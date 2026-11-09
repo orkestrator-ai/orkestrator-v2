@@ -100,7 +100,7 @@ async function fleet(
       },
     ],
     localProjects: () => command.loadProjects(),
-    kanban: command.kanban,
+    ticketSync: command.ticketSync,
     emit: eventSink((event, payload) => events.push({ event, payload })),
     debounceMs: 1,
     retryDelayMs: 60_000,
@@ -158,7 +158,7 @@ describe("command node to leaf", () => {
       comments: [expect.objectContaining({ text: "Looks good" })],
     });
     // Applying the command node's snapshot queues nothing back up.
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
 
     await f.command.kanban.deleteKanbanTask(ticket.id);
     await f.sync.sync(LEAF_ID);
@@ -195,7 +195,7 @@ describe("command node to leaf", () => {
     const kept = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "");
     await f.sync.sync(LEAF_ID);
     // A copy the board has never heard of, as after the command node's data was replaced.
-    await f.leaf.kanban.applyTicketSync({
+    await f.leaf.ticketSync.applyTicketSync({
       controllerId: COMMAND_ID,
       projectId: f.leafProject.id,
       sourceProjectId: f.commandProject.id,
@@ -229,7 +229,7 @@ describe("leaf to command node", () => {
     await f.sync.sync(LEAF_ID);
     await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "in-progress", title: "Build v2" });
     await f.leaf.kanban.addKanbanComment(ticket.id, "Started on the leaf");
-    const queued = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+    const queued = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
     expect(queued.items.map((item) => item.op.kind)).toEqual([
       "set-title",
       "set-status",
@@ -242,7 +242,7 @@ describe("leaf to command node", () => {
       status: "in-progress",
       comments: [expect.objectContaining({ text: "Started on the leaf" })],
     });
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
     // A second edit from the leaf, before or after the snapshot, is not a conflict with its first.
     await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Build v3" });
     expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
@@ -316,10 +316,10 @@ describe("leaf to command node", () => {
     const f = await fleet();
     await f.command.kanban.addKanbanTask(f.commandProject.id, "Seen", "");
     await f.sync.sync(LEAF_ID);
-    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([]);
+    expect(await f.leaf.ticketSync.ticketSyncOutboxControllers()).toEqual([]);
     const ticket = (await f.leaf.kanban.getKanbanTasks(f.leafProject.id))[0]!;
     await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "done" });
-    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([COMMAND_ID]);
+    expect(await f.leaf.ticketSync.ticketSyncOutboxControllers()).toEqual([COMMAND_ID]);
     f.sync.handleNodeEvent(TICKET_SYNC_OUTBOX_READY_EVENT, { controllerId: COMMAND_ID }, LEAF_ID);
     for (
       let round = 0;
@@ -345,7 +345,7 @@ describe("disconnection", () => {
     const removed = await f.leaf.kanban.addKanbanComment(ticket.id, "never mind");
     await f.leaf.kanban.deleteKanbanComment(ticket.id, removed.comments.at(-1)!.id);
     // Every operation remains immutable until acknowledgement.
-    const queued = (await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items;
+    const queued = (await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items;
     expect(queued.map((item) => item.op.kind)).toEqual([
       "set-status",
       "set-status",
@@ -361,7 +361,7 @@ describe("disconnection", () => {
     // The leaf applies the acknowledgement but the answer is lost: a retry must not duplicate.
     f.failNext.add("ack_ticket_sync_outbox");
     expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
     await f.sync.sync(LEAF_ID);
     const board = (await f.commandTicket(ticket.id))!;
     expect(board.status).toBe("in-progress");
@@ -384,12 +384,12 @@ describe("disconnection", () => {
       return original<T>(name, args);
     };
     expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(1);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(1);
     await f.sync.sync(LEAF_ID);
     expect((await f.commandTicket(ticket.id))?.comments.map((comment) => comment.text)).toEqual([
       "only once",
     ]);
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
   });
 });
 
@@ -454,8 +454,12 @@ describe("conflicts and tombstones", () => {
     await f.sync.sync(LEAF_ID);
     await f.leaf.kanban.deleteKanbanTask(ticket.id);
     // A snapshot sent before the leaf's deletion was collected does not bring it back.
-    const stale = await f.command.kanban.ticketSyncChangesSince(f.commandProject.id, 0, undefined);
-    await f.leaf.kanban.applyTicketSync({
+    const stale = await f.command.ticketSync.ticketSyncChangesSince(
+      f.commandProject.id,
+      0,
+      undefined,
+    );
+    await f.leaf.ticketSync.applyTicketSync({
       controllerId: COMMAND_ID,
       projectId: f.leafProject.id,
       sourceProjectId: f.commandProject.id,
@@ -480,7 +484,7 @@ describe("labels", () => {
     expect((await f.leafTicket(ticket.id))?.labels).toEqual(["bug"]);
 
     await f.leaf.kanban.setKanbanTaskLabel(ticket.id, "ui", true);
-    const queued = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+    const queued = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
     expect(queued.items.map((item) => item.op.kind)).toEqual(["set-content"]);
     expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
     expect((await f.commandTicket(ticket.id))?.labels).toEqual(["bug", "ui"]);
@@ -497,13 +501,17 @@ describe("labels", () => {
     });
     await f.sync.sync(LEAF_ID);
     await f.command.kanban.updateKanbanTask(ticket.id, { description: "New" });
-    const batch = await f.command.kanban.ticketSyncChangesSince(f.commandProject.id, 0, undefined);
+    const batch = await f.command.ticketSync.ticketSyncChangesSince(
+      f.commandProject.id,
+      0,
+      undefined,
+    );
     const items = batch.items.map((item) => {
       if ("deleted" in item) return item;
       const { labels: _labels, ...older } = item;
       return older;
     });
-    await f.leaf.kanban.applyTicketSync({
+    await f.leaf.ticketSync.applyTicketSync({
       controllerId: COMMAND_ID,
       projectId: f.leafProject.id,
       sourceProjectId: f.commandProject.id,
@@ -512,7 +520,7 @@ describe("labels", () => {
       cursor: batch.cursor,
     });
     expect(await f.leafTicket(ticket.id)).toMatchObject({ description: "New", labels: ["bug"] });
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
   });
 
   test.each(["command", "leaf"] as const)(
@@ -551,7 +559,7 @@ describe("labels", () => {
         }),
       ]);
       expect((await f.commandTicket(ticket.id))?.comments.at(-1)?.text).toContain("Sync conflict");
-      expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+      expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
       expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
     },
   );
@@ -561,7 +569,7 @@ describe("labels", () => {
     const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "Old", {
       labels: ["bug"],
     });
-    const result = await f.command.kanban.applyTicketSyncOps({
+    const result = await f.command.ticketSync.applyTicketSyncOps({
       nodeId: LEAF_ID,
       epoch: "older-leaf",
       items: [
@@ -634,12 +642,12 @@ describe("older leaves", () => {
     const f = await fleet();
     const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Keep me", "");
     await f.sync.sync(LEAF_ID);
-    await f.leaf.kanban.forgetTicketSyncController(COMMAND_ID);
+    await f.leaf.ticketSync.forgetTicketSyncController(COMMAND_ID);
     const copy = (await f.leafTicket(ticket.id))!;
     expect(copy.title).toBe("Keep me");
     expect(copy.sync?.replica).toBeUndefined();
     await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Mine now" });
-    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([]);
+    expect(await f.leaf.ticketSync.ticketSyncOutboxControllers()).toEqual([]);
     // New leaf tickets are no longer sent anywhere.
     const fresh = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Fresh", "");
     expect(fresh.sync?.replica).toBeUndefined();
@@ -654,9 +662,9 @@ describe("outbox collection interleavings", () => {
         await f.sync.sync(LEAF_ID);
         const task = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "A", "");
         const comment = await f.leaf.kanban.addKanbanComment(task.id, "temporary");
-        const batch = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+        const batch = await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0);
         const apply = () =>
-          f.command.kanban.applyTicketSyncOps({
+          f.command.ticketSync.applyTicketSyncOps({
             nodeId: LEAF_ID,
             nodeName: "Leaf",
             epoch: batch.epoch!,
@@ -669,7 +677,11 @@ describe("outbox collection interleavings", () => {
         if (action === "delete-comment")
           await f.leaf.kanban.deleteKanbanComment(task.id, comment.comments.at(-1)!.id);
         if (!appliedBefore) await apply();
-        await f.leaf.kanban.ackTicketSyncOutbox(COMMAND_ID, batch.epoch!, batch.items.at(-1)!.seq);
+        await f.leaf.ticketSync.ackTicketSyncOutbox(
+          COMMAND_ID,
+          batch.epoch!,
+          batch.items.at(-1)!.seq,
+        );
         expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
         const board = await f.commandTicket(task.id);
         if (action === "delete") expect(board).toBeNull();
@@ -702,7 +714,7 @@ describe("outbox collection interleavings", () => {
     };
     expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
     expect(await f.commandTicket(a.id)).not.toBeNull();
-    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(2);
+    expect((await f.leaf.ticketSync.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(2);
     f.link.invoke = invoke;
     expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
   });
@@ -782,15 +794,18 @@ for (const collision of ["project", "controller"] as const) {
     };
     // Give the existing row another controller when testing that ownership fence.
     if (collision === "controller") {
-      await f.leaf.kanban.applyTicketSync({
+      await f.leaf.ticketSync.applyTicketSync({
         ...input,
         controllerId: COMMAND_ID,
         items: [{ ...task, seq: 1, revs: {} }],
       });
     }
-    const beforeCursor = await f.leaf.kanban.getTicketSyncCursor(input.controllerId, project.id);
-    await expect(f.leaf.kanban.applyTicketSync(input)).rejects.toThrow("belongs to another");
-    expect(await f.leaf.kanban.getTicketSyncCursor(input.controllerId, project.id)).toEqual(
+    const beforeCursor = await f.leaf.ticketSync.getTicketSyncCursor(
+      input.controllerId,
+      project.id,
+    );
+    await expect(f.leaf.ticketSync.applyTicketSync(input)).rejects.toThrow("belongs to another");
+    expect(await f.leaf.ticketSync.getTicketSyncCursor(input.controllerId, project.id)).toEqual(
       beforeCursor,
     );
     expect(await f.leafTicket(task.id)).not.toBeNull();

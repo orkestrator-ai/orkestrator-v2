@@ -17,7 +17,7 @@ import {
 } from "@orkestrator/protocol/ticket-sync";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { KanbanStorage } from "../storage-kanban.js";
+import type { TicketSyncStorage } from "../storage-kanban-sync-repository.js";
 import { linkDomainApi, type EnvelopeLink } from "./node-domain-clients.js";
 
 const log = createLogger("nodes");
@@ -77,8 +77,8 @@ export interface NodeTicketSyncDeps {
   nodes(): Promise<TicketSyncNode[]>;
   /** This node's projects. */
   localProjects(): Promise<Array<{ id: string; gitUrl?: string | null }>>;
-  kanban: Pick<
-    KanbanStorage,
+  ticketSync: Pick<
+    TicketSyncStorage,
     | "ticketSyncChangesSince"
     | "applyTicketSyncOps"
     | "recordTicketSyncPeer"
@@ -317,7 +317,7 @@ export class NodeTicketSync {
       const firstUnknown = items.findIndex((item) => !localIds.has(item.sourceProjectId));
       const known = firstUnknown < 0 ? items : items.slice(0, firstUnknown);
       if (known.length !== items.length) log.warn("ticket-sync.unknown-project");
-      const result = await this.deps.kanban.applyTicketSyncOps({
+      const result = await this.deps.ticketSync.applyTicketSyncOps({
         nodeId,
         nodeName: node.displayName,
         epoch: batch.epoch,
@@ -350,7 +350,7 @@ export class NodeTicketSync {
           : 0;
       let epoch = typeof position?.epoch === "string" ? position.epoch : undefined;
       for (let round = 0; round < MAX_ROUNDS; round += 1) {
-        const changes = await this.deps.kanban.ticketSyncChangesSince(
+        const changes = await this.deps.ticketSync.ticketSyncChangesSince(
           pair.projectId,
           cursor,
           epoch,
@@ -373,7 +373,7 @@ export class NodeTicketSync {
         epoch = changes.epoch;
         if (!changes.more) break;
       }
-      await this.deps.kanban.recordTicketSyncPeer(
+      await this.deps.ticketSync.recordTicketSyncPeer(
         nodeId,
         pair.projectId,
         pair.leafProjectId,
@@ -386,7 +386,7 @@ export class NodeTicketSync {
   /** Where each leaf with a copy of the project stands, for the board and the tools. */
   async status(projectId: string): Promise<TicketSyncStatusResult> {
     const [overview, withProject] = await Promise.all([
-      this.deps.kanban.getTicketSyncOverview(projectId),
+      this.deps.ticketSync.getTicketSyncOverview(projectId),
       this.nodesWithProject(projectId),
     ]);
     const nodes: TicketSyncNodeState[] = withProject.map(({ node, leafProjectId }) => {

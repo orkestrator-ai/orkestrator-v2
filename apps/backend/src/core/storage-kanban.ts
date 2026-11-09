@@ -5,7 +5,6 @@ import {
   applyTicketContentUpdate,
   effectiveDeliveryPolicy,
   hasTicketContentUpdate,
-  normalizeTicketContent,
   type AcceptanceCriterionCheck,
   type DeliveryPolicy,
   type TicketContentUpdate,
@@ -23,7 +22,6 @@ import {
   randomUUID,
   resizeKanbanImage,
 } from "./storage-shared.js";
-import { createLogger } from "@orkestrator/protocol/logger";
 import {
   canonicalTicketLabels,
   normalizeTicketLabelName,
@@ -33,33 +31,9 @@ import {
   TICKET_LABEL_LIMITS,
   type TicketLabelSummary,
 } from "@orkestrator/protocol/ticket-labels";
-import {
-  isTicketTombstone,
-  parseTicketSyncItem,
-  ticketSyncConflictComment,
-  TICKET_SYNC_LIMITS,
-  type TicketSyncConflict,
-  type TicketSyncField,
-  type TicketSyncItem,
-  type TicketSyncOutboxItem,
-  type TicketWorkLocation,
-} from "@orkestrator/protocol/ticket-sync";
-import {
-  acceptsFieldChange,
-  assignTicketContent,
-  attributeFields,
-  storedTicketContent,
-  emptyKanbanSyncStore,
-  parseKanbanSyncStore,
-  pendingTicketFields,
-  recordConflict,
-  replicaLinkKey,
-  stampTicketChange,
-  ticketContentValue,
-  ticketSnapshot,
-  ticketTombstone,
-  type KanbanSyncStore,
-} from "./storage-kanban-sync.js";
+import { KanbanBoardStore, normalizeKanbanTask } from "./storage-kanban-board.js";
+
+export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
 import {
   kanbanTaskAwaitsMergeClosure,
@@ -67,7 +41,6 @@ import {
   type KanbanMergeClosure,
 } from "./kanban-merge-closure.js";
 
-const log = createLogger("storage");
 type FeaturePlanningRecord = shared.FeaturePlanningRecord;
 type KanbanImage = shared.KanbanImage;
 type KanbanStatus = shared.KanbanStatus;
@@ -87,18 +60,6 @@ import {
   type KanbanLabelCreateResult,
   type KanbanLabelInput,
 } from "./storage-kanban-labels.js";
-
-/**
- * A stored row as current content. Legacy rows get their kind and sections
- * derived on read; nothing is written back until the ticket is next changed,
- * so this is the migration and it never loses or rewrites text. Results a
- * hand-ticked legacy box records are dated with the ticket's creation, so
- * repeated reads return the same row.
- */
-export function normalizeKanbanTask(task: KanbanTask): KanbanTask {
-  const content = normalizeTicketContent(task, { now: task.createdAt });
-  return { ...task, ...content };
-}
 
 /** Content fields a create or update may carry; see `applyTicketContentUpdate`. */
 export interface KanbanTaskContentInput {
@@ -166,93 +127,19 @@ export class KanbanRepository {
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
+    private readonly board: KanbanBoardStore,
   ) {
     this.labelCatalogue = new KanbanLabelCatalogueStore(context, files);
   }
 
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
-    // Indexed by project: reads one board without parsing every project's.
-    const tasks = this.context.loadStoreRowsByOwner<KanbanTask>(this.files.kanbanFile(), projectId);
-    return tasks.filter((task) => task.projectId === projectId).map(normalizeKanbanTask);
+    return this.board.projectTasks(projectId);
   }
 
   async getKanbanTask(taskId: string): Promise<KanbanTask | null> {
-    const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    const tasks = await this.board.loadTasks();
     const task = tasks.find((candidate) => candidate.id === taskId);
     return task ? normalizeKanbanTask(task) : null;
-  }
-
-  /**
-   * Serializes the complete Kanban read-modify-write transaction both within
-   * this service instance and across backend processes sharing the data
-   * directory. Background PR reconciliation and foreground edits otherwise
-   * risk saving independent stale snapshots over each other.
-   */
-  private enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.context.serialize(this.files.kanbanFile(), "Kanban storage", operation);
-  }
-
-  /** The sync store, minted (not yet saved) when there is none. */
-  private async loadSyncStore(): Promise<{ store: KanbanSyncStore; fresh: boolean }> {
-    const stored = parseKanbanSyncStore(
-      await this.context.loadJson<unknown>(this.files.kanbanSyncFile(), () => null),
-    );
-    return stored
-      ? { store: stored, fresh: false }
-      : { store: emptyKanbanSyncStore(), fresh: true };
-  }
-
-  /**
-   * Saves the board with each change stamped for sync (`storage-kanban-sync.ts`),
-   * in one commit with the sync store. Call inside the Kanban lease. Each
-   * change names a ticket's row before (null when created) and the row being
-   * saved (null when deleted). A leaf's outbox that is full refuses the write.
-   */
-  private async commitKanban(
-    tasks: KanbanTask[],
-    changes: ReadonlyArray<{ before: KanbanTask | null; stored: KanbanTask | null }>,
-    loaded?: { store: KanbanSyncStore; fresh: boolean },
-  ): Promise<void> {
-    const { store, fresh } = loaded ?? (await this.loadSyncStore());
-    const sequence = store.nextSeq;
-    const now = nowIso();
-    let queued = false;
-    for (const change of changes) {
-      const controllers = stampTicketChange(store, {
-        before: change.before,
-        after: change.stored ? normalizeKanbanTask(change.stored) : null,
-        stored: change.stored,
-        now,
-      });
-      // Reject values that peers cannot read before either store is committed.
-      if (change.stored) parseTicketSyncItem(ticketSnapshot(normalizeKanbanTask(change.stored)));
-      if (controllers.length) queued = true;
-    }
-    const syncChanged = fresh || queued || store.nextSeq !== sequence || loaded !== undefined;
-    await this.context.atomically(async () => {
-      await this.context.saveJson(this.files.kanbanFile(), tasks);
-      if (syncChanged) await this.context.saveJson(this.files.kanbanSyncFile(), store);
-    });
-  }
-
-  private async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
-    await Promise.all(
-      imageIds.map(async (imageId) => {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          try {
-            await fs.rm(this.files.kanbanImageFile(imageId), { force: true });
-            return;
-          } catch {
-            if (attempt === 1) {
-              // The authoritative metadata no longer references this image.
-              // Keep the committed mutation successful; after the bounded
-              // retries the remaining orphan is safe to remove later.
-              log.warn("kanban.image-cleanup-failed");
-            }
-          }
-        }
-      }),
-    );
   }
 
   async addKanbanTask(
@@ -286,8 +173,8 @@ export class KanbanRepository {
       { now: createdAt },
     );
     if (initial.labels !== undefined) normalizeTicketLabels(initial.labels);
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const labels =
         initial.labels === undefined
           ? []
@@ -339,7 +226,7 @@ export class KanbanRepository {
           : {}),
       };
       tasks.push(task);
-      await this.commitKanban(tasks, [{ before: null, stored: task }]);
+      await this.board.commit(tasks, [{ before: null, stored: task }]);
       this.context.changes.announce("kanban", projectId);
       return task;
     });
@@ -359,7 +246,7 @@ export class KanbanRepository {
     requestId: string,
   ): Promise<KanbanTask | null> {
     const id = stableKanbanId(`ticket:${projectId}`, requestId);
-    const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    const tasks = await this.board.loadTasks();
     const task = tasks.find(
       (candidate) => candidate.id === id && candidate.projectId === projectId,
     );
@@ -397,8 +284,8 @@ export class KanbanRepository {
     if (updates.prState !== undefined && !isOneOf(updates.prState, ["open", "merged", "closed"])) {
       throw new Error("Kanban task pull request state is invalid");
     }
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
@@ -454,7 +341,7 @@ export class KanbanRepository {
               .map((candidate) => candidate.order),
           ) + 1;
       }
-      await this.commitKanban(tasks, [{ before, stored: task }]);
+      await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       const updated = normalizeKanbanTask(task);
       const deliveryPolicy = updated.sections?.delivery?.policy;
@@ -476,8 +363,8 @@ export class KanbanRepository {
     checks: readonly KanbanCriterionCheckInput[],
   ): Promise<KanbanTask | null> {
     if (checks.length === 0) return null;
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const index = tasks.findIndex((candidate) => candidate.id === taskId);
       if (index < 0) return null;
       const task = normalizeKanbanTask(tasks[index]!);
@@ -495,7 +382,7 @@ export class KanbanRepository {
       // Results live only in sections, never in the text mirrors, so the
       // basis stays valid and no other field changes.
       tasks[index] = { ...task, sections: { ...task.sections, acceptanceCriteria: next } };
-      await this.commitKanban(tasks, [{ before: task, stored: tasks[index]! }]);
+      await this.board.commit(tasks, [{ before: task, stored: tasks[index]! }]);
       this.context.changes.announce("kanban", task.projectId);
       return tasks[index]!;
     });
@@ -511,8 +398,8 @@ export class KanbanRepository {
   async closeKanbanTasksForMergedPullRequests(
     closures?: readonly KanbanMergeClosure[],
   ): Promise<string[]> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const due = closures ?? pendingMergeClosures(tasks.map(normalizeKanbanTask));
       const changes: Array<{ before: KanbanTask; stored: KanbanTask }> = [];
       const moved: string[] = [];
@@ -540,7 +427,7 @@ export class KanbanRepository {
         changes.push({ before, stored: task });
       }
       if (changes.length === 0) return [];
-      await this.commitKanban(tasks, changes);
+      await this.board.commit(tasks, changes);
       for (const projectId of new Set(changes.map(({ stored }) => stored.projectId))) {
         this.context.changes.announce("kanban", projectId);
       }
@@ -560,8 +447,8 @@ export class KanbanRepository {
     expectedProjectId?: string,
   ): Promise<KanbanTask> {
     const label = normalizeTicketLabelName(name);
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
@@ -584,7 +471,7 @@ export class KanbanRepository {
         : current.filter((candidate) => ticketLabelKey(candidate) !== key);
       if (next.length) task.labels = next;
       else delete task.labels;
-      await this.commitKanban(tasks, [{ before, stored: task }]);
+      await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       return normalizeKanbanTask(task);
     });
@@ -612,39 +499,32 @@ export class KanbanRepository {
     return this.labelCatalogue.create(projectId, { ...input, name: name! });
   }
 
-  // A deletion retains only the last publication restriction, not ticket content.
-  // Save it before removing the row so Verify can read it without the pipeline lock.
-  private deletedDeliveryFile(taskId: string): string {
-    const key = createHash("sha256").update(taskId).digest("hex");
-    return `${this.files.kanbanFile()}.delivery/${key}.json`;
-  }
-
   async getDeletedKanbanDeliveryPolicy(
     taskId: string,
     projectId: string,
   ): Promise<DeliveryPolicy | undefined> {
     const saved = await this.context.loadJson<{ projectId: string; policy: DeliveryPolicy } | null>(
-      this.deletedDeliveryFile(taskId),
+      this.board.deletedDeliveryFile(taskId),
       () => null,
     );
     return saved?.projectId === projectId ? saved.policy : undefined;
   }
 
   async deleteKanbanTask(taskId: string): Promise<void> {
-    await this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    await this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-      await this.context.saveJson(this.deletedDeliveryFile(taskId), {
+      await this.context.saveJson(this.board.deletedDeliveryFile(taskId), {
         projectId: task.projectId,
         policy: effectiveDeliveryPolicy(normalizeKanbanTask(task).sections?.delivery?.policy),
       });
-      await this.commitKanban(
+      await this.board.commit(
         tasks.filter((candidate) => candidate.id !== taskId),
         [{ before: normalizeKanbanTask(task), stored: null }],
       );
       this.context.changes.announce("kanban", task.projectId);
-      await this.removeKanbanImageFilesBestEffort(task.images.map((image) => image.id));
+      await this.board.removeImageFilesBestEffort(task.images.map((image) => image.id));
     });
   }
 
@@ -654,8 +534,8 @@ export class KanbanRepository {
     expectedProjectId?: string,
     requestId?: string,
   ): Promise<KanbanTask> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
@@ -673,20 +553,20 @@ export class KanbanRepository {
       }
       const before = normalizeKanbanTask(structuredClone(task));
       task.comments.push({ id, text, createdAt: nowIso() });
-      await this.commitKanban(tasks, [{ before, stored: task }]);
+      await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       return normalizeKanbanTask(task);
     });
   }
 
   async deleteKanbanComment(taskId: string, commentId: string): Promise<KanbanTask> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
       const before = normalizeKanbanTask(structuredClone(task));
       task.comments = task.comments.filter((comment) => comment.id !== commentId);
-      await this.commitKanban(tasks, [{ before, stored: task }]);
+      await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       return normalizeKanbanTask(task);
     });
@@ -719,8 +599,8 @@ export class KanbanRepository {
     requestId?: string,
     normalized = false,
   ): Promise<{ task: KanbanTask; image: KanbanImage }> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
@@ -743,7 +623,7 @@ export class KanbanRepository {
       const before = normalizeKanbanTask(structuredClone(task));
       task.images.push(image);
       try {
-        await this.commitKanban(tasks, [{ before, stored: task }]);
+        await this.board.commit(tasks, [{ before, stored: task }]);
       } catch (error) {
         await fs.rm(this.files.kanbanImageFile(image.id), { force: true });
         throw error;
@@ -754,8 +634,8 @@ export class KanbanRepository {
   }
 
   async deleteKanbanImage(taskId: string, imageId: string): Promise<KanbanTask> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
       if (!isCanonicalUuid(imageId)) {
@@ -766,9 +646,9 @@ export class KanbanRepository {
       }
       const before = normalizeKanbanTask(structuredClone(task));
       task.images = task.images.filter((image) => image.id !== imageId);
-      await this.commitKanban(tasks, [{ before, stored: task }]);
+      await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
-      await this.removeKanbanImageFilesBestEffort([imageId]);
+      await this.board.removeImageFilesBestEffort([imageId]);
       return normalizeKanbanTask(task);
     });
   }
@@ -782,662 +662,6 @@ export class KanbanRepository {
     recurringWorkMetrics.work("file-read");
     recurringWorkMetrics.bytes(image.length);
     return image.toString("base64");
-  }
-
-  /*
-   * Sync across machines (docs/architecture/tickets.md, "Sync across machines").
-   * The pure rules are in `storage-kanban-sync.ts`; these hold the lease.
-   */
-
-  /**
-   * Command node: one project's changes after `cursor`, in change order. A
-   * cursor from another epoch, or older than a pruned tombstone, gets a full
-   * resync (`reset`, with the ids that exist). Rows written before sync existed
-   * are stamped on the first read, so every ticket has a place in the order.
-   */
-  async ticketSyncChangesSince(
-    projectId: string,
-    cursor: number,
-    epoch: string | undefined,
-    limit: number = TICKET_SYNC_LIMITS.maxBatchItems,
-  ): Promise<{
-    epoch: string;
-    items: TicketSyncItem[];
-    cursor: number;
-    more: boolean;
-    reset: boolean;
-    liveIds?: string[];
-  }> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-      const loaded = await this.loadSyncStore();
-      const { store } = loaded;
-      const own = tasks.filter((task) => task.projectId === projectId && !task.sync?.replica);
-      const unstamped = own.filter((task) => !task.sync);
-      for (const task of unstamped) {
-        const seq = store.nextSeq;
-        store.nextSeq += 1;
-        task.sync = { seq, revs: { title: seq, content: seq, status: seq } };
-      }
-      if (unstamped.length || loaded.fresh) {
-        await this.context.atomically(async () => {
-          if (unstamped.length) await this.context.saveJson(this.files.kanbanFile(), tasks);
-          await this.context.saveJson(this.files.kanbanSyncFile(), store);
-        });
-      }
-      const reset = epoch !== store.epoch || cursor < (store.prunedThrough[projectId] ?? 0);
-      const from = reset ? 0 : cursor;
-      const items: TicketSyncItem[] = [
-        ...own
-          .filter((task) => (task.sync?.seq ?? 0) > from)
-          .map((task) => ticketSnapshot(normalizeKanbanTask(task))),
-        ...(reset
-          ? []
-          : Object.entries(store.tombstones)
-              .filter(([, tombstone]) => tombstone.projectId === projectId && tombstone.seq > from)
-              .map(([id, tombstone]) => ticketTombstone(id, tombstone))),
-      ].sort((left, right) => left.seq - right.seq);
-      const page = items.slice(0, Math.max(1, limit));
-      return {
-        epoch: store.epoch,
-        items: page,
-        cursor: page.at(-1)?.seq ?? from,
-        more: items.length > page.length,
-        reset,
-        ...(reset ? { liveIds: own.map((task) => task.id) } : {}),
-      };
-    });
-  }
-
-  /**
-   * Leaf: applies a command node's snapshots and tombstones to this node's
-   * copy of the project. A field with a change still queued here keeps the
-   * local value until the command node has decided it; a ticket deleted here
-   * is not brought back. Returns the cursor to resume from.
-   */
-  async applyTicketSync(input: {
-    controllerId: string;
-    projectId: string;
-    sourceProjectId: string;
-    epoch: string;
-    items: readonly TicketSyncItem[];
-    cursor: number;
-    reset?: boolean;
-    liveIds?: readonly string[];
-  }): Promise<{ cursor: number; applied: number }> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-      const { store } = await this.loadSyncStore();
-      const key = replicaLinkKey(input.controllerId, input.projectId);
-      const other = Object.values(store.replicas).find(
-        (link) =>
-          link.controllerId === input.controllerId &&
-          link.sourceProjectId === input.sourceProjectId &&
-          link.projectId !== input.projectId,
-      );
-      if (other) {
-        throw new Error(
-          "That command node's tickets for this repository already sync into another project here.",
-        );
-      }
-      const now = nowIso();
-      const removedImages: string[] = [];
-      let applied = 0;
-      let next = tasks;
-      const ofThisController = (task: KanbanTask) =>
-        task.projectId === input.projectId &&
-        task.sync?.replica?.controllerId === input.controllerId;
-      if (input.reset && input.liveIds) {
-        const live = new Set(input.liveIds);
-        next = next.filter((task) => {
-          const gone =
-            ofThisController(task) && !task.sync?.replica?.pendingCreate && !live.has(task.id);
-          if (gone) removedImages.push(...task.images.map((image) => image.id));
-          return !gone;
-        });
-        if (next.length !== tasks.length) applied += tasks.length - next.length;
-      }
-      const orderIn = (status: KanbanStatus, except?: string) =>
-        Math.max(
-          -1,
-          ...next
-            .filter(
-              (candidate) =>
-                candidate.projectId === input.projectId &&
-                candidate.status === status &&
-                candidate.id !== except,
-            )
-            .map((candidate) => candidate.order),
-        ) + 1;
-      for (const item of input.items) {
-        const index = next.findIndex((task) => task.id === item.id);
-        const row = index >= 0 ? next[index]! : null;
-        // An id that is another project's here, or another command node's copy.
-        if (row && row.projectId !== input.projectId)
-          throw new Error("Ticket sync id belongs to another project.");
-        if (row?.sync?.replica && row.sync.replica.controllerId !== input.controllerId)
-          throw new Error("Ticket sync id belongs to another controller.");
-        if (isTicketTombstone(item)) {
-          if (row) {
-            removedImages.push(...row.images.map((image) => image.id));
-            next = next.filter((task) => task.id !== item.id);
-            applied += 1;
-          }
-          const seq = store.nextSeq;
-          store.nextSeq += 1;
-          store.tombstones[item.id] = { projectId: input.projectId, seq, deletedAt: now };
-          continue;
-        }
-        const pending = pendingTicketFields(store, input.controllerId, item.id);
-        if (store.tombstones[item.id] || pending.deleted) continue;
-        const replica = {
-          controllerId: input.controllerId,
-          sourceProjectId: input.sourceProjectId,
-          seq: item.seq,
-          revs: item.revs,
-        };
-        const content = {
-          description: item.description,
-          acceptanceCriteria: item.acceptanceCriteria,
-          ...(item.kind !== undefined ? { kind: item.kind } : {}),
-          ...(item.sections !== undefined ? { sections: item.sections } : {}),
-          ...(item.sectionsBasis !== undefined ? { sectionsBasis: item.sectionsBasis } : {}),
-          ...(item.labels !== undefined ? { labels: item.labels } : {}),
-        };
-        if (!row) {
-          next = [
-            ...next,
-            {
-              id: item.id,
-              projectId: input.projectId,
-              title: item.title,
-              ...storedTicketContent(content),
-              status: item.status,
-              ...(item.prMergeDoneUrl ? { prMergeDoneUrl: item.prMergeDoneUrl } : {}),
-              comments: item.comments,
-              images: [],
-              createdAt: item.createdAt,
-              order: orderIn(item.status),
-              prMergeCommented: false,
-              sync: {
-                seq: 0,
-                revs: {},
-                replica,
-                ...(item.work ? { work: item.work } : {}),
-              },
-            },
-          ];
-          applied += 1;
-          continue;
-        }
-        const updated: KanbanTask = { ...row };
-        if (!pending.fields.has("title")) updated.title = item.title;
-        if (!pending.fields.has("content")) {
-          assignTicketContent(updated, content);
-        }
-        if (!pending.fields.has("status")) {
-          if (updated.status !== item.status) {
-            updated.status = item.status;
-            updated.order = orderIn(item.status, row.id);
-          }
-          // Older peers omit the marker; they must not erase one already known.
-          if (item.prMergeDoneUrl) updated.prMergeDoneUrl = item.prMergeDoneUrl;
-        }
-        const authority = new Set(item.comments.map((comment) => comment.id));
-        updated.comments = [
-          ...item.comments.filter((comment) => !pending.removedComments.has(comment.id)),
-          ...row.comments.filter(
-            (comment) => pending.addedComments.has(comment.id) && !authority.has(comment.id),
-          ),
-        ];
-        const { work: _work, ...meta } = row.sync ?? { seq: 0, revs: {} };
-        updated.sync = { ...meta, replica, ...(item.work ? { work: item.work } : {}) };
-        next = next.map((task) => (task.id === row.id ? updated : task));
-        applied += 1;
-      }
-      const link = store.replicas[key];
-      store.replicas[key] = {
-        controllerId: input.controllerId,
-        projectId: input.projectId,
-        sourceProjectId: input.sourceProjectId,
-        sourceEpoch: input.epoch,
-        cursor:
-          input.reset || !link || link.sourceEpoch !== input.epoch
-            ? input.cursor
-            : Math.max(link.cursor, input.cursor),
-        appliedAt: now,
-      };
-      await this.context.atomically(async () => {
-        if (applied) await this.context.saveJson(this.files.kanbanFile(), next);
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
-      });
-      if (applied) this.context.changes.announce("kanban", input.projectId);
-      await this.removeKanbanImageFilesBestEffort(removedImages);
-      return { cursor: store.replicas[key]!.cursor, applied };
-    });
-  }
-
-  /** Leaf: where a command node's sync of this project stands, in that command node's epoch. */
-  async getTicketSyncCursor(
-    controllerId: string,
-    projectId: string,
-  ): Promise<{ cursor: number; epoch?: string; pending: number }> {
-    const { store } = await this.loadSyncStore();
-    const link = store.replicas[replicaLinkKey(controllerId, projectId)];
-    return {
-      cursor: link?.cursor ?? 0,
-      ...(link ? { epoch: link.sourceEpoch } : {}),
-      pending: store.outbox[controllerId]?.items.length ?? 0,
-    };
-  }
-
-  /** Leaf: queued changes for a command node after `after`, oldest first. */
-  async collectTicketSyncOutbox(
-    controllerId: string,
-    after: number,
-    limit: number = TICKET_SYNC_LIMITS.maxCollectItems,
-  ): Promise<{ epoch: string | null; items: TicketSyncOutboxItem[]; more: boolean }> {
-    const { store } = await this.loadSyncStore();
-    const outbox = store.outbox[controllerId];
-    if (!outbox) return { epoch: null, items: [], more: false };
-    const waiting = outbox.items.filter((item) => item.seq > after);
-    return {
-      epoch: outbox.epoch,
-      items: waiting.slice(0, limit),
-      more: waiting.length > limit,
-    };
-  }
-
-  /** Leaf: the command node applied everything up to `upTo` in this epoch. */
-  async ackTicketSyncOutbox(
-    controllerId: string,
-    epoch: string,
-    upTo: number,
-  ): Promise<{ remaining: number }> {
-    return this.enqueueKanbanMutation(async () => {
-      const { store } = await this.loadSyncStore();
-      const outbox = store.outbox[controllerId];
-      if (!outbox || outbox.epoch !== epoch) return { remaining: outbox?.items.length ?? 0 };
-      const remaining = outbox.items.filter((item) => item.seq > upTo);
-      if (remaining.length !== outbox.items.length) {
-        outbox.items = remaining;
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
-      }
-      return { remaining: remaining.length };
-    });
-  }
-
-  /** Leaf: the command nodes with changes waiting for them. */
-  async ticketSyncOutboxControllers(): Promise<string[]> {
-    const { store } = await this.loadSyncStore();
-    return Object.entries(store.outbox)
-      .filter(([, outbox]) => outbox.items.length > 0)
-      .map(([controllerId]) => controllerId);
-  }
-
-  /**
-   * Leaf: a command node detached. Its copies become this node's own tickets,
-   * keeping what they say now, and nothing more is queued for it.
-   */
-  async forgetTicketSyncController(controllerId: string): Promise<void> {
-    await this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-      const { store, fresh } = await this.loadSyncStore();
-      if (fresh) return;
-      let changed = false;
-      for (const task of tasks) {
-        if (task.sync?.replica?.controllerId !== controllerId) continue;
-        const { replica: _replica, work: _work, ...meta } = task.sync;
-        task.sync = meta;
-        changed = true;
-      }
-      const links = Object.keys(store.replicas).filter(
-        (key) => store.replicas[key]!.controllerId === controllerId,
-      );
-      if (!changed && !links.length && !store.outbox[controllerId]) return;
-      for (const key of links) delete store.replicas[key];
-      delete store.outbox[controllerId];
-      await this.context.atomically(async () => {
-        if (changed) await this.context.saveJson(this.files.kanbanFile(), tasks);
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
-      });
-      if (changed) {
-        for (const projectId of new Set(tasks.map((task) => task.projectId))) {
-          this.context.changes.announce("kanban", projectId);
-        }
-      }
-    });
-  }
-
-  /**
-   * Command node: applies a leaf's queued changes in order, each once (its
-   * outbox epoch and seq), under the rules of `storage-kanban-sync.ts`. A
-   * change that loses is recorded as a conflict and, when the ticket still
-   * exists, as a comment on it.
-   */
-  async applyTicketSyncOps(input: {
-    nodeId: string;
-    nodeName?: string;
-    epoch: string;
-    items: readonly TicketSyncOutboxItem[];
-  }): Promise<{ appliedSeq: number; applied: number; conflicts: TicketSyncConflict[] }> {
-    return this.enqueueKanbanMutation(async () => {
-      let tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-      const loaded = await this.loadSyncStore();
-      const { store } = loaded;
-      const existing = store.peers[input.nodeId];
-      const peer =
-        existing && existing.outboxEpoch === input.epoch
-          ? { ...existing }
-          : { outboxEpoch: input.epoch, appliedSeq: 0, projects: existing?.projects ?? {} };
-      const now = nowIso();
-      const changes = new Map<string, { before: KanbanTask | null; stored: KanbanTask | null }>();
-      const attributed = new Map<string, Set<TicketSyncField>>();
-      const workChanged = new Set<string>();
-      const conflicts: TicketSyncConflict[] = [];
-      const removedImages: string[] = [];
-      let applied = 0;
-      const track = (row: KanbanTask) => {
-        if (!changes.has(row.id)) {
-          changes.set(row.id, { before: normalizeKanbanTask(structuredClone(row)), stored: row });
-        }
-      };
-      const attribute = (id: string, field: TicketSyncField) => {
-        const fields = attributed.get(id) ?? new Set<TicketSyncField>();
-        fields.add(field);
-        attributed.set(id, fields);
-      };
-      const orderIn = (projectId: string, status: KanbanStatus, except?: string) =>
-        Math.max(
-          -1,
-          ...tasks
-            .filter(
-              (candidate) =>
-                candidate.projectId === projectId &&
-                candidate.status === status &&
-                candidate.id !== except,
-            )
-            .map((candidate) => candidate.order),
-        ) + 1;
-      const conflict = (
-        item: TicketSyncOutboxItem,
-        field: TicketSyncConflict["field"],
-        reason: TicketSyncConflict["reason"],
-        value: unknown,
-        row?: KanbanTask,
-      ) => {
-        const recorded = recordConflict(store, {
-          at: now,
-          ticketId: item.ticketId,
-          projectId: item.sourceProjectId,
-          fromNodeId: input.nodeId,
-          ...(input.nodeName ? { fromNodeName: input.nodeName } : {}),
-          field,
-          reason,
-          value,
-        });
-        conflicts.push(recorded);
-        if (row) {
-          track(row);
-          row.comments = [
-            ...row.comments,
-            { id: randomUUID(), text: ticketSyncConflictComment(recorded), createdAt: now },
-          ];
-        }
-      };
-      const items = [...input.items].sort((left, right) => left.seq - right.seq);
-      for (const item of items) {
-        if (item.seq <= peer.appliedSeq) continue;
-        peer.appliedSeq = item.seq;
-        applied += 1;
-        const op = item.op;
-        const row =
-          tasks.find(
-            (task) =>
-              task.id === item.ticketId &&
-              task.projectId === item.sourceProjectId &&
-              !task.sync?.replica,
-          ) ?? null;
-        const deleted = Boolean(store.tombstones[item.ticketId]);
-        if (op.kind === "create") {
-          if (row) continue;
-          if (deleted || tasks.some((task) => task.id === item.ticketId)) {
-            conflict(item, "ticket", "ticket-deleted", op.ticket.title);
-            continue;
-          }
-          const created: KanbanTask = {
-            id: item.ticketId,
-            projectId: item.sourceProjectId,
-            title: op.ticket.title,
-            ...storedTicketContent(ticketContentValue({ ...op.ticket } as KanbanTask)),
-            status: op.ticket.status,
-            ...(op.ticket.prMergeDoneUrl ? { prMergeDoneUrl: op.ticket.prMergeDoneUrl } : {}),
-            comments: op.ticket.comments,
-            images: [],
-            createdAt: op.ticket.createdAt,
-            order: orderIn(item.sourceProjectId, op.ticket.status),
-            prMergeCommented: false,
-          };
-          tasks = [...tasks, created];
-          changes.set(created.id, { before: null, stored: created });
-          for (const field of ["title", "content", "status"] as const) attribute(created.id, field);
-          continue;
-        }
-        if (!row) {
-          if (deleted && op.kind !== "delete") conflict(item, "ticket", "ticket-deleted", op);
-          continue;
-        }
-        switch (op.kind) {
-          case "set-title":
-          case "set-content":
-          case "set-status": {
-            const field: TicketSyncField =
-              op.kind === "set-title" ? "title" : op.kind === "set-content" ? "content" : "status";
-            const current =
-              field === "title"
-                ? row.title
-                : field === "status"
-                  ? row.status
-                  : ticketContentValue(normalizeKanbanTask(row));
-            const incoming = op.value;
-            // A leaf that predates labels sends none; its change leaves them alone.
-            if (op.kind === "set-content" && op.value.labels === undefined) {
-              delete (current as { labels?: string[] }).labels;
-            }
-            const mergeChanged =
-              op.kind === "set-status" &&
-              op.prMergeDoneUrl !== undefined &&
-              row.prMergeDoneUrl !== op.prMergeDoneUrl;
-            if (JSON.stringify(current) === JSON.stringify(incoming) && !mergeChanged) break;
-            if (!acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
-              conflict(
-                item,
-                field,
-                "stale-revision",
-                op.kind === "set-content" ? op.value.description : op.value,
-                row,
-              );
-              break;
-            }
-            track(row);
-            if (op.kind === "set-title") row.title = op.value;
-            if (op.kind === "set-status") {
-              if (row.status !== op.value) row.order = orderIn(row.projectId, op.value, row.id);
-              row.status = op.value;
-              if (op.prMergeDoneUrl) row.prMergeDoneUrl = op.prMergeDoneUrl;
-            }
-            if (op.kind === "set-content") {
-              assignTicketContent(row, op.value);
-            }
-            attribute(row.id, field);
-            break;
-          }
-          case "checks": {
-            const normalized = normalizeKanbanTask(row);
-            let changed = false;
-            const criteria = (normalized.sections?.acceptanceCriteria ?? []).map((criterion) => {
-              const result = op.checks.find(
-                (check) => check.id === criterion.id && check.text === criterion.text,
-              );
-              if (!result) return criterion;
-              changed = true;
-              return { ...criterion, check: result.check };
-            });
-            if (!changed) break;
-            track(row);
-            assignTicketContent(row, ticketContentValue(normalized));
-            row.sections = { ...normalized.sections, acceptanceCriteria: criteria };
-            break;
-          }
-          case "add-comment":
-            if (row.comments.some((comment) => comment.id === op.comment.id)) break;
-            track(row);
-            row.comments = [...row.comments, op.comment];
-            break;
-          case "delete-comment":
-            if (!row.comments.some((comment) => comment.id === op.commentId)) break;
-            track(row);
-            row.comments = row.comments.filter((comment) => comment.id !== op.commentId);
-            break;
-          case "work": {
-            track(row);
-            const meta = row.sync ?? { seq: 0, revs: {} };
-            const hasWork = Object.keys(op.work).length > 0;
-            if (hasWork) {
-              row.sync = {
-                ...meta,
-                work: {
-                  nodeId: input.nodeId,
-                  ...(input.nodeName ? { nodeName: input.nodeName } : {}),
-                  ...op.work,
-                  updatedAt: now,
-                },
-              };
-            } else if (meta.work?.nodeId === input.nodeId) {
-              const { work: _work, ...rest } = meta;
-              row.sync = rest;
-            }
-            workChanged.add(row.id);
-            break;
-          }
-          case "delete": {
-            const before = changes.get(row.id)?.before ?? normalizeKanbanTask(structuredClone(row));
-            await this.context.saveJson(this.deletedDeliveryFile(row.id), {
-              projectId: row.projectId,
-              policy: effectiveDeliveryPolicy(normalizeKanbanTask(row).sections?.delivery?.policy),
-            });
-            tasks = tasks.filter((task) => task !== row);
-            changes.set(row.id, { before, stored: null });
-            removedImages.push(...row.images.map((image) => image.id));
-            break;
-          }
-        }
-      }
-      store.peers[input.nodeId] = peer;
-      const stamp = nowIso();
-      for (const change of changes.values()) {
-        const seqBefore = change.stored?.sync?.seq;
-        stampTicketChange(store, {
-          before: change.before,
-          after: change.stored ? normalizeKanbanTask(change.stored) : null,
-          stored: change.stored,
-          now: stamp,
-        });
-        if (!change.stored) continue;
-        attributeFields(change.stored, [...(attributed.get(change.stored.id) ?? [])], input.nodeId);
-        // Work on another machine is shown everywhere, so it is a synced change here.
-        if (workChanged.has(change.stored.id) && change.stored.sync?.seq === seqBefore) {
-          change.stored.sync = {
-            ...(change.stored.sync ?? { revs: {} }),
-            seq: store.nextSeq,
-          } as KanbanTask["sync"];
-          store.nextSeq += 1;
-        }
-      }
-      await this.context.atomically(async () => {
-        if (changes.size) await this.context.saveJson(this.files.kanbanFile(), tasks);
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
-      });
-      for (const projectId of new Set(items.map((item) => item.sourceProjectId))) {
-        if (changes.size) this.context.changes.announce("kanban", projectId);
-      }
-      await this.removeKanbanImageFilesBestEffort(removedImages);
-      return { appliedSeq: peer.appliedSeq, applied, conflicts };
-    });
-  }
-
-  /** Command node: what a leaf confirmed for one of this node's projects. */
-  async recordTicketSyncPeer(
-    nodeId: string,
-    projectId: string,
-    leafProjectId: string,
-    cursor: number,
-  ): Promise<void> {
-    await this.enqueueKanbanMutation(async () => {
-      const { store } = await this.loadSyncStore();
-      const peer = store.peers[nodeId] ?? { appliedSeq: 0, projects: {} };
-      const previous = peer.projects[projectId];
-      if (previous && previous.cursor === cursor && previous.leafProjectId === leafProjectId) {
-        // Only the time moved; keep writes to real progress.
-        previous.syncedAt = nowIso();
-      } else {
-        peer.projects = {
-          ...peer.projects,
-          [projectId]: { leafProjectId, cursor, syncedAt: nowIso() },
-        };
-      }
-      store.peers[nodeId] = peer;
-      await this.context.saveJson(this.files.kanbanSyncFile(), store);
-    });
-  }
-
-  /** Command node: the inputs of one project's sync status. */
-  async getTicketSyncOverview(projectId: string): Promise<{
-    latestSeq: number;
-    peers: Array<{ nodeId: string; leafProjectId: string; cursor: number; syncedAt?: string }>;
-    conflicts: TicketSyncConflict[];
-    knownNodes: string[];
-  }> {
-    const tasks = await this.getKanbanTasks(projectId);
-    const { store } = await this.loadSyncStore();
-    const latestSeq = Math.max(
-      0,
-      ...tasks.filter((task) => !task.sync?.replica).map((task) => task.sync?.seq ?? 0),
-      ...Object.values(store.tombstones)
-        .filter((tombstone) => tombstone.projectId === projectId)
-        .map((tombstone) => tombstone.seq),
-    );
-    return {
-      latestSeq,
-      peers: Object.entries(store.peers).flatMap(([nodeId, peer]) => {
-        const project = peer.projects[projectId];
-        return project ? [{ nodeId, ...project }] : [];
-      }),
-      conflicts: store.conflicts.filter((conflict) => conflict.projectId === projectId),
-      knownNodes: Object.keys(store.peers),
-    };
-  }
-
-  /**
-   * Command node: a ticket's work started on another machine. The leaf will
-   * report its own progress; this shows where it runs at once.
-   */
-  async recordTicketRemoteWork(taskId: string, work: TicketWorkLocation): Promise<KanbanTask> {
-    return this.enqueueKanbanMutation(async () => {
-      const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
-      const task = tasks.find((candidate) => candidate.id === taskId && !candidate.sync?.replica);
-      if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-      const { store } = await this.loadSyncStore();
-      const seq = store.nextSeq;
-      store.nextSeq += 1;
-      task.sync = { ...(task.sync ?? { revs: {} }), seq, work } as KanbanTask["sync"];
-      await this.context.atomically(async () => {
-        await this.context.saveJson(this.files.kanbanFile(), tasks);
-        await this.context.saveJson(this.files.kanbanSyncFile(), store);
-      });
-      this.context.changes.announce("kanban", task.projectId);
-      return normalizeKanbanTask(task);
-    });
   }
 
   async getProjectNotes(projectId: string): Promise<ProjectNotes> {
@@ -1984,17 +1208,6 @@ export type KanbanStorage = Pick<
   | "addNormalizedKanbanImageForRequest"
   | "deleteKanbanImage"
   | "getKanbanImageData"
-  | "ticketSyncChangesSince"
-  | "applyTicketSync"
-  | "getTicketSyncCursor"
-  | "collectTicketSyncOutbox"
-  | "ackTicketSyncOutbox"
-  | "ticketSyncOutboxControllers"
-  | "forgetTicketSyncController"
-  | "applyTicketSyncOps"
-  | "recordTicketSyncPeer"
-  | "getTicketSyncOverview"
-  | "recordTicketRemoteWork"
   | "getProjectNotes"
   | "saveProjectNotes"
   | "getFeaturePlans"

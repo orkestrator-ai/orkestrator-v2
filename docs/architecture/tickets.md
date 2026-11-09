@@ -300,7 +300,9 @@ A project's board is shared by every machine in a fleet that has a copy of
 the same repository (matched by repository identity, as everything else
 across nodes is). Code: `@orkestrator/protocol/ticket-sync` (wire shapes,
 limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
-`KanbanRepository` (the sync methods, under the Kanban lease),
+`KanbanSyncRepository` (`storage-kanban-sync-repository.ts`, reached as
+`storage.ticketSync`: the sync methods, under the Kanban lease it shares with
+`KanbanRepository` through `KanbanBoardStore`),
 `nodes/node-ticket-sync.ts` (the command node's runs),
 `commands-registry-ticket-sync.ts` (the leaf commands) and
 `coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). The

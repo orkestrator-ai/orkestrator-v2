@@ -83,7 +83,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
     ) {
       throw new Error("Expected liveIds to be ticket ids.");
     }
-    return context.storage.kanban.applyTicketSync({
+    return context.storage.ticketSync.applyTicketSync({
       controllerId,
       projectId,
       sourceProjectId: nonBlank(args.sourceProjectId, "sourceProjectId"),
@@ -97,7 +97,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
 
   register(getTicketSyncCursorCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
-    return context.storage.kanban.getTicketSyncCursor(
+    return context.storage.ticketSync.getTicketSyncCursor(
       controllerId,
       nonBlank(args.projectId, "projectId"),
     );
@@ -105,7 +105,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
 
   register(collectTicketSyncOutboxCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
-    return context.storage.kanban.collectTicketSyncOutbox(
+    return context.storage.ticketSync.collectTicketSyncOutbox(
       controllerId,
       sequence(args.after, "after"),
     );
@@ -113,7 +113,7 @@ export function registerTicketSyncCommands(register: CommandRegistrar): void {
 
   register(ackTicketSyncOutboxCommand, async (args, context) => {
     const controllerId = attachedController(args, context);
-    return context.storage.kanban.ackTicketSyncOutbox(
+    return context.storage.ticketSync.ackTicketSyncOutbox(
       controllerId,
       nonBlank(args.epoch, "epoch"),
       sequence(args.upTo, "upTo"),

@@ -287,9 +287,12 @@ describe("StorageService store writers", () => {
       "publicOperations",
       "setupApprovals",
       "suborks",
+      "ticketSync",
       "watchedPullRequests",
     ]);
     expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");
+    // Sync across machines is its own collaborator sharing the board's lease.
+    expect(areas.get("ticketSync")).toContain("KanbanSyncRepository.applyTicketSyncOps");
     // Omitted from the area: only other repositories call it.
     expect(areas.get("publicOperations")).not.toContain(
       "PublicOperationsRepository.loadPublicOperationIndex",

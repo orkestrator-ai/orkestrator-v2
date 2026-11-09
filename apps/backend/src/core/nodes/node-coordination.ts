@@ -427,7 +427,7 @@ export class NodeCoordination {
           })),
         })),
       localProjects: () => storage.loadProjects(),
-      kanban: storage.kanban,
+      ticketSync: storage.ticketSync,
       emit: options.emit,
     });
     portal.readModel.onNodeEvent((event, payload, nodeId) => {
@@ -441,7 +441,7 @@ export class NodeCoordination {
       if (change.resource !== "kanban") return;
       if (nodes.mode?.() === "command") this.ticketSync.noteLocalChange(change.id);
       if (!nodes.listControllers?.().length) return;
-      void storage.kanban
+      void storage.ticketSync
         .ticketSyncOutboxControllers()
         .then((controllers) => {
           for (const controllerId of controllers) {
@@ -451,7 +451,7 @@ export class NodeCoordination {
         .catch(() => undefined);
     });
     nodes.onControllerDetached?.((controllerId) => {
-      void storage.kanban.forgetTicketSyncController(controllerId).catch(() => {
+      void storage.ticketSync.forgetTicketSyncController(controllerId).catch(() => {
         log.warn("ticket-sync.forget-failed");
       });
     });

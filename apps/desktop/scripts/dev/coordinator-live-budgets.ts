@@ -12,6 +12,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
   const peer = positive("ORKESTRATOR_AGENT_TEST_COORDINATOR_PEER_TIMEOUT_MS", 1_800_000);
   // A real Multi Review (reviewers, consolidation, then the Fix turn).
   const review = positive("ORKESTRATOR_AGENT_TEST_COORDINATOR_REVIEW_TIMEOUT_MS", 2_700_000);
+  // A whole build pipeline: build, Multi Review, its fix, verify.
+  const build = positive("ORKESTRATOR_AGENT_TEST_COORDINATOR_BUILD_TIMEOUT_MS", 3_600_000);
   // asyncCase has seven sequential step waits.
   const waits: Record<CoordinatorLiveScenario, number> = {
     "read-only": turn,
@@ -23,6 +25,8 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
     "deliver-now": step * 12,
     // Launch, its wake, the set turn, then the goal's turns and wake (three steps).
     goal: step * 6,
+    // Four request turns, four quiet waits and the worker's report, then the build.
+    routing: step * 9 + build,
     // Two environment starts, then the exchange.
     peer: step * 2 + peer,
   };
@@ -31,7 +35,7 @@ export function coordinatorLiveBudgets(env: NodeJS.ProcessEnv = process.env) {
   const tests = Object.fromEntries(
     Object.entries(waits).map(([scenario, wait]) => [scenario, wait + overhead]),
   ) as Record<CoordinatorLiveScenario, number>;
-  return { turn, step, family, peer, review, waits, tests, overhead, processMargin };
+  return { turn, step, family, peer, review, build, waits, tests, overhead, processMargin };
 }
 
 export function coordinatorLiveRunnerTimeout(

@@ -1819,6 +1819,11 @@ project home is the user's own checkout, and an agent working there conflicts
 with the user's own work in it. The role line says the coordinator gets the
 project's work done through workers and never alters the checkout itself.
 
+Whether a real model follows the table is checked by the live coordinator
+suite's `routing` scenario (`mise run test:agent:coordinator --scenario
+routing`; see "Live coordinator suite" in
+[`agent-testing.md`](../development/agent-testing.md)).
+
 ### The context block
 
 Every coordinator turn, including mail wakes, starts with a context block built

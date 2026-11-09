@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import * as realBackend from "@/lib/backend";
+import { normalizeTerminalText } from "@orkestrator/protocol/human-prompts";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 
 const realBackendSnapshot = { ...realBackend };
@@ -91,5 +92,42 @@ describe("UserCommandCard", () => {
     expect(screen.queryByRole("button", { name: /Cancel/ }) === null).toBe(true);
     expect(screen.queryByLabelText("Input for the running command") === null).toBe(true);
     expect(screen.getByText("npm ERR!")).toBeTruthy();
+  });
+
+  test("a spinner animates in place while the command runs", () => {
+    // A fake PTY stream, normalised the way the backend snapshots it: npm's
+    // spinner redraws at column 1 after clearing the line, with its escape
+    // sequences split across reads.
+    const E = "\u001b";
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"];
+    const chunks = [`npm notice Log in on https://registry.npmjs.org/\r\n${E}[?25l`];
+    for (const frame of frames) chunks.push(`${E}[1`, `G${E}[0K${frame}`);
+    let raw = "";
+    let revision = 1;
+    const at = () =>
+      record({ output: normalizeTerminalText(raw), prompt: undefined, revision: revision++ });
+    const view = render(<UserCommandCard command={at()} />);
+    const output = () => view.container.querySelector("pre")?.textContent ?? "";
+    for (const chunk of chunks) {
+      raw += chunk;
+      view.rerender(<UserCommandCard command={at()} />);
+      const frame = /[⠋⠙⠹⠸⠼⠴]/gu;
+      // Never more than one frame on screen, and always the latest one.
+      expect((output().match(frame) ?? []).length).toBeLessThanOrEqual(1);
+    }
+    expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\n⠴");
+    raw += `${E}[1G${E}[0KLogin at:\r\n`;
+    view.rerender(<UserCommandCard command={at()} />);
+    expect(output()).toBe("npm notice Log in on https://registry.npmjs.org/\nLogin at:\n");
+  });
+
+  test("truncated output keeps the omitted-output marker", () => {
+    render(
+      <UserCommandCard
+        command={record({ output: "last lines\n", outputTruncated: true, prompt: undefined })}
+      />,
+    );
+    expect(screen.getByText(/\[earlier output omitted\]/)).toBeTruthy();
+    expect(screen.getByText(/last lines/)).toBeTruthy();
   });
 });

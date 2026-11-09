@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { USER_COMMAND_OUTPUT_TAIL_CHARS } from "@orkestrator/protocol/user-commands";
+
 import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { spawnPty } from "./pty.js";
 import { UserCommandService, type UserCommandHost } from "./user-commands.js";
@@ -399,4 +401,52 @@ test("owner admission stays closed after command cleanup until the close is pers
     release();
   }
   await world.run();
+});
+
+describe("terminal redraws in command output", () => {
+  const E = "\u001b";
+  const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+  test("a spinner redraws in place while the command runs, split across chunks", async () => {
+    const world = controlledWorld();
+    const record = await world.run("bunx npm login");
+    const pty = world.processes[0]!;
+    const seen: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      // npm's spinner: column 1, clear to end, frame. Each redraw is split
+      // in the middle of its escape sequences, as PTY reads can be.
+      pty.output(`${E}[1`);
+      pty.output(`G${E}[`);
+      pty.output(`0K${FRAMES[i % FRAMES.length]}`);
+      seen.push(world.service.get(record.id).output);
+    }
+    expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => FRAMES[i % FRAMES.length]!));
+    pty.output(`${E}[1G${E}[0KLogin at:\r\n`);
+    pty.output(`${E}[1G${E}[0K⠋${E}[1G${E}[0Khttps://www.npmjs.com/login?next=/login/cli/abc\r\n`);
+    pty.output("Press ENTER to open in the browser...");
+    expect(world.service.get(record.id).output).toBe(
+      "Login at:\nhttps://www.npmjs.com/login?next=/login/cli/abc\nPress ENTER to open in the browser...",
+    );
+    expect(world.service.get(record.id).prompt).toMatchObject({
+      kind: "sign-in",
+      url: "https://www.npmjs.com/login?next=/login/cli/abc",
+      wantsEnter: true,
+    });
+    pty.exit(0);
+  });
+
+  test("output beyond the tail bound is truncated and still redraws in place", async () => {
+    const world = controlledWorld();
+    const record = await world.run("noisy");
+    const pty = world.processes[0]!;
+    const line = `${"x".repeat(99)}\r\n`;
+    for (let i = 0; i < (USER_COMMAND_OUTPUT_TAIL_CHARS / line.length) * 2; i += 1)
+      pty.output(line);
+    pty.output(`⠋${E}[1G${E}[0K⠙${E}[1G${E}[0Kdone`);
+    const snapshot = world.service.get(record.id);
+    expect(snapshot.outputTruncated).toBe(true);
+    expect(snapshot.output.length).toBeLessThanOrEqual(USER_COMMAND_OUTPUT_TAIL_CHARS);
+    expect(snapshot.output.endsWith(`${"x".repeat(99)}\ndone`)).toBe(true);
+    pty.exit(0);
+  });
 });

@@ -1409,7 +1409,7 @@
       "domain": "accounts",
       "since": 1,
       "access": "internal",
-      "read": true,
+      "read": false,
       "critical": [],
       "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
       "resultDigest": "sha256:d1ee87373b868f9d158c00a01b521e830debf5ec122bdb8350671b643fe2fba3"

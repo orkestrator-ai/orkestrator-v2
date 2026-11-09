@@ -317,7 +317,9 @@ export const collectSharedUsageReadingsCommand = defineCommand({
   name: "collect_shared_usage_readings",
   since: 1,
   access: "internal",
-  read: true,
+  // Classified as the routing classifier does (`isNodeReadCommand`), like
+  // `collect_ticket_sync_outbox`; it is never routed in any case.
+  read: false,
   args: Schema.Struct({ controllerId: optionalUnknown }),
   result: Schema.Struct({
     identities: Schema.optionalKey(Schema.Array(Schema.Unknown)),

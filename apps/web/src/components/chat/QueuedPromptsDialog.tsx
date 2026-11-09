@@ -17,7 +17,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { queuedPromptDisplay } from "@/lib/chat/queued-prompt-text";
 import { describePromptQueueActionError } from "@/lib/prompt-queue-errors";
+
+/**
+ * The prompt text a row shows: without the attachment path-reference block,
+ * which the transcript hides too. The files it names stand in for an
+ * attachment-only prompt.
+ */
+function displayText(text: string): string {
+  const display = queuedPromptDisplay(text);
+  return display.text || display.attachments.map((attachment) => attachment.name).join(", ");
+}
 
 export const WEB_ANNOTATION_QUEUE_REMOVE_WARNING =
   "Removing this item cancels the web annotation request.";
@@ -44,7 +55,10 @@ interface QueuedPromptsDialogProps<TQueued extends { id: string; text: string }>
    * instead of after it. Absent when there is no live turn to steer.
    */
   onSteer?: (message: TQueued) => void | Promise<void>;
-  /** Whether an entry can be steered; steering carries text only. */
+  /**
+   * Whether an entry can be steered. Steering carries text only, so an entry
+   * with attachments steers only when its text names them by path.
+   */
   canSteer?: (message: TQueued) => boolean;
   dispatchError?: { message: string };
   onRetryDispatch?: () => Promise<void>;
@@ -236,7 +250,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                               title="Web annotation requests can't be edited here"
                               className="line-clamp-4 text-sm break-words whitespace-pre-wrap text-muted-foreground"
                             >
-                              {message.text}
+                              {displayText(message.text)}
                             </p>
                           </>
                         ) : (
@@ -250,7 +264,7 @@ export function QueuedPromptsDialog<TQueued extends { id: string; text: string }
                             title="Click to edit this message"
                             className="-mx-1 line-clamp-4 w-full cursor-pointer rounded px-1 text-left text-sm break-words whitespace-pre-wrap transition-colors hover:bg-muted/50 disabled:cursor-wait disabled:opacity-60"
                           >
-                            {message.text}
+                            {displayText(message.text)}
                           </button>
                         )}
                         {renderMeta || steerable ? (

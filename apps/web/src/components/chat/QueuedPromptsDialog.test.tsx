@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { QueuedPromptsDialog, WEB_ANNOTATION_QUEUE_REMOVE_WARNING } from "./QueuedPromptsDialog";
 import {
   PromptQueueActionError,
@@ -31,6 +32,31 @@ describe("QueuedPromptsDialog", () => {
       <QueuedPromptsDialog {...props} onSteer={() => {}} canSteer={(item) => item.id === "two"} />,
     );
     expect(screen.getAllByRole("button", { name: "Steer" }).length).toBe(1);
+  });
+
+  test("shows a queued prompt without its attachment path-reference block", () => {
+    const text = buildInitialPromptWithAttachmentReferences("Compare against this", [
+      { name: "shot.png", path: "/workspace/shot.png" },
+    ]);
+    const attachmentOnly = buildInitialPromptWithAttachmentReferences("", [
+      { name: "notes.md", path: "/workspace/notes.md" },
+    ]);
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={[
+          { id: "one", text },
+          { id: "two", text: attachmentOnly },
+        ]}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Compare against this" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "notes.md" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("orkestrator-attachment-paths");
   });
 
   test("labels in-flight steering and blocks competing queue actions", async () => {

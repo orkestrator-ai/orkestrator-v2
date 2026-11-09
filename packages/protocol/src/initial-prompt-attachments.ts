@@ -120,6 +120,31 @@ export function extractMarkedAttachmentReferences(prompt: string): {
 }
 
 /**
+ * True when every attachment is named, by its exact path, in a valid marked
+ * path-reference block of `prompt`. Vacuously true with no attachments.
+ *
+ * Steering carries text only. A queued message whose files are all named in
+ * its own text still reaches the agent whole when steered, because the agent
+ * opens each file from the workspace path; one whose files are not would lose
+ * them. Only the marked block counts: heading text alone can be typed by the
+ * user and proves nothing about the files.
+ */
+export function attachmentsReferencedByPath(
+  prompt: string,
+  attachments: readonly unknown[],
+): boolean {
+  if (attachments.length === 0) return true;
+  const referenced = new Set(
+    extractMarkedAttachmentReferences(prompt).attachments.map((reference) => reference.path),
+  );
+  return attachments.every((attachment) => {
+    if (!attachment || typeof attachment !== "object" || !("path" in attachment)) return false;
+    const { path } = attachment;
+    return typeof path === "string" && path.trim().length > 0 && referenced.has(path);
+  });
+}
+
+/**
  * Remove the legacy path-reference suffix from transcript presentation.
  *
  * The suffix remains part of the provider prompt because terminal agents and

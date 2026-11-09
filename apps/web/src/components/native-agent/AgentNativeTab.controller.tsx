@@ -173,6 +173,8 @@ import {
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
 import {
   autoSteerNotice,
+  attachmentsSteerByPath,
+  queuedPromptSteerable,
   queuedSteerNote,
   shouldAutoSteer,
   steerRefusalNote,
@@ -184,6 +186,7 @@ import {
   resolveWorkspaceAttachment,
   retainSupportedAttachments,
 } from "@/lib/chat/workspace-attachments";
+import { queuedPromptAttachments, queuedPromptEditText } from "@/lib/chat/queued-prompt-text";
 import { createSessionKey } from "@/lib/utils";
 import {
   conversationScrollTargetKey,
@@ -2211,12 +2214,8 @@ export function SharedNativeAgentController({
           reportSendError(sessionAction.error);
           return false;
         }
-        if (submittedAttachments.length > 0) {
-          reportSendError("/steer supports text only. Remove the attachments and retry.");
-          return false;
-        }
         if (sendableTranscriptAnnotations(draft.annotations).length > 0) {
-          reportSendError("/steer supports text only. Remove transcript annotations and retry.");
+          reportSendError("/steer can't include transcript annotations. Remove them and retry.");
           return false;
         }
         reportSendError(null);
@@ -2224,7 +2223,16 @@ export function SharedNativeAgentController({
         setIsSubmitting(true);
         try {
           // Only `/steer` resolves here: it alone acts on the live turn.
-          const outcome = await performAction({ kind: "steer", text: sessionAction.text });
+          // Steering carries text only. Attachments travel as the same marked
+          // path-reference block a prompt carries, so the agent opens each file
+          // from the workspace and the transcript shows it as an attachment.
+          const outcome = await performAction({
+            kind: "steer",
+            text: buildInitialPromptWithAttachmentReferences(
+              sessionAction.text,
+              submittedAttachments.map(({ name, path }) => ({ name, path })),
+            ),
+          });
           if (outcome.outcome === "applied") {
             clearDraft(sessionKey);
             discardProvisionalDraft();
@@ -2453,7 +2461,8 @@ export function SharedNativeAgentController({
           steerAvailable,
           command: rawCommand,
           preparedPrompt,
-          attachmentCount: submittedAttachments.length,
+          text: prompt,
+          attachments: submittedAttachments,
           pendingHandoff: Boolean(handoff.pendingHistory),
         })
           ? crypto.randomUUID()
@@ -3891,34 +3900,25 @@ export function SharedNativeAgentController({
         }
       }
       await removeQueued(message.id);
+      // Sending appends the path-reference block for the restored attachments
+      // again, so the queued copy of it must not stay in the text.
+      const text = queuedPromptEditText(message.text, attachments);
       updateDraft(sessionKey, {
-        text: message.text,
+        text,
         mentions: [],
         attachments,
         annotations: [],
       });
       // Queue an end-caret request even if the store replacement has not
       // reached the editable DOM yet. Plain focus preserves the old offset.
-      inputRef.current?.focusAtEnd(message.text);
+      inputRef.current?.focusAtEnd(text);
     } finally {
       queueEditPendingRef.current = false;
       setQueueEditPending(false);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   };
-  const canSteerQueuedPrompt = (message: { id: string }) => {
-    // Steering carries text only, and a queued command must be
-    // revalidated as a command, not typed into the turn. An annotation
-    // request is a frozen brief with its own lifecycle, so it never steers.
-    const queued = message as Record<string, unknown>;
-    return (
-      webAnnotationQueueOrigin(message) === null &&
-      !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
-      queued.command === undefined &&
-      !nativeAsyncQuestionItemId(message.id) &&
-      !(typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
-    );
-  };
+  const canSteerQueuedPrompt = (message: { id: string }) => queuedPromptSteerable(message);
   // Why a row offers no Steer while the turn runs. Annotation requests and
   // question answers have their own cards, so they get no note here.
   const queuedRowSteerNote = (message: { id: string }) => {
@@ -3936,6 +3936,10 @@ export function SharedNativeAgentController({
       parked: Boolean(recoverableDispatch),
       steerable: canSteerQueuedPrompt(message),
       attachmentCount: Array.isArray(queued.attachments) ? queued.attachments.length : 0,
+      attachmentsReferencedByPath: attachmentsSteerByPath(
+        typeof queued.text === "string" ? queued.text : "",
+        queued.attachments,
+      ),
       command: queued.command !== undefined,
       refusal: steerRefusals.get(message.id),
       label,
@@ -4406,9 +4410,11 @@ export function SharedNativeAgentController({
                     // cancels it, so both stay behind the dialog.
                     const inline = !webAnnotationQueueOrigin(message);
                     const note = queuedRowSteerNote(message);
+                    const attachments = queuedPromptAttachments(message);
                     return {
                       id: message.id,
                       text: message.text,
+                      ...(attachments.length > 0 ? { attachments } : {}),
                       ...(note ? { note } : {}),
                       onSteer:
                         steerQueuedPrompt && canSteerQueuedPrompt(message)
@@ -4466,7 +4472,12 @@ export function SharedNativeAgentController({
                               busy: isRunning,
                             }).kind !== "prompt",
                           preparedPrompt: false,
-                          attachmentCount: draft.attachments.length,
+                          // Sending appends the path-reference block for these.
+                          text: buildInitialPromptWithAttachmentReferences(
+                            draft.text,
+                            draft.attachments.map(({ name, path }) => ({ name, path })),
+                          ),
+                          attachments: draft.attachments,
                           pendingHandoff: Boolean(handoff.pendingHistory),
                         })
                         ? `Steer the current ${label} turn`

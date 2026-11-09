@@ -394,7 +394,7 @@ test.each(["$deploy now", "/review changes"])(
   },
 );
 
-test("attachments only queue", async () => {
+test("attachments steer by the workspace paths their text names", async () => {
   setAutoSteer(true);
   const tabId = "tab-attachment";
   appCommandStore(nativeComposeStore)
@@ -405,9 +405,10 @@ test("attachments only queue", async () => {
       ],
     });
   await sendWhileRunning(tabId, "read this file");
-  await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
-  expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+  await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
+  expect(enqueuedText()).toContain('{"name":"image.png","path":"/workspace/image.png"}');
   expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+  expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
 });
 
 test("a prepared initial prompt waits for idle without auto-steering", async () => {

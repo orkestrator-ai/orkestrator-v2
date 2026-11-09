@@ -3,6 +3,7 @@ import {
   isGoalContinuationRequestId,
   sessionGoal,
 } from "@orkestrator/protocol/native-agent-goal";
+import { attachmentsReferencedByPath } from "@orkestrator/protocol/initial-prompt-attachments";
 import { createHash } from "node:crypto";
 import {
   isNativeAgentSteerRejectedOutcome,
@@ -501,7 +502,14 @@ export class NativeAgentDeliveries {
                 message.origin !== undefined ||
                 nativeAsyncQuestionItemId(messageId) ||
                 nativeAsyncQuestionItemId(requestId) ||
-                (Array.isArray(message.attachments) && message.attachments.length > 0)
+                // Steering carries text only. Attachments steer only when the
+                // text names each one by its workspace path, so the agent
+                // still receives every file.
+                (Array.isArray(message.attachments) &&
+                  !attachmentsReferencedByPath(
+                    typeof message.text === "string" ? message.text : "",
+                    message.attachments,
+                  ))
               ) {
                 throw new Error("This queued item cannot be steered");
               }

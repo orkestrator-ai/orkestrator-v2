@@ -335,7 +335,7 @@ for (const kind of ["graph-pending", "graph-rejected", "mail", "prompt"] as cons
       expect(patch).not.toHaveProperty("action");
       expect(patch).toMatchObject(edit === "rename" ? { name: "Renamed" } : { cron: "0 4 * * *" });
       expect(job.action).toEqual(original);
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       settle(graphScheduleOptions());
     });
   }
@@ -358,7 +358,7 @@ test("remote project routes list/create and graph reads to its own node and isol
     kind: "launch",
     projectId: "p1",
   });
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   const count = client.calls("list_scheduled_jobs").length;
   const timer = installControlledTimeout(50, { label: "resource change coalescing" });
   try {

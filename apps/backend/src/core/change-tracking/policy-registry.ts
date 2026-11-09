@@ -108,7 +108,7 @@ export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.
   evidencePullEntries: 256,
   snapshotSoftBudgetBytes: 1024 * 1024 * 1024,
   snapshotHardBudgetBytes: 4 * 1024 * 1024 * 1024,
-  archivedBodyRetentionDays: 90,
+  archivedBodyRetentionDays: 30,
   orphanGraceMs: 60 * 60_000,
   idleOwnerGraceMs: 30_000,
   restoreEnabled: true,

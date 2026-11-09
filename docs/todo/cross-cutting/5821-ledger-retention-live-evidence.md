@@ -1,10 +1,10 @@
 # Prove ledger retention on a real data directory
 
-From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: their "Needs verification" items, the finished-boundary policy that waits on a measurement, and one gap the work exposed. The code is built and tested on fixtures; nothing here has run against a long-lived ledger. The batch file was deleted when E3 was built; it is in Git history at the commit named in [Related](#related).
-
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `0e8958f57`.
+Analysed 2026-11-09 against main at `64a5b4cfb207820f07956615e43be7791bb56b05`.
+
+From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: their "Needs verification" items, the finished-boundary policy that waits on a measurement, and one gap the work exposed. The code is built and tested on fixtures; nothing here has run against a long-lived ledger. The batch file was deleted when E3 was built; it is in Git history at the commit named in [Related](#related).
 
 ### Tasks
 
@@ -56,7 +56,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 **Context.** 0730's constraints. The first pass also builds `change_turn_boundaries_environment`, `change_thread_segments_environment` and `change_turn_boundaries_age`, each one synchronous statement on small tables.
 
-**Investigation.** Not run. The fixtures hold hundreds of rows; `retention-deletion.test.ts` proves the pass splits them into many transactions, not how long a real one takes. A synthetic ledger of mini's size (2.8M rows, 1.28 GB; [0741](0741-backend-responsiveness-under-load.md) task 6) with a 7-day window retired 773,000 rows over 8 passes (78 s), with a worst event-loop stall of 120 ms, after 0741 removed four whole-table statements from the pass. A real ledger has not run it.
+**Investigation.** Live measurement remains open. On 2026-11-09 the ledger switched to WAL NORMAL and the default archive window fell from 90 to 30 days. A fresh-connection fixture with 200 turns aged 31–89 days proves the first pass releases their references in multiple transactions (at most 16 turns each), lets a timer observe partial progress, keeps recent history and does not revisit retired turns. The fixtures hold hundreds of rows; `retention-deletion.test.ts` proves the pass splits them into many transactions, not how long a real one takes. A synthetic ledger of mini's size (2.8M rows, 1.28 GB; [0741](0741-backend-responsiveness-under-load.md) task 6) with a 7-day window retired 773,000 rows over 8 passes (78 s), with a worst event-loop stall of 120 ms, after 0741 removed four whole-table statements from the pass. A real ledger has not run it.
 
 **Decisions.**
 
@@ -72,7 +72,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 **Problem.** Whether a client depends on old `change_frames` or `change_operations` for anything beyond a turn's own view was read from the service, not exercised.
 
-**Context.** 0730's Needs verification. Backend tests prove a retired turn lists with a null measurement, its view answers `unavailable` with `changes.reason.history-expired`, and a retired call's presentation is null, the answer an untracked call already gets. No real browser run reached that state: retirement needs a turn older than 90 days, and no billed provider turn was allowed.
+**Context.** 0730's Needs verification. Backend tests prove a retired turn lists with a null measurement, its view answers `unavailable` with `changes.reason.history-expired`, and a retired call's presentation is null, the answer an untracked call already gets. No real browser run reached that state: retirement needs a turn older than 30 days, and no billed provider turn was allowed.
 
 **Investigation.** `changeReason` (`apps/web/src/lib/changes/labels.ts`) has a label for the new reason and falls back to readable text for a renderer that lacks it. The history row, the thread header and the tool card were read, not driven.
 
@@ -84,7 +84,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
     - Cons: fixture setup against the real schema.
   - **Wait for a real thread to age out.**
     - Pros: nothing to set up.
-    - Cons: 90 days.
+    - Cons: 30 days.
 
 ### 5. Environments deleted before this change
 
@@ -103,6 +103,21 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
   - **Leave them.**
     - Pros: no inference-driven deletion.
     - Cons: their baselines stay pinned on disk for good.
+
+## Assumptions and decisions
+
+### Task 3: ledger durability and archive window
+
+On 2026-11-09, implemented the agreed ledger-only NORMAL synchronization and
+30-day archive window. FULL retains power-loss durability but syncs each ledger
+commit; NORMAL avoids those per-commit syncs while keeping WAL consistent and
+commits safe across application crashes or SIGKILL. Recent ledger commits may
+roll back after power loss or an OS crash. The main store stays FULL.
+Keeping 90 days retains more bodies but increases maintenance work; 30 days
+reduces that backlog. Worker threads and a size cap remain out of scope.
+Existing batch limits and yields are unchanged. Task 3 remains open for live
+disk-contention evidence; the fixture proves scheduling behavior, not a maximum
+stall duration on a real disk.
 
 ## Related
 

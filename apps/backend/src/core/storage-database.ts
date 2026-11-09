@@ -251,6 +251,8 @@ export interface StorageDatabaseOptions {
    * The change-tracking ledger has its own file (`change-tracking/ledger-schema.ts`).
    */
   file?: string;
+  /** WAL commit durability; defaults to full. Only the change ledger opts into normal. */
+  synchronous?: "normal" | "full";
   busyTimeoutMs?: number;
   /**
    * Called before migrating a database that already has data (outside any
@@ -383,8 +385,12 @@ export class StorageDatabase {
       // switching later needs a full VACUUM. Lets deletes give space back.
       this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
       this.db.exec("PRAGMA journal_mode = WAL");
-      // Structural writes were fsynced before; keep commits durable.
-      this.db.exec("PRAGMA synchronous = FULL");
+      // Preserve full durability unless this database explicitly opts into NORMAL.
+      this.db.exec(
+        options.synchronous === "normal"
+          ? "PRAGMA synchronous = NORMAL"
+          : "PRAGMA synchronous = FULL",
+      );
       // Deleting user content must not leave it readable in free pages.
       this.db.exec("PRAGMA secure_delete = ON");
       // No table declares a foreign key, so `foreign_keys` is left off: setting

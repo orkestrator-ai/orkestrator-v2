@@ -441,8 +441,10 @@ primitives above serialize their writes.
 
 ## Durability and deletion
 
-- WAL with `synchronous = FULL`: a committed write survives a crash, and a
-  torn write is impossible.
+- The main storage database uses WAL with `synchronous = FULL`: a committed
+  write survives a crash, and a torn write is impossible. `StorageDatabase`
+  defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
+  explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
   their backups) returns up to 16 MiB of freed pages to the filesystem

@@ -72,7 +72,7 @@ test("linked pipeline environment omits Auto-pipeline", async () => {
     client: node,
   });
   await waitFor(() => expect(node.calls("auto_pipeline_sources")).toHaveLength(1));
-  expect(screen.queryByRole("button", { name: "Auto-pipeline" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Auto-pipeline" }) === null).toBe(true);
 });
 test("coordinator and pipeline review dialog callers without a manual prompt target omit Auto-pipeline", () => {
   renderInNodeScope(
@@ -85,7 +85,7 @@ test("coordinator and pipeline review dialog callers without a manual prompt tar
     />,
     { client: client() },
   );
-  expect(screen.queryByRole("button", { name: "Auto-pipeline" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Auto-pipeline" }) === null).toBe(true);
 });
 test("cancel never sends a confirmation", async () => {
   const node = client();

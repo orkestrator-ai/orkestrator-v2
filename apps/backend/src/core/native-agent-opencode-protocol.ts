@@ -142,8 +142,9 @@ export function openCodeRoutingDependencies(
  * 1.x:
  *
  * - a coordinator's read-only policy (coordinators are not qualified on 2.x);
- * - a policy that asks for approvals, because an unattended 2.x session has
- *   no interaction surface to answer them through yet and would park;
+ * - no policy, or one that asks for approvals, because an unattended 2.x
+ *   session has no interaction surface to answer them through yet and would
+ *   park;
  * - an environment whose record of 2.x sessions is full.
  */
 export function newOpenCodeWorkflowSessionProtocol(
@@ -154,8 +155,10 @@ export function newOpenCodeWorkflowSessionProtocol(
 ): "v2" | undefined {
   if (resolveOpenCodeProtocol(setting) !== "v2") return undefined;
   if (environment?.environmentType !== "local") return undefined;
-  if (options.policy?.id === "coordinator-read-only") return undefined;
-  if (options.policy?.approvals === "ask") return undefined;
+  // Without a policy the session would run on the agent's own defaults,
+  // which ask; an unattended 2.x session has nobody to answer.
+  if (!options.policy || options.policy.approvals === "ask") return undefined;
+  if (options.policy.id === "coordinator-read-only") return undefined;
   return hasCapacity ? "v2" : undefined;
 }
 

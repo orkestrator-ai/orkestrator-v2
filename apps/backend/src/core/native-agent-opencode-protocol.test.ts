@@ -191,7 +191,8 @@ describe("workflow sessions", () => {
   test("follow the same switch, except where 2.x cannot serve them yet", () => {
     const policy = { id: "host-default", approvals: "auto-approve" } as never;
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "v2", true)).toBe("v2");
-    expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe("v2");
+    // Without a policy the agent's defaults ask, and nobody would answer.
+    expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe(undefined);
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "legacy", true)).toBe(undefined);
     expect(
       newOpenCodeWorkflowSessionProtocol({ policy }, { environmentType: "container" }, "v2", true),
@@ -228,7 +229,11 @@ describe("workflow sessions", () => {
       },
     };
     const deps = openCodeWorkflowRoutingDependencies(async () => undefined, storage, "env")!;
-    expect(await deps.newSessionProtocol!({})).toBe("v2");
+    expect(
+      await deps.newSessionProtocol!({
+        policy: { id: "host-default", approvals: "auto-approve" } as never,
+      }),
+    ).toBe("v2");
     expect(await deps.persistedProtocol("ses_w")).toBe(undefined);
     await deps.recordSession!("ses_w");
     expect(await deps.persistedProtocol("ses_w")).toBe("v2");

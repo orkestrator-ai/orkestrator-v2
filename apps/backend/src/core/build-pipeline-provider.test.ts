@@ -3,6 +3,8 @@ import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-mes
 import { openCodeFake } from "./agent-provider-test-support.js";
 import { createBuildPipelineProvider } from "./build-pipeline-provider.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 
 /** An OpenCode workflow provider on a login with only `opencode-go` connected. */
 function goOnlyProvider(model?: string) {
@@ -226,6 +228,49 @@ describe("createBuildPipelineProvider", () => {
       expect(fake.createCalls[0]?.model).toBeUndefined();
     } finally {
       await provider.dispose?.();
+    }
+  });
+});
+
+describe("createBuildPipelineProvider on the OpenCode 2.x preview", () => {
+  test("a workflow session follows the switch and is recorded before it is handed out", async () => {
+    const server = new FakeOpenCode2Server();
+    const fake = openCodeFake();
+    const recorded: string[] = [];
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+        model: "fixture/fixture",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        bridgeEnvironmentId: "env-1",
+        openCode2Workflow: (environmentId) => ({
+          connection: async () => ({
+            baseUrl: "http://127.0.0.1:1",
+            password: "pw",
+            directory: "/work",
+            generation: environmentId,
+          }),
+          persistedProtocol: async (id) => (recorded.includes(id) ? "v2" : undefined),
+          newSessionProtocol: async () => "v2",
+          recordSession: async (id) => void recorded.push(id),
+          createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+        }),
+      },
+    );
+    try {
+      const id = await provider.createSession("review", "Reviewer", { model: "fixture/fixture" });
+      expect(server.sessions.has(id)).toBe(true);
+      expect(recorded).toEqual([id]);
+      expect(fake.createCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+      server.stop();
     }
   });
 });

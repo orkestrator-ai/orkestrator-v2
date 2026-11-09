@@ -26,6 +26,7 @@ async function withService(
     origin?: "interactive-native" | "build-pipeline";
     /** What `openCode2InContainer` answers; absent leaves the option out. */
     inContainer?: boolean;
+    resolveAgentToolConnection?: () => { url: string; token: string };
   },
   run: (input: {
     service: NativeAgentService;
@@ -56,6 +57,9 @@ async function withService(
     ...(options.inContainer === undefined
       ? {}
       : { openCode2InContainer: async () => options.inContainer === true }),
+    ...(options.resolveAgentToolConnection
+      ? { resolveAgentToolConnection: options.resolveAgentToolConnection }
+      : {}),
   });
   try {
     await run({ service, created, storage });
@@ -79,6 +83,20 @@ describe("OpenCode line of a new native session", () => {
       expect((await service.ensureSession(identity)).openCodeProtocol).toBe("v2");
       expect(created).toHaveLength(1);
     });
+  });
+
+  test("a 2.x tab takes the per-tab Orkestrator MCP credential; a 1.x tab does not", async () => {
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    const owner = { kind: "environment" as const, projectId: "project-1", environmentId: "env-1" };
+    for (const setting of ["v2", "legacy"] as const) {
+      await withService(
+        { setting, resolveAgentToolConnection: () => connection },
+        async ({ service, created }) => {
+          await service.ensureSession({ ...identity, owner });
+          expect(created[0]?.agentMcp).toEqual(setting === "v2" ? connection : undefined);
+        },
+      );
+    }
   });
 
   test("legacy, workflows, containers and hosts without a 2.x server stay on 1.x", async () => {

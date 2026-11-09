@@ -269,6 +269,8 @@ export class CoordinatorService {
     );
     this.statusWakes = new CoordinatorStatusWakes(storage, {
       ...options,
+      pullRequestMetadata:
+        options.pullRequestMetadata ?? ((url) => this.pullRequestWatches.metadata(url)),
       noticeRouter: this.noticeRouter,
       ...(workerActivity ? { workerActivity } : {}),
     });

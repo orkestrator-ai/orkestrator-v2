@@ -14,7 +14,8 @@ import { rpc, useControlMcpServerHarness } from "./control-mcp-server-test-suppo
 // Measured 2026-11-05: 89 tools and 125,040 bytes before the legacy node tools
 // and start_multi_review were removed, 82 tools and 115,114 bytes after.
 // 2026-11-07: 85 tools and 118,361 bytes with the three ticket label tools.
-const MAX_TOOLS = 85;
+// Two conversation mark tools added for the Actions panel.
+const MAX_TOOLS = 87;
 const MAX_SCHEMA_BYTES = 125_000;
 
 const harness = useControlMcpServerHarness();

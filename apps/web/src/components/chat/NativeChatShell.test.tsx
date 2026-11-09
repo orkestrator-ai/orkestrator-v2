@@ -103,6 +103,43 @@ describe("NativeChatShell", () => {
     mock.module("./VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
   });
 
+  test("coordinator gate, history evidence, viewport cutoff and navigation use the shell wiring", () => {
+    const props = shellProps();
+    const messages: NativeMessage[] = [0, 1].map((i) => ({
+      id: `row-${i}`,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-09",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "orkestrator_mark_question",
+          toolState: "success",
+          toolArgs: { title: `Question ${i}` },
+        },
+      ],
+    }));
+    let target = "";
+    const view = renderInAppCommandScope(<NativeChatShell {...props} messages={messages} />);
+    expect(screen.queryByRole("region", { name: "Actions" }) === null).toBe(true);
+    view.rerender(
+      <NativeChatShell
+        {...props}
+        messages={messages}
+        coordinatorNavigate={(id) => {
+          target = id;
+        }}
+      />,
+    );
+    act(() => lastVirtualizedMessageListProps!.onVisibleEnd(0));
+    fireEvent.focus(screen.getByRole("button", { name: "Actions, 1 waiting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Question 0" }));
+    expect(target).toBe("row-0");
+    expect(lastVirtualizedMessageListProps!.onVisibleEnd).toBeFunction();
+    cleanup();
+  });
+
   test("mounts the prompt rail only with a controller and an uncentered composer, using dock measurements", () => {
     const props = shellProps();
     const controller = new TranscriptScrollController({ current: null });

@@ -745,6 +745,25 @@ describe("reading a carrier back", () => {
     ).toBe(true);
   });
 
+  test("PR metadata survives the provider transcript carrier", () => {
+    const pullRequest = {
+      url: "https://github.com/acme/app/pull/12",
+      number: 12,
+      title: "Improve search",
+    };
+    const message = mailMessage({
+      from: { kind: "system", projectId: "p", source: "workflow", resourceId: "review" },
+      notice: {
+        resource: { kind: "multi-review", id: "review" },
+        state: "pr-opened",
+        tone: "info",
+        pullRequest,
+      },
+    });
+    const { entries } = readAgentMailCarriers(renderAgentMailCarrier(message));
+    expect(entries[0]?.notice?.pullRequest).toEqual(pullRequest);
+  });
+
   test("reads back what the carrier was rendered from", () => {
     const { entries, rest } = readAgentMailCarriers(renderAgentMailCarrier(mailMessage()));
 
@@ -812,4 +831,34 @@ describe("reading a carrier back", () => {
       expect(readAgentMailCarriers(carrierOf(payload)).entries).toEqual([null]);
     }
   });
+});
+
+test("PR metadata survives normalization and rejects invalid identity", () => {
+  const pullRequest = {
+    url: "https://github.com/acme/app/pull/12",
+    number: 12,
+    title: "Improve search",
+  };
+  const notice = {
+    resource: { kind: "multi-review", id: "review" },
+    state: "pr-opened",
+    tone: "info",
+    pullRequest,
+  };
+  expect(normalizeAgentMailNotice(JSON.parse(JSON.stringify(notice)))?.pullRequest).toEqual(
+    pullRequest,
+  );
+  for (const invalid of [
+    { ...pullRequest, number: -1 },
+    { ...pullRequest, number: 13 },
+    { ...pullRequest, url: "javascript:alert(1)" },
+  ]) {
+    expect(
+      normalizeAgentMailNotice({ ...notice, pullRequest: invalid })?.pullRequest,
+    ).toBeUndefined();
+  }
+  expect(
+    normalizeAgentMailNotice({ ...notice, pullRequest: { ...pullRequest, title: "x".repeat(241) } })
+      ?.pullRequest,
+  ).toEqual({ url: pullRequest.url, number: 12 });
 });

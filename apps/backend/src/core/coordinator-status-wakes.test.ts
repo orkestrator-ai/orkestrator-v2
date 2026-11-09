@@ -98,6 +98,7 @@ async function createWorld(
   const world = await MailWorld.create({
     statusWakes: {
       timers,
+      pullRequestMetadata: async (url) => ({ url, number: 7, title: "Improve search" }),
       workerActivity: async (environmentId, tabId) =>
         activity.get(`${environmentId}:${tabId}`) ?? "working",
       lastAssistantExcerpt: async (environmentId, tabId) =>
@@ -480,6 +481,11 @@ describe("coordinator status wakes", () => {
       "Pull request: https://github.com/org/repo/pull/7",
     );
     expect(world.received(coordinator)[1]).toContain("does not merge");
+    expect(world.carriers(coordinator)[1]![0]!.notice?.pullRequest).toEqual({
+      url: "https://github.com/org/repo/pull/7",
+      number: 7,
+      title: "Improve search",
+    });
   });
 
   test.each(["sessionKey", "startedAt"] as const)(

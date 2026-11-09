@@ -332,6 +332,11 @@ describe("watching a pull request", () => {
       expect(mail.body).toContain("checks failing");
       expect(mail.body).toContain("no action is expected");
       expect(mail.notice).toEqual({
+        pullRequest: {
+          url: "https://github.com/Acme/App/pull/7",
+          number: 7,
+          title: "Add the watch",
+        },
         resource: { kind: "watched-pull-request", id: "acme/app#7", label: "Add the watch" },
         state: "pr-checks-failed",
         tone: "failure",
@@ -786,5 +791,31 @@ describe("readings", () => {
       }),
     ).toEqual(["merged"]);
     expect(describeWatchedPullRequestChanges(open, open)).toEqual([]);
+  });
+});
+
+test("PR metadata reuses the host reader and bounds the title", async () => {
+  await withHarness(async ({ watches, reads, setStatus, setToken }) => {
+    setStatus(7, status({ title: "  Improve\nsearch  " }));
+    expect(await watches.metadata("https://github.com/acme/app/pull/7")).toEqual({
+      url: "https://github.com/acme/app/pull/7",
+      number: 7,
+      title: "Improve search",
+    });
+    expect(reads).toEqual([ref(7)]);
+    setStatus(7, status({ title: "x".repeat(500) }));
+    expect((await watches.metadata("https://github.com/acme/app/pull/7"))?.title?.length).toBe(120);
+    setStatus(7, new Error("metadata unavailable"));
+    expect(await watches.metadata("https://github.com/acme/app/pull/7")).toEqual({
+      url: "https://github.com/acme/app/pull/7",
+      number: 7,
+    });
+    setToken(undefined);
+    expect(await watches.metadata("https://github.com/acme/app/pull/7")).toEqual({
+      url: "https://github.com/acme/app/pull/7",
+      number: 7,
+    });
+    expect(await watches.metadata("https://example.com/pull/7")).toBeUndefined();
+    expect(reads).toHaveLength(3);
   });
 });

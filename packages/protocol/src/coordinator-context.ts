@@ -1,3 +1,4 @@
+import { COORDINATOR_ACTION_GUIDANCE } from "./coordinator-actions.js";
 /**
  * The context block at the head of every coordinator prompt.
  *
@@ -149,6 +150,7 @@ function projectLine(project: CoordinatorContextInput["project"]): string {
 function delegationLines(delegation: CoordinatorContextDelegation): string {
   if (delegation.kind === "side") {
     return (
+      `${COORDINATOR_ACTION_GUIDANCE}\n` +
       `Side agent: you are ${bounded(delegation.title, MAX_LABEL_LENGTH)}, a side agent of this project's coordinator. You can read the project and Orkestrator state, including a worker's changes with get_worker_changes, but you cannot launch environments or jobs. ` +
       (delegation.messagingEnabled
         ? `Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`
@@ -164,6 +166,7 @@ function delegationLines(delegation: CoordinatorContextDelegation): string {
   return (
     `Main coordinator: every worker in this project reports to you. Side agents (Side 1, Side 2…) may mail you; reach one with send_message to its environment id from list_mailboxes. Message a worker by its environment id; toTabId is optional.\n` +
     `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
+    `${COORDINATOR_ACTION_GUIDANCE}\n` +
     `${COORDINATOR_ROUTING_RULE}\n` +
     `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
     `Actions: launch_multi_review runs the environment's Multi Review button action; open_multi_review and open_multi_review_fix present saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +

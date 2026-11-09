@@ -227,6 +227,7 @@ export function renderWatchedPullRequestNotice(
     subject,
     body,
     notice: {
+      pullRequest: { url, number: entry.number, ...(label ? { title: label } : {}) },
       resource: {
         kind: "watched-pull-request",
         id: entry.key,
@@ -348,6 +349,19 @@ export class CoordinatorPullRequestWatches {
       });
       if (stop) break;
     }
+  }
+
+  /** Reuse the host credential and conditional GitHub reader for status-card labels. */
+  async metadata(url: string) {
+    const parsed = parseGitHubPullRequestLink(url);
+    if (!parsed) return undefined;
+    const ref = { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
+    const title = await this.token()
+      .then(async (token) =>
+        token ? boundedTitle((await this.readStatus(token, ref)).title) : undefined,
+      )
+      .catch(() => undefined);
+    return { url: gitHubPullRequestUrl(ref), number: ref.number, ...(title ? { title } : {}) };
   }
 
   /** Read one watched pull request; true when GitHub asked us to stop for now. */

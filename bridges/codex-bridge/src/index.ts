@@ -913,6 +913,7 @@ export const __testing = {
     sseRouteTestHooks = hooks;
   },
   startBridgeServerForTesting: startBridgeServer,
+  startBridgeForTesting: startBridge,
   startSelectedEngineForTesting: startSelectedEngine,
   stopSelectedEngineForTesting: stopSelectedEngine,
   startSseKeepaliveForTesting: startSseKeepalive,
@@ -2177,6 +2178,16 @@ function startBridgeServer(
   });
 }
 
+function startBridge(
+  env: NodeJS.ProcessEnv = process.env,
+  listen: (options: BridgeServerOptions) => unknown = serve,
+  runtime: Pick<AppServerRuntime, "start" | "getHealth"> = appServerRuntime,
+): unknown {
+  // Mark restoration synchronously before a listener can receive requests.
+  void startSelectedEngine(env, runtime);
+  return startBridgeServer(env, listen);
+}
+
 const shutdownHandler = createShutdownHandler(cleanupTimer);
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, shutdownHandler);
@@ -2211,7 +2222,4 @@ if (parentPid !== null) {
   });
 }
 
-// The engine first: `start()` marks the session registry as restoring before
-// the server can hand any session route a request (see awaitRestoredSessions).
-void startSelectedEngine();
-startBridgeServer();
+startBridge();

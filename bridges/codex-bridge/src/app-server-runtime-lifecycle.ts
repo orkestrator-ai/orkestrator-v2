@@ -116,13 +116,22 @@ export class CodexRuntimeLifecycle {
    */
   async start(): Promise<void> {
     if (this.ctx.started) return;
-    if (this.ctx.sessionRestore === "not-started") this.ctx.sessionRestore = "restoring";
+    if (this.ctx.sessionRestore === "failed") {
+      this.ctx.sessionsRestored = Promise.withResolvers<boolean>();
+    }
+    if (this.ctx.sessionRestore !== "restored") this.ctx.sessionRestore = "restoring";
     if (this.ctx.startPromise) return this.ctx.startPromise;
     const startPromise = this.startOnce();
     this.ctx.startPromise = startPromise;
     try {
       await startPromise;
       this.ctx.started = true;
+    } catch (error) {
+      if (this.ctx.sessionRestore === "restoring") {
+        this.ctx.sessionRestore = "failed";
+        this.ctx.sessionsRestored.resolve(false);
+      }
+      throw error;
     } finally {
       if (this.ctx.startPromise === startPromise) this.ctx.startPromise = null;
     }
@@ -171,7 +180,7 @@ export class CodexRuntimeLifecycle {
     // Session routes can now tell a missing session from one not yet read.
     // Engine start can take far longer, and nothing it does changes the registry.
     this.ctx.sessionRestore = "restored";
-    this.ctx.sessionsRestored.resolve();
+    this.ctx.sessionsRestored.resolve(true);
 
     try {
       await this.ctx.options.engine.start();
@@ -199,6 +208,7 @@ export class CodexRuntimeLifecycle {
    * passes first, which the caller reports as unavailable, never as missing.
    */
   async whenSessionsRestored(timeoutMs: number): Promise<boolean> {
+    if (this.ctx.sessionRestore === "failed") return false;
     if (this.ctx.sessionRestore !== "restoring") return true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<false>((resolve) => {
@@ -206,7 +216,7 @@ export class CodexRuntimeLifecycle {
       timer.unref?.();
     });
     try {
-      return await Promise.race([this.ctx.sessionsRestored.promise.then(() => true), timedOut]);
+      return await Promise.race([this.ctx.sessionsRestored.promise, timedOut]);
     } finally {
       clearTimeout(timer);
     }

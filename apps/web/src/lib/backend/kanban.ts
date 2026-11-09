@@ -31,6 +31,9 @@ export interface KanbanImage {
   /** Original filename before WebP conversion */
   filename: string;
   createdAt: string;
+  /** The machine holding the bytes, for an image on a ticket synced from another machine. */
+  nodeId?: string;
+  nodeName?: string;
 }
 
 export type KanbanStatus = "backlog" | "in-progress" | "review" | "done";

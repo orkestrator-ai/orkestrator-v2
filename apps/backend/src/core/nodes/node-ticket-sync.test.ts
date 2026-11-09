@@ -1,9 +1,4 @@
-import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 
 import {
   TICKET_SYNC_LIMITS,
@@ -12,117 +7,17 @@ import {
 
 import { seedStore, readStoredValue } from "../storage-test-support.js";
 import { emptyKanbanSyncStore, journalTicketOp } from "../storage-kanban-sync.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
-import { createProject, StorageService } from "../storage.js";
-import type { ContractEnvelope } from "./node-link.js";
-import { NodeTicketSync, type TicketSyncLink } from "./node-ticket-sync.js";
+import { createProject } from "../storage.js";
+import { cleanupFleets, COMMAND_ID, fleet, LEAF_ID } from "./node-ticket-sync-test-support.js";
 
 /**
  * Kanban sync between a command node and a leaf, each a real storage service
  * in its own data directory, over an in-process link that runs the leaf's real
- * sync commands. `link.connected = false` is a disconnected leaf.
+ * sync commands (`node-ticket-sync-test-support.ts`). The to-do 3800
+ * follow-ups are in `node-ticket-sync-followups.test.ts`.
  */
 
-const COMMAND_ID = "bk_command";
-const LEAF_ID = "bk_leaf";
-const REPO = "https://github.com/acme/repo.git";
-
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
-});
-
-async function storageIn(name: string): Promise<StorageService> {
-  const dir = await mkdtemp(path.join(tmpdir(), `ork-ticket-sync-${name}-`));
-  const storage = new StorageService(dir);
-  await storage.init();
-  cleanups.push(async () => {
-    storage.close?.();
-    await rm(dir, { recursive: true, force: true });
-  });
-  return storage;
-}
-
-async function fleet(
-  options: {
-    capability?: boolean;
-    /** The leaf's hello `domains` (plan item 1010); absent is a pre-contract leaf. */
-    domains?: Record<string, { min: number; max: number }>;
-  } = {},
-) {
-  const command = await storageIn("command");
-  const leaf = await storageIn("leaf");
-  const commandProject = await command.addProject(createProject(REPO));
-  const leafProject = await leaf.addProject(createProject(REPO));
-  const handlers = new Map<string, CommandHandler>();
-  registerTicketSyncCommands(registrarFrom((name, handler) => handlers.set(name, handler)));
-  const leafContext = {
-    storage: leaf,
-    nodes: { listControllers: () => [{ controllerId: COMMAND_ID, displayName: "Command" }] },
-  } as unknown as CommandContext;
-  const received: string[] = [];
-  const envelopes: Array<{ command: string; envelope: ContractEnvelope | undefined }> = [];
-  const failNext = new Set<string>();
-  const link: TicketSyncLink & { connected: boolean } = {
-    connected: true,
-    hello: {
-      capabilities: options.capability === false ? {} : { "ticket-sync": 1 },
-      ...(options.domains ? { domains: options.domains } : {}),
-    },
-    async invoke<T>(
-      name: string,
-      args: Record<string, unknown> = {},
-      invokeOptions?: { envelope?: ContractEnvelope },
-    ): Promise<T> {
-      if (!link.connected) throw new Error("fetch failed");
-      received.push(name);
-      envelopes.push({ command: name, envelope: invokeOptions?.envelope });
-      const handler = handlers.get(name);
-      if (!handler) throw new Error(`Unknown command: ${name}`);
-      // The leaf's registry gets the envelope as the gateway passes it.
-      const result = await handler(structuredClone(args), leafContext, invokeOptions?.envelope);
-      // An answer lost on the way back: the leaf acted, the command node never heard.
-      if (failNext.delete(name)) throw new Error("connection lost");
-      return structuredClone(result) as T;
-    },
-  };
-  const events: Array<{ event: string; payload: unknown }> = [];
-  const sync = new NodeTicketSync({
-    selfId: async () => COMMAND_ID,
-    link: () => link,
-    nodes: async () => [
-      {
-        nodeId: LEAF_ID,
-        displayName: "Leaf machine",
-        available: link.connected,
-        projects: [{ projectId: leafProject.id, repositoryHint: "github.com/acme/repo" }],
-      },
-    ],
-    localProjects: () => command.loadProjects(),
-    ticketSync: command.ticketSync,
-    emit: eventSink((event, payload) => events.push({ event, payload })),
-    debounceMs: 1,
-    retryDelayMs: 60_000,
-  });
-  cleanups.push(async () => sync.dispose());
-  const leafTicket = async (id: string) => leaf.kanban.getKanbanTask(id);
-  const commandTicket = async (id: string) => command.kanban.getKanbanTask(id);
-  return {
-    command,
-    leaf,
-    commandProject,
-    leafProject,
-    link,
-    sync,
-    received,
-    envelopes,
-    failNext,
-    events,
-    leafTicket,
-    commandTicket,
-  };
-}
+afterEach(cleanupFleets);
 
 describe("command node to leaf", () => {
   test("a command node ticket reaches the leaf under the same id, and edits and deletion follow", async () => {

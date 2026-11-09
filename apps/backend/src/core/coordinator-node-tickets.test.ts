@@ -130,6 +130,7 @@ async function setup(
       })),
     localProjects: () => world.storage.loadProjects(),
     ticketSync: world.storage.ticketSync,
+    localImage: (imageId) => world.storage.kanban.getKanbanImageData(imageId).catch(() => null),
     emit: () => undefined,
     debounceMs: 1,
     retryDelayMs: 60_000,

@@ -21,7 +21,12 @@
  *   A deleted ticket leaves a tombstone, so a reconnecting leaf removes its
  *   copy instead of bringing the ticket back.
  *
- * Images are not synced: each machine keeps its own (see the design record).
+ * Images sync as references (`TicketSyncImageRef`): each machine keeps the
+ * bytes of the images attached on it, and another machine reads them over the
+ * node link when it needs them (`read_ticket_image`, `put_ticket_image`). A
+ * leaf sends image changes only to a command node that declared the `images`
+ * feature when it collected, so an older command node never receives an
+ * operation it cannot read.
  */
 
 import { isTicketLabelList } from "./ticket-labels.js";
@@ -43,6 +48,12 @@ export const TICKET_SYNC_OUTBOX_READY_EVENT = "ticket-sync-outbox-ready";
 /** The command node's view of its leaves' sync changed (renderer re-reads the status). */
 export const TICKET_SYNC_STATUS_EVENT = "ticket-sync-status-changed";
 
+/** What a command node declares it can apply when it collects a leaf's outbox. */
+export const TICKET_SYNC_FEATURES = {
+  /** Image references (`add-image`, `delete-image`, `images` on a creation). */
+  images: "images",
+} as const;
+
 export const TICKET_SYNC_LIMITS = {
   /** Snapshots or tombstones per `apply_ticket_sync` call. */
   maxBatchItems: 100,
@@ -58,6 +69,14 @@ export const TICKET_SYNC_LIMITS = {
   maxConflicts: 200,
   /** Characters of a conflicting value kept in its record. */
   maxConflictPreview: 500,
+  /** Conflicts `get_ticket_sync_status` returns. */
+  maxStatusConflicts: 20,
+  /** Image references on one ticket. */
+  maxImageRefs: 200,
+  /** Base64 characters of one image read or delivered over the link. */
+  maxImageDataChars: 16 * 1024 * 1024,
+  /** Images a leaf asks its command node for in one collection. */
+  maxWantedImages: 20,
 } as const;
 
 export const TICKET_SYNC_FIELDS = ["title", "content", "status"] as const;
@@ -71,6 +90,18 @@ export interface TicketSyncComment {
   id: string;
   text: string;
   createdAt: string;
+}
+
+/**
+ * An image attached to a synced ticket. `nodeId` names the machine that holds
+ * its bytes; a machine reads images it does not hold over the node link.
+ */
+export interface TicketSyncImageRef {
+  id: string;
+  filename: string;
+  createdAt: string;
+  nodeId?: string;
+  nodeName?: string;
 }
 
 /** Where a ticket's build or environment runs, when that is another machine. */
@@ -133,6 +164,11 @@ export interface TicketSnapshot extends TicketContentValue {
   /** The merge already applied, retained when a user reopens the ticket. */
   prMergeDoneUrl?: string;
   comments: TicketSyncComment[];
+  /**
+   * The ticket's images, each naming the machine with its bytes. Absent from
+   * nodes that predate image sync; then a receiver keeps the images it has.
+   */
+  images?: TicketSyncImageRef[];
   createdAt: string;
   work?: TicketWorkLocation;
 }
@@ -159,6 +195,8 @@ export type TicketSyncOp =
         status: TicketSyncStatus;
         prMergeDoneUrl?: string;
         comments: TicketSyncComment[];
+        /** The leaf's own images; sent only to a command node with the `images` feature. */
+        images?: TicketSyncImageRef[];
         createdAt: string;
       };
     }
@@ -171,6 +209,9 @@ export type TicketSyncOp =
     }
   | { kind: "add-comment"; comment: TicketSyncComment }
   | { kind: "delete-comment"; commentId: string }
+  /** An image attached on the leaf (its bytes stay there). */
+  | { kind: "add-image"; image: TicketSyncImageRef }
+  | { kind: "delete-image"; imageId: string }
   | {
       kind: "work";
       work: Omit<TicketWorkLocation, "nodeId" | "nodeName" | "updatedAt">;
@@ -189,6 +230,8 @@ export interface TicketSyncOutboxItem {
 
 /** A leaf change the command node did not apply, kept for the user. */
 export interface TicketSyncConflict {
+  /** Absent from records written before conflicts could be dismissed; the board derives one. */
+  id?: string;
   at: string;
   ticketId: string;
   projectId: string;
@@ -207,6 +250,13 @@ export interface TicketSyncNodeState {
   nodeName: string;
   /** The leaf's copy of the project. */
   projectId?: string;
+  /** That copy's name on the leaf. */
+  projectName?: string;
+  /**
+   * Other copies of the repository on the leaf. Only the first syncs; the
+   * others keep their own boards (one ticket id is one row on a machine).
+   */
+  otherCopies?: number;
   state: "in-sync" | "syncing" | "behind" | "offline" | "update-required" | "error";
   /** The board's latest change and the last one the leaf confirmed. */
   latestSeq: number;
@@ -219,7 +269,34 @@ export interface TicketSyncNodeState {
 export interface TicketSyncStatusResult {
   projectId: string;
   nodes: TicketSyncNodeState[];
+  /** The latest conflicts, at most `maxStatusConflicts`. */
   conflicts: TicketSyncConflict[];
+  /** Every conflict kept for the project; absent from older backends. */
+  conflictCount?: number;
+}
+
+/** A leaf board's view of its command nodes (`get_ticket_sync_leaf_status`). */
+export interface TicketSyncLeafStatus {
+  projectId: string;
+  /** The command nodes whose tickets this board holds copies of. */
+  controllers: Array<{
+    controllerId: string;
+    nodeName: string;
+    /** The command node's project. */
+    sourceProjectId: string;
+    lastSyncedAt?: string;
+    /** Changes queued here for it. */
+    pending: number;
+  }>;
+  /** Tickets on this board the command node does not have, which Share sends. */
+  unshared: number;
+  /** Set when this project is not synced because another copy of its repository here is. */
+  syncedCopy?: { projectId: string; projectName: string; nodeName: string };
+}
+
+/** Why the bytes of an image on another machine cannot be shown. */
+export function ticketImageUnavailableMessage(nodeName: string): string {
+  return `This image is on ${nodeName}, which is not connected. It shows here once ${nodeName} is back.`;
 }
 
 /** A leaf that does not advertise `ticket-sync` (version-compatibility.md, Register). */
@@ -317,6 +394,37 @@ function parseContent(value: Record<string, unknown>): TicketContentValue {
   };
 }
 
+export function parseTicketSyncImageRef(value: unknown): TicketSyncImageRef {
+  if (
+    !isRecord(value) ||
+    !isBoundedString(value.id, 200) ||
+    !/^[A-Za-z0-9_-]+$/.test(value.id) ||
+    !isBoundedString(value.filename, 1_000) ||
+    !isBoundedString(value.createdAt, 64)
+  ) {
+    throw new Error("Invalid ticket image.");
+  }
+  const ref: TicketSyncImageRef = {
+    id: value.id,
+    filename: value.filename,
+    createdAt: value.createdAt,
+  };
+  for (const key of ["nodeId", "nodeName"] as const) {
+    if (value[key] === undefined) continue;
+    if (!isBoundedString(value[key], 200) || !value[key]) throw new Error("Invalid ticket image.");
+    ref[key] = value[key] as string;
+  }
+  return ref;
+}
+
+function parseImageRefs(value: unknown): { images?: TicketSyncImageRef[] } {
+  if (value === undefined) return {};
+  if (!Array.isArray(value) || value.length > TICKET_SYNC_LIMITS.maxImageRefs) {
+    throw new Error("Invalid ticket images.");
+  }
+  return { images: value.map(parseTicketSyncImageRef) };
+}
+
 function parseWork(value: unknown): TicketWorkLocation {
   if (!isRecord(value) || !isBoundedString(value.nodeId, 200) || !value.nodeId) {
     throw new Error("Invalid ticket work location.");
@@ -377,6 +485,7 @@ export function parseTicketSyncItem(value: unknown): TicketSyncItem {
     status: value.status,
     ...parseMergeDone(value),
     comments: value.comments.map(parseComment),
+    ...parseImageRefs(value.images),
     createdAt: value.createdAt,
     ...parseContent(value),
     ...(value.work !== undefined ? { work: parseWork(value.work) } : {}),
@@ -405,6 +514,7 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
           status: ticket.status,
           ...parseMergeDone(ticket),
           comments: ticket.comments.map(parseComment),
+          ...parseImageRefs(ticket.images),
           createdAt: ticket.createdAt,
           ...parseContent(ticket),
         },
@@ -444,6 +554,11 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
     case "delete-comment":
       if (!isBoundedString(value.commentId, 200) || !value.commentId) break;
       return { kind: "delete-comment", commentId: value.commentId };
+    case "add-image":
+      return { kind: "add-image", image: parseTicketSyncImageRef(value.image) };
+    case "delete-image":
+      if (!isBoundedString(value.imageId, 200) || !value.imageId) break;
+      return { kind: "delete-image", imageId: value.imageId };
     case "work": {
       if (!isRecord(value.work)) break;
       const {

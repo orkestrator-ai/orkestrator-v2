@@ -1,10 +1,12 @@
 import { effectiveDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import {
+  TICKET_SYNC_FEATURES,
   isTicketTombstone,
   ticketSyncConflictComment,
   TICKET_SYNC_LIMITS,
   type TicketSyncConflict,
   type TicketSyncField,
+  type TicketSyncImageRef,
   type TicketSyncItem,
   type TicketSyncOutboxItem,
   type TicketWorkLocation,
@@ -17,16 +19,27 @@ import {
   acceptsFieldChange,
   assignTicketContent,
   attributeFields,
+  mergeSnapshotImages,
   pendingTicketFields,
   recordConflict,
+  replicaLinkForProject,
   replicaLinkKey,
+  shareTicket,
   stampTicketChange,
   storedTicketContent,
   ticketContentValue,
   ticketSnapshot,
+  ticketSyncConflictId,
   ticketTombstone,
 } from "./storage-kanban-sync.js";
-import { nowIso, randomUUID, type KanbanStatus, type KanbanTask } from "./storage-shared.js";
+import {
+  fs,
+  nowIso,
+  randomUUID,
+  type KanbanImage,
+  type KanbanStatus,
+  type KanbanTask,
+} from "./storage-shared.js";
 
 /**
  * Kanban sync across machines (docs/architecture/tickets.md, "Sync across
@@ -54,6 +67,8 @@ export class KanbanSyncRepository {
     cursor: number,
     epoch: string | undefined,
     limit: number = TICKET_SYNC_LIMITS.maxBatchItems,
+    /** This node's id: with it, snapshots carry image references (`ticketSnapshot`). */
+    selfId?: string,
   ): Promise<{
     epoch: string;
     items: TicketSyncItem[];
@@ -84,7 +99,7 @@ export class KanbanSyncRepository {
       const items: TicketSyncItem[] = [
         ...own
           .filter((task) => (task.sync?.seq ?? 0) > from)
-          .map((task) => ticketSnapshot(normalizeKanbanTask(task))),
+          .map((task) => ticketSnapshot(normalizeKanbanTask(task), selfId)),
         ...(reset
           ? []
           : Object.entries(store.tombstones)
@@ -209,7 +224,7 @@ export class KanbanSyncRepository {
               status: item.status,
               ...(item.prMergeDoneUrl ? { prMergeDoneUrl: item.prMergeDoneUrl } : {}),
               comments: item.comments,
-              images: [],
+              images: mergeSnapshotImages([], item.images, pending, input.controllerId).images,
               createdAt: item.createdAt,
               order: orderIn(item.status),
               prMergeCommented: false,
@@ -244,6 +259,14 @@ export class KanbanSyncRepository {
             (comment) => pending.addedComments.has(comment.id) && !authority.has(comment.id),
           ),
         ];
+        const merged = mergeSnapshotImages(
+          row.images ?? [],
+          item.images,
+          pending,
+          input.controllerId,
+        );
+        updated.images = merged.images;
+        removedImages.push(...merged.removed);
         const { work: _work, ...meta } = row.sync ?? { seq: 0, revs: {} };
         updated.sync = { ...meta, replica, ...(item.work ? { work: item.work } : {}) };
         next = next.map((task) => (task.id === row.id ? updated : task));
@@ -285,12 +308,19 @@ export class KanbanSyncRepository {
     };
   }
 
-  /** Leaf: queued changes for a command node after `after`, oldest first. */
+  /**
+   * Leaf: queued changes for a command node after `after`, oldest first.
+   * `features` is what the command node declared it can apply
+   * (`TICKET_SYNC_FEATURES`); it is recorded so later changes it could not
+   * read are not queued for it. An older command node declares none.
+   */
   async collectTicketSyncOutbox(
     controllerId: string,
     after: number,
     limit: number = TICKET_SYNC_LIMITS.maxCollectItems,
+    features?: readonly string[],
   ): Promise<{ epoch: string | null; items: TicketSyncOutboxItem[]; more: boolean }> {
+    if (features !== undefined) await this.recordControllerFeatures(controllerId, features);
     const { store } = await this.board.loadSyncStore();
     const outbox = store.outbox[controllerId];
     if (!outbox) return { epoch: null, items: [], more: false };
@@ -300,6 +330,22 @@ export class KanbanSyncRepository {
       items: waiting.slice(0, limit),
       more: waiting.length > limit,
     };
+  }
+
+  private async recordControllerFeatures(
+    controllerId: string,
+    features: readonly string[],
+  ): Promise<void> {
+    const known = new Set<string>(Object.values(TICKET_SYNC_FEATURES));
+    const declared = [...new Set(features.filter((feature) => known.has(feature)))].sort();
+    const { store: current } = await this.board.loadSyncStore();
+    if (JSON.stringify(current.features[controllerId] ?? []) === JSON.stringify(declared)) return;
+    await this.board.enqueue(async () => {
+      const { store } = await this.board.loadSyncStore();
+      if (declared.length) store.features[controllerId] = declared;
+      else delete store.features[controllerId];
+      await this.context.saveJson(this.files.kanbanSyncFile(), store);
+    });
   }
 
   /** Leaf: the command node applied everything up to `upTo` in this epoch. */
@@ -348,9 +394,11 @@ export class KanbanSyncRepository {
       const links = Object.keys(store.replicas).filter(
         (key) => store.replicas[key]!.controllerId === controllerId,
       );
-      if (!changed && !links.length && !store.outbox[controllerId]) return;
+      if (!changed && !links.length && !store.outbox[controllerId] && !store.features[controllerId])
+        return;
       for (const key of links) delete store.replicas[key];
       delete store.outbox[controllerId];
+      delete store.features[controllerId];
       await this.context.atomically(async () => {
         if (changed) await this.context.saveJson(this.files.kanbanFile(), tasks);
         await this.context.saveJson(this.files.kanbanSyncFile(), store);
@@ -439,6 +487,14 @@ export class KanbanSyncRepository {
           ];
         }
       };
+      // A leaf sends only its own images: their bytes are on that leaf.
+      const leafImage = (image: TicketSyncImageRef): KanbanImage => ({
+        id: image.id,
+        filename: image.filename,
+        createdAt: image.createdAt,
+        nodeId: input.nodeId,
+        ...(input.nodeName ? { nodeName: input.nodeName } : {}),
+      });
       const items = [...input.items].sort((left, right) => left.seq - right.seq);
       for (const item of items) {
         if (item.seq <= peer.appliedSeq) continue;
@@ -467,7 +523,7 @@ export class KanbanSyncRepository {
             status: op.ticket.status,
             ...(op.ticket.prMergeDoneUrl ? { prMergeDoneUrl: op.ticket.prMergeDoneUrl } : {}),
             comments: op.ticket.comments,
-            images: [],
+            images: (op.ticket.images ?? []).map((image) => leafImage(image)),
             createdAt: op.ticket.createdAt,
             order: orderIn(item.sourceProjectId, op.ticket.status),
             prMergeCommented: false,
@@ -553,6 +609,20 @@ export class KanbanSyncRepository {
             track(row);
             row.comments = row.comments.filter((comment) => comment.id !== op.commentId);
             break;
+          case "add-image":
+            if ((row.images ?? []).some((image) => image.id === op.image.id)) break;
+            track(row);
+            row.images = [...(row.images ?? []), leafImage(op.image)];
+            break;
+          case "delete-image": {
+            const image = (row.images ?? []).find((candidate) => candidate.id === op.imageId);
+            if (!image) break;
+            track(row);
+            row.images = row.images.filter((candidate) => candidate.id !== op.imageId);
+            // This machine's bytes, or its cached copy of another machine's.
+            removedImages.push(image.id);
+            break;
+          }
           case "work": {
             track(row);
             const meta = row.sync ?? { seq: 0, revs: {} };
@@ -667,7 +737,9 @@ export class KanbanSyncRepository {
         const project = peer.projects[projectId];
         return project ? [{ nodeId, ...project }] : [];
       }),
-      conflicts: store.conflicts.filter((conflict) => conflict.projectId === projectId),
+      conflicts: store.conflicts
+        .filter((conflict) => conflict.projectId === projectId)
+        .map((conflict) => ({ ...conflict, id: ticketSyncConflictId(conflict) })),
       knownNodes: Object.keys(store.peers),
     };
   }
@@ -693,6 +765,165 @@ export class KanbanSyncRepository {
       return normalizeKanbanTask(task);
     });
   }
+
+  /**
+   * Command node: removes conflicts from the project's list (`ids`, or all of
+   * them). The comments they left on tickets stay.
+   */
+  async dismissTicketSyncConflicts(
+    projectId: string,
+    ids?: readonly string[],
+  ): Promise<{ dismissed: number; remaining: number }> {
+    return this.board.enqueue(async () => {
+      const { store, fresh } = await this.board.loadSyncStore();
+      if (fresh) return { dismissed: 0, remaining: 0 };
+      const chosen = ids ? new Set(ids) : null;
+      const kept = store.conflicts.filter(
+        (conflict) =>
+          conflict.projectId !== projectId ||
+          (chosen !== null && !chosen.has(ticketSyncConflictId(conflict))),
+      );
+      const dismissed = store.conflicts.length - kept.length;
+      if (dismissed) {
+        store.conflicts = kept;
+        await this.context.saveJson(this.files.kanbanSyncFile(), store);
+      }
+      return {
+        dismissed,
+        remaining: kept.filter((conflict) => conflict.projectId === projectId).length,
+      };
+    });
+  }
+
+  /**
+   * Leaf: the inputs of a board's sync line here. `links` are the command
+   * nodes whose copies this project holds; `unshared` counts the tickets
+   * Share would send (made here before sync began, or kept after a command
+   * node detached); `linkedProjects` are every project here that a command
+   * node syncs, for naming the copy that syncs when this one does not.
+   */
+  async getTicketSyncLeafOverview(projectId: string): Promise<{
+    links: Array<{
+      controllerId: string;
+      sourceProjectId: string;
+      appliedAt: string;
+      pending: number;
+    }>;
+    unshared: number;
+    linkedProjects: Array<{ projectId: string; controllerId: string }>;
+  }> {
+    const { store } = await this.board.loadSyncStore();
+    const links = Object.values(store.replicas)
+      .filter((link) => link.projectId === projectId)
+      .map((link) => ({
+        controllerId: link.controllerId,
+        sourceProjectId: link.sourceProjectId,
+        appliedAt: link.appliedAt,
+        pending: store.outbox[link.controllerId]?.items.length ?? 0,
+      }));
+    const unshared = links.length
+      ? this.board.projectTasks(projectId).filter((task) => !task.sync?.replica).length
+      : 0;
+    return {
+      links,
+      unshared,
+      linkedProjects: Object.values(store.replicas).map((link) => ({
+        projectId: link.projectId,
+        controllerId: link.controllerId,
+      })),
+    };
+  }
+
+  /**
+   * Leaf: sends tickets this board has and its command node does not (made
+   * before sync began) to that command node, under their own ids, as a new
+   * leaf ticket goes. `taskIds` absent shares them all. Only an explicit
+   * action calls this: adopting them on first sync could duplicate tickets a
+   * user had already copied by hand, and could not be undone.
+   */
+  async shareTicketsWithCommandNode(
+    projectId: string,
+    taskIds?: readonly string[],
+  ): Promise<{ shared: number; controllerId: string }> {
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
+      const loaded = await this.board.loadSyncStore();
+      const link = replicaLinkForProject(loaded.store, projectId);
+      if (!link) {
+        throw new Error(
+          "This board is not synced with a command node, so there is nothing to share it with.",
+        );
+      }
+      const chosen = taskIds ? new Set(taskIds) : null;
+      const now = nowIso();
+      let shared = 0;
+      for (const task of tasks) {
+        if (task.projectId !== projectId || task.sync?.replica) continue;
+        if (chosen && !chosen.has(task.id)) continue;
+        if (loaded.store.tombstones[task.id]) continue;
+        const before = normalizeKanbanTask(structuredClone(task));
+        shareTicket(loaded.store, link, before, task, now);
+        shared += 1;
+      }
+      if (!shared) return { shared, controllerId: link.controllerId };
+      // The rows changed only their sync marks: no stamp, one commit with the outbox.
+      await this.context.atomically(async () => {
+        await this.context.saveJson(this.files.kanbanFile(), tasks);
+        await this.context.saveJson(this.files.kanbanSyncFile(), loaded.store);
+      });
+      this.context.changes.announce("kanban", projectId);
+      return { shared, controllerId: link.controllerId };
+    });
+  }
+
+  /** The row holding an image, with the image. */
+  async findTicketImage(imageId: string): Promise<{ task: KanbanTask; image: KanbanImage } | null> {
+    for (const task of await this.board.loadTasks()) {
+      const image = (task.images ?? []).find((candidate) => candidate.id === imageId);
+      if (image) return { task: normalizeKanbanTask(task), image };
+    }
+    return null;
+  }
+
+  /**
+   * Leaf: an image's bytes for the command node that asks, when they are here
+   * and the image is on a ticket that command node has (a copy of its ticket,
+   * or one sent up to it). `null` otherwise.
+   */
+  async readTicketImageFor(controllerId: string, imageId: string): Promise<string | null> {
+    const found = await this.findTicketImage(imageId);
+    if (!found || found.image.nodeId) return null;
+    if (found.task.sync?.replica?.controllerId !== controllerId) return null;
+    try {
+      const data = await fs.readFile(this.files.kanbanImageFile(imageId));
+      const encoded = data.toString("base64");
+      return encoded.length <= TICKET_SYNC_LIMITS.maxImageDataChars ? encoded : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Keeps a copy of another machine's image here, so it is read over the link
+   * once. Only for an image this board references from `fromNodeId` (a leaf
+   * whose image a command node read, or the command node that delivered it to
+   * a leaf). Returns whether it was stored.
+   */
+  async storeTicketImageCopy(fromNodeId: string, imageId: string, data: string): Promise<boolean> {
+    if (data.length > TICKET_SYNC_LIMITS.maxImageDataChars) return false;
+    // Under the lease, so a removal of the image either precedes this check or
+    // follows the write and deletes the copy with it.
+    return this.board.enqueue(async () => {
+      const found = await this.findTicketImage(imageId);
+      if (!found?.image.nodeId) return false;
+      const from =
+        found.task.sync?.replica?.controllerId === fromNodeId || found.image.nodeId === fromNodeId;
+      if (!from) return false;
+      await fs.mkdir(this.files.kanbanImagesDir(), { recursive: true });
+      await fs.writeFile(this.files.kanbanImageFile(imageId), Buffer.from(data, "base64"));
+      return true;
+    });
+  }
 }
 
 /**
@@ -715,4 +946,10 @@ export type TicketSyncStorage = Pick<
   | "recordTicketSyncPeer"
   | "getTicketSyncOverview"
   | "recordTicketRemoteWork"
+  | "dismissTicketSyncConflicts"
+  | "getTicketSyncLeafOverview"
+  | "shareTicketsWithCommandNode"
+  | "findTicketImage"
+  | "readTicketImageFor"
+  | "storeTicketImageCopy"
 >;

@@ -65,6 +65,8 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_ticket_sync_cursor",
   "collect_ticket_sync_outbox",
   "ack_ticket_sync_outbox",
+  "read_ticket_image",
+  "put_ticket_image",
   "sync_node_tickets",
   "create_node_action_request",
   "list_node_action_requests",

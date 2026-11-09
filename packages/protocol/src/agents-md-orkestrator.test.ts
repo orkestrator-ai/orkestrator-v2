@@ -371,7 +371,7 @@ describe("main coordinator AGENTS.md guidance", () => {
       "future workers or conversations",
       "repeatedly steers the same regular behaviour (corrections or instructions)",
       "explicit standing preference beyond this task",
-      "ask briefly at a natural pause, outside urgent work",
+      "ask once, briefly at a natural pause, outside urgent work",
       "## Orkestrator section of AGENTS.md",
       "Name the pattern noticed and quote exact entries",
       "one plain line each, within tool limits",
@@ -381,7 +381,7 @@ describe("main coordinator AGENTS.md guidance", () => {
       "You write nothing",
       "user reviews the change and Orkestrator opens a pull request",
       "Skip one-off task details",
-      "do not re-suggest entries already in the section or declined in this conversation unless the user raises them",
+      "do not re-suggest entries already in the section, unanswered or declined in this conversation unless the user raises them",
     ]) {
       expect(COORDINATOR_AGENTS_MD_RULE).toContain(phrase);
     }

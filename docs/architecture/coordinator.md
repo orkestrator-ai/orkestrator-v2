@@ -3524,13 +3524,13 @@ environments on a given machine, or saying "from now on, answer status questions
 without a plan" qualifies. Asking to group just today's three tasks, choosing
 a machine for one run, or giving a one-off status request does not.
 
-At a natural pause, outside urgent work, it asks briefly whether to save the
+At a natural pause, outside urgent work, it asks once, briefly, whether to save the
 guidance, naming the pattern it noticed and quoting the exact proposed entries,
 one plain line each within the tool's limits. It asks at most one such question
 per turn and batches several suggestions into one question and one call. It
 calls the tool only after the user agrees, using any wording the user changed;
 the coordinator writes nothing itself. It skips one-off task details and does
-not re-suggest entries already in the section or declined in the same
+not re-suggest entries already in the section, left unanswered or declined in the same
 conversation unless the user raises them. The decline mail repeats the rule
 against re-asking after a decline. Side agents are not told and cannot call the
 tool.

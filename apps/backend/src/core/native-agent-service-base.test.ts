@@ -3735,7 +3735,7 @@ describe("NativeAgentService", () => {
       expect(COORDINATOR_AGENTS_MD_RULE).toContain("propose_agents_md_update");
       expect(COORDINATOR_AGENTS_MD_RULE).toContain("batch several decisions");
       expect(COORDINATOR_AGENTS_MD_RULE).toContain(
-        "do not re-suggest entries already in the section or declined in this conversation",
+        "do not re-suggest entries already in the section, unanswered or declined in this conversation",
       );
       // The conversation's own platform, not a bare availability question.
       expect(delegationFor).toHaveBeenCalledWith("codex");

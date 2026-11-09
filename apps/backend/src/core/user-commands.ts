@@ -457,11 +457,12 @@ export class UserCommandService {
   }
 
   private snapshot(entry: Running): UserCommandRecord {
+    const output = normalizeTerminalText(entry.raw);
     return {
       ...entry.record,
       context: { ...entry.record.context },
-      output: normalizeTerminalText(entry.raw),
-      outputTruncated: entry.rawTruncated,
+      output: output.slice(-USER_COMMAND_OUTPUT_TAIL_CHARS),
+      outputTruncated: entry.rawTruncated || output.length > USER_COMMAND_OUTPUT_TAIL_CHARS,
     };
   }
 

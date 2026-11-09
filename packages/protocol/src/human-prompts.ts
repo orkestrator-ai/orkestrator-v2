@@ -17,6 +17,8 @@
  * not log what these return (see AGENTS.md, invariant 12).
  */
 
+import { normalizeTerminalText } from "./terminal-text.js";
+
 export type HumanPromptKind = "sign-in" | "device-code" | "press-enter" | "secret" | "host-key";
 
 export interface HumanPrompt {
@@ -81,23 +83,12 @@ const SECRET_PROMPT =
 const HOST_KEY =
   /are you sure you want to continue connecting \(yes\/no(?:\/\[fingerprint\])?\)\??\s*$|the authenticity of host .{1,200} can't be established/i;
 
-/** Remove ANSI/OSC escapes and resolve carriage-return overwrites line by line. */
-export function normalizeTerminalText(raw: string): string {
-  const withoutEscapes = raw
-    // OSC (e.g. hyperlinks, titles) terminated by BEL or ST.
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
-    // CSI and other two-byte escapes.
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b[@-Z\\-_]/g, "");
-  return withoutEscapes
-    .split("\n")
-    .map((line) => {
-      const trimmedEnd = line.replace(/\r+$/, "");
-      const segments = trimmedEnd.split("\r");
-      return segments[segments.length - 1] ?? "";
-    })
-    .join("\n");
-}
+/**
+ * Raw terminal output as display text: escapes removed and in-place redraws
+ * (carriage returns, backspaces, cursor moves and erases) applied, so a
+ * spinner leaves only its latest frame. See `terminal-text.ts`.
+ */
+export { normalizeTerminalText, TerminalTextBuffer } from "./terminal-text.js";
 
 const URL_PATTERN = /\bhttps:\/\/[^\s"'<>`)\]}]+/g;
 

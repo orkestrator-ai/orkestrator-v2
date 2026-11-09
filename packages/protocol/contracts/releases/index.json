@@ -160,6 +160,11 @@
     {
       "version": "2.37.0-alpha",
       "channel": "unstable",
+      "publishedAt": "2026-11-07T21:55:13Z"
+    },
+    {
+      "version": "2.37.1-beta",
+      "channel": "beta",
       "publishedAt": null
     }
   ]

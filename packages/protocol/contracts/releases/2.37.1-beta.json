@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "version": "2.37.1-beta",
+  "channel": "beta",
+  "preContract": false,
+  "source": "manifest",
+  "readClassified": true,
+  "counts": {
+    "commands": 1008,
+    "defined": 1008,
+    "untyped": 0,
+    "unmapped": 0
+  },
+  "domains": {
+    "accounts": {
+      "file": "domains/accounts-c264f45bf8d6ffb9.json",
+      "digest": "sha256:c264f45bf8d6ffb9a46755494ce72b7cf8c931a1595fda3688aae7a8751d8c7d",
+      "commands": 33,
+      "version": 1,
+      "min": 1
+    },
+    "agent-mail": {
+      "file": "domains/agent-mail-40a807436e3ba6ba.json",
+      "digest": "sha256:40a807436e3ba6ba3f5a2dbd7389f7011db5310c101499c3db33deed3eaf6d5e",
+      "commands": 23,
+      "version": 1,
+      "min": 1
+    },
+    "agent-servers": {
+      "file": "domains/agent-servers-08a7d108a27dd9f9.json",
+      "digest": "sha256:08a7d108a27dd9f9a82d31171ab2ec5e667abc927f17121b586c3bfc3c132318",
+      "commands": 77,
+      "version": 1,
+      "min": 1
+    },
+    "claude-tmux": {
+      "file": "domains/claude-tmux-25c10880cd354266.json",
+      "digest": "sha256:25c10880cd3542660b4054069be206010cc4ca6f175cdc028d006421a8132324",
+      "commands": 28,
+      "version": 1,
+      "min": 1
+    },
+    "config": {
+      "file": "domains/config-b208264b63924534.json",
+      "digest": "sha256:b208264b639245348e1c96b8ca57df788786420d07ad43eada72e86fb202b978",
+      "commands": 31,
+      "version": 1,
+      "min": 1
+    },
+    "coordinator": {
+      "file": "domains/coordinator-f1b00fda0369496c.json",
+      "digest": "sha256:f1b00fda0369496cdd36caf9089ff241596874bf92fae2edf6d64314990f50d1",
+      "commands": 103,
+      "version": 1,
+      "min": 1
+    },
+    "design": {
+      "file": "domains/design-7849478351c040ef.json",
+      "digest": "sha256:7849478351c040eff25171929e1619b9d7b84e1d8eaa96cb93134d6675be0e05",
+      "commands": 35,
+      "version": 1,
+      "min": 1
+    },
+    "docker": {
+      "file": "domains/docker-6e26215e3e0fe62e.json",
+      "digest": "sha256:6e26215e3e0fe62e89172c79f810758cb629910b22761a778035695a79744ee0",
+      "commands": 29,
+      "version": 1,
+      "min": 1
+    },
+    "environments": {
+      "file": "domains/environments-a10303f0d0bc8818.json",
+      "digest": "sha256:a10303f0d0bc88186cc380207cfb20da1ddb429d558f962535614026e119b5b1",
+      "commands": 63,
+      "version": 1,
+      "min": 1
+    },
+    "files": {
+      "file": "domains/files-c2f65b61087c1924.json",
+      "digest": "sha256:c2f65b61087c192485ebf2245be1e934be56a5c6f083f47f194db2949d452b02",
+      "commands": 28,
+      "version": 1,
+      "min": 1
+    },
+    "git": {
+      "file": "domains/git-3e20db180c1e9e1d.json",
+      "digest": "sha256:3e20db180c1e9e1dc7a7ddfe55401c7d555075d6b7bcc9f952f861ef0c285c93",
+      "commands": 23,
+      "version": 1,
+      "min": 1
+    },
+    "graphs": {
+      "file": "domains/graphs-49520e52432fe55b.json",
+      "digest": "sha256:49520e52432fe55b3b57907667c32d0aac2c673078b1704d8c8cf093eafeec2b",
+      "commands": 39,
+      "version": 1,
+      "min": 1
+    },
+    "kanban": {
+      "file": "domains/kanban-e2273b66869cf4b3.json",
+      "digest": "sha256:e2273b66869cf4b3f63937a179d6ffbf0669721b1b66e803a565dd616932718a",
+      "commands": 33,
+      "version": 1,
+      "min": 1
+    },
+    "mcp": {
+      "file": "domains/mcp-28ec96f24e291ad4.json",
+      "digest": "sha256:28ec96f24e291ad46bda1a24db434d385f0a02c26f9d42ecb2f857808f5a9397",
+      "commands": 13,
+      "version": 1,
+      "min": 1
+    },
+    "multi-review": {
+      "file": "domains/multi-review-8ad8b40ffaf805ba.json",
+      "digest": "sha256:8ad8b40ffaf805ba15985fb66b35b5aac3a7994009930a87ee66ab9ccd7db65e",
+      "commands": 30,
+      "version": 1,
+      "min": 1
+    },
+    "native-sessions": {
+      "file": "domains/native-sessions-1826f61c254f97f6.json",
+      "digest": "sha256:1826f61c254f97f6fd1a807a7421d96d1f446bbe8b478e5c45fd60af25758c9f",
+      "commands": 87,
+      "version": 1,
+      "min": 1
+    },
+    "node-files": {
+      "file": "domains/node-files-22ea083ceb9655aa.json",
+      "digest": "sha256:22ea083ceb9655aa9f36dbaec8b6554d0765e4e822ccea40598e0351e90867b1",
+      "commands": 8,
+      "version": 1,
+      "min": 1
+    },
+    "node-mail": {
+      "file": "domains/node-mail-5f70d92fca3f2712.json",
+      "digest": "sha256:5f70d92fca3f271221a9f934be11b9e6a30739d85126ec957cb7567c366c8002",
+      "commands": 13,
+      "version": 1,
+      "min": 1
+    },
+    "nodes": {
+      "file": "domains/nodes-379dc78343dcbac0.json",
+      "digest": "sha256:379dc78343dcbac0ad958d7c686896906ce5988e657f061a76137c63511d7461",
+      "commands": 51,
+      "version": 1,
+      "min": 1
+    },
+    "pipelines": {
+      "file": "domains/pipelines-b16ef0c48d44287e.json",
+      "digest": "sha256:b16ef0c48d44287e0e4303e51177b803290787a7ad39dd02174349cc51898dd4",
+      "commands": 39,
+      "version": 1,
+      "min": 1
+    },
+    "previews": {
+      "file": "domains/previews-d81c4cd1ed7a138a.json",
+      "digest": "sha256:d81c4cd1ed7a138a1407f93b75a9a23aba10441888c28a1f8a251635e58ce848",
+      "commands": 17,
+      "version": 1,
+      "min": 1
+    },
+    "projects": {
+      "file": "domains/projects-1ebe0daac40fa0ff.json",
+      "digest": "sha256:1ebe0daac40fa0ff657f20e5e5c7b00732334815641f03ea5f3a453304be5c85",
+      "commands": 26,
+      "version": 1,
+      "min": 1
+    },
+    "public-api": {
+      "file": "domains/public-api-fed1375921292988.json",
+      "digest": "sha256:fed13759212929881db4b55ae132fa0c55e6e4ab06651d3cd180a6ec60f72b9f",
+      "commands": 1,
+      "version": 1,
+      "min": 1
+    },
+    "pull-requests": {
+      "file": "domains/pull-requests-3ddf2a9b14b3608e.json",
+      "digest": "sha256:3ddf2a9b14b3608efa828d889a1fd1080e4f4df35a8b5d16d2859a70b99f8ac9",
+      "commands": 42,
+      "version": 1,
+      "min": 1
+    },
+    "system": {
+      "file": "domains/system-71525209749c5dce.json",
+      "digest": "sha256:71525209749c5dce919601f418a9a5518c62e6018ee167ba675a5c0df3889da0",
+      "commands": 50,
+      "version": 1,
+      "min": 1
+    },
+    "terminals": {
+      "file": "domains/terminals-5f7bdfda428656e4.json",
+      "digest": "sha256:5f7bdfda428656e4aadc879245dce29f72747bcf5f2aeebd2509cf1b9e95bc0b",
+      "commands": 26,
+      "version": 1,
+      "min": 1
+    },
+    "ticket-sync": {
+      "file": "domains/ticket-sync-006f39f86263bb27.json",
+      "digest": "sha256:006f39f86263bb275430639c996cd223f6092e8ccabbe081318ac275ce56d92f",
+      "commands": 7,
+      "version": 1,
+      "min": 1
+    },
+    "transcripts": {
+      "file": "domains/transcripts-0bfe95d5ce0474e7.json",
+      "digest": "sha256:0bfe95d5ce0474e79a3f085e25556ddb1e7923b7e0322841821acece9208ea8b",
+      "commands": 16,
+      "version": 1,
+      "min": 1
+    },
+    "web-annotations": {
+      "file": "domains/web-annotations-4ad60226b4d6b63a.json",
+      "digest": "sha256:4ad60226b4d6b63acde1f8e8efa1a09eee08f114e6cd30d6e77fbcde626f15db",
+      "commands": 37,
+      "version": 1,
+      "min": 1
+    }
+  },
+  "events": {
+    "agent-accounts-changed": {
+      "domain": "accounts",
+      "payloadDigest": "sha256:7512c151b1dbba076be4e1d083d2ace9ff08f917dc3d05476a730da265f3c64f"
+    },
+    "backend-profile-changed": {
+      "domain": "system",
+      "payloadDigest": "sha256:d20b074eb74ecdbe653a429b828150913db7e15764a2032c74e4326da25502b0"
+    },
+    "change-projection-changed": {
+      "domain": "git",
+      "payloadDigest": "sha256:7d3f5486c444baafbf7de95bf33009a4c00bc06263f4917e578e2cd381fb02c7"
+    },
+    "claude-model-catalog-updated": {
+      "domain": "agent-servers",
+      "payloadDigest": "sha256:de8686732493f8d2fe1c2c22922b55d7ec01e3176142e4ef4b12311df7f19d47"
+    },
+    "claude-state-*": {
+      "domain": "claude-tmux",
+      "family": true,
+      "prefix": "claude-state-",
+      "key": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
+      "payloadDigest": "sha256:5868c365d5c0d17e980573bda58361d64ae25b18b1efd916d3b456c293ecd19c"
+    },
+    "claude-tmux:event": {
+      "domain": "claude-tmux",
+      "payloadDigest": "sha256:a5010e2ac58866cde2b725df48911445a79c97ed0ad61e4e988bc4b74a7c6367"
+    },
+    "container-host-reachability-changed": {
+      "domain": "docker",
+      "payloadDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
+    "container-lifecycle-updated": {
+      "domain": "docker",
+      "payloadDigest": "sha256:053f44130ce9c79cbc1ca38a1b9df352e07c864d8af2d13b2b0c6e336edfa149"
+    },
+    "control-mcp-state-changed": {
+      "domain": "system",
+      "payloadDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347"
+    },
+    "coordinator-account-switched": {
+      "domain": "accounts",
+      "payloadDigest": "sha256:850a4dd412f46fa10158b6f246d25179b0f828d8b5404b48f3579ad2e03bec87"
+    },
+    "coordinator-wake-attention": {
+      "domain": "coordinator",
+      "payloadDigest": "sha256:006ceacce630e8614c691bd94798692ba7521f80cfc169d0e11af5b725db4587"
+    },
+    "design-canvas-changed": {
+      "domain": "design",
+      "payloadDigest": "sha256:92c202ee2930bf17896804b58ccea8a7ca6e568a7633cc4ca52ec44873e9e837"
+    },
+    "environment-activity-recorded": {
+      "domain": "environments",
+      "payloadDigest": "sha256:2a7b10d68588c639fe3429186ca066108d1a3083d9332bc26e37bc592069ce8f"
+    },
+    "environment-attention": {
+      "domain": "environments",
+      "payloadDigest": "sha256:c9518c75fa944b011afa05f02365e852de2180c308cb72ee5f5efa57f9746a37"
+    },
+    "environment-diff-stats-changed": {
+      "domain": "git",
+      "payloadDigest": "sha256:39530f9baf6eac13b4a9852b730ded0f4e048f9f44c4efec97c5f28d91b7123d"
+    },
+    "environment-renamed": {
+      "domain": "environments",
+      "payloadDigest": "sha256:00cf4e831de0c08b67627c38f83af290f191fa0a692d1729aa40dd025a92e5e7"
+    },
+    "environment-setup-complete": {
+      "domain": "environments",
+      "payloadDigest": "sha256:612d6ba1bf5a1bfb33494d45291450b346cabf859d9d4672dfc035ece7d1b2e0"
+    },
+    "environment-setup-started": {
+      "domain": "environments",
+      "payloadDigest": "sha256:38c210f5d4016c2c91ea7b109fc20696e7486145223b81a61e351228911c8bdb"
+    },
+    "host-maintenance-updated": {
+      "domain": "system",
+      "payloadDigest": "sha256:65557dd4473b0cfb4d7f2993c1db821db6371ddae6267dbef631f6fa0dd48b13"
+    },
+    "mcp-management-changed": {
+      "domain": "mcp",
+      "payloadDigest": "sha256:2f82721636412d224a06acf953aa586066d003fc65911d1584cc6405e6c1df97"
+    },
+    "native-agent-async-question": {
+      "domain": "native-sessions",
+      "payloadDigest": "sha256:513c6b7fe748cb2cf067f8d7ac94aac7a5de48684f0d443d94adf7fdb59d53db"
+    },
+    "native-agent-session-activity": {
+      "domain": "native-sessions",
+      "payloadDigest": "sha256:9e02b97026b9226c9d3eb7f3c558e868f317b10fff201034c6e42c6721e3302c"
+    },
+    "node-action-requests-changed": {
+      "domain": "node-mail",
+      "payloadDigest": "sha256:39d14c382eecb1e5158c2cf7321a1f3fca16a94d99c842393eefda08ae177697"
+    },
+    "node-agent-account-auto-switched": {
+      "domain": "accounts",
+      "payloadDigest": "sha256:2fe3152f04522229dc0f79c778a56e255e3190615050adf1574c367177412e47"
+    },
+    "node-outbox-ready": {
+      "domain": "node-mail",
+      "payloadDigest": "sha256:176f4b03603de235644a2b38caaf3fa0a7b22226d4da23a5f11d28e6fa5fbff3"
+    },
+    "node-outcomes-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:ca77bd3b33e13665db4d22a514d7601c3b4df67b45f4296c8dee77b94c30f4b5"
+    },
+    "node-ssh-prompt": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:03b1fd1f3d13a03a8a3a07f12c95dbac1ba70cafe977af9513ec17ac3f65d54c"
+    },
+    "node-status-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
+    },
+    "node-summary-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:82403c9033a3bd6e12c8d6637d368f5657021aec8f9dd5070a0e2436b1838498"
+    },
+    "nodes-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:11cb963c8494bf5b7a01351d368ad3265e4a8a8e74d29ba6ff2e2eac92107150"
+    },
+    "portal-layout-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:d2a3f5cd13d8a15285df7f4f0299f759854cfca1f1317243658534a258dd15c7"
+    },
+    "pr-monitor-changed": {
+      "domain": "pull-requests",
+      "payloadDigest": "sha256:98ec1ae14e29809fc6113d08b11dc6b44d15f3ca3607021fa4f99650715f0935"
+    },
+    "preview-services-changed": {
+      "domain": "previews",
+      "payloadDigest": "sha256:97770ef311681a6ffa55d63a0881c276944543fe54b2df0140b01f283ddc159f"
+    },
+    "project-copy-changed": {
+      "domain": "nodes",
+      "payloadDigest": "sha256:ac7745f0e152afe72967dd91cf326164005250c483dd485a0345912336bf059c"
+    },
+    "relayed-node-event:*": {
+      "domain": "nodes",
+      "family": true,
+      "prefix": "relayed-node-event:",
+      "key": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
+      "payloadDigest": "sha256:40e0ded4a6fd242f1e22acc6ec58e7a67dbb6b8b63e59f69d936133a3aff38b8"
+    },
+    "resource-changed": {
+      "domain": "system",
+      "payloadDigest": "sha256:927bf6efb967bb00af5017c9865edae5be3b073b1fa9fabba59c7d8ca6e02035"
+    },
+    "terminal-output-*": {
+      "domain": "terminals",
+      "family": true,
+      "prefix": "terminal-output-",
+      "key": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
+      "payloadDigest": "sha256:4a7d70f3ead73055146126181bde71bb5204ff0272d73c8a8c9c23703ff0975e"
+    },
+    "ticket-sync-outbox-ready": {
+      "domain": "ticket-sync",
+      "payloadDigest": "sha256:176f4b03603de235644a2b38caaf3fa0a7b22226d4da23a5f11d28e6fa5fbff3"
+    },
+    "ticket-sync-status-changed": {
+      "domain": "ticket-sync",
+      "payloadDigest": "sha256:ca77bd3b33e13665db4d22a514d7601c3b4df67b45f4296c8dee77b94c30f4b5"
+    },
+    "tmux-agent-usage": {
+      "domain": "claude-tmux",
+      "payloadDigest": "sha256:48bea8912d4a2c43189d30d450e9839705c9d86baae3841910687c39ac2f2951"
+    },
+    "tmux-prompt-cleared": {
+      "domain": "claude-tmux",
+      "payloadDigest": "sha256:5a0885c6dd1462cb80f32f56c84308e3f50f858b3394230ba20a2d04ee90350d"
+    },
+    "tmux-prompt-detected": {
+      "domain": "claude-tmux",
+      "payloadDigest": "sha256:f45e8959dc737dab55e600ca12b9eb56fdd22c144577f69c92aa9d5d96d27137"
+    },
+    "web-annotations-changed": {
+      "domain": "web-annotations",
+      "payloadDigest": "sha256:706f98bbd1f2fd708608df5a9affaaef079f73f34c44485acf60483e8d4f97b8"
+    },
+    "worktree-snapshot-changed": {
+      "domain": "git",
+      "payloadDigest": "sha256:1f18232d10e6ae3abf0d2e9553d642e48b1050952aabcd6dcd4250c9e55aaee6"
+    }
+  }
+}

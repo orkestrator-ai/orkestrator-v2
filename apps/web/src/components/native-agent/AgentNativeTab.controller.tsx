@@ -250,6 +250,7 @@ import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
 import {
+  completedTurnElapsedSeconds,
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
 } from "@/lib/session-timer";
@@ -1634,7 +1635,11 @@ export function SharedNativeAgentController({
   // The running clock ticks inside the footer (`elapsedStartedAt`): holding
   // the tick here would re-render this whole tab every second of a turn.
   const elapsedStartedAt = isTurnActive ? turnStartedAt : undefined;
-  const finalElapsedSeconds = isTurnActive ? null : (completedElapsedSeconds ?? null);
+  const finalElapsedSeconds = completedTurnElapsedSeconds({
+    turnActive: isTurnActive,
+    phase,
+    completedSeconds: completedElapsedSeconds,
+  });
   const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.

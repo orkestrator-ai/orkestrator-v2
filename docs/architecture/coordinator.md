@@ -1827,7 +1827,8 @@ by the pure `buildCoordinatorContext`
 (`coordinator-context-reads.ts` and the existing helpers) and passes the answers
 in, so a test can check the block's content and size without a service. A test
 holds a main coordinator's block, before the research, node and checkout lines,
-under 9,000 characters: it is paid on every turn, so raising that limit is a
+under 9,300 characters (including a 300-character increase for pattern-spotting
+AGENTS.md guidance): it is paid on every turn, so raising that limit is a
 decision about cost.
 
 The block names the project (`Project: <name> at <checkout> (id <id>)`), falling
@@ -3540,12 +3541,24 @@ every agent reads, through a pull request, without a worker environment.
 
 **When it offers.** The main coordinator's per-turn context
 (`COORDINATOR_AGENTS_MD_RULE` in
-`packages/protocol/src/agents-md-orkestrator.ts`) tells it to ask once,
-briefly, at a natural pause after such a decision is agreed, whether to save
-it; to batch several decisions into one question and one call; to skip
-one-off task details; and not to ask again about a decision the user declined
-in the same conversation. The decline mail repeats that last rule. Side agents
-are not told and cannot call the tool.
+`packages/protocol/src/agents-md-orkestrator.ts`) tells it to notice durable decisions the user settles,
+repeated steering of the same regular behaviour (corrections or instructions),
+and an explicit standing preference meant to outlast the current task. For
+example, correcting it twice to group related work, repeatedly forbidding
+environments on a given machine, or saying "from now on, answer status questions
+without a plan" qualifies. Asking to group just today's three tasks, choosing
+a machine for one run, or giving a one-off status request does not.
+
+At a natural pause, outside urgent work, it asks once, briefly, whether to save the
+guidance, naming the pattern it noticed and quoting the exact proposed entries,
+one plain line each within the tool's limits. It asks at most one such question
+per turn and batches several suggestions into one question and one call. It
+calls the tool only after the user agrees, using any wording the user changed;
+the coordinator writes nothing itself. It skips one-off task details and does
+not re-suggest entries already in the section, left unanswered or declined in the same
+conversation unless the user raises them. The decline mail repeats the rule
+against re-asking after a decline. Side agents are not told and cannot call the
+tool.
 
 **The tool.** `propose_agents_md_update` (main only: capability
 `environments`) takes a `requestId`, a `reason`, an optional `nodeId` for the

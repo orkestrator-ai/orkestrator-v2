@@ -15,6 +15,12 @@ import {
   ticketContentFromSections,
   ticketMarkdownTemplate,
   ticketSectionsBasis,
+  criterionCheckBasis,
+  isAcceptanceCriterionCheck,
+  isTicketSections,
+  manualCheck,
+  ticketCriteriaSummary,
+  type AcceptanceCriterionCheck,
   type TicketSections,
 } from "./ticket-sections";
 
@@ -480,5 +486,105 @@ describe("delivery policy choices", () => {
 
   test("push-no-pr promises no Multi Review", () => {
     expect(DELIVERY_POLICY_LABELS["push-no-pr"]).toBe("Push, no PR");
+  });
+});
+
+describe("the commit a criterion check judged", () => {
+  const COMMIT = "abc1234" + "0".repeat(33);
+  const LATER = "def5678" + "0".repeat(33);
+  const verify = (extra: Partial<AcceptanceCriterionCheck> = {}): AcceptanceCriterionCheck => ({
+    status: "passed",
+    evidence: "bun test passes",
+    checkedAt: "2026-11-08T00:00:00.000Z",
+    source: "verify",
+    pipelineId: "pipeline-1",
+    ...extra,
+  });
+
+  test("the guard accepts a recorded commit and rejects a malformed one", () => {
+    expect(isAcceptanceCriterionCheck(verify({ commit: COMMIT }))).toBe(true);
+    expect(isAcceptanceCriterionCheck(verify({ commit: "f".repeat(64) }))).toBe(true);
+    expect(isAcceptanceCriterionCheck(verify({ commit: COMMIT, uncommittedChanges: true }))).toBe(
+      true,
+    );
+    // A check stored before the field existed is still valid.
+    expect(isAcceptanceCriterionCheck(verify())).toBe(true);
+    for (const commit of ["abc1234", COMMIT.toUpperCase(), `${COMMIT}0`, 42]) {
+      expect(isAcceptanceCriterionCheck({ ...verify(), commit })).toBe(false);
+    }
+    expect(isAcceptanceCriterionCheck({ ...verify(), uncommittedChanges: "yes" })).toBe(false);
+    expect(
+      isTicketSections({
+        acceptanceCriteria: [{ id: "ac-1", text: "One", check: verify({ commit: COMMIT }) }],
+      }),
+    ).toBe(true);
+  });
+
+  test("a check with no commit reads as not recorded, never as current", () => {
+    expect(criterionCheckBasis(verify(), COMMIT)).toEqual({
+      uncommittedChanges: false,
+      moved: false,
+      text: "commit not recorded",
+    });
+  });
+
+  test("names the commit, uncommitted changes, and a branch that has moved", () => {
+    expect(criterionCheckBasis(verify({ commit: COMMIT }))?.text).toBe("on abc1234");
+    expect(criterionCheckBasis(verify({ commit: COMMIT }), COMMIT)).toMatchObject({
+      moved: false,
+      text: "on abc1234",
+    });
+    expect(criterionCheckBasis(verify({ commit: COMMIT }), LATER.toUpperCase())).toEqual({
+      commit: COMMIT,
+      uncommittedChanges: false,
+      moved: true,
+      text: "on abc1234; the branch has moved since",
+    });
+    expect(
+      criterionCheckBasis(verify({ commit: COMMIT, uncommittedChanges: true }), LATER)?.text,
+    ).toBe("on abc1234 with uncommitted changes; the branch has moved since");
+    // An unreadable HEAD makes no claim either way.
+    expect(criterionCheckBasis(verify({ commit: COMMIT }), "unknown")?.moved).toBe(false);
+  });
+
+  test("a hand tick judged no code", () => {
+    expect(criterionCheckBasis(manualCheck("2026-11-08T00:00:00.000Z"), LATER)).toBeUndefined();
+    expect(criterionCheckBasis(undefined)).toBeUndefined();
+  });
+
+  test("tool summaries carry the commit and the judged phrase", () => {
+    const sections: TicketSections = {
+      acceptanceCriteria: [
+        { id: "ac-1", text: "One", check: verify({ commit: COMMIT, uncommittedChanges: true }) },
+        { id: "ac-2", text: "Two", check: verify() },
+        { id: "ac-3", text: "Three", check: manualCheck("2026-11-08T00:00:00.000Z") },
+        { id: "ac-4", text: "Four" },
+      ],
+    };
+    expect(ticketCriteriaSummary(sections, LATER)).toEqual([
+      {
+        id: "ac-1",
+        text: "One",
+        status: "passed",
+        evidence: "bun test passes",
+        commit: COMMIT,
+        uncommittedChanges: true,
+        judged: "on abc1234 with uncommitted changes; the branch has moved since",
+      },
+      {
+        id: "ac-2",
+        text: "Two",
+        status: "passed",
+        evidence: "bun test passes",
+        judged: "commit not recorded",
+      },
+      {
+        id: "ac-3",
+        text: "Three",
+        status: "passed",
+        evidence: "Ticked by hand in the ticket text.",
+      },
+      { id: "ac-4", text: "Four" },
+    ]);
   });
 });

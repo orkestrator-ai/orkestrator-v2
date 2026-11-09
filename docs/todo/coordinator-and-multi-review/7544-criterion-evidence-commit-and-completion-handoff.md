@@ -14,9 +14,9 @@ Analysed 2026-11-08 against `main` at `02f55ea9b`.
 
 ### Tasks
 
-1. **Record the commit each criterion check judged**: Verify's check names the pipeline but not the code. Status: open.
-2. **Put per-criterion results in the Build completion notice and in `get_build_pipeline`**: the coordinator is told only "Last verification: pass". Status: open.
-3. **Tell the coordinator to close finished work with a handoff**: what was delivered, which criteria passed on which commit, what is open, what the user must do. Status: open (depends on 2).
+1. **Record the commit each criterion check judged**: Verify's check names the pipeline but not the code. Status: done.
+2. **Put per-criterion results in the Build completion notice and in `get_build_pipeline`**: the coordinator is told only "Last verification: pass". Status: done.
+3. **Tell the coordinator to close finished work with a handoff**: what was delivered, which criteria passed on which commit, what is open, what the user must do. Status: done (live check outstanding; see Needs verification).
 
 ### 1. Record the commit each criterion check judged
 
@@ -121,6 +121,73 @@ asks the coordinator to report.
     - Pros: exact and uniform.
     - Cons: new UI the user recently chose to keep out of the panel (the Work panel was removed in #1889); duplicates what the coordinator says next.
 
+## Assumptions and decisions
+
+### Task 1: which session's commit, and how a dirty worktree is marked
+
+The check takes `commit` from the Verify session's `validationHeadAtStart`
+(lower-cased, 40 or 64 hex) and sets `uncommittedChanges: true` when its
+baseline status is `dirty` or it recorded uncommitted paths
+(`verifySessionJudgedCode`). A session with no usable HEAD records neither, so
+the check reads "commit not recorded". The pipeline inspector's checks
+(`pipelineCriteriaView`) carry the same two fields, so both views agree.
+
+### Task 1: stale passes are compared on read, as recommended
+
+The ticket dialog reads the build environment's HEAD lazily
+(`useCriteriaEnvironmentHead`, through `get_environment_uncommitted_paths`
+without a fingerprint) only when a check names a commit, and `get_ticket` does
+the same with a 5-second limit. Neither writes anything. Another node's ticket
+read through `nodeId` shows the commit without a comparison, because this
+node cannot read that environment.
+
+### Task 1: manual ticks and graph-engine checks carry no commit
+
+"Commit not recorded" is shown only for `source: "verify"` checks; a hand
+tick judged no code, so it shows neither. The graph engine's `update-ticket`
+system action (`graph-system-ticket.ts`) still records checks without a
+commit and so reads "commit not recorded"; adding one needs the graph Verify
+node's baseline, which is out of this file's scope.
+
+### Task 2: one report for the notice and the tool, read from the snapshot
+
+`build-pipeline-criteria-report.ts` reduces the newest live Verify session
+(the projection `pipelineCriteriaView` already defines) to counts, the judged
+commit and each criterion, failed first, text cut to 500 characters and the
+list to 48 KiB. A criterion Verify reported nothing for is `not-checked`, never
+passed. The wake shows a tally and each failed or not-checked criterion within
+the detail cap, keeping the delivery line, and adds criteria to the `failed`
+notice too, since a build that fails Verify on its last iteration has the
+same facts to report. `get_build_pipeline` returns the report as `criteria`
+with `verificationResult`.
+
+### Task 2: `buildPipelineStatus` moved to its own module
+
+`coordinator-status-wakes.ts` was already over 2000 lines. The build reduction
+moved to `coordinator-build-pipeline-status.ts`, and the readers both share
+(`record`, `text`, `hash`, `stalledSession`, `MAX_DETAILS`) to
+`coordinator-status-support.ts`; `coordinator-status-wakes.ts` re-exports
+`buildPipelineStatus`, so callers and tests are unchanged.
+
+### Task 3: the handoff rule rides on the terminal wake, not the context block
+
+- **In the context block (the recommendation here).**
+  - Pros: a standing rule the model sees every turn.
+  - Cons: the block had about 20 characters left under the 9,000-character
+    budget `coordinator-context.test.ts` holds; the rule is about 560, so it
+    would raise the cost of every coordinator turn, which that test calls a
+    decision rather than a chore.
+- **As the last line of a terminal build pipeline or Multi Review notice (implemented).**
+  - Pros: no per-turn cost; arrives exactly when it applies, beside the facts
+    it asks for; still a verbatim constant (`COORDINATOR_HANDOFF_RULE`) and
+    works for every provider and remote node, because notices are mail.
+  - Cons: a coordinator that ends work without such a wake (a prompt
+    environment's delegation wake, say) is not told.
+- **A rendered summary card.** Not taken, for the reason given above.
+
+It replaces "Decide whether it needs anything from you; if not, acknowledge
+it and finish the turn" on those notices only, since the two contradict.
+
 ## Constraints and rationale
 
 - Missing evidence is never a pass. A check without a commit reads as "commit
@@ -131,7 +198,8 @@ asks the coordinator to report.
 ## Needs verification
 
 - A live Build from a structured ticket whose wake carries the criteria and
-  whose coordinator writes the handoff. Batch it with
+  whose coordinator writes the handoff, and the ticket dialog showing "the
+  branch has moved since" after a commit lands in the build environment. Batch it with
   [0742](0742-structured-tickets.md) task 4 (live Verify on each provider)
   and [7545](7545-coordinator-routing-live-scenario.md).
 

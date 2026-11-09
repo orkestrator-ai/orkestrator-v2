@@ -5,7 +5,8 @@
  * wake in `coordinator-service.ts`). This module covers everything else a
  * coordinator creates or prompts and then waits on: a Multi Review reaching a
  * state that needs a decision, a build pipeline ending or stopping on an
- * error, a run that stalls, a delegated tab blocked on an approval or a
+ * error (the reduction is in `coordinator-build-pipeline-status.ts`), a run
+ * that stalls, a delegated tab blocked on an approval or a
  * question (named from its pending interactions when they can be read), a
  * graph run that waits on a person or ends (item 208; the reduction is in
  * `graph-run-coordinator-status.ts`, one notice per wait), and a worker's
@@ -37,12 +38,6 @@ import {
   reconcilePipelineCreation,
 } from "./coordinator-pipeline-origin.js";
 import {
-  pipelineDeliverySummary,
-  type ResumableBuildPhase,
-} from "@orkestrator/protocol/build-pipeline";
-import { sessionPhaseForBuildPhase } from "./build-pipeline-stages.js";
-import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import {
   observePublicationAttempt,
   prAttemptActivity,
   publicationFailedStatus,
@@ -50,7 +45,6 @@ import {
 } from "./coordinator-pr-attempt.js";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
-import { createHash } from "node:crypto";
 import {
   agentMailStatusBudgetKey,
   normalizeAgentMessagingSettings,
@@ -60,6 +54,7 @@ import {
   type CoordinatorStatusWakeMode,
 } from "@orkestrator/protocol/agent-mail";
 import {
+  COORDINATOR_HANDOFF_RULE,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -90,6 +85,9 @@ import {
 import { isStatusBackfill } from "./coordinator-status-backfill.js";
 import { CoordinatorWorkerOutcomes } from "./coordinator-worker-outcomes.js";
 import type { Environment } from "./models.js";
+import { buildPipelineStatus } from "./coordinator-build-pipeline-status.js";
+export { buildPipelineStatus };
+import { hash, MAX_DETAILS, record, stalledSession, text } from "./coordinator-status-support.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
@@ -122,7 +120,6 @@ export const COORDINATOR_RESOLVE_START_GRACE_MS = 60_000;
  * recheck before it reports the latest reading anyway.
  */
 export const COORDINATOR_RESOLVE_REFRESH_WAIT_MS = 60_000;
-const MAX_DETAILS = 8;
 const MAX_LABEL_CHARS = 80;
 
 const MODE_ORDER: Record<CoordinatorStatusWakeMode, number> = { off: 0, settled: 1, stages: 2 };
@@ -156,18 +153,6 @@ export interface CoordinatorStatusResource {
   label?: string;
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
 function count(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
 }
@@ -195,26 +180,6 @@ function findingCounts(report: unknown): { line: string; total: number } {
       ? `; verdict: ${report.verdict.ready}`
       : "";
   return { line: `${findings}${coverage}${verdict}`, total: issues.length + gaps };
-}
-
-interface StalledSession {
-  key: string;
-  label: string;
-  since: string;
-}
-
-/** The earliest running session that has produced nothing for too long. */
-function stalledSession(candidates: Array<[string, unknown]>): StalledSession | null {
-  let earliest: StalledSession | null = null;
-  for (const [label, session] of candidates) {
-    if (!record(session)) continue;
-    const since = text(session.stalledSince);
-    if (!since) continue;
-    if (session.status !== undefined && session.status !== "running") continue;
-    const key = text(session.sessionKey) ?? text(session.id) ?? label;
-    if (!earliest || since < earliest.since) earliest = { key, label, since };
-  }
-  return earliest;
 }
 
 /**
@@ -531,152 +496,6 @@ export function multiReviewStatus(
   return null;
 }
 
-const BUILD_STAGE_LABELS: Record<string, string> = {
-  reviewing: "build",
-  addressing: "review",
-  verifying: "address",
-  fixing: "verification",
-  // Successful verification starts PR creation; a fix loops back through review.
-  "creating-pr": "verification",
-  "resolving-conflicts": "pull request",
-};
-
-/** The settled status of a build pipeline snapshot, or null while it is just making progress. */
-export function buildPipelineStatus(
-  snapshot: unknown,
-  pipelineId: string,
-): CoordinatorStatus | null {
-  if (!record(snapshot)) return null;
-  const phase = text(snapshot.phase);
-  const read = `get_build_pipeline { "pipelineId": "${pipelineId}" }`;
-  const task = text(snapshot.taskTitle)
-    ? [`Task: ${boundedLine(snapshot.taskTitle as string)}`]
-    : [];
-  const iteration =
-    typeof snapshot.iteration === "number" ? Math.max(0, Math.trunc(snapshot.iteration)) : 0;
-  const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
-  const verification =
-    snapshot.verificationResult === "pass" || snapshot.verificationResult === "fail"
-      ? [`Last verification: ${snapshot.verificationResult}.`]
-      : [];
-  if (phase === "complete") {
-    const delivery =
-      record(snapshot.delivery) && isDeliveryPolicy(snapshot.delivery.policy)
-        ? [
-            pipelineDeliverySummary({
-              policy: snapshot.delivery.policy,
-              ...(typeof snapshot.delivery.uncommittedPaths === "number"
-                ? { uncommittedPaths: snapshot.delivery.uncommittedPaths }
-                : {}),
-            }),
-          ].filter((line): line is string => Boolean(line))
-        : [];
-    return {
-      key: "complete",
-      state: "completed",
-      tone: "success",
-      terminal: true,
-      headline: "completed",
-      details: [...task, ...verification, ...delivery],
-      tools: [read],
-      mode: "off",
-    };
-  }
-  if (phase === "failed") {
-    // A step failure (not a cancel, not setup) can be carried on from that step.
-    const failure = record(snapshot.failureContext)
-      ? text(snapshot.failureContext.phase)
-      : undefined;
-    const restartable =
-      !snapshot.cancelledAt &&
-      !(text(snapshot.error)?.startsWith("Build cancelled") ?? false) &&
-      failure !== undefined &&
-      sessionPhaseForBuildPhase(failure as ResumableBuildPhase) !== null;
-    return {
-      key: "failed",
-      state: "failed",
-      tone: "failure",
-      terminal: true,
-      headline: "failed",
-      details: [...task, ...errorLine],
-      tools: restartable
-        ? [read, `restart_build_pipeline_step { "pipelineId": "${pipelineId}", "requestId": "…" }`]
-        : [read],
-      mode: "off",
-    };
-  }
-  // A pause the user (or the coordinator) asked for is not news to them; a
-  // pause the supervisor took on an error needs a decision.
-  if (phase === "paused" && snapshot.pauseCause === "supervisor") {
-    return {
-      key: `paused:${text(snapshot.pausedFromPhase) ?? ""}:${iteration}:${hash(text(snapshot.error) ?? "")}`,
-      state: "paused",
-      tone: "attention",
-      terminal: false,
-      headline: "paused and needs a decision",
-      details: [...task, ...errorLine],
-      tools: [read, `resume_build_pipeline { "pipelineId": "${pipelineId}" }`],
-      mode: "settled",
-    };
-  }
-  const fanout = record(snapshot.reviewFanout) ? snapshot.reviewFanout : undefined;
-  const fanoutStall =
-    phase === "reviewing" && fanout
-      ? stalledSession([
-          ...(Array.isArray(fanout.reviewers)
-            ? fanout.reviewers.map(
-                (reviewer, index) => [`reviewer ${index + 1}`, reviewer] as [string, unknown],
-              )
-            : []),
-          ["consolidation", fanout.consolidation],
-        ])
-      : null;
-  if (fanoutStall)
-    return {
-      key: `stalled:${hash(`${fanoutStall.key}:${fanoutStall.since}`)}`,
-      state: "stalled",
-      tone: "attention",
-      terminal: false,
-      headline: `stalled (${fanoutStall.label})`,
-      details: [
-        ...task,
-        `No activity from the ${fanoutStall.label} session since ${fanoutStall.since}.`,
-      ],
-      tools: [read],
-      mode: "settled",
-    };
-  const stall = record(snapshot.stallWarning) ? snapshot.stallWarning : undefined;
-  if (stall && phase !== "paused") {
-    return {
-      key: `stalled:${hash(`${text(stall.sessionId) ?? ""}:${text(stall.detectedAt) ?? ""}`)}`,
-      state: "stalled",
-      tone: "attention",
-      terminal: false,
-      headline: "stage looks stalled",
-      details: [
-        ...task,
-        `No transcript activity in the ${phase ?? "current"} stage since ${text(stall.detectedAt) ?? "a while"}.`,
-      ],
-      tools: [read],
-      mode: "settled",
-    };
-  }
-  const finishedStage = phase ? BUILD_STAGE_LABELS[phase] : undefined;
-  if (finishedStage) {
-    return {
-      key: `stage:${phase}:${iteration}`,
-      state: "stage-completed",
-      tone: "info",
-      terminal: false,
-      headline: `finished its ${finishedStage} stage; now ${phase}`,
-      details: [...task, ...verification],
-      tools: [read],
-      mode: "stages",
-    };
-  }
-  return null;
-}
-
 /** Subject, Markdown body and structured notice for one status, all bounded. */
 export function renderCoordinatorStatusNotice(
   resource: CoordinatorStatusResource,
@@ -709,7 +528,11 @@ export function renderCoordinatorStatusNotice(
     ...status.details.slice(0, MAX_DETAILS).map((detail) => `- ${boundedLine(detail)}`),
     "",
     `Read more: ${status.tools.map((tool) => `\`${tool}\``).join(", ")}.`,
-    "This is a status update for work this conversation started. Decide whether it needs anything from you; if not, acknowledge it and finish the turn.",
+    // A build or review that has ended is closed with a handoff to the user;
+    // anything else may need nothing at all.
+    status.terminal && (resource.kind === "build-pipeline" || resource.kind === "multi-review")
+      ? `This is a status update for work this conversation started. ${COORDINATOR_HANDOFF_RULE}`
+      : "This is a status update for work this conversation started. Decide whether it needs anything from you; if not, acknowledge it and finish the turn.",
   ].join("\n");
   return {
     subject,

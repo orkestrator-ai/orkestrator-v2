@@ -193,7 +193,7 @@ export function registerKanbanCommands(
       assertOnlyKeys(value, ["id", "text", "check"], `checks[${index}]`);
       assertOnlyKeys(
         { ...value.check },
-        ["status", "evidence", "checkedAt", "source", "pipelineId"],
+        ["status", "evidence", "checkedAt", "source", "pipelineId", "commit", "uncommittedChanges"],
         `checks[${index}].check`,
       );
       return { id: value.id, text: value.text, check: value.check };

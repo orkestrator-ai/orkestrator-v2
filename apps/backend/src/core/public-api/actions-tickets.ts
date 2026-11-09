@@ -17,6 +17,7 @@ import {
   type TicketKind,
   type TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
+import { criteriaEnvironmentHead } from "../ticket-criteria-head.js";
 import type { KanbanTask } from "../storage-shared-core.js";
 import { parseKanbanLabelInput } from "../storage-kanban-labels.js";
 import { paginate, requireProject } from "./actions-discovery.js";
@@ -69,13 +70,13 @@ export function publicTicketSummary(task: KanbanTask): PublicTicketSummary {
   };
 }
 
-function publicTicketDetail(task: KanbanTask): PublicTicketDetail {
+function publicTicketDetail(task: KanbanTask, currentHead?: string): PublicTicketDetail {
   return {
     ...publicTicketSummary(task),
     kind: task.kind ?? "feature",
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
-    criteria: ticketCriteriaSummary(task.sections),
+    criteria: ticketCriteriaSummary(task.sections, currentHead),
     ...(task.sections?.delivery?.policy ? { deliveryPolicy: task.sections.delivery.policy } : {}),
     comments: task.comments.slice(-50).map((comment) => ({
       id: comment.id,
@@ -191,9 +192,9 @@ const ticketGet: ReadActionHandler<{ projectId: string; ticketId: string }> = {
     return { projectId: requiredId(input, "projectId"), ticketId: requiredId(input, "ticketId") };
   },
   async run(input, context) {
-    return {
-      result: publicTicketDetail(await requireTicket(context, input.projectId, input.ticketId)),
-    };
+    const task = await requireTicket(context, input.projectId, input.ticketId);
+    const head = await criteriaEnvironmentHead(context.invoke, task);
+    return { result: publicTicketDetail(task, head) };
   },
 };
 

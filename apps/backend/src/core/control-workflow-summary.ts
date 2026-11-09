@@ -1,6 +1,7 @@
 import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { pipelineWorkers } from "@orkestrator/protocol/pipeline-worker-mail";
+import { buildPipelineCriteriaReport } from "./build-pipeline-criteria-report.js";
 
 /**
  * A build pipeline's workers, each with the mailbox address a coordinator
@@ -25,8 +26,23 @@ function buildPipelineWorkers(workflow: Record<string, unknown>): Record<string,
   }
 }
 
+function buildPipelineCriteria(
+  workflow: Record<string, unknown>,
+  detail: boolean,
+): Record<string, unknown> {
+  if (!Array.isArray(workflow.sessions)) return {};
+  const criteria = buildPipelineCriteriaReport(workflow);
+  if (!criteria) return {};
+  if (detail) return { criteria };
+  const { criteria: _entries, criteriaTruncated: _truncated, ...tally } = criteria;
+  return { criteria: tally };
+}
+
 /** Bounded control response; never include provider configuration or controller fences. */
-export function workflowSummary(workflow: Record<string, unknown>): Record<string, unknown> {
+export function workflowSummary(
+  workflow: Record<string, unknown>,
+  options: { criteriaDetail?: boolean } = {},
+): Record<string, unknown> {
   return {
     id: workflow.id,
     projectId: workflow.projectId,
@@ -41,6 +57,12 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
     // Build pipelines: one mailbox per worker; send_message with toTabId set
     // to `address` reaches that worker only.
     ...(Array.isArray(workflow.sessions) ? { workers: buildPipelineWorkers(workflow) } : {}),
+    // Build pipelines keep the verdict, tally and judged commit in general
+    // summaries. Only the explicit detail read includes criterion evidence.
+    ...(workflow.verificationResult === "pass" || workflow.verificationResult === "fail"
+      ? { verificationResult: workflow.verificationResult }
+      : {}),
+    ...buildPipelineCriteria(workflow, options.criteriaDetail === true),
     ...("autoFix" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),

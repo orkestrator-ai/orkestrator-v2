@@ -14,8 +14,8 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers, and phases 4 to 6, open; see "Task 5: phase 3 routing and preview setting").
-6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08); still open: containers, sign-in through `/api/credential`, the GitHub-token plugin port.
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phases 4 to 6 open; see "Task 5: phase 3 routing and preview setting").
+6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, and the GitHub-token plugin ported to the 2.x shape); still open: sign-in through `/api/credential`.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
 9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
@@ -652,14 +652,18 @@ users until phase 3 routes new sessions to it.
      `OPENCODE_DISABLE_AUTOUPDATE` and an explicit `OPENCODE_FLAGS`, health on
      `/api/info`, and a 2.x credential plugin (`opencode2/server.ts`,
      `opencode2-host-server.ts`).
-   - Open: the container launch, and porting the GitHub-token plugin
-     (`buildOpenCodeGitHubEnvironmentPluginSource`) to the 2.x plugin shape.
+   - **Done on 2026-11-09 for containers.** The container launch on port 4102
+     (`opencode2/container-server.ts`, `opencode2-container-server.ts`) and
+     the GitHub-token plugin in the 2.x shape
+     (`buildOpenCode2GitHubEnvironmentPluginSource`); see "Task 5 and 6:
+     container server and GitHub-token plugin".
 3. **Provider core and routing.** Status: the provider core is done
    (2026-11-08, `opencode2/provider.ts`). Routing, the marker, the host
    server launch and the preview setting are done for host environments
    (2026-11-08; see "Task 5: phase 3 routing and
-   preview setting"). The container 2.x server is open: a container
-   environment never gets a 2.x session, and the host server refuses one.
+   preview setting"). The container 2.x server is done (2026-11-09): a
+   container whose image lists `opencode2` and publishes port 4102 takes
+   2.x sessions under the same switch; an older image stays on 1.x.
 
    The core is unit-tested against `fake-server.test-support.ts` and
    live-tested in `opencode2-provider.live.test.ts`. It covers create, send
@@ -943,6 +947,10 @@ Before any 2.x pin reaches production:
   turn runs, and the inactive-environment path (start a 2.x turn, switch
   away, return, reload). Both go through code with unit and live provider
   coverage, but neither was driven through the UI.
+- Containers (2026-11-09): a preserving rebuild carrying `opencode2.db`, a
+  runtime without an egress gateway, Linux amd64, and the
+  inactive-environment path for a running 2.x turn in a container. See
+  "Task 5 and 6: container server and GitHub-token plugin".
 
 ## Assumptions and decisions
 
@@ -1314,8 +1322,8 @@ Known gaps, for phases 4 and 5:
   "queued until idle" rather than "unsupported, queued": the platform table
   says steer, and the mail delivery falls back once `steerSupported` says
   no. The message is queued either way.
-- Containers: no 2.x server in the image's runtime yet (a second fixed port
-  and `x-opencode-directory: /workspace`).
+- Containers: done on 2026-11-09 (port 4102, `directory: /workspace`); see
+  "Task 5 and 6: container server and GitHub-token plugin".
 
 Evidence: unit tests for the router, transcript, setting, marker, service
 selection and projection narrowing; the host server against a stand-in
@@ -1371,6 +1379,150 @@ The owner chose every recommended option:
    meaning: new OpenCode work uses 2.x.
 5. **Nothing is pushed yet.** Everything stays on one local branch
    (`upgrade-opencode-602d9d93f8a6-r1`) until the owner says so.
+
+### Task 5 and 6: container server and GitHub-token plugin (2026-11-09)
+
+Branch `opencode2-containers`, from `862789fcd`. A container environment
+whose image runs 2.x now takes OpenCode 2.x sessions under the same preview
+switch as a local one.
+
+What exists now:
+
+- **Which containers.** `containerRunsOpenCode2`
+  (`opencode2-container-server.ts`): the runtime's image manifest lists a 2.x
+  `agents.opencode2`, and the container (its egress gateway, when it has one)
+  publishes container port 4102 (`HostConfig.PortBindings`, so a stopped
+  container answers too). Both are read only after every other condition
+  already says 2.x. Anything unreadable answers false, so an older image, or
+  a container created before the port existed, stays on 1.x.
+- **The server** (`opencode2/container-server.ts`, started by
+  `startContainerOpenCode2Server`): `/home/node/.opencode/bin/opencode2 serve`
+  on 4102 in `/workspace`; `OPENCODE_DB` is `opencode2.db` beside 1.x's on the
+  persistent `opencode/db` mount (`/home/node/.local/share/opencode/opencode2.db`
+  without the mount, never `opencode.db`); `OPENCODE_CONFIG_DIR` is
+  `/home/node/.config/orkestrator-opencode2`, holding only the two plugins;
+  `OPENCODE_DISABLE_AUTOUPDATE=1`; `OPENCODE_FLAGS` as on the host; log
+  `/tmp/opencode2-serve.log`. The password reaches the container on stdin
+  only: to root's `/run/orkestrator-bridge/opencode2-token` and, through the
+  start secrets, to the server alone (`boundedLaunchWithPrivateEnv`). Ready on
+  `/api/info`, then one `GET /api/session/active` in `/workspace` loads the
+  plugins. A server that answers with the persisted password and was started
+  with the current plugins (a fingerprint file) is reused, also across a
+  backend restart; anything else listening on 4102 is replaced. Starts share
+  the container's OpenCode bridge-operation queue and sync the OpenCode login
+  first, because 2.x imports `auth.json` once, on its first start.
+- **Credential plugin, container form.** `buildOpenCode2CredentialPluginSource({
+  hardened: "refuse-tools" })` also marks the server non-dumpable with
+  `prctl(PR_SET_DUMPABLE, 0)` through `bun:ffi`, as the 1.x plugin does, and
+  registers a `tool.execute.before` hook that refuses every tool when it
+  cannot. Removing the variable alone does not change `/proc/<pid>/environ`.
+- **GitHub-token plugin.** `buildOpenCode2GitHubEnvironmentPluginSource`: a
+  `{ id, setup }` directory plugin whose `shell.hook("create.before")` reads
+  `/tmp/orkestrator-ai/github-token` per shell and sets `GITHUB_TOKEN` and
+  `GH_TOKEN`; a missing or empty file adds nothing. The start script unsets
+  both, `GITHUB_PERSONAL_ACCESS_TOKEN` and 1.x's password variables, as 1.x's
+  does.
+- **Routing.** `openCode2EnvironmentServer` sends a container environment to
+  the in-container server and everything else to the host one;
+  `NativeAgentServiceOptions.openCode2InContainer` feeds the selection.
+  Observers never start a server: a known one is re-checked at most every
+  10 s, and one this backend did not start is adopted through its persisted
+  password at most every 15 s; a server that stopped answering reads as none.
+- **Shared plumbing.** Port 4102 is published on every new container
+  (directly or through the egress gateway, `ORKESTRATOR_INGRESS_PORTS`
+  included) and refused as a preview target; the legacy replacement copy
+  carries `opencode2.db*`; `PROVIDER_STATE_TRACED_TOOLCHAINS` traces
+  `opencode2` 2.2.6 and the layout test compares it with the pin.
+
+Decisions:
+
+- **Where the 2.x database lives.**
+  - **A second file in the existing `opencode/db` sub-directory
+    (implemented).** Pros: no new mount, so storage sets initialized before
+    2.x (which create only the sub-directories they knew) mount unchanged;
+    the preserving rebuild already copies the directory; 1.x never opens it.
+    Cons: one mount holds both lines' databases; the layout entry describes
+    two files.
+  - **A new `PROVIDER_STATE_LAYOUT` entry.** Pros: one path per database.
+    Cons: `volume-subpath` fails when the sub-directory is missing, so every
+    existing storage set would need a migration before its next start.
+  - Recommendation: the shared sub-directory.
+- **Which credential modes 2.x accepts.**
+  - **Root credential file only; `token-file` refused (implemented).** Pros:
+    the password is never in a `node`-readable file; every image that carries
+    `opencode2` has `bridge-credential` and `bridge-launch`. Cons: none in
+    practice; the refusal exists for a hand-built image.
+  - **Mirror 1.x's three modes.** Cons: a `node`-readable password file for a
+    case that cannot occur with a supported image.
+  - Recommendation: root only.
+- **GitHub-token plugin on the host.**
+  - **None (implemented).** 1.x has no GitHub plugin on the host either:
+    `buildOpenCodeGitHubEnvironmentPluginSource` is written only into
+    containers, and host shells inherit the user's own environment and `gh`
+    login. Pros: same behaviour as 1.x on both sides. Cons: none.
+  - **Write it into the host config directory.** Cons: there is no managed
+    token file on the host to read, so it would do nothing.
+  - Recommendation: none; the plugin builder takes a file path should a
+    host token file ever exist.
+- **What the 1.x stop command does to the 2.x server.**
+  - **Nothing (implemented).** A container stop ends both. Pros: the 1.x
+    stop is used for 1.x restarts and account changes, and stopping 2.x there
+    would end a 2.x turn for an unrelated reason; 2.x does not re-read
+    `auth.json` anyway. Cons: no explicit command stops 2.x alone (nothing
+    needs one yet).
+  - **Stop both, as the host does.** Cons: the reasons above.
+  - Recommendation: nothing.
+- **Network allowlist.** Read at `v2.2.6` (`packages/core/src`,
+  `packages/cli/src`, `packages/util/src`). No change: OpenCode's own Zen and
+  Go inference stay under `opencode.ai` (`/inference/...`) and its console is
+  `opencode.ai/console`, both covered by the existing `opencode.ai` entry.
+  The model catalogue refreshes from `models.opencode.ai`, a new exact name
+  the egress filter refuses; 2.x then uses its bundled snapshot and logs the
+  failed refresh (`ModelsDev.refresh` ignores the error), as 1.x does with
+  its own `models.dev`, which is not listed either. A plugin package named in
+  a config is installed from npm (`Npm.add`), which `registry.npmjs.org` in
+  the default list already covers, as for 1.x. Add `models.opencode.ai` only
+  if a fresh catalogue in restricted containers becomes a requirement.
+
+Evidence:
+
+- Unit: `opencode2/container-server.test.ts` (script, plugins, image and
+  port checks), `opencode2/server.test.ts` (both plugin forms run against a
+  stand-in context, including the Linux refusal), `tests/opencode2-container-server.test.ts`
+  (fake Docker: password only on stdin and in root's file, reuse, refused
+  `token-file`, missing port, adoption and its rate limit, routing,
+  `containerRunsOpenCode2`), selection tests for containers, and the layout,
+  replacement and preview tests.
+- Live against the real 2.2.6 binary (macOS arm64,
+  `opencode2-container-plugins.live.test.ts`): with the container plugin set
+  and a 1.x plugin file in the shared config directory, the agent's shell saw
+  no password and no token, then, after a fake token was written while the
+  server ran, `GH_TOKEN` and `GITHUB_TOKEN` of the right length and still no
+  password.
+- Real stack, 2026-11-09, throwaway profile `oc2c-a612` (`dev:test --fixture
+  --fixture-environments local,container --agent-platforms opencode
+  --no-agent-credentials`, image built from this branch; since stopped and
+  reset, its dev image removed). With the switch on, `session start --agent
+  opencode` in `fixture-container` ran on the in-container 2.x server (the
+  transcript shows 2.x's `shell` tool and message ids; OpenCode's free
+  default model). Inside the container: `opencode serve` on 4096 and
+  `opencode2 serve` on 4102 side by side; `/proc/<pid>/environ` of the 2.x
+  server denied to `node` (so `prctl` through `bun:ffi` works in the Linux
+  binary); `opencode2.db` beside `opencode.db` on the mounted
+  `orkestrator-db`; both plugins in the config directory. The agent's shell
+  printed `PW= SPW=`, and after a fake token was written to the managed file
+  `GH=SET GT=SET LEN=38 PW=`. After `dev:stop` and a fresh `dev:test`, a
+  follow-up prompt answered from the same 2.x process (same pid), so the
+  restarted backend adopted it. `docker/tests/final-image-smoke.sh` passed on
+  that image.
+
+Not checked live: a container rebuild carrying `opencode2.db` across (the copy
+plan is unit-tested), a gateway-less (`ORKESTRATOR_EGRESS=in-container`)
+runtime, Linux amd64, and the inactive-environment path for a running 2.x
+turn in a container. Both lines also share the data directory's
+`snapshot/<project>/<worktree hash>` git directory (the same layout in 1.19.5
+and 2.2.6), on the host as in containers; no conflict was seen, but
+concurrent snapshots from both lines were not exercised.
 
 ## Related
 

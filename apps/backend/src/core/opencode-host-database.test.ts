@@ -41,6 +41,9 @@ describe("host OpenCode database", () => {
     try {
       database.run("PRAGMA journal_mode = WAL");
       for (const table of tables) database.run(`CREATE TABLE \`${table}\` (id TEXT PRIMARY KEY)`);
+      // Materialise the WAL header even when the fixture has no schema writes.
+      // Otherwise macOS SQLite cannot reopen that empty WAL database read-only.
+      database.run("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally {
       database.close();
     }

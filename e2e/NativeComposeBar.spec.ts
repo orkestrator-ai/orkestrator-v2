@@ -263,3 +263,28 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await page.getByRole("button", { name: "Address all" }).click();
   await expect(page.getByTestId("native-send-count")).toHaveText("1");
 });
+
+test("authored leading breaks survive input, typing, and deletion", async ({ page }) => {
+  await page.goto("/native-compose");
+  const input = page.getByRole("textbox", { name: "Send a message" });
+  await input.fill("");
+  await input.focus();
+  await page.keyboard.press("Shift+Enter");
+  expect(await input.innerText()).toMatch(/^\n+$/);
+  await page.keyboard.type("Leading line");
+  expect(await input.innerText()).toMatch(/^\n+Leading line/);
+  const caret = await input.evaluate((element) => {
+    const selection = window.getSelection()!;
+    if (!selection.anchorNode || !element.contains(selection.anchorNode)) return null;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.setEnd(selection.anchorNode, selection.anchorOffset);
+    return { offset: range.toString().length, length: element.textContent!.length };
+  });
+  expect(caret).not.toBeNull();
+  expect(caret!.offset).toBe(caret!.length);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+a" : "Control+a");
+  await page.keyboard.press("Backspace");
+  await expect(input).toBeEmpty();
+  await expect(page.locator("[data-native-compose-placeholder]")).toBeVisible();
+});

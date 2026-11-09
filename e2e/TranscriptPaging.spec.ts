@@ -527,3 +527,62 @@ test("native: the automatic opening page keeps following subsequent live rows", 
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(before);
 });
+
+test("coarse-pointer targets preserve dock and transcript row heights", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "touch layout");
+  await page.goto("/transcript-paging");
+  const dock = page.getByTestId("compose-dock");
+  const actions = page.locator("[data-message-actions]").last();
+  await expect(actions).toBeVisible();
+  await expect(dock).toBeVisible();
+  await dock.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished),
+    );
+  });
+  const before = await actions.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    row: element.closest("[data-chat-message-key]")!.getBoundingClientRect().height,
+    dock: document.querySelector('[data-testid="compose-dock"]')!.getBoundingClientRect().height,
+  }));
+  for (const button of await page.locator("[data-native-compose-toolbar] button").all()) {
+    const box = await button.boundingBox();
+    expect(box!.height).toBeGreaterThanOrEqual(40);
+    expect(box!.width).toBeGreaterThanOrEqual(40);
+  }
+  const action = actions.locator("button").last();
+  const hitArea = await action.evaluate((element) => {
+    const style = getComputedStyle(element, "::after");
+    const box = element.getBoundingClientRect();
+    return {
+      height: parseFloat(style.minHeight),
+      width: box.width,
+      receivesExpandedHit:
+        document.elementFromPoint(box.x + box.width / 2, box.y - 4)?.closest("button") === element,
+    };
+  });
+  expect(hitArea.height).toBeGreaterThanOrEqual(40);
+  expect(hitArea.width).toBeGreaterThanOrEqual(40);
+  expect(hitArea.receivesExpandedHit).toBe(true);
+  // Compare against the mouse-size geometry without changing content or font.
+  await page.addStyleTag({
+    content: `
+    [data-native-compose-toolbar] { padding-top: 12px !important; }
+    [data-native-compose-toolbar] button { min-height: 0 !important; min-width: 0 !important; }
+    [data-message-actions] button { min-width: 0 !important; }
+  `,
+  });
+  const after = await actions.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    row: element.closest("[data-chat-message-key]")!.getBoundingClientRect().height,
+    dock: document.querySelector('[data-testid="compose-dock"]')!.getBoundingClientRect().height,
+  }));
+  expect(before.height).toBe(after.height);
+  expect(before.row).toBe(after.row);
+  expect(before.dock).toBe(after.dock);
+});

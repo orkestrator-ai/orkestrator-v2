@@ -7,6 +7,7 @@ import {
   useImperativeHandle,
   type KeyboardEvent,
   type ClipboardEvent,
+  type FormEvent,
 } from "react";
 import { isFocusHeldElsewhere } from "@/lib/background-focus";
 import { cn } from "@/lib/utils";
@@ -99,8 +100,12 @@ function extractText(element: HTMLElement): string {
 export function isEditorVisuallyEmpty(element: HTMLElement): boolean {
   if ((element.textContent ?? "") !== "") return false;
   if (element.querySelector('[data-mention="true"]')) return false;
-  return Array.from(element.querySelectorAll("*")).every(
-    (node) => node.tagName === "BR" || isBlockElement(node as HTMLElement),
+  if (element.childNodes.length === 0) return true;
+  if (element.childNodes.length !== 1) return false;
+  const child = element.firstChild;
+  return (
+    child instanceof HTMLElement &&
+    (child.tagName === "BR" || (isBlockElement(child) && isEditorVisuallyEmpty(child)))
   );
 }
 
@@ -496,30 +501,37 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       setCursorOffset(input, cursorPosition);
     }, [disabled]);
 
-    const handleInput = useCallback(() => {
-      if (!inputRef.current || isComposingRef.current) return;
+    const handleInput = useCallback(
+      (event?: FormEvent<HTMLDivElement>) => {
+        if (!inputRef.current || isComposingRef.current) return;
 
-      // A cleared editor keeps the browser's `<br>` placeholder, which would
-      // otherwise read as a "\n" draft: the placeholder text never returned
-      // and the stray draft followed the user to other clients.
-      if (inputRef.current.childNodes.length > 0 && isEditorVisuallyEmpty(inputRef.current)) {
-        inputRef.current.replaceChildren();
-      }
-      const newText = extractText(inputRef.current);
-      const remainingMentions = mentions.filter((mention) =>
-        newText.includes(`@${mention.filename}`),
-      );
+        // A cleared editor keeps the browser's `<br>` placeholder, which would
+        // otherwise read as a "\n" draft: the placeholder text never returned
+        // and the stray draft followed the user to other clients.
+        if (
+          (event?.nativeEvent as InputEvent | undefined)?.inputType?.startsWith("delete") &&
+          inputRef.current.childNodes.length > 0 &&
+          isEditorVisuallyEmpty(inputRef.current)
+        ) {
+          inputRef.current.replaceChildren();
+        }
+        const newText = extractText(inputRef.current);
+        const remainingMentions = mentions.filter((mention) =>
+          newText.includes(`@${mention.filename}`),
+        );
 
-      lastValueRef.current = newText;
-      lastMentionsRef.current = remainingMentions;
-      onChange(newText, remainingMentions);
+        lastValueRef.current = newText;
+        lastMentionsRef.current = remainingMentions;
+        onChange(newText, remainingMentions);
 
-      if (onCursorChange) {
-        const cursorPosition = getCursorOffset(inputRef.current);
-        lastCursorPositionRef.current = cursorPosition;
-        onCursorChange(cursorPosition, newText);
-      }
-    }, [mentions, onChange, onCursorChange]);
+        if (onCursorChange) {
+          const cursorPosition = getCursorOffset(inputRef.current);
+          lastCursorPositionRef.current = cursorPosition;
+          onCursorChange(cursorPosition, newText);
+        }
+      },
+      [mentions, onChange, onCursorChange],
+    );
 
     const handleCompositionStart = useCallback(() => {
       isComposingRef.current = true;

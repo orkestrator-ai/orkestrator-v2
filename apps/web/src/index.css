@@ -937,24 +937,46 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 /*
+ * Touch targets on coarse pointers: 40px, the floor DESIGN.md sets for touch.
+ * Keep message actions at their measured row size; enlarge their hit area
+ * within the surrounding footer spacing instead of growing transcript rows.
+ */
+@media (hover: none) and (pointer: coarse) {
+  [data-native-compose-toolbar] button,
+  [data-tab-close] {
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  /* Spend the toolbar's existing 12px top gap on the taller controls, so
+     the dock keeps its original height even in a short touch viewport. */
+  [data-native-compose-toolbar] {
+    padding-top: 0;
+  }
+
+  [data-message-actions] button {
+    min-width: 2.5rem;
+    position: relative;
+  }
+
+  [data-message-actions] button::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    width: 100%;
+    height: 100%;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/*
  * Touch browsers can zoom focused editable content whose computed font size is
  * below 16px. Use a real 16px compose font while retaining the shared 20px
  * line height so the editor still displays the configured twelve lines before
  * it scrolls. The capability query leaves mouse/trackpad layouts unchanged.
  */
-/*
- * Touch targets on coarse pointers: 40px, the floor DESIGN.md sets for touch.
- * The compose toolbar, a message's fork/copy actions and a tab's close button
- * are 24–28px for a mouse; a thumb next to Send needs the room.
- */
-@media (hover: none) and (pointer: coarse) {
-  [data-native-compose-toolbar] button,
-  [data-message-actions] button,
-  [data-tab-close] {
-    min-height: 2.5rem;
-    min-width: 2.5rem;
-  }
-}
 
 @media (hover: none) and (pointer: coarse) {
   .native-compose-input {

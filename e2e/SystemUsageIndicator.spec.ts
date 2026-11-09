@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const PRIMARY_RGB = "rgb(59, 130, 246)";
+const SIGNAL_BLUE_RGB = "rgb(59, 130, 246)";
 
 async function openProcessPanel(page: Page) {
   await page.goto("/system-usage");
@@ -9,7 +9,9 @@ async function openProcessPanel(page: Page) {
   await expect(page.getByRole("region", { name: "title-bar-layout processes" })).toBeVisible();
 }
 
-test("environment names and totals use the Create PR blue at process size", async ({ page }) => {
+test("environment names and totals use signal blue independently of the Create PR fill at process size", async ({
+  page,
+}) => {
   await openProcessPanel(page);
 
   const heading = page.getByRole("heading", { name: "title-bar-layout" });
@@ -29,9 +31,9 @@ test("environment names and totals use the Create PR blue at process size", asyn
   );
   expect(themePrimary).toBe("#3b82f6");
 
-  await expect(heading).toHaveCSS("color", PRIMARY_RGB);
-  await expect(totals).toHaveCSS("color", PRIMARY_RGB);
-  await expect(createPr).toHaveCSS("background-color", PRIMARY_RGB);
+  await expect(heading).toHaveCSS("color", SIGNAL_BLUE_RGB);
+  await expect(totals).toHaveCSS("color", SIGNAL_BLUE_RGB);
+  await expect(createPr).toHaveCSS("background-color", "rgb(37, 99, 235)");
 
   const [totalsFontSize, processFontSize] = await Promise.all([
     totals.evaluate((element) => getComputedStyle(element).fontSize),

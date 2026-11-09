@@ -6,7 +6,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 export interface EnvironmentContainment {
   /** "worktree", "container" or "project checkout". */
   isolation: string;
-  /** "host network", "restricted network" or "full network". */
+  /** Host network, or the configured container network mode. */
   network: string;
   branch: string;
   /** Plain-language account of the boundary, for the tooltip. */
@@ -49,18 +49,18 @@ export function describeEnvironmentContainment(environment: {
   const restricted = environment.networkAccessMode === "restricted";
   return {
     isolation: "container",
-    network: restricted ? "restricted network" : "full network",
+    network: restricted ? "configured restricted network" : "configured full network",
     branch: environment.branch,
     explanation: restricted
-      ? "A Docker container with its own checkout and branch. Outbound traffic reaches only the allowlisted hosts."
-      : "A Docker container with its own checkout and branch. Its network is unrestricted.",
+      ? "A Docker container with its own checkout and branch. Restricted networking is configured; the running container may use an earlier policy until rebuilt. Check Network policy for its applied status."
+      : "A Docker container with its own checkout and branch. Full networking is configured; the running container may use an earlier policy until rebuilt. Check Network policy for its applied status.",
     container: true,
   };
 }
 
 /**
  * The environment's containment, stated where the work happens: a mono line
- * reading "worktree · host network · feature/x" or "container · restricted
+ * reading "worktree · host network · feature/x" or "container · configured restricted
  * network · feature/x". Reads the environment store only; renders nothing until
  * the environment is known.
  */

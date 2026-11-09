@@ -30,7 +30,14 @@ export function ThreadChangesSummary({
   const noFileChanges =
     !projection.badge.visible &&
     (projection.state === "ready" || projection.state === "partial") &&
-    projection.counters.changedFiles === 0;
+    projection.counters.changedFiles === 0 &&
+    projection.hasFileChanges === false;
+  const compactFinal =
+    !provisional &&
+    projection.state === "ready" &&
+    projection.coverageState === "complete" &&
+    projection.observationState === "fresh" &&
+    !projection.reasonKeys.includes("changes.reason.interrupted");
   const diffIdentityId = projection.detail?.diffIdentityId ?? null;
   const canOpen = Boolean(diffIdentityId && onOpenDiff);
   const content = (
@@ -45,11 +52,11 @@ export function ThreadChangesSummary({
           No file changes
         </span>
       ) : null}
-      {/* A settled "Final" gives way on narrow panes; a "Live" tag always shows. */}
-      <span aria-hidden="true" className={cn(!provisional && "hidden @md:inline")}>
+      {/* A settled "Final" gives way on narrow panes; abnormal and incomplete states always show. */}
+      <span aria-hidden="true" className={cn(compactFinal && "hidden @md:inline")}>
         ·
       </span>
-      <ChangeStateTag projection={projection} className={cn(!provisional && "hidden @md:flex")} />
+      <ChangeStateTag projection={projection} className={cn(compactFinal && "hidden @md:flex")} />
     </>
   );
   const classes = cn(

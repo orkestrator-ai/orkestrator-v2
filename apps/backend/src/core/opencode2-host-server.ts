@@ -162,7 +162,6 @@ async function startOpenCode2HostServerUnlocked(
 
   const cliPath = resolveOpenCode2Binary(context);
   const dataDir = context.storage.getDataDir();
-  const configDir = await writeOpenCode2HostConfig(dataDir);
   const port = await allocateLocalPort();
   const password = mintBridgeToken();
   const baseEnv: NodeJS.ProcessEnv = {
@@ -172,6 +171,8 @@ async function startOpenCode2HostServerUnlocked(
   };
   for (const name of WITHHELD_ENV) delete baseEnv[name];
   dropInheritedVendorDebug(baseEnv);
+  // Mirrors the user's global OpenCode configuration as this environment locates it.
+  const configDir = await writeOpenCode2HostConfig(dataDir, baseEnv);
   const launch = openCode2HostLaunch({ cliPath, dataDir, configDir, port, password, baseEnv });
 
   // Shutdown or deletion may have begun while this start awaited the disk.

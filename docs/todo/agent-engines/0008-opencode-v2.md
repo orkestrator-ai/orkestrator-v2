@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; open: coordinators, the user's global MCP servers, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; open: coordinators, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store). Done.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -769,9 +769,15 @@ users until phase 3 routes new sessions to it.
      2.x, graph describe, goal verifier and subork sessions, and artifact
      grants, the design connection and worker mail on 2.x turns (see "Task
      5: phase 5 workflows in containers, describe/verifier/subork sessions
-     and per-turn connections"). Still open in this phase: the user's global
-     MCP servers (the 2.x server reads Orkestrator's own config directory,
-     not `~/.config/opencode`) and coordinators.
+     and per-turn connections"). Still open in this phase: coordinators.
+   - **The user's global configuration: done on 2026-11-09, host and
+     container** (branch `opencode2-globalcfg-flake`; see "Task 5: phase 5
+     the user's global configuration"). Orkestrator's 2.x config directory
+     mirrors `~/.config/opencode` read-only and without plugins
+     (`opencode2/user-config.ts`), so a 2.x server sees the same MCP servers,
+     providers, agents, commands, skills and `AGENTS.md` a 1.x server does;
+     a policy that selects its user MCP servers denies the others on 2.x as on
+     1.x.
    - **Session features: done for host sessions on 2026-11-09** (branch
      `opencode2-session-features`; see "Task 5: phase 5 session features").
      Sign-in on both lines (each 1.x change mirrored into the 2.x database),
@@ -2065,6 +2071,145 @@ Not checked live: a workflow in a container running 2.x (needs an image
 built from this branch), graph describe on 2.x, a build pipeline worker
 turn's mailbox through the real agent tools server, and artifact
 publication end to end on 2.x.
+
+### Task 5: phase 5 the user's global configuration (2026-11-09)
+
+Branch `opencode2-globalcfg-flake`, from `5ed139cfc`. Code:
+`opencode2/user-config.ts` (new), `opencode2/server.ts`,
+`opencode2/container-server.ts`, `opencode2-host-server.ts`,
+`opencode2-credential-sync.ts`, `opencode2/mcp.ts`, `opencode2/permissions.ts`,
+`opencode2/provider.ts`.
+
+How 2.2.6 resolves configuration (upstream `v2.2.6`,
+`packages/util/src/global.ts`, `packages/core/src/config.ts`,
+`config/discovery.ts`, `packages/cli/src/server-process.ts`):
+
+- `OPENCODE_CONFIG_DIR` **replaces** the global directory (`Global.config`);
+  on 1.x it only adds one. The global directory supplies `opencode.json` and
+  `opencode.jsonc` (not `config.json`), the `agent(s)`/`mode(s)`,
+  `command(s)`, `skill(s)` and `plugin(s)` directories, and `AGENTS.md`.
+- Layers, lowest first: managed policies, integrations, well-known, the
+  global directory, `OPENCODE_CONFIG` (an explicit file), project
+  `opencode.json(c)` files, project `.opencode` directories,
+  `OPENCODE_CONFIG_CONTENT`, managed settings. The project walk goes up to
+  `/` with no stop, so `~/.opencode` and `~/opencode.json` are read as
+  project layers for any worktree below the home directory.
+- 2.x writes its global directory: `cli.json` (CLI configuration and its
+  migration) and `opencode.jsonc` through `Config.update`.
+- A malformed document is skipped with a warning, not fatal.
+- Plugins: a `plugin`/`plugins` entry that names an npm package is installed
+  (`npm.add`), and the plugin registry is held until pending installs
+  settle. A module without `{ id, setup | effect }` fails to load with a
+  warning (`PluginSupervisor`), which is how a 1.x plugin ends. A
+  `plugins: ["-*"]` or `"-<id>"` entry unloads every plugin it matches
+  except upstream's guarded internals, so it would unload Orkestrator's
+  credential plugin.
+- A configured MCP server's tools default to Code Mode: the model reaches
+  them through `execute` as `tools["<server>"].<tool>(...)`, not as
+  `<server>_<tool>`. A `deny` rule on `<server>_*` removes them from Code
+  Mode's catalogue ("Unknown tool 'user-tools.user_echo'", observed live).
+
+What was built:
+
+- **The mirror.** Every 2.x start refreshes Orkestrator's 2.x config
+  directory from `$XDG_CONFIG_HOME/opencode` (the directory the 1.x server
+  reads): one merged `opencode.jsonc` from `config.json`, `opencode.json` and
+  `opencode.jsonc` in 1.x's order, without `plugin`/`plugins`, relative
+  `{file:...}` references rebased onto the user's directory; links to the
+  user's `agent(s)`, `mode(s)`, `command(s)`, `skill(s)` and `AGENTS.md`.
+  The backend's `OPENCODE_CONFIG`, when set, is mirrored the same way to
+  `<data>/opencode2/opencode-config.jsonc` and passed in its place; it is
+  never passed unmirrored. Nothing is written below the user's directory, a
+  failed mirror never fails the start, and the mirror is owner-only.
+- **Containers.** The start script mirrors the container's
+  `~/.config/opencode` (the entrypoint's copy of the host's) the same way,
+  running `mergeOpenCodeUserConfig`'s own source with the image's Bun; the
+  plugin fingerprint covers the mirror script, so a server started before it
+  is replaced on its next use.
+- **MCP selection on 2.x.** A session created with a policy that selects its
+  user MCP servers (`capabilityPolicy.userMcpServers`) lists the location's
+  servers (`GET /api/mcp`) and adds 1.x's per-server rules
+  (`openCodeUserMcpRules`) to its base; a list that cannot be read refuses
+  the session, as on 1.x. Before the mirror only project servers reached a
+  2.x session, and their selection was not applied either.
+
+What a 2.x session loses against 1.x, from the user's own configuration:
+1.x plugins (in the global `plugin(s)` directory or the `plugin` key) and
+1.x custom tools (`tool/`), which 2.x does not run; a 2.x-native plugin in
+the user's global directory, which the mirror does not link either; a
+backend `OPENCODE_CONFIG_DIR`, which 2.x replaces with Orkestrator's (1.x
+keeps it and goes without the credential plugin); and `~/.opencode` for a
+worktree outside the home directory. Upstream issue #50286 (the 1.x normalization
+overwriting a custom provider `baseURL`) applies to mirrored providers.
+
+Evidence: `opencode2-user-config.live.test.ts` on the pinned 2.2.6 binary,
+with an isolated `XDG_CONFIG_HOME` holding a fake `opencode.json` (a local
+stdio MCP server, a 1.x npm `plugin` entry and `-*`), a `command/`
+directory and a 1.x plugin file: `GET /api/mcp` lists the server as
+connected, a session calls its tool through Code Mode, the shell still sees
+no `OPENCODE_PASSWORD`, `/api/command` lists the user's command, the 1.x
+plugin is never imported and the user's directory is byte-identical after;
+a session whose policy selects no user server gets "Unknown tool" from Code
+Mode. The control (the same files without the mirror) lists neither the
+server nor the command once a project-level server and command have loaded.
+
+Decisions:
+
+- **How 2.x gets the user's global directory.**
+  - **A read-only mirror in Orkestrator's config directory (recommended,
+    built).** Pros: the credential plugin stays in the global directory;
+    nothing writes to the user's directory; plugin entries can be
+    withheld; precedence matches 1.x (global below `OPENCODE_CONFIG` and
+    project). Cons: a copy of the user's files (API keys included) under
+    Orkestrator's data directory, owner-only, beside the 2.x database that
+    already holds the imported `auth.json`; refreshed per server start, not
+    on every edit; one merged document instead of three.
+  - **Point `OPENCODE_CONFIG_DIR` at `~/.config/opencode` and put the plugin
+    elsewhere.** Pros: no copy, live edits. Cons: 2.x writes `cli.json` and
+    `opencode.jsonc` there; the user's `plugins: ["-*"]` or a 1.x npm plugin
+    reaches the server; there is no other place to load a plugin directory
+    from without a project file.
+  - **`OPENCODE_CONFIG` pointing at the user's `opencode.json`.** Pros: no
+    copy, read-only, live. Cons: one file only (not `opencode.jsonc`, not
+    `config.json`), no directories, the plugin entries pass through, and it
+    displaces a backend `OPENCODE_CONFIG`.
+- **What to do with the user's plugin entries.**
+  - **Withhold every `plugin`/`plugins` entry and the plugin directories
+    (recommended, built).** Pros: a 1.x npm plugin is never installed, a
+    `-*` cannot unload the credential plugin, nothing of the user's runs in
+    the 2.x server. Cons: a 2.x-native plugin the user configured globally
+    does not load in Orkestrator's 2.x sessions.
+  - **Pass them through.** Pros: 2.x-native plugins work. Cons: npm installs
+    hold the plugin registry, and `-*` or `-orkestrator-credential` would put
+    the server password back in the agent's shell.
+- **When to refresh.**
+  - **On every 2.x server start, host and container (recommended, built).**
+    Pros: the same moment 1.x reads its user files (it keeps them for its
+    lifetime), so the MCP settings page's "stop and start the environment"
+    applies to both lines. A running host server also follows a refresh made
+    by another environment's start, since it watches its config directory.
+    Cons: an edit reaches a running 2.x server only at the next start
+    anywhere on the host.
+  - **Also on every MCP settings save.** Pros: live on 2.x. Cons: the apply
+    pipeline would report `restart-required` for a change already applied,
+    and a save would reconfigure every running host 2.x server mid-turn.
+- **Enforce the MCP selection on 2.x in this change.**
+  - **Yes, at session creation (recommended, built).** Pros: without it the
+    mirror would hand global servers to sessions whose policy excludes them.
+    Cons: servers added after creation are not denied, and a reviewer's
+    read-only turn replaces
+    the base rules (`openCode2TurnRules`), so its selection rules do not apply
+    during that turn; see Not done.
+  - **Leave it to the workflows work.** Pros: smaller change. Cons: a
+    regression for graph nodes with an MCP selection the moment the mirror
+    lands.
+
+Not done: a reviewer's read-only turn on 2.x runs with the review rules in
+place of the base, so a reviewer policy's user MCP selection is not applied
+during that turn (carry the selection rules into `openCode2TurnRules`); the
+container mirror was run with the host's Bun 1.4.4 against a temporary
+directory, not inside a real container image; a backend
+`OPENCODE_CONFIG_DIR` is not read by 2.x.
 
 ## Related
 

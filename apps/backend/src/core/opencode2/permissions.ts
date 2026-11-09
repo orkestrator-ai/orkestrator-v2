@@ -167,11 +167,23 @@ export function openCode2IsolationRules(sessionId: string): OpenCode2PermissionR
   ];
 }
 
-/** The base rules of a session created with a backend execution policy. */
+/**
+ * The base rules of a session created with a backend execution policy.
+ * `configuredMcpServers` (the location's user servers) adds 1.x's per-server
+ * denies for a policy that selects its user MCP servers (`opencode-user-mcp.ts`);
+ * 2.x names a server's tools `<server>_<tool>` with the same namespace rule.
+ */
 export function openCode2PolicyRules(
   policy: NativeAgentExecutionPolicy | undefined,
+  configuredMcpServers?: readonly string[],
 ): OpenCode2PermissionRule[] {
-  return policy ? toOpenCode2Rules(openCodePermissionRules(effectiveOpenCodePolicy(policy))) : [];
+  if (!policy) return [];
+  return toOpenCode2Rules(
+    openCodePermissionRules(
+      effectiveOpenCodePolicy(policy),
+      configuredMcpServers ? { configuredMcpServers } : {},
+    ),
+  );
 }
 
 /** A reviewer's constrained shell for one read-only turn, in place of the base rules. */

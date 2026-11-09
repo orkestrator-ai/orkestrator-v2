@@ -29,13 +29,16 @@
  */
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
-import type {
-  NativeAgentMcpServer,
-  NativeAgentMcpServerAction,
+import {
+  nativeAgentRestrictsUserMcp,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentMcpServer,
+  type NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ORKESTRATOR_ARTIFACT_MCP_PATH } from "@orkestrator/protocol/transcript-artifacts";
 import { ProviderDispatchPreparationError } from "../agent-provider-contract.js";
+import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "../opencode-user-mcp.js";
 import type { OpenCode2Client } from "./client.js";
 import {
   isOrkestratorOpenCode2McpServer,
@@ -240,6 +243,39 @@ export class OpenCode2McpServers {
   private now(): number {
     return this.deps.now?.() ?? Date.now();
   }
+}
+
+/**
+ * The user's server names (the location's servers, Orkestrator's left out) a
+ * policy's MCP selection is computed over, or undefined when the policy
+ * narrows nothing (no request is made). The user's global servers reach 2.x
+ * through the config mirror (`user-config.ts`), so they are listed here as on
+ * 1.x. Throws when the list cannot be read: without it the rules would leave
+ * every server callable (`opencode-user-mcp.ts`).
+ */
+export async function openCode2ConfiguredUserMcpServers(
+  client: Pick<OpenCode2Client, "listMcpServers">,
+  policy: NativeAgentExecutionPolicy | undefined,
+): Promise<string[] | undefined> {
+  if (!policy || !nativeAgentRestrictsUserMcp(policy)) return undefined;
+  let servers: OpenCode2McpServer[];
+  try {
+    servers = await client.listMcpServers();
+  } catch (error) {
+    throw new ProviderDispatchPreparationError(
+      "OpenCode 2 did not list its MCP servers, so this session's MCP selection could not be applied",
+      { cause: error },
+    );
+  }
+  const names = servers
+    .map((server) => server.name)
+    .filter((name) => !isOrkestratorOpenCode2McpServer(name));
+  if (names.length > MAX_OPENCODE_CONFIGURED_MCP_SERVERS) {
+    throw new ProviderDispatchPreparationError(
+      `OpenCode listed more than ${MAX_OPENCODE_CONFIGURED_MCP_SERVERS} MCP servers, so this session's MCP selection could not be applied`,
+    );
+  }
+  return names.sort();
 }
 
 function sharedServer(server: OpenCode2McpServer): NativeAgentMcpServer {

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { OpenCode2Provider, parseOpenCode2Model } from "./provider.js";
 
 let server: FakeOpenCode2Server | undefined;
@@ -214,5 +216,52 @@ describe("OpenCode2Provider", () => {
     expect(await provider.activity(id)).toBe("idle");
     await provider.dispose();
     expect(provider.observationStreamLive()).toBe(false);
+  });
+});
+
+describe("a policy's user MCP selection on 2.x", () => {
+  const selecting = (userMcpServers: string[]): NativeAgentExecutionPolicy => ({
+    id: "pipeline",
+    sandbox: "none",
+    approvals: "auto-approve",
+    projectResources: true,
+    networkAccess: "full",
+    capabilityPolicy: { deny: [], userMcpServers },
+  });
+  const effect = (rules: unknown[] | undefined, action: string) =>
+    (rules as Array<{ action: string; effect: string }> | undefined)?.findLast(
+      (rule) => rule.action === action,
+    )?.effect;
+
+  test("denies every listed user server the selection leaves out, never Orkestrator's", async () => {
+    const { server, provider } = setup();
+    for (const name of ["docs", "linear", "orkestrator_tab_abc", "orkestrator_workflow_result"]) {
+      server.mcp.set(name, { config: {}, status: "connected" });
+    }
+    const id = await provider.createSession("build", "x", { policy: selecting(["docs"]) });
+    const rules = server.sessions.get(id)?.rules;
+    expect(effect(rules, "linear_*")).toBe("deny");
+    expect(effect(rules, "docs_*")).toBe("allow");
+    expect(effect(rules, "orkestrator_tab_abc_*")).toBeUndefined();
+
+    // A policy that narrows nothing reads no list.
+    const before = server.calls.filter((call) => call.path === "/api/mcp").length;
+    await provider.createSession("build", "y", {
+      policy: { ...selecting([]), capabilityPolicy: { deny: [] } },
+    });
+    expect(server.calls.filter((call) => call.path === "/api/mcp").length).toBe(before);
+  });
+
+  test("refuses the session when the server list cannot be read", async () => {
+    await expect(
+      openCode2ConfiguredUserMcpServers(
+        {
+          listMcpServers: async () => {
+            throw new Error("down");
+          },
+        },
+        selecting([]),
+      ),
+    ).rejects.toThrow("could not be applied");
   });
 });

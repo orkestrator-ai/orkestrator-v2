@@ -15,6 +15,10 @@
  *   ({@link buildOpenCode2CredentialPluginSource}) removes it from the
  *   process and from every shell the server creates. 1.x plugins do not run
  *   on 2.x, which is why this is a separate plugin.
+ * - **The user's global configuration, mirrored.** `OPENCODE_CONFIG_DIR`
+ *   replaces 2.x's global directory, so the user's `~/.config/opencode` is
+ *   mirrored into it read-only and without plugins (`user-config.ts`), and
+ *   the backend's `OPENCODE_CONFIG` is passed as its mirror.
  * - **Pinned behaviour.** `OPENCODE_DISABLE_AUTOUPDATE` keeps the pinned
  *   binary, and `OPENCODE_FLAGS` names every 2.2.6 feature flag explicitly.
  *   Scheduled tasks stay off, because they wake sessions with prompts
@@ -24,9 +28,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import type { OpenCode2Client } from "./client.js";
 import type { OpenCode2Info } from "./types.js";
+import { mirrorOpenCodeUserConfig } from "./user-config.js";
+
+const log = createLogger("native-agent.opencode2");
 
 export const OPENCODE2_CREDENTIAL_PLUGIN_ID = "orkestrator-credential";
 /** Every 2.2.6 feature flag, on or off by name (`packages/schema/src/config/flag.ts`). */
@@ -112,12 +120,21 @@ export function openCode2HostPaths(dataDir: string) {
     root,
     configDir: path.join(root, "config"),
     database: path.join(root, "opencode.db"),
+    /** The mirror of the backend's `OPENCODE_CONFIG` file (`user-config.ts`). */
+    customConfig: path.join(root, "opencode-config.jsonc"),
   };
 }
 
-/** Write the config directory holding the credential plugin; returns it. */
-export async function writeOpenCode2HostConfig(dataDir: string): Promise<string> {
-  const { configDir } = openCode2HostPaths(dataDir);
+/**
+ * Write the config directory: the credential plugin, and a read-only mirror of
+ * the user's global OpenCode configuration as `env` (the server's own
+ * environment) locates it ({@link mirrorOpenCodeUserConfig}). Returns it.
+ */
+export async function writeOpenCode2HostConfig(
+  dataDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const { configDir, customConfig } = openCode2HostPaths(dataDir);
   const pluginDir = path.join(configDir, "plugins", OPENCODE2_CREDENTIAL_PLUGIN_ID);
   await mkdir(pluginDir, { recursive: true, mode: 0o700 });
   const plugin = path.join(pluginDir, "index.ts");
@@ -128,6 +145,12 @@ export async function writeOpenCode2HostConfig(dataDir: string): Promise<string>
     await rename(staged, plugin);
   } finally {
     await rm(staged, { force: true });
+  }
+  try {
+    await mirrorOpenCodeUserConfig({ configDir, customConfigFile: customConfig, env });
+  } catch (error) {
+    // The server still starts, with Orkestrator's plugins and project configuration.
+    log.warn("user-config.mirror-failed", { error: formatLogError(error, { message: false }) });
   }
   return configDir;
 }
@@ -164,6 +187,12 @@ export function openCode2HostLaunch(input: {
     OPENCODE_DISABLE_AUTOUPDATE: "1",
     OPENCODE_FLAGS: OPENCODE2_FLAGS,
   });
+  // The user's own file reaches 2.x only as its mirror, without plugins.
+  if (env.OPENCODE_CONFIG?.trim()) {
+    env.OPENCODE_CONFIG = openCode2HostPaths(input.dataDir).customConfig;
+  } else {
+    delete env.OPENCODE_CONFIG;
+  }
   return {
     command: input.cliPath,
     args: ["serve", "--hostname", "127.0.0.1", "--port", String(input.port)],

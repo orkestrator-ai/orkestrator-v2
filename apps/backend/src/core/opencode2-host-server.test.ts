@@ -5,7 +5,7 @@
  * this test spawned, stopped through its recorded handle.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
@@ -23,6 +23,7 @@ const launched = {
   args,
   db: process.env.OPENCODE_DB,
   configDir: process.env.OPENCODE_CONFIG_DIR,
+  config: process.env.OPENCODE_CONFIG ?? null,
   flags: process.env.OPENCODE_FLAGS,
   autoupdate: process.env.OPENCODE_DISABLE_AUTOUPDATE,
   mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null,
@@ -55,6 +56,18 @@ async function setup(
   const dataDir = path.join(root, "data");
   const worktree = path.join(root, "worktree");
   await Promise.all([mkdir(binDir), mkdir(scripts), mkdir(dataDir), mkdir(worktree)]);
+  // The server mirrors the user's global OpenCode configuration: point it at a fixture.
+  const userConfigDir = path.join(root, "xdg", "opencode");
+  await mkdir(userConfigDir, { recursive: true });
+  const saved = { xdg: process.env.XDG_CONFIG_HOME, config: process.env.OPENCODE_CONFIG };
+  process.env.XDG_CONFIG_HOME = path.join(root, "xdg");
+  delete process.env.OPENCODE_CONFIG;
+  cleanup.push(async () => {
+    if (saved.xdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = saved.xdg;
+    if (saved.config === undefined) delete process.env.OPENCODE_CONFIG;
+    else process.env.OPENCODE_CONFIG = saved.config;
+  });
   await writeFile(path.join(scripts, "fake-opencode2.ts"), FAKE_SERVER);
   if (options.binary !== false) {
     const binary = path.join(binDir, "opencode2");
@@ -88,7 +101,7 @@ async function setup(
     resourceRoot: path.join(root, "none"),
     appRoot: path.join(root, "none"),
   } as unknown as CommandContext;
-  return { context, localServers, dataDir, worktree, environment };
+  return { context, localServers, dataDir, worktree, environment, userConfigDir };
 }
 
 async function info(connection: { baseUrl: string; password: string }) {
@@ -129,6 +142,26 @@ describe("host OpenCode 2.x server", () => {
     expect(again).toEqual(connection);
     expect(peekOpenCode2HostServer(context, "env-1")).toEqual(connection);
     expect(localServers.process(openCode2ServerKey("env-1"))).toBeDefined();
+  });
+
+  test("starts with the user's global configuration mirrored, never writing theirs", async () => {
+    const { context, dataDir, userConfigDir } = await setup();
+    const userFile = path.join(userConfigDir, "opencode.json");
+    const original = JSON.stringify({
+      plugin: ["opencode-v1-plugin"],
+      mcp: { mine: { type: "local", command: ["mine"] } },
+    });
+    await writeFile(userFile, original);
+    const answer = await info(await ensureOpenCode2HostServer(context, "env-1"));
+    expect(answer.launched.config).toBeNull();
+    const mirror = await readFile(
+      path.join(dataDir, "opencode2", "config", "opencode.jsonc"),
+      "utf8",
+    );
+    expect(mirror).toContain('"mine"');
+    expect(mirror).not.toContain("opencode-v1-plugin");
+    expect(await readFile(userFile, "utf8")).toBe(original);
+    expect(await readdir(userConfigDir)).toEqual(["opencode.json"]);
   });
 
   test("stops with the environment's OpenCode server", async () => {

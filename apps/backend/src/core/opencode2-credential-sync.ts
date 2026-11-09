@@ -97,18 +97,12 @@ export async function withOpenCode2HostDatabaseServer<T>(
   }
   const cliPath = resolveOpenCode2Binary(context);
   const dataDir = context.storage.getDataDir();
-  const configDir = await writeOpenCode2HostConfig(dataDir);
+  const baseEnv = { ...process.env, ORKESTRATOR_PARENT_PID: String(process.pid) };
+  const configDir = await writeOpenCode2HostConfig(dataDir, baseEnv);
   const directory = await probeWorkingDirectory(context);
   const port = await allocateLocalPort();
   const password = mintBridgeToken();
-  const launch = openCode2HostLaunch({
-    cliPath,
-    dataDir,
-    configDir,
-    port,
-    password,
-    baseEnv: { ...process.env, ORKESTRATOR_PARENT_PID: String(process.pid) },
-  });
+  const launch = openCode2HostLaunch({ cliPath, dataDir, configDir, port, password, baseEnv });
   const key = `opencode2-credential:${randomUUID()}`;
   const release = await localServers.openCode2.startGate.acquire();
   let child: ReturnType<typeof localServers.spawn>;

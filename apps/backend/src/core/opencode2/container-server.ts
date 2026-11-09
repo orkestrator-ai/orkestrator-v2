@@ -20,6 +20,10 @@
  *   `shell.env` plugin: each shell reads the token file when it is created, so
  *   a token synced later reaches the next shell without a restart, and the
  *   server itself never holds one.
+ * - **The user's global configuration, mirrored.** As on the host
+ *   (`user-config.ts`): the container's `~/.config/opencode` (the
+ *   entrypoint's copy of the host's) is mirrored into the 2.x config
+ *   directory without plugins, by the image's Bun, on every start.
  * - **Pinned behaviour.** `OPENCODE_DISABLE_AUTOUPDATE` and the explicit
  *   {@link OPENCODE2_FLAGS}, as on the host.
  */
@@ -34,11 +38,15 @@ import {
   OPENCODE2_FLAGS,
   buildOpenCode2CredentialPluginSource,
 } from "./server.js";
+import { buildOpenCode2ContainerUserConfigScript } from "./user-config.js";
 
 /** The image's 2.x binary (`OPENCODE2_CLI_PATH` in `docker/Dockerfile`). */
 export const OPENCODE2_CONTAINER_CLI_PATH = "/home/node/.opencode/bin/opencode2";
 export const OPENCODE2_CONTAINER_LOG = "/tmp/opencode2-serve.log";
-/** `OPENCODE_CONFIG_DIR`: an extra config directory holding only Orkestrator's plugins. */
+/**
+ * `OPENCODE_CONFIG_DIR`, which replaces 2.x's global config directory: Orkestrator's
+ * plugins and the mirror of the user's configuration.
+ */
 export const OPENCODE2_CONTAINER_CONFIG_DIR = "/home/node/.config/orkestrator-opencode2";
 export const OPENCODE2_GITHUB_ENV_PLUGIN_ID = "orkestrator-github-env";
 /** Records which plugin sources the running server was started with. */
@@ -97,9 +105,22 @@ export function openCode2ContainerPlugins(): ReadonlyArray<{ id: string; source:
   ];
 }
 
-/** Changes whenever a plugin source does, so a server started with older ones is replaced. */
+/** The container's copy of the user's global OpenCode configuration, which 1.x reads. */
+export const OPENCODE_CONTAINER_USER_CONFIG_DIR = "/home/node/.config/opencode";
+
+/** Mirrors the user's configuration into the 2.x config directory (`user-config.ts`). */
+const USER_CONFIG_SCRIPT = buildOpenCode2ContainerUserConfigScript(
+  OPENCODE_CONTAINER_USER_CONFIG_DIR,
+  OPENCODE2_CONTAINER_CONFIG_DIR,
+  quoteShell,
+);
+
+/**
+ * Changes whenever a plugin source or the configuration mirror does, so a
+ * server started with older ones is replaced.
+ */
 export const OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT = createHash("sha256")
-  .update(JSON.stringify(openCode2ContainerPlugins()))
+  .update(JSON.stringify({ plugins: openCode2ContainerPlugins(), userConfig: USER_CONFIG_SCRIPT }))
   .digest("hex");
 
 /**
@@ -125,6 +146,7 @@ ${plugins
       `    printf '%s' ${quoteShell(source)} > ${openCode2ContainerPluginPath(id)}`,
   )
   .join("\n")}
+    ${USER_CONFIG_SCRIPT}
     printf '%s' ${quoteShell(OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT)} > ${OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE}
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -44,6 +44,24 @@ describe("openCode2HostLaunch", () => {
     expect(OPENCODE2_FLAGS.split(",")).toContain("-schedules");
   });
 
+  test("the backend's OPENCODE_CONFIG reaches 2.x only as its mirror", () => {
+    const base = {
+      cliPath: "/bin/opencode2",
+      dataDir: "/data",
+      configDir: "/data/opencode2/config",
+      port: 1,
+      password: "p",
+    };
+    const custom = openCode2HostLaunch({
+      ...base,
+      baseEnv: { OPENCODE_CONFIG: "/home/u/my-opencode.json" },
+    });
+    expect(custom.env.OPENCODE_CONFIG).toBe(openCode2HostPaths("/data").customConfig);
+    expect(custom.env.OPENCODE_CONFIG).toStartWith(path.join("/data", "opencode2"));
+    const unset = openCode2HostLaunch({ ...base, baseEnv: { OPENCODE_CONFIG: " " } });
+    expect(unset.env).not.toHaveProperty("OPENCODE_CONFIG");
+  });
+
   test("the database never resolves to the user's shared opencode.db", () => {
     expect(openCode2HostPaths("/data").database).not.toContain(".local/share/opencode");
   });
@@ -53,7 +71,7 @@ describe("writeOpenCode2HostConfig", () => {
   test("writes the credential plugin as a directory plugin, owner-only", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "ork-opencode2-config-"));
     dirs.push(dataDir);
-    const configDir = await writeOpenCode2HostConfig(dataDir);
+    const configDir = await writeOpenCode2HostConfig(dataDir, { HOME: dataDir });
     const plugin = path.join(configDir, "plugins", "orkestrator-credential", "index.ts");
     const source = await readFile(plugin, "utf8");
     expect(source).toContain('"create.before"');
@@ -61,7 +79,42 @@ describe("writeOpenCode2HostConfig", () => {
     expect(source).not.toContain("import ");
     expect((await stat(plugin)).mode & 0o777).toBe(0o600);
     // Idempotent.
-    await writeOpenCode2HostConfig(dataDir);
+    await writeOpenCode2HostConfig(dataDir, { HOME: dataDir });
+  });
+
+  test("mirrors the user's global configuration beside the plugin", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-opencode2-config-"));
+    dirs.push(root);
+    const userDir = path.join(root, "xdg", "opencode");
+    await mkdir(userDir, { recursive: true });
+    await writeFile(
+      path.join(userDir, "opencode.json"),
+      JSON.stringify({ plugin: ["-*"], mcp: { mine: { type: "local", command: ["m"] } } }),
+    );
+    const configDir = await writeOpenCode2HostConfig(path.join(root, "data"), {
+      HOME: root,
+      XDG_CONFIG_HOME: path.join(root, "xdg"),
+    });
+    const mirror = await readFile(path.join(configDir, "opencode.jsonc"), "utf8");
+    expect(mirror).toContain('"mine"');
+    expect(mirror).not.toContain("-*");
+    const plugin = path.join(configDir, "plugins", "orkestrator-credential", "index.ts");
+    expect(await readFile(plugin, "utf8")).toContain("OPENCODE_PASSWORD");
+  });
+
+  test("a mirror that cannot be written never fails the start", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-opencode2-config-"));
+    dirs.push(root);
+    const dataDir = path.join(root, "data");
+    // The custom-config mirror's path is taken by a directory, so publishing it throws.
+    await mkdir(openCode2HostPaths(dataDir).customConfig, { recursive: true });
+    await writeFile(path.join(root, "custom.json"), "{}");
+    const configDir = await writeOpenCode2HostConfig(dataDir, {
+      HOME: root,
+      OPENCODE_CONFIG: path.join(root, "custom.json"),
+    });
+    const plugin = path.join(configDir, "plugins", "orkestrator-credential", "index.ts");
+    expect(await readFile(plugin, "utf8")).toContain("OPENCODE_PASSWORD");
   });
 });
 

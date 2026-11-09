@@ -65,7 +65,7 @@ import {
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
-import { OpenCode2McpServers } from "./mcp.js";
+import { OpenCode2McpServers, openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
@@ -167,8 +167,10 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     const model = await this.features.createModel(options);
-    // A backend execution policy becomes the session's base rules (`permissions.ts`).
-    const base = openCode2PolicyRules(options.policy);
+    // A backend execution policy becomes the session's base rules (`permissions.ts`),
+    // with a deny for every user MCP server its selection leaves out.
+    const configured = await openCode2ConfiguredUserMcpServers(this.client, options.policy);
+    const base = openCode2PolicyRules(options.policy, configured);
     let session;
     try {
       session = await this.client.createSession({

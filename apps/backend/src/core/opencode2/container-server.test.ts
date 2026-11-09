@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { quoteShell } from "../commands-agent-support.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
+import { buildOpenCode2ContainerUserConfigScript } from "./user-config.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE } from "../agent-credential-files.js";
 import { OPENCODE2_DB_PATH, OPENCODE_DB_PATH } from "../container-state-layout.js";
 import {
@@ -9,6 +12,7 @@ import {
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
   OPENCODE2_CONTAINER_PROCESS_PATTERN,
   OPENCODE2_GITHUB_ENV_PLUGIN_ID,
+  OPENCODE_CONTAINER_USER_CONFIG_DIR,
   STOP_OPENCODE2_CONTAINER_SERVER_SCRIPT,
   buildOpenCode2ContainerStartScript,
   buildOpenCode2GitHubEnvironmentPluginSource,
@@ -62,6 +66,24 @@ describe("buildOpenCode2ContainerStartScript", () => {
       `printf '%s' '${OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT}' > ${OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE}`,
     );
     expect(script).toContain("umask 077");
+  });
+
+  test("mirrors the container's user configuration after its plugins, and fingerprints it", () => {
+    const mirror = buildOpenCode2ContainerUserConfigScript(
+      OPENCODE_CONTAINER_USER_CONFIG_DIR,
+      OPENCODE2_CONTAINER_CONFIG_DIR,
+      quoteShell,
+    );
+    expect(script).toContain(mirror);
+    expect(script.indexOf(mirror)).toBeGreaterThan(
+      script.indexOf(openCode2ContainerPluginPath(OPENCODE2_CREDENTIAL_PLUGIN_ID)),
+    );
+    expect(script.indexOf(mirror)).toBeLessThan(script.indexOf("export OPENCODE_CONFIG_DIR="));
+    // A server started before the mirror existed is replaced, not reused.
+    const pluginsOnly = createHash("sha256")
+      .update(JSON.stringify(openCode2ContainerPlugins()))
+      .digest("hex");
+    expect(OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT).not.toBe(pluginsOnly);
   });
 });
 

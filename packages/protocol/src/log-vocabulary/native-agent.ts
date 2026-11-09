@@ -141,6 +141,14 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A provider sign-in change was copied into the 2.x database. `outcome` (written, removed, unchanged, skipped) only; never a provider id or value.",
       "credential.server-exit-unclean":
         "The private 2.x server started to copy a sign-in did not stop cleanly. Error class only.",
+      "user-config.mirror-failed":
+        "The user's global OpenCode configuration could not be mirrored for a host 2.x server, which starts without it. Error class only.",
+      "user-config.unreadable":
+        "A file of the user's OpenCode configuration could not be read for the 2.x mirror. `source`, the file's name and the error code only.",
+      "user-config.rejected":
+        "Files of the user's OpenCode configuration are not a JSONC object, so the 2.x mirror leaves them out. `source` and file names only, never contents.",
+      "user-config.plugins-withheld":
+        "The user's OpenCode configuration lists plugins, which the 2.x mirror leaves out (1.x plugins do not run on 2.x). `source` only.",
     },
   },
 });

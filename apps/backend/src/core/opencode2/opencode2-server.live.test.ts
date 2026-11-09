@@ -58,7 +58,7 @@ liveTest(
     await fixture.stop();
 
     dataDir = await mkdtemp(path.join(tmpdir(), "ork-opencode2-data-"));
-    const configDir = await writeOpenCode2HostConfig(dataDir);
+    const configDir = await writeOpenCode2HostConfig(dataDir, { HOME: dataDir });
     fixture = await startOpenCode2Fixture(binary!, {
       env: { OPENCODE_CONFIG_DIR: configDir, OPENCODE_FLAGS: OPENCODE2_FLAGS },
     });

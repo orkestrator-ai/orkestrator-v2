@@ -38,6 +38,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
+import type { ConversationTargetHighlight } from "@/lib/transcript-scroll/conversation-target-highlight";
 
 export type NativeConnectionState = "connecting" | "connected" | "error";
 
@@ -186,8 +187,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   scrollToBottom: () => void;
   scrollProps: TranscriptListScrollProps;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
-  /** Message id to highlight briefly after a jump to it. */
-  highlightedMessageId?: string | null;
+  /** The message to highlight briefly after a jump to it. */
+  conversationHighlight?: ConversationTargetHighlight | null;
 }
 
 const messageItemKey = (_index: number, message: NativeMessageType) => message.id;
@@ -254,7 +255,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   coordinatorNavigate,
   coordinatorActionHistory,
   coordinatorInteractions,
-  highlightedMessageId = null,
+  conversationHighlight = null,
 }: NativeChatShellProps<TMessage>) {
   const [visibleEnd, setVisibleEnd] = useState<number | null>(null);
   const loadedIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages]);
@@ -637,7 +638,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           onVisibleEnd={coordinatorNavigate ? setVisibleEnd : undefined}
           messages={messages}
           computeItemKey={messageItemKey}
-          highlightedItemKey={highlightedMessageId}
+          highlight={conversationHighlight}
           animateArrivals
           resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={renderMessage}

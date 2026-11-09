@@ -107,7 +107,7 @@ export function CoordinatorActionsTranscriptFixture() {
       })),
     [],
   );
-  const highlightedMessageId = useConversationScrollTarget({
+  const conversationHighlight = useConversationScrollTarget({
     environmentId: "actions-fixture",
     tabId: "coordinator",
     isActive: true,
@@ -152,7 +152,7 @@ export function CoordinatorActionsTranscriptFixture() {
           scrollToBottom={navigation.scrollToBottom}
           scrollProps={navigation.scrollProps}
           virtuosoRef={navigation.virtuosoRef}
-          highlightedMessageId={highlightedMessageId}
+          conversationHighlight={conversationHighlight}
           coordinatorInteractions={[interaction]}
           coordinatorNavigate={(id) => {
             setAnchor(id);

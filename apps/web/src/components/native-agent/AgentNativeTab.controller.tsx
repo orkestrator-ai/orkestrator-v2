@@ -1175,7 +1175,7 @@ export function SharedNativeAgentController({
     },
     [scrollTargetNodeId, data.environmentId, tabId],
   );
-  const highlightedMessageId = useConversationScrollTarget({
+  const conversationHighlight = useConversationScrollTarget({
     environmentId: data.environmentId,
     tabId,
     isActive,
@@ -4003,7 +4003,7 @@ export function SharedNativeAgentController({
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
-      highlightedMessageId={highlightedMessageId}
+      conversationHighlight={conversationHighlight}
       blockingCards={[
         // In a pane with a notice layer the prompts float with its other notices.
         ...(agentPrompts.length > 0 && !floatingNotices

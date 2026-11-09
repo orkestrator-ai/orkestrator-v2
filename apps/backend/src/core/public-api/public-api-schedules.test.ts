@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, jest, test, spyOn } from "bun:test";
 import type { PublicActionName, PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
+import { createProject } from "../storage.js";
 import { AgentToolsServer } from "../agent-tools.js";
 import { ProjectGitService } from "../project-git-service.js";
 import { ScheduledJobExecutor } from "../scheduled-jobs/executor.js";
@@ -884,4 +885,79 @@ test("agent schedules survive credential teardown but lose authority when their 
   } finally {
     await tools.stop();
   }
+});
+
+// Exercise the public entry point, including server-side environment resolution
+// and ownership, independently of firing or provider session setup.
+test("schedule.list resolves project prompt/mail targets without widening credential visibility", async () => {
+  const { harness, projectId } = await setup();
+  await enableScheduling(harness);
+  const environments = await harness.storage.loadEnvironments();
+  const other = await harness.storage.addProject(
+    createProject("https://example.invalid/other.git"),
+  );
+  await harness.storage.addEnvironment({
+    ...environments[0]!,
+    id: "env-other",
+    projectId: other.id,
+  });
+  const scheduler = new ScheduledJobService({
+    store: harness.storage.scheduledJobStore(),
+    now: () => Date.parse("2026-10-25T10:00:00Z"),
+    executor: {
+      validate: async () => {},
+      execute: async () => {
+        throw new Error("list must not fire schedules");
+      },
+    } as unknown as ScheduledJobExecutor,
+    defaultTimeZone: () => "UTC",
+  });
+  harness.context.scheduledJobs = scheduler;
+  const expected: string[] = [];
+  const mine: string[] = [];
+  for (const credentialId of [null, "reader", "other-reader"]) {
+    for (const environmentId of ["env-1", "env-other"]) {
+      for (const kind of ["prompt", "mail"]) {
+        const { job } = await scheduler.create(
+          credentialId ? { kind: "control-mcp", credentialId } : { kind: "operator" },
+          {
+            at: "+30m",
+            action:
+              kind === "prompt"
+                ? { kind: "prompt", environmentId, tabId: "agent", prompt: "Check" }
+                : {
+                    kind: "action",
+                    action: "mail.send",
+                    input: {
+                      toEnvironmentId: environmentId,
+                      toTabId: "agent",
+                      body: "Check",
+                    },
+                  },
+          },
+        );
+        if (environmentId === "env-1") {
+          expected.push(job.id);
+          if (credentialId === "reader") mine.push(job.id);
+        }
+      }
+    }
+  }
+  const operator = await harness.call<{ schedules: ScheduledJobSummary[]; total: number }>(
+    "schedule.list",
+    { projectId },
+  );
+  if (!operator.ok) throw new Error(operator.error.message);
+  expect(operator.result.total).toBe(6);
+  expect(operator.result.schedules.map((job) => job.id).sort()).toEqual(expected.sort());
+  const credential = (await harness.commands.get("public_action")!(
+    withPublicAuthority(
+      { schemaVersion: 1, action: "schedule.list", actionVersion: 1, input: { projectId } },
+      controlMcpAuthority("reader"),
+    ),
+    harness.context,
+  )) as { ok: boolean; result: { schedules: ScheduledJobSummary[]; total: number } };
+  expect(credential.ok).toBe(true);
+  expect(credential.result.total).toBe(2);
+  expect(credential.result.schedules.map((job) => job.id).sort()).toEqual(mine.sort());
 });

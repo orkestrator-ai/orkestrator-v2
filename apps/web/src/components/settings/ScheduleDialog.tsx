@@ -305,7 +305,7 @@ export function ScheduleDialog({
 
   const save = async () => {
     setProblem(null);
-    const original = job ? initialForm(job) : null;
+    const original = job ? initialForm(job, projectId) : null;
     const actionFields: (keyof FormState)[] = [
       "actionMode",
       "mailbox",

@@ -35,7 +35,9 @@ switch is shown only when Settings is editing the window's own machine; the
 Schedules menu and actions use that same backend. While it is off:
 
 - Settings → Schedules is not offered, and a project's Scheduling tab shows
-  a notice that opens Settings → Experimental instead of the list.
+  a notice instead of the list. On the window machine it opens Settings →
+  Experimental; on a remote node it enables scheduling there with a scoped
+  `patch_global_config` call, preserving other settings and the command node.
 - Every `*_scheduled_job` registry command and every `schedule.*` public
   action (so `orkestrator schedule …` and operator Control MCP calls) is
   refused, the public actions with `capability-unavailable`.
@@ -567,8 +569,14 @@ executing at once per backend.
   with fake accounts.
 - `apps/web/src/components/projects/ProjectSchedulesView.test.tsx`: the
   project tab's filtered read, the dialog's project defaults, choices and
-  locked project, and the notice while scheduling is off; the project filter
-  over environments is in `service.test.ts`.
+  locked project, untouched graph/mail/prompt edits, remote command and
+  resource-change isolation, graph reads, and node-local feature enablement
+  (saving, failure and remount). The project filter over environments is in
+  `service.test.ts`; `public-api-schedules.test.ts` also checks it through
+  `schedule.list`, retaining credential ownership restrictions.
+- `e2e/WorkspaceBarHeight.spec.ts`: Scheduling participates in the keyboard
+  focus walk in bar and grid presentations; a project schedule can be created
+  from the tab and restored after switching away and reloading.
 - `apps/web/src/components/settings/SchedulesSettings.test.tsx`: the
   settings list, actions, create/edit dialog (a graph schedule with saved
   defaults or pinned roles and parameters, and its edit) and history;

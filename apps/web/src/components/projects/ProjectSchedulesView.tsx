@@ -1,11 +1,12 @@
 import { CalendarClock, FlaskConical } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ScheduleManager } from "@/components/settings/ScheduleManager";
 import { useScheduleApi } from "@/components/settings/schedule-api";
 import { Button } from "@/components/ui/button";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useConfigStore, useProjectStore } from "@/stores";
+import { runScopedConfigCommand } from "@/stores/configStore";
 
 /**
  * A project's Scheduling tab: the schedules that belong to the project (its
@@ -17,6 +18,21 @@ import { useConfigStore, useProjectStore } from "@/stores";
 export function ProjectSchedulesView({ projectId }: { projectId: string }) {
   const scope = useNodeScope();
   const api = useScheduleApi();
+  const [enabling, setEnabling] = useState(false);
+  const [enableError, setEnableError] = useState<string | null>(null);
+  const enableOnNode = async () => {
+    setEnabling(true);
+    setEnableError(null);
+    try {
+      await runScopedConfigCommand({ scope, commandScope: null }, "patch_global_config", {
+        patch: { experimentalScheduling: true },
+      });
+    } catch (error) {
+      setEnableError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEnabling(false);
+    }
+  };
   const projectName = useProjectStore(
     (state) => state.projects.find((project) => project.id === projectId)?.name,
   );
@@ -66,10 +82,22 @@ export function ProjectSchedulesView({ projectId }: { projectId: string }) {
           size="sm"
           variant="outline"
           className="mt-3"
-          onClick={() => requestGlobalSettings("experimental")}
+          disabled={enabling}
+          onClick={() =>
+            scope.role === "leaf" ? void enableOnNode() : requestGlobalSettings("experimental")
+          }
         >
-          Turn it on in Settings → Experimental
+          {scope.role === "leaf"
+            ? enabling
+              ? "Turning on scheduling…"
+              : "Turn on scheduling on this node"
+            : "Turn it on in Settings → Experimental"}
         </Button>
+        {enableError ? (
+          <p role="alert" className="mt-3 text-red-400">
+            {enableError}
+          </p>
+        ) : null}
       </div>,
     );
   }

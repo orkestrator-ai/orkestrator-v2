@@ -57,5 +57,12 @@ export const EXECUTION_POLICY_NARROWINGS: Record<
   },
   opencode: { "host-deny": DENY_REFUSES_EVERY_COMMAND },
   grok: {},
-  pi: { "host-deny": DENY_REFUSES_EVERY_COMMAND },
+  pi: {
+    "host-deny": DENY_REFUSES_EVERY_COMMAND,
+    "container-ask": {
+      observed: { projectResources: false },
+      reason:
+        "Pi runs extensions inside the bridge process, where they could answer the session's own approvals, so an `ask` session loads no repository extensions (`projectExtensionsRefusedForApprovals`); its skills and prompt templates still load, and the reported note says so.",
+    },
+  },
 };

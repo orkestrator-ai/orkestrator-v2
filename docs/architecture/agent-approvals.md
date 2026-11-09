@@ -73,6 +73,39 @@ An image without the capability keeps the login-shell start and unsigned
 requests until it is rebuilt (`containerCredentialMode`). OpenCode has no bridge
 of ours: on a launcher image it starts as on a `bridge-credential=1` image.
 
+### Code a bridge loads itself
+
+The launcher keeps out what a shell would run before the bridge starts. It
+cannot keep out what the bridge loads once running. Pi's SDK runs in the Pi
+bridge's own process, and with project resources on (the container default)
+it runs the repository's extensions there: arbitrary TypeScript under
+`/workspace/.pi/`, or a package the project's settings name, evaluated while
+the session is built and before any model call. Code there sees every later
+`Authorization` header and holds the in-process approval gate, so it could
+resolve a parked call without the signature the approval routes require.
+Being non-dumpable does not isolate code already inside the process.
+
+So a Pi session whose approvals are `ask` loads no extensions, even with
+project resources on (`projectExtensionsRefusedForApprovals`,
+`bridges/pi-bridge/src/project-extensions.ts`). Its project skills and prompt
+templates still load: they are text the model reads, not code the bridge
+runs. The bridge's own inline extensions (the approval gate, the MCP client,
+command-change measurement) are unaffected. The reported policy keeps
+project resources on and its note says why the extensions did not load, so
+Agent Info shows it. A live session narrowed to `ask` is detached and rebuilt
+without them. An `auto-approve` or `deny` session keeps loading extensions:
+it has no approval for them to forge, and an extension's code can do no more
+than a command such a session already runs. Running extensions in a child
+process instead would keep them under `ask` too, but Pi's extension API is in
+process (tool registration, hooks over the session object), so it would need
+an RPC shim over an SDK surface that changes between releases.
+
+`project-extensions-bridge.test.ts` plants an extension in a temporary
+checkout, starts the real bridge with a synthetic API key and no model call,
+and checks that the extension's code never runs in an `ask` session (and
+does run, as the control, under `auto-approve`); the execution-policy
+conformance suite records the refusal as a Pi narrowing on `container-ask`.
+
 ## Where an approval is a boundary
 
 | Where | What an `ask` approval means |
@@ -106,9 +139,11 @@ need its own uid, and then its tools would too.
   persistent process can kill the bridge and start one of its own that the
   backend keeps trusting. To-do
   [7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md).
-- **Load code into Pi's bridge.** With project resources on, Pi runs repository
-  extensions inside the bridge process. To-do
-  [7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md).
+- **Load code into Pi's bridge, outside `ask`.** With project resources on, an
+  `auto-approve` or `deny` Pi session runs repository extensions inside the
+  bridge process, where they can read its environment (see
+  [Code a bridge loads itself](#code-a-bridge-loads-itself)). An `ask` session
+  loads none.
 - **Reach OpenCode's password.** Its server loads agent-writable plugins, and
   takes the plain password from whatever listens on its port. To-do
   [7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).

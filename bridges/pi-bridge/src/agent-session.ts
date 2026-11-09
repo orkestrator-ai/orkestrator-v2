@@ -28,6 +28,7 @@ import type {
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   NativeAgentCommandRefreshOutcome,
+  NativeAgentExecutionPolicy,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
@@ -52,6 +53,7 @@ import {
 import { assertAuthenticated, NOT_AUTHENTICATED_MESSAGE, PI_SIGN_IN } from "./credentials.js";
 import { piWithheldGitHubCredential, withheldShellToolDefinitions } from "./github-credential.js";
 import { requestToolApproval } from "./interactions.js";
+import { projectExtensionsRefusedForApprovals } from "./project-extensions.js";
 import {
   closePiMcp,
   mcpConfigNeedsRefresh,
@@ -948,6 +950,7 @@ export async function runDeferredCommandReload(state: SessionState): Promise<voi
 export function projectResourceDiscoveryOptions(
   enabled = false,
   readOnly = false,
+  approvals?: NativeAgentExecutionPolicy["approvals"],
 ): {
   noExtensions: boolean;
   noSkills: boolean;
@@ -961,7 +964,11 @@ export function projectResourceDiscoveryOptions(
   // with extensions because they are repository-controlled instructions too.
   const discoverProjectResources = enabled && !readOnly;
   return {
-    noExtensions: !discoverProjectResources,
+    // `projectExtensionsRefusedForApprovals`: an extension runs in this
+    // process, where it could answer the approvals an `ask` session relies on.
+    noExtensions:
+      !discoverProjectResources ||
+      projectExtensionsRefusedForApprovals({ projectResources: enabled, approvals }, readOnly),
     noSkills: !discoverProjectResources,
     noPromptTemplates: !discoverProjectResources,
     // Branch-controlled instructions must not steer a read-only review.
@@ -996,6 +1003,7 @@ export function piResourceLoaderPolicy(
   const discovery = projectResourceDiscoveryOptions(
     state.policy?.projectResources,
     state.readOnly === true,
+    state.policy?.approvals,
   );
   // A coordinator loads the user's skills (`~/.pi/agent/skills`,
   // `~/.agents/skills`) and the checkout's, the way the other platforms'

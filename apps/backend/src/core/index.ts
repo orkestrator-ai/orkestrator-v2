@@ -50,6 +50,7 @@ import {
   NodeCoordinatorRemote,
   NodePortal,
   NodeService,
+  NodeUsageSync,
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
@@ -81,7 +82,12 @@ import {
   readAgentAccountUsage,
   recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
+  listAgentAccountUsageIdentities,
 } from "./agent-accounts.js";
+import {
+  centralUsageReadings,
+  recordCentralUsageReadings,
+} from "./agent-accounts-usage-sharing.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
 import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
@@ -350,6 +356,9 @@ export class OrkestratorBackend {
   readonly nodes: NodeService;
   readonly nodePortal: NodePortal;
   readonly nodeCoordination: NodeCoordination;
+  /** Shared usage readings with the nodes this one controls (command node). */
+  readonly usageSync: NodeUsageSync;
+  private usageSyncTimer: ReturnType<typeof setInterval> | null = null;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
   /** How another node reaches this one, for handing it to a new command node. */
@@ -918,6 +927,23 @@ export class OrkestratorBackend {
       emit,
     });
     context.nodeCoordination = this.nodeCoordination;
+    this.usageSync = new NodeUsageSync({
+      selfId: () => this.nodes.selfIdentity(),
+      isCommandNode: () => this.nodes.mode() === "command",
+      link: (nodeId) => (isBackendId(nodeId) ? this.nodes.link(nodeId) : null),
+      connectedNodeIds: async () =>
+        (await this.nodes.listNodes()).nodes
+          .filter((node) => node.connection.state === "connected")
+          .map((node) => node.nodeId),
+      ownIdentities: () => listAgentAccountUsageIdentities(context),
+      central: () => centralUsageReadings(context),
+      storeCentral: (readings, ownIdentities) =>
+        recordCentralUsageReadings(context, readings, ownIdentities),
+    });
+    context.usageSync = this.usageSync;
+    this.nodePortal.readModel.onNodeEvent((event, payload) =>
+      this.usageSync.handleNodeEvent(event, payload),
+    );
     // Coordinator work on the nodes this one controls is read through the
     // node link, and their relayed changes settle it promptly.
     this.coordinators.setRemoteAccess(
@@ -2877,6 +2903,11 @@ export class OrkestratorBackend {
       });
     });
     this.nodeCoordination.start();
+    // Shared usage readings: once now, then a minute apart as a last resort for
+    // anything an event did not trigger (a node with nothing new costs a collect).
+    void this.usageSync.syncAll();
+    this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
+    this.usageSyncTimer.unref?.();
     this.coordinators.startStatusWakes();
     this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();
@@ -3156,6 +3187,11 @@ export class OrkestratorBackend {
     stopStepNow("pr-auto-merge", () => this.prAutoMerge.dispose());
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
     stopStepNow("node-coordination", () => this.nodeCoordination.dispose());
+    stopStepNow("usage-sync", () => {
+      if (this.usageSyncTimer) clearInterval(this.usageSyncTimer);
+      this.usageSyncTimer = null;
+      this.usageSync.dispose();
+    });
     stopStepNow("node-portal", () => this.nodePortal.stop());
     const nodesStopped = beginShutdownStep(() => this.nodes.stop()).catch(() => undefined);
     stopStepNow("activity-lease-sweep", () => {

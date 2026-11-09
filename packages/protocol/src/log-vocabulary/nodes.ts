@@ -30,6 +30,8 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "ticket-sync.unknown-project":
         "A node sent ticket changes for a project that no longer exists here.",
       "ticket-sync.forget-failed": "A detached command node's ticket copies could not be released.",
+      "usage-sync.failed":
+        "Sharing usage readings with a node failed; the next reading or reconnect retries.",
       "fleet-update.requested":
         "The update policy asked an older leaf to install the command node's version.",
       "fleet-update.failed": "The update policy could not read or update a leaf; it retries later.",

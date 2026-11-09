@@ -36,3 +36,31 @@ e2e/agent-testing/terminal-input-resume-electron.spec.ts --workers=1` passed
 `/tmp/orkestrator-test-run.SUsZf8` and `/tmp/orkestrator-test-run.bDd0iF`.
 This does not establish the cause of the original environment-entry timeout;
 case 1320 remains open for that distinct symptom.
+
+## 2026-11-09 Vim readiness follow-up
+
+Electron 45.2.3 qualification on mini at `4087ff472` reported 68 passed,
+5 skipped and 1 failed with one worker (652.2 s): terminal resume waited for
+`resume.txt` and `0,0-1`, but the empty editor displayed no ruler. The unchanged
+owner reproduced the same assertion alone (1 failed, 13.6 s), so this symptom
+is deterministic rather than a new flake recurrence. Mini uses `/usr/bin/vim`
+9.1; `vim -u NONE -N -n -es -c 'set ruler?' -c 'qa!'` reports `noruler`.
+
+The fixture now starts its editor with `-c "set ruler"`. It retains the
+readiness assertion, saved-file check and same-shell PID checks. The owning
+file passed with the change (1 passed, 14.2 s):
+`ORKESTRATOR_AGENT_TEST_RUN_ID=address-terminal-fixed mise run test:logged -- --name address-electron-terminal-fixed -- mise run test:agent:electron -- e2e/agent-testing/terminal-input-resume-electron.spec.ts`.
+This fixes the editor-default assumption without establishing a cause for the
+original environment-entry symptom; case 1320 remains open.
+
+Evidence: `output/agent-testing/electron-smoke/electron/results.json` and
+`output/agent-testing/address-terminal-owner/electron/results.json`;
+compressed logs under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0nN8YW/`
+and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.EXidlT/`.
+
+The final exact Electron suite rerun with the ruler fixture passed (69 passed,
+5 skipped, 611.7 s):
+`ORKESTRATOR_AGENT_TEST_RUN_ID=address-electron-final mise run test:logged -- --name address-electron-final -- mise run test:agent:electron`.
+Evidence: `output/agent-testing/address-electron-final/electron/results.json`.
+An intervening adjacent-port setup failure is tracked separately as
+[9902](../previews-annotations-and-gateway/9902-seeded-preview-adjacent-port-reservation.md).

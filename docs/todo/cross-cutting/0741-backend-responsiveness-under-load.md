@@ -1,5 +1,10 @@
 # Backend stops answering under load or when its log reader stalls
 
+## Task analysis
+
+Analysed 2026-11-09 against main at `64a5b4cfb`; tasks 1–5 retain their
+2026-10-28/29 investigations and task 6 its 2026-11-06 measurements.
+
 Checked against `main` at `7e3ceb7ce` (2026-10-28); tasks 3 to 5 updated
 against `79f3bc97e` (2026-10-29), task 6 against `b0ad3f747` (2026-11-06). This is task 3 of
 [0734](../coordinator-and-multi-review/0734-codex-orkestrator-mcp-handshake-under-load.md)
@@ -14,20 +19,16 @@ for one environment, and from 09:13Z Codex turns failed because the agent MCP
 `initialize` and `tools/list` handshake missed its 3 s budget. The backend
 (pid 59035, started 02:10:48Z) never restarted.
 
-## Task analysis
-
-Analysed 2026-10-28 against `main` at `7e3ceb7ce`; task 6 analysed again
-2026-11-06 against `main` at `b0ad3f747`.
-
 ### Tasks
 
 1. **Keep the backend serving when its stdout reader stalls**: Bun's console blocks the whole backend once the desktop stops reading its output. Status: done (2026-10-28).
 2. **Record event-loop stalls**: nothing in the logs measured the backend's own event loop. Status: done (2026-10-28).
 3. **Cut per-request work on the agent MCP endpoint**: every request rebuilt the tool server and parsed the whole mail store. Status: done (2026-10-29). No request parses the mail store any more; building the tool server per request stays, by decision, until task 6 shows it matters.
 4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check is task 7.
-5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; writes still parse once.
+5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; task 8 extends it to writes.
 6. **Qualify under load with the new stall log**: Status: open. Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. Under disk contention, commit fsyncs on the event loop still stall for 10 to 15 s; that is not fixed. Two open decisions wait for the user (task 6, Decisions): ledger `synchronous = NORMAL`, and lowering ledger retention from 90 to 30 days. Part B, the live heavy run on the production install, is still needed.
 7. **Modal-dialog routing on a production install**: real update, restart, toolchain and startup-failure dialogs open as sheets or on a host window, ask for attention, and do not hold the main thread. Moved from to-do 0880 (deleted 2026-11-06). Status: open (needs a production install).
+8. **Reuse revision-validated mail rows in writes**: send, acknowledge, seen and deletion no longer parse unchanged store rows. Status: done (2026-11-09); before/after measurements below.
 
 Evidence is labelled **measured** (read from logs, the power log, the unified
 log, or a benchmark run) or **inferred** (a conclusion the measurements fit
@@ -701,6 +702,48 @@ process logs stalls through `startEventLoopStallMonitor` (`desktop/main-thread.s
     - Pros: no heavy-load run needed.
     - Cons: two passes over the same logs.
 
+### 8. Reuse revision-validated mail rows in writes
+
+**Problem.** Task 5 left each mail mutation parsing every row through `load`,
+even when changing only one mailbox. The bounded store can reach 32 MiB.
+
+**Context.** `AgentMailStore.snapshot()` already validates committed database
+revisions and reuses parsed rows with identical serialized values. The existing
+lease and complete-value save are shared by all mail writers, including atomic
+buffering and legacy document-mode recovery.
+
+**Investigation.** Implemented on mini, 2026-11-09. `load()` copies the shared
+read model using a JSON-data copy routine; it no longer reparses unchanged rows.
+A private uncached load remains for document/atomic-buffer/corruption fallbacks,
+so those paths do not recurse into the read model. Save format, row ordering,
+idempotency and the UTF-8 32 MiB limit are unchanged. Tests spy on parsing across
+send, acknowledge, seen and delete, verify abandoned copies cannot mutate the
+committed view, and retain the existing external-writer and atomic tests.
+
+Measured with `mise exec -- bun apps/backend/scripts/agent-mail-store-bench.ts
+--iterations 100`: 100 environments × 6 tabs, 600 synthetic 1.8 KB messages.
+Two interleaved before/after runs on the same host, wall / CPU ms per call:
+
+| Operation | Before, run 1 | After, run 1 | Before, run 2 | After, run 2 |
+| --- | --- | --- | --- | --- |
+| Send | 2.95 / 3.10 | 2.22 / 2.42 | 2.98 / 3.17 | 2.27 / 2.52 |
+| Send then acknowledge | 5.90 / 6.21 | 4.67 / 4.95 | 5.93 / 6.24 | 4.80 / 5.04 |
+| Inbox after send | 3.47 / 3.92 | 2.81 / 3.11 | 3.47 / 3.93 | 2.82 / 3.12 |
+
+The before variant restored only `load()`'s original whole-store path; the after
+variant used the final copy routine. Initial unpaired measurements varied with
+host load, so the paired results above are the comparison. A preliminary
+`structuredClone` version regressed send to 5.20 ms and was replaced.
+
+**Decisions.**
+
+- **Reuse the read model and copy its JSON data (recommended; implemented).**
+  - Pros: parses only changed rows; preserves all writers, leases, atomic buffering and storage limits; measured lower call cost.
+  - Cons: still copies and serializes the store for a write; this is not a constant-time row mutation.
+- **Convert every mail writer to targeted row mutations.**
+  - Pros: could also avoid whole-store copying/serialization.
+  - Cons: a larger refactor of the shared writer and invariants than required to remove reparsing.
+
 ## Design note: agent MCP in its own process
 
 If task 6 shows long stalls caused by unrelated backend work, serve `/mcp`
@@ -755,7 +798,15 @@ stall is inconclusive, so task 6 remains open pending live evidence.
   same rows. Summaries are shallow copies that share their frozen `from` and
   `notice` objects; no caller writes to those.
 
-### Task 5: writers still take a full mutable copy
+### Task 8: copy the revision-validated read model for writes
+
+Chose the recommended read-model reuse rather than changing every writer's
+storage API. Mutable copies retain isolation from frozen snapshots and failed
+writes. A JSON-only copy avoids `structuredClone`'s measured overhead; changed
+rows are still reparsed once to refresh the canonical committed model. The
+interleaved benchmark above measures the resulting end-to-end calls.
+
+### Task 5: writers still take a full mutable copy (superseded by task 8)
 
 - **Chose:** keep `load()` for the roughly 30 read-modify-write paths.
 - **Why:** parsing is the cheapest way to get a mutable copy. Writing only

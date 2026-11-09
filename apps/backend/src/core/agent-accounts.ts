@@ -295,7 +295,7 @@ async function switchActiveAccount(
       if (
         latest.autoSwitch?.[platform]?.mode !== "automatic" ||
         !latest.autoSwitch[platform]?.includedAccountIds.includes(accountId) ||
-        !target ||
+        !target?.signedIn ||
         (options.automatic.expectedIdentity !== undefined &&
           JSON.stringify(target.identity) !== options.automatic.expectedIdentity)
       )

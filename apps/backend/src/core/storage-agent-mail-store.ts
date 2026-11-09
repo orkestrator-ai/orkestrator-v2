@@ -240,6 +240,29 @@ function normalizeStore(store: PersistedAgentMailStore): PersistedAgentMailStore
   return store;
 }
 
+/** Mail is JSON data only. Copy without structuredClone's serialization pass. */
+function cloneMailValue<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(cloneMailValue) as T;
+  if (value && typeof value === "object") {
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      const child = cloneMailValue((value as Record<string, unknown>)[key]);
+      if (key === "__proto__") {
+        Object.defineProperty(copy, key, {
+          value: child,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      } else {
+        copy[key] = child;
+      }
+    }
+    return copy as T;
+  }
+  return value;
+}
+
 /** Freezes `value` and everything reachable from it, skipping frozen subtrees. */
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -339,10 +362,16 @@ export class AgentMailStore {
 
   /**
    * A fresh copy of the committed store that the caller may mutate and
-   * {@link save}. It parses every row, so only read-modify-write paths use it;
-   * read-only callers use {@link snapshot}.
+   * {@link save}. Reuse the revision-validated read model, which parses only
+   * changed rows. Clone it so mutations (including abandoned/failed writes)
+   * cannot change a committed snapshot. Read-only callers use {@link snapshot}.
    */
   async load(): Promise<PersistedAgentMailStore> {
+    return cloneMailValue(await this.snapshot());
+  }
+
+  /** Whole/document and atomic-buffer fallback; never calls the read model. */
+  private async loadUncached(): Promise<PersistedAgentMailStore> {
     const value = await this.context.loadJsonCached<unknown>(
       this.files.agentMailFile(),
       emptyStore,
@@ -373,7 +402,7 @@ export class AgentMailStore {
     // Buffered by an atomic scope, or stored whole: no rows to reuse.
     if (serialized === undefined || serialized.mode === "document") {
       this.readModel = null;
-      return deepFreeze(await this.load());
+      return deepFreeze(await this.loadUncached());
     }
     const database = this.context.database;
     if (this.readModel?.database === database && this.readModel.revision === serialized.revision) {
@@ -419,7 +448,7 @@ export class AgentMailStore {
       // An unreadable row reads as `load` reads it (an absent store).
       if (!(error instanceof SyntaxError)) throw error;
       this.readModel = null;
-      return deepFreeze(await this.load());
+      return deepFreeze(await this.loadUncached());
     }
     deepFreeze(store);
     this.readModel = { database, revision: serialized.revision, store, rows };

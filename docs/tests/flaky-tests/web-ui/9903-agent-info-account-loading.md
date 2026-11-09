@@ -1,6 +1,6 @@
 # Agent account loading after controls appear
 
-- **ID:** 9902
+- **ID:** 9903
 - **Status:** open
 - **Date observed:** 2026-11-09
 - **File:** `apps/web/src/components/layout/AgentInfoButton.test.tsx:1064`

@@ -69,8 +69,8 @@ const MAX_TRACKED_STOPS = 256;
 /**
  * After asking for an account's sign-in to be renewed, wait this long before
  * asking again; each failure in a row doubles it, up to the cap. One renewal
- * yields a reset time that ranks the account until that reset, so a success
- * is rarely needed twice in a week.
+ * lets the next usage read establish current headroom. Regular checks share
+ * this backoff even when later usage is stale again.
  */
 export const LOGIN_RENEWAL_RETRY_MS = 30 * 60_000;
 export const LOGIN_RENEWAL_MAX_RETRY_MS = 6 * 60 * 60_000;
@@ -179,6 +179,24 @@ export interface UsageLimitStopInput {
 function label(snapshot: AgentAccountsSnapshot, platform: string, id: string): string {
   const account = snapshot.accounts.find((entry) => entry.platform === platform && entry.id === id);
   return account?.label ?? id;
+}
+
+/** Cached usage must be recent enough to describe the current short quota window. */
+export const AUTO_SWITCH_MAX_READING_AGE_MS = 5 * 60_000;
+
+function boundedUsageReading(
+  platform: AgentAccountPlatform,
+  snapshot: PlanUsageSnapshot,
+  now: number,
+): UsageLimitReading {
+  const age = now - Date.parse(snapshot.fetchedAt);
+  return usageLimitReading(
+    platform,
+    !Number.isFinite(age) || age < 0 || age > AUTO_SWITCH_MAX_READING_AGE_MS
+      ? { ...snapshot, stale: true }
+      : snapshot,
+    now,
+  );
 }
 
 export class AgentAccountAutoSwitcher {
@@ -602,7 +620,7 @@ export class AgentAccountAutoSwitcher {
     } catch {
       return "unreadable";
     }
-    const reading = usageLimitReading(platform, snapshot, this.now());
+    const reading = boundedUsageReading(platform, snapshot, this.now());
     if (!limitConfirmedUsedUp(reading)) {
       if (reading.freshness !== "fresh") return "unreadable";
       this.confirmed.delete(key);
@@ -625,6 +643,12 @@ export class AgentAccountAutoSwitcher {
     activeId: string,
     target: { accountId: string; reason: AutoSwitchReason; quietProjectId?: string },
   ): Promise<boolean> {
+    // Usage reads/renewals await I/O: sign-out may have happened since ranking.
+    const latest = await this.deps.snapshot();
+    const candidate = latest.accounts.find(
+      (entry) => entry.platform === platform && entry.id === target.accountId,
+    );
+    if (!candidate?.signedIn) return false;
     const moved = await this.deps.switchAccount(platform, target.accountId, {
       expectedActive: activeId,
       expectedIdentity: JSON.stringify(
@@ -696,8 +720,8 @@ export class AgentAccountAutoSwitcher {
   }
 
   /**
-   * Every account's reading. `cached` serves a recent reading and renews only an
-   * account it could otherwise never rank. `probe` is for a limit stop, where the
+   * Every account's reading. `cached` serves a recent reading and renews an
+   * account whose reading is stale or unknown. `probe` is for a limit stop, where the
    * choice should rest on how things are now: it reads every account afresh and
    * renews the sign-in of each login no entry could read freshly. Every fresh read
    * is saved as that account's last known usage, which Settings shows too.
@@ -715,7 +739,7 @@ export class AgentAccountAutoSwitcher {
       CONFIRMATION_REUSE_MS;
     const read = async (accountId: string, forced: boolean): Promise<UsageLimitReading> => {
       const reading = await this.deps.readUsage(platform, accountId, { force: forced }).then(
-        (snapshot) => usageLimitReading(platform, snapshot, this.now()),
+        (snapshot) => boundedUsageReading(platform, snapshot, this.now()),
         (): UsageLimitReading => ({ freshness: "none", wouldPay: false }),
       );
       if (forced && reading.freshness === "fresh") {
@@ -734,13 +758,12 @@ export class AgentAccountAutoSwitcher {
             reading = { freshness: "fresh", usedPercent: 100, wouldPay: false };
           } else if (account.signedIn && (included || account.id === state.activeId)) {
             reading = await read(account.id, mode === "probe" && !probedRecently(account.id));
-            // A reading with no reset to go on ranks after every account that has
-            // one, so without a fresh one this account would never be chosen and
-            // never be read again.
+            // A stale reading cannot establish headroom, even with a future reset.
+            // Renew before a forced read; failed renewals retain the conservative
+            // old limit blockers, ranked after every fresh account.
             if (
               mode === "cached" &&
               reading.freshness !== "fresh" &&
-              reading.resetsAt === undefined &&
               (await this.renewLogin(platform, account.id))
             ) {
               reading = await read(account.id, true);

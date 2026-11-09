@@ -7,6 +7,9 @@ import {
   FloatingNoticeLayer,
   TRANSCRIPT_COLUMN_REM,
   floatingNoticeLayout,
+  shiftedColumnLayout,
+  useClaimFloatingNoticeColumnShift,
+  useFloatingNoticeColumnShift,
   useInFloatingNoticeLayer,
 } from "./floating-notice";
 
@@ -47,6 +50,28 @@ describe("floatingNoticeLayout", () => {
       cardRem: 18,
     });
     expect(floatingNoticeLayout(0)).toEqual({ placement: "over", cardRem: 18 });
+  });
+});
+
+describe("shiftedColumnLayout", () => {
+  test("moves the column left just far enough for a card beside it", () => {
+    // 80rem pane: centred, 12rem a side is too little; moved 7.5rem left, the
+    // right gutter takes a full card plus its edge and gap.
+    expect(shiftedColumnLayout(80, TRANSCRIPT_COLUMN_REM)).toEqual({ cardRem: 18, shiftRem: 7.5 });
+    // Nearer the centred breakpoint the column needs to move less.
+    expect(shiftedColumnLayout(86, TRANSCRIPT_COLUMN_REM)).toEqual({ cardRem: 18, shiftRem: 4.5 });
+    // At the narrowest, the minimum card leaves the column its 2rem left inset.
+    expect(shiftedColumnLayout(73.5, TRANSCRIPT_COLUMN_REM)).toEqual({
+      cardRem: 14,
+      shiftRem: 6.75,
+    });
+  });
+
+  test("is null when the centred column already leaves room, or no shift does", () => {
+    expect(shiftedColumnLayout(87, TRANSCRIPT_COLUMN_REM)).toBeNull();
+    expect(shiftedColumnLayout(73, TRANSCRIPT_COLUMN_REM)).toBeNull();
+    expect(shiftedColumnLayout(0, TRANSCRIPT_COLUMN_REM)).toBeNull();
+    expect(shiftedColumnLayout(80)).toBeNull();
   });
 });
 
@@ -268,6 +293,55 @@ describe("FloatingNotice", () => {
       ).toBe("false");
     },
   );
+
+  test("a claimed column shift docks notices beside the moved column until released", () => {
+    // 80rem: only a shifted column leaves room beside it.
+    paneWidth = 1280;
+    function Shift({ claim }: { claim: boolean }) {
+      useClaimFloatingNoticeColumnShift(claim);
+      return <span data-testid="shift">{useFloatingNoticeColumnShift()}</span>;
+    }
+    const tree = (claim: boolean) => (
+      <FloatingNoticeLayer columnRem={TRANSCRIPT_COLUMN_REM}>
+        <Shift claim={claim} />
+        {notice()}
+      </FloatingNoticeLayer>
+    );
+    const { rerender } = render(tree(false));
+    expect(screen.getByTestId("shift").textContent).toBe("0");
+    expect(screen.getByRole("button", { name: /^Agent mail:/ })).toBeTruthy();
+
+    rerender(tree(true));
+    expect(screen.getByTestId("shift").textContent).toBe("7.5");
+    const card = screen.getByRole("region", { name: "Agent mail" });
+    expect(card.style.width).toBe("18rem");
+    expect(screen.queryByRole("button", { name: "Minimize Agent mail" }) === null).toBe(true);
+
+    // A pane too narrow for any shift ignores the claim.
+    act(() => {
+      paneWidth = 1100;
+      resize();
+    });
+    expect(screen.getByTestId("shift").textContent).toBe("0");
+    act(() => {
+      paneWidth = 1280;
+      resize();
+    });
+    expect(screen.getByTestId("shift").textContent).toBe("7.5");
+
+    rerender(tree(false));
+    expect(screen.getByTestId("shift").textContent).toBe("0");
+    expect(screen.getByRole("button", { name: /^Agent mail:/ })).toBeTruthy();
+  });
+
+  test("without a layer, a claim does nothing", () => {
+    function Shift() {
+      useClaimFloatingNoticeColumnShift(true);
+      return <span data-testid="shift">{useFloatingNoticeColumnShift()}</span>;
+    }
+    render(<Shift />);
+    expect(screen.getByTestId("shift").textContent).toBe("0");
+  });
 
   test("layer presence consumers do not render on anchor geometry changes", () => {
     paneWidth = 1600;

@@ -28,6 +28,7 @@ import {
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
 import { TranscriptAnnotationLayer } from "@/components/chat/TranscriptAnnotationLayer";
+import { CHAT_COLUMN_SHIFT_CLASS } from "@/components/chat/chat-column-shift";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import {
   collectSearchTextRuns,
@@ -1092,7 +1093,7 @@ export function VirtualizedMessageList<TMessage>({
             defaultItemHeight={320}
             increaseViewportBy={VIRTUOSO_VIEWPORT_MARGIN}
             style={VIRTUOSO_STYLE}
-            className="py-4"
+            className={cn("py-4", CHAT_COLUMN_SHIFT_CLASS)}
           />
         </LiveArrivalsContext>
       </StaticDocumentFindContext>

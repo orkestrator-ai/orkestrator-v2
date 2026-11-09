@@ -1,6 +1,6 @@
 import { copyFile, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
+import { agentToolchainsForPlatform } from "@orkestrator/toolchain/manifest";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
 /**
@@ -20,9 +20,6 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
  * directory: an agent-test backend never falls back to PATH (#1270), so a
  * Claude, Codex, OpenCode, Pi or Grok session would otherwise fail to start.
  */
-
-/** Providers whose agent binary the toolchain pins (`toolchain install --tool`). */
-const PINNED_TOOLS: ReadonlySet<string> = new Set(Object.keys(PINNED_TOOLCHAIN_VERSIONS));
 
 /** Providers whose bridge a scenario takes from this worktree, with that bridge. */
 export const REPOSITORY_BRIDGES: Readonly<Record<string, string>> = Object.freeze({
@@ -55,8 +52,11 @@ export async function prepareProviderRuntime(options: {
   repositoryRoot?: string;
 }): Promise<ProviderRuntime> {
   const bridge = options.provider ? REPOSITORY_BRIDGES[options.provider] : undefined;
-  const toolchainTools =
-    options.provider && PINNED_TOOLS.has(options.provider) ? [options.provider] : [];
+  // Every binary the toolchain pins for this provider (`toolchain install
+  // --tool`): OpenCode has two, Cursor none.
+  const toolchainTools: string[] = options.provider
+    ? agentToolchainsForPlatform(options.provider)
+    : [];
   if (!options.provider || !bridge) return { serveArgs: [], toolchainTools };
   const repositoryRoot = options.repositoryRoot ?? path.resolve(options.packageRoot, "../..");
   const resourceRoot = path.join(options.root, "resources");

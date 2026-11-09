@@ -197,10 +197,20 @@ add.
 The same driver signs in the host GitHub CLI (kind `"github"`; see
 [github-cli.md](github-cli.md)).
 
-### Signing the active account in again
+### Signing an account in again
 
 `start_agent_account_login` with `reauthenticate: true` (Claude only) renews
-the **active** account, host login or added, instead of creating one:
+the **active** account, host login or added, instead of creating one.
+`reauthenticate_agent_account` (`platform`, `accountId`) renews the named
+account the same way without making it active; Settings offers it as "Sign in"
+on a signed-out Claude account's row and shows the browser step on that row. It
+is a separate command rather than an `accountId` on `start_agent_account_login`
+because a node that predates it would ignore the key and renew the active
+account; it answers this command `unknown-command` instead, which the client
+reports as "update this machine". A renewal already running for one account
+answers a repeat request for the same account and refuses one for another.
+Codex accounts are not renewed in place: a lapsed one is removed and added
+again.
 
 1. `claude auth login` runs against a temporary directory,
    `<dataDir>/agent-accounts/.reauth/<operationId>`, so a failed or cancelled
@@ -575,6 +585,10 @@ failure as `message`. Any window whose reset time has passed is shown empty.
 Removing an account deletes its entry. A reading also says whether the account can
 spend past its plan, when the provider says so (`paidOverage`; see
 [Paid overage](#paid-overage)).
+
+Each signed-in account's row in Settings has a refresh button that reads that
+account alone with `force: true`, bypassing the two-minute cache; the section's
+own refresh button forces every row.
 
 A 429 from a usage endpoint is not retried until its `Retry-After` has passed
 (clamped to 1–30 minutes; 5 minutes if absent), even by a forced refresh. The

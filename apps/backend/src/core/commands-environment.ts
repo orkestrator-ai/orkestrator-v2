@@ -168,8 +168,10 @@ import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
+  isGitRemoteLifecycleMessage,
   logEnvironmentLifecycleFailure,
 } from "./commands-error-text.js";
+import { startFailureRemedy } from "./environment-start-remedy.js";
 import type { EnvironmentSetupStartResult } from "./environment-operations.js";
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -1747,20 +1749,19 @@ export async function startEnvironmentOnce(
         unpersistedWorktree.branch,
       ).catch(() => undefined);
     }
+    const lifecycleRemedy = await startFailureRemedy(environment, lifecycleError, context.storage);
     await storage
       .updateEnvironment(environment.id, {
         status: "error",
         lifecycleError,
+        lifecycleRemedy,
         // A start that never reached "running" cannot honour a post-setup agent
         // launch, and the durable intent would otherwise fire on some later
         // successful transition the user never connected to this attempt.
         ...clearPendingAgentLaunchUpdates(),
       })
       .catch(() => undefined);
-    if (
-      lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication ||
-      lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut
-    ) {
+    if (isGitRemoteLifecycleMessage(lifecycleError)) {
       throw new Error(lifecycleError);
     }
     throw error;

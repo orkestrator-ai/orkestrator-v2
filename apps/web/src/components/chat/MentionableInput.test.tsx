@@ -46,6 +46,36 @@ describe("MentionableInput", () => {
     expect(input!.textContent).toBe(draftText);
   });
 
+  test("clearing the editor restores the placeholder but preserves deliberate line breaks", () => {
+    const onChange = mock((_text: string, _mentions: FileMention[]) => {});
+    function Composer() {
+      const [value, setValue] = useState("Draft");
+      return (
+        <MentionableInput
+          value={value}
+          mentions={[]}
+          onChange={(text, mentions) => {
+            onChange(text, mentions);
+            setValue(text);
+          }}
+        />
+      );
+    }
+    const { getByRole, container } = render(<Composer />);
+    const input = getByRole("textbox");
+    input.replaceChildren(document.createElement("br"));
+    fireEvent.input(input, { inputType: "deleteContentBackward" });
+    expect(onChange).toHaveBeenLastCalledWith("", []);
+    expect(container.querySelector("[data-native-compose-placeholder]")?.textContent).toBe(
+      "Type a message...",
+    );
+
+    input.replaceChildren(document.createElement("br"), document.createElement("br"));
+    fireEvent.input(input);
+    expect(onChange).toHaveBeenLastCalledWith("\n\n", []);
+    expect(container.querySelectorAll("[data-native-compose-placeholder]").length).toBe(0);
+  });
+
   test("renders empty when value is empty string", () => {
     const { container, getByRole } = render(
       <MentionableInput value="" mentions={[]} onChange={() => {}} />,
@@ -96,6 +126,13 @@ describe("MentionableInput", () => {
     expect(placeholders?.length).toBe(1);
     expect(placeholders?.[0]?.textContent).toBe("Describe the change");
     expect(placeholders?.[0]?.classList.contains("native-compose-placeholder")).toBe(true);
+    // The placeholder sits in the input's grid cell rather than floating over
+    // it, so a long placeholder that wraps grows the box instead of spilling
+    // over the controls below.
+    expect(input.parentElement?.classList.contains("grid")).toBe(true);
+    expect(input.classList.contains("[grid-area:1/1]")).toBe(true);
+    expect(placeholders?.[0]?.classList.contains("[grid-area:1/1]")).toBe(true);
+    expect(placeholders?.[0]?.classList.contains("absolute")).toBe(false);
 
     rerender(
       <MentionableInput

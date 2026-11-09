@@ -19,7 +19,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { Virtuoso, type ListRange, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
+import {
+  Virtuoso,
+  type ListProps,
+  type ListRange,
+  type VirtuosoHandle,
+  type StateSnapshot,
+} from "react-virtuoso";
 import {
   AgentChatFindBar,
   findAgentChatTextMatches,
@@ -28,6 +34,7 @@ import {
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
 import { TranscriptAnnotationLayer } from "@/components/chat/TranscriptAnnotationLayer";
+import { CHAT_COLUMN_SHIFT_CLASS } from "@/components/chat/chat-column-shift";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 import {
   collectSearchTextRuns,
@@ -53,6 +60,11 @@ import { useRichViewPinned } from "@/stores/richContentViewStore";
 import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 import type { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
+import {
+  type ConversationTargetHighlight,
+  findTranscriptItemElement,
+  startConversationTargetGlow,
+} from "@/lib/transcript-scroll/conversation-target-highlight";
 import { keepMountedOverscan, useRatchetedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 import {
   LiveArrivalsContext,
@@ -105,10 +117,13 @@ interface VirtualizedMessageListProps<TMessage> {
   scrollProps: TranscriptListScrollProps;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /**
-   * Item key (as returned by `computeItemKey`) of a row to highlight briefly,
-   * e.g. the message a "open full conversation" link jumped to.
+   * A row to highlight briefly, e.g. the message an Actions card or an "open
+   * full conversation" link jumped to. Its `messageId` is the row's item key
+   * (as returned by `computeItemKey`). The item's own box glows and fades
+   * (`lib/transcript-scroll/conversation-target-highlight.ts`); a new
+   * generation restarts the glow.
    */
-  highlightedItemKey?: string | null;
+  highlight?: ConversationTargetHighlight | null;
   /**
    * Rows (and tool calls in a group) appended live grow in by their layout
    * height rather than appearing at full size (`lib/transcript-scroll/arrivals.ts`).
@@ -278,12 +293,23 @@ class PreCommitAnchor extends Component<{
 const NO_SCROLL_VIEW = () => () => {};
 const NO_TARGET = () => null;
 
+// The list, header, footer and empty state each carry the column shift: the
+// scroller's padding would not reach them, because Virtuoso's viewport is
+// absolutely positioned inside it.
 function FooterWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-0">{children}</div>;
+  return <div className={cn("min-w-0", CHAT_COLUMN_SHIFT_CLASS)}>{children}</div>;
 }
 
 function EmptyPlaceholderWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-0">{children}</div>;
+  return <div className={cn("min-w-0", CHAT_COLUMN_SHIFT_CLASS)}>{children}</div>;
+}
+
+function StableList({ ref, style, children, "data-testid": testId }: ListProps) {
+  return (
+    <div ref={ref} style={style} data-testid={testId} className={CHAT_COLUMN_SHIFT_CLASS}>
+      {children}
+    </div>
+  );
 }
 
 // Stable module-level component references for Virtuoso.
@@ -316,7 +342,7 @@ function TranscriptRow({
   tracker,
   arrivals,
   isCurrentFindMessage,
-  isHighlighted,
+  highlight,
   children,
 }: {
   rowKey: string;
@@ -324,33 +350,53 @@ function TranscriptRow({
   tracker: TranscriptRowVisibilityTracker;
   arrivals: LiveArrivalBatch;
   isCurrentFindMessage: boolean;
-  isHighlighted: boolean;
+  /** This row's jump highlight, when it is the jumped-to row. */
+  highlight: ConversationTargetHighlight | null;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const glowGeneration = highlight?.generation ?? null;
+  const glowStartedAt = highlight?.startedAt ?? null;
+  const glowDurationMs = highlight?.durationMs ?? null;
+  // The glow wraps the item's own box (its card, tile or content column), not
+  // this full-width row, so the item neither moves nor resizes. A new
+  // generation restarts it; the end of the period removes it.
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (glowGeneration === null || glowDurationMs === null || glowStartedAt === null || !content)
+      return;
+    return startConversationTargetGlow(
+      findTranscriptItemElement(content, content),
+      glowGeneration,
+      glowDurationMs,
+      glowStartedAt,
+    );
+  }, [glowGeneration, glowDurationMs, glowStartedAt]);
   // Observe before children's passive effects request render work.
   useLayoutEffect(() => {
     const element = ref.current;
     return element ? tracker.observe(rowKey, element) : undefined;
   }, [rowKey, tracker]);
-  useLiveArrivalEntrance(ref, arrivals, rowKey);
+  // A live arrival clips the row's content while it grows in, which would crop
+  // the glow: the jumped-to row is shown at full size at once instead.
+  useLiveArrivalEntrance(ref, arrivals, rowKey, highlight !== null);
   const visibility = tracker.source(rowKey);
   return (
     <div
       ref={ref}
       data-chat-message-index={index}
       data-chat-message-key={rowKey}
-      data-conversation-target={isHighlighted ? "true" : undefined}
+      data-conversation-target={highlight ? "true" : undefined}
       className={cn(
         "rounded-sm transition-colors duration-700 motion-reduce:transition-none",
         isCurrentFindMessage && "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
-        isHighlighted && "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
       )}
     >
       <RichRowVisibilityContext value={visibility}>
         <ChatFindActiveContext value={isCurrentFindMessage}>
           {/* One grid track must contain every root returned by the message. */}
-          <div>{children}</div>
+          <div ref={contentRef}>{children}</div>
         </ChatFindActiveContext>
       </RichRowVisibilityContext>
     </div>
@@ -368,7 +414,7 @@ export function VirtualizedMessageList<TMessage>({
   scrollProps,
   virtuosoRef,
   onVisibleEnd,
-  highlightedItemKey = null,
+  highlight = null,
   animateArrivals = false,
   find,
   annotation,
@@ -428,6 +474,7 @@ export function VirtualizedMessageList<TMessage>({
   const hasEmptyState = !!emptyState;
   const components = useMemo(
     () => ({
+      List: StableList,
       Footer: hasFooter ? StableFooter : undefined,
       Header: hasHeader ? StableHeader : undefined,
       EmptyPlaceholder: hasEmptyState ? StableEmptyPlaceholder : undefined,
@@ -976,7 +1023,7 @@ export function VirtualizedMessageList<TMessage>({
           tracker={tracker}
           arrivals={arrivals}
           isCurrentFindMessage={currentFindIndex === index}
-          isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
+          highlight={highlight !== null && rowKey === highlight.messageId ? highlight : null}
         >
           {renderMessage(
             index,
@@ -995,7 +1042,7 @@ export function VirtualizedMessageList<TMessage>({
       computeItemKey,
       currentFindIndex,
       firstItemIndex,
-      highlightedItemKey,
+      highlight,
       messages,
       renderMessage,
       resolvePreviousMessage,

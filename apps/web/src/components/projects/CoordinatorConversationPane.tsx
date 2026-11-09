@@ -24,7 +24,6 @@ import { useConfigStore } from "@/stores";
 import type { AgentPlatformBadge } from "@/components/chat/AgentModelPicker";
 import { CoordinatorIntroCard } from "./CoordinatorIntro";
 import {
-  COORDINATOR_COMMAND_HINT,
   COORDINATOR_COMPOSER_PLACEHOLDER,
   COORDINATOR_SIDE_AGENT_EXPLANATION,
   COORDINATOR_SIDE_COMPOSER_PLACEHOLDER,
@@ -92,11 +91,6 @@ function sendingHeldReason(
  * across renders that change none of its inputs: built once per module, or
  * memoized per conversation below.
  */
-const SIDE_COMPOSER_HINT = (
-  <>
-    {COORDINATOR_SIDE_AGENT_EXPLANATION} {COORDINATOR_COMMAND_HINT}
-  </>
-);
 const MAIN_UNASSIGNED = {
   unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS,
   unassignedIntro: <CoordinatorIntroCard />,
@@ -266,11 +260,12 @@ export function CoordinatorConversationPane({
               platformNotes={platformNotes}
               platformBadges={platformBadges}
               // A side agent launches nothing, so it is not asked what to get
-              // done, and its hint says what it is for.
+              // done, and its hint says what it is for. The main has no line
+              // under its composer: the placeholder covers @ and ! instead.
               composerPlaceholder={
                 side ? COORDINATOR_SIDE_COMPOSER_PLACEHOLDER : COORDINATOR_COMPOSER_PLACEHOLDER
               }
-              composerHint={side ? SIDE_COMPOSER_HINT : COORDINATOR_COMMAND_HINT}
+              {...(side ? { composerHint: COORDINATOR_SIDE_AGENT_EXPLANATION } : {})}
               {...(heldReason ? { sendingHeldReason: heldReason } : {})}
               // Only the main coordinator delegates, so only it is offered work
               // that has to run in a pipeline or environment.

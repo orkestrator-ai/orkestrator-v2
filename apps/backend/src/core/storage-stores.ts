@@ -130,6 +130,9 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
+  // OpenCode 2.x sessions workflows created, one row per environment
+  // (`storage-opencode2-sessions.ts`).
+  "opencode2-sessions": { kind: "record", owner: ownerField("environmentId") },
 };
 
 /**

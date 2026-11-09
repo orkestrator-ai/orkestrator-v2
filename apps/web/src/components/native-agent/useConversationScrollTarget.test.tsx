@@ -58,7 +58,43 @@ describe("useConversationScrollTarget", () => {
       expect(scrollToIndex).toHaveBeenCalledWith(2, { rowKey: "u-2" }, "message-link"),
     );
     expect(pending()).toBeNull();
-    await waitFor(() => expect(result.current).toBe("u-2"));
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ messageId: "u-2", durationMs: 300 }),
+    );
+    await waitFor(() => expect(result.current).toBeNull());
+  });
+
+  test("a repeat jump to the same message restarts the highlight; another moves it", async () => {
+    const { result } = setup({ highlightMs: 200 });
+    act(() => {
+      useConversationScrollTargetStore
+        .getState()
+        .request(at("env-1", "tab-1"), { messageId: "u-2" });
+    });
+    await waitFor(() => expect(result.current?.messageId).toBe("u-2"));
+    const first = result.current!;
+
+    // Part-way through the period, jump to the same message again.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    act(() => {
+      useConversationScrollTargetStore
+        .getState()
+        .request(at("env-1", "tab-1"), { messageId: "u-2" });
+    });
+    await waitFor(() => expect(result.current?.generation).toBeGreaterThan(first.generation));
+    expect(result.current?.messageId).toBe("u-2");
+    // The first period would have ended by now; the repeat restarted it.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(result.current?.messageId).toBe("u-2");
+    const repeat = result.current!;
+
+    act(() => {
+      useConversationScrollTargetStore
+        .getState()
+        .request(at("env-1", "tab-1"), { messageId: "a-1" });
+    });
+    await waitFor(() => expect(result.current?.messageId).toBe("a-1"));
+    expect(result.current!.generation).toBeGreaterThan(repeat.generation);
     await waitFor(() => expect(result.current).toBeNull());
   });
 
@@ -212,7 +248,7 @@ test("Actions navigation pages to an older anchor and highlights it", async () =
   await waitFor(() =>
     expect(scrollToIndex).toHaveBeenCalledWith(0, { rowKey: "older" }, "message-link"),
   );
-  expect(result.current).toBe("older");
+  expect(result.current?.messageId).toBe("older");
   expect(pending()).toBeNull();
 });
 

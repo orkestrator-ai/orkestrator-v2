@@ -754,6 +754,7 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
     if (entry.mode === "reauthenticate") {
       await finishReauthentication(context, entry);
+      const store = await context.storage.agentAccounts.loadAgentAccounts();
       entry.state = "succeeded";
       entry.completedAt = new Date().toISOString();
       // A first-run user who was never signed in has no model list yet; fetch it
@@ -763,9 +764,11 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );
-        // Whichever client signed in, prompts refused for want of this login
-        // go out now. Tracked and bounded by the service; never fails a sign-in.
-        context.nativeAgents?.signInResends.resendAll();
+        // Held prompts use the active login. Renewing an inactive slot must
+        // not consume them while the active login may still be signed out.
+        if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
+          context.nativeAgents?.signInResends.resendAll();
+        }
       }
       announceAccountsChanged(context, platform);
       return;
@@ -810,19 +813,44 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
 /**
  * Start a sign-in.
  *
- * By default it adds an account. With `reauthenticate` it signs the platform's
- * active account in again — the host login or an added account — so an agent
- * whose login has lapsed can be repaired without leaving the app.
+ * By default it adds an account. With `reauthenticate` it signs an existing
+ * account in again — the host login or an added account — so an agent whose
+ * login has lapsed can be repaired without leaving the app. That is the
+ * platform's active account unless `accountId` names another one (the settings
+ * pane's "Sign in" on a signed-out account), which stays inactive.
  */
 export async function startAgentAccountLogin(
   context: CommandContext,
   platform: AgentAccountPlatform,
-  options: { spawnImpl?: SpawnLike; executable?: string; reauthenticate?: boolean } = {},
+  options: {
+    spawnImpl?: SpawnLike;
+    executable?: string;
+    reauthenticate?: boolean;
+    /** With `reauthenticate`, the account to sign in again instead of the active one. */
+    accountId?: string;
+  } = {},
 ): Promise<AgentAccountLoginProgress> {
   const mode = options.reauthenticate ? "reauthenticate" : "add";
+  if (options.accountId !== undefined && mode !== "reauthenticate") {
+    throw new Error("Only a sign-in again can name an account.");
+  }
   const activeLogin = context.runtime.accounts.activeLogin();
   if (activeLogin?.state === "pending") {
-    if (activeLogin.platform === platform && activeLogin.mode === mode) {
+    const targetId =
+      mode === "reauthenticate"
+        ? (options.accountId ??
+          (await context.storage.agentAccounts.loadAgentAccounts()).active[platform] ??
+          DEFAULT_AGENT_ACCOUNT_ID)
+        : undefined;
+    // The slot may have changed or settled while resolving an implicit target.
+    if (context.runtime.accounts.activeLogin() !== activeLogin || activeLogin.state !== "pending") {
+      return startAgentAccountLogin(context, platform, options);
+    }
+    if (
+      activeLogin.platform === platform &&
+      activeLogin.mode === mode &&
+      (mode === "add" || activeLogin.accountId === targetId)
+    ) {
       return loginProgress(context);
     }
     throw new Error("Finish or cancel the other sign-in first.");
@@ -834,14 +862,23 @@ export async function startAgentAccountLogin(
     operationId: randomUUID(),
     platform,
     mode,
-    accountId: mode === "add" ? randomUUID() : DEFAULT_AGENT_ACCOUNT_ID,
+    accountId: mode === "add" ? randomUUID() : (options.accountId ?? DEFAULT_AGENT_ACCOUNT_ID),
     state: "pending",
   };
   context.runtime.accounts.claimLogin(entry);
   try {
     const store = await context.storage.agentAccounts.loadAgentAccounts();
     if (mode === "reauthenticate") {
-      entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      if (options.accountId === undefined) {
+        entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      } else if (
+        options.accountId === DEFAULT_AGENT_ACCOUNT_ID ||
+        store.accounts.some((a) => a.platform === platform && a.id === options.accountId)
+      ) {
+        entry.accountId = options.accountId;
+      } else {
+        throw new Error("Unknown agent account");
+      }
       // An agent-test profile only reads the host login its harness granted;
       // it must not write one.
       if (entry.accountId === DEFAULT_AGENT_ACCOUNT_ID && context.runtimeFlavor === "agent-test") {

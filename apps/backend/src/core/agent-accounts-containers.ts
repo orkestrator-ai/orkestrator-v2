@@ -1,3 +1,8 @@
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
+import {
+  SYNC_OPENCODE2_CONTAINER_CREDENTIALS,
+  openCode2ContainerCredentialPayload,
+} from "./opencode2/container-credentials.js";
 import { prepareEgressGatewayForStart } from "./egress-gateway.js";
 import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
@@ -98,6 +103,7 @@ const MAX_LOGIN_FILE_BYTES = 1024 * 1024;
 
 /** How this module reaches a container; replaced in tests. */
 export interface ContainerRunners {
+  mirrorOpenCode2?: (containerId: string, payload: string) => Promise<void>;
   exec: (containerId: string, command: string) => Promise<string>;
   /** Run `command` with `stdin` piped in; the payload never reaches argv or logs. */
   pipe: (containerId: string, command: string, stdin: string) => Promise<void>;
@@ -105,6 +111,26 @@ export interface ContainerRunners {
 }
 
 const defaultRunners: ContainerRunners = {
+  mirrorOpenCode2: async (containerId, payload) => {
+    const stdin = openCode2ContainerCredentialPayload(payload);
+    await runCommand(
+      "docker",
+      [
+        "exec",
+        ...CONTAINER_ROOT_USER_ARGS,
+        "-i",
+        containerId,
+        "sh",
+        "-c",
+        SYNC_OPENCODE2_CONTAINER_CREDENTIALS,
+      ],
+      {
+        stdin,
+        timeoutMs: 30_000,
+        redactValues: [stdin],
+      },
+    );
+  },
   exec: (containerId, command) => dockerExec(containerId, command),
   pipe: async (containerId, command, stdin) => {
     await runCommand("docker", ["exec", "-i", containerId, "bash", "-lc", command], {
@@ -744,8 +770,10 @@ export async function syncContainerLoginUnlocked(
       containerIdMatches(current.containerId, containerId) &&
       providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, provider)
     ) {
-      if (payload) await runners.pipe(containerId, login.command, payload);
-      else await runners.exec(containerId, DROP_IMPORTED_LOGIN_COMMAND.grok);
+      if (payload) {
+        await runners.pipe(containerId, login.command, payload);
+        if (provider === "opencode") await runners.mirrorOpenCode2?.(containerId, payload);
+      } else await runners.exec(containerId, DROP_IMPORTED_LOGIN_COMMAND.grok);
       return "applied";
     }
     return "skipped";

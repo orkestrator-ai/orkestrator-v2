@@ -49,6 +49,12 @@ import { runCommand } from "./shell.js";
  * hand to its agents.
  */
 export type ContainerBridgeKind = Exclude<LocalServerKind, "opencode">;
+/**
+ * Whose credential a root file holds: a bridge, OpenCode 1.x, or the OpenCode
+ * 2.x server (`opencode2-container-server.ts`), which has no `node`-readable
+ * token file because only images with root credential files carry it.
+ */
+export type ContainerCredentialKind = LocalServerKind | "opencode2";
 export type ContainerCredentialMode = "launcher" | "verifier" | "token-file";
 
 export const CONTAINER_BRIDGE_LAUNCHER = "/usr/local/bin/orkestrator-bridge-launch";
@@ -80,12 +86,12 @@ const TOKEN_ENV: Record<ContainerBridgeKind, string> = {
  */
 const VERIFIER_BUN = "bun --config=/dev/null";
 
-export function containerCredentialFile(kind: LocalServerKind): string {
+export function containerCredentialFile(kind: ContainerCredentialKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-token`;
 }
 
 /** The private half of a launcher-mode bridge's authority key, beside its token. */
-export function containerAuthorityKeyFile(kind: LocalServerKind): string {
+export function containerAuthorityKeyFile(kind: ContainerCredentialKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-authority`;
 }
 
@@ -117,8 +123,8 @@ export interface ContainerBridgeLauncherStart {
 
 export interface ContainerScriptLaunch {
   /** The file and token to write as root, before the script runs. */
-  rootCredential?: { kind: LocalServerKind; token: string; authorityKey?: string };
-  removeRootCredential?: LocalServerKind;
+  rootCredential?: { kind: ContainerCredentialKind; token: string; authorityKey?: string };
+  removeRootCredential?: ContainerCredentialKind;
   /** Exported at the top of the script, delivered on stdin. */
   secrets?: Record<string, string | undefined>;
   /**
@@ -207,7 +213,7 @@ export function containerBridgeLaunch(
  */
 export async function writeContainerBridgeCredential(
   containerId: string,
-  kind: LocalServerKind,
+  kind: ContainerCredentialKind,
   token: string,
   authorityKey?: string,
 ): Promise<void> {
@@ -241,7 +247,7 @@ export async function writeContainerBridgeCredential(
 
 export async function removeContainerBridgeCredential(
   containerId: string,
-  kind: LocalServerKind,
+  kind: ContainerCredentialKind,
 ): Promise<void> {
   await runCommand(
     "docker",
@@ -261,7 +267,7 @@ export async function removeContainerBridgeCredential(
 /** The token and, on a second line, the authority key, in one root exec. */
 async function readRootCredential(
   containerId: string,
-  kind: LocalServerKind,
+  kind: ContainerCredentialKind,
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<{ token: string; authorityKey: string }> {
@@ -289,7 +295,7 @@ async function readRootCredential(
  */
 export async function readContainerBridgeToken(
   containerId: string,
-  kind: LocalServerKind,
+  kind: ContainerCredentialKind,
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
@@ -303,6 +309,7 @@ export async function readContainerBridgeToken(
     }
     return root.token;
   }
+  if (kind === "opencode2") return null;
   const token = (
     await dockerExec(
       containerId,

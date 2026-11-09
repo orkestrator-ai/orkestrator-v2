@@ -23,6 +23,8 @@ stalled workers" in one durable tool call and end its turn.
 | `apps/backend/src/core/public-api/actions-schedules.ts` | The `schedule.*` public actions (CLI, Control MCP operator credentials) |
 | `apps/backend/src/core/commands-registry-scheduled-jobs.ts` | Registry commands the UI and the coordinator tools call |
 | `apps/web/src/components/settings/SchedulesSettings.tsx` | Settings → Schedules |
+| `apps/web/src/components/settings/ScheduleManager.tsx`, `ScheduleDialog.tsx`, `schedule-api.ts` | The schedule list and create/edit dialog shared by Settings → Schedules and a project's Scheduling tab |
+| `apps/web/src/components/projects/ProjectSchedulesView.tsx` | A project's Scheduling tab |
 | `packages/cli/src/client/commands/schedule.ts` | `orkestrator schedule …` |
 
 ## Experimental switch
@@ -32,7 +34,10 @@ Scheduling is experimental and off by default. `global.experimentalScheduling`
 switch is shown only when Settings is editing the window's own machine; the
 Schedules menu and actions use that same backend. While it is off:
 
-- Settings → Schedules is not offered.
+- Settings → Schedules is not offered, and a project's Scheduling tab shows
+  a notice instead of the list. On the window machine it opens Settings →
+  Experimental; on a remote node it enables scheduling there with a scoped
+  `patch_global_config` call, preserving other settings and the command node.
 - Every `*_scheduled_job` registry command and every `schedule.*` public
   action (so `orkestrator schedule …` and operator Control MCP calls) is
   refused, the public actions with `capability-unavailable`.
@@ -374,6 +379,18 @@ since it always runs as the owner.
   the next three fires), pauses, resumes, runs now, shows history and
   deletes. It reads `list_scheduled_jobs` on mount, on
   every `scheduled-job` resource change and on view safety checks.
+- **UI, per project**: the project page's **Scheduling** tab (after
+  Coordinator) lists that project's schedules with the same list and dialog,
+  on the project's own node. A project's schedules are those its agents or
+  coordinator own and those whose action names the project (`launch`,
+  `graph`, an action with `projectId`) or targets one of its environments (a
+  prompt, mail to one of its tabs). `list_scheduled_jobs` and `schedule.list`
+  with `projectId` resolve the project's environments from storage for that
+  last case (`withProjectEnvironments`). A schedule created there runs as the
+  operator; the dialog starts on "Launch an environment" in the project,
+  offers only the project's agent tabs, fixes the project for launches and
+  graphs, and leaves out "Other public action", so whatever it creates is
+  listed with the project.
 
 The tool form takes `everyMinutes`; the public action takes `everySeconds`.
 Agent schedule tools also accept a caller `tabId`, required when an
@@ -485,10 +502,15 @@ Each decision lists the options, the choice and its trade-offs.
     generator). Agent and coordinator surfaces get three tools in their own
     vocabulary (`type: "send_message"`, `everyMinutes`).
 15. **UI placement.** Options: a project board tab; a Settings section.
-    **Chosen: Settings → Schedules, a command-node section** listing this
-    backend's schedules across projects (operator schedules need not belong
-    to a project). Con: a leaf node's schedules are managed from that node's
-    own window or CLI.
+    **Chosen: both.** Settings → Schedules, a command-node section, lists
+    this backend's schedules across projects (operator schedules need not
+    belong to a project). A project's Scheduling tab lists and creates that
+    project's schedules on the project's own node, sharing the list and
+    dialog components. Membership is derived from the owner and the action
+    rather than stored, so existing schedules need no migration and an agent's
+    or coordinator's schedule appears without anyone tagging it. Con: an
+    operator schedule whose action names no project or environment (an
+    "Other public action" without `projectId`) appears only in Settings.
 16. **Coordinator edits (pause, resume, update).** Options: only cancel and
     re-create; the three edit tools for coordinators only; the same for
     agents too. **Chosen: coordinators only.** A coordinator's schedule can
@@ -545,6 +567,16 @@ executing at once per backend.
   restart, the delay and pending limits, a permission refused in a mail
   turn), and the "check in 2 hours and switch accounts" scenario end to end
   with fake accounts.
+- `apps/web/src/components/projects/ProjectSchedulesView.test.tsx`: the
+  project tab's filtered read, the dialog's project defaults, choices and
+  locked project, untouched graph/mail/prompt edits, remote command and
+  resource-change isolation, graph reads, and node-local feature enablement
+  (saving, failure and remount). The project filter over environments is in
+  `service.test.ts`; `public-api-schedules.test.ts` also checks it through
+  `schedule.list`, retaining credential ownership restrictions.
+- `e2e/WorkspaceBarHeight.spec.ts`: Scheduling participates in the keyboard
+  focus walk in bar and grid presentations; a project schedule can be created
+  from the tab and restored after switching away and reloading.
 - `apps/web/src/components/settings/SchedulesSettings.test.tsx`: the
   settings list, actions, create/edit dialog (a graph schedule with saved
   defaults or pinned roles and parameters, and its edit) and history;

@@ -13,6 +13,7 @@ import {
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
+  OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
 import type { Environment } from "./models.js";
@@ -82,6 +83,7 @@ const CONTAINER_AGENT_PORTS = new Set([
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
   PI_BRIDGE_PORT,
+  OPENCODE2_SERVER_PORT,
 ]);
 
 const INSPECT_FORMAT =

@@ -611,6 +611,73 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
+/*
+ * The transcript item a reader jumped to (an Actions card, a message link)
+ * glows sky blue around its own box, then fades to nothing over the highlight
+ * period. Only box-shadow changes, so the item never moves or resizes; the
+ * glow uses a 4px blur plus 1px spread inside the 8px tile gutters, so neither
+ * the row nor the scroller clips it. A row's live-arrival entrance (above) hides its
+ * content's overflow, so the jumped-to row skips or ends that entrance
+ * (`useLiveArrivalEntrance`'s `skip`). The attribute and the duration are set from a layout
+ * effect and removed when the period ends
+ * (`lib/transcript-scroll/conversation-target-highlight.ts`). Its value
+ * alternates between two identical animations so a repeat jump to the same
+ * item restarts the fade.
+ */
+
+@keyframes conversation-target-glow-a {
+  0%,
+  15% {
+    box-shadow: var(--conversation-target-glow-shadow);
+    animation-timing-function: ease-out;
+  }
+
+  100% {
+    box-shadow: var(--conversation-target-glow-faded);
+  }
+}
+
+@keyframes conversation-target-glow-b {
+  0%,
+  15% {
+    box-shadow: var(--conversation-target-glow-shadow);
+    animation-timing-function: ease-out;
+  }
+
+  100% {
+    box-shadow: var(--conversation-target-glow-faded);
+  }
+}
+
+[data-conversation-target-glow] {
+  --conversation-target-glow-shadow:
+    inset 0 0 0 1px rgb(56 189 248 / 0.4), 0 0 4px 1px rgb(56 189 248 / 0.55),
+    var(--conversation-target-base-shadow, 0 0 #0000);
+  --conversation-target-glow-faded:
+    inset 0 0 0 1px rgb(56 189 248 / 0), 0 0 4px 1px rgb(56 189 248 / 0),
+    var(--conversation-target-base-shadow, 0 0 #0000);
+
+  box-shadow: var(--conversation-target-glow-shadow);
+  animation-delay: var(--conversation-target-glow-delay, 0ms);
+  animation-duration: var(--conversation-target-glow-duration, 2500ms);
+  animation-fill-mode: forwards;
+}
+
+[data-conversation-target-glow="a"] {
+  animation-name: conversation-target-glow-a;
+}
+
+[data-conversation-target-glow="b"] {
+  animation-name: conversation-target-glow-b;
+}
+
+/* No fade: the glow stays at full strength until the period ends. */
+@media (prefers-reduced-motion: reduce) {
+  [data-conversation-target-glow][data-conversation-target-glow] {
+    animation: none;
+  }
+}
+
 @keyframes text-shimmer {
   from {
     background-position: var(--text-shimmer-travel) 50%;

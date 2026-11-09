@@ -252,7 +252,7 @@ export const NativeMessage = memo(function NativeMessage({
   if (userCommandPart) {
     return (
       <div className="px-2 @sm:px-4 py-2" data-user-command-row="true">
-        <div className="max-w-3xl mx-auto min-w-0">
+        <div data-transcript-item="user-command" className="max-w-3xl mx-auto min-w-0 rounded-lg">
           <UserCommandCard command={userCommandPart.userCommand} />
         </div>
       </div>
@@ -267,7 +267,10 @@ export const NativeMessage = memo(function NativeMessage({
   if (permissionRulePart) {
     return (
       <div className="px-2 @sm:px-4 py-1" data-permission-rule-row="true">
-        <div className="max-w-3xl mx-auto min-w-0">
+        <div
+          data-transcript-item="permission-rule"
+          className="max-w-3xl mx-auto min-w-0 rounded-md"
+        >
           <PermissionRuleNote
             application={permissionRulePart.application}
             ruleExists={permissionRulePart.ruleExists}
@@ -282,7 +285,7 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <>
         <div className="px-2 @sm:px-4 py-2">
-          <div className="max-w-3xl mx-auto min-w-0">
+          <div data-transcript-item="system" className="max-w-3xl mx-auto min-w-0 rounded-md">
             <div
               data-agent-chat-search-content="true"
               // Most system messages are one-line markers, for which

@@ -82,7 +82,18 @@ export interface ScheduleUpdateInput extends ScheduleTriggerInput {
 }
 
 export interface ScheduleListFilter {
+  /**
+   * A project's schedules: those its agents or coordinator own, and those
+   * whose action names the project or, with {@link projectEnvironmentIds},
+   * one of its environments.
+   */
   projectId?: string;
+  /**
+   * The environments of `projectId`, resolved by the caller from storage, so
+   * a prompt or mail into one of them counts as the project's. Never taken
+   * from request input.
+   */
+  projectEnvironmentIds?: ReadonlySet<string>;
   environmentId?: string;
   state?: ScheduleState;
   ownerKind?: ScheduleOwner["kind"];
@@ -646,7 +657,11 @@ function matches(job: ScheduledJob, filter: ScheduleListFilter): boolean {
   if (filter.ownerKind && job.owner.kind !== filter.ownerKind) return false;
   if (filter.projectId) {
     const projects = [scheduleOwnerProjectId(job.owner), scheduleActionProjectId(job.action)];
-    if (!projects.includes(filter.projectId)) return false;
+    const environments = filter.projectEnvironmentIds;
+    const targetsEnvironment =
+      environments !== undefined &&
+      scheduleActionEnvironmentIds(job.action).some((id) => environments.has(id));
+    if (!projects.includes(filter.projectId) && !targetsEnvironment) return false;
   }
   if (filter.environmentId) {
     const owned = job.owner.kind === "agent" && job.owner.environmentId === filter.environmentId;

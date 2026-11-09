@@ -162,6 +162,16 @@ describe("classifyCommandFailure", () => {
     ],
     ["error connecting to /tmp/tmux-501/default (Connection refused)", tmux, "server-not-running"],
     ["error connecting to /tmp/tmux-501/default (Permission denied)", tmux, "permission-denied"],
+    [
+      "ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.",
+      git,
+      "network-failed",
+    ],
+    [
+      "ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.",
+      git,
+      "network-failed",
+    ],
     ["error connecting to api.github.com", gh, "network-failed"],
     ["error connecting to api.github.com", undefined, "network-failed"],
     [

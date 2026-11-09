@@ -163,6 +163,27 @@ export function scheduleListFilter(args: Record<string, unknown>): ScheduleListF
 }
 
 /**
+ * Adds the project's environments to a project filter, so a schedule that
+ * prompts or mails one of them is listed with the project (the project's
+ * Scheduling tab, `schedule list --project`).
+ */
+export async function withProjectEnvironments(
+  filter: ScheduleListFilter,
+  storage: Pick<CommandContext["storage"], "loadEnvironments">,
+): Promise<ScheduleListFilter> {
+  if (!filter.projectId) return filter;
+  const environments = await storage.loadEnvironments();
+  return {
+    ...filter,
+    projectEnvironmentIds: new Set(
+      environments
+        .filter((environment) => environment.projectId === filter.projectId)
+        .map((environment) => environment.id),
+    ),
+  };
+}
+
+/**
  * Whether this backend fires schedules. The scheduler fires only while the
  * registry writer lease is held (`isWriter` in `core/index.ts`), so the
  * lease's state is the answer. No writer at all means nothing guards the
@@ -191,7 +212,10 @@ export function registerScheduledJobCommands(register: CommandRegistrar): void {
   register(
     listScheduledJobsCommand,
     async (args, context, invocation) => ({
-      schedules: (await service(context)).list(actorOf(invocation), scheduleListFilter(args)),
+      schedules: (await service(context)).list(
+        actorOf(invocation),
+        await withProjectEnvironments(scheduleListFilter(args), context.storage),
+      ),
       // Additive: a renderer that predates it ignores it and shows no notice.
       scheduler: schedulerStatus(context.registryWriterLease),
       revision: Date.now(),

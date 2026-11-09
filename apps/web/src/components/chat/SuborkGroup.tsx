@@ -149,7 +149,7 @@ export const SuborkGroup = memo(function SuborkGroup({
   };
   return (
     <div className="px-2 py-1 @sm:px-4" data-subork-group="true" data-status={batch.status}>
-      <div className="mx-auto min-w-0 max-w-3xl">
+      <div data-transcript-item="subork-group" className="mx-auto min-w-0 max-w-3xl rounded-lg">
         <div className="flex min-w-0 items-center gap-1">
           <button
             type="button"

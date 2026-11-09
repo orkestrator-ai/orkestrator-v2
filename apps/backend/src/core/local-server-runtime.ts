@@ -12,6 +12,7 @@ import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
+import { OpenCode2HostServerState } from "./opencode2/host-server-state.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -132,6 +133,8 @@ export class LocalServerRuntime {
   readonly gitHubCliLogin = new GitHubCliLoginSlot();
   /** The OpenCode provider sign-in, login change reservation and list flight. */
   readonly openCodeProviderLogin = new OpenCodeProviderLoginSlot();
+  /** Host OpenCode 2.x preview servers (`opencode2-host-server.ts`). */
+  readonly openCode2 = new OpenCode2HostServerState();
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly reapGroup: typeof reapProcessGroup;

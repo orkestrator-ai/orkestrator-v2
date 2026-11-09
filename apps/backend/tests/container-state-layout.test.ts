@@ -2,11 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import {
+  PINNED_TOOLCHAIN_VERSIONS,
+  agentPlatformForToolchain,
+} from "@orkestrator/toolchain/manifest";
+import {
+  OPENCODE2_DB_PATH,
+  OPENCODE2_LEGACY_DB_PATH,
+  OPENCODE_DB_DIRECTORY,
+  OPENCODE_DB_PATH,
   PROVIDER_PRESERVATION,
   PROVIDER_STATE_LAYOUT,
+  PROVIDER_STATE_TRACED_TOOLCHAINS,
   PROVIDER_STATE_TRACED_VERSIONS,
+  persistentStateExports,
 } from "../src/core/container-state-layout";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -24,10 +33,34 @@ describe("provider state layout re-trace", () => {
   // docs/development/upgrade-agents.md, then record the new version.
   test("was traced against every pinned provider version", () => {
     expect(Object.keys(PROVIDER_STATE_TRACED_VERSIONS).sort()).toEqual([...AGENT_PLATFORMS].sort());
-    expect(PROVIDER_STATE_TRACED_VERSIONS).toEqual({
-      ...PINNED_TOOLCHAIN_VERSIONS,
+    const platformPins: Record<string, string> = Object.fromEntries(
+      Object.entries(PINNED_TOOLCHAIN_VERSIONS).filter(
+        ([name]) => agentPlatformForToolchain(name) === name,
+      ),
+    );
+    expect<Record<string, string>>(PROVIDER_STATE_TRACED_VERSIONS).toEqual({
+      ...platformPins,
       cursor: cursorSdkPin(),
     });
+    // A platform's second binary (OpenCode 2.x, `opencode2`) is traced on its own.
+    const otherPins: Record<string, string> = Object.fromEntries(
+      Object.entries(PINNED_TOOLCHAIN_VERSIONS).filter(
+        ([name]) => agentPlatformForToolchain(name) !== name,
+      ),
+    );
+    expect(PROVIDER_STATE_TRACED_TOOLCHAINS).toEqual(otherPins);
+  });
+
+  test("OpenCode 2.x never opens 1.x's database, with or without the persistent mount", () => {
+    const exports = persistentStateExports("opencode2");
+    expect(exports).toContain(`export OPENCODE_DB=${OPENCODE2_DB_PATH}`);
+    expect(exports).toContain(`export OPENCODE_DB=${OPENCODE2_LEGACY_DB_PATH}`);
+    expect(exports).not.toContain(OPENCODE_DB_PATH);
+    expect(OPENCODE2_DB_PATH.startsWith(`${OPENCODE_DB_DIRECTORY}/`)).toBe(true);
+    // No mount of its own: storage sets initialized before 2.x stay valid.
+    expect(
+      PROVIDER_STATE_LAYOUT.filter((entry) => OPENCODE2_DB_PATH.startsWith(entry.containerPath)),
+    ).toHaveLength(1);
   });
 
   test("every provider has preserved state and a preservation claim", () => {

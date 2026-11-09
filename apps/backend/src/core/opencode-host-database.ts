@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -74,23 +75,56 @@ export function openCodeDataDirectory(env: NodeJS.ProcessEnv = process.env): str
  */
 export function inspectSharedOpenCodeDatabase(file: string): SharedOpenCodeDatabaseState {
   if (!existsSync(file)) return "missing";
-  let database: Database | undefined;
+  let tables: string[];
   try {
-    database = new Database(file, { readonly: true });
-    const tables = database
-      .query<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .all();
-    if (tables.length === 0 || tables.some((table) => table.name === "session")) {
-      return "compatible";
-    }
-    return "incompatible";
+    tables = readTableNames(file);
   } catch (error) {
     log.warn("host-database.unreadable", { error: formatLogError(error, { message: false }) });
     return "unreadable";
+  }
+  return tables.length === 0 || tables.includes("session") ? "compatible" : "incompatible";
+}
+
+/**
+ * The user tables in `file`, read without writing anything beside it. A
+ * read-only connection to a WAL database needs its `-shm` file, and OpenCode
+ * removes the `-wal` and `-shm` files when it closes cleanly, so reading a
+ * database it created and closed fails with `SQLITE_CANTOPEN`. With no
+ * write-ahead log left to read, an `immutable` open reads exactly what is on
+ * disk and creates no files. A non-empty `-wal` would be ignored by
+ * `immutable`, so then the original error stands.
+ */
+function readTableNames(file: string): string[] {
+  try {
+    return queryTableNames(new Database(file, { readonly: true }));
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "SQLITE_CANTOPEN" || hasWriteAheadLog(file)) {
+      throw error;
+    }
+    return queryTableNames(
+      new Database(`${pathToFileURL(file).href}?immutable=1`, { readonly: true }),
+    );
+  }
+}
+
+function queryTableNames(database: Database): string[] {
+  try {
+    return database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      )
+      .all()
+      .map((table) => table.name);
   } finally {
-    database?.close();
+    database.close();
+  }
+}
+
+function hasWriteAheadLog(file: string): boolean {
+  try {
+    return statSync(`${file}-wal`).size > 0;
+  } catch {
+    return false;
   }
 }
 

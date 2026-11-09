@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
-import { projectStore, uiStore } from "@/stores";
+import { configStore, projectStore, uiStore } from "@/stores";
 import { kanbanStore } from "@/stores/kanbanStore";
 import type { Project } from "@/types";
 import { ProjectWorkspace } from "./ProjectWorkspace";
@@ -39,4 +39,30 @@ test("Notes tab shows the project notes editor in its own panel", () => {
   expect(screen.getByRole("tabpanel").id).toBe("project-panel-notes");
   expect(screen.getByText("Acme Notes")).toBeTruthy();
   expect(loadNotes).toHaveBeenCalledWith("project");
+});
+
+test("Scheduling tab shows the project's schedules in its own panel", () => {
+  appCommandStore(uiStore).setState({ projectBoardTab: "schedules" });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project", name: "Acme" } as Project],
+  });
+  // Off, so the panel renders without reading the backend.
+  const config = appCommandStore(configStore);
+  const previous = config.getState();
+  config.setState({
+    hasLoaded: true,
+    config: {
+      ...previous.config,
+      global: { ...previous.config.global, experimentalScheduling: false },
+    },
+  });
+  try {
+    renderInAppCommandScope(<ProjectWorkspace projectId="project" />);
+    expect(screen.getByRole("tabpanel").id).toBe("project-panel-schedules");
+    expect(screen.getByText(/Work the backend starts in Acme/)).toBeTruthy();
+  } finally {
+    // Unmount first: restoring the config would otherwise mount the live list.
+    cleanup();
+    config.setState({ hasLoaded: previous.hasLoaded, config: previous.config });
+  }
 });

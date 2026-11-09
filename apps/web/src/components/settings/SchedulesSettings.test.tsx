@@ -633,7 +633,8 @@ describe("graph schedules", () => {
     ];
     renderInAppCommandScope(<SchedulesSettings />);
     const [row] = await screen.findAllByTestId("schedule-row");
-    expect(row!.textContent).toContain("Run graph nightly-review in p1");
+    // The project is named, not shown by id.
+    expect(row!.textContent).toContain("Run graph nightly-review in Shop");
     fireEvent.click(screen.getByRole("button", { name: "Edit Wake the coordinator" }));
     const dialog = await screen.findByRole("dialog");
     const role = await within(dialog).findByRole("region", { name: "Role Reviewer" });

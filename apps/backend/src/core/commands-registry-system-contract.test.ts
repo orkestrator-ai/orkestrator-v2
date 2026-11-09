@@ -74,7 +74,13 @@ const schedule = {
 
 function scheduleContext(service: Record<string, unknown>): CommandContext {
   return {
-    storage: { loadConfig: async () => ({ global: { experimentalScheduling: true } }) },
+    storage: {
+      loadConfig: async () => ({ global: { experimentalScheduling: true } }),
+      loadEnvironments: async () => [
+        { id: "e1", projectId: "p1" },
+        { id: "e2", projectId: "p2" },
+      ],
+    },
     scheduledJobs: service,
   } as unknown as CommandContext;
 }
@@ -142,7 +148,13 @@ test("list_scheduled_jobs keeps its filter keys", async () => {
   );
   expect(list.mock.calls[0]).toEqual([
     { kind: "operator" },
-    { projectId: "p1", environmentId: "e1", state: "paused", ownerKind: "agent" },
+    {
+      projectId: "p1",
+      environmentId: "e1",
+      state: "paused",
+      ownerKind: "agent",
+      projectEnvironmentIds: new Set(["e1"]),
+    },
   ]);
 });
 

@@ -75,6 +75,53 @@ describe("account login argument validation", () => {
   );
 });
 
+describe("signing a named account in again", () => {
+  const reauthenticate = createCommandRegistry().get("reauthenticate_agent_account")!;
+  test("starts a renewal of exactly that account", async () => {
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    const context = {
+      storage: {
+        agentAccounts: {
+          agentAccountsDirectory: () => {
+            throw new Error("stop before spawn");
+          },
+          loadAgentAccounts: async () => ({
+            version: 1,
+            accounts: [{ id: accountId, platform: "claude", label: "Work", createdAt: "" }],
+            active: {},
+          }),
+        },
+      },
+      // Stop at the first filesystem step after the account is resolved.
+      runtime: { accounts: new AgentAccountsRuntime() },
+      storageRoot: undefined,
+    } as unknown as CommandContext;
+    expect(await failureOf(() => reauthenticate({ platform: "claude", accountId }, context))).toBe(
+      "stop before spawn",
+    );
+    expect(agentAccountLoginProgress(context)).toMatchObject({ mode: "reauthenticate", accountId });
+  });
+  test.each([{}, { accountId: "" }, { accountId: "   " }])(
+    "refuses a missing or blank account %j",
+    async (args) => {
+      const loadAgentAccounts = mock(async () => ({ version: 1, accounts: [], active: {} }));
+      const context = {
+        storage: { agentAccounts: { loadAgentAccounts } },
+        runtime: { accounts: new AgentAccountsRuntime() },
+      } as unknown as CommandContext;
+      await expect(reauthenticate({ platform: "claude", ...args }, context)).rejects.toThrow(
+        "accountId",
+      );
+      expect(loadAgentAccounts).not.toHaveBeenCalled();
+    },
+  );
+  test("is refused for a platform without accounts", async () => {
+    await expect(
+      reauthenticate({ platform: "grok", accountId: "x" }, {} as CommandContext),
+    ).rejects.toThrow("Agent accounts are not supported for grok");
+  });
+});
+
 describe("OpenCode provider login argument validation", () => {
   const registry = createCommandRegistry();
   const context = {

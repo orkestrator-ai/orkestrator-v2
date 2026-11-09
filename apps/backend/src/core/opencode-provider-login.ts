@@ -22,6 +22,10 @@ import type { CommandContext } from "./commands-context.js";
 import { withHostOpenCodeServer, type HostOpenCodeServer } from "./host-model-catalog-refresh.js";
 import { openCodeSdkFetch } from "./http-bridge/index.js";
 import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
+import { mirrorOpenCodeLoginToOpenCode2 } from "./opencode2-credential-sync.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.opencode");
 
 /**
  * Signs OpenCode model providers in from the app.
@@ -37,6 +41,11 @@ import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
  * server is flagged and replaced the next time it is used while idle
  * (`markLocalBridgesForLoginRefresh`). Containers copy the login in when they
  * start.
+ *
+ * Each change is then mirrored into the OpenCode 2.x database
+ * (`opencode2-credential-sync.ts`), which reads that provider's new entry from
+ * the store; that module, not this one, handles the value. A failed mirror is
+ * reported, with 1.x already holding the change, so a retry repeats both.
  */
 
 /** OAuth device codes last about 15 minutes; give the whole sign-in a little more. */
@@ -60,6 +69,12 @@ export interface OpenCodeProviderLoginDependencies {
   createClient: typeof createOpencodeClient;
   /** Flags every live local OpenCode server so it reloads credentials once idle. */
   onLoginChanged: (context: CommandContext) => void;
+  /**
+   * Copies the provider's new `auth.json` entry (or its removal) into the
+   * OpenCode 2.x database, which imported `auth.json` only once
+   * (`opencode2-credential-sync.ts`). One sign-in updates both lines.
+   */
+  mirrorToOpenCode2: (context: CommandContext, providerId: string) => Promise<unknown>;
   loginTimeoutMs: number;
 }
 
@@ -67,8 +82,26 @@ const defaultDependencies: OpenCodeProviderLoginDependencies = {
   withServer: (context, use) => withHostOpenCodeServer(context, use, "provider-sign-in"),
   createClient: createOpencodeClient,
   onLoginChanged: (context) => markLocalBridgesForLoginRefresh(context, "opencode"),
+  mirrorToOpenCode2: mirrorOpenCodeLoginToOpenCode2,
   loginTimeoutMs: LOGIN_TOTAL_TIMEOUT_MS,
 };
+
+/** Shown when 1.x took the change and the 2.x copy could not be written. */
+export const OPENCODE2_MIRROR_FAILED_MESSAGE =
+  "Saved for OpenCode, but OpenCode 2 could not be updated. Try again.";
+
+async function mirrorOrExplain(
+  dependencies: OpenCodeProviderLoginDependencies,
+  context: CommandContext,
+  providerId: string,
+): Promise<void> {
+  try {
+    await dependencies.mirrorToOpenCode2(context, providerId);
+  } catch (error) {
+    log.warn("login.opencode2-mirror-failed", { error: formatLogError(error, { message: false }) });
+    throw new Error(OPENCODE2_MIRROR_FAILED_MESSAGE);
+  }
+}
 
 function bounded(value: unknown, max: number): string | undefined {
   const text = nonEmptyString(value)?.trim();
@@ -309,6 +342,7 @@ export function createOpenCodeProviderLogin(
         assertResponse(response, "Saving the API key");
       });
       dependencies.onLoginChanged(context);
+      await mirrorOrExplain(dependencies, context, id);
     } finally {
       release();
     }
@@ -326,6 +360,7 @@ export function createOpenCodeProviderLogin(
         assertResponse(response, "Signing out");
       });
       dependencies.onLoginChanged(context);
+      await mirrorOrExplain(dependencies, context, id);
     } finally {
       release();
     }
@@ -437,11 +472,13 @@ export function createOpenCodeProviderLogin(
         assertResponse(completed, "Completing the sign-in");
         if (completed.data !== true) throw new Error("OpenCode did not confirm the sign-in.");
       })
+      .then(async () => {
+        // 1.x holds the login now, whatever the mirror does.
+        dependencies.onLoginChanged(context);
+        await mirrorOrExplain(dependencies, context, providerId);
+      })
       .then(
-        () => {
-          finish({ state: "succeeded" });
-          dependencies.onLoginChanged(context);
-        },
+        () => finish({ state: "succeeded" }),
         (error: unknown) => {
           const reason = controller.signal.aborted ? controller.signal.reason : error;
           finish({ state: "failed", error: messageOf(reason).slice(0, MAX_ERROR_LENGTH) });

@@ -164,7 +164,8 @@ export function usePipelineMessageComposer({
       steerAvailable,
       command: looksLikeCommand(text),
       preparedPrompt: false,
-      attachmentCount: 0,
+      text,
+      attachments: [],
       pendingHandoff: false,
     });
 

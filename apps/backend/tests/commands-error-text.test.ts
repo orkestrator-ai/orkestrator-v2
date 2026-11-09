@@ -67,6 +67,36 @@ describe("Electron backend command registry", () => {
       ),
     ).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication);
 
+    // A blocked SSH port: the cause is in the output, and it is not a key
+    // problem even though Git adds "Could not read from remote repository".
+    const sshUnreachable =
+      "Couldn't reach the git remote over SSH (github.com, port 22). Your network may be blocking SSH.";
+    expect(
+      classify(
+        new CommandFailedError(
+          "ssh: connect to host github.com port 22: Operation timed out\r\nfatal: Could not read from remote repository.",
+          {
+            stderr:
+              "ssh: connect to host github.com port 22: Operation timed out\r\nfatal: Could not read from remote repository.",
+            exitCode: 128,
+          },
+        ),
+      ),
+    ).toStartWith(sshUnreachable);
+    expect(
+      classify(
+        new Error("worktree failed", {
+          cause: new CommandFailedError("Command failed: git fetch origin main", {
+            stderr: "ssh: connect to host github.com port 22: Connection timed out",
+            exitCode: 128,
+          }),
+        }),
+      ),
+    ).toStartWith(sshUnreachable);
+    expect(
+      classify(new Error("ssh: connect to host /home/me/secret port 22: Operation timed out")),
+    ).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown);
+
     // A remote fetch that hangs (e.g. ssh waiting on a passphrase) is a
     // timeout too, but pointing at the container runtime would be wrong.
     expect(classify(new GitRemoteTimeoutError("Command failed: git fetch origin main"))).toBe(

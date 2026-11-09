@@ -40,6 +40,7 @@ import type { WorktreeLocationSettings } from "../../../disk-usage.js";
 import type { LogDetail } from "../../../log-policy.js";
 import type { McpManagementRolloutSettings } from "../../../mcp-management.js";
 import { MULTI_REVIEW_ENGINES } from "../../../multi-review.js";
+import { OPENCODE_PROTOCOLS } from "../../../opencode-protocol.js";
 import type { NotificationSoundSettings } from "../../../notification-sounds.js";
 import {
   PERMISSION_RULE_KINDS,
@@ -130,6 +131,8 @@ export const globalSettingsFields = {
   agentSettings: Schema.optional(AgentSettingsTierSchema),
   /** OpenCode provider catalogues offered in model pickers; empty means unrestricted. */
   openCodeModelProviders: optionalStrings,
+  /** Which OpenCode line runs new interactive host sessions; absent means `legacy` (1.x). */
+  openCodeProtocol: Schema.optional(Schema.Literals(OPENCODE_PROTOCOLS)),
   /** Maximum concurrently open spawned-agent threads per native Codex session. */
   codexMaxConcurrentThreads: Schema.Finite,
   /** Longest a Claude native background shell command may run, in hours. */

@@ -19,6 +19,7 @@ import {
   listOpenCodeProviderAuthCommand,
   openAgentSignInTerminalCommand,
   readHostAgentSignInsCommand,
+  reauthenticateAgentAccountCommand,
   removeAgentAccountCommand,
   removeOpenCodeProviderLoginCommand,
   renameAgentAccountCommand,
@@ -281,6 +282,12 @@ export function registerAgentAccountCommands(
         args.reauthenticate === undefined
           ? false
           : asRequiredBoolean(args.reauthenticate, "reauthenticate"),
+    });
+  });
+  definePlatformFirst(reauthenticateAgentAccountCommand, async (args, context) => {
+    return startAgentAccountLogin(context, asAccountPlatform(args.platform), {
+      reauthenticate: true,
+      accountId: asNonBlankString(args.accountId, "accountId"),
     });
   });
   define(getAgentAccountLoginCommand, async (_args, context) => {

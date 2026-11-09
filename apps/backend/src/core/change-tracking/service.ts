@@ -1099,13 +1099,26 @@ export class ChangeTrackingService {
     return { kind: "page", entries, nextCursor: next };
   }
 
-  /** The current thread segment's resource key, for the thread header. */
+  /**
+   * The current thread segment's resource key, for the thread header. `null`
+   * until a turn of the segment has reached the provider: a segment opened by
+   * a dispatch that was refused, or one still being prepared, has no thread
+   * measurement to wait for, and naming it would leave the header loading
+   * forever.
+   */
   threadResource(
     environmentId: string,
     logicalSessionKey: string,
   ): { segmentId: string; resourceKey: string } | null {
-    const segment = this.ledger.currentSegment(threadIdFor(environmentId, logicalSessionKey));
+    const threadId = threadIdFor(environmentId, logicalSessionKey);
+    const segment = this.ledger.currentSegment(threadId);
     if (!segment) return null;
+    if (
+      !this.ledger.latestMeasurement("segment", segment.segment_id, "thread-net") &&
+      this.ledger.segmentTurnProgress(threadId, segment.segment_id) === "none"
+    ) {
+      return null;
+    }
     return {
       segmentId: segment.segment_id,
       resourceKey: `thread-net/segment/${encodeURIComponent(segment.segment_id)}/live`,

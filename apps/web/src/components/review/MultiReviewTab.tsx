@@ -28,7 +28,6 @@ import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -69,6 +68,7 @@ import {
   StepTranscriptTail,
 } from "./MultiReviewInspector";
 import { defaultFlowSelection, latestActivityAt } from "@/components/flow-graph/flow-graph-model";
+import { InspectorTranscriptTabs, type InspectorBodyTab } from "./MultiReviewInspectorViews";
 import {
   flowPendingLabel,
   mergeReviewerFindings,
@@ -396,53 +396,6 @@ interface MultiReviewFlowNodeView {
   actions: ReactNode;
   body: ReactNode;
   activityAt?: number;
-}
-
-type InspectorBodyTab = "transcript" | "report";
-
-/**
- * The inspector's lower section: the node's transcript, and the report it
- * filed once there is one. The transcript stays mounted behind the report so
- * returning to it keeps its scroll position and follow state.
- */
-function InspectorTranscriptTabs({
-  transcript,
-  report,
-  tab,
-  onTabChange,
-}: {
-  transcript: ReactNode;
-  report: ReactNode;
-  tab: InspectorBodyTab;
-  onTabChange: (tab: InspectorBodyTab) => void;
-}) {
-  if (!report) return transcript;
-  return (
-    <Tabs
-      value={tab}
-      onValueChange={(value) => onTabChange(value as InspectorBodyTab)}
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
-    >
-      <TabsList aria-label="Inspector views" className="h-7 rounded-md p-0.5">
-        <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
-          Transcript
-        </TabsTrigger>
-        <TabsTrigger className="h-6 px-2 text-xs" value="report">
-          Report
-        </TabsTrigger>
-      </TabsList>
-      <TabsContent
-        value="transcript"
-        forceMount
-        className="flex min-h-0 min-w-0 flex-col data-[state=inactive]:hidden"
-      >
-        {transcript}
-      </TabsContent>
-      <TabsContent value="report" className="min-w-0">
-        {report}
-      </TabsContent>
-    </Tabs>
-  );
 }
 
 /**

@@ -1544,6 +1544,88 @@ describe("development profile lifecycle primitives", () => {
     ]);
   });
 
+  test("keeps OpenCode pending until both of its binaries are installed", async () => {
+    const { profile } = await toolchainFixture(["pi"]);
+    const logs: string[] = [];
+
+    // The host has the 1.x binary but not yet the 2.x one.
+    await seedAgentTestProfileState({ ...profile, agentPlatforms: ["opencode"] }, "agent-test", {
+      seedModelCatalogCaches: async () => [],
+      seedProviderCredentials: async () => [],
+      seedAgentToolchains: async () => ({ seeded: ["opencode@1.19.5"], failed: [] }),
+      prefetchAgentToolchains: async (_profile, platforms) => {
+        expect(platforms).toEqual(["opencode"]);
+        return { downloaded: ["opencode@1.19.5", "opencode2@2.2.6"] };
+      },
+      log: (message) => logs.push(message),
+      warn: (message) => logs.push(`warn: ${message}`),
+    });
+
+    expect(logs).toEqual([
+      "Seeded toolchains from the host install: opencode@1.19.5",
+      "Downloaded managed toolchains before Electron: opencode@1.19.5, opencode2@2.2.6",
+    ]);
+  });
+
+  test("prefetches and seeds both OpenCode binaries for the opencode platform", async () => {
+    const { profile, roots: profileRoots } = await toolchainFixture(["pi"]);
+    const opencode = (name: "opencode" | "opencode2", version: string): ToolchainArtifact => ({
+      name,
+      version,
+      platform: "darwin",
+      architecture: "arm64",
+      archive: {
+        format: "raw",
+        url: `https://example.invalid/${name}`,
+        allowedHosts: ["example.invalid"],
+        entryPath: name,
+        size: 1,
+        sha256: "0".repeat(64),
+      },
+      executable: { fileName: name, size: 1, sha256: "0".repeat(64) },
+    });
+    const artifacts = [
+      opencode("opencode", "1.19.5"),
+      opencode("opencode2", "2.2.6"),
+      toolchainArtifact("pi", "0.84.3"),
+    ];
+    const received: string[][] = [];
+
+    await expect(
+      prefetchAgentToolchains(profile, ["opencode"], {
+        artifacts,
+        platform: "darwin",
+        architecture: "arm64",
+        ensure: async (options) => {
+          received.push((options.artifacts ?? []).map((artifact) => artifact.name));
+          return { rootDir: "", binDir: "", executables: {} as never };
+        },
+      }),
+    ).resolves.toEqual({ downloaded: ["opencode@1.19.5", "opencode2@2.2.6"] });
+    expect(received).toEqual([["opencode", "opencode2"]]);
+
+    for (const [name, version] of [
+      ["opencode", "1.19.5"],
+      ["opencode2", "2.2.6"],
+    ] as const) {
+      const host = path.join(
+        profileRoots.productionDataDir,
+        "toolchains",
+        name,
+        version,
+        "darwin-arm64",
+      );
+      await mkdir(host, { recursive: true });
+      await writeFile(path.join(host, name), `${name}-bytes`);
+    }
+    await expect(
+      seedInstalledAgentToolchains(
+        { ...profile, agentPlatforms: ["opencode"] },
+        { roots: profileRoots, artifacts, platform: "darwin", architecture: "arm64" },
+      ),
+    ).resolves.toEqual({ seeded: ["opencode@1.19.5", "opencode2@2.2.6"], failed: [] });
+  });
+
   test.each(["downloaded", "seeded", "failed"] as const)(
     "startup uses the real prefetch helper when toolchains are %s",
     async (outcome) => {

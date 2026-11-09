@@ -320,7 +320,10 @@ export const MailTile = memo(function MailTile({
       data-mail-state={mail.notice?.state}
       data-expanded={open ? "true" : "false"}
     >
-      <div className={cn("mx-auto min-w-0 max-w-3xl rounded-lg border", style.frame)}>
+      <div
+        data-transcript-item="mail"
+        className={cn("mx-auto min-w-0 max-w-3xl rounded-lg border", style.frame)}
+      >
         <div className="flex min-w-0 items-start">
           <button
             type="button"

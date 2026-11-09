@@ -161,15 +161,23 @@ export function MessageShell({
 
   return (
     <div className={cn("px-3 @sm:px-6 py-3", className)}>
+      {/*
+        The item's own box for a jump highlight
+        (`lib/transcript-scroll/conversation-target-highlight.ts`): the user's
+        bubble, or the content column of an agent reply. The radius only rounds
+        that glow; the column has no fill or border of its own.
+      */}
       <div
+        data-transcript-item={isUser ? undefined : "message"}
         className={cn(
           "mx-auto flex max-w-3xl min-w-0",
-          isUser ? "justify-end" : "justify-start",
+          isUser ? "justify-end" : "justify-start rounded-lg",
           contentClassName,
         )}
       >
         <div className={cn("group min-w-0 break-words", isUser ? "max-w-[82%]" : "w-full")}>
           <div
+            data-transcript-item={isUser ? "message" : undefined}
             className={cn(
               "min-w-0 break-words",
               isUser
@@ -252,7 +260,10 @@ export function MessageErrorAlert({
   return (
     <div className="px-2 @sm:px-4 py-3">
       <div className="max-w-3xl mx-auto min-w-0">
-        <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/25">
+        <div
+          data-transcript-item="error"
+          className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/25"
+        >
           <AlertCircle className="w-4 h-4 text-failure shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <div

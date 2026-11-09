@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
@@ -283,6 +284,11 @@ describe("durable queue-to-steer handoff", () => {
         { id: "command", text: "/test", command: {} },
         { id: "image", text: "See this", attachments: [{}] },
         {
+          id: "unreferenced-image",
+          text: "See this",
+          attachments: [{ type: "image", path: "/workspace/.orkestrator/attachments/shot.png" }],
+        },
+        {
           id: "annotation",
           text: "Note",
           origin: { kind: "web-annotation", requestId: "req", bodyHash: "hash" },
@@ -294,6 +300,39 @@ describe("durable queue-to-steer handoff", () => {
         ).rejects.toThrow("cannot be steered");
       }
       expect(perform).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("steering a queued prompt whose attachments are named by path", () => {
+  const shotPath = "/workspace/.orkestrator/attachments/a/shot.png";
+  const withShot = {
+    id: "with-shot",
+    text: buildInitialPromptWithAttachmentReferences("See this", [
+      { name: "shot.png", path: shotPath },
+    ]),
+    attachments: [{ type: "image", path: shotPath, filename: "shot.png" }],
+  };
+
+  test("steers the text, path block included", async () => {
+    await fixture(async ({ service, storage, perform }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, withShot);
+      expect(await service.steerQueuedPrompt({ ...identity, messageId: withShot.id })).toEqual({
+        outcome: "applied",
+      });
+      const [, action] = perform.mock.calls[0] as unknown[];
+      expect(action).toMatchObject({ kind: "steer", text: withShot.text });
+      expect((action as { text: string }).text).toContain(shotPath);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([item, tail]);
+    });
+  });
+
+  test("a refused steer restores the item with its attachments", async () => {
+    await fixture(async ({ service, storage, setResponse }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, withShot);
+      setResponse({ outcome: "rejected", requestId: withShot.id, reason: "steer-not-recorded" });
+      await service.steerQueuedPrompt({ ...identity, messageId: withShot.id });
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([item, tail, withShot]);
     });
   });
 });

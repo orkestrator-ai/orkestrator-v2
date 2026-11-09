@@ -392,6 +392,9 @@ Rules:
 - Codex's runtime databases (`CODEX_SQLITE_HOME`) and OpenCode's database
   (`OPENCODE_DB`) are relocated onto the state volume only when that mount is
   present, so a legacy runtime keeps its existing sessions where they are.
+  OpenCode 2.x always gets a database of its own, `opencode2.db`: on the same
+  mount beside 1.x's when it is present, otherwise in the container layer,
+  never 1.x's `opencode.db`, which 2.x would migrate in place.
 - Discarding a volume-backed runtime deletes its storage set (label-verified,
   never forced) and starts a new workspace generation; a volume that will not
   remove stays referenced as a retained copy. Deleting an environment removes
@@ -413,12 +416,17 @@ Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
 1.0.77), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
+A platform's second binary is traced on its own, in
+`PROVIDER_STATE_TRACED_TOOLCHAINS`: OpenCode 2.x (`opencode2` 2.2.6), whose
+sessions are in `OPENCODE_DB` (`opencode2.db` and its WAL and SHM files) in
+the same `opencode/db` sub-directory, so it needed no mount of its own and a
+storage set initialized before it existed mounts unchanged.
 
 | Provider | Preserved (`state` sub-directory → mount) | Not preserved |
 | --- | --- | --- |
 | Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`skills`/`agents`/`plugins`, caches, `~/.claude.json` |
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
-| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
+| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization; 2.x keeps its own `opencode2.db` there, with its sessions, credentials imported from `auth.json` on its first start, and key-value cache) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
 | Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, brought back in step on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
@@ -1630,6 +1638,7 @@ first, which moves the log to its `.prev.log` name:
 | Server | Active log | Previous run |
 | --- | --- | --- |
 | OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
+| OpenCode 2.x | `/tmp/opencode2-serve.log` | `/tmp/opencode2-serve.prev.log` |
 | Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
 | Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
 | Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
@@ -2051,6 +2060,13 @@ refuses tools; on a host it only logs, because a host's OpenCode can be any buil
 A host server gets the plugin through `OPENCODE_CONFIG_DIR`
 (`opencode-host-credential.ts`), and a server whose user set that variable runs
 without it (`credential-plugin.skipped`).
+The OpenCode 2.x server (`opencode2-container-server.ts`, container port
+4102) takes its password the same way, in `opencode2-token` and in its own
+environment alone; its 2.x plugin (`buildOpenCode2CredentialPluginSource` with
+`hardened: "refuse-tools"`) removes it from the process and every shell,
+marks the server non-dumpable and refuses tools when it cannot. An image that
+keeps no root credential file is refused rather than given a `node`-readable
+one; every image that carries `opencode2` has one.
 Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
 
 ## Container worktree signal (`container-worktree-signal=1`)

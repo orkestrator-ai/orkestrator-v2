@@ -69,6 +69,21 @@ describe("host OpenCode database", () => {
     expect(hostOpenCodeDatabaseEnvironment(env)).toEqual({});
   });
 
+  test("reads a database OpenCode closed cleanly without leaving files beside it", async () => {
+    // A clean close checkpoints and removes the -wal and -shm files, and a
+    // read-only open of such a WAL database used to fail with SQLITE_CANTOPEN,
+    // which read as "unreadable" and kept sharing an incompatible database.
+    const database = new Database(shared, { create: true });
+    database.run("PRAGMA journal_mode = WAL");
+    database.run("CREATE TABLE `session_v2` (id TEXT PRIMARY KEY)");
+    database.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    database.close();
+    await fs.rm(`${shared}-wal`, { force: true });
+    await fs.rm(`${shared}-shm`, { force: true });
+    expect(inspectSharedOpenCodeDatabase(shared)).toBe("incompatible");
+    expect((await fs.readdir(dataDirectory)).sort()).toEqual(["opencode.db"]);
+  });
+
   test("shares a database OpenCode 2 created or migrated that kept `session`", () => {
     writeDatabase(shared, ["migration", "session", "session_v2", "session_message"]);
     expect(hostOpenCodeDatabaseEnvironment(env)).toEqual({});

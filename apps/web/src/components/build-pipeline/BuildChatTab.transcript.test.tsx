@@ -17,6 +17,7 @@ import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessag
 
 import { graphRunCacheKey, graphRunStore } from "@/stores/graphRunStore";
 import { act as activationOf, agentSession } from "@/components/graph-run/graph-run.test-fixtures";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 import { appCommandStore } from "@/test/app-command-store";
 
 const realBackendSnapshot = { ...realBackend };
@@ -48,7 +49,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
           {renderMessage(index, message, null)}
         </div>
       ))}
-      {footer}
+      <div data-testid="transcript-footer">{footer}</div>
     </div>
   ),
 }));
@@ -514,4 +515,70 @@ test("pipeline row aliases survive acceptance revealing and hiding a document", 
   expect(screen.getByTestId("transcript-row")).toBe(original);
   view.rerender(element(false, [...entries.slice(3), adjacentTool("d")]));
   expect(screen.getByTestId("transcript-row")).toBe(original);
+});
+
+test("moves the review report out of the footer exactly once when wide and back when narrowed", () => {
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  const OriginalObserver = globalThis.ResizeObserver;
+  let width = 900;
+  const callbacks = new Set<() => void>();
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return { width } as DOMRect;
+  };
+  globalThis.ResizeObserver = class {
+    constructor(private callback: () => void) {}
+    observe() {
+      callbacks.add(this.callback);
+    }
+    disconnect() {
+      callbacks.delete(this.callback);
+    }
+    unobserve() {}
+  } as unknown as typeof ResizeObserver;
+  const report = TEST_STRUCTURED_REVIEW_REPORT;
+  const session = {
+    ...pipeline.sessions[0]!,
+    phase: "review" as const,
+    messages: verifyMessages,
+    reviewReport: report,
+  };
+  const loaded = { ...pipeline, structuredReview: report, sessions: [session] };
+  try {
+    const view = renderInAppCommandScope(
+      <PipelineSessionTranscript
+        pipeline={loaded}
+        session={session}
+        visible
+        isActive={false}
+        ownsGlobalShortcuts={false}
+        environmentId="env-1"
+        containerId={undefined}
+        composer={false}
+      />,
+    );
+    const row = screen.getByTestId("transcript-row");
+    const footer = screen.getByTestId("transcript-footer");
+    expect(footer.querySelectorAll("article").length).toBe(1);
+    act(() => {
+      width = 1280;
+      for (const callback of Array.from(callbacks)) callback();
+    });
+    expect(screen.getAllByRole("article").length).toBe(1);
+    expect(footer.querySelectorAll("article").length).toBe(0);
+    expect(screen.getByTestId("pipeline-report-beside").querySelector("article")).toBeTruthy();
+    expect(screen.getByTestId("transcript-row")).toBe(row);
+    act(() => {
+      width = 900;
+      for (const callback of Array.from(callbacks)) callback();
+    });
+    expect(screen.getAllByRole("article").length).toBe(1);
+    expect(footer.querySelectorAll("article").length).toBe(1);
+    expect(screen.queryByTestId("pipeline-report-beside") === null).toBe(true);
+    expect(screen.getByTestId("transcript-row")).toBe(row);
+    view.unmount();
+  } finally {
+    cleanup();
+    HTMLElement.prototype.getBoundingClientRect = originalRect;
+    globalThis.ResizeObserver = OriginalObserver;
+  }
 });

@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/context-menu";
 import {
   AlertTriangle,
+  CalendarClock,
   Code2,
   Columns3,
   Copy,
@@ -682,6 +683,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               ),
               overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
               panelId: "project-panel-coordinator",
+            },
+            {
+              value: "schedules",
+              label: "Scheduling",
+              icon: <CalendarClock className="size-3.5" />,
+              panelId: "project-panel-schedules",
             },
             {
               value: "kanban",

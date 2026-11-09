@@ -4,7 +4,10 @@ import { useScopesWithCommandFallback } from "../../apps/web/src/lib/node-scope/
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
-import { coordinatorActionCards } from "../../apps/web/src/components/projects/coordinator-action-cards";
+import {
+  coordinatorActionCards,
+  type CoordinatorActionCard,
+} from "../../apps/web/src/components/projects/coordinator-action-cards";
 import type { NativeMessage } from "../../apps/web/src/lib/chat/native-message-types";
 import { useMemo, useState } from "react";
 import { CoordinatorActionsPanel } from "../../apps/web/src/components/projects/CoordinatorActionsPanel";
@@ -13,8 +16,22 @@ import {
   FloatingNoticeLayer,
 } from "../../apps/web/src/components/ui/floating-notice";
 
+/** `?many` adds questions, so a short pane has more cards than fit. */
+const extraQuestions = (): CoordinatorActionCard[] =>
+  new URLSearchParams(window.location.search).has("many")
+    ? Array.from({ length: 8 }, (_, offset) => ({
+        id: `extra-${offset}`,
+        anchorId: `extra-${offset}`,
+        index: offset + 2,
+        kind: "question" as const,
+        title: `Follow-up question ${offset + 1}`,
+        done: false,
+      }))
+    : [];
+
 export function CoordinatorActionsFixture() {
   const [anchor, setAnchor] = useState("");
+  const [extra] = useState(extraQuestions);
   return (
     <div className="relative h-screen bg-background text-foreground">
       <FloatingNoticeLayer columnRem={56}>
@@ -66,6 +83,7 @@ export function CoordinatorActionsFixture() {
               title: "Which option?",
               done: false,
             },
+            ...extra,
           ]}
           onNavigate={setAnchor}
         />
@@ -81,19 +99,33 @@ export function CoordinatorActionsFixture() {
 
 /** Exercises the production shell and viewport measurement rather than prebuilt cards. */
 export function CoordinatorActionsTranscriptFixture() {
+  const shiftLayout = new URLSearchParams(window.location.search).has("shift-layout");
   const navigation = useVirtuosoScrollState();
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const [anchor, setAnchor] = useState("");
   const [done, setDone] = useState(false);
+  const [rowCount, setRowCount] = useState(shiftLayout ? 12 : 50);
   const messages = useMemo<NativeMessage[]>(
     () =>
-      Array.from({ length: 50 }, (_, index) => ({
-        id: `row-${index}`,
-        role: "assistant",
+      Array.from({ length: rowCount }, (_, index) => ({
+        id: index === 1 ? "peer-mail-fixture" : `row-${index}`,
+        role: index === 2 ? "user" : "assistant",
+        ...(index === 1
+          ? {
+              peerMail: {
+                messageId: "mail",
+                warning: "",
+                kind: "notice" as const,
+                sender: "System",
+                subject: "Workflow ready",
+                body: "The workflow is ready for review.",
+              },
+            }
+          : {}),
         createdAt: "2026-11-09",
         content: `Conversation row ${index}`,
         parts:
-          index === 5 || index === 40
+          index === 5 || index === 40 || index >= 50
             ? [
                 {
                   type: "tool-invocation",
@@ -105,9 +137,9 @@ export function CoordinatorActionsTranscriptFixture() {
               ]
             : [{ type: "text", content: `Conversation row ${index}` }],
       })),
-    [],
+    [rowCount],
   );
-  const highlightedMessageId = useConversationScrollTarget({
+  const conversationHighlight = useConversationScrollTarget({
     environmentId: "actions-fixture",
     tabId: "coordinator",
     isActive: true,
@@ -134,6 +166,26 @@ export function CoordinatorActionsTranscriptFixture() {
         <button onClick={() => navigation.scrollToIndex(0)}>Read start</button>
         <button onClick={() => navigation.scrollToIndex(49)}>Read end</button>
         <button onClick={() => setDone(true)}>Answer question</button>
+        <button onClick={() => setRowCount((count) => count + 1)}>Append question</button>
+        {shiftLayout && <button onClick={() => setRowCount(0)}>Clear transcript</button>}
+        {[
+          { id: "peer-mail-fixture", label: "mail" },
+          { id: "row-2", label: "user" },
+        ].map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() =>
+              useConversationScrollTargetStore
+                .getState()
+                .request(
+                  { nodeId, environmentId: "actions-fixture", tabId: "coordinator" },
+                  { messageId: id },
+                )
+            }
+          >
+            Jump {label}
+          </button>
+        ))}
         <output data-testid="anchor">{anchor}</output>
         <NativeChatShell
           agentLabel="Codex"
@@ -148,11 +200,21 @@ export function CoordinatorActionsTranscriptFixture() {
           finalElapsedSeconds={null}
           centerCompose={false}
           composer={<textarea aria-label="Prompt" />}
+          transcriptHeader={
+            shiftLayout ? (
+              <div data-testid="shift-header" className="mx-auto max-w-[56rem]">
+                Earlier messages
+              </div>
+            ) : undefined
+          }
+          transcriptCards={
+            shiftLayout ? <div data-testid="shift-footer">Waiting for review</div> : undefined
+          }
           isAtBottom={navigation.isAtBottom}
           scrollToBottom={navigation.scrollToBottom}
           scrollProps={navigation.scrollProps}
           virtuosoRef={navigation.virtuosoRef}
-          highlightedMessageId={highlightedMessageId}
+          conversationHighlight={conversationHighlight}
           coordinatorInteractions={[interaction]}
           coordinatorNavigate={(id) => {
             setAnchor(id);

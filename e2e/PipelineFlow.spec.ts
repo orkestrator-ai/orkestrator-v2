@@ -1193,3 +1193,36 @@ test("Notes shows follow-ups and the full brief after reload", async ({ page }) 
     await expect(notes).toContainText("On the pipeline record");
   }
 });
+
+test("review report scrolls beside the transcript and returns to its footer on narrow screens", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/pipeline-flow?scenario=fanout&longTranscript=report");
+  const beside = page.getByTestId("pipeline-report-beside");
+  await expect(beside).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(1);
+  // Expand the report to exercise its independent bounded scroller.
+  for (const button of await beside
+    .getByRole("button", { name: /^(Issues|Test coverage gaps) ·/ })
+    .all()) {
+    if ((await button.getAttribute("aria-expanded")) === "false") await button.click();
+  }
+  const bounds = await beside.boundingBox();
+  expect(bounds!.height).toBeGreaterThan(200);
+  expect(bounds!.height).toBeLessThan(900);
+  const range = await beside.evaluate((element) => element.scrollHeight - element.clientHeight);
+  expect(range).toBeGreaterThan(0);
+  await beside.evaluate((element) => {
+    element.scrollTop = 100;
+  });
+  await expect.poll(() => beside.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await page.screenshot({ path: "output/visual-previews/pipeline-report-wide.png" });
+  await page.setViewportSize({ width: 900, height: 900 });
+  await expect(beside).toHaveCount(0);
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await page.screenshot({ path: "output/visual-previews/pipeline-report-narrow.png" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(beside).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(1);
+});

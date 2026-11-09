@@ -840,9 +840,22 @@ export function registerVoiceTools(server: McpServer, caller: ControlMcpCaller):
           key,
           undefined,
         );
+        // A steer that missed its turn is delivered as the next one instead.
+        const deliveredAs = envelope.ok
+          ? (envelope.result as { deliveredAs?: unknown } | undefined)?.deliveredAs
+          : undefined;
         return envelopeToolResult(envelope, profile, {
           ...sayForEnvelope(envelope),
-          ...(envelope.ok ? { say: "Guidance added to the running turn." } : {}),
+          ...(envelope.ok
+            ? {
+                say:
+                  deliveredAs === "new-turn"
+                    ? "That turn had ended, so I sent it as a new turn."
+                    : deliveredAs === "queued"
+                      ? "That turn had moved on, so I queued it as the next turn."
+                      : "Guidance added to the running turn.",
+              }
+            : {}),
         });
       },
     );

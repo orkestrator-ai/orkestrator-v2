@@ -215,7 +215,7 @@ environments", §"Diagnostics" and §"Framework configuration".
   cannot check). Route details show an **owner** row; `user-registered` reads
   "any process listening on this port is shown".
 - The resolver still refuses Orkestrator's own ports and the in-container agent
-  servers on 4096–4101.
+  servers on 4096–4102.
 
 ## Outstanding work
 

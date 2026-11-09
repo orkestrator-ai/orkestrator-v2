@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
+  CONVERSATION_TARGET_HIGHLIGHT_MS,
+  type ConversationTargetHighlight,
+} from "@/lib/transcript-scroll/conversation-target-highlight";
+import {
   CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
   conversationScrollTargetKey,
   resolveConversationScrollIndex,
   useConversationScrollTargetStore,
 } from "@/stores/conversationScrollTargetStore";
 
-/** How long the jumped-to message stays highlighted. */
-export const CONVERSATION_TARGET_HIGHLIGHT_MS = 2_500;
 /**
  * Retries while the list handle is not ready (the shell can still be showing
  * its connecting state). Bounded; after that the request waits for the next
@@ -45,7 +47,8 @@ interface UseConversationScrollTargetOptions {
 /**
  * Consumes this tab's pending "scroll to message" request (see
  * `conversationScrollTargetStore`) once the chat is active and the message is
- * rendered, and returns the id of the row to highlight briefly.
+ * rendered, and returns the row to highlight briefly. Every jump returns a new
+ * generation, so jumping to the same row again restarts its highlight.
  *
  * A request that cannot be placed is dropped rather than held: shortly after
  * the transcript settles without the message (it may be outside the loaded
@@ -65,14 +68,15 @@ export function useConversationScrollTarget({
   loadEarlier,
   settledGraceMs = CONVERSATION_SCROLL_TARGET_SETTLED_GRACE_MS,
   highlightMs = CONVERSATION_TARGET_HIGHLIGHT_MS,
-}: UseConversationScrollTargetOptions): string | null {
+}: UseConversationScrollTargetOptions): ConversationTargetHighlight | null {
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const ref = useMemo(() => ({ nodeId, environmentId, tabId }), [nodeId, environmentId, tabId]);
   const pending = useConversationScrollTargetStore(
     (state) => state.targets.get(conversationScrollTargetKey(ref)) ?? null,
   );
   const clear = useConversationScrollTargetStore((state) => state.clear);
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState<ConversationTargetHighlight | null>(null);
+  const highlightGeneration = useRef(0);
 
   const targetIndex = useMemo(
     () => (pending ? resolveConversationScrollIndex(messages, pending, turnBoundaries) : -1),
@@ -98,7 +102,13 @@ export function useConversationScrollTarget({
       // the outcome; the navigation retires anything still in flight.
       if (scrollToIndex(targetIndex, { rowKey: targetMessageId }, "message-link")) {
         clear(ref, pending.nonce);
-        setHighlightedMessageId(targetMessageId);
+        highlightGeneration.current += 1;
+        setHighlight({
+          messageId: targetMessageId,
+          generation: highlightGeneration.current,
+          durationMs: highlightMs,
+          startedAt: performance.now(),
+        });
         return;
       }
       attempts += 1;
@@ -109,7 +119,7 @@ export function useConversationScrollTarget({
       if (frame !== null) cancelAnimationFrame(frame);
       if (retry !== null) clearTimeout(retry);
     };
-  }, [clear, isActive, pending, ref, scrollToIndex, targetIndex, targetMessageId]);
+  }, [clear, highlightMs, isActive, pending, ref, scrollToIndex, targetIndex, targetMessageId]);
 
   const paging = useRef<Promise<unknown> | null>(null);
   // Read one page at a time. The request TTL bounds missing/deleted anchors.
@@ -162,11 +172,15 @@ export function useConversationScrollTarget({
     return () => clearTimeout(timer);
   }, [clear, pending, ref, settledGraceMs, unresolvedAfterSettle]);
 
+  // A new jump replaces the object, so the period restarts with it.
   useEffect(() => {
-    if (!highlightedMessageId) return;
-    const timer = setTimeout(() => setHighlightedMessageId(null), highlightMs);
+    if (!highlight) return;
+    const timer = setTimeout(
+      () => setHighlight(null),
+      Math.max(0, highlight.startedAt + highlight.durationMs - performance.now()),
+    );
     return () => clearTimeout(timer);
-  }, [highlightMs, highlightedMessageId]);
+  }, [highlight]);
 
-  return highlightedMessageId;
+  return highlight;
 }

@@ -51,7 +51,10 @@ export const GoalTurnTile = memo(function GoalTurnTile({
       data-goal-turn-tile="true"
       data-expanded={open ? "true" : "false"}
     >
-      <div className="mx-auto min-w-0 max-w-3xl rounded-lg border border-border/60 bg-muted/20">
+      <div
+        data-transcript-item="goal-turn"
+        className="mx-auto min-w-0 max-w-3xl rounded-lg border border-border/60 bg-muted/20"
+      >
         <button
           type="button"
           aria-expanded={open}
@@ -217,7 +220,10 @@ export const GoalStatusRow = memo(function GoalStatusRow({
       data-goal-status-row={status.kind}
       data-goal-status-tone={status.tone}
     >
-      <div className="mx-auto min-w-0 max-w-3xl text-xs text-muted-foreground">
+      <div
+        data-transcript-item="goal-status"
+        className="mx-auto min-w-0 max-w-3xl rounded-md text-xs text-muted-foreground"
+      >
         {expandable ? (
           <button
             type="button"

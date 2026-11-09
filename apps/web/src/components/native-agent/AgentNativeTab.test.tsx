@@ -1,6 +1,9 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
-import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  nativeAgentSteerRejectionMessage,
+} from "@orkestrator/protocol/native-agent";
 /**
  * Contract suite for the single pane-level native agent tab.
  *
@@ -236,7 +239,10 @@ const getAgentHandoffCapabilitiesMock = mock(async () => ({
 }));
 const getNativeAgentSignInResendMock = mock(async () => ({ pending: false }));
 const performNativeAgentSessionActionMock = mock(
-  async (_input: { agent: string; action: { kind: string; text?: string } }) => ({
+  async (_input: {
+    agent: string;
+    action: { kind: string; text?: string };
+  }): Promise<{ outcome: "applied"; deliveredAs?: "new-turn" | "queued"; requestId?: string }> => ({
     outcome: "applied" as const,
   }),
 );
@@ -312,7 +318,8 @@ const defaultProjection = async (input: {
     modes: [{ id: "build" as const, label: "Build" }],
   },
   capabilities: {
-    attachments: { files: false, images: false },
+    // As a real projection does: the platform's table, narrowed per session.
+    attachments: nativeAgentCapabilities(input.agent).attachments,
     queue: false,
     resume: false,
     fork: false,
@@ -2616,13 +2623,18 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    // Each save waits out the 400 ms draft debounce; control it instead.
-    const saveDebounce = installControlledTimeout(400, { label: "native compose draft save" });
+    // Both the shell's initial settle and the draft debounce take 400 ms.
+    // Advance both explicitly; revision checks below prove the save also ran.
+    const saveDebounce = installControlledTimeout(400, {
+      label: "native compose draft save and column settle",
+      maxPending: 2,
+    });
     const flushSave = async () => {
-      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(1));
+      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(2));
       await act(async () => {
-        saveDebounce.advance();
+        expect(saveDebounce.advance()).toBe(2);
       });
+      saveDebounce.assertDrained();
     };
     try {
       const first = renderInAppCommandScope(
@@ -2731,6 +2743,30 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
+  });
+
+  test("the attach control follows the session's capabilities, not only its platform's", async () => {
+    // OpenCode's table offers attachments; this session's projection narrows them away.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, attachments: { files: false, images: false } },
+      };
+    });
+    const { unmount } = renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-narrowed" data={identity("opencode")} isActive />,
+    );
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Add attachment" }) === null).toBe(true),
+    );
+    unmount();
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="tab-full" data={identity("opencode")} isActive />,
+    );
+    expect(await screen.findByRole("button", { name: "Add attachment" })).toBeTruthy();
   });
 
   test("an annotation-only first prompt starts the selected agent", async () => {
@@ -7147,7 +7183,7 @@ describe("AgentNativeTab", () => {
     expect(mockToastInfo).not.toHaveBeenCalled();
   });
 
-  test("tells the user when a new OpenCode session starts on a substituted model", async () => {
+  test("tells the user, once, when a new OpenCode session starts on a substituted model", async () => {
     appCommandStore(configStore)
       .getState()
       .updateGlobalConfig({
@@ -7163,12 +7199,32 @@ describe("AgentNativeTab", () => {
         message,
       },
     }));
+    // The session itself carries the notice, so a session its first prompt's
+    // dispatch created (an answer with no room for it) still shows it.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      notices: [
+        {
+          kind: "advisory" as const,
+          severity: "info" as const,
+          message,
+          occurrenceId: "model-substitution:2026-11-09T10:00:00.000Z",
+        },
+      ],
+    }));
 
     renderInAppCommandScope(
       <AgentNativeTab tabId="tab-opencode-substituted" data={freshTab("opencode")} isActive />,
     );
 
-    await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+    await waitFor(() =>
+      expect(mockToastInfo).toHaveBeenCalledWith(
+        message,
+        expect.objectContaining({ duration: Infinity }),
+      ),
+    );
+    // Shown from the projection alone: the ensure answer does not toast it again.
+    expect(mockToastInfo.mock.calls.filter(([text]) => text === message)).toHaveLength(1);
     // The configured model is still what the tab asked for; the backend owns
     // the substitution, so the saved choice survives a reconnect.
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -12324,6 +12380,43 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
 
+    for (const [deliveredAs, message] of [
+      ["new-turn", "Codex finished the turn first, so your message was sent as a new turn."],
+      ["queued", "Your message missed the active turn, so it was queued as the next turn."],
+    ] as const) {
+      test(`a /steer the backend delivered as ${deliveredAs} clears the draft without an error`, async () => {
+        seedProjection({ phase: "running", actions: { steer: true } });
+        performNativeAgentSessionActionMock.mockResolvedValueOnce({
+          outcome: "applied",
+          deliveredAs,
+          requestId: "turn-1",
+        });
+        renderInAppCommandScope(
+          <AgentNativeTab tabId={`tab-steer-${deliveredAs}`} data={identity("codex")} isActive />,
+        );
+        const sessionKey = createSessionKey("env-1", `tab-steer-${deliveredAs}`);
+        const input = await screen.findByRole("textbox");
+        fireEvent.input(input, { target: { textContent: "/steer keep the diff small" } });
+        await waitFor(() =>
+          expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe(
+            "/steer keep the diff small",
+          ),
+        );
+
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+        // Delivered: nothing to resend, so the draft is not given back.
+        expect(
+          appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text ?? "",
+        ).toBe("");
+        expect(screen.queryByRole("alert") === null).toBe(true);
+        expect(mockToastError).not.toHaveBeenCalled();
+        // The backend owns the new turn or queue item; the renderer adds neither.
+        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      });
+    }
+
     test("steers a queued prompt through one backend handoff", async () => {
       const queued = { id: "queued-1", text: "also update the README", mode: "build" };
       seedProjection({ phase: "running", actions: { steer: true }, queue: { items: [queued] } });
@@ -12539,7 +12632,7 @@ describe("AgentNativeTab", () => {
 
     test.each([
       ["/steer", /Add instructions after \/steer/],
-      ["/steer narrow the scope", /Remove transcript annotations and retry/],
+      ["/steer narrow the scope", /Remove them and retry/],
     ] as const)("does not use annotations as /steer instructions for %s", async (text, error) => {
       seedProjection({ phase: "running", actions: { steer: true } });
       const tabId = `tab-steer-annotation-${text.length}`;

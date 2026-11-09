@@ -112,6 +112,55 @@ describe("native agent projection helpers", () => {
     expect(notices.map((notice) => notice.kind)).toEqual(["warning", "incomplete-turn"]);
   });
 
+  test("a new session's model substitution is a notice while it is news", () => {
+    const createdAt = "2026-11-09T10:00:00.000Z";
+    const created = Date.parse(createdAt);
+    const substitution = {
+      requestedModelId: "opencode-go/beam-free",
+      modelId: "opencode/beam-free",
+      message: "beam-free isn't available in OpenCode 2 with your sign-ins; using Beam Free.",
+    };
+    const session = {
+      createdAt,
+      controls: { modelId: "opencode/beam-free" },
+      modelSubstitutionNotice: substitution,
+    };
+    const notice = helpers.sessionModelSubstitutionNotice(session, created + 1_000);
+    expect(notice).toEqual({
+      kind: "advisory",
+      severity: "info",
+      message: substitution.message,
+      occurrenceId: `model-substitution:${createdAt}`,
+    });
+    expect(
+      helpers
+        .visibleProjectionNotices("opencode", [], undefined, undefined, notice)
+        .map((entry) => entry.message),
+    ).toEqual([substitution.message]);
+    // Old news, a later pick of another model, or no substitution: nothing.
+    expect(
+      helpers.sessionModelSubstitutionNotice(
+        session,
+        created + helpers.MODEL_SUBSTITUTION_NOTICE_MS,
+      ),
+    ).toBeUndefined();
+    expect(
+      helpers.sessionModelSubstitutionNotice(
+        { ...session, controls: { modelId: "opencode/other" } },
+        created + 1_000,
+      ),
+    ).toBeUndefined();
+    expect(
+      helpers.sessionModelSubstitutionNotice({ createdAt, controls: session.controls }, created),
+    ).toBeUndefined();
+    expect(
+      helpers.sessionModelSubstitutionNotice(
+        { ...session, modelSubstitutionNotice: { modelId: "opencode/beam-free" } as never },
+        created,
+      ),
+    ).toBeUndefined();
+  });
+
   test("interaction kinds keep known kinds once and distinguish empty from absent", () => {
     expect(helpers.normalizeInteractionKinds(undefined)).toBeUndefined();
     expect(helpers.normalizeInteractionKinds([])).toEqual([]);

@@ -41,6 +41,7 @@ import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   type AgentModel,
@@ -265,6 +266,14 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    // A `/steer` that reaches the provider as a prompt arrived while the
+    // composer saw no running turn. Answer it here, as the bridges do
+    // (`idleSteerPromptReply`), rather than let the raw command start a model
+    // turn. Literal intent and a resolved command skip it.
+    if (options.allowProviderCommands !== false && !options.command) {
+      const reply = idleSteerPromptReply(prompt, "OpenCode");
+      if (reply) throw new PromptRejectedError(reply);
+    }
     if ((await this.lineOf(sessionId)) === "v2") {
       return (await this.requireV2()).send(sessionId, prompt, options);
     }
@@ -437,7 +446,11 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     return this.legacy.connectedModelProviders();
   }
 
-  resolveDefaultModel(modelId: string | undefined) {
+  /** A new 2.x session's default comes from 2.x's own catalogue, not 1.x's. */
+  async resolveDefaultModel(modelId: string | undefined, options?: { openCodeProtocol?: "v2" }) {
+    if (options?.openCodeProtocol === "v2") {
+      return (await this.requireV2()).features.resolveDefaultModel(modelId);
+    }
     return this.legacy.resolveDefaultModel(modelId);
   }
 

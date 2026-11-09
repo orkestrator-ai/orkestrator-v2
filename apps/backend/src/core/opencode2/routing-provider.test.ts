@@ -5,7 +5,7 @@ import {
   TURN_STOPPED_BY_USER_MESSAGE,
 } from "../agent-provider-contract.js";
 import type { OpenCodeProvider } from "../opencode-provider.js";
-import { FakeOpenCode2Server } from "./fake-server.test-support.js";
+import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 import {
   OPENCODE2_CAPABILITY_LIMITS,
@@ -43,6 +43,7 @@ function fakeLegacy() {
     ),
     interactiveSnapshot: mock(async () => ({ status: "idle" as const, messages: ["legacy"] })),
     modelCatalog: mock(async () => [{ platform: "opencode", id: "fixture/fixture" }]),
+    resolveDefaultModel: mock(async (modelId: string | undefined) => ({ modelId })),
     observationStreamLive: () => true,
     performSessionAction: mock(async () => ({ outcome: "applied" as const })),
     releaseSession: mock((_id: string) => {}),
@@ -103,6 +104,41 @@ describe("OpenCodeRoutingProvider", () => {
     await router.send(v2Id, "hello", { requestId: "req-1" });
     expect(await router.dispatchStatus(v2Id, "req-1")).toBe("dispatched");
     await router.send(legacyId, "hello", { requestId: "req-2" });
+    expect(legacy.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("a new 2.x session's default model comes from 2.x's catalogue", async () => {
+    const { server, legacy, router } = setup();
+    server.models = [fakeOpenCode2Model("opencode", "beam-free")];
+    const resolution = await router.resolveDefaultModel("opencode-go/beam-free", {
+      openCodeProtocol: "v2",
+    });
+    expect(resolution.modelId).toBe("opencode/beam-free");
+    expect(resolution.substitution?.requestedModelId).toBe("opencode-go/beam-free");
+    expect(legacy.resolveDefaultModel).not.toHaveBeenCalled();
+    await router.resolveDefaultModel("opencode-go/beam-free");
+    expect(legacy.resolveDefaultModel).toHaveBeenCalledTimes(1);
+  });
+
+  test("a /steer sent as a prompt is answered locally, never sent to either line", async () => {
+    const { server, legacy, router } = setup();
+    const legacyId = await router.createSession("build", "a");
+    const v2Id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+    for (const id of [legacyId, v2Id]) {
+      await expect(
+        router.send(id, "/steer also print the date", { requestId: `r-${id}` }),
+      ).rejects.toThrow("There is no active OpenCode turn to steer");
+      await expect(router.send(id, "/steer", { requestId: `u-${id}` })).rejects.toThrow(
+        "Usage: /steer <instructions>",
+      );
+    }
+    expect(legacy.send).not.toHaveBeenCalled();
+    expect(server.calls.some((call) => call.path.endsWith("/prompt"))).toBe(false);
+    // Literal intent sends the text as typed.
+    await router.send(legacyId, "/steer as text", {
+      requestId: "lit",
+      allowProviderCommands: false,
+    });
     expect(legacy.send).toHaveBeenCalledTimes(1);
   });
 

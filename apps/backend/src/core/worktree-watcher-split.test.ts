@@ -254,7 +254,41 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     context.replaceDirectory("src");
     context.watchOn("/wt").emit("rename", "src");
     await until(() => previous.closed);
-    expect(context.live()).toContain("recursive /wt/src");
+    // The old watch closes at the event; the next plan pass attaches the new one.
+    await until(() => context.live().includes("recursive /wt/src"));
+    expect(context.live()).toEqual(SPLIT_WATCHES);
+  });
+
+  // Linux reuses a removed directory's inode number for the next one made, so
+  // `rm -r src && mkdir src` usually leaves the identity unchanged while the
+  // old watch is dead (flake 6381).
+  test("a directory replaced with the same identity still gets a new watch", async () => {
+    const context = standardTree();
+    const { watcher, hints } = split(context);
+    await until(() => watcher.qualified === true);
+    const previous = context.watchOn("/wt/src");
+
+    context.watchOn("/wt").emit("rename", "src");
+    await until(() => previous.closed);
+    await until(() => context.live().includes("recursive /wt/src"));
+    expect(context.live()).toEqual(SPLIT_WATCHES);
+    hints.length = 0;
+    context.watchOn("/wt/src").emit("rename", "probe.txt");
+    await until(() => hints.some((hint) => hint.paths?.includes("src/probe.txt") === true));
+  });
+
+  test("watches below a directory replaced with the same identity are replaced too", async () => {
+    const context = standardTree();
+    const { watcher } = split(context);
+    await until(() => watcher.qualified === true);
+    const previous = ["/wt/apps", "/wt/apps/web", "/wt/apps/web/lib"].map(context.watchOn);
+    const unrelated = context.watchOn("/wt/src");
+
+    context.watchOn("/wt").emit("rename", "apps");
+    await until(() => previous.every((watch) => watch.closed));
+    await until(() => context.live().length === SPLIT_WATCHES.length);
+    expect(context.live()).toEqual(SPLIT_WATCHES);
+    expect(unrelated.closed).toBe(false);
   });
 
   test("a new node_modules is left out before anything enters it", async () => {

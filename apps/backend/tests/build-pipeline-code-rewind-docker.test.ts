@@ -511,7 +511,7 @@ async function expectDeletedWithoutReset(
   const after = invocations.slice(invocationsBefore);
   expect(
     after.filter((call) => call.command === "update_kanban_task").map((call) => call.args),
-  ).toEqual([{ taskId, status: "backlog" }]);
+  ).toEqual([{ taskId, status: "backlog", preserveDoneStatus: true }]);
   expect(after.some((call) => call.command === "add_kanban_comment")).toBe(false);
   await service.advanceNow(id);
   expect(provider.created.length).toBe(createdBefore);

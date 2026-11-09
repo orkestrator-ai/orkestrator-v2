@@ -45,6 +45,22 @@ for (const view of ["native", "reviewer"]) {
               timeout: 1_000,
             });
           }).toPass();
+          // Opening animates the group's height for 500ms; the dock can still
+          // be finishing its initial collapse too. Establish the open view
+          // before capturing the paging baseline. The cases below separately
+          // exercise folding while a held-place restoration is in progress.
+          await page.evaluate(async () => {
+            await Promise.all(
+              Array.from(
+                document.querySelectorAll('.tool-group-fold-content, [data-testid="compose-dock"]'),
+              )
+                .flatMap((element) => element.getAnimations({ subtree: true }))
+                .filter(
+                  (animation) => animation.effect?.getComputedTiming().iterations !== Infinity,
+                )
+                .map((animation) => animation.finished),
+            );
+          });
         }
         await list.hover();
         await expect

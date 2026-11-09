@@ -93,9 +93,9 @@ function extractText(element: HTMLElement): string {
 }
 
 /**
- * True when the editor holds no text, only the line-break placeholder a
- * browser leaves behind (select all, then Delete, leaves `<br>` or
- * `<div><br></div>`). That placeholder is not a newline the user typed.
+ * Recognizes a possible browser deletion placeholder (`<br>` or
+ * `<div><br></div>`). Authored breaks can have the same shape, so the input
+ * event must also identify a deletion before this content can be discarded.
  */
 export function isEditorVisuallyEmpty(element: HTMLElement): boolean {
   if ((element.textContent ?? "") !== "") return false;

@@ -32,6 +32,8 @@ const CURATED_ESSENTIAL_EVENTS = [
   "desktop main-thread.stalled",
   "desktop uncaught-exception",
   "docker bridge.launched",
+  "docker bridge.listener-refused",
+  "docker bridge.listener-unrecorded",
   "docker writer-lease.lost",
   "docker writer-lease.not-acquired",
   "docker writer-lease.regained",

@@ -82,6 +82,20 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: { provider: "label", containerPort: "number" },
       },
+      "bridge.listener-refused": {
+        description:
+          "The socket listening on a container bridge's port is not the one the bridge the backend started opened (to-do 7250), so its token is not handed out and the next start replaces it. `reason` is a fixed label: `different-socket`, `several-sockets`, `pending` (a start has not recorded its bridge yet, or failed before it did) or `scan-incomplete`.",
+        essential: true,
+        fields: { provider: "label", reason: "label" },
+      },
+      "bridge.listener-adopted":
+        "A running container bridge had no listener record, because a backend from before the record started it, so the socket on its port was recorded as the bridge's; `provider` names it.",
+      "bridge.listener-unrecorded": {
+        description:
+          "A bridge the backend just launched could not be recorded as its port's listener, for the fixed `reason` given (`no-listener`, `several-sockets`, `launch-exited` or `scan-incomplete`); what listens on the port is stopped and the start fails.",
+        essential: true,
+        fields: { provider: "label", reason: "label" },
+      },
     },
   },
   "docker.reachability": {

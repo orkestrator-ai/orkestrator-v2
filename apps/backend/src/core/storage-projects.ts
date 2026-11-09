@@ -1057,6 +1057,16 @@ export class ProjectsRepository {
           environment.lifecycleError = value ?? null;
         }
       }
+      if ("lifecycleRemedy" in updates) {
+        const value = updates.lifecycleRemedy;
+        // Explicit null, like lifecycleError; anything unknown is no remedy.
+        environment.lifecycleRemedy = value === "use-https" ? value : null;
+      } else if ("lifecycleError" in updates && environment.lifecycleRemedy) {
+        // A remedy belongs to the failure it was checked against. Any other
+        // write of the error (a retry clearing it, a different failure)
+        // retires it, so no call site has to remember to.
+        environment.lifecycleRemedy = null;
+      }
       if ("diffBaseline" in updates) {
         const value = updates.diffBaseline;
         if (value === null || value === undefined) {

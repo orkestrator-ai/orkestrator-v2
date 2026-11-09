@@ -187,6 +187,8 @@ export function TerminalContainer({
     envProjectId,
     environmentName,
     isLocalEnvironment,
+    lifecycleError,
+    lifecycleRemedy,
     pendingAgentLaunch,
     setupPhase,
     setupReady,
@@ -206,6 +208,8 @@ export function TerminalContainer({
         envProjectId: env?.projectId,
         environmentName: env?.name,
         isLocalEnvironment: env?.environmentType === "local",
+        lifecycleError: env?.lifecycleError?.trim() || null,
+        lifecycleRemedy: env?.lifecycleRemedy ?? null,
         // Prompt-bearing launches keep this true until the initial prompt is
         // dispatched. Prompt-less launches consume it in the same setup-complete
         // snapshot, so the one-shot window activation is the remaining owed handoff.
@@ -2279,6 +2283,9 @@ export function TerminalContainer({
         showNoEnvironmentOverlay={showNoEnvironmentOverlay}
         showCreatingOverlay={showCreatingOverlay}
         showNotRunningOverlay={showNotRunningOverlay}
+        lifecycleError={lifecycleError}
+        lifecycleRemedy={lifecycleRemedy}
+        projectId={envProjectId ?? null}
         setupPhase={setupPhase}
         createScriptPrompt={createScriptPrompt}
         onStartContainer={onStartContainer}

@@ -1,6 +1,7 @@
 import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+import { sshConnectFailure, type SshConnectFailure } from "./git-ssh-transport.js";
 
 const log = createLogger("environment");
 
@@ -64,6 +65,36 @@ export function imageWithoutStagedInputsMessage(image: string): string {
 const IMAGE_WITHOUT_STAGED_INPUTS =
   /ContainerLifecycleError:capability-unavailable: (The environment image \S+(?: \(\w+\))? is too old for new containers: .*)$/;
 
+/**
+ * OpenSSH could not open a connection to the remote, the usual sign of a
+ * network that blocks outbound SSH. Names the host and port, which
+ * `sshConnectFailure` restricts to hostname characters and a number, so no
+ * path, credential or other child output reaches it.
+ */
+export function gitSshUnreachableMessage({ host, port }: SshConnectFailure): string {
+  return `Couldn't reach the git remote over SSH (${host}, port ${port}). Your network may be blocking SSH. Retry on a network that allows it, or switch this project's remote to HTTPS.`;
+}
+
+const GIT_SSH_UNREACHABLE = /^Couldn't reach the git remote over SSH \([a-z0-9.-]+, port \d+\)\./;
+
+/** Whether a lifecycle message is `gitSshUnreachableMessage`'s. */
+export function isGitSshUnreachableMessage(message: string | null | undefined): boolean {
+  return typeof message === "string" && GIT_SSH_UNREACHABLE.test(message);
+}
+
+/**
+ * Lifecycle messages that are about reaching the project's git remote, which
+ * a failed start rethrows as-is so the immediate error says the same thing as
+ * the persisted one.
+ */
+export function isGitRemoteLifecycleMessage(message: string): boolean {
+  return (
+    message === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication ||
+    message === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitRemoteTimedOut ||
+    isGitSshUnreachableMessage(message)
+  );
+}
+
 /** The manifest could not be read, which says nothing about the image's age. */
 export function imageUnreadableMessage(image: string): string {
   return `Docker could not report what the environment image ${image} supports. Nothing was created. Check that Docker is running and retry.`;
@@ -78,8 +109,9 @@ export function isGitSshAuthenticationFailure(message: string): boolean {
  * Classifies a subprocess/storage failure into a message that is safe to
  * persist and render. Raw command errors can contain clone URLs, host paths,
  * environment variables, and child output, so the raw text never crosses this
- * boundary — the return value is one of the constants above, or the image
- * refusal built by `imageWithoutStagedInputsMessage`.
+ * boundary — the return value is one of the constants above, the image
+ * refusal built by `imageWithoutStagedInputsMessage`, or the SSH connect
+ * failure built by `gitSshUnreachableMessage`.
  *
  * Classification prefers `CommandFailedError`'s structured outcome over the
  * message. A timeout in particular is invisible in the text: `execFile` kills
@@ -100,6 +132,12 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   }
 
   const message = error instanceof Error ? error.message : "";
+  // Before the authentication check: Git follows a refused connection with
+  // "Could not read from remote repository", which says nothing about keys.
+  const unreachable =
+    sshConnectFailure(message) ??
+    (error instanceof CommandFailedError ? sshConnectFailure(error.stderr) : null);
+  if (unreachable) return gitSshUnreachableMessage(unreachable);
   const imageRefusal = IMAGE_WITHOUT_STAGED_INPUTS.exec(message)?.[1];
   if (imageRefusal) return imageRefusal;
   if (message.includes("ContainerLifecycleError:not-ready:")) {

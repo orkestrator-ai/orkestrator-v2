@@ -202,6 +202,17 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   }
 
   /**
+   * Points the project checkout's GitHub SSH `origin` at HTTPS, after the
+   * backend checked HTTPS works there. Offered when a start could not reach
+   * the remote over SSH (`lifecycleRemedy: "use-https"`).
+   */
+  async function switchProjectRemoteToHttps(
+    projectId: string,
+  ): Promise<{ remoteUrl: string; changed: boolean }> {
+    return projects().use_https_git_remote({ projectId });
+  }
+
+  /**
    * Persists a sidebar arrangement: the full project order plus any folder
    * memberships that changed, applied as one backend mutation.
    */
@@ -523,6 +534,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     removeProject,
     reorderProjects,
     updateProject,
+    switchProjectRemoteToHttps,
     arrangeProjects,
     arrangeProjectsByIntent,
     getEnvironments,
@@ -574,6 +586,7 @@ export const {
   removeProject,
   reorderProjects,
   updateProject,
+  switchProjectRemoteToHttps,
   arrangeProjects,
   arrangeProjectsByIntent,
   getEnvironments,

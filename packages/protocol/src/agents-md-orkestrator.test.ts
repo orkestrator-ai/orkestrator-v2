@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AgentsMdSectionError,
+  COORDINATOR_AGENTS_MD_RULE,
   MAX_AGENTS_MD_CHANGES,
   ORKESTRATOR_SECTION_NOTE,
   agentsMdEntryKey,
@@ -360,5 +361,38 @@ describe("section boundary regressions", () => {
       expect(() => validateAgentsMdEntry(text)).toThrow();
     expect(agentsMdEntryKey("Rule.\u200B")).toBe(agentsMdEntryKey("Rule."));
     expect(agentsMdEntryKey("Ｒｕｌｅ.")).toBe(agentsMdEntryKey("Rule."));
+  });
+});
+
+describe("main coordinator AGENTS.md guidance", () => {
+  test("pins pattern recognition and consent before proposing", () => {
+    for (const phrase of [
+      "user settles a durable decision, rule or preference",
+      "future workers or conversations",
+      "repeatedly steers the same regular behaviour (corrections or instructions)",
+      "explicit standing preference beyond this task",
+      "ask briefly at a natural pause, outside urgent work",
+      "## Orkestrator section of AGENTS.md",
+      "Name the pattern noticed and quote exact entries",
+      "one plain line each, within tool limits",
+      "at most one such question per turn",
+      "batch several decisions into one question and one propose_agents_md_update call",
+      "Call only after the user agrees, using any wording they changed",
+      "You write nothing",
+      "user reviews the change and Orkestrator opens a pull request",
+      "Skip one-off task details",
+      "do not re-suggest entries already in the section or declined in this conversation unless the user raises them",
+    ]) {
+      expect(COORDINATOR_AGENTS_MD_RULE).toContain(phrase);
+    }
+  });
+
+  test("stays one short paragraph in the per-turn context", () => {
+    // Before pattern guidance the rule was 584 characters / 92 words.
+    expect(COORDINATOR_AGENTS_MD_RULE).not.toMatch(/[\r\n]/);
+    expect(COORDINATOR_AGENTS_MD_RULE.length).toBeLessThanOrEqual(Math.floor(584 * 1.6));
+    expect(COORDINATOR_AGENTS_MD_RULE.split(/\s+/).length).toBeLessThanOrEqual(
+      Math.floor(92 * 1.6),
+    );
   });
 });

@@ -143,11 +143,15 @@ describe("buildCoordinatorContext", () => {
     expect(on).toContain("you are Side 1");
     expect(on).toContain('send_message to toEnvironmentId "coordinator"');
     expect(on).not.toContain(COORDINATOR_ASYNC_CONTRACT);
+    expect(on).not.toContain(COORDINATOR_AGENTS_MD_RULE);
+    expect(on).not.toContain("propose_agents_md_update");
     const off = buildCoordinatorContext(
       input({ delegation: { kind: "side", title: "Side 1", messagingEnabled: false } }),
     );
     expect(off).not.toContain("send_message");
     expect(off).toContain("Agent messaging is off");
+    expect(off).not.toContain(COORDINATOR_AGENTS_MD_RULE);
+    expect(off).not.toContain("propose_agents_md_update");
   });
 
   describe("the project line", () => {
@@ -249,7 +253,8 @@ describe("buildCoordinatorContext", () => {
         waitingOn: { names: ["w".repeat(100), "x".repeat(100), "y".repeat(100)], total: 99 },
       },
     });
-    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_000);
+    // Pattern recognition adds 273 characters; reserve 300 more for that guidance.
+    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_300);
     const side = input({ delegation: { kind: "side", title: "Side 1", messagingEnabled: true } });
     expect(buildCoordinatorContext(side).length).toBeLessThan(2_000);
   });

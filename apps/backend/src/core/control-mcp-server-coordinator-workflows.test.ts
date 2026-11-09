@@ -26,6 +26,24 @@ describe("Orkestrator control MCP server", () => {
     server = harness.server;
   });
 
+  test("AGENTS.md tool description requires consent for noticed patterns", async () => {
+    const credential = coordinatorCredential(["environments"]);
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const proposalDescription = listed.body.result?.tools?.find(
+      (tool) => tool.name === "propose_agents_md_update",
+    )?.description;
+    for (const phrase of [
+      "Ask the user first",
+      "pattern noticed in repeated steering or an explicit standing preference",
+      "quoting the exact entries you suggest",
+      "Call only after the user agrees, using any wording they changed",
+      "batch every decision into one call",
+      "You write nothing",
+    ]) {
+      expect(proposalDescription).toContain(phrase);
+    }
+  });
+
   test("worker surface tools forward the authenticated scope and stay off side agents", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

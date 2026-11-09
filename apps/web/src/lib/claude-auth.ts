@@ -1,4 +1,4 @@
-import { isClaudeNotLoggedInText } from "@orkestrator/protocol/claude-login-notice";
+import { isClaudeLoginRefusalText } from "@orkestrator/protocol/claude-login-notice";
 import { NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -22,11 +22,14 @@ export function isClaudeAuthenticationError(message: string | null | undefined):
   return AUTH_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
-/** Matches Claude’s exact signed-out assistant notice. */
-export function isClaudeNotLoggedInNotice(
+/**
+ * Matches Claude’s exact reply to a turn its login cannot run: signed out,
+ * expired, past its time limit or revoked.
+ */
+export function isClaudeLoginRefusalNotice(
   message: Pick<NativeMessage, "role" | "content"> | null | undefined,
 ): boolean {
-  return message?.role === "assistant" && isClaudeNotLoggedInText(message.content);
+  return message?.role === "assistant" && isClaudeLoginRefusalText(message.content);
 }
 
 /**

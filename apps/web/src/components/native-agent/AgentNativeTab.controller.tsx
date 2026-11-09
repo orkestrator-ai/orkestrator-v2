@@ -258,7 +258,7 @@ import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
-import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
+import { isClaudeLoginRefusalNotice } from "@/lib/claude-auth";
 import {
   createStartupPromptPreviewMessage,
   INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
@@ -1239,13 +1239,14 @@ export function SharedNativeAgentController({
     [normalizedMessages, turnRows],
   );
   const latestAssistantMessage = transcriptTail.latestAssistantMessage;
-  // Claude answers a turn it cannot run with this notice as an ordinary reply.
-  // Only while it is still the latest exchange: once the user sends again, the
-  // moment to sign in has passed and the card would be stale history.
-  const claudeNotLoggedInNotice =
+  // Claude answers a turn its login cannot run (none, expired, timed out,
+  // revoked) with a fixed refusal as an ordinary reply. Only while it is still
+  // the latest exchange: once the user sends again, the moment to sign in has
+  // passed and the card would be stale history.
+  const claudeLoginRefusal =
     platform === "claude" &&
     latestAssistantMessage !== undefined &&
-    isClaudeNotLoggedInNotice(latestAssistantMessage) &&
+    isClaudeLoginRefusalNotice(latestAssistantMessage) &&
     turnRows.at(-1)?.role !== "user" &&
     transcriptTail.latestAssistantIndex > transcriptTail.lastUserTurnIndex
       ? latestAssistantMessage.content
@@ -1254,7 +1255,7 @@ export function SharedNativeAgentController({
   // really go out again after a sign-in, from this client or any other.
   const signInResendPending = useSignInResendPending(
     { environmentId: data.environmentId, agent: platform, logicalSessionKey: sessionKey },
-    claudeNotLoggedInNotice === null ? undefined : latestAssistantMessage?.id,
+    claudeLoginRefusal === null ? undefined : latestAssistantMessage?.id,
   );
   const planContent = useMemo(
     () => extractNativePlanContent(normalizedMessages),
@@ -3267,11 +3268,47 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // Claude signs in again through the backend's `claude auth login`, which its
+  // card drives; the generic banner's routes do not reach it. One card,
+  // whichever of the readiness, Claude's own reply or a turn-time auth notice
+  // asked for it. A turn that ended for want of a login shows it inline at the
+  // end of the transcript, under the reply it answers, and it stays there for
+  // as long as that reply is the latest exchange. Only a lock with nothing in
+  // the transcript to answer is pinned above the composer.
+  const claudeSignInInline = claudeLoginRefusal !== null || claudeAuthNotice !== undefined;
+  const claudeSignInError =
+    claudeLoginRefusal ?? authenticationReadiness?.message ?? claudeAuthNotice?.message ?? "";
+  const claudeSignInFailureAt =
+    claudeLoginRefusal !== null
+      ? latestAssistantMessage?.createdAt
+      : (authRequiredSince ?? claudeAuthNoticeSeen?.at ?? undefined);
+  const claudeSignInCard = useMemo(
+    () =>
+      platform === "claude" && (authenticationRequired || claudeSignInInline) ? (
+        <ClaudeAuthRecoveryCard
+          key="claude-not-logged-in"
+          placement="pinned"
+          error={claudeSignInError}
+          failureAt={claudeSignInFailureAt}
+          containerId={data.containerId}
+          resendsAfterSignIn={signInResendPending}
+        />
+      ) : null,
+    [
+      authenticationRequired,
+      claudeSignInError,
+      claudeSignInFailureAt,
+      claudeSignInInline,
+      data.containerId,
+      platform,
+      signInResendPending,
+    ],
+  );
   // The list's footer and header: a new element here renders every visible row
   // again (see `StableVirtuoso` in VirtualizedMessageList).
   const transcriptCards = useMemo(
-    () =>
-      transcriptInteractions.map((interaction) =>
+    () => [
+      ...transcriptInteractions.map((interaction) =>
         interaction.kind === "question" ? (
           <NativeAgentQuestionCard
             key={interaction.id}
@@ -3291,7 +3328,16 @@ export function SharedNativeAgentController({
           />
         ),
       ),
-    [holdInteraction, planContent, resolveInteraction, transcriptInteractions],
+      ...(claudeSignInCard !== null && claudeSignInInline ? [claudeSignInCard] : []),
+    ],
+    [
+      claudeSignInCard,
+      claudeSignInInline,
+      holdInteraction,
+      planContent,
+      resolveInteraction,
+      transcriptInteractions,
+    ],
   );
   const messageWindow = projection?.messageWindow;
   const showBytesNotice =
@@ -3444,32 +3490,9 @@ export function SharedNativeAgentController({
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
-    // Claude signs in again through the backend's `claude auth login`, which
-    // its card drives; the generic banner's routes do not reach it. One card,
-    // whichever of the readiness, Claude's own reply or a turn-time auth notice
-    // asked for it.
-    platform === "claude" &&
-    (authenticationRequired ||
-      claudeNotLoggedInNotice !== null ||
-      claudeAuthNotice !== undefined) ? (
-      <ClaudeAuthRecoveryCard
-        key="claude-not-logged-in"
-        placement="pinned"
-        error={
-          claudeNotLoggedInNotice ??
-          authenticationReadiness?.message ??
-          claudeAuthNotice?.message ??
-          ""
-        }
-        failureAt={
-          claudeNotLoggedInNotice !== null
-            ? latestAssistantMessage?.createdAt
-            : (authRequiredSince ?? claudeAuthNoticeSeen?.at ?? undefined)
-        }
-        containerId={data.containerId}
-        resendsAfterSignIn={signInResendPending}
-      />
-    ) : null,
+    // A sign-in the transcript does not explain (the composer locked before any
+    // turn ran) stays above the composer; see `claudeSignInCard`.
+    claudeSignInCard !== null && !claudeSignInInline ? claudeSignInCard : null,
     authenticationRequired && platform !== "claude" ? (
       <div
         key="authentication-required"

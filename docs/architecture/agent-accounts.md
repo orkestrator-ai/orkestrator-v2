@@ -399,14 +399,24 @@ live.
 
 How each tab shows it:
 
-- Claude: the notice pins `ClaudeAuthRecoveryCard` above the composer, beside
-  the warning, without locking the composer. Claude Code 2.1.310 ends a turn
-  whose login is dead with an ordinary reply ("Failed to authenticate. API
-  Error: 401 OAuth access token is invalid.", `error: "authentication_failed"`),
-  not a terminal error row, so the notice is the only thing that can ask for
-  the card. A terminal auth error row after the last prompt already carries
-  the card in the transcript, so nothing is pinned then. The CLI also blanks
-  the stored credential once it fails to refresh it.
+- Claude: `ClaudeAuthRecoveryCard` appears inline at the end of the transcript,
+  among the transcript cards, without locking the composer, and names the
+  machine's active Claude account (the login a reauthentication renews). Claude
+  Code ends a turn whose login is dead with an ordinary reply carrying
+  `error: "authentication_failed"` ("Failed to authenticate. API Error: 401 …",
+  "Login expired · Please run /login", "Failed to authenticate: this login
+  reached its time limit and cannot be renewed. …"), not a terminal error row.
+  The transcript does not keep that `error` field, so
+  `isClaudeLoginRefusalText` (`@orkestrator/protocol/claude-login-notice`)
+  matches those fixed replies in full; while one is the latest exchange the
+  card stays, and the backend holds the refused prompt to resend. The bridge's
+  notice is in-memory and can clear first, which used to take the card with
+  it. The notice still asks for the card when the reply is not one of the
+  known refusals. A terminal auth error row after the last prompt already
+  carries the card in the transcript, so no second card appears then. Only a
+  readiness lock with nothing in the transcript to answer is pinned above the
+  composer. The CLI also blanks the stored credential once it fails to refresh
+  it.
 - Codex: the notice is treated like readiness: the banner offers the in-tab
   sign-in and the composer locks. Because no turn can complete while it is
   locked, a successful sign-in clears every thread's notice.

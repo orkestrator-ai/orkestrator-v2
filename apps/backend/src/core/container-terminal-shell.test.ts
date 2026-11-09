@@ -29,6 +29,7 @@ function scripts() {
   mkdirSync(dir, { mode: 0o700 });
   return {
     dir,
+    prefix,
     close: CONTAINER_TERMINAL_CLOSE_SCRIPT.replaceAll(CONTAINER_TERMINAL_PID_DIR_PREFIX, prefix),
     record: CONTAINER_TERMINAL_PID_RECORD_COMMAND.replaceAll(
       CONTAINER_TERMINAL_PID_DIR_PREFIX,
@@ -72,7 +73,7 @@ afterEach(async () => {
 describe("container terminal close", () => {
   test("runs the close script as the terminal's own user with the token as an argument", () => {
     const token = newContainerTerminalToken();
-    expect(token).toMatch(/^[0-9a-f-]{36}$/);
+    expect(token).toMatch(/^[0-9a-f-]{36}--[0-9a-f-]{36}$/);
     expect(containerTerminalCloseArgs({ containerId: "container-1", user: "node", token })).toEqual(
       [
         "exec",
@@ -171,6 +172,62 @@ describe("container terminal close", () => {
       expect(job.signalCode).toBe("SIGHUP");
     },
   );
+
+  test("tokens share a shell-safe process prefix but never a shell suffix", () => {
+    const first = newContainerTerminalToken();
+    const second = newContainerTerminalToken();
+    expect(first.split("--")[0]).toBe(second.split("--")[0]);
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^[0-9a-f-]+$/);
+    expect(CONTAINER_TERMINAL_PID_RECORD_COMMAND).not.toContain("'");
+  });
+
+  test.skipIf(!existsSync("/proc/self/environ"))(
+    "a new backend closes old and legacy shells but preserves its own shells",
+    async () => {
+      const fixture = scripts();
+      const currentToken = newContainerTerminalToken();
+      const oldToken = `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa--${newContainerTerminalToken().split("--")[1]}`;
+      const legacyToken = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+      const current = startSleep(currentToken);
+      const old = startSleep(oldToken);
+      const legacy = startSleep(legacyToken);
+      for (const [token, child] of [
+        [currentToken, current],
+        [oldToken, old],
+        [legacyToken, legacy],
+      ] as const) {
+        writeFileSync(
+          join(fixture.dir, `${token}.pid`),
+          `${child.pid} ${await sessionId(child.pid)}\n`,
+        );
+      }
+      await runScript(fixture.record, newContainerTerminalToken());
+      await Promise.all([old.exited, legacy.exited]);
+      expect(old.signalCode).toBe("SIGHUP");
+      expect(legacy.signalCode).toBe("SIGHUP");
+      expect(current.exitCode).toBeNull();
+      expect(existsSync(join(fixture.dir, `${oldToken}.pid`))).toBe(false);
+      expect(existsSync(join(fixture.dir, `${currentToken}.pid`))).toBe(true);
+    },
+  );
+
+  test("startup reaps only the starting uid's orphan records", async () => {
+    const fixture = scripts();
+    const otherUid = process.getuid!() === 0 ? 1000 : 0;
+    const otherDir = `${fixture.prefix}${otherUid}`;
+    mkdirSync(otherDir, { mode: 0o700 });
+    const orphan = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    // Beyond pid_max on every supported platform; no host process can be signalled.
+    const record = "999999999 999999999\n";
+    const ownFile = join(fixture.dir, `${orphan}.pid`);
+    const otherFile = join(otherDir, `${orphan}.pid`);
+    writeFileSync(ownFile, record);
+    writeFileSync(otherFile, record);
+    await runScript(fixture.record, newContainerTerminalToken());
+    expect(existsSync(ownFile)).toBe(false);
+    expect(await Bun.file(otherFile).text()).toBe(record);
+  });
 
   test("contains a failed docker exec and forwards its timeout and shutdown signal", async () => {
     const controller = new AbortController();

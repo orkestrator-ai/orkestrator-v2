@@ -85,7 +85,11 @@ function harness(options: {
     readUsage: async (_platform, accountId, { force }) => {
       reads.push({ accountId, force });
       const account = options.accounts[accountId]!;
-      return renewed.has(accountId) ? (account.after ?? account.before) : account.before;
+      const result = renewed.has(accountId) ? (account.after ?? account.before) : account.before;
+      // Live fixtures advance with the clock; explicit old timestamps stay old.
+      return !result.stale && result.fetchedAt === inHours(0)
+        ? { ...result, fetchedAt: new Date(clock).toISOString() }
+        : result;
     },
     ...(options.withoutRenewal ? {} : { renewLogin }),
     switchAccount: async (_platform, accountId) => {
@@ -233,21 +237,76 @@ describe("renewing idle accounts so they can be ranked", () => {
     expect(h.state.active).toBe("dev");
   });
 
-  test("readings that can already be ranked are never renewed", async () => {
+  test("stale readings with a future reset are renewed before ranking", async () => {
     const h = harness({
       active: "host",
       accounts: {
         host: { before: usage(2, 160) },
-        // Stale, but its reset is still ahead, so it ranks as it is.
+        // A future reset does not make an old reading trustworthy.
         known: { before: usage(30, 50, true) },
         // Stale and past the threshold with its reset ahead: out until then.
         full: { before: usage(99, 20, true) },
       },
     });
     await h.switcher.evaluate("claude");
-    expect(h.renewLogin).not.toHaveBeenCalled();
-    expect(h.state.active).toBe("known");
+    expect(h.renewedIds()).toEqual(["known", "full"]);
+    expect(h.state.active).toBe("host");
   });
+
+  test.each([true, false])(
+    "a 2.5-day-old 31%% reading is refreshed even with stale=%s",
+    async (stale) => {
+      const h = harness({
+        active: "host",
+        accounts: {
+          host: { before: usage(98, 72) },
+          old: {
+            before: { ...usage(31, 24, stale), fetchedAt: inHours(-60) },
+            after: usage(100, 24),
+          },
+          third: { before: usage(20, 48) },
+        },
+      });
+      await h.switcher.evaluate("claude");
+      expect(h.renewedIds()).toEqual(["old"]);
+      expect(h.reads.filter(({ accountId }) => accountId === "old")).toEqual([
+        { accountId: "old", force: false },
+        { accountId: "old", force: true },
+      ]);
+      expect(h.state.active).toBe("third");
+      await h.switcher.evaluate("claude");
+      expect(h.state.active).toBe("third");
+    },
+  );
+
+  test.each([true, false])(
+    "a lapsed login whose renewal fails keeps its old reading behind fresh usage (stale=%s)",
+    async (stale) => {
+      const h = harness({
+        active: "host",
+        renewLogin: async () => false,
+        accounts: {
+          host: { before: usage(98, 72) },
+          old: {
+            before: { ...usage(31, 24, stale), fetchedAt: inHours(-60) },
+            after: usage(100, 24),
+          },
+          third: { before: usage(20, 48) },
+        },
+      });
+      await h.switcher.evaluate("claude");
+      expect(h.renewedIds()).toEqual(["old"]);
+      expect(h.reads.filter(({ accountId }) => accountId === "old")).toEqual([
+        { accountId: "old", force: false },
+      ]);
+      expect(h.state.active).toBe("third");
+      // The login still appears signed in and its old usage remains cached.
+      // A failed renewal cannot make that reading fresh on the next tick.
+      await h.switcher.evaluate("claude");
+      expect(h.renewLogin).toHaveBeenCalledTimes(1);
+      expect(h.state.active).toBe("third");
+    },
+  );
 
   test("an account with its tick off is neither read nor renewed", async () => {
     const h = harness({

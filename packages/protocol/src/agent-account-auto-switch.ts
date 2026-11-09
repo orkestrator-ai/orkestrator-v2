@@ -503,8 +503,8 @@ function sameLogin(left: AutoSwitchAccount, right: AutoSwitchAccount): boolean {
 }
 
 /**
- * Included, signed-in accounts with room on both limits, soonest weekly reset
- * first; no known reset ranks last. The 5-hour limit only says who has room, so an
+ * Included, signed-in accounts with room on both limits, fresh usage first,
+ * then soonest weekly reset within each freshness class; no known reset ranks last. The 5-hour limit only says who has room, so an
  * account that gets it back takes its place in the order again. A used-up entry's twins have no room either, though only a fresh
  * reading says so about the active entry. While the active entry is usable its
  * twins are left out, because moving to one gains no allowance. Once it is signed
@@ -530,6 +530,9 @@ export function rankAutoSwitchAccounts(
       );
     })
     .sort((left, right) => {
+      const freshness =
+        FRESHNESS_ORDER[left.reading.freshness] - FRESHNESS_ORDER[right.reading.freshness];
+      if (freshness !== 0) return freshness;
       const leftReset = left.reading.resetsAt ?? Number.POSITIVE_INFINITY;
       const rightReset = right.reading.resetsAt ?? Number.POSITIVE_INFINITY;
       if (leftReset !== rightReset) return leftReset - rightReset;

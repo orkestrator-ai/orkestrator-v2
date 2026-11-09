@@ -47,6 +47,7 @@ import {
 } from "../../electron/runtime-profile.js";
 import { ensurePinnedToolchains, pinnedArtifactDirectory } from "@orkestrator/toolchain/manager";
 import {
+  agentPlatformForToolchain,
   isSupportToolName,
   pinnedToolchainArtifacts,
   type ToolchainArtifact,
@@ -553,7 +554,8 @@ export async function seedInstalledAgentToolchains(
   const selected = new Set<string>(profile.agentPlatforms);
   const artifacts = (options.artifacts ?? pinnedToolchainArtifacts()).filter(
     (artifact) =>
-      (selected.has(artifact.name) || isSupportToolName(artifact.name)) &&
+      (selected.has(agentPlatformForToolchain(artifact.name)) ||
+        isSupportToolName(artifact.name)) &&
       artifact.platform === platform &&
       artifact.architecture === architecture,
   );
@@ -644,7 +646,7 @@ export async function prefetchAgentToolchains(
   const architecture = options.architecture ?? process.arch;
   const artifacts = (options.artifacts ?? pinnedToolchainArtifacts(platform, architecture)).filter(
     (artifact) =>
-      selected.has(artifact.name) &&
+      selected.has(agentPlatformForToolchain(artifact.name)) &&
       artifact.platform === platform &&
       artifact.architecture === architecture,
   );

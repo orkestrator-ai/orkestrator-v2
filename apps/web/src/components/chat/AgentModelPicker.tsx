@@ -47,6 +47,7 @@ import type {
 import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
+import { disambiguatingProviderLabel } from "./model-label-disambiguation";
 
 /**
  * A short named property of a platform, shown on its rail row and as a pill in
@@ -838,6 +839,15 @@ export function AgentModelPicker({
     selectedPlatform ??
     models.find((model) => model.id === selectedModelId)?.platform ??
     models[0]?.platform;
+  // Two providers can list one model under look-alike names; the trigger then
+  // names the selected model's provider, as its picker row already does.
+  const selectedProviderLabel = disambiguatingProviderLabel(
+    models.find(
+      (model) =>
+        model.id === selectedModelId && (!triggerPlatform || model.platform === triggerPlatform),
+    ),
+    models,
+  );
   // The caveat belongs to whichever platform's catalogue is on screen. On the
   // favourites view that is the selected provider, so a limitation is still
   // readable when the user opens the picker on a favourite rather than a
@@ -855,9 +865,10 @@ export function AgentModelPicker({
   // reuses null for "no stored choice" and must not look like an unknown snapshot.
   const fastModeUnknown = speedCapable && fastModeEnabled === null && !speedInherit;
   const showReasoningControls = reasoningOptions.length > 0;
+  const providerSuffix = selectedProviderLabel ? ` · ${selectedProviderLabel}` : "";
   const displayLabel = selectedReasoningLabel
-    ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
-    : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
+    ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})${providerSuffix}`
+    : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}${providerSuffix}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
   const canReorderFavorites =
     catalogView === "favorites" &&
@@ -963,6 +974,14 @@ export function AgentModelPicker({
               </span>
             ) : fastModeEnabled ? (
               <span className="shrink-0">&nbsp;(⚡)</span>
+            ) : null}
+            {selectedProviderLabel ? (
+              <span
+                data-testid="model-picker-trigger-provider"
+                className="shrink-0 text-muted-foreground"
+              >
+                &nbsp;· {selectedProviderLabel}
+              </span>
             ) : null}
           </span>
         </button>

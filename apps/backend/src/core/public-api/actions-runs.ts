@@ -232,16 +232,20 @@ const runRetry: MutationActionHandler<{ operationId: string }> = {
       },
       async execute() {
         // Replays the stored prompt/steer verbatim under its original request
-        // ID. It never sends new text and never mints a new key.
-        const outcome = await context.invoke<{ outcome: string; error?: string }>(
-          "retry_native_agent_dispatch",
-          {
-            environmentId: session.environment.id,
-            agent: session.agent,
-            logicalSessionKey: session.logicalSessionKey,
-            requestId,
-          },
-        );
+        // ID. It never sends new text and never mints a new key for it. Only
+        // a steer the provider then proves unsent (its turn ended or moved
+        // on) goes out again, as a new turn under the id the backend reports.
+        const outcome = await context.invoke<{
+          outcome: string;
+          error?: string;
+          requestId?: string;
+          deliveredAs?: string;
+        }>("retry_native_agent_dispatch", {
+          environmentId: session.environment.id,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          requestId,
+        });
         const dispatch =
           outcome.outcome === "accepted"
             ? ({ state: "accepted" } as const)
@@ -251,15 +255,37 @@ const runRetry: MutationActionHandler<{ operationId: string }> = {
                   state: "rejected",
                   ...(outcome.error ? { error: outcome.error.slice(0, 500) } : {}),
                 } as const);
+        const missedTurn =
+          outcome.outcome === "accepted" &&
+          (outcome.deliveredAs === "new-turn" || outcome.deliveredAs === "queued") &&
+          outcome.requestId
+            ? { deliveredAs: outcome.deliveredAs, requestId: outcome.requestId }
+            : undefined;
         await context.command.storage.publicOperations.updatePublicOperation(
           record.operationId,
           (current) =>
             ["admitted", "running", "unknown"].includes(current.state)
               ? {
                   ...current,
-                  dispatch,
+                  // A queued miss is sent by the drainer after this receipt.
+                  dispatch:
+                    missedTurn?.deliveredAs === "queued" ? { state: "pending" as const } : dispatch,
                   ...(dispatch.state === "accepted" && record.action === "session.steer"
-                    ? { result: { sessionId: session.sessionId } }
+                    ? {
+                        result: {
+                          sessionId: session.sessionId,
+                          // The steer missed its turn and became the next one.
+                          ...(missedTurn ? { deliveredAs: missedTurn.deliveredAs } : {}),
+                        },
+                        ...(missedTurn
+                          ? {
+                              resources: {
+                                ...current.resources,
+                                dispatchRequestId: missedTurn.requestId,
+                              },
+                            }
+                          : {}),
+                      }
                     : {}),
                   ...(dispatch.state === "rejected" ||
                   (dispatch.state === "accepted" && record.action === "session.steer")

@@ -1,0 +1,291 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ProviderCreateSessionOptions } from "./agent-provider-contract.js";
+import { NativeAgentService } from "./native-agent-service.js";
+import { OPENCODE2_CAPABILITY_LIMITS } from "./opencode2/routing-provider.js";
+import {
+  addEnvironment,
+  createProviderStub,
+  createStorage,
+  refusingInvoke,
+} from "./native-agent-service-projection-test-support.js";
+
+const identity = {
+  environmentId: "env-1",
+  agent: "opencode" as const,
+  logicalSessionKey: "env-env-1:tab-opencode-protocol",
+};
+
+async function withService(
+  options: {
+    setting?: "legacy" | "v2";
+    environmentType?: "local" | "containerized";
+    host?: boolean;
+    origin?: "interactive-native" | "build-pipeline";
+    /** What `openCode2InContainer` answers; absent leaves the option out. */
+    inContainer?: boolean;
+    resolveAgentToolConnection?: () => { url: string; token: string };
+  },
+  run: (input: {
+    service: NativeAgentService;
+    created: ProviderCreateSessionOptions[];
+    storage: Awaited<ReturnType<typeof createStorage>>;
+  }) => Promise<void>,
+) {
+  const root = await mkdtemp(join(tmpdir(), "ork-opencode-protocol-"));
+  const storage = await createStorage(root);
+  await addEnvironment(storage, {
+    environmentType: options.environmentType ?? "local",
+    ...(options.environmentType === "containerized" ? { containerId: "c-1" } : {}),
+  });
+  if (options.setting) {
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, openCodeProtocol: options.setting });
+  }
+  const created: ProviderCreateSessionOptions[] = [];
+  const { provider } = createProviderStub("opencode", {
+    createSession: async (_phase, _label, createOptions = {}) => {
+      created.push(createOptions);
+      return `ses_${created.length}`;
+    },
+  });
+  const service = new NativeAgentService(storage, refusingInvoke, {
+    provider: async () => provider,
+    ...(options.host === false ? {} : { openCode2HostServer: async () => undefined }),
+    ...(options.inContainer === undefined
+      ? {}
+      : { openCode2InContainer: async () => options.inContainer === true }),
+    ...(options.resolveAgentToolConnection
+      ? { resolveAgentToolConnection: options.resolveAgentToolConnection }
+      : {}),
+  });
+  try {
+    await run({ service, created, storage });
+  } finally {
+    await service.shutdown();
+    storage.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("OpenCode line of a new native session", () => {
+  test("the setting puts a new interactive local tab on 2.x, on the record and the create", async () => {
+    await withService({ setting: "v2" }, async ({ service, created, storage }) => {
+      const session = await service.ensureSession(identity);
+      expect(session.openCodeProtocol).toBe("v2");
+      expect(created[0]?.openCodeProtocol).toBe("v2");
+      expect((await storage.getNativeAgentSession(session.key))?.openCodeProtocol).toBe("v2");
+      // An existing session keeps its line whatever the setting says now.
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({ ...config.global, openCodeProtocol: "legacy" });
+      expect((await service.ensureSession(identity)).openCodeProtocol).toBe("v2");
+      expect(created).toHaveLength(1);
+    });
+  });
+
+  test("a 2.x tab takes the per-tab Orkestrator MCP credential; a 1.x tab does not", async () => {
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    const owner = { kind: "environment" as const, projectId: "project-1", environmentId: "env-1" };
+    for (const setting of ["v2", "legacy"] as const) {
+      await withService(
+        { setting, resolveAgentToolConnection: () => connection },
+        async ({ service, created }) => {
+          await service.ensureSession({ ...identity, owner });
+          expect(created[0]?.agentMcp).toEqual(setting === "v2" ? connection : undefined);
+        },
+      );
+    }
+  });
+
+  test("legacy, workflows, containers and hosts without a 2.x server stay on 1.x", async () => {
+    const cases = [
+      { setting: "legacy" as const },
+      {},
+      { setting: "v2" as const, origin: "build-pipeline" as const },
+      { setting: "v2" as const, environmentType: "containerized" as const },
+      { setting: "v2" as const, environmentType: "containerized" as const, inContainer: false },
+      { setting: "legacy" as const, environmentType: "containerized" as const, inContainer: true },
+      { setting: "v2" as const, host: false },
+    ];
+    for (const options of cases) {
+      await withService(options, async ({ service, created }) => {
+        const session = await service.ensureSession({
+          ...identity,
+          ...(options.origin ? { origin: options.origin } : {}),
+        });
+        expect(session.openCodeProtocol).toBeUndefined();
+        expect(created[0]?.openCodeProtocol).toBeUndefined();
+      });
+    }
+  });
+});
+
+describe("OpenCode line of a new container session", () => {
+  test("a container whose image runs 2.x takes it, like a local tab", async () => {
+    await withService(
+      { setting: "v2", environmentType: "containerized", inContainer: true },
+      async ({ service, created }) => {
+        const session = await service.ensureSession(identity);
+        expect(session.openCodeProtocol).toBe("v2");
+        expect(created[0]?.openCodeProtocol).toBe("v2");
+      },
+    );
+  });
+});
+
+describe("adopting an OpenCode 2.x session", () => {
+  test("a resumed or forked 2.x session keeps its line on the record", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode2-adopt-"));
+    const storage = await createStorage(root);
+    await addEnvironment(storage);
+    const registered: unknown[] = [];
+    const { provider } = createProviderStub("opencode", { createSession: async () => "ses_first" });
+    provider.sessionProtocol = async (sessionId) => (sessionId === "ses_v2" ? "v2" : undefined);
+    provider.registerSession = (_sessionId, registration) => {
+      registered.push(registration);
+    };
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+    });
+    try {
+      const first = await service.ensureSession(identity);
+      expect(first.openCodeProtocol).toBeUndefined();
+      const adopted = await service.adoptSession({
+        ...identity,
+        providerSessionId: "ses_v2",
+        expectedProviderSessionId: "ses_first",
+      });
+      expect(adopted.openCodeProtocol).toBe("v2");
+      expect((await storage.getNativeAgentSession(adopted.key))?.openCodeProtocol).toBe("v2");
+      expect(registered.at(-1)).toMatchObject({ openCodeProtocol: "v2" });
+      // A 1.x session adopted after it carries no marker.
+      const legacy = await service.adoptSession({
+        ...identity,
+        providerSessionId: "ses_legacy",
+        expectedProviderSessionId: "ses_v2",
+      });
+      expect(legacy.openCodeProtocol).toBeUndefined();
+    } finally {
+      await service.shutdown();
+      storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("projection of an OpenCode 2.x session", () => {
+  for (const supported of [true, false]) {
+    test(`narrows the platform's capabilities by the session's limits (steer ${supported ? "supported" : "refused"})`, async () => {
+      const root = await mkdtemp(join(tmpdir(), "ork-opencode2-projection-"));
+      const storage = await createStorage(root);
+      await addEnvironment(storage);
+      const { provider } = createProviderStub("opencode", {
+        createSession: async () => "ses_v2",
+        steerSupported: async () => supported,
+        interactiveSnapshot: async () => ({
+          status: "idle",
+          messages: [],
+          // The narrowing a session reports, beyond what 2.x itself still omits.
+          capabilityLimits: {
+            ...OPENCODE2_CAPABILITY_LIMITS,
+            withoutActions: [
+              ...(OPENCODE2_CAPABILITY_LIMITS.withoutActions ?? []),
+              "compact",
+              "undo",
+              "redo",
+            ],
+            withoutAttachments: true,
+            withoutSlashCommands: true,
+            withoutFork: true,
+          },
+        }),
+      });
+      const service = new NativeAgentService(storage, refusingInvoke, {
+        provider: async () => provider,
+      });
+      try {
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.capabilities.actions).toMatchObject({
+          compact: false,
+          undo: false,
+          redo: false,
+          steer: supported,
+        });
+        expect(projection?.capabilities.attachments).toEqual({ files: false, images: false });
+        expect(projection?.capabilities.slashCommands).toBe(false);
+        expect(projection?.capabilities.fork).toBe(false);
+      } finally {
+        await service.shutdown();
+        storage.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("the first prompt of a new OpenCode 2.x session", () => {
+  test("names a model 2.x cannot serve: the session starts on 2.x's default and says so", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode2-first-model-"));
+    const storage = await createStorage(root);
+    await addEnvironment(storage);
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, openCodeProtocol: "v2" });
+    const sent: Array<string | undefined> = [];
+    const { provider } = createProviderStub("opencode", {
+      createSession: async () => "ses_v2",
+      send: async (_sessionId, _prompt, options) => {
+        sent.push(options.model);
+      },
+    });
+    // 2.x serves only OpenCode's own models on this host (no OpenCode Go sign-in).
+    const resolveCalls: Array<{ modelId?: string; protocol?: string }> = [];
+    provider.resolveDefaultModel = async (modelId, options) => {
+      resolveCalls.push({ modelId, protocol: options?.openCodeProtocol });
+      return modelId === "opencode-go/beam-free"
+        ? {
+            modelId: "opencode/beam-free",
+            substitution: {
+              requestedModelId: "opencode-go/beam-free",
+              modelId: "opencode/beam-free",
+              message:
+                "beam-free isn't available in OpenCode 2 with your sign-ins; using Beam Free.",
+            },
+          }
+        : { modelId };
+    };
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+      openCode2HostServer: async () => undefined,
+    });
+    try {
+      // The picker sends its (1.x) default as an explicit model, with no source.
+      await service.dispatchIntent({
+        ...identity,
+        prompt: "Reply with exactly: ready",
+        requestId: "first",
+        model: "opencode-go/beam-free",
+      });
+      expect(resolveCalls[0]).toEqual({ modelId: "opencode-go/beam-free", protocol: "v2" });
+      expect(sent).toEqual(["opencode/beam-free"]);
+      const session = await storage.getNativeAgentSession(
+        (await service.ensureSession(identity)).key,
+      );
+      expect(session?.openCodeProtocol).toBe("v2");
+      expect(session?.controls?.modelId).toBe("opencode/beam-free");
+      // The dispatch's answer has no room for the substitution, so the session
+      // keeps it for every tab's projection to show.
+      expect(session?.modelSubstitutionNotice).toEqual({
+        requestedModelId: "opencode-go/beam-free",
+        modelId: "opencode/beam-free",
+        message: "beam-free isn't available in OpenCode 2 with your sign-ins; using Beam Free.",
+      });
+    } finally {
+      await service.shutdown();
+      storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

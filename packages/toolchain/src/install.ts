@@ -26,6 +26,7 @@ import {
 } from "./manager.js";
 import {
   PINNED_TOOL_VERSIONS,
+  agentPlatformForToolchain,
   isSupportToolName,
   isToolchainName,
   pinnedToolchainArtifacts,
@@ -63,25 +64,34 @@ export { isToolchainName };
  *
  * Support tools such as `gh` join every selection, as they do for the desktop
  * app, whichever agents are chosen.
+ *
+ * An explicit list names tools; a configuration names platforms, and a
+ * platform brings every tool `agentPlatformForToolchain` assigns it, so an
+ * enabled `opencode` installs both `opencode` and `opencode2`.
  */
 export async function resolveToolchainSelection(options: {
   dataDir: string;
   tools?: readonly string[];
 }): Promise<ToolchainSelection> {
   const known = Object.keys(PINNED_TOOL_VERSIONS) as ToolchainName[];
-  const withSupportTools = (chosen: Set<string>) =>
-    known.filter((name) => chosen.has(name) || isSupportToolName(name));
+  const withSupportTools = (chosen: (name: ToolchainName) => boolean) =>
+    known.filter((name) => chosen(name) || isSupportToolName(name));
   if (options.tools !== undefined) {
     if (options.tools.length === 0) throw new Error("At least one tool must be selected");
     const unknown = options.tools.filter((tool) => !isToolchainName(tool));
     if (unknown.length > 0) {
       throw new Error(`Unknown tool: ${unknown.join(", ")}. Expected: ${known.join(", ")}`);
     }
-    return { tools: withSupportTools(new Set(options.tools)), source: "explicit" };
+    const tools = new Set(options.tools);
+    return { tools: withSupportTools((name) => tools.has(name)), source: "explicit" };
   }
   const selection = await loadAgentPlatformSelection(options.dataDir);
   if (selection.needsFirstRunChoice) return { tools: known, source: "all" };
-  return { tools: withSupportTools(new Set<string>(selection.enabled)), source: "config" };
+  const platforms = new Set<string>(selection.enabled);
+  return {
+    tools: withSupportTools((name) => platforms.has(agentPlatformForToolchain(name))),
+    source: "config",
+  };
 }
 
 export interface InstallToolchainOptions {

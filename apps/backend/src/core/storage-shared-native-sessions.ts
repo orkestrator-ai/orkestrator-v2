@@ -34,6 +34,9 @@ export function isPersistedNativeAgentSession(
     isAgentPlatform(value.agent) &&
     isNonBlankString(value.logicalSessionKey) &&
     isNonBlankString(value.providerSessionId) &&
+    // Only an OpenCode session may name an OpenCode line, and only 2.x is named.
+    (value.openCodeProtocol === undefined ||
+      (value.openCodeProtocol === "v2" && value.agent === "opencode")) &&
     (value.owner === undefined || isAgentSessionOwner(value.owner)) &&
     (value.executionPolicy === undefined || value.executionPolicy === "coordinator-read-only") &&
     (value.policy === undefined || isNativeAgentExecutionPolicy(value.policy)) &&

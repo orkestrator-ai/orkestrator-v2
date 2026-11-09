@@ -282,6 +282,7 @@ describe("StorageService store writers", () => {
       "graphTemplates",
       "kanban",
       "nodes",
+      "openCode2Sessions",
       "previewServices",
       "publicOperations",
       "setupApprovals",

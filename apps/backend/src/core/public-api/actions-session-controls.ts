@@ -210,15 +210,42 @@ const sessionSteer: MutationActionHandler<TargetInput & { text: string }> = {
       },
       async execute(operation) {
         await operation.update({ stage: "steering" });
-        const outcome = await context.invoke<{ outcome: string; requestId?: string }>(
-          "perform_native_agent_session_action",
-          { ...triple(session), action: { kind: "steer", text: input.text } },
-        );
+        const outcome = await context.invoke<{
+          outcome: string;
+          requestId?: string;
+          deliveredAs?: string;
+        }>("perform_native_agent_session_action", {
+          ...triple(session),
+          action: {
+            kind: "steer",
+            text: input.text,
+            // A steer that misses its turn becomes the next turn under this
+            // operation's own id, so a replay finds that same turn or queue
+            // item instead of sending the text again. One bound to a run
+            // (`--expect-run`) asked for that run only: it is refused instead.
+            turnRequestId: operation.operationId,
+            ...(input.expectedOperationId ? { onMissedTurn: "refuse" } : {}),
+          },
+        });
         const resources = outcome.requestId ? { dispatchRequestId: outcome.requestId } : {};
+        if (outcome.outcome === "applied" && outcome.deliveredAs === "queued") {
+          // Durably queued under `dispatchRequestId`. The backend drainer, not
+          // this operation, sends it when the running turn ends, so the
+          // receipt's `dispatch` stays as it was at hand-over.
+          return {
+            state: "succeeded",
+            result: { sessionId: session.sessionId, deliveredAs: "queued" },
+            resources,
+            dispatch: { state: "pending" },
+          };
+        }
         if (outcome.outcome === "applied") {
           return {
             state: "succeeded",
-            result: { sessionId: session.sessionId },
+            result: {
+              sessionId: session.sessionId,
+              ...(outcome.deliveredAs === "new-turn" ? { deliveredAs: "new-turn" } : {}),
+            },
             resources,
             dispatch: { state: "accepted" },
           };

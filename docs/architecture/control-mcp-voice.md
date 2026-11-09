@@ -37,7 +37,7 @@ leave out project and settings edits, destructive environment actions and
 | `resolve_target` | Turns a spoken name ("the auth environment", "the first Codex tab" within an environment) into an ID. One exact match wins; anything else is `ambiguous-target` with up to five candidates to ask about, or `not-found`. It never guesses. |
 | `read_session` | The last 3 messages, about 600 characters each (`detail: "full"`: the last 10). When the newest is delivered mail, `messages` keeps the stored text and the spoken line names its sender and subject, plus any trailing user text (excluding the structured-prompt transport suffix). A cut transcript reports that the latest sender and batch size cannot be determined. |
 | `prompt_session` | A new prompt to an idle session. A busy session is refused with a hint to use `steer_session`; it never turns into a steer. |
-| `steer_session` | Guidance added to the running turn. |
+| `steer_session` | Guidance added to the running turn. If that turn has ended or another has started, the guidance becomes the next turn (sent now, or queued behind the running one) and the spoken line says which; with `expectedOperationId` it is refused instead. |
 | `stop_session` | Stops the running turn, optionally only while `expectedOperationId` is still current. |
 | `answer_question` | Resolves a pending question or approval at its revision. |
 | `start_work` | A new environment with a first prompt (`projectId`), or a new session in a ready environment (`environmentId`); the agent defaults to the configured one. |

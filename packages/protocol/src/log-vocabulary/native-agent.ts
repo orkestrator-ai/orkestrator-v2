@@ -105,6 +105,52 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Host OpenCode uses Orkestrator's own database because the shared one has no `session` table (an OpenCode 2 database); `reason` says why.",
       "host-database.unreadable":
         "The shared OpenCode database could not be inspected, so host OpenCode opens it as usual. Error class only.",
+      "login.opencode2-mirror-failed":
+        "A provider sign-in change reached OpenCode 1 but could not be copied into the OpenCode 2 database; the user is told to retry. Error class only.",
+    },
+  },
+  "native-agent.opencode2": {
+    description:
+      "The OpenCode 2.x provider: its event monitor, steering, routing, host and container servers.",
+    events: {
+      "events.dropped":
+        "The 2.x event stream ended or failed, so reads go to the server until it reconnects. Error class only.",
+      "steer.unconfirmed":
+        "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
+      "provider.dispose-failed":
+        "Disposing the 2.x provider of a replaced server failed. Error class only.",
+      "transcript.unknown-row":
+        "A 2.x history row of a kind the transcript does not know was dropped (a newer server). Its kind name only, once per kind.",
+      "mcp.remove-failed":
+        "Removing a closed session's Orkestrator MCP server from the 2.x server failed. Error class only.",
+      "protocol.select-failed":
+        "A workflow could not read the OpenCode line setting, so its new session takes 1.x. Error class only.",
+      "host-server.ready":
+        "A local environment's (or a coordinator conversation's) 2.x server answered `/api/info` as 2.x. Environment id, pid and whether it is a coordinator's only.",
+      "coordinator-research.unavailable":
+        "A coordinator's 2.x server could not register its research servers, so the conversation runs without them until the server restarts. Error class only.",
+      "host-server.terminate-failed":
+        "A 2.x server that did not become ready could not be stopped; its process entry is kept for shutdown. Error class only.",
+      "container-server.launched":
+        "The start script of a container environment's 2.x server was run. Container port only.",
+      "container-server.ready":
+        "A container environment's 2.x server this backend started answered `/api/info` as 2.x. Environment id only.",
+      "container-server.warm-incomplete":
+        "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
+      "resume-list.unavailable":
+        "The 2.x sessions could not be listed for the resume picker, so it shows the 1.x list alone. Error class only.",
+      "credential.mirrored":
+        "A provider sign-in change was copied into the 2.x database. `outcome` (written, removed, unchanged, skipped) only; never a provider id or value.",
+      "credential.server-exit-unclean":
+        "The private 2.x server started to copy a sign-in did not stop cleanly. Error class only.",
+      "user-config.mirror-failed":
+        "The user's global OpenCode configuration could not be mirrored for a host 2.x server, which starts without it. Error class only.",
+      "user-config.unreadable":
+        "A file of the user's OpenCode configuration could not be read for the 2.x mirror. `source`, the file's name and the error code only.",
+      "user-config.rejected":
+        "Files of the user's OpenCode configuration are not a JSONC object, so the 2.x mirror leaves them out. `source` and file names only, never contents.",
+      "user-config.plugins-withheld":
+        "The user's OpenCode configuration lists plugins, which the 2.x mirror leaves out (1.x plugins do not run on 2.x). `source` only.",
     },
   },
 });

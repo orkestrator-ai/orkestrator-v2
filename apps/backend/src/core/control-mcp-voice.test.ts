@@ -754,6 +754,28 @@ describe("Control MCP voice core", () => {
     expect(harness.stub.sends).toHaveLength(1);
   });
 
+  test("steer_session says when guidance that missed its turn went out as a new turn", async () => {
+    const harness = await open();
+    const voice = await harness.credential("voice");
+    const session = await startSession(harness, "steer-missed-run");
+    Object.assign(harness.stub.provider, {
+      activeSteerRun: async () => ({ state: "idle" }),
+      steerSupported: async () => true,
+      steerStatus: async () => "absent",
+      performSessionAction: async () => ({ outcome: "idle" }),
+    });
+    harness.stub.setStatus(async () => "idle");
+    setActivity(harness.service, "claude", session.tabId, session.providerSessionId, "idle");
+    const steered = await harness.call(voice.token, "steer_session", {
+      sessionId: session.sessionId,
+      text: "and add a test",
+      requestId: "steer-missed-1",
+    });
+    expect(structured(steered).error).toBeUndefined();
+    expect(steered.content?.[0]?.text).toContain("sent it as a new turn");
+    expect(harness.stub.sends).toHaveLength(2);
+  });
+
   describe("read_session on a delivered mail row", () => {
     /** The spoken line and excerpt for a session whose newest row is `content`. */
     async function readNewest(content: string, role = "user") {

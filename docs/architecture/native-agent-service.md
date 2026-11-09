@@ -33,7 +33,9 @@ What stays on the service is the work that is not a cluster of state: trusted
 session input (coordinator authority), `ensureSession` / `adoptSession` /
 `inspectSession`, bridge start and peek, the dispatch path
 (`dispatchAdmittedPrompt` holds the storage lease across provider I/O), steer
-(the persisted-steer dispatch it shares with the prompt queue), mail injection
+(the persisted-steer dispatch it shares with the prompt queue; a direct steer
+that misses its turn is handed to `native-agent-missed-steer.ts`, which sends it
+as a new turn or queues it), mail injection
 and turn outcomes, provider teardown and moves. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the

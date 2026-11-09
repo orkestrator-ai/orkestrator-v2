@@ -134,8 +134,15 @@ export function openCodeResearchToolIds(
 const LIST_TIMEOUT_MS = 10_000;
 const MAX_RESEARCH_TOOLS = 128;
 
-/** The research server's own tool names, listed directly: OpenCode does not report MCP tools. */
-async function listResearchTools(url: string, signal?: AbortSignal): Promise<string[]> {
+/**
+ * The research server's own tool names, listed directly: OpenCode does not
+ * report MCP tools. Also used for a coordinator on OpenCode 2.x
+ * (`opencode2/coordinator.ts`).
+ */
+export async function listOpenCodeResearchTools(
+  url: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
   const client = new McpClient(
     { name: "orkestrator-opencode-research", version: "1.0.0" },
     { versionNegotiation: { mode: "auto" } },
@@ -196,7 +203,7 @@ async function registerResearchServers(input: ResearchInput): Promise<readonly s
   }
   const allowed: string[] = [];
   for (const server of connected) {
-    const tools = await listResearchTools(server.url, input.signal).catch(() => []);
+    const tools = await listOpenCodeResearchTools(server.url, input.signal).catch(() => []);
     allowed.push(
       ...openCodeResearchToolIds(
         server.name,

@@ -21,6 +21,7 @@ import {
   type LogDetailExpiryAction,
 } from "@orkestrator/protocol/log-policy";
 import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
+import { isOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
@@ -794,6 +795,10 @@ export class ConfigRepository {
     if (multiReviewEngine !== undefined && !isMultiReviewEngine(multiReviewEngine)) {
       throw new Error("The Multi Review engine must be bespoke or graph");
     }
+    const openCodeProtocol = reviewValidated.openCodeProtocol as unknown;
+    if (openCodeProtocol !== undefined && !isOpenCodeProtocol(openCodeProtocol)) {
+      throw new Error("The OpenCode version for new sessions must be legacy or v2");
+    }
     // Absent is a save that predates the setting; `commitGlobalConfig` keeps the
     // stored one. A value that does not parse is refused rather than dropped, or
     // a bridge left at detail the user thinks they changed would look like a bug.
@@ -876,6 +881,9 @@ export class ConfigRepository {
     // A settings save that predates the engine setting keeps the stored one.
     if (validated.multiReviewEngine === undefined && config.global.multiReviewEngine !== undefined)
       validated.multiReviewEngine = config.global.multiReviewEngine;
+    // Likewise a save from a renderer that predates the OpenCode 2 preview.
+    if (validated.openCodeProtocol === undefined && config.global.openCodeProtocol !== undefined)
+      validated.openCodeProtocol = config.global.openCodeProtocol;
     // Omission (including a patch unset) preserves the explicit sharing choice.
     if (validated.containerGitHubCredential === undefined)
       validated.containerGitHubCredential = config.global.containerGitHubCredential;

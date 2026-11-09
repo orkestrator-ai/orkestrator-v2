@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   NativeAgentLaunchActivityReconciler,
   type NativeAgentLaunchActivityReconcilerHost,
@@ -26,6 +27,7 @@ function harness(
     environments?: () => Promise<Partial<Environment>[]>;
     sessions?: () => Promise<unknown[]>;
     stopped?: () => boolean;
+    cachedEnvironmentIds?: () => string[];
   } = {},
 ) {
   const loadEnvironments = mock(overrides.environments ?? (async () => []));
@@ -44,7 +46,10 @@ function harness(
     } as unknown as StorageService,
     invoke: (async () => undefined) as CommandInvoker,
     options: {},
-    providerRegistry: { prune } as unknown as ProviderRegistry,
+    providerRegistry: {
+      prune,
+      cachedEnvironmentIds: overrides.cachedEnvironmentIds ?? (() => []),
+    } as unknown as ProviderRegistry,
     observations: new NativeAgentObservationBroker(() => Date.now()),
     turnRecovery: {} as NativeAgentTurnRecovery,
     now: () => Date.now(),
@@ -136,6 +141,18 @@ describe("NativeAgentLaunchActivityReconciler launch scans", () => {
     });
     await expect(reconciler.countedLaunchScan()).resolves.toBe(0);
     expect(prune).toHaveBeenCalledWith(new Set(["env-1"]));
+  });
+
+  test("a cached provider with no environment row is kept only while its runtime may be live", async () => {
+    // An unreadable coordinator store proves nothing, so that provider is
+    // kept; an ordinary id with no row is not a runtime and is pruned.
+    const coordinator = coordinatorRuntimeId("coordinator-1", "conversation-1");
+    const { reconciler, prune } = harness({
+      environments: async () => [{ id: "env-1", status: "running" }],
+      cachedEnvironmentIds: () => ["env-1", "env-gone", coordinator],
+    });
+    await expect(reconciler.countedLaunchScan()).resolves.toBe(0);
+    expect(prune).toHaveBeenCalledWith(new Set(["env-1", coordinator]));
   });
 
   test("a stopped reconciler never reads storage", async () => {

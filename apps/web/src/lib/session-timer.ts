@@ -68,3 +68,17 @@ export function findLatestBackendTurnElapsedSeconds<T extends { role: string; cr
   if (completedAt === undefined || completedAt < startedAt) return undefined;
   return Math.floor((completedAt - startedAt) / 1000);
 }
+
+/**
+ * The completed-turn duration to show under the transcript, or `null`. A turn
+ * that is active, or blocked on an approval or question (which is not "active"
+ * for Stop), has not completed, whatever its newest response row says.
+ */
+export function completedTurnElapsedSeconds(input: {
+  turnActive: boolean;
+  phase: string | undefined;
+  completedSeconds: number | null | undefined;
+}): number | null {
+  if (input.turnActive || input.phase === "blocked") return null;
+  return input.completedSeconds ?? null;
+}

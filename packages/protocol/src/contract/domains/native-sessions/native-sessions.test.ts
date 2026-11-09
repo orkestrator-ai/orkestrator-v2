@@ -30,6 +30,8 @@ import {
   getNativeAgentTranscriptUpdateCommand,
   nativeSessionsClient,
   nativeSessionsDomain,
+  performNativeAgentSessionActionCommand,
+  retryNativeAgentDispatchCommand,
 } from "./index.js";
 
 /** Commands no workspace client calls: the interaction monitor's diagnostics. */
@@ -134,6 +136,19 @@ describe("native-sessions definitions", () => {
       id: "a",
       deep: { x: [1] },
     });
+  });
+
+  it("carries how a steer that missed its turn was delivered", () => {
+    const applied = { outcome: "applied", deliveredAs: "queued", requestId: "turn-1" };
+    const decoded = decodeCommandResult(performNativeAgentSessionActionCommand, applied);
+    expect(decoded._tag === "Success" && decoded.success).toEqual(applied);
+    const retried = { outcome: "accepted", deliveredAs: "new-turn", requestId: "turn-2" };
+    const retry = decodeCommandResult(retryNativeAgentDispatchCommand, retried);
+    expect(retry._tag === "Success" && retry.success).toEqual(retried);
+    // Optional: an older backend's plain answer still decodes.
+    expect(
+      decodeCommandResult(performNativeAgentSessionActionCommand, { outcome: "idle" })._tag,
+    ).toBe("Success");
   });
 
   it("does not validate a pre-encoded (spliced) result", () => {

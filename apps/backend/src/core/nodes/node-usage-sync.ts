@@ -152,7 +152,10 @@ export class NodeUsageSync {
     return run;
   }
 
-  private async collect(controllerId: string, nodeId: string): Promise<NodeHoldings | "unsupported" | "failed"> {
+  private async collect(
+    controllerId: string,
+    nodeId: string,
+  ): Promise<NodeHoldings | "unsupported" | "failed"> {
     const link = this.deps.link(nodeId);
     if (!link?.connected) return "failed";
     let answer: { identities?: readonly unknown[]; readings?: readonly unknown[] };
@@ -182,7 +185,10 @@ export class NodeUsageSync {
     const controllerId = await this.deps.selfId();
     const nodeIds = await this.deps.connectedNodeIds();
     const collected = await Promise.all(
-      nodeIds.map(async (nodeId) => ({ nodeId, holdings: await this.collect(controllerId, nodeId) })),
+      nodeIds.map(async (nodeId) => ({
+        nodeId,
+        holdings: await this.collect(controllerId, nodeId),
+      })),
     );
     const answered = collected
       .map(({ holdings }) => holdings)

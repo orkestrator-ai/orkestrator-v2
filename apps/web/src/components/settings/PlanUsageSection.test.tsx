@@ -46,8 +46,10 @@ describe("PlanUsageSection", () => {
     );
     render(<PlanUsageSection platform="opencode" />);
     expect(await screen.findByText("42% used")).toBeTruthy();
-    expect(screen.getByText(/Last known usage, as of 1h ago\. HTTP 429/)).toBeTruthy();
-    expect(screen.queryByText(/^Updated /) === null).toBe(true);
+    const age = screen.getByTestId("usage-reading-age");
+    expect(age.textContent).toMatch(/Updated .+ \(1h ago\)/);
+    expect(screen.getByText("Stale")).toBeTruthy();
+    expect(screen.getByText("HTTP 429. Retrying in 5 minutes.")).toBeTruthy();
     expect(screen.getByLabelText("Refresh plan usage").hasAttribute("disabled")).toBe(false);
   });
 

@@ -279,10 +279,39 @@ describe("AgentAccountsSection", () => {
     for (const name of ["Host login", "second@example.com"]) {
       const row = await screen.findByRole("listitem", { name });
       expect(await within(row).findByText("40% used")).toBeTruthy();
-      expect(
-        within(row).getByText(/Last known usage, as of 1h ago\. Sign-in expired/),
-      ).toBeTruthy();
+      const age = within(row).getByTestId("usage-reading-age");
+      expect(age.textContent).toMatch(/Updated .+ \(1h ago\)/);
+      expect(within(age).getByText("Stale")).toBeTruthy();
+      expect(within(row).getByText(/Sign-in expired/)).toBeTruthy();
+      expect(within(row).getByTestId("usage-reading-bars").getAttribute("data-stale")).toBe("true");
     }
+  });
+
+  test("a row shows a reading another machine took of the same login, and when", async () => {
+    usageResult = {
+      ...usage,
+      fetchedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      readOn: { nodeId: "bk_beelink", nodeName: "beelink" },
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    const age = await within(row).findByTestId("usage-reading-age");
+    expect(age.textContent).toMatch(/^Updated .+ \(2m ago\) on beelink$/);
+    expect(age.getAttribute("data-stale")).toBe("false");
+  });
+
+  test("a row whose usage was never read says so", async () => {
+    usageResult = {
+      platform: "codex",
+      status: "unavailable",
+      windows: [],
+      message: "This account's sign-in is refreshed while it is in use.",
+      fetchedAt: new Date().toISOString(),
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(await within(row).findByText("Usage has not been read yet.")).toBeTruthy();
+    expect(within(row).getByText(/refreshed while it is in use/)).toBeTruthy();
   });
 
   test("lists only this platform's accounts with their identity and usage", async () => {

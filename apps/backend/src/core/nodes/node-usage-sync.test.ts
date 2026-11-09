@@ -133,12 +133,7 @@ async function fakeNode(nodeId: string, name: string, identities: UsageIdentity[
       }
       if (command === "apply_shared_usage_readings") {
         node.applied.push(wire);
-        return (await applySharedUsageReadings(
-          context,
-          node.identities,
-          wire.readings,
-          NOW,
-        )) as T;
+        return (await applySharedUsageReadings(context, node.identities, wire.readings, NOW)) as T;
       }
       throw unknownCommand(command, "accounts");
     },
@@ -305,7 +300,10 @@ describe("shared usage readings", () => {
       event: AGENT_USAGE_READINGS_CHANGED_EVENT,
       payload: { platform: "claude", origin: "local" },
     });
-    sync.handleNodeEvent(AGENT_USAGE_READINGS_CHANGED_EVENT, { platform: "claude", origin: "local" });
+    sync.handleNodeEvent(AGENT_USAGE_READINGS_CHANGED_EVENT, {
+      platform: "claude",
+      origin: "local",
+    });
     for (let attempt = 0; attempt < 100 && node("bk_omarchy").applied.length === 0; attempt += 1) {
       await Bun.sleep(5);
     }
@@ -372,7 +370,10 @@ describe("shared usage readings", () => {
     const leaf = await fakeNode("bk_leaf", "beelink", []);
     await expect(
       Promise.resolve(
-        handlers.get("collect_shared_usage_readings")!({ controllerId: "bk_stranger" }, leaf.context),
+        handlers.get("collect_shared_usage_readings")!(
+          { controllerId: "bk_stranger" },
+          leaf.context,
+        ),
       ),
     ).rejects.toThrow("not attached");
     await expect(

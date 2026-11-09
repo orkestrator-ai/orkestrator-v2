@@ -38,7 +38,10 @@ export class AgentAccountSharedUsage {
   private readonly loaded = new Map<string, Promise<Store>>();
   private readonly writes = new Map<string, Promise<void>>();
 
-  async get(accountsRoot: string, identity: UsageIdentity): Promise<SharedUsageReading | undefined> {
+  async get(
+    accountsRoot: string,
+    identity: UsageIdentity,
+  ): Promise<SharedUsageReading | undefined> {
     return (await this.load(accountsRoot)).get(usageIdentityKey(identity));
   }
 

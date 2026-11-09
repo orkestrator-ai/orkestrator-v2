@@ -1,24 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { getPlanUsage } from "@/lib/backend";
 import { useAccountMachine } from "./account-machine";
-import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
+import { UsageReadingAge, UsageReadingBars } from "./UsageReading";
 import { cn } from "@/lib/utils";
-
-/** Says how old a stale reading is and why a fresh one could not be made. */
-export function StalePlanUsageNote({ snapshot }: { snapshot: PlanUsageSnapshot }) {
-  return (
-    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">
-      Last known usage, as of {formatRelativeTime(snapshot.fetchedAt)}.
-      {snapshot.message ? ` ${snapshot.message}` : null}
-    </p>
-  );
-}
 
 /**
  * Provider plan/quota shown at the top of a platform's settings pane.
@@ -74,7 +63,6 @@ export function PlanUsageSection({
     };
   }, [load, reloadToken]);
 
-  const windows = snapshot?.windows ?? [];
   const message = error ?? (snapshot?.status === "error" ? snapshot.message : null);
   const unavailable = snapshot?.status === "unavailable" ? snapshot.message : null;
 
@@ -103,10 +91,14 @@ export function PlanUsageSection({
 
       <div className="mt-4">
         {message ? (
-          <p className="flex items-start gap-2 text-xs text-destructive">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            {message}
-          </p>
+          <div className="space-y-1">
+            <p className="flex items-start gap-2 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {message}
+            </p>
+            {/* A failed read with a last known reading would have answered it, stale. */}
+            {snapshot?.status === "error" ? <UsageReadingAge snapshot={null} /> : null}
+          </div>
         ) : unavailable ? (
           <p className="text-xs leading-relaxed text-muted-foreground">{unavailable}</p>
         ) : loading && !snapshot ? (
@@ -114,22 +106,16 @@ export function PlanUsageSection({
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Checking plan usage…
           </div>
-        ) : windows.length > 0 ? (
-          <>
-            <AccountQuotaList account={windows} />
-            {snapshot?.stale ? (
-              <StalePlanUsageNote snapshot={snapshot} />
-            ) : snapshot ? (
-              <p className="mt-3 text-[10px] text-muted-foreground/70">
-                Updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
+        ) : snapshot ? (
+          <UsageReadingBars
+            snapshot={snapshot}
+            empty={
+              <p className="text-xs text-muted-foreground">
+                This account does not report any metered plan limits.
               </p>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            This account does not report any metered plan limits.
-          </p>
-        )}
+            }
+          />
+        ) : null}
       </div>
     </section>
   );

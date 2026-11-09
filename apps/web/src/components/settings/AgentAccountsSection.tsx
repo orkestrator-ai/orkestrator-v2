@@ -18,14 +18,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
-import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
 import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { AutoSwitchKeptNote } from "@/components/settings/AutoSwitchKeptNote";
 import { CoordinatorAccountSwitchGrant } from "@/components/settings/CoordinatorAccountSwitchGrant";
 import { useAccountMachine } from "@/components/settings/account-machine";
-import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
+import { UsageReadingAge, UsageReadingBars } from "@/components/settings/UsageReading";
 import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
+import { useAgentUsageReadingsChanged } from "@/hooks/useAgentUsageReadingsChanged";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   cancelAgentAccountLogin,
@@ -79,12 +79,13 @@ function sortAccounts(accounts: AgentAccountSummary[]): AgentAccountSummary[] {
 }
 
 /**
- * Of one login's readings, the one to show: a fresh one before a stale one, and
- * the newest of either. Its entries share one allowance, so the freshest wins.
+ * Of one login's readings, the one to show: the newest reading, by when it was
+ * taken. Its entries share one allowance, so the freshest wins. A last known
+ * reading keeps its original time, so a newer fresh one always beats it; a
+ * failed read with no reading at all comes last.
  */
 export function freshestUsage(snapshots: readonly PlanUsageSnapshot[]): PlanUsageSnapshot | null {
-  const rank = (snapshot: PlanUsageSnapshot) =>
-    snapshot.status !== "ok" ? 2 : snapshot.stale ? 1 : 0;
+  const rank = (snapshot: PlanUsageSnapshot) => (snapshot.status !== "ok" ? 1 : 0);
   return (
     [...snapshots].sort(
       (left, right) =>
@@ -97,6 +98,7 @@ function AccountUsage({
   platform,
   accountIds,
   reloadToken,
+  readToken,
   refreshToken,
   onRefreshed,
 }: {
@@ -104,6 +106,8 @@ function AccountUsage({
   /** Every entry of one login. */
   accountIds: readonly string[];
   reloadToken: string;
+  /** Raised when a newer reading may be on the machine: read again, from its cache. */
+  readToken: number;
   /** Raised by the row's refresh button: the next read bypasses the cache. */
   refreshToken: number;
   /** Called once a read for `refreshToken` has settled, whatever its outcome. */
@@ -153,7 +157,7 @@ function AccountUsage({
     return () => {
       current = false;
     };
-  }, [platform, idsKey, reloadToken, refreshToken, machine]);
+  }, [platform, idsKey, reloadToken, readToken, refreshToken, machine]);
 
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (!snapshot) {
@@ -165,15 +169,21 @@ function AccountUsage({
     );
   }
   if (snapshot.status !== "ok") {
-    return <p className="text-xs text-muted-foreground">{snapshot.message}</p>;
+    // No reading at all: a last known one would have been served, marked stale.
+    return (
+      <div className="space-y-0.5">
+        {snapshot.message ? (
+          <p className="text-xs text-muted-foreground">{snapshot.message}</p>
+        ) : null}
+        <UsageReadingAge snapshot={null} />
+      </div>
+    );
   }
-  return snapshot.windows.length > 0 ? (
-    <div>
-      <AccountQuotaList account={snapshot.windows} />
-      {snapshot.stale ? <StalePlanUsageNote snapshot={snapshot} /> : null}
-    </div>
-  ) : (
-    <p className="text-xs text-muted-foreground">No metered plan limits reported.</p>
+  return (
+    <UsageReadingBars
+      snapshot={snapshot}
+      empty={<p className="text-xs text-muted-foreground">No metered plan limits reported.</p>}
+    />
   );
 }
 
@@ -323,6 +333,7 @@ function AccountRow({
   login,
   busy,
   usageReloadToken,
+  usageReadToken,
   autoSwitchIncluded,
   signIn,
   onUse,
@@ -333,6 +344,8 @@ function AccountRow({
   login: AgentAccountLogin;
   busy: boolean;
   usageReloadToken: string;
+  /** Raised when a newer reading may be on the machine; re-read without forcing. */
+  usageReadToken: number;
   /** Absent from a machine that predates automatic switching. */
   autoSwitchIncluded?: boolean;
   signIn: AccountSignIn;
@@ -523,6 +536,7 @@ function AccountRow({
           platform={account.platform}
           accountIds={login.entryIds}
           reloadToken={usageReloadToken}
+          readToken={usageReadToken}
           refreshToken={usageRefresh.requested}
           onRefreshed={onUsageRefreshed}
         />
@@ -545,6 +559,7 @@ export function AgentAccountsSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [usageReloadToken, setUsageReloadToken] = useState(0);
+  const [usageReadToken, setUsageReadToken] = useState(0);
   const mounted = useRef(true);
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
   const { machine, name: machineName } = useAccountMachine();
@@ -574,6 +589,8 @@ export function AgentAccountsSection({
   }, [reload]);
   // Automatic switching moves the active account with no one here.
   useAgentAccountsChanged(platform, () => void reload());
+  // A reading this machine took, or one another machine took of the same login.
+  useAgentUsageReadingsChanged(platform, () => setUsageReadToken((token) => token + 1));
 
   const previousLoginState = useRef<AgentAccountLoginProgress["state"]>("idle");
   const applyLogin = useCallback(
@@ -773,6 +790,7 @@ export function AgentAccountsSection({
                 login={entry}
                 busy={busy}
                 usageReloadToken={`${reloadToken}:${usageReloadToken}`}
+                usageReadToken={usageReadToken}
                 {...(autoSwitch
                   ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
                   : {})}

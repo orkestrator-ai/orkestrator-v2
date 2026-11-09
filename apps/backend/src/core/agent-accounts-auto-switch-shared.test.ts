@@ -65,17 +65,15 @@ async function harness(options: {
     trading: normalizeUsageIdentity("claude", "618BTrading@gmail.com", "org-1")!,
     dev: normalizeUsageIdentity("claude", "arktechdev@example.com", "org-2")!,
   };
-  const summaries = Object.keys(options.local).map(
-    (id): AgentAccountSummary => ({
-      id,
-      platform: "claude",
-      label: id,
-      isDefault: false,
-      isActive: false,
-      signedIn: true,
-      identity: { email: identities[id]!.email },
-    }),
-  );
+  const summaries = Object.keys(options.local).map((id): AgentAccountSummary => ({
+    id,
+    platform: "claude",
+    label: id,
+    isDefault: false,
+    isActive: false,
+    signedIn: true,
+    identity: { email: identities[id]!.email },
+  }));
   const state = { active: "trading" };
   const renewed = new Set<string>();
   const renewLogin = mock(async (_platform: AgentAccountPlatform, accountId: string) => {

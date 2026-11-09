@@ -49,19 +49,21 @@ describe("usage identity", () => {
 
   test("matches only on provider, email and organisation together", () => {
     const key = usageIdentityKey(identity);
-    expect(usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@GMAIL.com", "org-1")!)).toBe(
+    expect(
+      usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@GMAIL.com", "org-1")!),
+    ).toBe(key);
+    expect(
+      usageIdentityKey(normalizeUsageIdentity("codex", "618btrading@gmail.com", "org-1")!),
+    ).not.toBe(key);
+    expect(
+      usageIdentityKey(normalizeUsageIdentity("claude", "other@gmail.com", "org-1")!),
+    ).not.toBe(key);
+    expect(
+      usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@gmail.com", "org-2")!),
+    ).not.toBe(key);
+    expect(usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@gmail.com")!)).not.toBe(
       key,
     );
-    expect(usageIdentityKey(normalizeUsageIdentity("codex", "618btrading@gmail.com", "org-1")!)).not.toBe(
-      key,
-    );
-    expect(usageIdentityKey(normalizeUsageIdentity("claude", "other@gmail.com", "org-1")!)).not.toBe(
-      key,
-    );
-    expect(usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@gmail.com", "org-2")!)).not.toBe(
-      key,
-    );
-    expect(usageIdentityKey(normalizeUsageIdentity("claude", "618btrading@gmail.com")!)).not.toBe(key);
   });
 
   test("a login without an email, or on a platform without accounts, has none", () => {
@@ -101,7 +103,9 @@ describe("parseSharedUsageReading", () => {
 
   test("a fetch time a little ahead is dated now; one far ahead is refused", () => {
     const slightlyAhead = { ...reading(0), fetchedAt: new Date(NOW + 60_000).toISOString() };
-    expect(parseSharedUsageReading(slightlyAhead, NOW)?.fetchedAt).toBe(new Date(NOW).toISOString());
+    expect(parseSharedUsageReading(slightlyAhead, NOW)?.fetchedAt).toBe(
+      new Date(NOW).toISOString(),
+    );
     const farAhead = {
       ...reading(0),
       fetchedAt: new Date(NOW + SHARED_USAGE_CLOCK_SKEW_MS + 1_000).toISOString(),
@@ -110,7 +114,9 @@ describe("parseSharedUsageReading", () => {
   });
 
   test("refuses a reading with no identity, machine or fetch time", () => {
-    expect(parseSharedUsageReading({ ...reading(1), identity: { platform: "claude" } }, NOW)).toBeNull();
+    expect(
+      parseSharedUsageReading({ ...reading(1), identity: { platform: "claude" } }, NOW),
+    ).toBeNull();
     expect(parseSharedUsageReading({ ...reading(1), source: { nodeId: "x" } }, NOW)).toBeNull();
     expect(parseSharedUsageReading({ ...reading(1), fetchedAt: "yesterday" }, NOW)).toBeNull();
   });
@@ -159,15 +165,22 @@ describe("newest reading", () => {
       fetchedAt: new Date(NOW - 2.5 * 24 * 60 * 60_000).toISOString(),
     };
     expect(newestPlanUsage(local, shared)).toBe(shared);
-    expect(newestPlanUsage({ ...local, stale: false, fetchedAt: new Date(NOW).toISOString() }, shared).readOn).toBeUndefined();
+    expect(
+      newestPlanUsage({ ...local, stale: false, fetchedAt: new Date(NOW).toISOString() }, shared)
+        .readOn,
+    ).toBeUndefined();
     expect(newestPlanUsage({ ...local, status: "unavailable" }, shared)).toBe(shared);
-    expect(planUsageSnapshotFromSharedReading(reading(1), "node-beelink", NOW).readOn).toBeUndefined();
+    expect(
+      planUsageSnapshotFromSharedReading(reading(1), "node-beelink", NOW).readOn,
+    ).toBeUndefined();
   });
 
   test("a shared window whose reset has passed is shown started over", () => {
     const passed = {
       ...reading(90),
-      windows: [{ window: "five_hour", usedPercent: 80, resetsAt: new Date(NOW - 1).toISOString() }],
+      windows: [
+        { window: "five_hour", usedPercent: 80, resetsAt: new Date(NOW - 1).toISOString() },
+      ],
     };
     expect(planUsageSnapshotFromSharedReading(passed, "node-mini", NOW).windows).toEqual([
       { window: "five_hour", usedPercent: 0 },

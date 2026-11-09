@@ -2623,13 +2623,18 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    // Each save waits out the 400 ms draft debounce; control it instead.
-    const saveDebounce = installControlledTimeout(400, { label: "native compose draft save" });
+    // Both the shell's initial settle and the draft debounce take 400 ms.
+    // Advance both explicitly; revision checks below prove the save also ran.
+    const saveDebounce = installControlledTimeout(400, {
+      label: "native compose draft save and column settle",
+      maxPending: 2,
+    });
     const flushSave = async () => {
-      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(1));
+      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(2));
       await act(async () => {
-        saveDebounce.advance();
+        expect(saveDebounce.advance()).toBe(2);
       });
+      saveDebounce.assertDrained();
     };
     try {
       const first = renderInAppCommandScope(

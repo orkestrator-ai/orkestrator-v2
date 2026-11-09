@@ -1349,6 +1349,29 @@ Chose the HTTP API. ACP was the cheaper route and would have closed most of the
 gate, but it cannot steer (see task 9), and steering is the owner's one hard
 requirement.
 
+### Owner decisions for parity (2026-11-09)
+
+The owner chose every recommended option:
+
+1. **Permissions offer Allow once / Deny only.** The provider never sends
+   `always`, because it would save a rule in OpenCode's own database that
+   applies to every later session and that Orkestrator cannot list or
+   remove. This is the same stance as Codex exec-policy amendments.
+   Orkestrator's own permission rules (0723) still apply.
+2. **Orkestrator's tools reach 2.x through its per-session MCP routes**
+   (`PUT /api/experimental/mcp/:server`, connect/disconnect). These are the
+   per-tab agent MCP, the workflow-result tool and structured output, and the
+   user's MCP servers. The exact pin plus a live test guard the experimental
+   routes on every bump. The alternative, native tools in the 2.x plugin, was
+   rejected: it would be a second implementation of every tool.
+3. **One Orkestrator sign-in updates both lines.** It writes 1.x's `auth.json`
+   (as today) and 2.x's `/api/credential` on the 2.x server.
+4. **The same preview switch moves pipelines, Multi Review, graphs and
+   coordinators** once 2.x can serve them. There is one switch, with one
+   meaning: new OpenCode work uses 2.x.
+5. **Nothing is pushed yet.** Everything stays on one local branch
+   (`upgrade-opencode-602d9d93f8a6-r1`) until the owner says so.
+
 ## Related
 
 - [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) (OpenCode

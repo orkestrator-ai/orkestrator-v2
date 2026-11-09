@@ -1594,6 +1594,10 @@ Decisions:
   - **All of them.** Cons: a parked approval stalls the workflow.
   - Recommendation: the first; lift the `ask` condition with the
     interaction cards.
+  - **Lifted on 2026-11-09 at integration.** Phase 4's cards reach a
+    workflow through the provider's `interactions`, as on 1.x, so a policy
+    that asks (or none) now takes 2.x too; only the coordinator's read-only
+    policy keeps 1.x (`newOpenCodeWorkflowSessionProtocol`).
 - **Coordinators.** Not moved. A coordinator needs the `plan` agent pinned per
   prompt, its research MCP server, the read-only policy honoured as process
   authority across restarts, and `synchronizeSessionPolicy`, none of which a

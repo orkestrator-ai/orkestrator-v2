@@ -213,6 +213,10 @@ describe("the sweep's global work", () => {
       await addWorker(world, owner, `worker-${index}-a`);
       await addWorker(world, owner, `worker-${index}-b`);
     }
+    // The setup's pane-layout and environment writes arm the mail service's
+    // debounced presence sync (250 ms). Under load the sweep outlasts it and
+    // that unrelated sync was counted as the sweep's own (flaky-test 9844).
+    await world.mail.shutdown();
     const sync = countCalls(world.storage, "synchronizeAgentMailboxes");
     const perProject = countCalls(
       world.storage.coordinators,

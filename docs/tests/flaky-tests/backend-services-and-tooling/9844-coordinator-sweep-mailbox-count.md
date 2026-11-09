@@ -1,7 +1,7 @@
 # Coordinator sweep mailbox sync count varies in aggregate validation
 
 - **ID:** 9844
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `the sweep's global work > runs the mailbox sync and the delegation scans once for several coordinators`
 - **File:** `apps/backend/src/core/coordinator-sweep.test.ts:226`
@@ -45,3 +45,38 @@ Original evidence remains in
 and `orkestrator-test-run.gIhwSP` compressed group logs below the host temporary
 directory. The isolated pass establishes intermittence, not a cause or a fix.
 The case remains open; no implementation, assertion, deadline or skip changed.
+
+## CI recurrence and resolution — 2026-11-08 / 2026-11-09
+
+**Recurrence.** CI pull-request run 42534159294 (#1990, `gpt-model-not`),
+job "Tests (backend)" 128894642698, failed only this case: expected one sync
+call, received two (475.06 ms); 20,582 passed, 1 failed. `mise run
+flaky:recurrence -- 9844 --base a49fd2815` answered "open". Observed from
+branch `fix-ci-failures-46b27b2ba576-r1`, base `a49fd2815`.
+
+**Root cause (test).** `AgentMailService` debounces a mailbox sync 250 ms
+after any `pane-layout`, `environment`, `project`, `session` or `coordinator`
+change (`agent-mail-service.ts`, the `syncTimers` scopes). `addWorker` writes
+an environment and a pane layout just before the test installs its
+`synchronizeAgentMailboxes` spy. When the sweep took longer than the rest of
+that 250 ms (a loaded runner), the mail service's own debounced sync landed
+inside the measured window and was counted as the sweep's. The sibling case
+in the same `describe` already stops the mail service before counting for
+this reason; this one did not.
+
+**Fix.** `coordinator-sweep.test.ts` calls `world.mail.shutdown()` (which
+clears the debounce timers) before installing the spies, as its sibling does.
+No assertion, deadline or production code changed.
+
+**Verification.**
+
+- Reproduced before the fix: a temporary `await Bun.sleep(300)` after the
+  spies were installed failed the case with the CI message (expected 1,
+  received 2; 367.68 ms) via `bun test --cwd apps/backend
+  ./src/core/coordinator-sweep.test.ts -t "runs the mailbox sync"`.
+- With the fix and the same delay: passed. Delay removed afterwards.
+- Stress: eight concurrent runs of the case pinned to two cores with two
+  busy-loop processes: 8 of 8 passed. The complete owning file passed through
+  `mise run test:logged -- --name coordinator-sweep -- bun test --cwd
+  apps/backend ./src/core/coordinator-sweep.test.ts --parallel=1
+  --only-failures` (1.1 s).

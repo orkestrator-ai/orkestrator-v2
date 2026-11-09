@@ -56,8 +56,10 @@ describe("OpenCode2Provider", () => {
     const { server, provider } = setup();
     const id = await provider.createSession("build", "x");
     await provider.send(id, "hi", { requestId: "r", model: "openai/gpt-5" });
-    const paths = server.calls.map((call) => call.path.split("/").at(-1));
-    expect(paths.slice(-2)).toEqual(["model", "prompt"]);
+    const paths = server.calls
+      .map((call) => call.path.split("/").at(-1))
+      .filter((path) => path === "model" || path === "prompt");
+    expect(paths).toEqual(["model", "prompt"]);
     expect(server.sessions.get(id)?.model).toEqual({ providerID: "openai", id: "gpt-5" });
   });
 
@@ -85,8 +87,11 @@ describe("OpenCode2Provider", () => {
     const { server, provider } = setup();
     const id = await provider.createSession("build", "x");
     await expect(
-      provider.send(id, "hi", { requestId: "r", schema: { type: "object" } }),
-    ).rejects.toThrow("structured output");
+      provider.send(id, "hi", {
+        requestId: "r",
+        command: { name: "review" } as never,
+      }),
+    ).rejects.toThrow("slash commands");
     expect(server.calls.some((call) => call.path.endsWith("/prompt"))).toBe(false);
   });
 

@@ -220,6 +220,7 @@ import {
   containerRunsOpenCode2,
   openCode2EnvironmentServer,
 } from "./opencode2-container-server.js";
+import { openCodeWorkflowRoutingDependencies } from "./native-agent-opencode-protocol.js";
 import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
@@ -1031,6 +1032,13 @@ export class OrkestratorBackend {
       }),
     });
     this.coordinators.noticeRouter.setUsageLimitStops(this.usageLimitNotices);
+    // The OpenCode 2.x preview server of a local or container environment;
+    // see opencode2-host-server.ts and opencode2-container-server.ts.
+    const openCode2HostServer = (environmentId: string, options: { start: boolean }) =>
+      openCode2EnvironmentServer(context, environmentId, options);
+    // Workflows follow the same preview switch (docs/todo/agent-engines/0008-opencode-v2.md).
+    const openCode2Workflow = (environmentId: string) =>
+      openCodeWorkflowRoutingDependencies(openCode2HostServer, storage, environmentId);
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1046,10 +1054,7 @@ export class OrkestratorBackend {
           ? { sessionTitles: createSessionTitleService(context) }
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
-        // The OpenCode 2.x preview server of a local or container environment;
-        // see opencode2-host-server.ts and opencode2-container-server.ts.
-        openCode2HostServer: (environmentId, options) =>
-          openCode2EnvironmentServer(context, environmentId, options),
+        openCode2HostServer,
         openCode2InContainer: (environment) => containerRunsOpenCode2(context, environment),
         planUsage: this.runtime.accounts.planUsage,
         usageLimitStops: this.accountAutoSwitch,
@@ -1414,6 +1419,7 @@ export class OrkestratorBackend {
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,
+          openCode2Workflow,
         },
         resolveAgentToolConnection,
         // Each worker's own mailbox identity on turns without a result tool.
@@ -1473,6 +1479,7 @@ export class OrkestratorBackend {
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,
+          openCode2Workflow,
         },
         resolveAgentToolConnection,
         resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
@@ -1643,6 +1650,7 @@ export class OrkestratorBackend {
       providerDependencies: {
         planUsage: this.runtime.accounts.planUsage,
         usageLimitStops: this.accountAutoSwitch,
+        openCode2Workflow,
       },
       agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),

@@ -119,6 +119,10 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Disposing the 2.x provider of a replaced server failed. Error class only.",
       "transcript.unknown-row":
         "A 2.x history row of a kind the transcript does not know was dropped (a newer server). Its kind name only, once per kind.",
+      "mcp.remove-failed":
+        "Removing a closed session's Orkestrator MCP server from the 2.x server failed. Error class only.",
+      "protocol.select-failed":
+        "A workflow could not read the OpenCode line setting, so its new session takes 1.x. Error class only.",
       "host-server.ready":
         "A local environment's 2.x server answered `/api/info` as 2.x. Environment id and pid only.",
       "host-server.terminate-failed":

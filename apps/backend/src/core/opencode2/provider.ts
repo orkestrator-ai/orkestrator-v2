@@ -22,14 +22,21 @@
  *   check is still delivered once: 2.x starts a new run with it.
  * - **Close never deletes.** It interrupts, rejects parked permissions and
  *   forms, and forgets the session; the conversation stays in OpenCode.
+ * - **Orkestrator's tools, results and read-only turns** (phase 5) are in
+ *   `workflow-results.ts`: the tab's MCP connection and the workflow-result
+ *   broker are location MCP servers (`mcp.ts`), confined to their session by
+ *   its permission rules, and a read-only or result turn's rules are granted
+ *   under the session's dispatch lock and restored after (`turn-grants.ts`).
  *
- * Not yet covered (later phases): attachments, structured output and
- * workflow-result tools, transcript projection and paging, interaction
- * cards, MCP, sign-in and slash commands. Requests that need them are refused
+ * Requests that need what this provider does not offer yet are refused
  * explicitly rather than silently degraded.
  */
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
+  NativeAgentSessionActionOutcome,
+} from "@orkestrator/protocol/native-agent";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   AmbiguousPromptDispatchError,
@@ -41,6 +48,7 @@ import {
   type ProviderCreateSessionOptions,
   type ProviderDispatchStatus,
   type ProviderNativeAgentSessionAction,
+  type ProviderPrepareDispatchOptions,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
   type ProviderStatus,
@@ -49,6 +57,10 @@ import {
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
+import { OpenCode2McpServers } from "./mcp.js";
+import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
+import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
+import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
 import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
 
@@ -68,6 +80,8 @@ export interface OpenCode2ProviderDependencies {
   /** Disable the live event monitor (tests that only exercise reads). */
   monitorEvents?: boolean;
   now?: () => number;
+  /** MCP registration timing (tests). */
+  mcp?: ConstructorParameters<typeof OpenCode2McpServers>[1];
 }
 
 type SessionState = {
@@ -98,6 +112,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   /** Transcript, state, usage and interaction cards (`reads.ts`). */
   readonly reads: OpenCode2SessionReads;
   readonly interactions: OpenCode2SessionReads["interactions"];
+  /** MCP connections, per-turn grants and workflow results (`workflow-results.ts`). */
+  private readonly workflow: OpenCode2WorkflowTurns;
 
   constructor(
     private readonly client: OpenCode2Client,
@@ -105,6 +121,10 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   ) {
     this.reads = new OpenCode2SessionReads(client, () => this.streamConnected);
     this.interactions = this.reads.interactions;
+    this.workflow = new OpenCode2WorkflowTurns(
+      new OpenCode2McpServers(client, dependencies.mcp),
+      new OpenCode2TurnGrants(client),
+    );
     if (dependencies.monitorEvents !== false) this.monitorTask = this.watchEvents();
   }
 
@@ -126,11 +146,19 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     const model = parseOpenCode2Model(options.model);
+    // A backend execution policy becomes the session's base rules (`permissions.ts`).
+    const base = openCode2PolicyRules(options.policy);
     let session;
     try {
       session = await this.client.createSession({
         ...(model ? { model } : {}),
-        metadata: { orkestrator: { phase: phase.slice(0, 120), label: label.slice(0, 200) } },
+        metadata: openCode2CreateMetadata({
+          phase,
+          label,
+          base,
+          ...(options.reviewerSession && options.policy ? { reviewerPolicy: options.policy } : {}),
+        }),
+        permissions: openCode2CreateRules(base),
       });
     } catch (error) {
       if (error instanceof OpenCode2RequestError) throw new PromptRejectedError(error.message);
@@ -143,11 +171,34 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return session.id;
   }
 
+  /** Registers the turn's MCP connections before the at-most-once window. */
+  async prepareDispatch(
+    sessionId: string,
+    options: ProviderPrepareDispatchOptions = {},
+  ): Promise<void> {
+    await this.workflow.prepare(sessionId, options);
+  }
+
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     refuseUnsupportedSendOptions(options);
-    const text = boundedText(prompt);
+    const text = boundedText(this.workflow.shapePrompt(prompt, options));
     this.registerSession(sessionId);
+    await this.workflow.prepare(sessionId, options);
     await this.applyModel(sessionId, options.model);
+    // Grants, the prompt and settlement of one session never interleave.
+    await this.workflow.dispatch(
+      sessionId,
+      options,
+      () => this.dispatchPrompt(sessionId, text, options),
+      () => this.rememberRefusal(options.requestId),
+    );
+  }
+
+  private async dispatchPrompt(
+    sessionId: string,
+    text: string,
+    options: ProviderSendOptions,
+  ): Promise<void> {
     const id = mintOpenCode2InputId(this.now());
     let answer: unknown;
     try {
@@ -244,9 +295,31 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.reads.usage(sessionId);
   }
 
-  /** Structured output arrives with the workflow-result tool (phase 5). */
-  async structured<T>(): Promise<StructuredOutputResult<T> | null> {
-    return null;
+  /** A `schema` turn's parsed final answer, once its run has settled. */
+  async structured<T>(
+    sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
+    return openCode2StructuredResult<T>(
+      await this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+      requestId,
+    );
+  }
+
+  /** Restores a finished request's turn grant; false while its run is still going. */
+  settleTurn(sessionId: string, requestId: string): Promise<boolean> {
+    return this.workflow.settleTurn(sessionId, requestId, () =>
+      this.history(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+    );
+  }
+
+  /** The user's MCP servers on this location; Orkestrator's own are not listed. */
+  mcpServers(): Promise<NativeAgentMcpServer[]> {
+    return this.workflow.mcpServers();
+  }
+
+  mcpServerAction(_sessionId: string, serverId: string, action: NativeAgentMcpServerAction) {
+    return this.workflow.mcpServerAction(serverId, action);
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -258,7 +331,12 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     } finally {
       this.markDirty(sessionId);
     }
-    await this.rejectPendingRequests(sessionId);
+    try {
+      // Whichever turn held a grant (read-only, result tools) no longer does.
+      await this.workflow.afterAbort(sessionId);
+    } finally {
+      await this.rejectPendingRequests(sessionId);
+    }
   }
 
   /** Stop owned work and forget the session. Never deletes the conversation. */
@@ -266,6 +344,7 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     try {
       await this.abort(sessionId);
     } finally {
+      await this.workflow.closeSession(sessionId);
       this.releaseSession(sessionId);
     }
   }
@@ -537,12 +616,7 @@ function refuseUnsupportedSendOptions(options: ProviderSendOptions): void {
   const unsupported = [
     options.attachments?.length ? "attachments" : undefined,
     options.images?.length ? "images" : undefined,
-    options.schema ? "structured output" : undefined,
-    options.workflowResultTool || options.workflowResultSlots?.length
-      ? "workflow results"
-      : undefined,
     options.command ? "slash commands" : undefined,
-    options.readOnly ? "read-only turns" : undefined,
   ].filter((name): name is string => name !== undefined);
   if (unsupported.length > 0) {
     throw new PromptRejectedError(

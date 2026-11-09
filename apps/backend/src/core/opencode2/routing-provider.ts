@@ -10,7 +10,10 @@
  *
  * - **By the record, never by guess.** A session is 2.x when it was created
  *   here with `openCodeProtocol: "v2"`, registered with that marker, or its
- *   persisted record carries it (looked up once, on first use). Everything
+ *   persisted record carries it (looked up once, on first use). A workflow
+ *   provider (build pipelines, Multi Review, graphs) picks the line itself
+ *   through `newSessionProtocol` and records it (`recordSession`, the
+ *   `opencode2-sessions` store) before handing the id out. Everything
  *   else is 1.x, so every existing session stays where it is. A failed lookup
  *   is an error, not "1.x": routing a 2.x session to 1.x would read it as
  *   missing, and a missing session is replaced.
@@ -21,9 +24,10 @@
  *   password) gets a new 2.x provider; the old one is disposed.
  * - **No 1.x behaviour reaches a 2.x session.** Members the 2.x provider does
  *   not have answer what an absent capability would (empty catalogues) or
- *   refuse with a clear error (fork, MCP actions). Transcript windows and
- *   pages, session state, usage and interaction cards are the 2.x
- *   provider's own (`reads.ts`). Snapshots carry `capabilityLimits`, which
+ *   refuse with a clear error (fork). Transcript windows and pages, session
+ *   state, usage and interaction cards (`reads.ts`), and MCP, workflow
+ *   results and read-only turns are the 2.x provider's own. Snapshots carry
+ *   `capabilityLimits`, which
  *   the projection uses to stop offering compact, undo, redo, fork,
  *   attachments and slash commands on a 2.x tab.
  *
@@ -106,6 +110,18 @@ export interface OpenCodeRoutingDependencies {
   connection(options: { start: boolean }): Promise<OpenCode2RouteConnection | undefined>;
   /** The persisted marker of a session this provider has not seen yet. */
   persistedProtocol(sessionId: string): Promise<"v2" | undefined>;
+  /**
+   * Workflow providers only (build pipelines, Multi Review, graphs): which
+   * line a new session takes when the caller does not say. Absent for the
+   * interactive service, whose unmarked sessions are always 1.x.
+   */
+  newSessionProtocol?(options: ProviderCreateSessionOptions): Promise<"v2" | undefined>;
+  /**
+   * Durably record a session {@link newSessionProtocol} put on 2.x, so
+   * {@link persistedProtocol} answers `"v2"` for it from then on. Required
+   * with `newSessionProtocol`; a failure refuses the session.
+   */
+  recordSession?(sessionId: string): Promise<void>;
   /** Builds the 2.x provider for one server generation (tests substitute it). */
   createProvider?(client: OpenCode2Client): OpenCode2Provider;
 }
@@ -194,22 +210,43 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     label: string,
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
-    if (options.openCodeProtocol !== "v2") {
+    // The interactive service decides per request; a workflow provider asks its
+    // own policy (`newSessionProtocol`) and records the answer itself.
+    const chosenHere = options.openCodeProtocol === undefined && !!this.deps.newSessionProtocol;
+    const protocol =
+      options.openCodeProtocol ??
+      (await this.deps.newSessionProtocol?.(options).catch((error: unknown) => {
+        log.debug("protocol.select-failed", { error: formatLogError(error, { message: false }) });
+        return undefined;
+      }));
+    if (protocol !== "v2") {
       const id = await this.legacy.createSession(phase, label, options);
       this.remember(id, "legacy");
       return id;
     }
     const provider = await this.requireV2();
     const id = await provider.createSession(phase, label, options);
+    if (chosenHere) {
+      // Recorded before the caller sees the id, so the run never changes line.
+      // A session that could not be recorded is not handed out (it stays
+      // unused in OpenCode, which is harmless).
+      try {
+        await this.deps.recordSession!(id);
+      } catch (error) {
+        throw new ProviderUnavailableError("The OpenCode 2 session could not be recorded", {
+          cause: error,
+        });
+      }
+    }
     this.remember(id, "v2");
     return id;
   }
 
   async prepareDispatch(sessionId: string, options?: ProviderPrepareDispatchOptions) {
     if ((await this.lineOf(sessionId)) === "v2") {
-      // The cold start (spawn and readiness) belongs before the at-most-once window.
-      await this.requireV2();
-      return;
+      // The cold start (spawn and readiness) and the MCP registrations belong
+      // before the at-most-once window.
+      return (await this.requireV2()).prepareDispatch(sessionId, options);
     }
     return this.legacy.prepareDispatch(sessionId, options);
   }
@@ -229,8 +266,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   }
 
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
-    // A 2.x session holds no temporary reviewer permissions to restore.
-    if ((await this.lineOf(sessionId)) === "v2") return true;
+    if ((await this.lineOf(sessionId)) === "v2") {
+      // The grant lives in the session, so restoring it needs the server.
+      return (await this.requireV2()).settleTurn(sessionId, requestId);
+    }
     return this.legacy.settleTurn(sessionId, requestId);
   }
 
@@ -358,7 +397,9 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
-    if ((await this.lineOf(sessionId)) === "v2") return null;
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).structured<T>(sessionId, requestId);
+    }
     return this.legacy.structured<T>(sessionId, requestId);
   }
 
@@ -406,13 +447,17 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   }
 
   async mcpServers(sessionId: string) {
-    if ((await this.lineOf(sessionId)) === "v2") return [];
+    if ((await this.lineOf(sessionId)) === "v2") {
+      // A catalogue read never starts the 2.x server.
+      const provider = await this.observedV2();
+      return provider ? provider.mcpServers() : [];
+    }
     return this.legacy.mcpServers();
   }
 
   async mcpServerAction(...args: Parameters<LegacyOpenCodeProvider["mcpServerAction"]>) {
     if ((await this.lineOf(args[0])) === "v2") {
-      throw new PromptRejectedError("OpenCode 2 sessions do not manage MCP servers yet");
+      return (await this.requireV2()).mcpServerAction(...args);
     }
     return this.legacy.mcpServerAction(...args);
   }

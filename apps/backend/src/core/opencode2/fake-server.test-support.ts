@@ -14,6 +14,10 @@ export interface FakeOpenCode2Session {
   inbox: Row[];
   running: boolean;
   model?: unknown;
+  /** The session's own permission rules (`permissions` on the wire). */
+  rules?: unknown[];
+  metadata?: Record<string, unknown>;
+  /** Pending permission requests. */
   permissions: Array<{
     id: string;
     sessionID: string;
@@ -45,6 +49,12 @@ export class FakeOpenCode2Server {
   failNextPrompt?: { status: number; body?: unknown } | "network";
   /** Answer the next form reply with this status and body instead of applying it. */
   failNextFormReply?: { status: number; body?: unknown };
+  /** Runtime MCP servers by name, as `PUT /api/experimental/mcp/:server` left them. */
+  readonly mcp = new Map<string, { config: unknown; status: string }>();
+  /** The status a newly added MCP server reports (`connected` unless a test says otherwise). */
+  mcpAddStatus = "connected";
+  /** Session updates to drop silently (a write that did not persist). */
+  dropNextSessionUpdate = false;
   private readonly server: ReturnType<typeof Bun.serve>;
   private events = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private seq = new Map<string, number>();
@@ -77,10 +87,19 @@ export class FakeOpenCode2Server {
   }
 
   /** Settle the running run: deliver what the run would have answered, then `idle`. */
-  finishRun(sessionId: string, outcome: "succeeded" | "interrupted" = "succeeded"): void {
+  finishRun(
+    sessionId: string,
+    outcome: "succeeded" | "interrupted" | "failed" = "succeeded",
+    answer?: string,
+  ): void {
     const session = this.sessions.get(sessionId)!;
     this.drainInbox(session);
-    session.rows.push({ id: this.id("msg"), type: "assistant", content: [], time: { created: 1 } });
+    session.rows.push({
+      id: this.id("msg"),
+      type: "assistant",
+      content: answer === undefined ? [] : [{ type: "text", text: answer }],
+      time: { created: 1 },
+    });
     session.rows.push({ id: this.id("msg"), type: "idle", outcome, time: { created: 1 } });
     session.running = false;
     session.info.outcome = outcome;
@@ -179,6 +198,30 @@ export class FakeOpenCode2Server {
       });
       return new Response(stream, { headers: { "content-type": "text/event-stream" } });
     }
+    if (path === "/api/mcp") {
+      return Response.json({
+        location: { directory: "/work" },
+        data: [...this.mcp].map(([name, entry]) => ({ name, status: { status: entry.status } })),
+      });
+    }
+    const mcp = /^\/api\/experimental\/mcp\/([^/]+)(?:\/(connect|disconnect))?$/.exec(path);
+    if (mcp) {
+      const name = decodeURIComponent(mcp[1]!);
+      const entry = this.mcp.get(name);
+      if (request.method === "PUT") {
+        this.mcp.set(name, { config: body!.config, status: this.mcpAddStatus });
+        return new Response(null, { status: 204 });
+      }
+      if (!entry) {
+        return Response.json(
+          { _tag: "McpServerNotFoundError", server: name, message: "missing" },
+          { status: 404 },
+        );
+      }
+      if (request.method === "DELETE") this.mcp.delete(name);
+      else entry.status = mcp[2] === "disconnect" ? "disabled" : "connected";
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/session" && request.method === "POST") {
       const id = this.id("ses");
       this.sessions.set(id, {
@@ -187,6 +230,8 @@ export class FakeOpenCode2Server {
         inbox: [],
         running: false,
         model: body?.model,
+        ...(body?.permissions ? { rules: body.permissions as unknown[] } : {}),
+        ...(body?.metadata ? { metadata: body.metadata as Record<string, unknown> } : {}),
         permissions: [],
         forms: [],
         replies: [],
@@ -209,6 +254,26 @@ export class FakeOpenCode2Server {
     if (!match || !session) return notFound();
     const rest = match[2] ?? "";
 
+    if (rest === "" && request.method === "GET") {
+      return ok({
+        id: session.id,
+        model: session.model,
+        ...(session.metadata ? { metadata: session.metadata } : {}),
+        ...(session.rules ? { permissions: session.rules } : {}),
+      });
+    }
+    if (rest === "" && request.method === "PATCH") {
+      if (this.dropNextSessionUpdate) {
+        this.dropNextSessionUpdate = false;
+        return new Response(null, { status: 204 });
+      }
+      // Both fields replace what the session held (2.2.6).
+      if (body && "permissions" in body) session.rules = (body.permissions as unknown[]) ?? [];
+      if (body && "metadata" in body) {
+        session.metadata = (body.metadata as Record<string, unknown> | null) ?? undefined;
+      }
+      return new Response(null, { status: 204 });
+    }
     if (rest === "prompt") {
       const failure = this.failNextPrompt;
       this.failNextPrompt = undefined;

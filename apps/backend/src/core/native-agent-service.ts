@@ -178,6 +178,7 @@ import { localServerStopCommandName } from "./local-server-runtime.js";
 import {
   openCodeRoutingDependencies,
   selectNewOpenCodeSessionProtocol,
+  sessionTakesAgentTools,
 } from "./native-agent-opencode-protocol.js";
 import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
@@ -3824,7 +3825,7 @@ export class NativeAgentService {
         durable: PersistedNativeAgentSession,
       ): Promise<{ url: string; token: string } | undefined> => {
         if (
-          nativeAgentCapabilities(durable.agent).agentTools !== true ||
+          !sessionTakesAgentTools(durable.agent, durable.openCodeProtocol) ||
           durable.owner?.kind !== "environment" ||
           !this.options.resolveAgentToolConnection
         ) {
@@ -4674,7 +4675,7 @@ export class NativeAgentService {
       ? input.logicalSessionKey.slice(prefix.length)
       : "";
     const agentMcp =
-      nativeAgentCapabilities(input.agent).agentTools === true &&
+      sessionTakesAgentTools(input.agent, openCodeProtocol) &&
       input.owner?.kind === "environment" &&
       tabId &&
       environment &&

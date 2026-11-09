@@ -24,7 +24,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 type Json = Record<string, unknown>;
-type ChatRequest = { messages?: Array<{ role: string; content?: unknown }> };
+type ChatRequest = {
+  messages?: Array<{ role: string; content?: unknown }>;
+  tools?: Array<{ function?: { name?: string } }>;
+};
 
 const STEP_SLEEP_SECONDS = 3;
 const FINAL_ANSWER_DELAY_MS = 2500;
@@ -59,7 +62,14 @@ function textOf(content: unknown): string {
 
 /** Each scripted reply is chosen by the latest user text the model was given. */
 export class ScriptedModel {
-  readonly calls: Array<{ userTexts: string[]; lastRole: string }> = [];
+  /** `tools` is every tool name the request offered the model. */
+  readonly calls: Array<{
+    userTexts: string[];
+    lastRole: string;
+    tools: string[];
+    /** The newest tool result the model was handed, when the request ends in one. */
+    toolResult?: string;
+  }> = [];
   private server: ReturnType<typeof Bun.serve> | undefined;
 
   start(): string {
@@ -74,18 +84,32 @@ export class ScriptedModel {
         const messages = body.messages ?? [];
         const userTexts = messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
         const lastRole = messages.at(-1)?.role ?? "";
-        this.calls.push({ userTexts, lastRole });
+        const tools = (body.tools ?? []).flatMap((tool) =>
+          typeof tool.function?.name === "string" ? [tool.function.name] : [],
+        );
+        this.calls.push({
+          userTexts,
+          lastRole,
+          tools,
+          ...(lastRole === "tool" ? { toolResult: textOf(messages.at(-1)?.content) } : {}),
+        });
         const latestUser = userTexts.at(-1) ?? "";
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
         // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).
+        // `RUN_TOOL:<name> <json arguments>` (one line) calls any offered tool by its exact name.
+        // `ANSWER_JSON:<value>` (one line) makes the final answer exactly that text.
         if (lastRole === "user") {
           // `CALL_TOOL:<name> <json args>` calls any tool once (fixture-only).
           const call = /CALL_TOOL:(\S+)\s+(\{.*\})\s*$/s.exec(latestUser);
           if (call) return sse(namedToolCallChunks(call[1]!, call[2]!));
+          const tool = /RUN_TOOL:(\S+) (\{.*\})$/m.exec(latestUser);
+          if (tool) return sse(toolCallChunks(undefined, tool[1]!, tool[2]!));
           const bash = /RUN_BASH:(.+)$/s.exec(latestUser)?.[1];
           if (bash) return sse(toolCallChunks(bash.trim()));
           if (latestUser.includes("RUN_SLOW_TOOL")) return sse(toolCallChunks());
         }
+        const answer = /ANSWER_JSON:(.+)$/m.exec(latestUser)?.[1];
+        if (answer) return sse(answerChunks(answer.trim()));
         const slowAnswer = latestUser.includes("SLOW_ANSWER");
         return sse(
           answerChunks(`ack:${latestUser.slice(0, 40)}`),
@@ -108,7 +132,11 @@ const base = {
   model: "fixture",
 };
 
-function toolCallChunks(command = `sleep ${STEP_SLEEP_SECONDS}`): Json[] {
+function toolCallChunks(
+  command = `sleep ${STEP_SLEEP_SECONDS}`,
+  name = "shell",
+  argumentsJson?: string,
+): Json[] {
   return [
     {
       ...base,
@@ -120,15 +148,17 @@ function toolCallChunks(command = `sleep ${STEP_SLEEP_SECONDS}`): Json[] {
             tool_calls: [
               {
                 index: 0,
-                id: "call_sleep",
+                id: `call_${Math.random().toString(36).slice(2, 10)}`,
                 type: "function",
                 function: {
                   // 2.x names it `shell` (it repairs a `bash` call, but say it right).
-                  name: "shell",
-                  arguments: JSON.stringify({
-                    command,
-                    description: "Run in the disposable workspace",
-                  }),
+                  name,
+                  arguments:
+                    argumentsJson ??
+                    JSON.stringify({
+                      command,
+                      description: "Run in the disposable workspace",
+                    }),
                 },
               },
             ],

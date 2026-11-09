@@ -23,10 +23,13 @@ import type {
   OpenCode2InboxDelivery,
   OpenCode2InboxItem,
   OpenCode2Info,
+  OpenCode2McpRemoteConfig,
+  OpenCode2McpServer,
   OpenCode2Message,
   OpenCode2ModelRef,
   OpenCode2PermissionDecision,
   OpenCode2PermissionRequest,
+  OpenCode2PermissionRule,
   OpenCode2Session,
   OpenCode2UserInput,
 } from "./types.js";
@@ -117,7 +120,7 @@ export class OpenCode2Client {
     model?: OpenCode2ModelRef;
     agent?: string;
     metadata?: Record<string, unknown>;
-    permissions?: unknown[];
+    permissions?: readonly OpenCode2PermissionRule[];
   }): Promise<OpenCode2Session> {
     return this.request("POST", "/api/session", "OpenCode session create", {
       body: { ...input, location: { directory: this.connection.directory } },
@@ -132,7 +135,10 @@ export class OpenCode2Client {
 
   async updateSession(
     sessionId: string,
-    patch: { metadata?: Record<string, unknown> | null; permissions?: unknown[] | null },
+    patch: {
+      metadata?: Record<string, unknown> | null;
+      permissions?: readonly OpenCode2PermissionRule[] | null;
+    },
   ): Promise<void> {
     await this.request("PATCH", `/api/session/${seg(sessionId)}`, "OpenCode session update", {
       body: patch,
@@ -308,6 +314,58 @@ export class OpenCode2Client {
       `/api/session/${seg(sessionId)}/form/${seg(formId)}`,
       "OpenCode form reject",
       { query: { message } },
+    );
+  }
+
+  // ── MCP (location-scoped; `/api/experimental/mcp/*` is guarded by the exact pin) ──
+
+  /** The location's MCP servers and their connection status. */
+  async listMcpServers(): Promise<OpenCode2McpServer[]> {
+    const data = await this.request<unknown>("GET", "/api/mcp", "OpenCode MCP list");
+    if (!Array.isArray(data)) throw new ProviderUnavailableError("OpenCode MCP list is malformed");
+    return data.filter(
+      (server): server is OpenCode2McpServer =>
+        !!server &&
+        typeof (server as { name?: unknown }).name === "string" &&
+        typeof (server as { status?: { status?: unknown } }).status?.status === "string",
+    );
+  }
+
+  /**
+   * Add or replace a runtime MCP server; it starts connecting at once and
+   * lives until the server restarts. The config carries a bearer token, so a
+   * refusal never repeats the server's message (it may echo the config).
+   */
+  async putMcpServer(name: string, config: OpenCode2McpRemoteConfig): Promise<void> {
+    try {
+      await this.request("PUT", `/api/experimental/mcp/${seg(name)}`, "OpenCode MCP add", {
+        body: { config },
+      });
+    } catch (error) {
+      if (error instanceof OpenCode2RequestError) {
+        throw new OpenCode2RequestError(error.operation, error.status, error.tag, "refused");
+      }
+      throw error;
+    }
+  }
+
+  async removeMcpServer(name: string): Promise<void> {
+    await this.request("DELETE", `/api/experimental/mcp/${seg(name)}`, "OpenCode MCP remove");
+  }
+
+  async connectMcpServer(name: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/api/experimental/mcp/${seg(name)}/connect`,
+      "OpenCode MCP connect",
+    );
+  }
+
+  async disconnectMcpServer(name: string): Promise<void> {
+    await this.request(
+      "POST",
+      `/api/experimental/mcp/${seg(name)}/disconnect`,
+      "OpenCode MCP disconnect",
     );
   }
 

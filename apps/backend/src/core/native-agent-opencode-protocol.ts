@@ -6,15 +6,23 @@
  * stored on its record (`openCodeProtocol: "v2"`). Only new interactive tabs
  * of an ordinary local environment, or of a container environment whose image
  * runs 2.x (`containerRunsOpenCode2`), take 2.x, and only while the setting
- * asks for it: build pipelines, Multi Review, graphs and coordinators create
- * their sessions with other origins or owners, and a container from an older
- * image stays on 1.x. Everything else, every existing record included, is
- * 1.x.
+ * asks for it: coordinators create their sessions with other origins or
+ * owners, and a container from an older image stays on 1.x. Everything else,
+ * every existing record included, is 1.x.
+ *
+ * Workflows (build pipelines, Multi Review, graph agent nodes) follow the same
+ * switch through their own providers (`openCodeWorkflowRoutingDependencies`),
+ * in local environments only for now: the line is chosen when a session is
+ * created and recorded in the `opencode2-sessions` store before the id is
+ * handed out.
  */
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
+import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
+import type { ProviderCreateSessionOptions } from "./agent-provider-contract.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
+import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { OpenCodeRoutingDependencies } from "./opencode2/routing-provider.js";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
 
@@ -82,14 +90,21 @@ export async function selectNewOpenCodeSessionProtocol(
 type SessionReader = {
   readNativeAgentSessionsSnapshot?: () => Promise<readonly PersistedNativeAgentSession[]>;
   listNativeAgentSessions?: () => Promise<readonly PersistedNativeAgentSession[]>;
+  /** The 2.x sessions workflows created (`storage-opencode2-sessions.ts`). */
+  openCode2Sessions?: Pick<OpenCode2SessionsStorage, "isOpenCode2Session">;
 };
 
-/** The persisted marker of one environment's OpenCode provider session. */
+/**
+ * The persisted line of one environment's OpenCode provider session: a
+ * native record's marker, or the workflow record of a 2.x session a build
+ * pipeline, Multi Review or graph created (and a tab may later open).
+ */
 export async function persistedOpenCodeProtocol(
   storage: SessionReader,
   environmentId: string,
   providerSessionId: string,
 ): Promise<"v2" | undefined> {
+  if (storage.openCode2Sessions?.isOpenCode2Session(environmentId, providerSessionId)) return "v2";
   const sessions = storage.readNativeAgentSessionsSnapshot
     ? await storage.readNativeAgentSessionsSnapshot()
     : storage.listNativeAgentSessions
@@ -118,4 +133,86 @@ export function openCodeRoutingDependencies(
     connection: (start) => host(environmentId, start),
     persistedProtocol: (sessionId) => persistedOpenCodeProtocol(storage, environmentId, sessionId),
   };
+}
+
+/**
+ * Whether a workflow session created now (build pipeline, Multi Review,
+ * graph) should run on OpenCode 2.x: the same switch as interactive tabs,
+ * with what a workflow needs that a 2.x session cannot give it yet kept on
+ * 1.x:
+ *
+ * - a coordinator's read-only policy (coordinators are not qualified on 2.x);
+ * - a policy that asks for approvals, because an unattended 2.x session has
+ *   no interaction surface to answer them through yet and would park;
+ * - an environment whose record of 2.x sessions is full.
+ */
+export function newOpenCodeWorkflowSessionProtocol(
+  options: Pick<ProviderCreateSessionOptions, "policy">,
+  environment: Pick<Environment, "environmentType"> | null | undefined,
+  setting: unknown,
+  hasCapacity: boolean,
+): "v2" | undefined {
+  if (resolveOpenCodeProtocol(setting) !== "v2") return undefined;
+  if (environment?.environmentType !== "local") return undefined;
+  if (options.policy?.id === "coordinator-read-only") return undefined;
+  if (options.policy?.approvals === "ask") return undefined;
+  return hasCapacity ? "v2" : undefined;
+}
+
+export type OpenCodeWorkflowStorage = SessionReader & {
+  getEnvironment(environmentId: string): Promise<Pick<Environment, "environmentType"> | null>;
+  loadConfig(): Promise<{ global: { openCodeProtocol?: unknown } }>;
+  openCode2Sessions: Pick<
+    OpenCode2SessionsStorage,
+    "isOpenCode2Session" | "hasOpenCode2SessionCapacity" | "recordOpenCode2Session"
+  >;
+};
+
+/**
+ * The routing dependencies of a workflow provider for one environment, or
+ * undefined without a 2.x host. The line is chosen per new session and
+ * recorded before the session is handed out, so a run started on one line
+ * stays there whatever the setting says later.
+ */
+export function openCodeWorkflowRoutingDependencies(
+  host: NativeAgentServiceOptions["openCode2HostServer"],
+  storage: OpenCodeWorkflowStorage,
+  environmentId: string,
+): OpenCodeRoutingDependencies | undefined {
+  if (!host) return undefined;
+  return {
+    connection: (start) => host(environmentId, start),
+    persistedProtocol: (sessionId) => persistedOpenCodeProtocol(storage, environmentId, sessionId),
+    newSessionProtocol: async (options) => {
+      const [environment, config] = await Promise.all([
+        storage.getEnvironment(environmentId),
+        storage.loadConfig(),
+      ]);
+      return newOpenCodeWorkflowSessionProtocol(
+        options,
+        environment,
+        config.global.openCodeProtocol,
+        storage.openCode2Sessions.hasOpenCode2SessionCapacity(environmentId),
+      );
+    },
+    recordSession: async (sessionId) => {
+      storage.openCode2Sessions.recordOpenCode2Session(environmentId, sessionId);
+    },
+  };
+}
+
+/**
+ * Whether a session receives the per-tab Orkestrator MCP credential with
+ * each dispatch: the platform's own answer, or an OpenCode 2.x session, whose
+ * server takes the connection per session (`opencode2/mcp.ts`) where 1.x's
+ * is environment-wide.
+ */
+export function sessionTakesAgentTools(
+  agent: Parameters<typeof nativeAgentCapabilities>[0],
+  openCodeProtocol: "v2" | undefined,
+): boolean {
+  return (
+    nativeAgentCapabilities(agent).agentTools === true ||
+    (agent === "opencode" && openCodeProtocol === "v2")
+  );
 }

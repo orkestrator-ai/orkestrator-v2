@@ -49,7 +49,34 @@ export interface OpenCode2Session {
   outcome?: OpenCode2RunOutcome;
   title?: string;
   metadata?: Record<string, unknown>;
+  /** The session's own rules, evaluated after its agent's (last match wins). */
+  permissions?: OpenCode2PermissionRule[];
   time?: { created?: number; updated?: number; busy?: number; idle?: number };
+}
+
+/** One 2.x permission rule (`Permission.Rule`): wildcard `action` and `resource`. */
+export interface OpenCode2PermissionRule {
+  action: string;
+  resource: string;
+  effect: "allow" | "deny" | "ask";
+}
+
+/** One MCP server of the server's location (`GET /api/mcp`). */
+export interface OpenCode2McpServer {
+  name: string;
+  status: { status: string; error?: string };
+  title?: string;
+}
+
+/** `Mcp.RemoteConfigEncoded`, the only kind Orkestrator registers. */
+export interface OpenCode2McpRemoteConfig {
+  type: "remote";
+  url: string;
+  headers?: Record<string, string>;
+  oauth?: false;
+  /** False exposes the server's tools directly, named `<server>_<tool>`. */
+  codemode?: boolean;
+  timeout?: { startup?: number; catalog?: number; execution?: number };
 }
 
 export interface OpenCode2FileInput {

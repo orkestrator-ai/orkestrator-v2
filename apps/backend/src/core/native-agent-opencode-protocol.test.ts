@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   newOpenCodeSessionProtocol,
+  newOpenCodeWorkflowSessionProtocol,
   openCodeRoutingDependencies,
+  openCodeWorkflowRoutingDependencies,
   persistedOpenCodeProtocol,
   selectNewOpenCodeSessionProtocol,
+  sessionTakesAgentTools,
 } from "./native-agent-opencode-protocol.js";
 import type { PersistedNativeAgentSession } from "./models.js";
 
@@ -181,5 +184,62 @@ describe("persistedOpenCodeProtocol", () => {
       "env",
     );
     expect(deps).toBeDefined();
+  });
+});
+
+describe("workflow sessions", () => {
+  test("follow the same switch, except where 2.x cannot serve them yet", () => {
+    const policy = { id: "host-default", approvals: "auto-approve" } as never;
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "v2", true)).toBe("v2");
+    expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe("v2");
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "legacy", true)).toBe(undefined);
+    expect(
+      newOpenCodeWorkflowSessionProtocol({ policy }, { environmentType: "container" }, "v2", true),
+    ).toBe(undefined);
+    // No unattended answer surface on 2.x yet: a policy that asks stays on 1.x.
+    expect(
+      newOpenCodeWorkflowSessionProtocol(
+        { policy: { id: "x", approvals: "ask" } as never },
+        local,
+        "v2",
+        true,
+      ),
+    ).toBe(undefined);
+    expect(
+      newOpenCodeWorkflowSessionProtocol(
+        { policy: { id: "coordinator-read-only", approvals: "deny" } as never },
+        local,
+        "v2",
+        true,
+      ),
+    ).toBe(undefined);
+    expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "v2", false)).toBe(undefined);
+  });
+
+  test("record their line, which every later lookup reads", async () => {
+    const recorded = new Set<string>();
+    const storage = {
+      getEnvironment: async () => local,
+      loadConfig: async () => ({ global: { openCodeProtocol: "v2" } }),
+      openCode2Sessions: {
+        isOpenCode2Session: (_env: string, id: string) => recorded.has(id),
+        hasOpenCode2SessionCapacity: () => true,
+        recordOpenCode2Session: (_env: string, id: string) => void recorded.add(id),
+      },
+    };
+    const deps = openCodeWorkflowRoutingDependencies(async () => undefined, storage, "env")!;
+    expect(await deps.newSessionProtocol!({})).toBe("v2");
+    expect(await deps.persistedProtocol("ses_w")).toBe(undefined);
+    await deps.recordSession!("ses_w");
+    expect(await deps.persistedProtocol("ses_w")).toBe("v2");
+    // An interactive lookup sees a workflow's 2.x session too (a tab may open it).
+    expect(await persistedOpenCodeProtocol(storage, "env", "ses_w")).toBe("v2");
+    expect(openCodeWorkflowRoutingDependencies(undefined, storage, "env")).toBeUndefined();
+  });
+
+  test("an OpenCode 2.x session takes the per-tab tools credential; a 1.x one does not", () => {
+    expect(sessionTakesAgentTools("opencode", "v2")).toBe(true);
+    expect(sessionTakesAgentTools("opencode", undefined)).toBe(false);
+    expect(sessionTakesAgentTools("claude", undefined)).toBe(true);
   });
 });

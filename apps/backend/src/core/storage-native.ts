@@ -1110,6 +1110,8 @@ export class NativeAgentSessionsRepository {
     // Unconditional: a retry after a partial failure finds the sessions
     // already gone, and must still clear the tails that failure left.
     await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
+    // The workflows' OpenCode 2.x session ids leave with the environment's sessions.
+    this.repos.openCode2Sessions.deleteOpenCode2SessionsForEnvironment(environmentId);
     await this.context.scrubSensitiveJsonBackups(
       this.files.nativeAgentSessionsFile(),
       (_key, record) => !isRecord(record) || record.environmentId !== environmentId,

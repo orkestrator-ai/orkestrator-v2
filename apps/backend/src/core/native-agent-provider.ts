@@ -105,10 +105,16 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop" | "noteUnresentStop">;
     /**
      * Route OpenCode sessions per session between 1.x and the 2.x preview
-     * (`opencode2/routing-provider.ts`). Only the interactive native-agent
-     * service passes it; workflow providers stay on 1.x.
+     * (`opencode2/routing-provider.ts`). The interactive native-agent
+     * service passes it for one environment.
      */
     openCode2?: OpenCodeRoutingDependencies;
+    /**
+     * The same routing for a workflow provider (build pipelines, Multi Review,
+     * graphs), built for its `bridgeEnvironmentId`; it chooses and records the
+     * line of each session it creates (`openCodeWorkflowRoutingDependencies`).
+     */
+    openCode2Workflow?: (environmentId: string) => OpenCodeRoutingDependencies | undefined;
   };
 
 /** A workflow polls its turns every few seconds; one not looked at for this long is not counted. */
@@ -191,9 +197,12 @@ export function createNativeAgentProvider(
       ...openCodeEnvironmentDependencies(dependencies.environment),
       ...dependencies,
     });
-    return dependencies.openCode2
-      ? new OpenCodeRoutingProvider(legacy, dependencies.openCode2)
-      : legacy;
+    const environmentId =
+      dependencies.bridgeEnvironmentId ?? dependencies.environment?.environmentId;
+    const routing =
+      dependencies.openCode2 ??
+      (environmentId ? dependencies.openCode2Workflow?.(environmentId) : undefined);
+    return routing ? new OpenCodeRoutingProvider(legacy, routing) : legacy;
   };
   const provider: NativeAgentRuntimeProvider =
     connection.agent === "opencode"

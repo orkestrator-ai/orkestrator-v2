@@ -41,21 +41,26 @@ export const COORDINATOR_STARTER_PROMPTS: readonly string[] = [
   "Take ticket … through build and review",
 ];
 
-export const COORDINATOR_COMPOSER_PLACEHOLDER = "What would you like to get done?";
+/**
+ * What the composer's special characters do. It lives in the empty message
+ * box's placeholder rather than a line under it, so it is out of the way once
+ * the user starts typing. `!` commands are the user's own action, so it says
+ * who runs them.
+ */
+export const COORDINATOR_COMPOSER_SYNTAX_HINT =
+  "Type @ to mention a file, or start with ! to run a command yourself.";
+
+export const COORDINATOR_COMPOSER_PLACEHOLDER = `What would you like to get done? ${COORDINATOR_COMPOSER_SYNTAX_HINT}`;
 
 /**
  * A side agent's own placeholder. The main's asks what to get done, which a
  * conversation that cannot launch anything should not promise.
  */
-export const COORDINATOR_SIDE_COMPOSER_PLACEHOLDER = "Ask a question about this project";
+export const COORDINATOR_SIDE_COMPOSER_PLACEHOLDER = `Ask a question about this project. ${COORDINATOR_COMPOSER_SYNTAX_HINT}`;
 
 /** What a side agent is for: the New side agent tooltip and a side composer's hint. */
 export const COORDINATOR_SIDE_AGENT_EXPLANATION =
   "Side agents can read the project and talk to the main coordinator, but can't launch workers. Good for a second opinion or a parallel investigation.";
-
-/** `!` commands are the user's own action, so the hint says who runs them. */
-export const COORDINATOR_COMMAND_HINT =
-  "Start a message with ! to run a command yourself in this checkout.";
 
 /** The tiers a qualified platform can hold (`coordinator.md`, Provider qualification). */
 export type CoordinatorReadOnlyTier = Exclude<CoordinatorProviderTier, "unavailable">;
@@ -83,7 +88,8 @@ export function coordinatorReadOnlyTier(
 
 /**
  * The header's one statement about where work happens, and the read-only tier
- * of the conversation in front.
+ * of the conversation in front. It reads as coloured text in the toolbar
+ * rather than a boxed panel; only the tier pill keeps an outline.
  *
  * `platform` and `tier` name the selected conversation's agent and how strongly
  * its read-only boundary holds; an unassigned conversation has neither. The
@@ -115,10 +121,10 @@ export function CoordinatorIsolationBadge({
           data-coordinator-isolation-badge={tier ?? "unassigned"}
           data-context-revision={contextRevision}
           className={cn(
-            "flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs focus-hairline",
+            "flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs focus-hairline",
             caution
-              ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-              : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
+              ? "text-amber-200 hover:text-amber-100"
+              : "text-emerald-200 hover:text-emerald-100",
           )}
         >
           <Icon className="size-3.5 shrink-0" aria-hidden="true" />

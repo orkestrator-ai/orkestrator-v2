@@ -486,7 +486,12 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const handleInput = useCallback(() => {
       if (!inputRef.current || isComposingRef.current) return;
 
-      const newText = extractText(inputRef.current);
+      const input = inputRef.current;
+      // Chromium leaves a sole BR as the caret holder after deleting all text.
+      // It is an empty editor, whereas multiple BRs represent deliberate lines.
+      const isEmptyCaretHolder =
+        input.childNodes.length === 1 && input.firstChild?.nodeName === "BR";
+      const newText = isEmptyCaretHolder ? "" : extractText(input);
       const remainingMentions = mentions.filter((mention) =>
         newText.includes(`@${mention.filename}`),
       );
@@ -583,8 +588,11 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
     const showPlaceholder = !value;
 
+    // The input and its placeholder share one grid cell, so a placeholder
+    // that wraps on a narrow composer grows the box instead of spilling over
+    // the controls below it.
     return (
-      <div className="relative">
+      <div className="relative grid">
         <div
           ref={inputRef}
           contentEditable={!disabled}
@@ -617,7 +625,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
               }
             : {})}
           className={cn(
-            "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
+            "native-compose-input [grid-area:1/1] w-full min-w-0 resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
             disabled && "cursor-not-allowed opacity-50",
             className,
           )}
@@ -631,7 +639,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         />
         {showPlaceholder && (
           <div
-            className="native-compose-placeholder pointer-events-none absolute top-1 left-1 text-sm text-muted-foreground"
+            className="native-compose-placeholder pointer-events-none [grid-area:1/1] self-start px-1 py-1 text-sm text-muted-foreground"
             data-native-compose-placeholder
             aria-hidden="true"
           >

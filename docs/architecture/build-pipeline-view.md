@@ -873,6 +873,34 @@ and enters the usual Review preparation path. It sends no turn to the original
 session. Restarting Build uses the ordinary ticket-based session path and
 retains the superseded original attempt and transcript.
 
-This is an internal foundation, not an available Auto-pipeline launch option.
-Draft generation, user review, ticket creation, committing changes and manual
-button wiring remain tracked in [7546](../todo/coordinator-and-multi-review/7546-auto-pipeline-launch-flow.md).
+The manual Auto-pipeline launch below supplies this admission data after the
+user reviews its draft.
+
+### Manual Auto-pipeline promotion
+
+The manual Multi Review configuration dialog offers **Auto-pipeline** for an
+open interactive native agent tab in a prompt environment. A picker identifies
+the transcript when several tabs are open. Running turns disable drafting with
+an explanation. Existing pipeline environments and coordinator or pipeline
+review launchers do not offer promotion.
+
+A separate read-only session uses the saved Build agent, model and effort. It
+receives the selected transcript and the branch diff against the environment's
+base commit. Its `submit_auto_pipeline_draft` result contains the ticket and the
+Build handoff together. It never sends a turn to the original tab. The backend
+bounds the transcript, diff and result, and refuses a changed checkout.
+
+The user edits the title, description and ordered acceptance criteria before
+confirming. Generated Build notes and the pending paths are shown read-only.
+Cancel creates no ticket or pipeline; a failed draft offers retry and plain
+Multi Review. Drafts and confirmation receipts are backend-owned SQLite records.
+
+Confirmation rechecks the source and checkout, creates an in-progress ticket,
+commits pending work with normal Git hooks, and admits a completed Build on the
+existing environment. The normal pipeline tab becomes active. The graph's first
+Build attempt retains the original transcript and immutable generated notes;
+its inspector also shows the reviewed acceptance criteria. The usual Review,
+Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
+Restarting Build creates an ordinary ticket-based session and retains the
+original as the first attempt. Pipeline records and ticket linkage provide the
+same sidebar, coordinator and PR ownership as any other pipeline.

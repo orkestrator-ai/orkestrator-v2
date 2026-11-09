@@ -1130,6 +1130,9 @@ export {
   deleteBuildPipeline,
   clearTaskBuildStatus,
   setEnvironmentUnread,
+  autoPipelineSources,
+  draftAutoPipeline,
+  confirmAutoPipeline,
 } from "./build-pipelines";
 export {
   getReviewValidationOutput,

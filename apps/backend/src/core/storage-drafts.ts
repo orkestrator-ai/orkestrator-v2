@@ -149,6 +149,40 @@ export type StorageLayerTypes = [
 ];
 
 export class DraftsRepository {
+  withAutoPipelinePromotion<T>(environmentId: string, operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.context.file(`auto-pipeline-promotion-${encodeURIComponent(environmentId)}`),
+      "Promote prompt environment",
+      operation,
+    );
+  }
+  latestAutoPipelineDraft(
+    environmentId: string,
+    tabId: string,
+  ): import("./auto-pipeline.js").AutoPipelineDraftRecord | null {
+    return (
+      this.context
+        .loadStoreRowsByOwner<import("./auto-pipeline.js").AutoPipelineDraftRecord>(
+          this.files.autoPipelineDraftsFile(),
+          environmentId,
+        )
+        .filter((record) => record.source.logicalSessionKey === tabId && !record.reviewed)
+        .sort((a, b) => b.attempt.completedAt.localeCompare(a.attempt.completedAt))[0] ?? null
+    );
+  }
+  getAutoPipelineDraft(id: string): import("./auto-pipeline.js").AutoPipelineDraftRecord | null {
+    return (
+      (this.context.loadStoreRow(this.files.autoPipelineDraftsFile(), id) as
+        import("./auto-pipeline.js").AutoPipelineDraftRecord | undefined) ?? null
+    );
+  }
+  putAutoPipelineDraft(record: import("./auto-pipeline.js").AutoPipelineDraftRecord): void {
+    this.context.updateStoreRow(this.files.autoPipelineDraftsFile(), record.draft.id, () => ({
+      result: undefined,
+      value: record,
+    }));
+  }
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,

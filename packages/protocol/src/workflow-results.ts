@@ -15,6 +15,7 @@ export const WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY = 2;
 export const WORKFLOW_RESULT_MCP_SERVER_NAME = "orkestrator_workflow_result";
 
 export const WORKFLOW_RESULT_KINDS = [
+  "auto-pipeline-draft",
   "feature-plan-state",
   "story-refinement",
   "validation-plan",
@@ -165,6 +166,7 @@ export function isWorkflowResultKind(value: unknown): value is WorkflowResultKin
 }
 
 const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
+  "auto-pipeline-draft": "submit_auto_pipeline_draft",
   "feature-plan-state": "submit_feature_plan_state",
   "story-refinement": "submit_story_refinement",
   "validation-plan": "submit_validation_plan",

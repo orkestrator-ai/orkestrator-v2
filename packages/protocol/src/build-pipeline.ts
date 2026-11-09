@@ -891,6 +891,8 @@ export interface PipelineSession {
   sdkSessionId: string;
   /** Original prompt tab retained as the first Build attempt after promotion. */
   adoptedFromTabId?: string;
+  /** Immutable original Build handoff, retained across later brief updates. */
+  adoptedBuildNotes?: import("./build-pipeline-key-information.js").KeyInformationPatch;
   /** Immutable admission identity, retained when the transcript leaves the snapshot. */
   adoptedAttemptDigest?: string;
   status: "running" | "idle" | "error";
@@ -2588,3 +2590,5 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
         (value.maxIterations as number) <= MAX_BUILD_PIPELINE_ITERATIONS))
   );
 }
+
+export * from "./auto-pipeline.js";

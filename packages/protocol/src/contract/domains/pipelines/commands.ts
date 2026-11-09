@@ -42,6 +42,43 @@ import {
   WorkflowResultToolsSettingsSchema,
 } from "./schemas.js";
 
+import {
+  AutoPipelineTicketSchema,
+  AutoPipelineDraftSchema,
+  AutoPipelineSourcesSchema,
+} from "../../../auto-pipeline.js";
+
+export const autoPipelineSourcesCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "auto_pipeline_sources",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ environmentId: Schema.String }),
+  result: AutoPipelineSourcesSchema,
+});
+export const draftAutoPipelineCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "draft_auto_pipeline",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ environmentId: Schema.String, tabId: Schema.String }),
+  result: AutoPipelineDraftSchema,
+});
+export const confirmAutoPipelineCommand = defineCommand({
+  domain: pipelinesDomain,
+  name: "confirm_auto_pipeline",
+  critical: [],
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ draftId: Schema.String, ticket: AutoPipelineTicketSchema }),
+  result: GetBuildPipelineResultSchema,
+});
+
 const checked = Schema.optionalKey(Schema.Unknown);
 
 /**
@@ -445,6 +482,9 @@ export const setWorkflowResultToolsRolloutCommand = defineCommand({
 });
 
 export const PIPELINES_COMMANDS = [
+  autoPipelineSourcesCommand,
+  draftAutoPipelineCommand,
+  confirmAutoPipelineCommand,
   startBuildPipelineCommand,
   createFeatureBuildCommand,
   launchBuildPipelineCommand,

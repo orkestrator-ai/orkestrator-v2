@@ -103,6 +103,7 @@ function installCompletedBuild(pipeline: BuildPipeline, attempt: CompletedBuildA
       sessionKey: `${pipeline.id}:build:0:${original.tabId}`,
       sdkSessionId: original.sessionId,
       adoptedFromTabId: original.tabId,
+      adoptedBuildNotes: original.notes,
       adoptedAttemptDigest: digest,
       label: "Build Session",
       status: "idle",

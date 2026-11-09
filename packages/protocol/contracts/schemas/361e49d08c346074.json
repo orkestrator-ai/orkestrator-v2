@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:361e49d08c3460749ef0285c0f751900846fcd8e852c5e83640649b739b01ae6",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "draftId": {
+          "type": "string"
+        },
+        "ticket": {
+          "additionalProperties": true,
+          "properties": {
+            "acceptanceCriteria": {
+              "items": {
+                "maxLength": 32000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            },
+            "description": {
+              "maxLength": 32000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": ["acceptanceCriteria", "description", "title"],
+          "type": "object"
+        }
+      },
+      "required": ["draftId", "ticket"],
+      "type": "object"
+    }
+  }
+}

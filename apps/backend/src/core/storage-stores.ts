@@ -74,6 +74,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "native-agent-sessions": { kind: "record" },
   "agent-interaction-resolution-journal": { kind: "document" },
   "prompt-queues": { kind: "record" },
+  "auto-pipeline-drafts": { kind: "record", owner: ownerField("environmentId") },
   "compose-drafts": { kind: "record" },
   "file-drafts": { kind: "record" },
   "agent-handoffs": { kind: "record" },

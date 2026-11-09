@@ -853,7 +853,7 @@ evidence is about 10% larger. For two small reports the whole compact prompt
 is about 2% larger, because the paragraph explaining `shared` outweighs what
 it saves. The savings grow with panel size and shared scope.
 
-## Adopting completed interactive work (internal foundation)
+## Adopting completed interactive work
 
 A completed prompt Build can be recorded through the pipeline service's internal
 adoption entry point. Its supplied key-information patch becomes the Build's
@@ -863,5 +863,18 @@ session and never requests another turn in the original tab. Without an immutabl
 review package, the normal preparation stage still runs before Review.
 
 The caller must supply a committed baseline and validate the chosen native tab's
-ownership and idleness before admission. User-facing drafting and confirmed
-promotion are not implemented yet; see [7546](../todo/coordinator-and-multi-review/7546-auto-pipeline-launch-flow.md).
+ownership and idleness before admission. The manual Auto-pipeline commands now
+perform these checks before drafting and again before confirmation.
+
+
+### Auto-pipeline Build handoff
+
+Manual Auto-pipeline drafting returns the ticket and Build key-information patch
+in one read-only session through `submit_auto_pipeline_draft`. The patch records
+observed work and files, decisions, checks with their results, and unfinished
+work. Confirmation keeps the generated handoff authoritative while accepting the
+user's edited ticket and criteria. It enters the completed-Build admission path
+on the existing environment. Review preparation, Verify and Notes then consume
+the normal ticket and key-information brief; they do not reconstruct the Build
+from a new model turn. Later brief updates do not overwrite the original Build
+attempt's inspector notes.

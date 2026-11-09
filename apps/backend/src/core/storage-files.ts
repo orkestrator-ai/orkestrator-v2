@@ -21,6 +21,10 @@ export class StorageFiles {
     return path.join(this.dataDir, name);
   }
 
+  autoPipelineDraftsFile(): string {
+    return this.file("auto-pipeline-drafts.json");
+  }
+
   projectsFile(): string {
     return this.file("projects.json");
   }

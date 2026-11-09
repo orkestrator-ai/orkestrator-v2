@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1004,
-    "defined": 1004,
+    "commands": 1007,
+    "defined": 1007,
     "untyped": 0,
     "events": 44
   },
@@ -558,6 +558,15 @@
       "critical": [],
       "argsDigest": "sha256:d88ecc9c86c1f15d2a8f29995431c92cb2b07acf40adcdcf1b0b0797f8e738a6",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "auto_pipeline_sources": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:788fee11f3d50a35205655a807b96a9d756312a170db6db23094c25dd2bd6caf"
     },
     "await_bridge_ready": {
       "domain": "agent-servers",
@@ -1404,6 +1413,15 @@
       "critical": [],
       "argsDigest": "sha256:033833e4f9992559dcc96f448b478a7615a5b4fe624fc5c8d058ecc38c3f69ea",
       "resultDigest": "sha256:83d1332fed0360e6f80bae6a7ddc905bc31b65de3775c7a977edec08adb647db"
+    },
+    "confirm_auto_pipeline": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:361e49d08c3460749ef0285c0f751900846fcd8e852c5e83640649b739b01ae6",
+      "resultDigest": "sha256:d22684328204132039aace51dec6a7af711913ece393a56688110943eb871970"
     },
     "connect_linear": {
       "domain": "kanban",
@@ -2462,6 +2480,15 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "draft_auto_pipeline": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:459319a8c7b3660748df151aaa16e59b58a10d846919dbc3d0b20038ac50213e"
     },
     "edit_controller_worker_tab": {
       "domain": "coordinator",

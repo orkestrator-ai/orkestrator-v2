@@ -1624,6 +1624,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onConfirm={handleConfiguredReview}
       />
       <MultiReviewLaunchDialog
+        autoPipelineEnvironmentId={selectedEnvironment?.id}
         open={multiReviewDialogOpen}
         onOpenChange={(open) => {
           if (!multiReviewLaunchInFlightRef.current) setMultiReviewDialogOpen(open);

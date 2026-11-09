@@ -1,10 +1,12 @@
+import { parseGitHubPullRequestLink, type GitHubPullRequestRef } from "./github-pull-requests.js";
+
 /**
  * The branch an environment owns.
  *
  * Every environment branch carries a compact prefix of its environment's id
  * (`<slug>-<namespace>[-r<revision>][-<collision suffix>]`), minted before the
- * branch is allocated. That namespace is the one durable proof that a branch
- * was created for an environment rather than adopted from the repository.
+ * branch is allocated. The namespace ties a candidate branch to a known
+ * environment id; the naming shape alone does not establish ownership.
  *
  * Branch cleanup (deleting a merged branch on GitHub, deleting the local branch
  * when an environment is removed) may only ever touch a branch that proof
@@ -14,7 +16,7 @@
  * names it.
  *
  * Browser-safe: the pull request view uses the same rule to decide whether to
- * offer branch deletion at all.
+ * offer branch deletion at all, together with its stored ownership record.
  */
 
 const ENVIRONMENT_BRANCH_NAMESPACE_LENGTH = 12;
@@ -63,10 +65,27 @@ export function isEnvironmentOwnedBranch(
 }
 
 /**
- * True for a branch Orkestrator created for some environment, when the caller
- * has no environment to compare against (the pull request view merges a PR
- * that may belong to an environment on another machine).
+ * True when a branch has the environment naming shape. This is not proof of
+ * ownership and must never authorize deletion by itself.
  */
 export function isEnvironmentBranchName(branch: string | null | undefined): boolean {
   return !!branch && parseEnvironmentBranchNamespace(branch) !== null;
+}
+
+/** Verify the exact branch against a stored environment and its attached repository. */
+export function hasEnvironmentBranchOwnership(
+  ref: GitHubPullRequestRef,
+  branch: string,
+  environments: readonly { id: string; branch: string | null; prUrl?: string | null }[],
+): boolean {
+  return environments.some((environment) => {
+    const pull = environment.prUrl ? parseGitHubPullRequestLink(environment.prUrl) : null;
+    return (
+      !!pull &&
+      pull.owner.toLowerCase() === ref.owner.toLowerCase() &&
+      pull.repo.toLowerCase() === ref.repo.toLowerCase() &&
+      environment.branch === branch &&
+      isEnvironmentOwnedBranch(environment.id, branch)
+    );
+  });
 }

@@ -239,8 +239,9 @@ export function registerGitHubPullRequestCommands(
       deleteBranch: asRequiredBoolean(args.deleteBranch, "deleteBranch"),
       expectedHeadSha: optionalString(args.expectedHeadSha, "expectedHeadSha"),
     };
+    const environments = input.deleteBranch ? await context.storage.loadEnvironments() : [];
     const result = await withGitHubToken(context, (token) =>
-      mergeGitHubPullRequest(token, ref, input),
+      mergeGitHubPullRequest(token, ref, input, { environments }),
     );
     if (result.merged) void refreshMonitoredPullRequest(ref, context);
     return result;

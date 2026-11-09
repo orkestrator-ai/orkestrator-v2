@@ -18,7 +18,7 @@ import {
   Eye,
 } from "lucide-react";
 import { toast } from "sonner";
-import { isEnvironmentBranchName } from "@orkestrator/protocol/environment-branch";
+import { hasEnvironmentBranchOwnership } from "@orkestrator/protocol/environment-branch";
 import {
   gitHubPullRequestUrl,
   type GitHubPullRequestDetail,
@@ -51,6 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { openInBrowser } from "@/lib/backend";
 import type { GitHubPullRequestStateAction } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePullRequestsStore } from "@/stores/pullRequestsStore";
 import {
   MERGE_METHOD_LABELS,
@@ -92,7 +93,10 @@ export function MergeButton({
   // Only a branch Orkestrator created for an environment may be deleted; a
   // release branch such as `dev`, or any branch made by hand, is always kept.
   // The backend applies the same rule whatever this sends.
-  const canDeleteBranch = !detail.isCrossRepository && isEnvironmentBranchName(detail.headRef);
+  const environments = useEnvironmentStore((state) => state.environments);
+  const canDeleteBranch =
+    !detail.isCrossRepository &&
+    hasEnvironmentBranchOwnership(pullRequest, detail.headRef, environments);
   const [deleteBranch, setDeleteBranch] = useState(true);
   const shouldDeleteBranch = deleteBranch && canDeleteBranch;
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -228,7 +232,7 @@ export function MergeButton({
                     ? `The ${detail.headRef} branch will be deleted after merging.`
                     : canDeleteBranch || detail.isCrossRepository
                       ? "The head branch will be kept."
-                      : `The ${detail.headRef} branch will be kept: it was not created for an environment.`}
+                      : `The ${detail.headRef} branch will be kept: environment ownership could not be verified.`}
                 </p>
                 {warning && (
                   <p className="flex items-start gap-1.5 text-amber-300">

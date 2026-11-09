@@ -28,6 +28,13 @@ const MERGE_PATH = "/repos/acme/repo/pulls/7/merge";
 /** A branch named for an environment, the only kind a merge may delete. */
 const ENVIRONMENT_HEAD = "widgets-0123456789ab";
 const BRANCH_PATH = `/repos/acme/repo/git/refs/heads/${ENVIRONMENT_HEAD}`;
+const ownership = [
+  {
+    id: "01234567-89ab-4000-8000-000000000000",
+    branch: ENVIRONMENT_HEAD,
+    prUrl: "https://github.com/acme/repo/pull/7",
+  },
+];
 const environmentPull = () =>
   apiPull({ head: { ref: ENVIRONMENT_HEAD, sha: HEAD_SHA, repo: { full_name: "acme/repo" } } });
 
@@ -46,7 +53,7 @@ describe("mergeGitHubPullRequest", () => {
       TOKEN,
       REF,
       { method: "squash", deleteBranch: true, expectedHeadSha: HEAD_SHA },
-      fake.options,
+      { ...fake.options, environments: ownership },
     );
 
     expect(fake.unexpected).toEqual([]);
@@ -75,7 +82,7 @@ describe("mergeGitHubPullRequest", () => {
       TOKEN,
       REF,
       { method: "merge", deleteBranch: true },
-      fake.options,
+      { ...fake.options, environments: ownership },
     );
     expect(forked.branchDeleted).toBe(false);
     expect(fake.requests.some((request) => request.method === "DELETE")).toBe(false);
@@ -93,7 +100,13 @@ describe("mergeGitHubPullRequest", () => {
   });
 
   test("keeps a branch that was not created for an environment, such as a release from dev", async () => {
-    for (const ref of ["dev", "feature/widgets"]) {
+    for (const ref of [
+      "dev",
+      "feature/widgets",
+      "release-202611091405",
+      "hotfix-deadbeefcafe",
+      ENVIRONMENT_HEAD,
+    ]) {
       const fake = createFakeGitHub();
       fake.on(
         "GET",
@@ -129,7 +142,7 @@ describe("mergeGitHubPullRequest", () => {
           TOKEN,
           REF,
           { method: "merge", deleteBranch: true },
-          fake.options,
+          { ...fake.options, environments: ownership },
         )
       ).branchDeleted,
     ).toBe(true);
@@ -139,7 +152,7 @@ describe("mergeGitHubPullRequest", () => {
       TOKEN,
       REF,
       { method: "merge", deleteBranch: true },
-      fake.options,
+      { ...fake.options, environments: ownership },
     );
     expect(result).toMatchObject({
       merged: true,
@@ -161,7 +174,7 @@ describe("mergeGitHubPullRequest", () => {
         TOKEN,
         REF,
         { method: "merge", deleteBranch: false, expectedHeadSha: HEAD_SHA },
-        fake.options,
+        { ...fake.options, environments: ownership },
       ),
     ).rejects.toThrow("Head branch was modified");
   });
@@ -173,7 +186,7 @@ describe("mergeGitHubPullRequest", () => {
         TOKEN,
         REF,
         { method: "fast-forward" as never, deleteBranch: false },
-        fake.options,
+        { ...fake.options, environments: ownership },
       ),
     ).rejects.toThrow("Merge method");
     await expect(
@@ -181,7 +194,7 @@ describe("mergeGitHubPullRequest", () => {
         TOKEN,
         REF,
         { method: "merge", deleteBranch: false, expectedHeadSha: "abc" },
-        fake.options,
+        { ...fake.options, environments: ownership },
       ),
     ).rejects.toThrow("full commit SHA");
     expect(fake.requests).toEqual([]);
@@ -469,7 +482,7 @@ test("a 422 branch deletion refusal retains partial merge success and a warning"
     TOKEN,
     REF,
     { method: "merge", deleteBranch: true },
-    fake.options,
+    { ...fake.options, environments: ownership },
   );
   expect(result).toMatchObject({
     merged: true,

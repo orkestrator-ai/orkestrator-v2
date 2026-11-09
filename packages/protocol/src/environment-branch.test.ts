@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   environmentBranchNamespace,
+  hasEnvironmentBranchOwnership,
   isBranchInEnvironmentNamespace,
   isEnvironmentBranchName,
   isEnvironmentOwnedBranch,
@@ -51,4 +52,20 @@ describe("environment branch ownership", () => {
     expect(isBranchInEnvironmentNamespace("orphanedbran", "x-orphanedbran")).toBe(false);
     expect(isBranchInEnvironmentNamespace("", "dev")).toBe(false);
   });
+});
+
+test("viewer ownership needs an exact stored branch, matching namespace and repository", () => {
+  const ref = { owner: "acme", repo: "widget", number: 42 };
+  const branch = "fix-ce98b4c62352";
+  const record = { id: ENVIRONMENT_ID, branch, prUrl: "https://github.com/acme/widget/pull/42" };
+  expect(hasEnvironmentBranchOwnership(ref, branch, [record])).toBe(true);
+  expect(hasEnvironmentBranchOwnership(ref, branch, [])).toBe(false);
+  for (const override of [
+    { branch: "other-ce98b4c62352" },
+    { id: OTHER_ENVIRONMENT_ID },
+    { prUrl: null },
+    { prUrl: "https://github.com/another/widget/pull/42" },
+  ]) {
+    expect(hasEnvironmentBranchOwnership(ref, branch, [{ ...record, ...override }])).toBe(false);
+  }
 });

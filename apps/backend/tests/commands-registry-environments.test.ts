@@ -3593,6 +3593,8 @@ exit 0
   test("deletes the remote head branch during merged local environment cleanup", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-delete-worktree-");
     const environment = createEnvironment({
+      id: "01234567-89ab-4000-8000-000000000000",
+      branch: "feature-0123456789ab",
       worktreePath,
       prUrl: "https://github.com/acme/repo/pull/42",
       prState: "merged",
@@ -3604,10 +3606,10 @@ exit 0
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/cleanup","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/cleanup" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature-0123456789ab" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
   exit 0
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
@@ -3621,7 +3623,7 @@ exit 1
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog).toContain("api repos/acme/repo/pulls/42");
         expect(ghLog).toContain(
-          "api repos/acme/repo/git/refs/heads/feature/cleanup --method DELETE",
+          "api repos/acme/repo/git/refs/heads/feature-0123456789ab --method DELETE",
         );
         await expect(
           commands.get("get_environment")?.({ environmentId: environment.id }, context),
@@ -3633,6 +3635,8 @@ exit 1
   test("continues merged environment cleanup when the remote head branch is already deleted", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-delete-404-worktree-");
     const environment = createEnvironment({
+      id: "01234567-89ab-4000-8000-000000000000",
+      branch: "feature-0123456789ab",
       worktreePath,
       prUrl: "https://github.com/acme/repo/pull/42",
       prState: "merged",
@@ -3644,10 +3648,10 @@ exit 1
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
-  printf '%s\\n' '{"head":{"ref":"feature/already-cleaned","repo":{"full_name":"acme/repo"}}}'
+  printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
   exit 0
 fi
-if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-cleaned" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature-0123456789ab" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
   printf '%s\\n' 'HTTP 422: Reference does not exist' >&2
   exit 1
 fi
@@ -3661,7 +3665,7 @@ exit 1
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog).toContain(
-          "api repos/acme/repo/git/refs/heads/feature/already-cleaned --method DELETE",
+          "api repos/acme/repo/git/refs/heads/feature-0123456789ab --method DELETE",
         );
         await expect(
           commands.get("get_environment")?.({ environmentId: environment.id }, context),
@@ -3701,7 +3705,8 @@ exit 1
 
   test("deletes the remote head branch during merged running container cleanup", async () => {
     const environment = createEnvironment({
-      id: "env-container-cleanup",
+      id: "01234567-89ab-4000-8000-000000000000",
+      branch: "feature-0123456789ab",
       environmentType: "containerized",
       worktreePath: undefined,
       containerId: "container-1",
@@ -3727,11 +3732,14 @@ if [ "$1" = "exec" ]; then
       printf '\\036ORKESTRATOR_PREPARE_OK\\037'
       exit 0
       ;;
-    *pulls/42*)
-      printf '%s\\n' '{"head":{"ref":"feature/container-cleanup","repo":{"full_name":"acme/repo"}}}'
+    *tmux*)
       exit 0
       ;;
-    *refs/heads/feature/container-cleanup*)
+    *pulls/42*)
+      printf '%s\\n' '{"head":{"ref":"feature-0123456789ab","repo":{"full_name":"acme/repo"}},"base":{"repo":{"full_name":"acme/repo"}}}'
+      exit 0
+      ;;
+    *refs/heads/feature-0123456789ab*)
       exit 0
       ;;
   esac
@@ -3751,7 +3759,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("pulls/42");
-        expect(execLog).toContain("refs/heads/feature/container-cleanup");
+        expect(execLog).toContain("refs/heads/feature-0123456789ab");
         expect(execLog).toContain("DELETE");
         const rmLog = await fs.readFile(logs.rm, "utf8");
         expect(rmLog).toContain("container-1");

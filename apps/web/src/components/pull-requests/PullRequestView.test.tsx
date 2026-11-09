@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
+import { environmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { uiStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastSuccess } from "../../../../../tests/mocks/sonner";
@@ -41,6 +43,7 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
 
 beforeEach(() => {
   resetPullRequestsStore();
+  appCommandStore(environmentStore).setState({ environments: [] });
 });
 
 afterEach(() => {
@@ -141,6 +144,15 @@ describe("PullRequestView", () => {
   });
 
   test("merging confirms the method and pins the head sha", async () => {
+    appCommandStore(environmentStore).setState({
+      environments: [
+        {
+          id: "01234567-89ab-4000-8000-000000000000",
+          branch: "usage-history-0123456789ab",
+          prUrl: "https://github.com/acme/widget/pull/42",
+        } as Environment,
+      ],
+    });
     renderView(makeDetail({ headRef: "usage-history-0123456789ab" }));
     await screen.findByText("feat: add usage history tab");
     fireEvent.click(screen.getByRole("button", { name: "Merge" }));
@@ -165,13 +177,37 @@ describe("PullRequestView", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(
       within(dialog).getByText(
-        "The dev branch will be kept: it was not created for an environment.",
+        "The dev branch will be kept: environment ownership could not be verified.",
       ),
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Squash and merge" }));
     await waitFor(() => expect(callsFor("merge_github_pull_request")).toHaveLength(1));
     expect(callsFor("merge_github_pull_request")[0]).toMatchObject({ deleteBranch: false });
   });
+
+  for (const headRef of ["release-202611091405", "hotfix-deadbeefcafe"]) {
+    test(`keeps handwritten matching branch ${headRef} without ownership`, async () => {
+      renderView(makeDetail({ headRef }));
+      await screen.findByText("feat: add usage history tab");
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Merge options" }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      expect(
+        screen
+          .getByRole("menuitemcheckbox", { name: "Delete branch after merge" })
+          .getAttribute("aria-disabled"),
+      ).toBe("true");
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/ownership could not be verified/)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Squash and merge" }));
+      await waitFor(() =>
+        expect(callsFor("merge_github_pull_request")[0]).toMatchObject({ deleteBranch: false }),
+      );
+    });
+  }
 
   test("hides the Merge button once the pull request is merged", async () => {
     renderView(makeDetail({ state: "merged", mergeability: "unavailable" }));

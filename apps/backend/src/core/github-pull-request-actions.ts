@@ -2,7 +2,7 @@
  * Pull request mutations for the in-app viewer: merge, state, conversation
  * comments, reviews, review threads, viewed files, reviewers and labels.
  */
-import { isEnvironmentBranchName } from "@orkestrator/protocol/environment-branch";
+import { hasEnvironmentBranchOwnership } from "@orkestrator/protocol/environment-branch";
 import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
@@ -211,7 +211,9 @@ export async function mergeGitHubPullRequest(
     deleteBranch: boolean;
     expectedHeadSha?: string;
   },
-  options: GitHubPullRequestRequestOptions = {},
+  options: GitHubPullRequestRequestOptions & {
+    environments?: readonly { id: string; branch: string | null; prUrl?: string | null }[];
+  } = {},
 ): Promise<GitHubPullRequestMergeResult> {
   assertPullRequestRef(ref);
   if (!MERGE_METHODS.has(input.method))
@@ -249,7 +251,8 @@ export async function mergeGitHubPullRequest(
   // Only a branch Orkestrator created for an environment may be deleted. A
   // release pull request from `dev`, or any branch the user made, merges and
   // keeps its branch, whatever the request asked for.
-  if (!isEnvironmentBranchName(headRef)) return { ...result, branchDeleted: false };
+  if (!hasEnvironmentBranchOwnership(ref, headRef, options.environments ?? []))
+    return { ...result, branchDeleted: false };
   try {
     return { ...result, branchDeleted: await deleteHeadBranch(client, ref, headRef) };
   } catch {

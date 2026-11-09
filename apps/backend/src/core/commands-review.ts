@@ -1331,7 +1331,11 @@ export async function mergePullRequestViaGitHubApi(
 
   let head: GitHubPullRequestHead | null = null;
   if (deleteBranchOf !== null) {
-    head = await loadPullRequestHead(pullEndpoint, runGh);
+    try {
+      head = await loadPullRequestHead(pullEndpoint, runGh);
+    } catch {
+      log.info("branch-cleanup.kept", { reason: "head-unavailable" });
+    }
   }
 
   const mergeOutput = await runGh(
@@ -1388,7 +1392,12 @@ export async function mergePullRequestInContainer(
   let deleteBranch = false;
   if (deleteBranchOf !== null) {
     const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
-    const head = await loadPullRequestHead(pullEndpoint, runGh);
+    let head: GitHubPullRequestHead | null = null;
+    try {
+      head = await loadPullRequestHead(pullEndpoint, runGh);
+    } catch {
+      log.info("branch-cleanup.kept", { reason: "head-unavailable" });
+    }
     deleteBranch = deletableEnvironmentHeadBranch(head, deleteBranchOf) !== null;
     if (!deleteBranch) {
       log.info("branch-cleanup.kept", {

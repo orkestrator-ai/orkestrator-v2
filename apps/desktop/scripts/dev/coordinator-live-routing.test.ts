@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { MULTI_REVIEW_MIN_REVIEWERS } from "@orkestrator/protocol/multi-review";
 import type { CoordinatorTranscriptMessage } from "./coordinator-live.js";
 import {
+  createRoutingRows,
   evaluateRoutingBuild,
   evaluateRoutingDeliveryOutcome,
   evaluateRoutingInvestigate,
@@ -234,13 +235,22 @@ describe("build cases", () => {
 });
 
 describe("investigation case", () => {
-  const counts = { newTickets: 0, newPipelines: 0, newReviews: 0 };
+  const counts = {
+    delegationRequests: [{ environmentId: "env", workerTabId: "tab" }],
+    newTickets: 0,
+    newPipelines: 0,
+    newReviews: 0,
+  };
 
   test("one worker by any worker tool passes", () => {
     for (const tool of ["launch_environment", "launch_job", "send_prompt_to_tab"]) {
       expect(
         failedNames(
-          evaluateRoutingInvestigate({ messages: [row(tool, {})], newWorkers: 1, ...counts }),
+          evaluateRoutingInvestigate({
+            messages: [row(tool, { environmentId: "env", tabId: "tab" })],
+            newWorkers: 1,
+            ...counts,
+          }),
         ),
       ).toEqual([]);
     }
@@ -321,4 +331,62 @@ describe("review case", () => {
       ),
     ).toEqual(["review-launched", "review-auto-actions-off", "review-no-other-workflow"]);
   });
+});
+
+test("investigation requires both successful tool completion and backend request evidence", () => {
+  for (const state of ["error", "running", "unknown"]) {
+    const messages = [{ parts: [{ toolName: "launch_job", toolState: state }] }];
+    expect(
+      failedNames(
+        evaluateRoutingInvestigate({
+          messages,
+          newWorkers: 0,
+          delegationRequests: [],
+          newTickets: 0,
+          newPipelines: 0,
+          newReviews: 0,
+        }),
+      ),
+    ).toContain("investigate-delegated");
+  }
+  expect(
+    failedNames(
+      evaluateRoutingInvestigate({
+        messages: [row("send_prompt_to_tab", {})],
+        newWorkers: 0,
+        delegationRequests: [],
+        newTickets: 0,
+        newPipelines: 0,
+        newReviews: 0,
+      }),
+    ),
+  ).toContain("investigate-delegated");
+});
+
+test("rolling projections retain case calls, revisions and delivery wakes after 200 rows", () => {
+  const collected = createRoutingRows();
+  const messages: CoordinatorTranscriptMessage[] = Array.from({ length: 200 }, (_, i) => ({
+    id: String(i),
+    role: "assistant",
+  }));
+  collected.observe(messages);
+  collected.begin();
+  for (let i = 200; i < 650; i++) {
+    messages.push({
+      id: String(i),
+      ...row(i === 200 ? "start_build_pipeline" : i === 649 ? "create_pr" : "read_file", {}),
+    });
+    collected.observe(messages.slice(-200));
+  }
+  expect(collected.messages()).toHaveLength(450);
+  expect(
+    routingToolCalls(collected.messages()).filter((call) => call.tool === "create_pr"),
+  ).toHaveLength(1);
+  expect(routingToolCalls(collected.messages())[0]?.tool).toBe("start_build_pipeline");
+  collected.begin();
+  collected.observe([...messages.slice(-199), { id: "650", ...row("launch_job", {}) }]);
+  expect(collected.messages().map((row) => row.id)).toEqual(["650"]);
+  collected.observe([...messages.slice(-199), { id: "650", ...row("send_prompt_to_tab", {}) }]);
+  expect(routingToolCalls(collected.messages())[0]?.tool).toBe("send_prompt_to_tab");
+  expect(() => collected.observe([{ id: "gap" }])).toThrow("projection gap");
 });

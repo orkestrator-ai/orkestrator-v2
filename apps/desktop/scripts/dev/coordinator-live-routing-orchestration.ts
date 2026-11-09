@@ -14,6 +14,7 @@ import {
 } from "./coordinator-live-observer.js";
 import { coordinatorTurn } from "./coordinator-live-orchestration.js";
 import {
+  createRoutingRows,
   evaluateRoutingBuild,
   evaluateRoutingDeliveryOutcome,
   evaluateRoutingInteractions,
@@ -151,7 +152,12 @@ async function settleQuiet(
         `the coordinator turn failed: ${watch.projection()?.turn.error ?? "no error text"}`,
       );
     }
-    if (observation.coordinatorPhase !== "idle" || observation.queueLength > 0 || waiting) {
+    if (
+      observation.coordinatorPhase !== "idle" ||
+      observation.queueLength > 0 ||
+      waiting ||
+      observation.delegations.some((d) => d.state === "running" || !d.wokenAt)
+    ) {
       quietSince = undefined;
       return false;
     }
@@ -234,10 +240,13 @@ export async function runRoutingScenario(input: {
     }
   });
 
-  const watch = createDelegationWatch(invoke, coordinator, summary, input.pollIntervalMs);
+  const collected = createRoutingRows();
+  const watch = createDelegationWatch(invoke, coordinator, summary, input.pollIntervalMs, {
+    onProjection: (projection) => collected.observe(projection?.messages ?? []),
+  });
   const checks: CoordinatorLiveCheck[] = [];
   const observed: Record<string, number> = {};
-  const caseRows = (rowsBefore: number) => (watch.projection()?.messages ?? []).slice(rowsBefore);
+  const caseRows = () => collected.messages();
   const countCalls = (name: RoutingCase, rows: ReturnType<typeof caseRows>) => {
     for (const [tool, count] of Object.entries(workflowCallCounts(routingToolCalls(rows)))) {
       observed[`${name}:${tool}`] = count;
@@ -248,8 +257,8 @@ export async function runRoutingScenario(input: {
   async function buildCase(name: "build" | "delivery") {
     const before = await baseline(reads);
     const prompt = name === "build" ? routingBuildPrompt(probe) : routingDeliveryPrompt(probe);
-    const turn = await coordinatorTurn(watch, coordinator, `the ${name} request`, prompt);
-    const rows = caseRows(turn.rowsBefore);
+    await coordinatorTurn(watch, coordinator, `the ${name} request`, prompt);
+    const rows = caseRows();
     countCalls(name, rows);
     const fresh = await added(reads, before);
     const pipeline = fresh.pipelines[0] ? await reads.pipeline(fresh.pipelines[0]) : undefined;
@@ -278,19 +287,27 @@ export async function runRoutingScenario(input: {
     // 2. A question that needs a run: a worker, and its report let through.
     async investigate() {
       const before = await baseline(reads);
-      const turn = await coordinatorTurn(
+      const prior = await watch.observe();
+      const requestKey = (d: { environmentId: string; workerTabId: string; requestedAt: string }) =>
+        JSON.stringify([d.environmentId, d.workerTabId, d.requestedAt]);
+      const priorRequests = new Set(prior.delegations.map(requestKey));
+      await coordinatorTurn(
         watch,
         coordinator,
         "the investigation request",
         routingInvestigatePrompt(),
       );
-      const rows = caseRows(turn.rowsBefore);
+      const rows = caseRows();
       countCalls("investigate", rows);
       const fresh = await added(reads, before);
+      const investigation = (await watch.observe()).delegations.filter(
+        (d) => !priorRequests.has(requestKey(d)),
+      );
       checks.push(
         ...evaluateRoutingInvestigate({
           messages: rows,
           newWorkers: fresh.workers.length,
+          delegationRequests: investigation,
           newTickets: fresh.tickets.length,
           newPipelines: fresh.pipelines.length,
           newReviews: fresh.reviews.length,
@@ -302,12 +319,15 @@ export async function runRoutingScenario(input: {
       for (const workflowId of fresh.reviews) {
         await invoke("cancel_multi_review", { workflowId }).catch(() => undefined);
       }
-      if (fresh.workers.length > 0) {
-        await watch.until("the investigating worker's report", (observation) =>
-          fresh.workers.every((environmentId) =>
+      if (investigation.length > 0) {
+        await watch.until("the investigating worker's report and wake", (observation) =>
+          investigation.every((request) =>
             observation.delegations.some(
-              (delegation) =>
-                delegation.environmentId === environmentId && delegation.wokenAt !== undefined,
+              (d) =>
+                requestKey(d) === requestKey(request) &&
+                d.state === "completed" &&
+                d.wokenAt !== undefined &&
+                observation.workerPhases?.[d.environmentId] === "idle",
             ),
           ),
         );
@@ -359,13 +379,8 @@ export async function runRoutingScenario(input: {
       };
 
       const before = await baseline(reads);
-      const turn = await coordinatorTurn(
-        watch,
-        coordinator,
-        "the review request",
-        routingReviewPrompt(target),
-      );
-      const rows = caseRows(turn.rowsBefore);
+      await coordinatorTurn(watch, coordinator, "the review request", routingReviewPrompt(target));
+      const rows = caseRows();
       countCalls("review", rows);
       const fresh = await added(reads, before);
       const review = (await reads.reviews(target.environmentId)).find(
@@ -392,7 +407,6 @@ export async function runRoutingScenario(input: {
 
     // 4. Case 1 under `commit-only`, run to its end.
     async delivery() {
-      const rowsBefore = watch.projection()?.messages.length ?? 0;
       const { fresh, pipeline } = await buildCase("delivery");
       if (!pipeline) throw new Error("the delivery request started no build pipeline");
       // Verify reads the live ticket's policy, minutes from now.
@@ -421,7 +435,7 @@ export async function runRoutingScenario(input: {
       await settle("the coordinator after the build finished");
       checks.push(
         ...evaluateRoutingDeliveryOutcome({
-          messages: caseRows(rowsBefore),
+          messages: caseRows(),
           ...(ended ? { pipeline: ended } : {}),
         }),
       );
@@ -439,6 +453,8 @@ export async function runRoutingScenario(input: {
     const started = Date.now();
     progress(`case ${name} started`);
     try {
+      await watch.observe();
+      collected.begin();
       await steps[name]();
       checks.push({ name: `${name}-finished`, passed: true });
       progress(`case ${name} finished in ${Math.round((Date.now() - started) / 1_000)}s`);

@@ -176,7 +176,7 @@ export function toolArgsRecord(value: unknown): Record<string, unknown> | undefi
   return args;
 }
 
-const MAX_ROUTING_CALLS = 200;
+const MAX_ROUTING_CALLS = 20_000;
 
 /** Every Orkestrator tool call in a case's rows, including grouped and sub-agent calls. */
 export function routingToolCalls(
@@ -184,7 +184,8 @@ export function routingToolCalls(
 ): RoutingToolCall[] {
   const calls: RoutingToolCall[] = [];
   const visit = (value: unknown, row: number, depth: number) => {
-    if (depth > 8 || calls.length >= MAX_ROUTING_CALLS) return;
+    if (calls.length >= MAX_ROUTING_CALLS) throw new Error("routing tool call budget exceeded");
+    if (depth > 8) return;
     if (Array.isArray(value)) {
       for (const item of value) visit(item, row, depth + 1);
       return;
@@ -393,6 +394,8 @@ export interface RoutingInvestigateInput {
   messages: readonly CoordinatorTranscriptMessage[];
   /** Workers the conversation's associations gained during the case. */
   newWorkers: number;
+  /** New backend delegation requests, including requests on reused workers. */
+  delegationRequests: readonly { environmentId: string; workerTabId: string }[];
   newTickets: number;
   newPipelines: number;
   newReviews: number;
@@ -412,8 +415,14 @@ export function evaluateRoutingInvestigate(input: RoutingInvestigateInput): Coor
   return [
     check(
       "investigate-delegated",
-      workers.length === 1 && input.newWorkers <= 1,
-      `${describeCounts(counts)}; ${input.newWorkers} new workers`,
+      workers.length === 1 &&
+        workers[0]?.state === "success" &&
+        input.newWorkers <= 1 &&
+        input.delegationRequests.length === 1 &&
+        (workers[0]?.tool !== "send_prompt_to_tab" ||
+          (workers[0]?.args?.environmentId === input.delegationRequests[0]?.environmentId &&
+            workers[0]?.args?.tabId === input.delegationRequests[0]?.workerTabId)),
+      `${describeCounts(counts)}; ${input.newWorkers} new workers, ${input.delegationRequests.length} delegation requests`,
     ),
     check(
       "investigate-no-build-or-review",
@@ -494,4 +503,38 @@ export function evaluateRoutingInteractions(input: {
     ...escapedInteractionFailures(input.workerInteractions).map((failure) => `worker: ${failure}`),
   ];
   return [check("no-user-action", failures.length === 0, failures.join("; "))];
+}
+
+/** Accumulate one case across rolling projections, replacing revised rows by id.
+ * Fail closed on a gap or a missing identity rather than silently lose evidence.
+ */
+export function createRoutingRows() {
+  let baseline = new Set<string>();
+  let previous: string[] = [];
+  let active = false;
+  const rows = new Map<string, CoordinatorTranscriptMessage>();
+  return {
+    begin() {
+      active = true;
+      baseline = new Set(previous);
+      rows.clear();
+    },
+    observe(messages: readonly CoordinatorTranscriptMessage[]) {
+      const ids = messages.map((row) => {
+        if (!row.id) throw new Error("routing transcript row has no stable id");
+        return row.id;
+      });
+      if (active && previous.length && ids.length && !ids.some((id) => previous.includes(id))) {
+        throw new Error("routing transcript projection gap");
+      }
+      if (active) {
+        for (const row of messages) {
+          if (!baseline.has(row.id!)) rows.set(row.id!, structuredClone(row));
+        }
+        if (rows.size > 5000) throw new Error("routing transcript case exceeded 5000 rows");
+      }
+      if (ids.length) previous = ids;
+    },
+    messages: () => [...rows.values()],
+  };
 }

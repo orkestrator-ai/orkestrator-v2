@@ -130,6 +130,9 @@ export async function coordinatorTurn(
 ): Promise<{ phases: string[]; rowsBefore: number; endedAt: number }> {
   const before = await watch.observe();
   const rowsBefore = watch.projection()?.messages.length ?? 0;
+  const priorIds = new Set(
+    (watch.projection()?.messages ?? []).flatMap((row) => (row.id ? [row.id] : [])),
+  );
   await coordinator.invoke("dispatch_native_agent_intent", {
     ...coordinator.identity,
     prompt,
@@ -148,7 +151,11 @@ export async function coordinatorTurn(
     }
     if (observation.coordinatorPhase !== "idle") sawActive = true;
     idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-    const grew = (watch.projection()?.messages.length ?? 0) > rowsBefore;
+    const grew =
+      (watch.projection()?.messages.length ?? 0) > rowsBefore ||
+      (watch.projection()?.messages ?? []).some(
+        (row) => row.id !== undefined && !priorIds.has(row.id),
+      );
     return idleReads >= 2 && (sawActive || grew) && observation.queueLength === 0;
   });
   return { phases, rowsBefore, endedAt: end.at };

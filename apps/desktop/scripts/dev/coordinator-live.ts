@@ -346,7 +346,12 @@ export interface ReadOnlyToolCall {
 }
 
 /** A native-agent transcript message, as the projection returns it. */
-export type CoordinatorTranscriptMessage = { role?: unknown; content?: unknown; parts?: unknown };
+export type CoordinatorTranscriptMessage = {
+  id?: string;
+  role?: unknown;
+  content?: unknown;
+  parts?: unknown;
+};
 
 const MAX_TOOL_CALLS = 200;
 const MAX_TOOL_DEPTH = 8;

@@ -104,7 +104,10 @@ export function createDelegationWatch(
   coordinator: DelegationCoordinator,
   summary: CoordinatorLivePlatformSummary,
   pollIntervalMs = 2_000,
-  options: { holdWorkerInteractions?: (environmentId: string) => boolean } = {},
+  options: {
+    holdWorkerInteractions?: (environmentId: string) => boolean;
+    onProjection?: (projection: Projection | null) => void;
+  } = {},
 ) {
   const { identity, conversation, projectId } = coordinator;
   const coordinatorMailbox = { environmentId: identity.environmentId, tabId: conversation.tabId };
@@ -116,6 +119,7 @@ export function createDelegationWatch(
   /** A worker turn that failed, by environment: the scenario cannot go on. */
   const workerErrors = new Map<string, string>();
   const names = new Map<string, string>();
+  const workerTabs = new Map<string, string>();
   /** Held interactions by worker, then by interaction id. */
   const held = new Map<
     string,
@@ -135,7 +139,7 @@ export function createDelegationWatch(
   const workerIdentity = (environmentId: string): SessionIdentity => ({
     environmentId,
     agent: identity.agent,
-    logicalSessionKey: `env-${environmentId}:startup-agent`,
+    logicalSessionKey: `env-${environmentId}:${workerTabs.get(environmentId) ?? "startup-agent"}`,
   });
   const answer = async (target: SessionIdentity, answers: TurnAnswer[]) => {
     for (const item of answers) {
@@ -220,6 +224,7 @@ export function createDelegationWatch(
         invoke<{ messages?: unknown[] } | null>("get_prompt_queue", { queueKey }).catch(() => null),
       ]);
       projection = nextProjection;
+      options.onProjection?.(projection);
       const { answers } = coordinatorTurn.observe(projection);
       await answer(identity, answers);
 
@@ -228,6 +233,8 @@ export function createDelegationWatch(
           workflow.kind === "environment" && workflow.conversationId === conversation.id,
       );
       for (const association of associations) {
+        if (association.delegation)
+          workerTabs.set(association.resourceId, association.delegation.workerTabId);
         if (!watch.workers.includes(association.resourceId))
           watch.workers.push(association.resourceId);
       }
@@ -248,7 +255,7 @@ export function createDelegationWatch(
         watch.workers.map(async (worker) => {
           const target = workerIdentity(worker);
           const [workerMail, workerProjection] = await Promise.all([
-            mailbox(worker, "startup-agent"),
+            mailbox(worker, workerTabs.get(worker) ?? "startup-agent"),
             invoke<Projection | null>("get_native_agent_projection", {
               ...target,
               messageLimit: 20,

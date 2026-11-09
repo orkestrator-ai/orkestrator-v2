@@ -187,7 +187,7 @@ whether it says who cancelled, has not been read.
 Chose the recommended option: cases 1 and 3 judge the first workflow call
 and the records it made, then the harness cancels the build or review; case
 4 runs its build to the end. Case 2 is the one deviation: its worker is let
-run to its report instead of being stopped. The worker's turn is one short
+run to its report instead of being stopped. The fixture worker's turn is one short
 `bun run check`, and a worker stopped mid-turn still ends with a wake that
 the coordinator reacts to at an unknown time, which could land inside the
 next case's rows. Between cases the harness waits until the coordinator has
@@ -221,10 +221,10 @@ finished build, makes no `create_pr` call (`COORDINATOR_PR_RULE`).
 ### What case 2 asks (task 1)
 
 "Does this project's test suite pass right now, and how many tests does it
-run? Someone has to actually run it (bun run check) to find out." A question
+run? Someone has to actually run the fixture command (bun run check) to find out." A question
 answerable by reading (what `/health` returns) would let a coordinator
 answer from `server.ts`, which is correct behaviour and proves nothing about
-routing. A Codex coordinator might still run `bun run check` in its own
+routing. A Codex coordinator might still run the fixture command `bun run check` in its own
 read-only sandbox; that fails `investigate-delegated`, and the check's
 detail names the workflow calls it made, which is the evidence task 2 needs.
 
@@ -254,6 +254,23 @@ Both platforms misrouted the `review` case, which task 2's rule says
 justifies a rule change. The rule was left as it is because the case's
 expectation is itself a product choice (task 3): a coordinator reading a
 one-file change is what the Scope line allows.
+
+### Review repairs: delegation evidence and case boundaries (task 1)
+
+Chose a successful worker tool call plus exactly one backend delegation request
+whose environment, tab and request timestamp were absent before the case.
+For a reused tab, the call must name that delegation's environment and tab.
+Waiting on that request's completed state, wake and idle worker prevents a
+late report crossing the case boundary. The observer reads the delegation's
+actual tab. The alternative, counting new environment associations, is simpler
+but cannot prove a reused worker started a new investigation.
+
+Chose stable message IDs and per-poll accumulation for case transcripts,
+including delivery wakes and revisions. Collection fails on a projection gap,
+missing identity or exceeded budget; the alternative, slicing by a prior row
+count, loses evidence once the bounded projection rolls. Instant turns also
+use new message IDs as evidence of progress. The regression transport exercises
+failed launches, delayed reports on reused tabs and rolling 200-row windows.
 
 ## Needs verification
 

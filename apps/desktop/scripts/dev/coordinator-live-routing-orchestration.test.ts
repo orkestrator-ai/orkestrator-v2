@@ -25,7 +25,7 @@ const tool = (
   toolArgs: Record<string, unknown>,
 ): CoordinatorTranscriptMessage => ({
   role: "assistant",
-  parts: [{ toolName, toolArgs, toolState: "completed" }],
+  parts: [{ toolName, toolArgs, toolState: "success" }],
 });
 
 /**
@@ -35,6 +35,10 @@ const tool = (
 type Script = {
   /** The build request goes to a prompt environment instead. */
   buildToEnvironment?: boolean;
+  failedInvestigation?: boolean;
+  reusedInvestigation?: boolean;
+  rollingProjection?: boolean;
+  instantTurns?: boolean;
   /** The build is started with an explicit agent. */
   buildOverridesAgent?: boolean;
   /** The investigation becomes a ticket and a build. */
@@ -54,7 +58,21 @@ async function fixture(script: Script = {}) {
   const messages: CoordinatorTranscriptMessage[] = [];
   const tickets: Array<Record<string, unknown>> = [];
   const environments: Array<Record<string, unknown>> = [{ id: "fixture-local", name: "fixture" }];
-  const workflows: Array<Record<string, unknown>> = [];
+  const workflows: Array<Record<string, unknown>> = script.reusedInvestigation
+    ? [
+        {
+          kind: "environment",
+          conversationId: "conversation",
+          resourceId: "fixture-local",
+          delegation: {
+            requestedAt: "old-request",
+            workerTabId: "startup-agent",
+            state: "completed",
+            wokenAt: "old-wake",
+          },
+        },
+      ]
+    : [];
   const pipelines = new Map<string, Record<string, unknown>>();
   const reviews: Array<Record<string, unknown>> = [];
   const commands: Array<{ command: string; args: Record<string, unknown> }> = [];
@@ -119,6 +137,9 @@ async function fixture(script: Script = {}) {
         : prompt.includes("Review the work")
           ? "review"
           : "delivery";
+    if (script.rollingProjection) {
+      for (let i = 0; i < 195; i++) messages.push({ role: "assistant" });
+    }
     messages.push({ role: "user", content: "harness prompt" });
     if (script.failTurn === kind) {
       turnError = "provider error";
@@ -136,6 +157,22 @@ async function fixture(script: Script = {}) {
     if (kind === "investigate") {
       if (script.investigateBuilds) {
         startBuild(createTicket("investigate"));
+        return;
+      }
+      if (script.failedInvestigation) {
+        messages.push({ parts: [{ toolName: "launch_environment", toolState: "error" }] });
+        return;
+      }
+      if (script.reusedInvestigation) {
+        workflows[0]!.delegation = {
+          requestedAt: now(),
+          workerTabId: "reused-tab",
+          state: "running",
+        };
+        messages.push(
+          tool("send_prompt_to_tab", { environmentId: "fixture-local", tabId: "reused-tab" }),
+        );
+        reportReads = 30;
         return;
       }
       return launchWorker();
@@ -249,7 +286,10 @@ async function fixture(script: Script = {}) {
       case "cancel_multi_review":
         break;
       case "dispatch_native_agent_intent":
-        workingReads = 2;
+        workingReads = script.instantTurns ? 0 : 2;
+        if (String(args.prompt).includes("Review the work") && script.reusedInvestigation) {
+          expect(reportReads).toBe(0);
+        }
         respond(String(args.prompt));
         break;
       case "get_prompt_queue":
@@ -283,7 +323,7 @@ async function fixture(script: Script = {}) {
           }
           value = {
             turn: { phase, error: phase === "error" ? "provider error" : undefined },
-            messages: [...messages],
+            messages: messages.map((row, i) => ({ ...row, id: String(i) })).slice(-200),
           };
         } else {
           value = { turn: { phase: reportReads > 0 ? "working" : "idle" }, messages: [] };
@@ -451,4 +491,20 @@ test("each case edge prints a content-free progress line", async () => {
     "[coordinator-live] claude: routing case delivery started",
     "[coordinator-live] claude: routing case delivery finished in Ns",
   ]);
+});
+
+test("a failed investigation launch without a backend worker fails delegation", async () => {
+  const { checks } = await run({ failedInvestigation: true });
+  expect(failed(checks)).toEqual(["investigate-delegated"]);
+});
+
+test("a reused worker's late report and wake finish before the review begins", async () => {
+  const { checks, observed } = await run({ reusedInvestigation: true });
+  expect(failed(checks)).toEqual([]);
+  expect(observed["investigate:send_prompt_to_tab"]).toBe(1);
+});
+
+test("cases still collect calls after the projection fills and rolls", async () => {
+  const { checks } = await run({ rollingProjection: true, instantTurns: true });
+  expect(failed(checks)).toEqual([]);
 });

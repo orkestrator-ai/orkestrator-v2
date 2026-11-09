@@ -18,8 +18,8 @@
     "typecheck": "bun check -p tsconfig.json && bun check -p tsconfig.test.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "2.1.1",
-    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
     "@opencode-ai/sdk": "1.19.5",
     "@orkestrator/protocol": "workspace:*",
     "@orkestrator/toolchain": "workspace:*",

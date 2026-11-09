@@ -2,8 +2,8 @@
 
 ## Task analysis
 
-Analysed 2026-11-07 against `main` at `413bd6219`. Upstream versions were read
-from the npm registry the same day, and `bun audit` was run on that commit.
+Analysed 2026-11-09 against main at `a49fd28157e23bc27496e0c078be0b4162c110e3`.
+Original advisory inventory: 2026-11-07 at `413bd6219`; refreshed below.
 
 This replaces the security report's file `0110-l18-dependency-advisories.md`
 (finding L18), deleted with the rest of `docs/reports/` on 2026-11-07. Read it
@@ -13,11 +13,11 @@ now moved for the worst of them, and `bun audit` reports more than L18 named.
 
 ### Tasks
 
-1. **Move Pi to 1.5.0**: clears all four high and four moderate `undici` advisories, and the `minimatch` one on Pi's side. Status: open (unblocked upstream 2026-11-07).
-2. **Take Electron 45.2.3**: the latest 45.x patch release; the lockfile still has 45.0.0. Status: open.
-3. **Refresh the in-range MCP transitive pins**: `@hono/node-server` 1.19.17 and 2.1.1, and `qs` 6.16.0. Status: open.
-4. **`minimatch` under electron-builder**: build-time only. Status: open (depends on 0032 task 2 if no in-range fix exists).
-5. **`postcss-selector-parser` 6.0.10**: dev only, through `@tailwindcss/typography`. Status: open (blocked upstream; `@tailwindcss/typography` 0.5.20 is still latest and still pins 6.0.10 exactly).
+1. **Move Pi to 1.5.0**: clears all four high and four moderate `undici` advisories, and the `minimatch` one on Pi's side. Status: done (already upgraded on the build baseline; re-verified 2026-11-09).
+2. **Take Electron 45.2.3**: the latest 45.x patch release; the lockfile still has 45.0.0. Status: open (out of scope: headless beelink has no display or Xvfb for Electron qualification).
+3. **Refresh the in-range MCP transitive pins**: `@hono/node-server` 1.19.17 and 2.1.1, and `qs` 6.16.0. Status: done (2026-11-09).
+4. **`minimatch` under electron-builder**: build-time only. Status: open (deferred to 0032 task 2; 26.18.1 still requires affected minimatch).
+5. **`postcss-selector-parser` 6.0.10**: dev only, through `@tailwindcss/typography`. Status: open (accepted until upstream moves; 0.5.20 still pins 6.0.10 exactly, confirmed 2026-11-09).
 
 ### 1. Move Pi to 1.5.0
 
@@ -43,9 +43,17 @@ SDK, `@earendil-works/pi-ai` and the `pi` binary), in `bridges/pi-bridge/package
 `packages/cli/bridge-runtimes/pi-bridge/package.json`, the toolchain manifest
 and `PI_CLI_VERSION` in `docker/Dockerfile`. `tests/unit/version-drift.test.ts`
 enforces the SDK and binary pairing. The procedure is
-[upgrade-agents.md](../../development/upgrade-agents.md). Not read yet: Pi
-1.5.0's changelog, and whether `models.test.ts`'s ChatGPT-backend premise
-still holds on it (`AGENTS.md`, Pi bridge, asks for that check on every bump).
+[upgrade-agents.md](../../development/upgrade-agents.md). Pi 1.5.0 was already pinned throughout the build baseline, including both
+bridge manifests, toolchain artifact records and Docker. Read the installed
+1.5.0 changelog (also available [upstream](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/CHANGELOG.md)).
+It replaces TypeBox argument validation with pi-schema, adds Terra, changes the
+OpenAI default to Sol, fixes session writes and resumes using the recorded cwd.
+The existing compatibility changes and runbook already cover these changes.
+Re-ran `models.test.ts` against the real 1.5.0 SDK: ChatGPT subscriptions use
+`gpt-6.1-sol`, matching Pi's internal default, although Terra is newer;
+`openai` starts on `chat-latest` and covers every backend catalogue model.
+The complete Pi bridge suite and a new real loopback HTTP session pass without
+provider credentials; SDK persistence and MCP parity tests also pass.
 
 **Decisions.**
 
@@ -100,8 +108,14 @@ accepts `@hono/node-server` `^1.19.9 || ^2.1.3`, and `@modelcontextprotocol/sdk`
 already 2.1.5, and the Claude bridge's standalone lockfile already has `qs`
 6.16.1.
 
-**Investigation.** None beyond the above. Lockfile changes follow **Updating
-Bun and lockfiles** in `AGENTS.md`, for both tracked lockfiles.
+**Investigation.** Updated node to 2.1.2 and SDK to 1.32.2. Node now peers on
+server `^2.4.0`, so the backend server pin also moves to 2.4.0. Root resolution
+uses node-server 2.1.5 and qs 6.17.1; the standalone Claude lock uses
+node-server 2.1.6 and qs 6.16.1. All are outside the advisory ranges.
+Regenerated all five tracked Bun lockfiles with Bun 1.4.4 and verified frozen
+installs. Claude's standalone manifest is staged without the workspace-only
+protocol dependency; Cursor's runtime install is staged with its declared patch,
+as the packaging process does. No lockfiles were edited by hand.
 
 **Decisions.**
 
@@ -124,8 +138,10 @@ and 5.1.9 copies the audit lists beside it are below that range.
 controls. electron-builder 27 is [0032](0032-dependency-upgrades.md) task 2,
 blocked on its stable release.
 
-**Investigation.** Whether electron-builder 26.x has a later patch that moves
-`minimatch` was not checked.
+**Investigation.** npm registry checked 2026-11-09: latest is 26.18.0,
+v26 is 26.18.1. The 26.18.1 app-builder-lib manifest still requires minimatch
+`^10.2.5` and universal 2.0.3, which still requires minimatch `^9.0.3`.
+Neither reaches the fixed 11.x range. Keep 26.18.0 and defer to 0032 task 2.
 
 **Decisions.**
 
@@ -145,7 +161,7 @@ blocked on its stable release.
 **Context.** Dev and build only, on CSS this repository writes. This is the
 same item as [0032](0032-dependency-upgrades.md) task 6's first half.
 
-**Investigation.** On 2026-11-07 `@tailwindcss/typography` `latest` is still
+**Investigation.** Reconfirmed from npm on 2026-11-09: `@tailwindcss/typography` `latest` is still
 0.5.20 and still depends on `postcss-selector-parser` `6.0.10` exactly.
 
 **Decisions.**
@@ -160,10 +176,48 @@ same item as [0032](0032-dependency-upgrades.md) task 6's first half.
 
 ## Current state
 
-`bun audit` on `413bd6219` (2026-11-07): 12 vulnerabilities, 4 high and 8
-moderate, in `@hono/node-server`, `minimatch`, `postcss-selector-parser`, `qs`
-and `undici`. `undici` 7.30.1 and 6.29.1 under Electron's `@electron/get` are
-listed in the same entry but are outside the affected `>=8.0.0` range.
+`bun audit` on 2026-11-09 after this change: **2 moderate, 0 high** (exit 1,
+expected for the accepted advisories). Only packaging minimatch 9.0.9/10.2.6
+and typography's postcss-selector-parser 6.0.10 remain. Audit prints Pi's
+unaffected minimatch 11.0.3 alongside affected copies; Pi's dependency is fixed.
+No undici, node-server or qs advisories remain. The historical inventory was
+12 advisories (4 high, 8 moderate); the build baseline already had Pi 1.5.0
+and started at 4 moderate advisories. Electron remains 45.0.0.
+
+Focused checks: version drift, complete Pi bridge suite (including the new
+loopback provider session), Pi bridge typecheck, and backend MCP tests.
+Full repository validation belongs to the next pipeline preparation stage.
+No app profile, real login, billed turn, Docker/network mutation or toolchain
+installation was used. Docker image/binary download qualification and native
+interactive/terminal UI smoke were not repeated for the already-landed Pi bump.
+
+## Assumptions and decisions
+
+### Task 1: retain the existing complete Pi upgrade
+
+The baseline already contains the 1.5.0 pins and compatibility work described
+in upgrade-agents.md. Retain them and recheck the real SDK/model premise,
+rather than duplicate an upgrade. Add HTTP loopback coverage to prove a real
+Pi session runs without a provider login; no undici override is needed.
+
+### Task 3: update MCP through declared dependency ranges
+
+Use node 2.1.2, SDK 1.32.2 and node's required server peer 2.4.0. Re-resolve qs
+within its existing range. This clears the advisories without overriding
+transitives or running audit fix. Regenerate the standalone runtime locks too.
+
+### Tasks 4 and 5: retain the accepted build-only advisories
+
+Defer minimatch to 0032 task 2: even 26.18.1 still excludes the fixed major.
+Keep typography's exact parser pin until upstream moves. Overrides would
+clear the listing but run packaging/plugin code on undeclared major or parser
+versions; controlled repository inputs justify accepting these two advisories.
+
+### Task 2: leave Electron open
+
+Electron 45.2.3 is explicitly out of scope. It changes shipped Chromium and
+requires the Electron suite under a display and a packaged smoke run; this
+headless node has no Xvfb. The Electron lock remains unchanged.
 
 ## Constraints and rationale
 

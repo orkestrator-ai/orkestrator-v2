@@ -1,3 +1,4 @@
+import { asRecord } from "./agent-provider-runtime.js";
 import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
@@ -2456,6 +2457,12 @@ export class NativeAgentService {
       if (outcome.outcome === "rejected") {
         return { outcome: "rejected", error: nativeAgentSteerRejectionMessage(outcome) };
       }
+      if (pendingSteer.onMissedTurn === "refuse") {
+        return {
+          outcome: "rejected",
+          error: "The steering instruction missed its turn and was refused.",
+        };
+      }
       // Missed its turn. A steer taken from the queue was put back there, and
       // the queue sends it as the next turn: sending it here as well would
       // deliver it twice.
@@ -2470,6 +2477,7 @@ export class NativeAgentService {
         resolved,
         pendingSteer.text,
         outcome.outcome === "mismatch" ? "mismatch" : "idle",
+        pendingSteer.turnRequestId,
       );
       if (delivered.outcome === "applied") {
         return {
@@ -2696,7 +2704,29 @@ export class NativeAgentService {
     },
     action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
   ): Promise<NativeAgentSessionActionOutcome> {
-    const outcome = await this.steerProjectionOnce(input, resolved, action);
+    const turnRequestId = action.turnRequestId;
+    const steerRequestId = turnRequestId
+      ? `steer:${createHash("sha256").update(turnRequestId).digest("hex")}`
+      : randomUUID();
+    if (turnRequestId) {
+      const current = await this.storage.getNativeAgentSession(resolved.key);
+      if (current?.dispatchedRequestIds?.includes(turnRequestId)) {
+        return { outcome: "applied", deliveredAs: "new-turn", requestId: turnRequestId };
+      }
+      if (current?.dispatchedRequestIds?.includes(steerRequestId))
+        return { outcome: "applied", requestId: steerRequestId };
+      if (current?.pendingDispatch?.requestId === turnRequestId)
+        return { outcome: "unknown", requestId: turnRequestId };
+      const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
+      if (
+        queue?.messages.some((message) => asRecord(message)?.id === turnRequestId) ||
+        queue?.inFlight?.requestId === turnRequestId ||
+        queue?.outstandingClaim?.message.requestId === turnRequestId
+      ) {
+        return { outcome: "applied", deliveredAs: "queued", requestId: turnRequestId };
+      }
+    }
+    const outcome = await this.steerProjectionOnce(input, resolved, action, steerRequestId);
     if (
       (outcome.outcome !== "idle" && outcome.outcome !== "mismatch") ||
       action.onMissedTurn === "refuse"
@@ -2782,6 +2812,8 @@ export class NativeAgentService {
       text,
       inputDigest: createHash("sha256").update(text).digest("hex"),
       expectedRunId: active.runId,
+      ...(action.onMissedTurn ? { onMissedTurn: action.onMissedTurn } : {}),
+      ...(action.turnRequestId ? { turnRequestId: action.turnRequestId } : {}),
       state: "prepared",
       createdAt: new Date().toISOString(),
     };

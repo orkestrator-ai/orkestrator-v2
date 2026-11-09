@@ -95,8 +95,8 @@ export function openCode2CredentialFromLegacy(
   }
   if (
     entry.type === "oauth" &&
-    typeof entry.refresh === "string" &&
-    typeof entry.access === "string" &&
+    nonEmpty(entry.refresh) &&
+    nonEmpty(entry.access) &&
     typeof entry.expires === "number" &&
     Number.isSafeInteger(entry.expires) &&
     entry.expires >= 0
@@ -165,8 +165,9 @@ async function credentialIds(
   integrationId: string,
 ): Promise<string[]> {
   const list = await client.api<unknown>("GET", "/api/credential", "OpenCode credential list", {});
-  if (!Array.isArray(list)) throw new Error("OpenCode credential list is malformed");
-  return list.slice(0, MAX_CREDENTIALS).flatMap((candidate) => {
+  if (!Array.isArray(list) || list.length > MAX_CREDENTIALS)
+    throw new Error("OpenCode credential list is malformed");
+  return list.flatMap((candidate) => {
     // Only the id and owner are read; the stored value is never touched.
     const entry = record(candidate);
     return entry?.integrationID === integrationId && nonEmpty(entry.id) ? [entry.id] : [];
@@ -250,4 +251,39 @@ export function openCode2AuthStatus(
     signIn: { kind: "terminal", hint },
     signOut: false,
   };
+}
+
+/** Reconcile a previously imported database before its next use after preview was disabled. */
+export async function reconcileOpenCode2Credentials(
+  client: OpenCode2Client,
+  file = legacyOpenCodeAuthFile(),
+): Promise<void> {
+  let store: Record<string, unknown>;
+  try {
+    if ((await stat(file)).size > MAX_AUTH_FILE_BYTES)
+      throw new Error("Credential store too large");
+    store = record(JSON.parse(await readFile(file, "utf8")))!;
+    if (!store) throw new Error("Invalid credential store");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") store = {};
+    else throw new Error("OpenCode credential store could not be reconciled");
+  }
+  const stored = await client.api<unknown>(
+    "GET",
+    "/api/credential",
+    "OpenCode credential list",
+    {},
+  );
+  if (!Array.isArray(stored) || stored.length > MAX_CREDENTIALS)
+    throw new Error("Invalid credential inventory");
+  const ids = new Set([
+    ...Object.keys(store).map(openCode2IntegrationId),
+    ...stored.map((entry) => record(entry)?.integrationID),
+  ]);
+  if (ids.size > MAX_CREDENTIALS) throw new Error("Credential inventory too large");
+  for (const id of ids) {
+    if (typeof id !== "string" || !PROVIDER_ID_PATTERN.test(id))
+      throw new Error("Invalid credential owner");
+    await mirrorOpenCode2Credential(client, id, await readLegacyOpenCodeCredential(file, id));
+  }
 }

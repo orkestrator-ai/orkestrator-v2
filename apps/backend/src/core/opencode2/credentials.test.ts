@@ -9,6 +9,7 @@ import {
   openCode2AuthStatus,
   openCode2CredentialFromLegacy,
   readLegacyOpenCodeCredential,
+  reconcileOpenCode2Credentials,
 } from "./credentials.js";
 
 // Fake values only; nothing here is a real credential.
@@ -121,4 +122,29 @@ describe("openCode2AuthStatus", () => {
     expect(JSON.stringify(status)).not.toContain(FAKE_KEY);
     expect(openCode2AuthStatus(providers, ["anthropic"], "hint").state).toBe("needs-auth");
   });
+});
+
+test.each([
+  { refresh: "", access: "a" },
+  { refresh: "r", access: "" },
+  { refresh: "", access: "" },
+])("rejects empty OAuth secrets: %j", (secrets) => {
+  expect(
+    openCode2CredentialFromLegacy("openai", { type: "oauth", expires: 123, ...secrets }),
+  ).toBeUndefined();
+});
+
+test("starting 2.x reconciles credentials deferred while preview was disabled", async () => {
+  dir = await mkdtemp(path.join(tmpdir(), "oc2-deferred-login-"));
+  const file = path.join(dir, "auth.json");
+  server = new FakeOpenCode2Server();
+  const client = server.client();
+  await mirrorOpenCode2Credential(client, "openai", { type: "key", key: "old-fake-key" });
+  await writeFile(file, JSON.stringify({ openai: { type: "api", key: "renewed-fake-key" } }));
+  await reconcileOpenCode2Credentials(client, file);
+  expect(server.credentials).toHaveLength(1);
+  expect(server.credentials[0]!.value).toEqual({ type: "key", key: "renewed-fake-key" });
+  await writeFile(file, "{}");
+  await reconcileOpenCode2Credentials(client, file);
+  expect(server.credentials).toEqual([]);
 });

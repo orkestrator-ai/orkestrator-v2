@@ -31,7 +31,13 @@ async function setup(options: { database: boolean }) {
   server = new FakeOpenCode2Server();
   const fake = server;
   const used: string[] = [];
-  const context = { storage: { getDataDir: () => dataDir } } as unknown as CommandContext;
+  const context = {
+    storage: {
+      getDataDir: () => dataDir,
+      loadConfig: async () => ({ global: { openCodeProtocol: "v2" } }),
+    },
+    runtime: { localServers: { openCode2: { live: () => [] } } },
+  } as unknown as CommandContext;
   const dependencies = {
     authFile,
     withServer: async <T>(_context: CommandContext, use: (client: never) => Promise<T>) => {
@@ -83,4 +89,14 @@ describe("mirrorOpenCodeLoginToOpenCode2", () => {
     expect(used).toEqual([]);
     expect(server.credentials.map((credential) => credential.id)).toEqual(["cred_keep"]);
   });
+});
+
+test("legacy sign-in skips an offline 2.x mirror even with an existing database and missing binary", async () => {
+  const { context, dependencies, used } = await setup({ database: true });
+  context.storage.loadConfig = async () => ({ global: { openCodeProtocol: "legacy" } }) as never;
+  dependencies.withServer = async () => {
+    throw new Error("missing opencode2 binary");
+  };
+  expect(await mirrorOpenCodeLoginToOpenCode2(context, "openai", dependencies)).toBe("skipped");
+  expect(used).toEqual([]);
 });

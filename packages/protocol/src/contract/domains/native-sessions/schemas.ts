@@ -415,6 +415,8 @@ export const PendingSteerSchema = openRecord({
   text: Schema.String,
   inputDigest: Schema.String,
   expectedRunId: Schema.String,
+  onMissedTurn: Schema.optional(Schema.Literals(["refuse", "new-turn"])),
+  turnRequestId: optionalString,
   state: Schema.Literals(["prepared", "unknown"]),
   /** Source reservation survives until delivery or definitive non-delivery. */
   sourceQueue: Schema.optional(Schema.Literal(true)),

@@ -64,6 +64,12 @@ export async function mirrorOpenCodeLoginToOpenCode2(
   dependencies: OpenCode2CredentialMirrorDependencies = {},
 ): Promise<OpenCode2CredentialMirrorOutcome> {
   if (!existsSync(openCode2HostPaths(context.storage.getDataDir()).database)) return "skipped";
+  const enabled = (await context.storage.loadConfig()).global.openCodeProtocol === "v2";
+  const localServers = context.runtime.localServers;
+  const running = Array.from(localServers.openCode2.live()).some(
+    ([id, record]) => localServers.process(openCode2ServerKey(id)) === record.child,
+  );
+  if (!enabled && !running) return "skipped";
   const credential = await readLegacyOpenCodeCredential(
     dependencies.authFile ?? legacyOpenCodeAuthFile(),
     providerId,

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { withService } from "../native-agent-service-projection-test-support.js";
+import { readProviderStatus } from "../agent-provider-contract.js";
 import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -265,3 +267,48 @@ describe("a policy's user MCP selection on 2.x", () => {
     ).rejects.toThrow("could not be applied");
   });
 });
+
+test("a deleted session is missing and ensureSession replaces its mapping before the next prompt", async () => {
+  const { server, provider } = setup();
+  await withService(
+    { prefix: "ork-oc2-deleted-", provider: async () => provider },
+    async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:deleted",
+      };
+      const first = await service.ensureSession(identity);
+      server.sessions.delete(first.providerSessionId);
+      expect(await provider.status(first.providerSessionId)).toBe("missing");
+      const replacement = await service.ensureSession(identity);
+      expect(replacement.providerSessionId).not.toBe(first.providerSessionId);
+      await provider.send(replacement.providerSessionId, "replacement", {
+        requestId: "replacement",
+      });
+      expect(await provider.dispatchStatus(replacement.providerSessionId, "replacement")).toBe(
+        "dispatched",
+      );
+    },
+  );
+});
+
+test.each(["failed", "interrupted"] as const)(
+  "workflow status exposes terminal %s outcomes",
+  async (outcome) => {
+    const { server, provider } = setup();
+    const id = await provider.createSession("build", "failure");
+    await provider.send(id, "work", { requestId: "failing" });
+    server.finishRun(id, outcome);
+    if (outcome === "failed")
+      Object.assign(server.sessions.get(id)!.rows.at(-1)!, {
+        error: { message: "Model unavailable" },
+      });
+    const observation = await readProviderStatus(provider, id);
+    expect(observation).toMatchObject({
+      status: "error",
+      error: outcome === "failed" ? "Model unavailable" : "Query stopped by user.",
+    });
+    expect(await provider.activityBatch([id])).toEqual(new Map([[id, "idle"]]));
+  },
+);

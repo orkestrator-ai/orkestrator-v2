@@ -324,3 +324,48 @@ describe("structured output", () => {
     ).rejects.toBeInstanceOf(ProviderDispatchPreparationError);
   });
 });
+
+test("an auto-approved reviewer retains its current user MCP selection", async () => {
+  const { server, provider } = setup();
+  const policy: NativeAgentExecutionPolicy = {
+    ...POLICY,
+    approvals: "auto-approve",
+    capabilityPolicy: { deny: [], userMcpServers: ["docs"] },
+  };
+  server.mcp.set("docs", { config: {}, status: "connected" });
+  server.mcp.set("linear", { config: {}, status: "connected" });
+  const id = await provider.createSession("review", "r", { policy, reviewerSession: true });
+  server.mcp.set("extra", { config: {}, status: "connected" });
+  await provider.send(id, "review", {
+    requestId: "review-mcp",
+    readOnly: true,
+    reviewShellPolicy: policy,
+  });
+  const effect = (name: string) =>
+    rulesOf(server, id).findLast((rule) => rule.action === name)?.effect;
+  expect(effect("linear_*")).toBe("deny");
+  expect(effect("extra_*")).toBe("deny");
+  expect(effect("docs_*")).toBe("allow");
+});
+
+test("a reviewer refuses dispatch when its current MCP inventory cannot be validated", async () => {
+  const { server, provider } = setup();
+  const policy: NativeAgentExecutionPolicy = {
+    ...POLICY,
+    capabilityPolicy: { deny: [], userMcpServers: ["docs"] },
+  };
+  const id = await provider.createSession("review", "r", { policy, reviewerSession: true });
+  const client = server.client();
+  client.listMcpServers = async () => {
+    throw new Error("unreadable inventory");
+  };
+  const { OpenCode2TurnGrants } = await import("./turn-grants.js");
+  await expect(
+    new OpenCode2TurnGrants(client).begin(id, {
+      requestId: "refused",
+      readOnly: true,
+      reviewShellPolicy: policy,
+    }),
+  ).rejects.toBeInstanceOf(ProviderDispatchPreparationError);
+  expect(server.calls.some((call) => call.path.endsWith("/prompt"))).toBe(false);
+});

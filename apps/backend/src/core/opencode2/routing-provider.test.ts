@@ -146,8 +146,8 @@ describe("OpenCodeRoutingProvider", () => {
   test("an unseen session follows its persisted marker, looked up once", async () => {
     const persisted = mock(async (id: string) => (id === "ses_v2" ? ("v2" as const) : undefined));
     const { legacy, router } = setup({ persisted });
-    expect(await router.status("ses_v2")).toBe("idle");
-    expect(await router.status("ses_v2")).toBe("idle");
+    expect(await router.status("ses_v2")).toBe("missing");
+    expect(await router.status("ses_v2")).toBe("missing");
     expect(legacy.status).not.toHaveBeenCalled();
     expect(await router.status("ses_old")).toBe("idle");
     expect(legacy.status).toHaveBeenCalledTimes(1);

@@ -24,7 +24,10 @@
  */
 import { createHash } from "node:crypto";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentRestrictsUserMcp,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { SUBORK_TOOL_NAME } from "@orkestrator/protocol/suborks";
 import {
   effectiveOpenCodePolicy,
@@ -32,6 +35,7 @@ import {
   openCodeReviewPermissionRules,
   openCodeWorkflowResultPermissionRules,
 } from "../opencode-provider-helpers.js";
+import { openCodeUserMcpRules } from "../opencode-user-mcp.js";
 import type { OpenCode2PermissionRule } from "./types.js";
 
 /** Prefix of every per-tab Orkestrator MCP server on a 2.x server. */
@@ -213,6 +217,7 @@ export interface OpenCode2TurnRuleInput {
   readOnly?: boolean;
   /** Set only when the session's durable reviewer marker allows it. */
   reviewPolicy?: NativeAgentExecutionPolicy;
+  configuredMcpServers?: readonly string[];
   workflowResultTool?: string;
   workflowResultExtraTools?: readonly string[];
 }
@@ -246,9 +251,20 @@ export function openCode2TurnRules(
   sessionId: string,
   turn: OpenCode2TurnRuleInput,
 ): OpenCode2PermissionRule[] {
+  if (
+    turn.readOnly &&
+    turn.reviewPolicy &&
+    nativeAgentRestrictsUserMcp(turn.reviewPolicy) &&
+    !turn.configuredMcpServers
+  ) {
+    throw new Error("Reviewer MCP selection requires a current server inventory");
+  }
   const review = turn.readOnly && turn.reviewPolicy ? openCode2ReviewRules(turn.reviewPolicy) : [];
   return bounded([
     ...(review.length > 0 ? review : base),
+    ...(review.length > 0 && turn.reviewPolicy
+      ? toOpenCode2Rules(openCodeUserMcpRules(turn.reviewPolicy, turn.configuredMcpServers ?? []))
+      : []),
     ...(turn.readOnly && review.length === 0 ? OPENCODE2_READ_ONLY_RULES : []),
     ...openCode2IsolationRules(sessionId),
     ...(turn.workflowResultTool

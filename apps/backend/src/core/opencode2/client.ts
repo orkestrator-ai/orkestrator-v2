@@ -352,12 +352,16 @@ export class OpenCode2Client {
   async listMcpServers(): Promise<OpenCode2McpServer[]> {
     const data = await this.request<unknown>("GET", "/api/mcp", "OpenCode MCP list");
     if (!Array.isArray(data)) throw new ProviderUnavailableError("OpenCode MCP list is malformed");
-    return data.filter(
-      (server): server is OpenCode2McpServer =>
-        !!server &&
-        typeof (server as { name?: unknown }).name === "string" &&
-        typeof (server as { status?: { status?: unknown } }).status?.status === "string",
-    );
+    if (
+      !data.every(
+        (server) =>
+          !!server &&
+          typeof (server as { name?: unknown }).name === "string" &&
+          typeof (server as { status?: { status?: unknown } }).status?.status === "string",
+      )
+    )
+      throw new ProviderUnavailableError("OpenCode MCP list is malformed");
+    return data as OpenCode2McpServer[];
   }
 
   /**

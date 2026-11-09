@@ -4,6 +4,7 @@ import { OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { containerCredentialFile } from "../src/core/container-bridge-credential";
 import {
   containerRunsOpenCode2,
+  ensureOpenCode2ContainerServer,
   openCode2EnvironmentServer,
   peekOpenCode2ContainerServer,
   startContainerOpenCode2Server,
@@ -301,4 +302,13 @@ describe("containerRunsOpenCode2", () => {
       ),
     ).toBe(false);
   });
+});
+
+test("revoked OpenCode credentials fence reuse and adoption before any Docker operation", async () => {
+  const { context } = createContext({
+    ...containerEnvironment(),
+    revokedInputProviders: ["opencode"],
+  });
+  await expect(ensureOpenCode2ContainerServer(context, "env-c")).rejects.toThrow("revoked");
+  expect(await peekOpenCode2ContainerServer(context, "env-c")).toBeUndefined();
 });

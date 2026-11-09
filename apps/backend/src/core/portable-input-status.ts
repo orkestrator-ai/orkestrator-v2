@@ -1,3 +1,4 @@
+import { SCRUB_OPENCODE2_CONTAINER_CREDENTIALS } from "./opencode2/container-credentials.js";
 import {
   AGENT_PLATFORMS,
   normalizeAgentPlatforms,
@@ -266,7 +267,7 @@ const PROVIDER_PROCESS_PATTERNS: Record<AgentPlatform, string> = {
   cursor: "[/]opt/cursor-bridge/",
   pi: "[/]opt/pi-bridge/",
   grok: "[/]opt/acp-bridge/",
-  opencode: "[o]pencode serve",
+  opencode: "[o]pencode(2)? serve",
 };
 
 /**
@@ -343,6 +344,33 @@ export async function revokeProviderCredentials(
       processesStopped = true;
     } catch {
       processesStopped = false;
+    }
+    if (provider === "opencode") {
+      try {
+        await runCommand(
+          "docker",
+          [
+            "exec",
+            ...CONTAINER_ROOT_USER_ARGS,
+            containerId,
+            "sh",
+            "-c",
+            `for attempt in $(seq 1 50); do
+              pgrep -f '[o]pencode(2)? serve' >/dev/null; opencode_process_status=$?
+              [ "$opencode_process_status" -ne 1 ] || break
+              [ "$opencode_process_status" -eq 0 ] || exit 1
+              sleep 0.1
+            done
+            pgrep -f '[o]pencode(2)? serve' >/dev/null; opencode_process_status=$?
+            [ "$opencode_process_status" -eq 1 ] || exit 1
+            ${SCRUB_OPENCODE2_CONTAINER_CREDENTIALS}`,
+          ],
+          { timeoutMs: 15_000 },
+        );
+      } catch {
+        removed = false;
+        processesStopped = false;
+      }
     }
     return {
       provider,

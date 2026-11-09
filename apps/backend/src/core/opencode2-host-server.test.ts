@@ -98,6 +98,7 @@ async function setup(
   };
   const updates: Array<Record<string, unknown>> = [];
   const context = {
+    runtimeFlavor: "agent-test",
     runtime: {
       localServers,
       environments: { fence: { assertNotMoving() {} }, assertNotDeleting() {} },

@@ -31,6 +31,7 @@ import {
   PromptRejectedError,
   ProviderDispatchPreparationError,
 } from "../agent-provider-contract.js";
+import { openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import {
   openCode2SteadyRules,
@@ -129,7 +130,11 @@ export class OpenCode2TurnGrants {
         turn.readOnly && turn.reviewShellPolicy && marker.reviewer && !this.authority
           ? turn.reviewShellPolicy
           : undefined;
-      const input = { ...turn, ...(reviewPolicy ? { reviewPolicy } : {}) };
+      const configuredMcpServers = await openCode2ConfiguredUserMcpServers(
+        this.client,
+        reviewPolicy,
+      );
+      const input = { ...turn, ...(reviewPolicy ? { reviewPolicy, configuredMcpServers } : {}) };
       if (!openCode2TurnNeedsGrant(input)) {
         // Nothing to grant: make sure an earlier grant is not still in force.
         const steady = openCode2SteadyRules(base, sessionId);

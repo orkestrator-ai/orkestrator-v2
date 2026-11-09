@@ -70,7 +70,9 @@ describe("OpenCode 2 transcript windows", () => {
     expect(window.messages.map((row) => (row as { id: string }).id)).toEqual(ids.slice(-4));
     expect(openCode2CursorAnchor(window.historyCursor!)).toBe(ids[7]);
     expect(openCode2CursorAnchor(window.historyCursor!)).toBe(ids.at(-4));
-    expect(window.historyCursorBefore!(ids[8]!)).toBe(openCode2HistoryCursor(ids[8]!));
+    expect(window.historyCursorBefore!(ids[8]!)).toBe(
+      openCode2HistoryCursor(ids[8]!, window.historyEpoch),
+    );
     expect(window.historyCursorBefore!("not-a-row")).toBeUndefined();
     const seen = window.messages.map((row) => (row as { id: string }).id);
     let cursor = window.historyCursor;
@@ -239,4 +241,48 @@ describe("OpenCode 2 transcript windows", () => {
       ),
     ).toMatchObject({ messages: [], complete: true });
   });
+});
+
+test("staged Undo hides an off-window boundary, expires retained pages and restores on Redo without events", async () => {
+  const { server, client, state, sessionId, ids } = await setup(12);
+  const options = { limit: 2, targetBytes: 1e6 };
+  const before = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+  const pageBefore = await openCode2TranscriptPage(client, state, sessionId, {
+    ...options,
+    cursor: before.historyCursor!,
+  });
+  expect(pageBefore.status).toBe("page");
+  server.sessions.get(sessionId)!.revert = { messageID: ids[4]! };
+  const undone = snapshot(
+    await openCode2TranscriptSnapshot(client, state, sessionId, {
+      ...options,
+      knownSourceToken: before.sourceToken,
+    }),
+  );
+  expect(undone.messages.map((row) => (row as { id: string }).id)).toEqual(ids.slice(2, 4));
+  expect(undone.historyEpoch).not.toBe(before.historyEpoch);
+  expect(
+    await openCode2TranscriptPage(client, state, sessionId, {
+      ...options,
+      cursor: before.historyCursor!,
+    }),
+  ).toEqual({ status: "expired" });
+  state.observe(sessionId, { type: "session.text.ended", data: { assistantMessageID: ids[9] } });
+  const revised = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+  expect(revised.revisedMessages).toBeUndefined();
+  const page = await openCode2TranscriptPage(client, state, sessionId, {
+    ...options,
+    cursor: undone.historyCursor!,
+  });
+  expect(page).toMatchObject({ status: "page", messages: ids.slice(0, 2).map((id) => ({ id })) });
+  server.sessions.get(sessionId)!.revert = undefined;
+  const redone = snapshot(await openCode2TranscriptSnapshot(client, state, sessionId, options));
+  expect(redone.messages.map((row) => (row as { id: string }).id)).toEqual(ids.slice(-2));
+  expect(redone.historyEpoch).not.toBe(undone.historyEpoch);
+  expect(
+    await openCode2TranscriptPage(client, state, sessionId, {
+      ...options,
+      cursor: undone.historyCursor!,
+    }),
+  ).toEqual({ status: "expired" });
 });

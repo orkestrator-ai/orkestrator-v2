@@ -270,10 +270,8 @@ export async function ensureOpenCode2ContainerServer(
   const environment = await containerEnvironment(context, environmentId);
   const { containerId } = environment;
   const servers = serversOf(context);
-  const known = servers.records.get(environmentId);
-  if (known?.containerId === containerId && (await answersAs2x(known.connection))) {
-    known.checkedAt = Date.now();
-    return known.connection;
+  if (environment.revokedInputProviders?.includes("opencode")) {
+    throw new ProviderUnavailableError("OpenCode credentials are revoked for this environment");
   }
   if (context.runtime.localServers.isShuttingDown()) {
     throw new ProviderUnavailableError("Backend is shutting down; OpenCode 2 cannot start");
@@ -287,8 +285,14 @@ export async function ensureOpenCode2ContainerServer(
   const operationId = await containerBridgeOperationId(context, containerId);
   return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
     // 2.x imports the login once, on its first start, so it is synced first.
-    await syncContainerLoginUnlocked(context, "opencode", containerId);
+    const current = await containerEnvironment(context, environmentId);
+    if (current.revokedInputProviders?.includes("opencode"))
+      throw new ProviderUnavailableError("OpenCode credentials are revoked for this environment");
+    if ((await syncContainerLoginUnlocked(context, "opencode", containerId)) === "failed")
+      throw new ProviderUnavailableError("OpenCode credential synchronization failed");
     const started = await startContainerOpenCode2Server(context, containerId);
+    if ((await syncContainerLoginUnlocked(context, "opencode", containerId)) === "failed")
+      throw new ProviderUnavailableError("OpenCode credential synchronization failed");
     servers.records.set(environmentId, {
       containerId,
       connection: started.connection,
@@ -311,7 +315,12 @@ export async function peekOpenCode2ContainerServer(
 ): Promise<OpenCode2RouteConnection | undefined> {
   const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
   const containerId = environment?.containerId?.trim();
-  if (environment?.environmentType !== "containerized" || !containerId) return undefined;
+  if (
+    environment?.environmentType !== "containerized" ||
+    !containerId ||
+    environment.revokedInputProviders?.includes("opencode")
+  )
+    return undefined;
   const servers = serversOf(context);
   const known = servers.records.get(environmentId);
   if (known?.containerId === containerId) {

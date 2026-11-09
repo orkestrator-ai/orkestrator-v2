@@ -205,7 +205,8 @@ describe("a steer that misses its turn", () => {
   });
 
   test("goes out once under a caller's turn id, however often it is replayed", async () => {
-    const stub = steerProvider({ active: "idle" });
+    const options: Parameters<typeof steerProvider>[0] = { active: "idle" };
+    const stub = steerProvider(options);
     await withService(
       { prefix: "orkestrator-native-missed-steer-replay-", provider: async () => stub.provider },
       async ({ service }) => {
@@ -218,6 +219,7 @@ describe("a steer that misses its turn", () => {
         };
 
         const first = await service.performProjectionAction({ ...identity, action });
+        options.active = "running";
         const second = await service.performProjectionAction({ ...identity, action });
 
         expect(first).toEqual({
@@ -226,6 +228,7 @@ describe("a steer that misses its turn", () => {
           requestId: "op-turn-1",
         });
         expect(second).toEqual(first);
+        expect(stub.performSessionAction).not.toHaveBeenCalled();
         expect(stub.send).toHaveBeenCalledTimes(1);
       },
     );
@@ -301,3 +304,69 @@ describe("a steer that misses its turn", () => {
     );
   });
 });
+
+test("replaying a queued fallback never steers it again", async () => {
+  const stub = steerProvider({
+    active: "running",
+    steer: async () => ({ outcome: "mismatch" }),
+    status: () => "running",
+  });
+  await withService(
+    { prefix: "ork-missed-queue-replay-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const identity = identityFor("queue-replay");
+      await service.ensureSession(identity);
+      const action = {
+        kind: "steer" as const,
+        text: "One delivery",
+        turnRequestId: "queue-replay-id",
+      };
+      const first = await service.performProjectionAction({ ...identity, action });
+      const second = await service.performProjectionAction({ ...identity, action });
+      expect(second).toEqual(first);
+      expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+      expect(stub.send).not.toHaveBeenCalled();
+      expect((await storage.getPromptQueue(queueKeyFor(identity)))?.messages).toHaveLength(1);
+    },
+  );
+});
+
+test.each(["idle", "mismatch"] as const)(
+  "a parked refuse-on-miss steer stays refused on %s recovery",
+  async (missed) => {
+    let ambiguous = true;
+    const stub = steerProvider({
+      active: "running",
+      steer: async () => {
+        if (ambiguous) throw new Error("ambiguous send");
+        return { outcome: missed };
+      },
+    });
+    await withService(
+      { prefix: "ork-missed-refuse-recovery-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = identityFor(`refuse-recover-${missed}`);
+        await service.ensureSession(identity);
+        const parked = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Only this run", onMissedTurn: "refuse" },
+        });
+        expect(parked.outcome).toBe("unknown");
+        expect(
+          (await storage.getNativeAgentSession(keyFor(identity)))?.pendingSteer?.onMissedTurn,
+        ).toBe("refuse");
+        ambiguous = false;
+        const result = await service.retryRecoverableDispatch({
+          ...identity,
+          requestId: parked.requestId!,
+        });
+        expect(result).toMatchObject({ outcome: "rejected" });
+        expect(stub.send).not.toHaveBeenCalled();
+        expect(await storage.getPromptQueue(queueKeyFor(identity))).toBeNull();
+        expect(
+          (await storage.getNativeAgentSession(keyFor(identity)))?.pendingSteer,
+        ).toBeUndefined();
+      },
+    );
+  },
+);

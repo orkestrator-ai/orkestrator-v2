@@ -214,12 +214,17 @@ describe("OpenCode 2.x session actions", () => {
     expect(await texts()).toEqual(["first", "second"]);
     await provider.performSessionAction(id, { kind: "undo" });
     expect(await texts()).toEqual(["first"]);
+    const native = await provider.transcriptSnapshot(id, { limit: 20, targetBytes: 1e6 });
+    expect(native).toMatchObject({ complete: true });
+    expect(JSON.stringify(native)).not.toContain('"second"');
+    expect(JSON.stringify(await provider.interactiveState(id))).not.toContain('"second"');
     expect((await provider.features.sessionState(id)).notices).toHaveLength(1);
     // Undo again goes one turn further back.
     await provider.performSessionAction(id, { kind: "undo" });
     expect(await texts()).toEqual([]);
     await provider.performSessionAction(id, { kind: "redo" });
     expect(await texts()).toEqual(["first", "second"]);
+    expect(JSON.stringify(await provider.interactiveState(id))).toContain('"second"');
     await provider.performSessionAction(id, { kind: "undo" });
     await provider.send(id, "replacement", { requestId: "r3" });
     expect(await texts()).toEqual(["first", "replacement"]);

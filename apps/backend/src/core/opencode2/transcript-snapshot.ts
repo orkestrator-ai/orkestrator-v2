@@ -44,6 +44,7 @@ import { openCodeDisplayBytes } from "../opencode-snapshots.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2Event } from "./events.js";
 import { normalizeOpenCode2Group, normalizeOpenCode2Groups } from "./transcript.js";
+import { openCode2RevertMarker } from "./revert.js";
 import type { OpenCode2Message } from "./types.js";
 
 /**
@@ -71,6 +72,7 @@ const ROW_EVENTS = new Set([
 const EPOCH_EVENTS = new Set(["session.revert.committed", "session.forked", "session.deleted"]);
 
 type SessionTranscriptState = {
+  revert?: string;
   revision: number;
   epoch: number;
   revised: RecentlyRevisedRows;
@@ -117,6 +119,13 @@ export class OpenCode2TranscriptState {
       this.sessions.delete(this.sessions.keys().next().value!);
     }
     return state;
+  }
+
+  syncRevert(sessionId: string, messageId: string | undefined): void {
+    const state = this.state(sessionId);
+    if (state.revert === messageId) return;
+    state.revert = messageId;
+    this.observe(sessionId, { type: "session.revert.committed", data: { sessionID: sessionId } });
   }
 
   /** One live event (durable or ephemeral) that names `sessionId`. */
@@ -206,11 +215,11 @@ export class OpenCode2TranscriptState {
 }
 
 /** A cursor for the history strictly before row `id`, in the server's own format. */
-export function openCode2HistoryCursor(id: string): string | undefined {
+export function openCode2HistoryCursor(id: string, epoch?: string): string | undefined {
   if (!id.startsWith("msg_")) return undefined;
-  const cursor = Buffer.from(JSON.stringify({ id, order: "desc", direction: "next" })).toString(
-    "base64url",
-  );
+  const cursor = Buffer.from(
+    JSON.stringify({ id, order: "desc", direction: "next", ...(epoch ? { epoch } : {}) }),
+  ).toString("base64url");
   return cursor.length <= MAX_CURSOR_LENGTH ? cursor : undefined;
 }
 
@@ -283,6 +292,12 @@ export async function openCode2TranscriptSnapshot(
   options: OpenCode2TranscriptReadOptions,
   onUnknown?: (type: string) => void,
 ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+  const session = await client.getSession(sessionId).catch((error: unknown) => {
+    if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
+    throw error;
+  });
+  const revert = openCode2RevertMarker(session);
+  state.syncRevert(sessionId, revert?.messageId);
   const revision = state.revision(sessionId);
   const historyEpoch = state.historyEpoch(sessionId);
   const count = readLimit(options.limit);
@@ -293,7 +308,11 @@ export async function openCode2TranscriptSnapshot(
   let page;
   try {
     // One row more than the window, so a session that fits says so.
-    page = await client.listMessages(sessionId, { limit: count + 1, order: "desc" });
+    page = await client.listMessages(sessionId, {
+      limit: count + 1,
+      order: "desc",
+      ...(revert ? { cursor: openCode2HistoryCursor(revert.messageId) } : {}),
+    });
   } catch (error) {
     if (error instanceof OpenCode2RequestError && error.status === 404) {
       return {
@@ -314,9 +333,12 @@ export async function openCode2TranscriptSnapshot(
   const kept = window.slice(start);
   const keptGroups = groups.slice(start);
   const firstKept = rowId(kept[0]);
-  const historyCursor = olderHistory && firstKept ? openCode2HistoryCursor(firstKept) : undefined;
+  const historyCursor =
+    olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
   const shown = new Set(window.map(rowId));
-  const revised = await revisedRows(client, state, sessionId, window, kept, onUnknown);
+  const revised = revert
+    ? { rows: [], ids: new Set<string>() }
+    : await revisedRows(client, state, sessionId, window, kept, onUnknown);
   const omitted = state
     .revisedIds(sessionId)
     .filter((id) => !shown.has(id) && !revised.ids.has(id));
@@ -333,7 +355,7 @@ export async function openCode2TranscriptSnapshot(
     historyEpoch,
     sourceToken,
     ...(historyCursor
-      ? { historyCursor, historyCursorBefore: cursorBefore(kept, keptGroups) }
+      ? { historyCursor, historyCursorBefore: cursorBefore(kept, keptGroups, historyEpoch) }
       : {}),
     ...(revised.rows.length > 0 ? { revisedMessages: revised.rows } : {}),
     ...(reconciliation ? { historyReconciliationToken: reconciliation } : {}),
@@ -348,6 +370,7 @@ export async function openCode2TranscriptSnapshot(
 function cursorBefore(
   messages: readonly OpenCode2Message[],
   groups: readonly Record<string, unknown>[][],
+  epoch: string,
 ): (messageId: string) => string | undefined {
   let firstRows: Map<string, string> | undefined;
   return (messageId) => {
@@ -360,7 +383,7 @@ function cursorBefore(
       });
     }
     const source = firstRows.get(messageId);
-    return source ? openCode2HistoryCursor(source) : undefined;
+    return source ? openCode2HistoryCursor(source, epoch) : undefined;
   };
 }
 
@@ -423,11 +446,29 @@ export async function openCode2TranscriptPage(
 ): Promise<ProviderTranscriptPage> {
   const anchor = openCode2CursorAnchor(options.cursor);
   if (!anchor) return { status: "expired" };
+  const session = await client.getSession(sessionId).catch((error: unknown) => {
+    if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
+    throw error;
+  });
+  if (!session) return { status: "expired" };
+  const revert = openCode2RevertMarker(session);
+  state.syncRevert(sessionId, revert?.messageId);
   const historyEpoch = state.historyEpoch(sessionId);
+  const cursorEpoch = asRecord(
+    JSON.parse(Buffer.from(options.cursor, "base64url").toString("utf8")),
+  )?.epoch;
+  if (
+    (cursorEpoch !== undefined && cursorEpoch !== historyEpoch) ||
+    (revert && cursorEpoch === undefined)
+  )
+    return { status: "expired" };
   const count = readLimit(options.limit);
   let page;
   try {
-    page = await client.listMessages(sessionId, { limit: count + 1, cursor: options.cursor });
+    page = await client.listMessages(sessionId, {
+      limit: count + 1,
+      cursor: openCode2HistoryCursor(anchor),
+    });
   } catch (error) {
     if (error instanceof OpenCode2RequestError && (error.status === 404 || error.status === 400)) {
       return { status: "expired" };
@@ -455,7 +496,8 @@ export async function openCode2TranscriptPage(
     read.length === 0 ? 0 : newestGroups(groups, { rows: count, targetBytes: options.targetBytes });
   const olderHistory = more || start > 0;
   const firstKept = rowId(read[start]);
-  const historyCursor = olderHistory && firstKept ? openCode2HistoryCursor(firstKept) : undefined;
+  const historyCursor =
+    olderHistory && firstKept ? openCode2HistoryCursor(firstKept, historyEpoch) : undefined;
   return {
     status: "page",
     messages: groups.slice(start).flat(),

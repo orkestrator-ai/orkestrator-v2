@@ -47,6 +47,8 @@ import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
+  ProviderSessionFailedError,
+  TURN_STOPPED_BY_USER_MESSAGE,
   type NativeAgentRuntimeProvider,
   type ProviderActiveSteerRun,
   type ProviderActivityState,
@@ -329,7 +331,26 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     const activity = await this.activity(sessionId);
     if (activity === "missing") return "missing";
     if (activity === "waiting") return "blocked";
-    return activity === "working" ? "running" : "idle";
+    if (activity === "working") return "running";
+    const session = await this.client.getSession(sessionId).catch((error: unknown) => {
+      if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
+      throw error;
+    });
+    if (!session) return "missing";
+    if (session.outcome === "failed" || session.outcome === "interrupted") {
+      const state = await this.reads.sessionState(sessionId, "idle");
+      throw new ProviderSessionFailedError("opencode", state.error ?? TURN_STOPPED_BY_USER_MESSAGE);
+    }
+    return "idle";
+  }
+
+  private async lifecycleStatus(sessionId: string): Promise<ProviderStatus> {
+    try {
+      return await this.status(sessionId);
+    } catch (error) {
+      if (error instanceof ProviderSessionFailedError) return "idle";
+      throw error;
+    }
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
@@ -370,12 +391,12 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   /** Status, usage, model and terminal outcome; never the transcript. */
   async sessionState(sessionId: string) {
-    return this.reads.sessionState(sessionId, await this.status(sessionId));
+    return this.reads.sessionState(sessionId, await this.lifecycleStatus(sessionId));
   }
 
   /** {@link sessionState} plus the newest normalized rows. */
   async interactiveState(sessionId: string) {
-    return this.reads.interactive(sessionId, await this.status(sessionId));
+    return this.reads.interactive(sessionId, await this.lifecycleStatus(sessionId));
   }
 
   refreshUsage(sessionId: string) {

@@ -72,6 +72,8 @@ import {
   openCode2CoordinatorSignature,
   writeOpenCode2CoordinatorConfig,
 } from "./opencode2/coordinator.js";
+import { pushedLoginHostFile } from "./agent-accounts-containers.js";
+import { reconcileOpenCode2Credentials } from "./opencode2/credentials.js";
 import { OpenCode2Client } from "./opencode2/client.js";
 import {
   openCode2ServerKey,
@@ -298,6 +300,8 @@ async function startOpenCode2HostServerUnlocked(
       isAlive: () =>
         localServers.process(key) === child && child.exitCode === null && child.signalCode === null,
     });
+    const authFile = pushedLoginHostFile(context, "opencode");
+    if (authFile) await reconcileOpenCode2Credentials(client, authFile);
   } catch (error) {
     release();
     await localServers

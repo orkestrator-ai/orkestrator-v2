@@ -1,3 +1,5 @@
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -444,4 +446,31 @@ test("legacy sent records retain proof of startup when their session fails", asy
   expect(h.reviewer.status).toBe("failed");
   expect(h.reviewer).toMatchObject({ agentStarted: true });
   expect(h.reviewer.startFailed).toBeUndefined();
+});
+
+test("a failed OpenCode 2 tool-result reviewer fails without sending a missing-result reminder", async () => {
+  const server = new FakeOpenCode2Server();
+  const provider = new OpenCode2Provider(server.client(), { monitorEvents: false });
+  try {
+    const id = await provider.createSession("review", "failed reviewer");
+    await provider.send(id, "review", { requestId: "review-request" });
+    server.finishRun(id, "failed");
+    Object.assign(server.sessions.get(id)!.rows.at(-1)!, {
+      error: { message: "Model unavailable" },
+    });
+    const h = harness("build");
+    h.reviewer.providerSessionId = id;
+    h.reviewer.dispatchState = "sent";
+    h.reviewer.resultTransport = "tool-v1";
+    h.provider.status = (sessionId) => provider.status(sessionId);
+    h.host.readResult = async () => null;
+    await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+    expect(h.reviewer.status).toBe("failed");
+    expect(h.reviewer.error).toContain("Model unavailable");
+    expect(h.reviewer.resultReminderSent).not.toBe(true);
+    expect(h.sends).toHaveLength(0);
+  } finally {
+    await provider.dispose();
+    server.stop();
+  }
 });

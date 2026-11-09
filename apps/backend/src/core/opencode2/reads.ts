@@ -31,9 +31,11 @@ import {
   OPENCODE2_TRANSCRIPT_READ_LIMIT,
   OpenCode2TranscriptState,
   openCode2TranscriptPage,
+  openCode2HistoryCursor,
   openCode2TranscriptSnapshot,
   type OpenCode2TranscriptReadOptions,
 } from "./transcript-snapshot.js";
+import { openCode2RevertMarker } from "./revert.js";
 import type { OpenCode2Message } from "./types.js";
 import { openCode2ContextUsage } from "./usage.js";
 
@@ -128,7 +130,14 @@ export class OpenCode2SessionReads {
   /** Oldest first. */
   private async newestRows(sessionId: string, limit: number): Promise<OpenCode2Message[]> {
     try {
-      const page = await this.client.listMessages(sessionId, { limit, order: "desc" });
+      const session = await this.client.getSession(sessionId);
+      const revert = openCode2RevertMarker(session);
+      this.transcript.syncRevert(sessionId, revert?.messageId);
+      const page = await this.client.listMessages(sessionId, {
+        limit,
+        order: "desc",
+        ...(revert ? { cursor: openCode2HistoryCursor(revert.messageId) } : {}),
+      });
       return [...page.messages].reverse();
     } catch (error) {
       if (error instanceof OpenCode2RequestError && error.status === 404) return [];

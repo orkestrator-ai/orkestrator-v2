@@ -1620,6 +1620,17 @@ kind's tool is not offered, and after the turn the same call is refused; a
 structured-output turn returns its parsed value; a read-only turn neither
 writes a file nor runs `touch`, and the next ordinary turn writes.
 
+Real stack, 2026-11-09, throwaway profile `oc2-w2-mcp` (`dev:test --fixture
+--agent-platforms opencode --no-agent-credentials`, since stopped and reset):
+the setting was turned on in Settings → OpenCode; with no tab opened, `ork
+review launch` on a local fixture environment with an OpenCode reviewer and
+review model (OpenCode's own default model) started the environment's 2.x
+server (`host-server.ready`), recorded the preparation, reviewer and
+consolidation sessions in `opencode2-sessions`, and finished at "Consolidated
+report ready" with one P1 finding on the planted bug. Not checked live: a
+build pipeline or graph run on 2.x, and which result transport (tool or
+structured output) each Multi Review step used.
+
 ### Task 9: HTTP API, not ACP
 
 Chose the HTTP API. ACP was the cheaper route and would have closed most of the

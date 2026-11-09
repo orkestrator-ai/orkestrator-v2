@@ -263,3 +263,45 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await page.getByRole("button", { name: "Address all" }).click();
   await expect(page.getByTestId("native-send-count")).toHaveText("1");
 });
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+]) {
+  test(`queued attachments show as a chip, never as path markup (${viewport.width}px)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/native-compose?attachment-queue&running");
+    const strip = page.getByTestId("compose-queue-strip");
+    await expect(strip).toContainText("3 queued");
+    await expect(strip).not.toContainText("orkestrator-attachment-paths");
+    await expect(strip).not.toContainText("/workspace/");
+
+    const shot = strip.locator('[data-queued-prompt-id="queued-shot"]');
+    await expect(shot).toContainText("Match the header spacing in this screenshot");
+    await expect(shot.getByTestId("compose-queue-item-attachments")).toHaveText(
+      "header-spacing.png",
+    );
+    await expect(shot.getByTestId("compose-queue-item-note")).toHaveText(
+      "Steering sends the attachment as a workspace file path.",
+    );
+    // The chip stays inside the row rather than pushing the actions out.
+    const rowBox = (await shot.boundingBox())!;
+    const chipBox = (await shot.getByTestId("compose-queue-item-attachments").boundingBox())!;
+    expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+
+    const notes = strip.locator('[data-queued-prompt-id="queued-notes"]');
+    await expect(notes.getByRole("button", { name: /^Steer queued prompt/ })).toHaveCount(0);
+    await expect(notes.getByTestId("compose-queue-item-note")).toHaveText(
+      "Steering carries text only, so this is sent with its attachments when the turn ends.",
+    );
+
+    await shot
+      .getByRole("button", {
+        name: "Steer queued prompt 1 of 3: Match the header spacing in this screenshot",
+      })
+      .click();
+    await expect(page.getByTestId("native-steered")).toHaveText("queued-shot");
+  });
+}

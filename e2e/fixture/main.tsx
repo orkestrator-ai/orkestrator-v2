@@ -133,6 +133,13 @@ import {
 import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  attachmentsSteerByPath,
+  queuedPromptSteerable,
+  queuedSteerNote,
+} from "../../apps/web/src/components/native-agent/auto-steer";
+import { queuedPromptAttachments } from "../../apps/web/src/lib/chat/queued-prompt-text";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
@@ -502,6 +509,29 @@ const queuedComposePrompts = Array.from({ length: 123 }, (_, index) => ({
       : `Queued prompt ${index + 1}`,
 }));
 
+const queuedShotPath = "/workspace/.orkestrator/attachments/7f3c/header-spacing.png";
+/**
+ * Queued prompts as a native tab queues them while a turn runs (`?attachment-queue`):
+ * one whose screenshot is named by path in its text, one whose file is not, and
+ * plain text. Steer and the row note come from the tab's own rules.
+ */
+const attachmentQueuePrompts: Array<{ id: string; text: string; attachments?: unknown[] }> = [
+  {
+    id: "queued-shot",
+    text: buildInitialPromptWithAttachmentReferences(
+      "Match the header spacing in this screenshot",
+      [{ name: "header-spacing.png", path: queuedShotPath }],
+    ),
+    attachments: [{ type: "image", path: queuedShotPath, filename: "header-spacing.png" }],
+  },
+  {
+    id: "queued-notes",
+    text: "Read the release notes before changing the copy",
+    attachments: [{ type: "file", path: "/workspace/notes/release.md", filename: "release.md" }],
+  },
+  { id: "queued-plain", text: "Then run the focused tests" },
+];
+
 /**
  * The native composer as an agent tab assembles it: `NativeComposeBar` owns the
  * layout and the secondary controls, while the primary slot carries whatever
@@ -511,7 +541,10 @@ function NativeComposeFixture() {
   const [fastModeEnabled, setFastModeEnabled] = useState(false);
   const [sentCount, setSentCount] = useState(0);
   const [queueOpen, setQueueOpen] = useState(false);
-  const [queued, setQueued] = useState(queuedComposePrompts);
+  const attachmentQueue = new URLSearchParams(window.location.search).has("attachment-queue");
+  const [queued, setQueued] = useState<typeof attachmentQueuePrompts>(
+    attachmentQueue ? attachmentQueuePrompts : queuedComposePrompts,
+  );
   const [steered, setSteered] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [steeringAvailable, setSteeringAvailable] = useState(true);
@@ -551,22 +584,45 @@ function NativeComposeFixture() {
           queue={{
             length: queued.length,
             onOpen: () => setQueueOpen(true),
-            items: queued.map((prompt) => ({
-              ...prompt,
-              onSteer:
-                steeringAvailable && !(nonSteerableHead && prompt.id === "queued-1")
-                  ? () => {
-                      setSteered((current) => [...current, prompt.id]);
-                      dropQueued(prompt.id);
-                    }
-                  : undefined,
-              onEdit: () => {
-                setText(prompt.text);
-                dropQueued(prompt.id);
-                inputRef.current?.focusAtEnd(prompt.text);
-              },
-              onRemove: () => dropQueued(prompt.id),
-            })),
+            items: queued.map((prompt) => {
+              const attachments = queuedPromptAttachments(prompt);
+              const steerable =
+                queuedPromptSteerable(prompt) && !(nonSteerableHead && prompt.id === "queued-1");
+              const note = attachmentQueue
+                ? queuedSteerNote({
+                    running: steeringAvailable,
+                    providerSteers: true,
+                    parked: false,
+                    steerable,
+                    attachmentCount: attachments.length,
+                    attachmentsReferencedByPath: attachmentsSteerByPath(
+                      prompt.text,
+                      prompt.attachments,
+                    ),
+                    command: false,
+                    label: "Codex",
+                  })
+                : undefined;
+              return {
+                id: prompt.id,
+                text: prompt.text,
+                ...(attachments.length > 0 ? { attachments } : {}),
+                ...(note ? { note } : {}),
+                onSteer:
+                  steeringAvailable && steerable
+                    ? () => {
+                        setSteered((current) => [...current, prompt.id]);
+                        dropQueued(prompt.id);
+                      }
+                    : undefined,
+                onEdit: () => {
+                  setText(prompt.text);
+                  dropQueued(prompt.id);
+                  inputRef.current?.focusAtEnd(prompt.text);
+                },
+                onRemove: () => dropQueued(prompt.id),
+              };
+            }),
           }}
           showAddressAll
           onAddressAll={async () => setSentCount((count) => count + 1)}

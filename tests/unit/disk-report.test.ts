@@ -21,6 +21,7 @@ import {
 } from "../../scripts/disk-report";
 import {
   listProbeNetworks,
+  probeNetworkCreators,
   removeStaleProbeNetworks,
   staleProbeNetworks,
   type DockerRun,
@@ -428,6 +429,13 @@ describe("probe network sweep", () => {
     "ork-4444444444444444-reach-probe-net": [id("e"), hours(30), null],
     "ork-5555555555555555-reach-probe-net": [id("f"), hours(26), 0],
   };
+  // The creator label `network ls` prints; absent is a network from before it.
+  const creators: Record<string, string> = {
+    "ork-0123456789abcdef-reach-probe-net": "agent-test/temporary",
+    // Not a value a backend writes: read as unlabelled, never echoed.
+    "ork-1111111111111111-reach-probe-net": "/home/someone/data",
+    "ork-2222222222222222-reach-probe-net": "production/persistent",
+  };
 
   function fakeDocker(refuse = new Set<string>()): { run: DockerRun; calls: string[][] } {
     const calls: string[][] = [];
@@ -438,7 +446,9 @@ describe("probe network sweep", () => {
       calls.push([command, ...args]);
       const [verb, ...rest] = args;
       if (verb === "network" && rest[0] === "ls") {
-        const lines = Object.entries(daemon).map(([name, [networkId]]) => `${networkId} ${name}`);
+        const lines = Object.entries(daemon).map(
+          ([name, [networkId]]) => `${networkId} ${name} ${creators[name] ?? ""}`,
+        );
         // A same-label network whose name is not a probe's: never touched.
         lines.push(`${id("9")} ork-0123456789abcdef-env-net`);
         return { status: 0, stdout: `${lines.join("\n")}\n` };
@@ -475,6 +485,19 @@ describe("probe network sweep", () => {
     ]);
     // Listing asks by role label, and containers in every state.
     expect(calls[0]).toContain("label=orkestrator-resource-role=host-reachability-probe");
+    expect(calls[0]).toContain('{{.ID}} {{.Name}} {{.Label "orkestrator-creator"}}');
+    // Only a value a backend writes counts as a creator.
+    expect(networks.map((network) => network.creator)).toEqual([
+      "agent-test/temporary",
+      null,
+      "production/persistent",
+      null,
+      null,
+      null,
+    ]);
+    expect(probeNetworkCreators(networks)).toBe(
+      "unlabelled 4, agent-test/temporary 1, production/persistent 1",
+    );
     // A never-started container matches only the name, a started one the id.
     expect(calls).toContainEqual([
       "docker",
@@ -531,7 +554,8 @@ describe("probe network sweep", () => {
 
   test("reports the backlog, and nothing when Docker cannot list networks", () => {
     expect(probeNetworkRow(fakeDocker().run, now)).toMatchObject({
-      orphaned: "2 of 6 unattached and older than a day",
+      orphaned:
+        "2 of 6 unattached and older than a day (by creator: agent-test/temporary 1, unlabelled 1)",
       cleanup: "mise run disk:report -- --fix probe-networks",
     });
     const unavailable: DockerRun = () => ({ status: 1, stdout: "" });

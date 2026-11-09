@@ -1,5 +1,9 @@
-import { DOCKER_LABEL_RESOURCE_ROLE } from "../apps/backend/src/core/constants";
+import {
+  DOCKER_LABEL_CREATOR,
+  DOCKER_LABEL_RESOURCE_ROLE,
+} from "../apps/backend/src/core/constants";
 import { HOST_REACHABILITY_PROBE_ROLE } from "../apps/backend/src/core/container-host-reachability";
+import { PROBE_CREATOR_PATTERN } from "../apps/backend/src/core/container-host-reachability-creator";
 
 /**
  * Host-reachability probe networks of any owner (rules in
@@ -23,6 +27,11 @@ export type ProbeNetwork = {
   createdAt: number | null;
   /** Containers in any state that name the network, or null when unknown. */
   containers: number | null;
+  /**
+   * The creating backend's kind (`agent-test/temporary`, …), or null for a
+   * network made before the label existed or carrying an unexpected value.
+   */
+  creator: string | null;
 };
 
 export const PROBE_NETWORK_MIN_AGE_MS = 24 * 3_600_000;
@@ -51,19 +60,19 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
     `label=${DOCKER_LABEL_RESOURCE_ROLE}=${HOST_REACHABILITY_PROBE_ROLE}`,
     "--no-trunc",
     "--format",
-    "{{.ID}} {{.Name}}",
+    `{{.ID}} {{.Name}} {{.Label "${DOCKER_LABEL_CREATOR}"}}`,
   ]);
   if (listed.status !== 0) return null;
   const entries = listed.stdout
     .split("\n")
     .map((line) => line.trim().split(" "))
     .filter(
-      (fields): fields is [string, string] =>
-        fields.length === 2 &&
+      (fields): fields is [string, string] | [string, string, string] =>
+        (fields.length === 2 || fields.length === 3) &&
         /^[0-9a-f]{12,64}$/.test(fields[0]!) &&
         PROBE_NETWORK_NAME.test(fields[1]!),
     );
-  return entries.map(([id, name]) => {
+  return entries.map(([id, name, label]) => {
     const inspected = run("docker", ["network", "inspect", "--format", "{{.Created}}", id]);
     const createdAt = inspected.status === 0 ? parseCreatedAt(inspected.stdout.trim()) : null;
     // `network inspect` lists only running endpoints, so ask `ps -a` for
@@ -82,8 +91,26 @@ export function listProbeNetworks(run: DockerRun): ProbeNetwork[] | null {
       name,
       createdAt,
       containers: attached.status === 0 ? attached.stdout.split("\n").filter(Boolean).length : null,
+      creator: label && PROBE_CREATOR_PATTERN.test(label) ? label : null,
     };
   });
+}
+
+/**
+ * `agent-test/temporary 3, unlabelled 1`: how many of `networks` each kind of
+ * backend made, most first; "unlabelled" counts networks from before the
+ * creator label (todo 7470 task 2).
+ */
+export function probeNetworkCreators(networks: readonly ProbeNetwork[]): string {
+  const counts = new Map<string, number>();
+  for (const network of networks) {
+    const creator = network.creator ?? "unlabelled";
+    counts.set(creator, (counts.get(creator) ?? 0) + 1);
+  }
+  return Array.from(counts)
+    .sort(([a, left], [b, right]) => right - left || a.localeCompare(b))
+    .map(([creator, count]) => `${creator} ${count}`)
+    .join(", ");
 }
 
 /** Unattached probe networks older than `minAgeMs`; anything unknown is kept. */

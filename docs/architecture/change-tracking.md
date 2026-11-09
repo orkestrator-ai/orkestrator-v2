@@ -404,9 +404,10 @@ existing `git-docker-scan` pool (4 jobs, 1 per target) with at most 2 remote
 captures; 10 s foreground boundary; 100,000 candidates; 16 MiB/file and
 256 MiB/capture retained; 1 s/5 s provisional spacing; 250 ms live-body
 coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 2,000 file rows per measurement; 1 GiB soft / 4 GiB hard snapshot
-storage; 90-day archived retention (a maximum subject to quota, not a
+storage; 30-day archived retention (a maximum subject to quota, not a
 guarantee); restore preflight 5 ms per planned path, at least 10 s and at most
-5 min. Changing a policy affects future work only.
+5 min. Capture policy changes affect future work; the archive window applies
+to existing history on the next retention pass.
 
 ## Restore
 
@@ -522,8 +523,14 @@ without incremental auto-vacuum reuse freed pages but do not physically shrink;
 backup headroom is calculated from live pages rather than allocated file size.
 
 The ledger lives in its own database, `change-tracking.sqlite`, beside
-`orkestrator.sqlite`, with the same settings (WAL, full sync, secure delete)
-and its own schema version. Nothing joins or writes across the two files.
+`orkestrator.sqlite`, with WAL, secure delete and its own schema version.
+The ledger explicitly uses `synchronous = NORMAL`; the main storage database
+and other `StorageDatabase` callers default to `FULL`. NORMAL avoids syncing
+the WAL after every ledger commit (checkpoints still sync). In WAL mode NORMAL
+cannot corrupt the database, but the last few committed ledger transactions may
+roll back after a power loss or OS crash. An application crash or SIGKILL loses
+no committed transactions. See [SQLite's synchronous guarantees](https://www.sqlite.org/pragma.html#pragma_synchronous).
+Nothing joins or writes across the two files.
 Hourly snapshots copy `orkestrator.sqlite` only, so a small app-store change no
 longer copies the ledger. The ledger has its own best-effort snapshots in
 `<dataDir>/backups/`: `change-tracking-daily-<stamp>.sqlite` once a day when it
@@ -575,7 +582,10 @@ touch any of this directly; what happens to a removed project's own stores is
 
 ### Age-based retention
 
-`archivedBodyRetentionDays` (90) is the one window, measured from `finished_at`.
+`archivedBodyRetentionDays` (30) is the one window, measured from `finished_at`.
+Existing ledgers use the 30-day window on the first pass after the change;
+turns aged between 30 and 90 days expire through the same bounded batches and
+yields, with leftovers handled by later passes. No bulk migration is needed.
 Past it a terminal turn loses its measurements, selections, references, capture
 attempts and `turnops:` and `pturn:` keys, oldest first from a durable cursor
 (`retention:turn-cursor`), so a pass never walks a retired turn again. Its boundary

@@ -17,7 +17,7 @@
  * - `queries`: projection reads (views, tool presentations, history) and the
  *   ledger's measurement reads (latest measurement, file pages and counts).
  * - `retention`: one hourly pass (`ChangeRetentionService.run`) with the
- *   default 90-day window, while three synthetic environments are purged.
+ *   default 30-day window, while three synthetic environments are purged.
  * - `manifest`: storing and cold-reading a capture manifest of
  *   `--manifest-entries` entries, and parsing measurement JSON.
  * - `mixed`: ingestion, queries and back-to-back retention passes at once.
@@ -28,7 +28,8 @@
  * `--disk-writers N` adds N child processes that write and fsync 4 MiB blocks
  * in a loop (at most 256 MiB each, in the data directory) for the whole run:
  * the disk contention of builds, Docker and other test suites on the same
- * host, which makes each commit's fsync (`synchronous = FULL`) slow.
+ * host, which slows ledger I/O, including checkpoints that still sync with
+ * `synchronous = NORMAL` (ledger commits no longer sync individually).
  *
  * A stall is the lateness of a 2 ms timer chain, as in
  * `apps/backend/scripts/storage-maintenance-stall.ts`. Every statement the

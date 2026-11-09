@@ -150,3 +150,31 @@ ORKESTRATOR_E2E_PORT=15475 mise run test:logged -- --name pane-owning-rerun -- b
 A separately installed detached `origin/main` at `38d55ee14` also passed the complete owner with two workers in 85.8 s (port 15476, logged name `main-pane-breakpoint`). This confirms intermittence, not a main reproduction of the failure. Aggregate evidence: host temporary directory `orkestrator-test-run.ZlAiMU/browser.log` (compressed at finalization). No pane code, assertion, timeout or skip changed.
 
 Final MCP provenance browser rerun: the wrapper hit its 1,800-second deadline after starting case 995 of 1,206, so no final pass total is available. Both source-layout viewport cases ran; the separate source-layout owner passed. Eleven browser failures were reported before termination, including two design-canvas failures. Compressed evidence: `orkestrator-test-run.ZlAiMU/browser.log.gz` under the host temporary directory, copied to `output/visual-previews/review-validation-evidence/` in the provenance worktree. The public-site stage was not reached. This incomplete run remains failed.
+
+## Auto-pipeline editing review — 2026-11-09
+
+Observed on `review-pipeline-acb77a487d3d-r1`, whose base is
+`448e9fffb992c3b6306aa6562c88e23c59fb74d8`. The read-only
+`mise run flaky:recurrence -- 0351 --base 448e9fffb` check returned `open`.
+
+The exact command `mise run test:logged -- --name browser -- mise run test:browser`
+ran 1,726 component cases with nine workers alongside repository validation:
+1,572 passed, 151 skipped and three failed (1,404.3 seconds logged).
+The mobile case `split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, appendChild fallback)`
+failed at `e2e/PaneBreakpoint.spec.ts:145`: expected first visible
+`Transcript message 36.`, received `Transcript message 35.`. The other two
+failures were the repeatable remote-sidebar keyboard case in both viewports.
+The public-site stage was not reached because the component suite failed.
+
+The complete unchanged pane owner passed alone with one worker in 107.8 seconds:
+
+```sh
+mise run test:logged -- --name pane-breakpoint-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --workers=1 --output output/playwright/auto-pipeline-pane-owner
+```
+
+Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0EWA6D/browser.log.gz`.
+Failure trace:
+`output/playwright/test-results/PaneBreakpoint-split-panes-c1009-shell-appendChild-fallback--mobile-chromium/trace.zip`.
+No pane source, assertion, timeout or skip changed. The isolated pass confirms
+intermittence; it does not establish the cause of the anchor mismatch.

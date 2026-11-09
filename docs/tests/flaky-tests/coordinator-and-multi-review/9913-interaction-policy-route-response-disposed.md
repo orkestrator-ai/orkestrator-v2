@@ -1,6 +1,6 @@
 # Coordinator policy browser route receives a disposed API response
 
-- **ID:** 9910
+- **ID:** 9913
 - **Status:** open
 - **Date observed:** 2026-11-09
 - **Test:** `[mobile-chromium] a coordinator turn delegates through Orkestrator tools, is refused a write and asks a question`

@@ -27,3 +27,23 @@ On macOS, `groupHasLiveMember` treats an unsuccessful process inspection as
 unknown and returns `true`; its `ps` subprocess has a 100 ms timeout. That is a
 possible explanation, but no subprocess failure or timeout was captured here.
 The isolated pass establishes intermittence, not its cause. Leave this open.
+
+## Scheduling repair validation, 2026-11-09
+
+Observed on `project-scheduling-ac146edab2ff-r1`, base
+`3cf3dd7994cb36954f0670430216a71c7b6505d9`. The recurrence tool reported
+case 9840 open against `origin/main` and directed recording this recurrence.
+
+Command: `mise run test:logged -- --name address-full-tests-after-guard-fix -- mise run test`.
+After an 825.6 s admission wait, the aggregate ran workspace (five slots), root
+(one), bridges (two) and protocol (one), beside a five-worker browser suite.
+The same empty-group assertion returned true at 425.68 ms. Protocol totals:
+5,713 passed, two skipped, one failed; 5,716 tests across 316 files, 45.01 s.
+Evidence is the workspace log under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.IYESto/`.
+
+The unchanged owner passed with
+`mise run test:logged -- --name process-group-isolated -- bun test packages/protocol/src/node/shell-process-state.test.ts --parallel=2 --only-failures`
+(exit 0, 1.2 s). Passing output was removed, so no isolated total is claimed.
+No assertion or timeout changed. Cause remains unconfirmed; the isolated pass
+does not replace the failed aggregate or establish an environmental exemption.

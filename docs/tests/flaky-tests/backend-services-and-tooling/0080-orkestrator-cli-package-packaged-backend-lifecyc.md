@@ -83,3 +83,31 @@ workers, no reliable closing aggregate total. The unchanged owner passed with
 packages/cli ./tests/cli.test.ts --parallel=1 --only-failures` in 6.6 s, exit 0.
 Passing output was removed, so no new totals are claimed. No CLI or startup
 code was repaired; this isolated pass does not replace the failed aggregate.
+
+## Scheduling repair validation, 2026-11-09
+
+Observed on `project-scheduling-ac146edab2ff-r1`, base
+`3cf3dd7994cb36954f0670430216a71c7b6505d9`. The recurrence tool reported
+case 0080 open against `origin/main` and directed recording a recurrence.
+
+`mise run test:logged -- --name address-full-tests -- mise run test` failed
+both readiness cases: `starts and gracefully stops the packaged backend`
+(20,085.31 ms) and `starts when the caller's environment already sets NODE_ENV`
+(20,020.30 ms), both with `Packaged backend did not become ready:` and no
+stderr cause. Workspace had five worker slots alongside root (one), bridges
+(two), protocol (one), and a five-worker browser run. CLI totals were 508
+passed, eight skipped, two failed; 518 tests across 36 files, 48.69 s.
+Evidence: workspace log under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.mX02WE/`.
+
+Two owning-file attempts also failed (11 passed, two failed): one without an
+explicit preload, then the package's preload-aware command
+`mise run test:logged -- --name cli-lifecycle-with-preload -- bun --cwd=packages/cli test tests/cli.test.ts --preload ../../tests/setup-node.ts --parallel=2 --only-failures`
+(40.4 s). Artifact:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.WtM5aA/cli-lifecycle-with-preload.log.gz`.
+
+The second aggregate's complete CLI package passed (510 passed, eight skipped,
+518 tests, 13.35 s). The exact preload-aware owning-file command above then
+passed unchanged (exit 0, 6.6 s); passing output was deleted, so no isolated
+total is claimed. No CLI implementation, assertion or deadline changed. This
+establishes intermittence, not a cause or environmental exemption.

@@ -346,19 +346,24 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     transcriptRefreshing &&
     !transcriptSettled;
   const composerCentered = centerCompose && !hasTranscriptCards;
+  // Select the visible notice once so its layout reservation and dock content
+  // always share both eligibility and priority.
+  const dockNoticeKind =
+    displayAvailable && connectionState === "error"
+      ? "connection"
+      : refreshingTranscript && (composerCentered || !isAtBottom)
+        ? "refresh"
+        : desynced
+          ? "desync"
+          : null;
   /*
    * The transcript normally scrolls behind the floating dock. A notice row
    * (reconnect error, refresh shimmer, desync warning) is text the user has to
    * read, so while one is up the transcript ends at the dock's top edge instead:
    * the notice pushes the messages up rather than having them run underneath.
-   * Mirrors the `notice` chain passed to the dock below.
    */
   const insetTranscriptForNotice =
-    !composerCentered &&
-    measuredDockHeight !== null &&
-    ((displayAvailable && connectionState === "error") ||
-      (refreshingTranscript && !isAtBottom) ||
-      desynced);
+    !composerCentered && measuredDockHeight !== null && dockNoticeKind !== null;
   // What the transcript list renders from. Each keeps its identity until
   // something it shows changes (see `StableVirtuoso`), so a render of this shell
   // for any other reason does not render the visible rows again.
@@ -556,9 +561,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    * bottom never reaches its footer. The dock's notice row is visible in both
    * layouts and at any scroll position, so it carries the fallback.
    */
-  const pinRefreshShimmer = refreshingTranscript && (composerCentered || !isAtBottom);
   const connectionNotice =
-    displayAvailable && connectionState === "error" ? (
+    dockNoticeKind === "connection" ? (
       <div
         role="alert"
         className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
@@ -592,12 +596,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       </div>
     ) : null;
 
-  const desyncNotice = desynced ? (
-    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-      <AlertCircle className="h-4 w-4 shrink-0" />
-      Live updates disconnected. A full session refresh will run when the connection returns.
-    </div>
-  ) : null;
+  const desyncNotice =
+    dockNoticeKind === "desync" ? (
+      <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        Live updates disconnected. A full session refresh will run when the connection returns.
+      </div>
+    ) : null;
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -719,7 +724,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
          */
         notice={
           connectionNotice ??
-          (pinRefreshShimmer ? <SessionRefreshShimmer active variant="pinned" /> : null) ??
+          (dockNoticeKind === "refresh" ? (
+            <SessionRefreshShimmer active variant="pinned" />
+          ) : null) ??
           desyncNotice
         }
         statusAccessory={statusAccessory}

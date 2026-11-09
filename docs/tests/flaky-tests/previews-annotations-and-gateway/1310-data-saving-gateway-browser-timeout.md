@@ -211,3 +211,14 @@ mise run test:logged -- --name isolate-data-saving -- bunx playwright test --con
 
 The isolated pass confirms intermittence; the cause remains unconfirmed. Status
 stays open. No assertion, timeout or skip changed.
+
+
+## Dock notice review repairs — 2026-11-09
+
+- **Observing branch:** `fix-error-message-d954c85349a7-r1`, head `46a098de1cf920de3f4db6a14718a1831b22e87e`, base `448e9fffb9` (2.37.1-beta). This branch does not change this owner or the gateway.
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`, nine component workers. Result: 1,582 passed, 151 skipped, three failed in 1,385.8 seconds. The chained public-site stage did not run.
+- **Failure:** mobile `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` (`e2e/DataSavingGateway.spec.ts:18`) exceeded its 60,000 ms deadline; cleanup at line 170 reported `browserContext.close: Target page, context or browser has been closed`.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0XExwN/browser.log.gz`. The other two browser failures were `SidebarCrossMachineSelect.spec.ts:150` at both viewports; those also failed in their complete owning-file rerun and are not classified as flakes.
+- **Complete unchanged owner:** after the aggregate and sidebar diagnostic finished, `mise run test:logged -- --name data-saving-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/data-saving-isolated` passed both viewport cases, exit 0, in 38.0 seconds.
+- **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb` reported the case open and instructed recording this observation. Status remains open.
+- **Assessment:** the unchanged isolated pass confirms intermittence. Host contention is a hypothesis for this observation; no new root cause is established. No implementation, assertion, timeout or skip changed in this owner.

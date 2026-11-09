@@ -240,7 +240,14 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   counts them, and `mise run disk:report -- --fix probe-networks` removes,
   one at a time by network id, only those with no container in any state and
   created more than a day ago, whatever their owner. A check lasts seconds, so such a network
-  cannot belong to a running one (todo 0241).
+  cannot belong to a running one (todo 0241). Each probe network and container
+  also carries an `orkestrator-creator` label, `<runtime flavor>/<temporary|persistent>`
+  (for example `agent-test/temporary` for a disposable test backend), and the
+  row counts the stale ones by it; `unlabelled` ones predate the label
+  (todo 7470). The value never names a path, a user or a spec, because anyone
+  who can reach the daemon can read it. Electron specs and the CLI harnesses
+  run their backends with the boot probe off, so a new `…/temporary` leak
+  points at a harness that does not.
 
 ## Commands
 

@@ -194,6 +194,7 @@ import {
 } from "./transcript-artifacts/index.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
+import { probeCreator } from "./container-host-reachability-creator.js";
 import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
@@ -609,6 +610,7 @@ export class OrkestratorBackend {
         : new ContainerHostReachabilityService({
             servicePort: () => this.agentTools.servicePort?.() ?? null,
             ownerNamespace: dockerOwnerNamespace(options.dataDir),
+            creator: probeCreator(options.runtimeFlavor ?? "production", options.dataDir),
             fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
             // Read lazily: the gateway that receives events is created after init.
             emit,

@@ -20,6 +20,7 @@ import {
   nativeMenuScreenshot,
   nativeMenuWindows,
 } from "./native-menu-input";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * Runs on macOS too, where the first test skips: there Help comes from the
@@ -45,12 +46,6 @@ test("Help offers Open Developer Tools only while a renderer has debug logging o
     );
     const headless = headlessElectronRequested();
     const inherited = headless ? withoutDisplay(process.env) : process.env;
-    const env = Object.fromEntries(
-      Object.entries(inherited).filter(
-        (entry): entry is [string, string] =>
-          entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE",
-      ),
-    );
     app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
@@ -60,7 +55,7 @@ test("Help offers Open Developer Tools only while a renderer has debug logging o
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env,
+      env: electronSpecEnvironment(inherited, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     const page = await app.firstWindow();
     await expect(page).toHaveTitle("Orkestrator menu qualification");
@@ -126,17 +121,10 @@ test("built application menu resolves native roles and dispatches callbacks", as
       ],
       { timeout: 30_000 },
     );
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(
-        (entry): entry is [string, string] =>
-          entry[1] !== undefined && entry[0] !== "ELECTRON_RUN_AS_NODE",
-      ),
-    );
-    if (process.platform === "linux") {
-      delete env.WAYLAND_DISPLAY;
-      env.GDK_BACKEND = "x11";
-      env.XDG_SESSION_TYPE = "x11";
-    }
+    const x11 =
+      process.platform === "linux"
+        ? { WAYLAND_DISPLAY: undefined, GDK_BACKEND: "x11", XDG_SESSION_TYPE: "x11" }
+        : {};
     app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
@@ -146,7 +134,7 @@ test("built application menu resolves native roles and dispatches callbacks", as
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env,
+      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined, ...x11 }),
     });
     const page = await app.firstWindow();
     await expect(page).toHaveTitle("Orkestrator menu qualification");

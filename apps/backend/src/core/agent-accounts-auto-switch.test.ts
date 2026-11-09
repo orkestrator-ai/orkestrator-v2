@@ -117,7 +117,9 @@ function harness(options: {
     readUsage: async (_platform, accountId, { force }) => {
       reads.push({ accountId, force });
       const reading = options.accounts[accountId]!;
-      return typeof reading === "function" ? reading() : reading;
+      const result = typeof reading === "function" ? reading() : reading;
+      // These fixtures represent a provider read at the harness clock.
+      return result.stale ? result : { ...result, fetchedAt: new Date(clock).toISOString() };
     },
     switchAccount,
     sessionAccount: async () =>
@@ -194,6 +196,38 @@ describe("between turns", () => {
     ]);
     // Between turns it reads what is cached; only a limit error forces a read.
     expect(h.reads.every((read) => !read.force)).toBe(true);
+  });
+
+  test("a limited Host skips the signed-out second account and lands on the third", async () => {
+    const h = harness({
+      active: "host",
+      signedOut: ["signed-out"],
+      accounts: {
+        host: usage({ used: 100, resetsInHours: 72 }),
+        "signed-out": usage({ used: 10, resetsInHours: 1 }),
+        third: usage({ used: 20, resetsInHours: 48 }),
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("third");
+    expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    expect(h.reads.some(({ accountId }) => accountId === "signed-out")).toBe(false);
+  });
+
+  test("a target signed out while usage was read is refused before switching", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: usage({ used: 100, resetsInHours: 72 }),
+        candidate: () => {
+          h.summaries.find(({ id }) => id === "candidate")!.signedIn = false;
+          return usage({ used: 20, resetsInHours: 24 });
+        },
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("host");
+    expect(h.switchAccount).not.toHaveBeenCalled();
   });
 
   test("signed-out active accounts move; signed-out destinations are skipped", async () => {

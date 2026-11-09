@@ -31,9 +31,12 @@ export type ContainerTerminalShell = {
   token: string;
 };
 
-/** A fresh token for one shell; hexadecimal and dashes only, so it is shell-safe. */
+/** One process owns every token it issues; a new backend can identify orphans. */
+const backendInstanceId = randomUUID();
+
+/** A per-instance prefix and per-shell suffix; hexadecimal and dashes only. */
 export function newContainerTerminalToken(): string {
-  return randomUUID();
+  return `${backendInstanceId}--${randomUUID()}`;
 }
 
 /** The `docker exec` arguments that close one container terminal's shell. */

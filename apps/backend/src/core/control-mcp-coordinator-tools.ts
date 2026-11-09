@@ -1,3 +1,4 @@
+import { registerCoordinatorMarkTools } from "./control-mcp-coordinator-marks.js";
 import { hostTimeZone, isValidTimeZone } from "@orkestrator/protocol/schedule-time";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
@@ -107,6 +108,7 @@ export function registerCoordinatorWorkflowTools(
     pollGuard,
   }: CoordinatorToolContext,
 ): void {
+  registerCoordinatorMarkTools(server);
   registerControlReviewActions(server, invoke, coordinatorScope);
   registerCoordinatorSurfaceTools(server, invoke, coordinatorScope);
   registerCoordinatorWorkerTools(server, invoke, coordinatorScope);

@@ -63,32 +63,6 @@ export const CONTAINER_TERMINAL_SESSION_ENV = "ORKESTRATOR_TERMINAL_SESSION";
 /** Prefix of the per-uid directory holding `<token>.pid` records, in the container. */
 export const CONTAINER_TERMINAL_PID_DIR_PREFIX = "/tmp/orkestrator-terminals-";
 /**
- * Runs in `bash -lc` before `exec zsh -l`, so `$$` is the interactive shell's
- * PID. Sweeps this uid's stale records (a PID that no longer carries its
- * token: a shell that exited, or one from before a container restart), then
- * records this shell. Skipped without a token, and when the directory is not a
- * real directory this uid owns (another user planted it), so a root shell
- * never writes through a path someone else controls. No single quotes, so
- * `docker/tests/root-boundary-smoke.sh` can embed the exact launch.
- */
-export const CONTAINER_TERMINAL_PID_RECORD_COMMAND = [
-  `if [ -n "\${${CONTAINER_TERMINAL_SESSION_ENV}:-}" ]; then`,
-  `  orkestrator_terminal_dir="${CONTAINER_TERMINAL_PID_DIR_PREFIX}$(id -u)"`,
-  '  mkdir -p -m 700 "$orkestrator_terminal_dir" 2>/dev/null',
-  '  if [ -d "$orkestrator_terminal_dir" ] && [ ! -L "$orkestrator_terminal_dir" ] && [ -O "$orkestrator_terminal_dir" ]; then',
-  '    for orkestrator_terminal_file in "$orkestrator_terminal_dir"/*.pid; do',
-  '      [ -f "$orkestrator_terminal_file" ] || continue',
-  '      orkestrator_terminal_token="${orkestrator_terminal_file##*/}"',
-  '      orkestrator_terminal_pid=""',
-  '      read -r orkestrator_terminal_pid orkestrator_terminal_sid < "$orkestrator_terminal_file" 2>/dev/null',
-  `      grep -qzxF "${CONTAINER_TERMINAL_SESSION_ENV}=\${orkestrator_terminal_token%.pid}" "/proc/\${orkestrator_terminal_pid:-0}/environ" 2>/dev/null || rm -f "$orkestrator_terminal_file"`,
-  "    done",
-  `    echo "$$ $(ps -o sid= -p $$)" > "$orkestrator_terminal_dir/\${${CONTAINER_TERMINAL_SESSION_ENV}}.pid"`,
-  "  fi",
-  "  unset orkestrator_terminal_dir orkestrator_terminal_file orkestrator_terminal_token orkestrator_terminal_pid orkestrator_terminal_sid",
-  "fi",
-].join("\n");
-/**
  * `sh -c` script the backend runs as the terminal's own user when the PTY
  * goes away, with the token as `$1`. Removes the record, HUPs the recorded
  * shell's process group once `/proc/<pid>/environ` proves the PID is still
@@ -127,6 +101,43 @@ export const CONTAINER_TERMINAL_CLOSE_SCRIPT = [
   '  [ "$candidate_sid" = "$sid" ] && kill -s HUP "$candidate" 2>/dev/null',
   "done",
   "exit 0",
+].join("\n");
+/**
+ * Runs in `bash -lc` before `exec zsh -l`, so `$$` is the interactive shell's
+ * PID. Sweeps this uid's stale records (a PID that no longer carries its
+ * token: a shell that exited, or one from before a container restart), and
+ * closes records owned by an earlier backend instance using the close script.
+ * A job in an orphaned tab ends at the next terminal start. Then records this
+ * shell. Skipped without a token, and when the directory is not a
+ * real directory this uid owns (another user planted it), so a root shell
+ * never writes through a path someone else controls. No single quotes, so
+ * `docker/tests/root-boundary-smoke.sh` can embed the exact launch.
+ */
+export const CONTAINER_TERMINAL_PID_RECORD_COMMAND = [
+  `if [ -n "\${${CONTAINER_TERMINAL_SESSION_ENV}:-}" ]; then`,
+  "  orkestrator_terminal_close() (",
+  CONTAINER_TERMINAL_CLOSE_SCRIPT,
+  "  )",
+  `  orkestrator_terminal_instance="\${${CONTAINER_TERMINAL_SESSION_ENV}%%--*}--"`,
+  `  orkestrator_terminal_dir="${CONTAINER_TERMINAL_PID_DIR_PREFIX}$(id -u)"`,
+  '  mkdir -p -m 700 "$orkestrator_terminal_dir" 2>/dev/null',
+  '  if [ -d "$orkestrator_terminal_dir" ] && [ ! -L "$orkestrator_terminal_dir" ] && [ -O "$orkestrator_terminal_dir" ]; then',
+  '    for orkestrator_terminal_file in "$orkestrator_terminal_dir"/*.pid; do',
+  '      [ -f "$orkestrator_terminal_file" ] || continue',
+  '      orkestrator_terminal_token="${orkestrator_terminal_file##*/}"',
+  '      case "${orkestrator_terminal_token%.pid}" in',
+  '        "$orkestrator_terminal_instance"*) ;;',
+  '        *) orkestrator_terminal_close "${orkestrator_terminal_token%.pid}"; continue ;;',
+  "      esac",
+  '      orkestrator_terminal_pid=""',
+  '      read -r orkestrator_terminal_pid orkestrator_terminal_sid < "$orkestrator_terminal_file" 2>/dev/null',
+  `      grep -qzxF "${CONTAINER_TERMINAL_SESSION_ENV}=\${orkestrator_terminal_token%.pid}" "/proc/\${orkestrator_terminal_pid:-0}/environ" 2>/dev/null || rm -f "$orkestrator_terminal_file"`,
+  "    done",
+  `    echo "$$ $(ps -o sid= -p $$)" > "$orkestrator_terminal_dir/\${${CONTAINER_TERMINAL_SESSION_ENV}}.pid"`,
+  "  fi",
+  "  unset orkestrator_terminal_dir orkestrator_terminal_file orkestrator_terminal_token orkestrator_terminal_pid orkestrator_terminal_sid orkestrator_terminal_instance",
+  "  unset -f orkestrator_terminal_close",
+  "fi",
 ].join("\n");
 export const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
   "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",

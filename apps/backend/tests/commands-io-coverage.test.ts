@@ -214,7 +214,7 @@ describe("backend command I/O coverage", () => {
     expect(shell).toEqual({
       containerId: "container-1",
       user: "node",
-      token: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      token: expect.stringMatching(/^[0-9a-f-]{36}--[0-9a-f-]{36}$/),
     });
     expect(spawnPty).toHaveBeenCalledWith(
       "docker",

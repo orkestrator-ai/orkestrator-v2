@@ -740,6 +740,18 @@ describe("the rkmbp readings of 2026-11-04", () => {
   });
 });
 
+test("fresh unknown-reset usage ranks ahead of stale or unread usage with an earlier reset", () => {
+  const ranked = rankAutoSwitchAccounts(
+    [
+      account("stale", { freshness: "stale", usedPercent: 31, resetsAt: at(1) }),
+      account("unknown", { freshness: "none", resetsAt: at(2) }),
+      account("fresh", { freshness: "fresh", usedPercent: 20 }),
+    ],
+    "limited",
+  );
+  expect(ranked.map(({ account: entry }) => entry.id)).toEqual(["fresh", "stale", "unknown"]);
+});
+
 describe("the 5-hour limit", () => {
   const out = (hours: number) => ({
     freshness: "fresh" as const,
@@ -781,7 +793,8 @@ describe("the 5-hour limit", () => {
             "active",
           ),
         );
-      expect(ranked(recovered)[0]).toBe("return");
+      // Recovery makes the account eligible again; fresh usage still ranks first.
+      expect(ranked(recovered)).toEqual(["active", "return"]);
       for (const stale of [false, true]) {
         // Explicit provider credit/overage use stays authoritative even after reset.
         const explicit = read({

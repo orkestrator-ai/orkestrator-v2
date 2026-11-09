@@ -49,6 +49,7 @@ import {
   agentMailStatusBudgetKey,
   normalizeAgentMessagingSettings,
   type AgentMailNotice,
+  type AgentMailPullRequest,
   type AgentMailNoticeResource,
   type AgentMailNoticeTone,
   type CoordinatorStatusWakeMode,
@@ -500,6 +501,7 @@ export function multiReviewStatus(
 export function renderCoordinatorStatusNotice(
   resource: CoordinatorStatusResource,
   status: CoordinatorStatus,
+  pullRequest?: AgentMailPullRequest,
 ): { subject: string; body: string; notice: AgentMailNotice } {
   const name =
     resource.kind === "multi-review"
@@ -538,6 +540,7 @@ export function renderCoordinatorStatusNotice(
     subject,
     body,
     notice: {
+      ...(pullRequest ? { pullRequest } : {}),
       resource: {
         kind: resource.kind,
         id: resource.id,
@@ -589,6 +592,8 @@ export interface CoordinatorStatusWakeOptions {
    * state only. Without it a local PR is never "ready" and has no checks.
    */
   prMonitorHealth?: (environment: Environment) => CoordinatorPrHealth;
+  /** Best-effort PR identity from the host GitHub reader, also for remote workers. */
+  pullRequestMetadata?: (url: string) => Promise<AgentMailPullRequest | undefined>;
   timers?: CoordinatorStatusWakeTimers;
   coalesceMs?: number;
   waitingDebounceMs?: number;
@@ -1806,18 +1811,25 @@ export class CoordinatorStatusWakes {
    * association, conversation and state, so a retry after a crash finds the
    * message already placed.
    */
-  private deliver(
+  private async deliver(
     _workspaces: CoordinatorWorkspace[],
     association: CoordinatorWorkflowAssociation,
     resource: CoordinatorStatusResource,
     status: CoordinatorStatus,
   ): Promise<boolean> {
     // A worker on another node: the transcript tile opens it through that node.
+    const prUrl = status.details
+      .map((line) => line.match(/^Pull request: (https?:\/\/\S+)/)?.[1])
+      .find(Boolean);
+    const pullRequest = prUrl
+      ? await this.options.pullRequestMetadata?.(prUrl).catch(() => undefined)
+      : undefined;
     const { subject, body, notice } = renderCoordinatorStatusNotice(
       association.nodeId && (resource.kind === "agent-tab" || resource.kind === "environment")
         ? { ...resource, nodeId: association.nodeId }
         : resource,
       status,
+      pullRequest,
     );
     return this.router.deliver({
       projectId: association.projectId,

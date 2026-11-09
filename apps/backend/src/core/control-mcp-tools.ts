@@ -63,6 +63,8 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["list_agents", "discovery"],
   ["get_launch_options", "discovery"],
   ["get_repository_context", "discovery"],
+  ["mark_topic", "discovery"],
+  ["mark_question", "discovery"],
   ["list_workflows", "discovery"],
   ["adopt_workflow", "discovery"],
   ["list_environments", "environments"],

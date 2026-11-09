@@ -1,3 +1,4 @@
+import { useCoordinatorActionHistory } from "@/components/projects/useCoordinatorActionHistory";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -1163,12 +1164,24 @@ export function SharedNativeAgentController({
   ]);
   // "Open full conversation" (web annotations) parks a scroll target for this
   // tab; it is consumed here once the message is rendered.
+  const requestActionNavigation = useCallback(
+    (messageId: string) => {
+      useConversationScrollTargetStore
+        .getState()
+        .request(
+          { nodeId: scrollTargetNodeId, environmentId: data.environmentId, tabId },
+          { messageId },
+        );
+    },
+    [scrollTargetNodeId, data.environmentId, tabId],
+  );
   const highlightedMessageId = useConversationScrollTarget({
     environmentId: data.environmentId,
     tabId,
     isActive,
     messages,
     turnBoundaries: projection?.turnBoundaries,
+    loadEarlier: coordinatorProjectId && canLoadEarlierHistory ? loadEarlierMessages : undefined,
     transcriptSettled:
       hasCompletedRead &&
       (transcriptAvailability === "current" || transcriptAvailability === "empty"),
@@ -3258,6 +3271,13 @@ export function SharedNativeAgentController({
     () => (sessionStateAuthoritative ? (projectedInteractions ?? []) : []),
     [projectedInteractions, sessionStateAuthoritative],
   );
+  const coordinatorActionHistory = useCoordinatorActionHistory(
+    Boolean(coordinatorProjectId),
+    data.environmentId,
+    tabId,
+    platform,
+    projection?.sessionId,
+  );
   const transcriptInteractions = useMemo(
     () =>
       allInteractions.filter(
@@ -3953,6 +3973,9 @@ export function SharedNativeAgentController({
       onRetry={() => {
         void connect();
       }}
+      coordinatorActionHistory={coordinatorActionHistory}
+      coordinatorInteractions={allInteractions}
+      coordinatorNavigate={coordinatorProjectId ? requestActionNavigation : undefined}
       messages={messages}
       agentActivityAnnouncement={agentActivityAnnouncement}
       resolveModelLabel={resolveModelLabel}

@@ -1,6 +1,6 @@
 # Auto-pipeline mobile editor timeout
 
-- **ID:** 9903
+- **ID:** 9905
 - **Status:** open
 - **Date observed:** 2026-11-09
 

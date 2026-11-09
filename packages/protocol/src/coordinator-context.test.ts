@@ -254,7 +254,8 @@ describe("buildCoordinatorContext", () => {
       },
     });
     // Pattern recognition adds 273 characters; reserve 300 more for that guidance.
-    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_300);
+    // Actions marking adds 99 characters of per-turn guidance.
+    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_400);
     const side = input({ delegation: { kind: "side", title: "Side 1", messagingEnabled: true } });
     expect(buildCoordinatorContext(side).length).toBeLessThan(2_000);
   });
@@ -350,4 +351,13 @@ describe("coordinator delegation state", () => {
       stopRequestedAt: "2026-01-03T00:00:00.000Z",
     });
   });
+});
+
+test("main and side coordinators receive action mark guidance", () => {
+  expect(buildCoordinatorContext(input())).toContain("mark_topic");
+  expect(
+    buildCoordinatorContext(
+      input({ delegation: { kind: "side", title: "Research", messagingEnabled: true } }),
+    ),
+  ).toContain("mark_topic");
 });

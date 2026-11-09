@@ -198,3 +198,53 @@ describe("useConversationScrollTarget", () => {
     }
   });
 });
+
+test("Actions navigation pages to an older anchor and highlights it", async () => {
+  useConversationScrollTargetStore.getState().request(at("env-1", "tab-1"), { messageId: "older" });
+  const loadEarlier = mock(async () => {});
+  const { rerender, initialProps, result, scrollToIndex } = setup({
+    loadEarlier,
+    highlightMs: 300,
+  });
+  await waitFor(() => expect(loadEarlier).toHaveBeenCalled());
+  expect(scrollToIndex).not.toHaveBeenCalled();
+  rerender({ ...initialProps, messages: [{ id: "older" }, ...initialProps.messages] });
+  await waitFor(() =>
+    expect(scrollToIndex).toHaveBeenCalledWith(0, { rowKey: "older" }, "message-link"),
+  );
+  expect(result.current).toBe("older");
+  expect(pending()).toBeNull();
+});
+
+test("Actions navigation ends a failed history read without moving the transcript", async () => {
+  useConversationScrollTargetStore
+    .getState()
+    .request(at("env-1", "tab-1"), { messageId: "missing" });
+  const { scrollToIndex } = setup({
+    loadEarlier: async () => {
+      throw new Error("offline");
+    },
+  });
+  await waitFor(() => expect(pending()).toBeNull());
+  expect(scrollToIndex).not.toHaveBeenCalled();
+});
+
+test("streaming changes join the pending history read", async () => {
+  useConversationScrollTargetStore.getState().request(at("env-1", "tab-1"), { messageId: "older" });
+  let release!: () => void;
+  const read = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const loadEarlier = mock(() => read);
+  const { rerender, initialProps, scrollToIndex } = setup({ loadEarlier });
+  rerender({ ...initialProps, messages: [...initialProps.messages, { id: "streaming" }] });
+  expect(loadEarlier).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    release();
+    await read;
+  });
+  rerender({ ...initialProps, messages: [{ id: "older" }, ...initialProps.messages] });
+  await waitFor(() =>
+    expect(scrollToIndex).toHaveBeenCalledWith(0, { rowKey: "older" }, "message-link"),
+  );
+});

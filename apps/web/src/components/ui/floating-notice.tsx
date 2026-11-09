@@ -108,15 +108,13 @@ interface LayerState {
   container: HTMLElement | null;
   widthRem: number;
   columnRem?: number;
+  /** Height in px from the stack's top to the pane's bottom margin. */
+  heightPx?: number;
 }
 
 interface LayerContext {
   state: LayerState;
-  setAnchor: (anchor: {
-    container: HTMLElement | null;
-    widthRem: number;
-    columnRem?: number;
-  }) => void;
+  setAnchor: (anchor: LayerState) => void;
 }
 
 const FloatingNoticeContext = createContext<LayerContext | null>(null);
@@ -224,9 +222,9 @@ export function FloatingNoticeAnchor({
 
   useEffect(() => {
     if (!setAnchor) return;
-    setAnchor({ container: stack, widthRem, columnRem });
+    setAnchor({ container: stack, widthRem, columnRem, heightPx: availableHeight });
     return () => setAnchor({ container: null, widthRem: 0 });
-  }, [setAnchor, stack, widthRem, columnRem]);
+  }, [setAnchor, stack, widthRem, columnRem, availableHeight]);
 
   if (!layer) return null;
   return (
@@ -430,14 +428,21 @@ export function FloatingNotice({
 /** The small buttons notice cards use, so every card's actions line up. */
 export const FLOATING_NOTICE_ACTION = "h-7 px-2.5 text-xs";
 
-/** Shares the notice stack and the exact gutter measurement with custom notices. */
+/**
+ * Shares the notice stack and the exact gutter measurement with custom
+ * notices. `heightPx` is the stack's available height, from its top to the
+ * pane's bottom margin, once measured.
+ */
 export function FloatingNoticeSlot({
   children,
 }: {
-  children: (layout: ReturnType<typeof floatingNoticeLayout>) => ReactNode;
+  children: (layout: ReturnType<typeof floatingNoticeLayout> & { heightPx?: number }) => ReactNode;
 }) {
   const layer = useContext(FloatingNoticeContext);
-  const layout = floatingNoticeLayout(layer?.state.widthRem ?? 0, layer?.state.columnRem);
+  const layout = {
+    ...floatingNoticeLayout(layer?.state.widthRem ?? 0, layer?.state.columnRem),
+    heightPx: layer?.state.heightPx,
+  };
   const content = children(layout);
   return layer?.state.container ? createPortal(content, layer.state.container) : content;
 }

@@ -9,6 +9,8 @@ import {
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { InitializationLogs } from "./InitializationLogs";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+import type { EnvironmentLifecycleRemedy } from "@orkestrator/protocol/contract/domains/environments";
+import { StartFailureNotice } from "./StartFailureNotice";
 
 // Shown only after a failed setup, and it renders a transcript message.
 const LazySetupPendingOverlay = lazy(async () => ({
@@ -25,6 +27,10 @@ interface TerminalContainerOverlaysProps {
   showNoEnvironmentOverlay: boolean;
   showCreatingOverlay: boolean;
   showNotRunningOverlay: boolean;
+  /** Why the last start failed, from the environment record; null when it did not. */
+  lifecycleError?: string | null;
+  lifecycleRemedy?: EnvironmentLifecycleRemedy | null;
+  projectId?: string | null;
   setupPhase: SetupPhase;
   createScriptPrompt: string;
   onStartContainer?: () => void;
@@ -40,6 +46,9 @@ export function TerminalContainerOverlays({
   showNoEnvironmentOverlay,
   showCreatingOverlay,
   showNotRunningOverlay,
+  lifecycleError = null,
+  lifecycleRemedy = null,
+  projectId = null,
   setupPhase,
   createScriptPrompt,
   onStartContainer,
@@ -73,12 +82,20 @@ export function TerminalContainerOverlays({
       )}
 
       {showNotRunningOverlay && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background">
-          <div className="text-center">
+        <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-background p-4">
+          <div className="w-full text-center">
             <TerminalIcon className="mx-auto mb-4 h-12 w-12 text-muted-foreground opacity-50" />
             <p className="mb-4 text-muted-foreground">
               {isLocalEnvironment ? "Environment not started" : "Container is not running"}
             </p>
+            {lifecycleError && (
+              <StartFailureNotice
+                message={lifecycleError}
+                remedy={lifecycleRemedy}
+                projectId={projectId}
+                onRetry={onStartContainer}
+              />
+            )}
             {onStartContainer && (
               <ContextMenu>
                 <ContextMenuTrigger asChild>

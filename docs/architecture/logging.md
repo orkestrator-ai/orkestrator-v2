@@ -862,7 +862,7 @@ command-failure site checks that `reason` comes from the classifier.
 | `command-not-found` | A shell could not find the program. | `command not found`; exit 127 |
 | `not-executable` | A shell could not run the program. | Exit 126 |
 | `auth-failed` | No credentials, or they were refused. | `authentication failed` or `required`, `could not read username`, `terminal prompts disabled`, `bad credentials`, `permission denied (publickey)`, `host key verification failed`, `gh auth login`, `HTTP 401`, `returned error: 401` or `403`; `gh` exit 4 |
-| `network-failed` | Could not reach a host. | `could not resolve host`, `connection refused` or `reset`, `network is unreachable`, `early eof`, `remote end hung up`, `unable to access` an HTTP(S) URL, `i/o timeout` |
+| `network-failed` | Could not reach a host. | `could not resolve host`, `connection timed out`, `operation timed out` (macOS's wording for an SSH connect timeout), `connection refused` or `reset`, `network is unreachable`, `early eof`, `remote end hung up`, `unable to access` an HTTP(S) URL, `i/o timeout` |
 | `disk-full` | No room to write. | `no space left`, `ENOSPC`, `disk quota exceeded` |
 | `permission-denied` | The OS refused access. | `permission denied`, `operation not permitted`, `read-only file system` |
 | `path-not-found` | A needed path does not exist. | `no such file or directory` |

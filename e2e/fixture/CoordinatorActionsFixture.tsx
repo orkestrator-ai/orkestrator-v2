@@ -4,7 +4,10 @@ import { useScopesWithCommandFallback } from "../../apps/web/src/lib/node-scope/
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
-import { coordinatorActionCards } from "../../apps/web/src/components/projects/coordinator-action-cards";
+import {
+  coordinatorActionCards,
+  type CoordinatorActionCard,
+} from "../../apps/web/src/components/projects/coordinator-action-cards";
 import type { NativeMessage } from "../../apps/web/src/lib/chat/native-message-types";
 import { useMemo, useState } from "react";
 import { CoordinatorActionsPanel } from "../../apps/web/src/components/projects/CoordinatorActionsPanel";
@@ -13,8 +16,22 @@ import {
   FloatingNoticeLayer,
 } from "../../apps/web/src/components/ui/floating-notice";
 
+/** `?many` adds questions, so a short pane has more cards than fit. */
+const extraQuestions = (): CoordinatorActionCard[] =>
+  new URLSearchParams(window.location.search).has("many")
+    ? Array.from({ length: 8 }, (_, offset) => ({
+        id: `extra-${offset}`,
+        anchorId: `extra-${offset}`,
+        index: offset + 2,
+        kind: "question" as const,
+        title: `Follow-up question ${offset + 1}`,
+        done: false,
+      }))
+    : [];
+
 export function CoordinatorActionsFixture() {
   const [anchor, setAnchor] = useState("");
+  const [extra] = useState(extraQuestions);
   return (
     <div className="relative h-screen bg-background text-foreground">
       <FloatingNoticeLayer columnRem={56}>
@@ -66,6 +83,7 @@ export function CoordinatorActionsFixture() {
               title: "Which option?",
               done: false,
             },
+            ...extra,
           ]}
           onNavigate={setAnchor}
         />

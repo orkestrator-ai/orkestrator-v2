@@ -53,6 +53,12 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "setup.tab-publish-failed": "The setup terminal's tab could not be published.",
       "lifecycle.failed":
         "Starting, rebuilding or recreating an environment failed; `operation` says which.",
+      "git-https-probe.failed":
+        "Checking whether a project's GitHub remote works over HTTPS failed; `reason` says why.",
+      "git-https-remedy.failed":
+        "Deciding whether to offer HTTPS after an SSH failure threw; no remedy is offered.",
+      "git-origin.switched-to-https":
+        "A project's origin remote was switched from GitHub SSH to HTTPS at the user's request.",
       "tab-teardown.pending":
         "A tab's teardown failed and stays pending; the reconcile sweep retries.",
       "tab-reconcile.skipped":

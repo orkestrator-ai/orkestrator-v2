@@ -3833,9 +3833,44 @@ Coordinator conversations (including side conversations) show an Actions panel
 in the pane's existing floating-notice stack. It shares the mail banner's gutter
 measurement: with at least 14rem beside the 56rem transcript column it docks
 there, below the notices; otherwise it folds to an icon with a waiting count.
-Hover or keyboard focus opens the overlay, a 160ms grace period allows pointer
-travel, and leaving both pointer and focus closes it. Escape closes it
-immediately; touch clicks toggle it. Expansion respects reduced motion.
+
+The panel's header ("Actions", the waiting count and a minimise mark) is a
+button labelled "Collapse actions" with `aria-expanded`. Clicking it, or Enter
+or Space on it, folds the panel into the icon at the same top-right position,
+and focus moves to the icon.
+
+- **Wide panes (docked).** The panel is sticky. Folded, it stays folded until
+  the icon is clicked (hover and focus do not open it); open, it stays open
+  through clicks elsewhere, card clicks, pointer leave, focus leave and Escape,
+  until its header is clicked again. Opening from the icon moves focus to the
+  header. The choice is a local UI preference
+  (`coordinator-actions-preference.ts`, localStorage key
+  `orkestrator.coordinator-actions.docked`), shared by every coordinator
+  conversation and every window of the origin; other windows follow it through
+  the `storage` event. It is open by default.
+- **Narrow panes (overlay).** Hover or keyboard focus opens the overlay, a
+  160ms grace period allows pointer travel, and leaving both pointer and focus
+  closes it. Escape closes it immediately; touch clicks toggle it. A click or
+  tap outside the overlay and its icon closes it at once, and so does its
+  header. The overlay's open state is transient and never touches the
+  preference.
+- **Resizing.** Crossing the breakpoint starts each mode in its own state:
+  going narrow shows the folded icon, and going wide restores the remembered
+  docked choice rather than carrying over the overlay's open state.
+
+Showing and hiding animate a short contraction toward the icon; reduced motion
+shows and hides without a transition in both modes.
+
+The panel never scrolls. It shows only the newest whole cards (at most ten)
+that fit between its top and the pane's bottom margin, dropping the oldest
+first; no card is cut part-way. The floating-notice layer passes its measured
+available height to the panel (`FloatingNoticeSlot`'s `heightPx`). Each change
+of cards, width, available height or the panel's position in the stack (a
+notice above it appearing or resizing) renders every card once, measures it
+and hides the oldest that do not fit, before the browser paints. Scroll sync
+still decides which cards are eligible; the height fit then trims that set.
+The header and its waiting count always show, and the count includes cards
+trimmed for height.
 
 Cards represent structured PR status notices, question tools and asynchronous
 questions, and explicit topic/question marks. Merged or closed PRs and answered
@@ -3856,7 +3891,8 @@ Transcript replay derives topic anchors from the preceding actual user message
 and question anchors from the message holding the tool call; mail and automatic
 prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
-store is used.
+store is used for cards; the only renderer persistence is the docked panel's
+open or folded preference above.
 
 The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures

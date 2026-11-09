@@ -21,6 +21,10 @@ import type { AcpLocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
+import {
+  environmentBranchNamespace,
+  parseEnvironmentBranchNamespace,
+} from "@orkestrator/protocol/environment-branch";
 
 type ManagedBinaryContext = Pick<CommandContext, "appRoot" | "resourceRoot" | "toolchainBinDir"> &
   Partial<Pick<CommandContext, "runtimeFlavor">>;
@@ -174,7 +178,6 @@ export function makeUniqueEnvironmentSlug(
   return candidate;
 }
 
-const ENVIRONMENT_BRANCH_NAMESPACE_LENGTH = 12;
 const GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS = 3_000;
 
 /**
@@ -204,27 +207,9 @@ export function environmentBranchBase(
   return branchRevision === 0 ? base : `${base}-r${branchRevision}`;
 }
 
-/** The compact environment-id prefix that {@link environmentBranchBase} embeds. */
-export function environmentBranchNamespace(environmentId: string): string {
-  return environmentId
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "")
-    .slice(0, ENVIRONMENT_BRANCH_NAMESPACE_LENGTH);
-}
-
-/**
- * `<slug>-<namespace>[-r<revision>][-<collision suffix>]` for an environment
- * whose id is a UUID, so the namespace is 12 hex characters. Up to two numeric
- * suffixes cover `allocateGitBranchName` running at allocation and again when
- * the worktree is created.
- */
-const ENVIRONMENT_BRANCH_PATTERN =
-  /^[a-z0-9_][a-z0-9_-]*-([0-9a-f]{12})(?:-r[1-9][0-9]{0,5})?(?:-[1-9][0-9]{0,5}){0,2}$/;
-
-/** The namespace of a branch named by the environment scheme, or null. */
-export function parseEnvironmentBranchNamespace(branch: string): string | null {
-  return ENVIRONMENT_BRANCH_PATTERN.exec(branch)?.[1] ?? null;
-}
+// The naming scheme and its ownership test live in the protocol so the pull
+// request view applies the same rule (`@orkestrator/protocol/environment-branch`).
+export { environmentBranchNamespace, parseEnvironmentBranchNamespace };
 
 /** Allocate the first available branch from one shared suffixing policy. */
 export async function allocateGitBranchName(

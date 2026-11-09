@@ -35,6 +35,7 @@ import {
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
+import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
 import { dockerExec } from "./commands-container-exec.js";
 import {
   addLocalWorkspaceArtifactsToGitExclude,
@@ -97,6 +98,11 @@ export type GitHubPullRequestRef = {
 export type GitHubPullRequestHead = {
   head?: {
     ref?: unknown;
+    repo?: {
+      full_name?: unknown;
+    } | null;
+  } | null;
+  base?: {
     repo?: {
       full_name?: unknown;
     } | null;
@@ -1229,15 +1235,45 @@ export async function loadPullRequestHead(
   return JSON.parse(stdout) as GitHubPullRequestHead;
 }
 
+/**
+ * The head branch of `head` when cleanup may delete it for `environmentId`,
+ * otherwise null. Only the branch Orkestrator created for that environment
+ * qualifies, and only in the pull request's own repository: a base branch, a
+ * branch the user picked, another environment's branch or a fork's branch is
+ * never returned, whatever the pull request names.
+ */
+export function deletableEnvironmentHeadBranch(
+  head: GitHubPullRequestHead | null,
+  environmentId: string,
+): { ref: string; owner: string; repo: string } | null {
+  const ref = typeof head?.head?.ref === "string" ? head.head.ref : "";
+  const headRepository =
+    typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
+  const baseRepository =
+    typeof head?.base?.repo?.full_name === "string" ? head.base.repo.full_name : "";
+  const [owner, repo] = headRepository.split("/");
+  if (!ref || !owner || !repo) return null;
+  if (headRepository.toLowerCase() !== baseRepository.toLowerCase()) return null;
+  if (!isEnvironmentOwnedBranch(environmentId, ref)) return null;
+  return { ref, owner, repo };
+}
+
+/**
+ * Deletes the pull request's head branch on GitHub, but only when it is the
+ * branch created for `environmentId` ({@link deletableEnvironmentHeadBranch}).
+ * Anything else is kept and reported as `"kept"`.
+ */
 export async function deleteRemoteBranchForPullRequestHead(
   head: GitHubPullRequestHead | null,
   runGh: GhCliRunner,
-): Promise<void> {
-  const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
-  const headRepositoryNameWithOwner =
-    typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
-  const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
-  if (!headRefName || !headOwner || !headRepo) return;
+  environmentId: string,
+): Promise<"deleted" | "kept"> {
+  const target = deletableEnvironmentHeadBranch(head, environmentId);
+  if (!target) {
+    log.info("branch-cleanup.kept", { environmentId, reason: "not-environment-branch" });
+    return "kept";
+  }
+  const { ref: headRefName, owner: headOwner, repo: headRepo } = target;
 
   try {
     await runGh(
@@ -1255,24 +1291,34 @@ export async function deleteRemoteBranchForPullRequestHead(
       throw error;
     }
   }
+  return "deleted";
 }
 
 export async function deletePullRequestHeadBranchViaGitHubApi(
   prUrl: string,
   runGh: GhCliRunner,
+  environmentId: string,
 ): Promise<void> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const head = await loadPullRequestHead(pullEndpoint, runGh);
-  await deleteRemoteBranchForPullRequestHead(head, runGh);
+  await deleteRemoteBranchForPullRequestHead(head, runGh, environmentId);
 }
 
+/**
+ * Merges an environment's pull request through the GitHub API.
+ *
+ * `deleteBranchOf` names the environment whose own branch may be deleted once
+ * the merge lands, or is null to keep the head branch. Deletion goes through
+ * {@link deleteRemoteBranchForPullRequestHead}, so a head branch that is not
+ * that environment's branch is kept whatever the caller asked for.
+ */
 export async function mergePullRequestViaGitHubApi(
   gitHubConfig: GitHubCliConfigSource,
   gitHubCliSelection: GitHubCliSelection | undefined,
   prUrl: string,
   method: "squash" | "merge" | "rebase",
-  deleteBranch: boolean,
+  deleteBranchOf: string | null,
   cwd: string,
   expectedHeadSha?: string,
 ): Promise<MergePrResult> {
@@ -1284,8 +1330,12 @@ export async function mergePullRequestViaGitHubApi(
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
   let head: GitHubPullRequestHead | null = null;
-  if (deleteBranch) {
-    head = await loadPullRequestHead(pullEndpoint, runGh);
+  if (deleteBranchOf !== null) {
+    try {
+      head = await loadPullRequestHead(pullEndpoint, runGh);
+    } catch {
+      log.info("branch-cleanup.kept", { reason: "head-unavailable" });
+    }
   }
 
   const mergeOutput = await runGh(
@@ -1310,25 +1360,52 @@ export async function mergePullRequestViaGitHubApi(
 
   if (mergeResponse.merged !== true) return { outcome: "unknown" };
 
-  if (deleteBranch) {
-    await deleteRemoteBranchForPullRequestHead(head, runGh);
+  if (deleteBranchOf !== null) {
+    await deleteRemoteBranchForPullRequestHead(head, runGh, deleteBranchOf);
   }
   return { outcome: "merged" };
 }
 
+/**
+ * Merges a container environment's pull request with `gh pr merge`.
+ *
+ * `deleteBranchOf` names the environment whose own branch may be deleted with
+ * the merge, or is null to keep the head branch. `--delete-branch` is passed
+ * only after reading the pull request's head and confirming it is that
+ * environment's branch in the same repository
+ * ({@link deletableEnvironmentHeadBranch}).
+ */
 export async function mergePullRequestInContainer(
   containerId: string,
   method: "squash" | "merge" | "rebase",
-  deleteBranch: boolean,
+  deleteBranchOf: string | null,
   expectedHeadSha?: string,
   attachedPrUrl?: string,
 ): Promise<MergePrResult> {
   const runGh = createContainerGhRunner(containerId);
   const prUrl =
     attachedPrUrl ?? (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
-  parseGitHubPullRequestUrl(prUrl);
+  const pr = parseGitHubPullRequestUrl(prUrl);
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
+
+  let deleteBranch = false;
+  if (deleteBranchOf !== null) {
+    const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
+    let head: GitHubPullRequestHead | null = null;
+    try {
+      head = await loadPullRequestHead(pullEndpoint, runGh);
+    } catch {
+      log.info("branch-cleanup.kept", { reason: "head-unavailable" });
+    }
+    deleteBranch = deletableEnvironmentHeadBranch(head, deleteBranchOf) !== null;
+    if (!deleteBranch) {
+      log.info("branch-cleanup.kept", {
+        environmentId: deleteBranchOf,
+        reason: "not-environment-branch",
+      });
+    }
+  }
 
   await runGh(
     [
@@ -1473,14 +1550,14 @@ async function runStoredEnvironmentMergeOnce<T>(
               context.runtime.gitHubCli,
               environment.prUrl!,
               method,
-              deleteBranch,
+              deleteBranch ? environment.id : null,
               environment.worktreePath!,
               expectedHeadSha,
             )
           : await mergePullRequestInContainer(
               environment.containerId!,
               method,
-              deleteBranch,
+              deleteBranch ? environment.id : null,
               expectedHeadSha,
               environment.prUrl ?? undefined,
             );

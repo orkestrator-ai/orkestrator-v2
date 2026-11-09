@@ -10,6 +10,7 @@ import {
 } from "./workspace-removal-preflight.js";
 import { HARDENED_GIT_CONFIG, removeLegacyWorktreeFsmonitor } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
+import { MissingRemoteBaseBranchError } from "./commands-error-text.js";
 import { readGitBlob } from "./git-blob-read.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { promises as fs } from "node:fs";
@@ -1063,6 +1064,13 @@ async function hasOriginRemote(projectPath: string): Promise<boolean> {
   );
 }
 
+function isMissingRemoteRefFailure(error: unknown): boolean {
+  if (!(error instanceof CommandFailedError) || error.timedOut) return false;
+  return /couldn't find remote ref|could not find remote ref/i.test(
+    `${error.stderr}\n${error.message}`,
+  );
+}
+
 export async function resolveRemoteWorktreeStartPoint(
   projectPath: string,
   baseBranch: string,
@@ -1085,12 +1093,13 @@ export async function resolveRemoteWorktreeStartPoint(
     if (error instanceof CommandFailedError && error.timedOut && !error.outputCloseTimedOut) {
       throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
     }
+    if (isMissingRemoteRefFailure(error)) throw new MissingRemoteBaseBranchError(branch);
     throw error;
   }
 
   const remoteRef = `origin/${branch}`;
   if (!(await gitRefExists(projectPath, remoteRef))) {
-    throw new Error(`Remote base branch not found: ${remoteRef}`);
+    throw new MissingRemoteBaseBranchError(branch);
   }
   return remoteRef;
 }

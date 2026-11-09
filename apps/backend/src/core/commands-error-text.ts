@@ -49,9 +49,28 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
     "Docker did not remove the old container, so it was kept. Retry the reset once Docker is healthy.",
   gitSshAuthentication:
     "Git SSH authentication failed. Orkestrator can't enter a key passphrase, so a key authorized for this repository must be loaded in an SSH agent (ssh-add). If Orkestrator can't reach that agent, set its socket in Settings > General, then restart Orkestrator and retry.",
+  baseBranchMissing:
+    "The base branch does not exist on the git remote: it may have been deleted or renamed. Choose another base branch in the project settings, or recreate it on the remote, then retry.",
   gitRemoteTimedOut:
     "Timed out fetching from the git remote. Check your network connection and that your SSH agent has your key loaded (a passphrase-protected key must be added with ssh-add), then retry.",
 } as const;
+
+/**
+ * The base branch an environment starts from does not exist on `origin`: it was
+ * deleted or renamed there, or the project names a branch the remote never had.
+ * Git's own "couldn't find remote ref" names neither the setting nor the fix.
+ * The message names the branch for the caller; the persisted lifecycle error
+ * is the fixed `baseBranchMissing` text.
+ */
+export class MissingRemoteBaseBranchError extends Error {
+  constructor(readonly branch: string) {
+    super(
+      `Base branch "${branch}" does not exist on origin. It may have been deleted or renamed. ` +
+        `Choose another base branch in the project settings, or recreate "${branch}" on the remote.`,
+    );
+    this.name = "MissingRemoteBaseBranchError";
+  }
+}
 
 /**
  * The one lifecycle message that is not a fixed constant: a refused create has
@@ -121,6 +140,9 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   if (error instanceof Error && error.cause && causeDepth < 8) {
     const causeMessage = environmentLifecycleErrorMessage(error.cause, causeDepth + 1);
     if (causeMessage !== ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.unknown) return causeMessage;
+  }
+  if (error instanceof MissingRemoteBaseBranchError) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.baseBranchMissing;
   }
   if (error instanceof CommandFailedError) {
     // Before the generic timeout: a stuck remote fetch is not a container problem.

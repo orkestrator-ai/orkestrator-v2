@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; re-checked 2026-11-09 against `main` at `c6de4733`.
 
 ### Tasks
 
-1. **Publish the preview worker image**: push the multi-architecture worker image to a registry and pin packaged installs by digest in `published-image.json`. Status: dropped (2026-11-02): the publishing workflow was removed and the pull route is to be deleted; see [2681](2681-remove-preview-worker-pull-route.md).
-2. **Close phase 9**: the phase checklist still says "Partly" and "No PR opened", although the work shipped in #1103 and the live cycle passed on all six providers. Status: partly done (only the checklist wording is stale).
+1. **Publish the preview worker image**: push the multi-architecture worker image to a registry and pin packaged installs by digest in `published-image.json`. Status: dropped (2026-11-02): the publishing workflow was removed, and [2681](2681-remove-preview-worker-pull-route.md) deleted the pull route on 2026-11-03.
+2. **Close phase 9**: the phase checklist said "Partly" and "No PR opened", although the work shipped in #1103 and the live cycle passed on all six providers. Status: done (2026-11-09): phase 9 reads Done with "Merged in #1103", phase 8 reads Done, and the file is marked finished in the folder index.
 
 ### 1. Publish the preview worker image
 
@@ -43,11 +43,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 2. Close phase 9
 
-**Problem.** The phase checklist says phase 9 is "Partly" with "No PR opened", which reads as outstanding work that is not there.
+**Problem.** The phase checklist said phase 9 was "Partly" with "No PR opened", which read as outstanding work that is not there.
 
 **Context.** The rich-transcript work merged as #1103. The Remaining work list shows every qualification item ticked on 2026-10-20.
 
-**Investigation.** `git log` shows `97af3d45 feat: add rich transcript artifacts (#1103)` on `main`. The live cycle, performance gate, Electron host and engine matrix are all recorded as done. Phase 8's "Done with limits below" refers to limits that are now all ticked or closed with a decision (Mermaid math kept as a diagnostic).
+**Investigation.** `git log` shows `97af3d45 feat: add rich transcript artifacts (#1103)` on `main`. The live cycle, performance gate, Electron host and engine matrix are all recorded as done. Phase 8's "Done with limits below" refers to limits that are now all ticked or closed with a decision (Mermaid math kept as a diagnostic). 2026-11-09: `git log` still shows `97af3d458` (#1103) on `main`; every Remaining work item is ticked or dropped; the 2026-10-20 live-cycle narrative (Real-stack evidence) is not in the architecture guides, which hold only the desktop host and browser engine qualification sections; and the file is linked from `docs/handoff/2026-10-20-rich-transcript-issues.md`, flake case 1190 and to-do 2681.
 
 **Decisions.**
 
@@ -82,7 +82,7 @@ were re-inspected at `67a6cc31`).
 | 5 Static HTML through the transcript | Done | Static preview job reusing `designBootstrap`; sanitizer diagnostics returned to the agent; static artifact published and rendered by a real Codex turn. |
 | 6 Executable interactive HTML | Done | Preparation (HTMLRewriter, CSP hashes), content server, four-message channel, desktop `WebContentsView` host, container worker; calculator/bug/d3 fixtures; runaway, escape and credential-canary matrices in real Chrome and Docker. |
 | 7 Provider parity, projection, history | Done | Artifact tools auto-allowed and recorded publish calls tested through each provider's real translation path (Claude, Codex, OpenCode, Cursor, Grok/ACP, Pi); OpenCode per-turn grant; ledger-driven placement with live hint, also in the backend projection; Codex reload keeps the publish call. Live cycle passed on all six providers. |
-| 8 Cross-cutting behaviour | Done with limits below | Find segments and reveal, copy semantics, focus return, follow pausing, keep-mounted row, protected-content clearing, scoped caches. |
+| 8 Cross-cutting behaviour | Done | Find segments and reveal, copy semantics, focus return, follow pausing, keep-mounted row, protected-content clearing, scoped caches. The limits once listed under Remaining work are all ticked, dropped or closed with a decision (Mermaid math labels stay a diagnostic). |
 | 9 Qualification and handoff | Done | Repository gates pass (`format:check`, `lint`, `typecheck`, `mise run test`). Live browser pass via `e2e/agent-testing/rich-transcripts-live.spec.ts` (opt-in) on all six providers; real-browser performance gate within 10%; Electron host qualified; Chromium, Firefox and WebKit engine matrix. Merged in #1103. |
 
 ## Real-stack evidence (2026-10-20)
@@ -184,4 +184,8 @@ credentials), Google Chrome, macOS, Docker 29.8:
 7. **Fix the backend build's turbo inputs.** The backend build stages `docker/artifact-preview-worker/` and copies the pin, but its turbo hash covered only the package. A changed Dockerfile or pin could restore a cached `dist/` with the old ones. `@orkestrator/backend#build` now adds `$TURBO_ROOT$/docker/artifact-preview-worker/**`.
 8. **Check the published image at startup too, and split off the local build.** Startup preferred a locally present published image without any check, so a pin left over from another context would still have run an old worker; it now requires the shipped context to match (`publishedMatchesContext`). The same staleness affects a worker built locally by "Prepare isolated preview worker", which stays pinned in the data directory across upgrades. Fixing that changes isolation selection after an upgrade, so it was tracked separately in todo 0385 rather than widened into this item. Done there on 2026-10-28: a packaged backend now treats a local worker built from another context as outdated and offers preparation again (todo 0385 was retired on 2026-10-29; see [transcript-artifacts-runtime.md](../../architecture/transcript-artifacts-runtime.md#preview-worker)).
 9. **Phase 9 in the phase table.** "No PR opened" was stale: the work merged in #1103. The phase is marked Done.
-
+10. **Close phase 9 (task 2): finish the wording and keep the file (2026-11-09).**
+    - Options: (a) delete the file now, as the README asks of a finished file; (b) correct the remaining wording, mark the file finished in the folder index and keep it.
+    - Choice: (b). Task 2's recommended deletion was conditional on task 1 being done and on first moving the durable content into the architecture guides; task 1 was dropped rather than done, and the 2026-10-20 live-cycle evidence has not been copied into `transcript-artifacts-runtime.md`. The file is also linked from a handoff note, flake case 1190 and to-do 2681, which would need updating. This ticket was scoped to the checklist wording.
+    - What changed: task 2 is done; phase 8 reads Done (its limits are all closed) as well as phase 9; task 1's status names 2681's removal of the pull route; the folder index row is Finished Yes and rated Low, since nothing is left.
+    - Left for whoever retires the file: copy the live-cycle evidence into the runtime guide's qualification sections, repoint the three links, then delete the file and its index row.

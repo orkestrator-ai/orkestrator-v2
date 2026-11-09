@@ -346,6 +346,19 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     transcriptRefreshing &&
     !transcriptSettled;
   const composerCentered = centerCompose && !hasTranscriptCards;
+  /*
+   * The transcript normally scrolls behind the floating dock. A notice row
+   * (reconnect error, refresh shimmer, desync warning) is text the user has to
+   * read, so while one is up the transcript ends at the dock's top edge instead:
+   * the notice pushes the messages up rather than having them run underneath.
+   * Mirrors the `notice` chain passed to the dock below.
+   */
+  const insetTranscriptForNotice =
+    !composerCentered &&
+    measuredDockHeight !== null &&
+    ((displayAvailable && connectionState === "error") ||
+      (refreshingTranscript && !isAtBottom) ||
+      desynced);
   // What the transcript list renders from. Each keeps its identity until
   // something it shows changes (see `StableVirtuoso`), so a render of this shell
   // for any other reason does not render the visible rows again.
@@ -442,7 +455,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {/*
             The dock floats over the transcript, so its full live height must
             be reserved here. That keeps a growing composer — plus any pinned
-            cards — from covering the last messages.
+            cards — from covering the last messages. While a notice insets the
+            whole transcript above the dock, there is nothing left to clear.
           */}
         <div
           data-testid="transcript-bottom-spacer"
@@ -454,7 +468,11 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 : bottomSpacerClassName
               : undefined,
           )}
-          style={measuredDockHeight !== null ? { height: measuredDockHeight } : undefined}
+          style={
+            measuredDockHeight !== null
+              ? { height: insetTranscriptForNotice ? 0 : measuredDockHeight }
+              : undefined
+          }
           aria-hidden="true"
         />
       </>
@@ -468,6 +486,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       finalElapsedSeconds,
       footerCards,
       hasPinnedContent,
+      insetTranscriptForNotice,
       isLoading,
       measuredDockHeight,
       refreshingTranscript,
@@ -616,10 +635,16 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {refreshingTranscript ? `Refreshing ${agentLabel} session…` : null}
       </span>
       <div
+        data-testid="transcript-region"
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
           composerCentered && "pointer-events-none scale-[0.995] opacity-0",
         )}
+        style={
+          insetTranscriptForNotice && measuredDockHeight !== null
+            ? { paddingBottom: measuredDockHeight }
+            : undefined
+        }
       >
         {coordinatorNavigate && (
           <CoordinatorActionsPanel

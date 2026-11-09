@@ -220,6 +220,31 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("336px");
   });
 
+  test("a dock notice pushes the transcript above the dock instead of overlaying it", () => {
+    const { rerender } = renderInAppCommandScope(
+      <NativeChatShell {...shellProps()} connectionState="error" displayAvailable />,
+    );
+
+    const dock = screen.getByTestId("compose-dock");
+    const region = screen.getByTestId("transcript-region");
+    const spacer = screen.getByTestId("transcript-bottom-spacer");
+    dock.getBoundingClientRect = () => ({ height: 210 }) as DOMRect;
+    act(() => {
+      resizeCallback?.([], resizeObserver!);
+    });
+
+    expect(screen.getByTestId("compose-dock-notice")).toBeTruthy();
+    // The scroll area ends at the dock's top edge, so nothing runs under the
+    // notice, and there is no overlay left for the spacer to clear.
+    expect(region.style.paddingBottom).toBe("210px");
+    expect(spacer.style.height).toBe("0px");
+
+    // Once the notice clears, the transcript scrolls behind the dock again.
+    rerender(<NativeChatShell {...shellProps()} connectionState="connected" displayAvailable />);
+    expect(region.style.paddingBottom).toBe("");
+    expect(spacer.style.height).toBe("210px");
+  });
+
   test("enables live arrivals on the production transcript", () => {
     renderInAppCommandScope(<NativeChatShell {...shellProps()} />);
     expect(lastVirtualizedMessageListProps?.animateArrivals).toBe(true);

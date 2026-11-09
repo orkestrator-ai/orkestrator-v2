@@ -416,6 +416,23 @@ export const openProjectAgentsMdPrCommand = defineCommand({
   critical: ["requestKey"],
 });
 
+/**
+ * Points a project checkout's GitHub SSH `origin` at its HTTPS form, after
+ * checking HTTPS works from this machine. Offered when a start could not
+ * reach the remote over SSH (`lifecycleRemedy: "use-https"`). The stored
+ * project `gitUrl` is unchanged. `remoteUrl` carries no credential.
+ */
+export const useHttpsGitRemoteCommand = defineCommand({
+  domain: projectsDomain,
+  name: "use_https_git_remote",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ projectId: Schema.String }),
+  result: Schema.Struct({ remoteUrl: Schema.String, changed: Schema.Boolean }),
+  critical: [],
+});
+
 /** Every `projects` command definition. */
 export const PROJECTS_COMMANDS = [
   getProjectsCommand,
@@ -444,4 +461,5 @@ export const PROJECTS_COMMANDS = [
   requestCoordinatorAgentsMdUpdateCommand,
   readProjectAgentsMdSectionCommand,
   openProjectAgentsMdPrCommand,
+  useHttpsGitRemoteCommand,
 ] as const;

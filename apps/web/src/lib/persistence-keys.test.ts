@@ -36,9 +36,12 @@ describe("local annotation drafts are kept per node", () => {
 
     // An older client writing the v1 key again is not re-imported over newer text.
     writeLocalDraft("env-1", "editor-1", "newer", 3);
-    localStorage.setItem(LEGACY_DRAFTS_KEY, legacyDraft("stale"));
+    // One payload: building it twice reads the clock twice, and the copies
+    // differ whenever a millisecond boundary falls between the two reads.
+    const staleLegacy = legacyDraft("stale");
+    localStorage.setItem(LEGACY_DRAFTS_KEY, staleLegacy);
     expect(readLocalDraft("env-1", "editor-1")?.text).toBe("newer");
-    expect(localStorage.getItem(LEGACY_DRAFTS_KEY)).toBe(legacyDraft("stale"));
+    expect(localStorage.getItem(LEGACY_DRAFTS_KEY)).toBe(staleLegacy);
   });
 
   test("a leaf has its own drafts and never receives the command node's", () => {

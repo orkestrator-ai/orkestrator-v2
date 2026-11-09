@@ -1,7 +1,7 @@
 # Legacy draft timestamp comparison
 
-- **ID:** 9906
-- **Status:** open
+- **ID:** 9908
+- **Status:** resolved
 - **Test:** `local annotation drafts are kept per node > the un-namespaced copy moves to the command node once`
 - **File:** `apps/web/src/lib/persistence-keys.test.ts:41`
 
@@ -34,5 +34,14 @@ unchanged. This is an assertion clock dependency, not evidence of a product race
 Neither the owner nor its persistence implementation is changed by the Actions
 panel branch. No unrelated test or product code was modified to hide the failure.
 
-A future repair can capture the expected JSON once and reuse it for the write and
-assertion. This case records the failure only; the default suite remains red.
+At the time of this observation, the case recorded the failure only and the
+default suite remained red.
+
+## Resolution (2026-11-09)
+
+Merging `origin/main` brought in the repair: the test captures the stale payload
+once and reuses it for the write and comparison. The same failure was independently
+recorded in [case 9907](9907-local-annotation-draft-legacy-clock-race.md), which
+contains the reproduction and stress evidence for that fix. No new reproduction
+or stress run is claimed here. This branch's original observation is retained
+under a new number because main already owns claim 9906 for a different case.

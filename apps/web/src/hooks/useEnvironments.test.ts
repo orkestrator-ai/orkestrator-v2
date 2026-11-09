@@ -11,6 +11,7 @@ import {
   cleanupDeletedEnvironmentSubscriptions,
   cleanupSubscriptionsRemovedByProjectSnapshot,
   reconcileEnvironmentLifecycleErrors,
+  reconcileEnvironmentSetupSnapshots,
   refreshEnvironmentSnapshot,
 } from "./useEnvironments";
 import {
@@ -372,5 +373,87 @@ describe("refreshEnvironmentSnapshot", () => {
       refreshEnvironmentSnapshot("project-1", "env-1", appCommandScope()),
     ).rejects.toThrow("backend down");
     read.mockRestore();
+  });
+});
+
+describe("HTTPS remedy lifecycle", () => {
+  test.each([undefined, null])(
+    "authoritative snapshot clears a previous remedy (%s)",
+    async (remedy) => {
+      appCommandStore(environmentStore).setState({
+        environments: [
+          {
+            ...environment("https-env", "p"),
+            lifecycleError: "SSH failed",
+            lifecycleRemedy: "use-https",
+          },
+        ],
+      });
+      const read = spyOn(backend, "getEnvironment").mockResolvedValue({
+        ...environment("https-env", "p"),
+        lifecycleError: null,
+        lifecycleRemedy: remedy,
+      });
+      try {
+        await act(async () => {
+          await reconcileEnvironmentSetupSnapshots(appCommandScope());
+        });
+        const current = appCommandStore(environmentStore).getState().environments[0]!;
+        expect(current.lifecycleError).toBeNull();
+        expect(current.lifecycleRemedy).toBeNull();
+      } finally {
+        read.mockRestore();
+      }
+    },
+  );
+
+  test("retry clears the old remedy before backend admission and ignores an older snapshot", async () => {
+    const failed = {
+      ...environment("https-retry", "p"),
+      lifecycleError: "SSH failed",
+      lifecycleRemedy: "use-https" as const,
+    };
+    appCommandStore(environmentStore).setState({ environments: [failed] });
+    let finishStart!: () => void;
+    let finishRead!: (value: Environment) => void;
+    const start = spyOn(backend, "startEnvironmentInBackground").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    const read = spyOn(backend, "getEnvironmentSnapshot").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    try {
+      const { result } = renderHookInAppCommandScope(() =>
+        useEnvironments(null, { listenForRenameEvents: false }),
+      );
+      const snapshot = refreshEnvironmentSnapshot("p", failed.id, appCommandScope());
+      let retry!: ReturnType<typeof result.current.startEnvironment>;
+      act(() => {
+        retry = result.current.startEnvironment(failed.id, undefined, { background: true });
+      });
+      expect(
+        appCommandStore(environmentStore).getState().environments[0]?.lifecycleRemedy,
+      ).toBeNull();
+      await act(async () => {
+        finishRead(failed);
+        await snapshot;
+      });
+      expect(
+        appCommandStore(environmentStore).getState().environments[0]?.lifecycleRemedy,
+      ).toBeNull();
+      await act(async () => {
+        finishStart();
+        await retry;
+      });
+    } finally {
+      start.mockRestore();
+      read.mockRestore();
+    }
   });
 });

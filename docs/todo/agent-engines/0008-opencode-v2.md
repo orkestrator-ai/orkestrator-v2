@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phases 4 to 6 open; see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; phases 5 and 6 open; see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, and the GitHub-token plugin ported to the 2.x shape); still open: sign-in through `/api/credential`.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -744,10 +744,13 @@ users until phase 3 routes new sessions to it.
      ambiguous attempt is never re-posted (the 1.x rule). Message pages carry
      an opaque base64 JSON cursor (`{ id, order, direction }`) for history
      paging.
-4. **Transcript and interactions.** The message history becomes normalized rows
-   (one row per assistant message), history pages come from the list cursor,
-   permissions and forms become the shared cards (denying on timeout), and
-   usage is read from the session's tokens and cost.
+4. **Transcript and interactions. Done on 2026-11-09 for host sessions**
+   (branch `opencode2-interactions-transcript`; see "Task 5: phase 4
+   interactions, transcript and usage"). The message history becomes
+   normalized rows (one row per assistant message), history pages come from
+   the list cursor, permissions and forms become the shared cards (Allow once
+   / Deny; no timeout exists to deny on, so stop and close deny), and usage is
+   read from the session's tokens and cost.
 5. **Feature parity.** The workflow-result tool and structured output over MCP,
    MCP management, sign-in through `/api/credential`, slash commands, staged
    revert, and `OPENCODE_FLAGS=todo`.
@@ -1307,14 +1310,14 @@ Known gaps, for phases 4 and 5:
 
 - No permission or form cards on a 2.x tab: a parked request reads as
   `blocked`, and the tab shows a warning notice that says so and suggests
-  stopping the turn.
+  stopping the turn. (Closed by phase 4.)
 - The model catalogue, resume list and sign-in are the 1.x ones. The 2.x
   session takes the model on create and on each prompt; the execution
   profile (Plan/Build agent) and the session `policy` are not sent yet.
 - No agent-tools MCP on 2.x (its MCP routes are under `/api/experimental`),
   so a 2.x tab has no Orkestrator mail or ticket tools.
 - The transcript has no tool output, diffs, sub-agents, history paging,
-  usage or terminal-error rows.
+  usage or terminal-error rows. (Closed by phase 4.)
 - 2.x events do not reach the observation hints, so a 2.x session keeps the
   activity sweep at full cadence (`observationStreamLive` answers false while
   one is known).
@@ -1350,6 +1353,126 @@ platform table, so a 2.x tab still shows the attach button; a send with an
 attachment is refused with "OpenCode 2.x sessions do not support attachments
 yet". The execution-profile (Plan/Build) picker is also still shown and its
 choice is not sent to 2.x.
+
+### Task 5: phase 4 interactions, transcript and usage (2026-11-09)
+
+Branch `opencode2-interactions-transcript`, from `862789fcd`. New modules
+under `apps/backend/src/core/opencode2/`: `interactions.ts` and `forms.ts`
+(cards), `transcript.ts` and `transcript-tools.ts` (rows),
+`transcript-snapshot.ts` (windows, pages, revised rows), `session-state.ts`
+and `usage.ts` (state, usage, sub-agent hydration), and `reads.ts`, which
+`OpenCode2Provider` owns and delegates to. The router forwards
+`interactions`, `transcriptSnapshot`, `transcriptPage`,
+`sessionStateSnapshot`, `interactiveSnapshot` and a new `refreshUsage` for
+2.x sessions; the phase 3 "waiting" notice is gone.
+
+What exists now:
+
+- **Cards.** `GET /api/session/:id/permission` and `/form` are read on every
+  snapshot. A permission is a `permission` card with "Allow once" and "Deny"
+  only; `approve-for-session` and an answer carrying content are refused
+  before anything is sent; deny, decline and cancel send `reject`. An edit
+  permission's card shows its diff (`metadata.files[].patch`). Forms are
+  `question` cards: `string` (with or without options, free text when
+  `custom`), `multiselect`, `boolean` (Yes/No), `number`/`integer` (free text,
+  parsed and range-checked here), `external` ("Done" plus the URL), and any
+  other kind as free text the server judges. Hidden fields answer with their
+  default; conditional (`when`) fields are optional with the condition in the
+  description, and an answer to an inactive one is dropped. A form with more
+  than 16 shown fields is shown with confirm disabled, so it can only be
+  declined. A reply is `applied` only once the request has left the pending
+  list; a 404 is `already-resolved`, a 4xx `rejected` with the card kept.
+  Orkestrator's permission rules (0723) get a detail for a one-command shell
+  request, a one-file edit and a one-URL webfetch.
+- **Transcript.** One row per 2.x row; every row kind has a fate in
+  `OPENCODE2_ROW_FATES` and an unknown one is dropped and logged once
+  (`transcript.unknown-row`, kind only). Assistant rows carry text, reasoning,
+  tool cards with state, input, output, duration and edit diffs, sub-agent
+  cards (`subagent` tool, `metadata.sessionID`, active while a background
+  child runs), a pending `retry` part, and an inline error row when the
+  response failed. `idle` rows show a failed run as an inline error (deduped
+  against the response's own) and a stopped one as "Interrupted by user".
+  `shell`, `compaction`, `synthetic`, `system` (description only, never the
+  instruction text), `skill` and agent/model switches have rows too.
+- **Windows and pages.** `transcriptSnapshot` reads at most 199 rows plus one
+  (2.2.6 refuses `limit` above 200), trims whole rows to the reader's byte
+  target, and names `historyCursor`/`historyCursorBefore` in the server's own
+  cursor format. `transcriptPage` pages through the list route; an empty page
+  is checked against its anchor row, so a revert expires the cursor instead
+  of claiming the start of history. Events whose data names an
+  `assistantMessageID` note revised rows; one outside the window is fetched
+  once per change and sent as a revised row.
+- **State and usage.** `sessionStateSnapshot` reads the session (title,
+  lifetime tokens and cost, model, last outcome) and the newest assistant row;
+  a failed last run reads `error` with the idle row's message, a stopped one
+  carries a `stopped` notice. Cost is `estimate` (2.x prices from the
+  catalogue), unknown for GitHub Copilot.
+
+Decisions:
+
+- **Timeouts.**
+  - **No backend deadline, as on 1.x (implemented).** Pros: matches the
+    documented stance in agent-engines.md ("No backend timer stands in for
+    one, by choice"); OpenCode publishes none, so there is nothing to show or
+    pause; stop and close reject everything parked, and only interactive
+    sessions reach 2.x. Cons: a card nobody answers waits until the turn is
+    stopped.
+  - **A backend `InteractionDeadline` per request that rejects on expiry.**
+    Pros: a literal reading of "deny on timeout". Cons: contradicts the
+    documented decision for every provider without a published deadline, and
+    needs hold state the backend has never kept.
+  - Recommendation: no deadline.
+- **Where live events count.**
+  - **Hints only (implemented).** Every event for a session moves its
+    revision, so `unchanged` is answered only while the stream is connected
+    and nothing arrived; a dropped stream, an oversized frame or a reconnect
+    moves every revision and the revised-rows overflow version. A `durable.seq`
+    gap moves only the revision, because 2.2.6 skips about two sequence numbers
+    per run and treating each as lost notes would re-page retained history
+    every run.
+  - **Gap as lost notes too.** Pros: strictly conservative. Cons: a full
+    history reconcile per run on 2.2.6.
+  - Recommendation: hints, with gaps as re-reads.
+- **Usage.**
+  - **The session's own lifetime ledger (implemented).** Pros: authoritative,
+    never under-counts a long job. Cons: one more small read per state
+    snapshot.
+  - **Summing the transcript window, as `usageFromMessages` does on 1.x.**
+    Cons: a window under-counts. The router's `usageFromMessages` stays 1.x
+    only: its input for a 2.x session is normalized rows with no tokens, and
+    the goal-budget path reads `sessionStateSnapshot` first.
+  - Recommendation: the ledger.
+- **Sub-agent actions.** Hydrated from the child session (eight children,
+  fifty rows each) in `interactiveSnapshot` only, as 1.x does; the progressive
+  window shows the card without its actions.
+- **`permissionRuleDetail` in the router is synchronous.** The phase 3 router
+  wrapped it in an `async` function, which the enforcer reads synchronously;
+  a promise is truthy and would have been taken for a detail. It now answers
+  from the known line, `null` for a session not yet routed.
+
+Not done:
+
+- Containers (as for phase 3).
+- A `todo` tool card with a task snapshot; it renders as a plain tool card.
+- File results of a tool (`Tool.FileContent`) are named in its output, not
+  shown as images.
+- The renderer shows "Completed in 0s" under a response row whose tool is
+  still waiting on a permission (seen live); it reads the response's own
+  completion time.
+
+Evidence: unit tests for every module against `fake-server.test-support.ts`
+(now with session reads, cursors, single-row reads, form replies and the
+200-row cap); `opencode2-interactions.live.test.ts` on the real 2.2.6 binary
+with the scripted model (shell and edit set to `ask`): an Allow once card that
+runs the tool and shows its output, a denied call, an edit card with its diff
+and file rule, a question-tool form answered through its card, and a stopped
+turn whose parked request is rejected and whose history pages back to its
+start. Real stack, profile `oc2-cards-a352` (since stopped and reset): with
+the preview setting on and shell set to `ask` in the fixture worktree's
+`opencode.json`, OpenCode's free default model asked to run `ls -la`; the
+card appeared on a freshly loaded page, "Allow once" ran it and the
+transcript showed the output; asked to use its question tool, it raised a
+question card that was answered in the browser and reached the model.
 
 ### Task 9: HTTP API, not ACP
 

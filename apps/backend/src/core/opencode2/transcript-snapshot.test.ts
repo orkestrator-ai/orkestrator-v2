@@ -96,7 +96,7 @@ describe("OpenCode 2 transcript windows", () => {
     );
     expect(result.messages.length).toBeGreaterThan(0);
     expect(result.messages.length).toBeLessThan(6);
-    expect((result.messages.at(-1) as { id: string }).id).toBe(ids.at(-1));
+    expect((result.messages.at(-1) as { id: string }).id).toBe(ids.at(-1)!);
     expect(result.complete).toBe(false);
     // The cursor pages strictly before the oldest row kept.
     expect(openCode2CursorAnchor(result.historyCursor!)).toBe(

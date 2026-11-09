@@ -88,7 +88,7 @@ export class FakeOpenCode2Server {
   }
 
   /** Append a history row as the server would (a tool-call response, a shell row, …). */
-  pushRow(sessionId: string, row: Omit<Row, "id"> & { id?: string }): string {
+  pushRow(sessionId: string, row: Record<string, unknown> & { type: string; id?: string }): string {
     const id = row.id ?? this.id("msg");
     this.sessions.get(sessionId)!.rows.push({ time: { created: 1 }, ...row, id } as Row);
     return id;

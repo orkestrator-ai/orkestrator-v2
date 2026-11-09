@@ -46,6 +46,7 @@ describe("typed Address report", () => {
           "Report your work in the Address Findings result you submit",
         );
         expect(dispatch.workflowResultTool).toBe("submit_fix_result");
+        expect(dispatch.workflowResultKey).toBe(address.structuredRequestId);
 
         const submitted = {
           ...TEST_ADDRESS_FINDINGS_RESULT,

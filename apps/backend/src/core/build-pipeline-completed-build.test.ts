@@ -3,6 +3,7 @@ import {
   isBuildPipeline,
   REVIEW_PACKAGE_SESSION_LABEL,
 } from "@orkestrator/protocol/build-pipeline";
+import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 import { pipeline, startInput, withService } from "./build-pipeline-service-test-support.js";
 
@@ -81,6 +82,17 @@ test("continues through the normal Review and PR path without a second Build or 
     expect(provider.sent.every((turn) => turn.sessionId !== "original-session")).toBe(true);
     expect(provider.created.every((session) => session.phase !== "build")).toBe(true);
     expect(invocations.some((entry) => entry.command === "run_environment_setup")).toBe(false);
+    // The finished run lands on its notes in the authoritative layout, beside
+    // and in place of the pipeline tab's selection.
+    const layout = await storage.getPaneLayout("env-1");
+    const leaf = layout?.root as { tabs: Array<Record<string, unknown>>; activeTabId: string };
+    const notesId = keyInformationTabId("env-1", started.id, "notes");
+    expect(leaf.activeTabId).toBe(notesId);
+    expect(leaf.tabs.map((tab) => tab.type)).toEqual(["claude-build", "key-information"]);
+    expect(leaf.tabs[1]).toMatchObject({
+      id: notesId,
+      keyInformationTabData: { environmentId: "env-1", pipelineId: started.id, view: "notes" },
+    });
   });
 });
 

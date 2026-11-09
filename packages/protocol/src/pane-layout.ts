@@ -58,3 +58,17 @@ export function isPaneLayoutRevisionConflict(error: unknown): boolean {
     hasErrorCode(error, "pane-layout-revision-conflict", PANE_LAYOUT_REVISION_CONFLICT_MARKER)
   );
 }
+
+/**
+ * The id of a build pipeline's key information tab (`view` absent) or its
+ * notes tab (`view: "notes"`). Every client and the backend derive it the same
+ * way, so a tab two of them open for the same pipeline and view merges into
+ * one tab instead of two.
+ */
+export function keyInformationTabId(
+  environmentId: string,
+  pipelineId: string,
+  view?: "notes",
+): string {
+  return `key-information:${JSON.stringify([environmentId, pipelineId, view ?? "information"])}`;
+}

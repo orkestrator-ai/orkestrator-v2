@@ -5,7 +5,7 @@ import { StoreCorruptError } from "./storage-database.js";
 import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
 import type { UsageEnvironmentLabel } from "./usage-history-record.js";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
-import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { keyInformationTabId, MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
   AGENT_HANDOFF_PRUNE_GRACE_MS,
   MAX_SESSIONS_PER_ENVIRONMENT,
@@ -647,6 +647,99 @@ export class SessionsRepository {
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish a finished build pipeline's notes tab and select it, so the run
+   * lands on its notes in every client, including one that was closed, on
+   * another environment or another node when the run finished.
+   *
+   * The tab opens in the pane holding the pipeline's own tab, else the active
+   * pane; an open notes tab is selected rather than duplicated. Its id is the
+   * one every renderer derives (`keyInformationTabId`), so a renderer that
+   * opens the same tab merges with this one. A full layout, or an environment
+   * with no layout yet, is left as it is. Returns null when nothing changed.
+   */
+  async ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) return null;
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      if (!previous) return null;
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) return null;
+
+      const isNotesTab = (tab: Record<string, unknown>): boolean => {
+        const data = tab.keyInformationTabData;
+        return (
+          tab.type === "key-information" &&
+          isRecord(data) &&
+          data.pipelineId === input.pipelineId &&
+          data.view === "notes"
+        );
+      };
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some(isNotesTab));
+      const existingTab = existingLeaf?.tabs.find(isNotesTab);
+      let target = existingLeaf;
+      let tabId = typeof existingTab?.id === "string" ? existingTab.id : undefined;
+      if (!target || !tabId) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        // A full layout keeps the pipeline tab, where the Notes step is selected.
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) return null;
+        target =
+          leaves.find((leaf) =>
+            leaf.tabs.some((tab) => {
+              const build = tab.buildTabData;
+              return (
+                tab.type === "claude-build" &&
+                isRecord(build) &&
+                build.pipelineId === input.pipelineId
+              );
+            }),
+          ) ??
+          leaves.find((leaf) => leaf.id === previous.activePaneId) ??
+          leaves[0]!;
+        tabId = keyInformationTabId(input.environmentId, input.pipelineId, "notes");
+        target.tabs.push({
+          id: tabId,
+          type: "key-information",
+          keyInformationTabData: {
+            environmentId: input.environmentId,
+            pipelineId: input.pipelineId,
+            view: "notes",
+          },
+        });
+      }
+      target.activeTabId = tabId;
+      if (
+        previous.activePaneId === target.id &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return null;
+      }
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        environmentId: input.environmentId,
+        activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous.revision ?? 0) + 1,
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;

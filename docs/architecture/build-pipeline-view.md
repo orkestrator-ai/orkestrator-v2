@@ -782,16 +782,28 @@ A pipeline has one such tab, separate from its key information tab, which keeps
 showing the brief alone. Both keep only the pipeline id and read the record, so
 they follow every update and survive a reload.
 
-A run seen finishing also opens that tab and activates it
-(`apps/web/src/lib/build-pipeline-completion-notes.ts`), in the pane holding the
-pipeline tab, else the environment's active pane. The trigger is a completion
-the renderer observed: a pipeline the store held in an earlier phase arriving
-as `complete`. A run already complete when first loaded opens nothing, so a
-reload or a new window never reopens old notes. The intent is held outside
-React and waits for the environment's layout to be installed, so a run that
-finishes while another environment is on screen has its notes tab open and
-active on return. An open notes tab is focused rather than duplicated; a full
-layout opens nothing, leaving the Notes step selected.
+A finished run opens that tab and selects it. The backend does this when the
+pipeline completes (`ensureBuildPipelineNotesTab` in
+`apps/backend/src/core/storage-sessions.ts`, called from the recovery
+module's `complete`): it adds the notes tab to the environment's authoritative
+layout, in the pane holding the pipeline tab, else the active pane, and makes it
+that pane's tab and the active pane. So a run that finished while no client was
+watching it (the app closed, the window on another environment, or the run on
+another node whose pipelines this window had not loaded yet) still lands on
+its notes: a client hydrating the environment adopts the backend's selection.
+An Electron window keeps its own selection, so it follows the notes tab once,
+when the tab first arrives in that window (`applyCompletionNotesArrival` in
+`apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
+published setup terminal; a user who then picks another tab is not pulled back.
+Completion is the only trigger, so a reload never reopens old notes.
+
+The renderer also reacts to a completion it observed
+(`apps/web/src/lib/build-pipeline-completion-notes.ts`): a pipeline the store
+held in an earlier phase arriving as `complete` opens or focuses the same tab
+without waiting for the layout round trip. Both derive the tab id from
+`keyInformationTabId` (`@orkestrator/protocol/pane-layout`), so they merge into
+one tab. An open notes tab is focused rather than duplicated; a full layout
+opens nothing, leaving the Notes step selected.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

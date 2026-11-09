@@ -154,6 +154,31 @@ function applySetupTabArrival(
 }
 
 /**
+ * A finished build pipeline's notes tab, which the backend publishes and selects
+ * when the run completes (`ensureBuildPipelineNotesTab`), takes focus in a
+ * window the first time that window sees it. Arrival happens once per window,
+ * so a user who then returns to another tab is not pulled back.
+ */
+function applyCompletionNotesArrival(
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const leaf = findLeaf(
+    authoritative.root,
+    (candidate) => candidate.id === authoritative.activePaneId,
+  );
+  const tab = leaf?.tabs.find((candidate) => candidate.id === leaf.activeTabId);
+  if (tab?.type !== "key-information" || tab.keyInformationTabData?.view !== "notes") {
+    return selected;
+  }
+  if (findLeaf(current.root, (candidate) => candidate.tabs.some(({ id }) => id === tab.id))) {
+    return selected;
+  }
+  return activateTabInState(selected, tab.id) ?? selected;
+}
+
+/**
  * Let the post-setup layout revision perform the one setup-to-agent focus
  * handoff requested by this Electron window.
  *
@@ -680,12 +705,16 @@ export function reconcileAuthoritativePaneLayout(
   if (!restored) return null;
 
   if (window.orkestrator?.isolatedViewState) {
-    const selected = applySetupTabArrival(
+    const selected = applyCompletionNotesArrival(
       restored,
-      applyStoredPaneSelection(
-        preserveClientPaneSelection(restored, current),
-        environmentId,
-        readWindowPaneSelection(environmentId, scope),
+      applySetupTabArrival(
+        restored,
+        applyStoredPaneSelection(
+          preserveClientPaneSelection(restored, current),
+          environmentId,
+          readWindowPaneSelection(environmentId, scope),
+        ),
+        current,
       ),
       current,
     );

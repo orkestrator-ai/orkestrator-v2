@@ -13,10 +13,11 @@ import {
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
 } from "../src/core/opencode2/container-server";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { createCommandFixtures } from "./command-fixtures";
 
-const { createContext, createEnvironment, fs, reserveFreePort, withFakeDocker } =
-  await createCommandFixtures();
+const { createContext, createEnvironment, fs, withFakeDocker } = await createCommandFixtures();
 
 const ROOT_TOKEN = `okb_${"r".repeat(43)}`;
 
@@ -37,10 +38,10 @@ esac
 exit 0
 `;
 
-/** A stand-in 2.x server: `/api/info` for the expected password (any when unset). */
-function serve(port: number, password?: string) {
+/** A stand-in 2.x server on port 0: `/api/info` for the expected password (any when unset). */
+function serve(password?: string) {
   return Bun.serve({
-    port,
+    port: 0,
     hostname: "127.0.0.1",
     fetch: (request) => {
       const auth = request.headers.get("authorization") ?? "";
@@ -55,6 +56,33 @@ function serve(port: number, password?: string) {
   });
 }
 
+/**
+ * Holds a port from the start (binding port 0, never releasing it for someone
+ * else to take) but drops every connection until `ready()`: before the fake
+ * container "starts" 2.x, nothing answers on the port, as with a real one.
+ */
+async function serveWhenReady(ready: () => boolean) {
+  const server = createHttpServer((request, response) => {
+    if (!ready()) {
+      request.socket.destroy();
+      return;
+    }
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    response.setHeader("content-type", "application/json");
+    if (url.pathname === "/api/info") return response.end(JSON.stringify({ version: "2.2.6" }));
+    if (url.pathname === "/api/session/active") return response.end(JSON.stringify({ data: {} }));
+    response.statusCode = 404;
+    response.end("{}");
+  });
+  server.on("connection", (socket) => {
+    if (!ready()) socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  return { port, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+}
+
+const held: Array<{ stop: () => Promise<void> }> = [];
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 const savedEnv: Record<string, string | undefined> = {};
 function setEnv(values: Record<string, string>) {
@@ -63,8 +91,9 @@ function setEnv(values: Record<string, string>) {
     process.env[key] = value;
   }
 }
-afterEach(() => {
+afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
+  await Promise.all(held.splice(0).map((holder) => holder.stop()));
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -90,15 +119,16 @@ function containerEnvironment() {
 
 describe("startContainerOpenCode2Server", () => {
   test("starts 2.x with its password in root's file and the server's environment only", async () => {
-    const port = await reserveFreePort();
+    let arrived = false;
+    const holder = await serveWhenReady(() => arrived);
+    held.push(holder);
+    const port = holder.port;
     setEnv({ FAKE_DOCKER_PORT: String(port), FAKE_ROOT_TOKEN: "" });
     const { context } = createContext(containerEnvironment());
     await withFakeDocker(FAKE_DOCKER, async (logs) => {
       // The server answers once the detached start has run, as a real one does.
       const arrive = setInterval(async () => {
-        if (servers.length === 0 && (await readLog(logs.exec)).argv.includes("exec -d ")) {
-          servers.push(serve(port));
-        }
+        if (!arrived && (await readLog(logs.exec)).argv.includes("exec -d ")) arrived = true;
       }, 25);
       try {
         const started = await startContainerOpenCode2Server(
@@ -130,8 +160,9 @@ describe("startContainerOpenCode2Server", () => {
   });
 
   test("reuses a server that answers with the persisted password and current plugins", async () => {
-    const port = await reserveFreePort();
-    servers.push(serve(port, ROOT_TOKEN));
+    const server = serve(ROOT_TOKEN);
+    servers.push(server);
+    const port = server.port;
     setEnv({
       FAKE_DOCKER_PORT: String(port),
       FAKE_ROOT_TOKEN: ROOT_TOKEN,
@@ -149,7 +180,10 @@ describe("startContainerOpenCode2Server", () => {
   });
 
   test("an image that would leave the password readable by node is refused", async () => {
-    const port = await reserveFreePort();
+    // Held but never answering: the start must be refused before anything listens.
+    const holder = await serveWhenReady(() => false);
+    held.push(holder);
+    const port = holder.port;
     setEnv({ FAKE_DOCKER_PORT: String(port), FAKE_ROOT_TOKEN: "" });
     const { context } = createContext(containerEnvironment());
     await withFakeDocker(FAKE_DOCKER, async (logs) => {
@@ -173,8 +207,9 @@ describe("startContainerOpenCode2Server", () => {
 
 describe("peekOpenCode2ContainerServer", () => {
   test("adopts a server started before this backend, then trusts it briefly", async () => {
-    const port = await reserveFreePort();
-    servers.push(serve(port, ROOT_TOKEN));
+    const server = serve(ROOT_TOKEN);
+    servers.push(server);
+    const port = server.port;
     setEnv({ FAKE_DOCKER_PORT: String(port), FAKE_ROOT_TOKEN: ROOT_TOKEN });
     const { context } = createContext(containerEnvironment());
     let clock = 1_000_000;

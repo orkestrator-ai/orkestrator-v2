@@ -2754,7 +2754,7 @@ describe("AgentNativeTab", () => {
     );
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Add attachment" })).toBeNull(),
+      expect(screen.queryByRole("button", { name: "Add attachment" }) === null).toBe(true),
     );
     unmount();
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);

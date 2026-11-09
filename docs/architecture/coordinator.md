@@ -881,17 +881,19 @@ places the user acts:
 - **Side agents.** **New side agent**'s tooltip and a side composer's hint
   say that a side agent can read the project and talk to the main but cannot
   launch workers. A side composer has its own placeholder ("Ask a question
-  about this project") rather than the main's "What would you like to get
-  done?", and no starter prompts.
-- **`!` commands.** Every coordinator composer has a hint line under it:
-  "Start a message with ! to run a command yourself in this checkout." The
-  panel footer speaks of the coordinator's own work ("The coordinator hands
-  code changes, builds and fixes to build pipelines and prompt
-  environments"), so it does not contradict a command the user runs. A first
-  message cannot be a command (see [User `!` commands](#user--commands)); the
-  rule is shown inline under the composer, with the text kept, until the text
-  no longer starts with `!`.
-- **The read-only tier.** The toolbar badge names the selected
+  about this project. …") rather than the main's "What would you like to get
+  done? …", and no starter prompts.
+- **`@` and `!`.** Every coordinator composer's placeholder ends with "Type
+  @ to mention a file, or start with ! to run a command yourself.", so the
+  guidance shows in the empty box and is out of the way once the user types.
+  The main composer has no hint line under it and the panel has no footer:
+  where changes run is the toolbar badge's job. A first message cannot be a
+  command (see [User `!` commands](#user--commands)); the rule is shown
+  inline under the composer, with the text kept, until the text no longer
+  starts with `!`.
+- **The read-only tier.** The toolbar badge ("Changes run in isolated
+  environments") is coloured text with no box around it; only its tier pill
+  keeps an outline. It names the selected
   conversation's tier as a pill ("Read-only · Enforced",
   "Read-only · Provider-configured", "Read-only · Advisory"); only an
   `advisory` platform is called advisory. The badge opens a menu, so it

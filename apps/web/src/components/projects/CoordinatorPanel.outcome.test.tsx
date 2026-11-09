@@ -250,7 +250,10 @@ mock.module("@/components/native-agent", () => ({
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
-import { COORDINATOR_COMMAND_HINT, COORDINATOR_STARTER_PROMPTS } from "./CoordinatorPanelNotices";
+import {
+  COORDINATOR_COMPOSER_PLACEHOLDER,
+  COORDINATOR_STARTER_PROMPTS,
+} from "./CoordinatorPanelNotices";
 import { COORDINATOR_INTRO_LINES } from "./CoordinatorIntro";
 import { FIRST_MESSAGE_COMMAND_RULE } from "@/components/native-agent/AgentNativeTab.helpers";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -403,7 +406,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     const main = await screen.findByTestId("native-agent");
-    expect(main.getAttribute("data-placeholder")).toBe("What would you like to get done?");
+    expect(main.getAttribute("data-placeholder")).toBe(
+      "What would you like to get done? Type @ to mention a file, or start with ! to run a command yourself.",
+    );
     expect(main.getAttribute("data-starter-prompts")).toBe(COORDINATOR_STARTER_PROMPTS.join("|"));
 
     fireEvent.click(screen.getByRole("tab", { name: "Side 1, Codex" }));
@@ -413,15 +418,18 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       ),
     );
     const side = screen.getByTestId("native-agent");
-    expect(side.getAttribute("data-placeholder")).toBe("Ask a question about this project");
+    expect(side.getAttribute("data-placeholder")).toBe(
+      "Ask a question about this project. Type @ to mention a file, or start with ! to run a command yourself.",
+    );
     expect(side.getAttribute("data-starter-prompts")).toBe("");
   });
 
-  test("a side composer says what a side agent is for; both mention ! commands", async () => {
+  test("only a side composer has a hint line, saying what a side agent is for", async () => {
     ensuredSnapshot = withWorkspace({ conversations: [mainConversation, sideConversation] });
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
+    // The main's @ and ! guidance is in its placeholder, not a line under it.
     const mainHint = (await screen.findByTestId("composer-hint")).textContent ?? "";
-    expect(mainHint).toBe("Start a message with ! to run a command yourself in this checkout.");
+    expect(mainHint).toBe("");
     expect(screen.getByTestId("intro-slot")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "Side 1, Codex" }));
@@ -433,20 +441,20 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const sideHint = screen.getByTestId("composer-hint").textContent ?? "";
     expect(sideHint).toContain("can't launch workers");
     expect(sideHint).toContain("Good for a second opinion or a parallel investigation.");
-    expect(sideHint).toContain("Start a message with !");
+    expect(sideHint).not.toContain("!");
     // The first-run card is the main's: a side agent never offers it.
     expect(screen.queryByTestId("intro-slot") === null).toBe(true);
   });
 
-  test("the footer speaks of the coordinator's work, so it does not contradict ! commands", async () => {
+  test("the panel has no footer line; the header badge says where changes run", async () => {
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
     expect(
-      screen.getByText(
-        /The coordinator hands code changes, builds and fixes to build pipelines and prompt environments\./,
-      ),
+      screen.queryByText(/The coordinator hands code changes, builds and fixes/) === null,
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /Changes run in isolated environments/ }),
     ).toBeTruthy();
-    expect(screen.queryByText(/Code changes, commands, builds/) === null).toBe(true);
   });
 
   test("the first-run card explains the coordinator until dismissed, and ? shows it again", async () => {
@@ -480,7 +488,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(useUIChromeStore.getState().coordinatorIntroDismissed).toBe(true);
     view.unmount();
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByRole("textbox", { name: "What would you like to get done?" });
+    await screen.findByRole("textbox", { name: COORDINATOR_COMPOSER_PLACEHOLDER });
     expect(screen.queryByRole("region", { name: "How the coordinator works" }) === null).toBe(true);
 
     // The toolbar's ? shows the same lines, whatever the composer's state.
@@ -506,8 +514,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       });
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-    const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
-    expect(screen.getByText(COORDINATOR_COMMAND_HINT)).toBeTruthy();
+    const input = await screen.findByRole("textbox", { name: COORDINATOR_COMPOSER_PLACEHOLDER });
+    expect(document.querySelector("[data-composer-hint]") === null).toBe(true);
 
     fireEvent.input(input, { target: { textContent: "!git status" } });
     await waitFor(() =>
@@ -535,7 +543,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(screen.getByRole("alert").textContent).toBe(FIRST_MESSAGE_COMMAND_RULE);
     fireEvent.input(input, { target: { textContent: "git status --short" } });
     await waitFor(() => expect(screen.queryByText(FIRST_MESSAGE_COMMAND_RULE) === null).toBe(true));
-    expect(screen.getByText(COORDINATOR_COMMAND_HINT)).toBeTruthy();
+    expect(document.querySelector("[data-composer-hint]") === null).toBe(true);
   });
 
   test("an empty conversation's starter prompt fills the real message box without sending", async () => {
@@ -549,7 +557,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = withWorkspace({ conversations: [unassigned(mainConversation)] });
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
 
-    const input = await screen.findByRole("textbox", { name: "What would you like to get done?" });
+    const input = await screen.findByRole("textbox", { name: COORDINATOR_COMPOSER_PLACEHOLDER });
     const starters = screen.getByRole("group", { name: "Starter prompts" });
     const offered = within(starters)
       .getAllByRole("button")
@@ -814,13 +822,13 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       );
       const input = await screen.findByRole("textbox");
       expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
-        "What would you like to get done?",
+        COORDINATOR_COMPOSER_PLACEHOLDER,
       );
       fireEvent.input(input, { target: { textContent: "Review this branch" } });
       fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
       await waitFor(() => expect(dispatchIntent).toHaveBeenCalled());
       expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
-        "What would you like to get done?",
+        COORDINATOR_COMPOSER_PLACEHOLDER,
       );
     },
   );
@@ -1063,7 +1071,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         ).toBe("connected"),
       );
       const input = await screen.findByRole("textbox");
-      expect(placeholder(input)).toBe("What would you like to get done?");
+      expect(placeholder(input)).toBe(COORDINATOR_COMPOSER_PLACEHOLDER);
       fireEvent.input(input, { target: { textContent: "Review this branch" } });
       fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
       await waitFor(() => expect(dispatchIntent).toHaveBeenCalled());

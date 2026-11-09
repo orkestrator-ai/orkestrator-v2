@@ -13,6 +13,7 @@
  * whole purpose is a long or real-time fixture. Prefer making a slow test
  * deterministic (fake clocks, in-process fakes) over adding it here.
  */
+import { readdirSync, statSync, type Dirent } from "node:fs";
 import path from "node:path";
 
 export const TEST_TIER_ENV = "ORKESTRATOR_TEST_TIER";
@@ -46,6 +47,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/runtime-env-wiring.test.ts",
     "tests/unit/test-all.test.ts",
     "tests/unit/test-diagnostic-bounds.test.ts",
+    // Races the slow-tier scan against a real process rebuilding dist/ (flake 9902).
+    "tests/unit/test-tiers-scan-race.test.ts",
     // Real busy-loop processes pinned to a core, and a signalled runner.
     "tests/unit/test-under-contention-processes.test.ts",
   ],
@@ -176,14 +179,77 @@ export function testTier(env: NodeJS.ProcessEnv): TestTier {
   throw new Error(`${TEST_TIER_ENV} must be one of ${TEST_TIERS.join(", ")}; got ${value}`);
 }
 
+/**
+ * Directories the slow-tier scan never enters: dependencies and build output.
+ * Neither holds test sources, and a concurrent build deletes `dist/` entries
+ * while the scan is listing them (flake 9902: `Bun.Glob.scanSync` over the
+ * whole package threw ENOENT on a `dist/artifact-runtime` file).
+ */
+const SCAN_SKIPPED_DIRECTORIES = new Set(["node_modules", "dist"]);
+const GLOB_SEGMENT = /[*?[\]{}!]/;
+
+function isVanished(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * Files under `directory/base`, relative to `directory`, skipping hidden
+ * entries (as `Bun.Glob` does without `dot`) and the skipped directories. An
+ * entry that disappears between being listed and being read is dropped rather
+ * than failing the scan.
+ */
+function walkFiles(directory: string, base: string): string[] {
+  const files: string[] = [];
+  const pending = [base];
+  while (pending.length > 0) {
+    const relative = pending.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(path.join(directory, relative), { withFileTypes: true });
+    } catch (error) {
+      if (isVanished(error)) continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const child = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!SCAN_SKIPPED_DIRECTORIES.has(entry.name)) pending.push(child);
+      } else if (entry.isFile()) {
+        files.push(child);
+      }
+    }
+  }
+  return files;
+}
+
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch (error) {
+    if (isVanished(error)) return false;
+    throw error;
+  }
+}
+
 /** Slow-tier files that exist under `directory`, relative to it, sorted. */
 export function slowTestFiles(root: string, packageDirectory: string): string[] {
   const directory = path.join(root, packageDirectory);
   const files = new Set<string>();
   for (const pattern of SLOW_TESTS[packageDirectory] ?? []) {
-    for (const file of new Bun.Glob(pattern).scanSync({ cwd: directory })) {
-      const relative = file.split(path.sep).join("/");
-      if (!relative.split("/").includes("node_modules")) files.add(relative);
+    const segments = pattern.split("/");
+    const firstGlob = segments.findIndex((segment) => GLOB_SEGMENT.test(segment));
+    const candidates =
+      firstGlob === -1
+        ? isFile(path.join(directory, pattern))
+          ? [pattern]
+          : []
+        : walkFiles(directory, segments.slice(0, firstGlob).join("/"));
+    const glob = new Bun.Glob(pattern);
+    for (const file of candidates) {
+      if (file.split("/").some((segment) => SCAN_SKIPPED_DIRECTORIES.has(segment))) continue;
+      if (firstGlob === -1 || glob.match(file)) files.add(file);
     }
   }
   return Array.from(files).sort();

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -74,6 +75,38 @@ describe("test tier selection", () => {
       "src/nested/example.live.test.ts",
       "tests/tmux-live.test.ts",
     ]);
+  });
+
+  test("slow discovery never enters build output, dependencies or hidden directories", () => {
+    const { root } = fixture({
+      "apps/backend/src/a.live.test.ts": "",
+      "apps/backend/dist/locked/b.live.test.ts": "",
+      "apps/backend/src/dist/c.live.test.ts": "",
+      "apps/backend/.turbo/d.live.test.ts": "",
+      "apps/backend/src/node_modules/e.live.test.ts": "",
+      "apps/backend/tests/tmux-live.test.ts": "",
+    });
+    // An unreadable dist/ fails any scan that descends into it (flake 9902: a
+    // concurrent build deleted dist/ entries mid-scan and the scan threw).
+    const locked = path.join(root, "apps/backend/dist/locked");
+    chmodSync(locked, 0o000);
+    try {
+      expect(slowTestFiles(root, "apps/backend")).toEqual([
+        "src/a.live.test.ts",
+        "tests/tmux-live.test.ts",
+      ]);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  test("literal slow-tier entries are selected only when the file exists", () => {
+    const { root } = fixture({
+      "tests/unit/test-all.test.ts": "",
+      // A directory with a listed file's name is not a test file.
+      "tests/unit/run-logged.test.ts/inner": "",
+    });
+    expect(slowTestFiles(root, ".")).toEqual(["tests/unit/test-all.test.ts"]);
   });
 
   test("slow discovery respects directories, individual files and path boundaries", () => {

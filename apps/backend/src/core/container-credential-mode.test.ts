@@ -141,7 +141,8 @@ test.each([
         return "supported";
       }),
     ).toBe(mode);
-    expect(asked[0]).toBe("opencode-launch");
+    // OpenCode's launch extends the bridges' launcher; nothing else asks for it.
+    expect(asked.includes("opencode-launch")).toBe(bridgeLaunch === "supported");
   },
 );
 

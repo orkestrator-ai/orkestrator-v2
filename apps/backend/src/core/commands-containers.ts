@@ -831,7 +831,12 @@ export async function startContainerOpenCodeServer(
       if (fingerprint !== OPENCODE_LAUNCH_FINGERPRINT) return false;
     } else if (
       fingerprint !== OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT ||
-      (await mode()) === "opencode-launcher"
+      // A healthy server is reused when the image cannot be read, as before;
+      // a fresh start still refuses then.
+      (await mode().then(
+        (current) => current === "opencode-launcher",
+        () => false,
+      ))
     ) {
       return false;
     }

@@ -44,6 +44,9 @@ export async function containerOpenCodeMode(
   containerId: string,
   check = containerImageCapabilitySupport,
 ): Promise<OpenCodeContainerMode> {
+  // `opencode-launch` extends the bridges' launcher, so only a launcher image is asked.
+  const bridges = await containerCredentialMode(context, containerId, check);
+  if (bridges !== "launcher") return bridges;
   const launch = await check(containerId, context, "opencode-launch", 1).catch(
     () => "unknown" as const,
   );
@@ -52,6 +55,5 @@ export async function containerOpenCodeMode(
       "Cannot determine bridge credential support; retry when the container image is available",
     );
   }
-  if (launch === "supported") return "opencode-launcher";
-  return containerCredentialMode(context, containerId, check);
+  return launch === "supported" ? "opencode-launcher" : "launcher";
 }

@@ -6,12 +6,15 @@
  * process ran on the host. The census these cases feed is limited to the
  * servers this file starts, so other work on the host cannot change the result.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { confirmTmuxSessionGone, type ExecOutput } from "../src/core/tmux-shared";
+
+// A case can run several subprocesses, each bounded to 10 seconds.
+setDefaultTimeout(60_000);
 
 const NAMESPACE = ["--user", "--map-root-user", "--net"];
 

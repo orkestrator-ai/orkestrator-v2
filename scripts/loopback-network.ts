@@ -51,11 +51,18 @@ export function classifyIsolationProbe(result: {
   stderr?: string | null;
 }): IsolationProbe {
   if (result.error?.code === "ENOENT") return { ok: false, reason: "`unshare` is not installed" };
-  if (result.error || result.signal) {
+  if (result.error?.code === "ETIMEDOUT") {
     return {
       ok: false,
       reason: `the namespace probe did not finish within ${PROBE_TIMEOUT_MS / 1000} s`,
     };
+  }
+  if (result.error) {
+    const detail = (result.error.code || result.error.name).slice(0, MAX_REASON_DETAIL);
+    return { ok: false, reason: `the namespace probe failed (${detail})` };
+  }
+  if (result.signal) {
+    return { ok: false, reason: `the namespace probe was terminated by ${result.signal}` };
   }
   if (result.status === 0) return { ok: true };
   const detail = (result.stderr ?? "").trim().split("\n")[0]!.trim().slice(0, MAX_REASON_DETAIL);

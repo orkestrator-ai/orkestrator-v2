@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   HOST_NETWORK_ENV,
   canIsolateNetwork,
@@ -112,17 +114,68 @@ describe("classifyIsolationProbe", () => {
     });
   });
 
-  test("a probe that times out or is killed does not isolate", () => {
+  test("a probe that times out does not isolate", () => {
     const timedOut = Object.assign(new Error("spawnSync unshare ETIMEDOUT"), { code: "ETIMEDOUT" });
     expect(classifyIsolationProbe({ status: null, error: timedOut })).toEqual({
       ok: false,
       reason: "the namespace probe did not finish within 5 s",
     });
-    expect(classifyIsolationProbe({ status: null, signal: "SIGKILL" }).ok).toBe(false);
+    expect(classifyIsolationProbe({ status: null, error: timedOut, signal: "SIGTERM" })).toEqual({
+      ok: false,
+      reason: "the namespace probe did not finish within 5 s",
+    });
+  });
+
+  test("names non-timeout spawn failures", () => {
+    const denied = Object.assign(new Error("spawnSync unshare EACCES"), { code: "EACCES" });
+    expect(classifyIsolationProbe({ status: null, error: denied })).toEqual({
+      ok: false,
+      reason: "the namespace probe failed (EACCES)",
+    });
+  });
+
+  test("names terminating signals without assuming a timeout", () => {
+    for (const signal of ["SIGSYS", "SIGKILL"] as const) {
+      expect(classifyIsolationProbe({ status: null, signal })).toEqual({
+        ok: false,
+        reason: `the namespace probe was terminated by ${signal}`,
+      });
+    }
   });
 });
 
 describe("the loopback-network script", () => {
+  test.skipIf(process.platform !== "linux")(
+    "prints the fallback cause and runs the command",
+    () => {
+      const bin = mkdtempSync(path.join(tmpdir(), "ork-loopback-fallback-"));
+      try {
+        const unshare = path.join(bin, "unshare");
+        writeFileSync(
+          unshare,
+          "#!/bin/sh\nprintf 'unshare: unshare failed: Operation not permitted\\n' >&2\nexit 1\n",
+        );
+        chmodSync(unshare, 0o700);
+        const result = spawnSync(
+          process.execPath,
+          [script, "--", process.execPath, "-e", "process.exit(7)"],
+          {
+            encoding: "utf8",
+            timeout: 10_000,
+            env: { ...process.env, PATH: bin, [HOST_NETWORK_ENV]: "" },
+          },
+        );
+        expect(result.status).toBe(7);
+        expect(result.stderr).toContain(
+          "[loopback-network] running on the host network (this host refused an unprivileged user and network namespace (unshare: unshare failed: Operation not permitted))",
+        );
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
   test("passes the command's exit status through", () => {
     const result = spawnSync("bun", [script, "--", "sh", "-c", "exit 7"], { encoding: "utf8" });
     expect(result.status).toBe(7);

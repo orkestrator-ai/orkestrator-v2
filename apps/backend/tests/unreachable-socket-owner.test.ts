@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import net from "node:net";
@@ -11,6 +11,9 @@ import {
   noProcessServesTmuxSocket,
   tmuxSocketPathFromMessage,
 } from "../src/core/tmux-socket-owner";
+
+// A case can run several subprocesses, each bounded to 10 seconds.
+setDefaultTimeout(60_000);
 
 const SOCKET = "/tmp/tmux-1000/default";
 

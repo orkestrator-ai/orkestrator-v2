@@ -50,8 +50,23 @@ test("idle prompt tab offers Auto-pipeline and reviews editable criteria before 
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   expect(screen.getByText("Implemented fixture")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Reviewed feature" } });
+  // The description opens as rendered Markdown and turns into the raw text on activation.
+  expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+  fireEvent.click(screen.getByText("Summary, problem and context"));
+  const description = screen.getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement;
+  expect(description.value).toBe("Summary, problem and context");
+  fireEvent.change(description, { target: { value: "## Summary\n\nReviewed **summary**" } });
+  fireEvent.blur(description);
+  expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Summary" })).toBeTruthy();
+  expect(screen.getByText("summary").tagName).toBe("STRONG");
+  // Criteria live on their own tab.
+  expect(screen.queryByLabelText("Criterion 1")).toBeNull();
+  const criteriaTab = screen.getByRole("tab", { name: "Acceptance criteria (2)" });
+  fireEvent.mouseDown(criteriaTab, { button: 0 });
+  fireEvent.click(criteriaTab);
   fireEvent.click(screen.getByRole("button", { name: "Move criterion 2 up" }));
-  expect((screen.getByLabelText("Criterion 1") as HTMLInputElement).value).toBe("Second check");
+  expect((screen.getByLabelText("Criterion 1") as HTMLTextAreaElement).value).toBe("Second check");
   fireEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));
   fireEvent.click(screen.getByRole("button", { name: "Add criterion" }));
   fireEvent.change(screen.getByLabelText("Criterion 2"), { target: { value: "New check" } });

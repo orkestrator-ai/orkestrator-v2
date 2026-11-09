@@ -23,6 +23,7 @@ import {
 } from "./workspace-code-rewind.js";
 import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
+import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
@@ -94,23 +95,34 @@ export class AutoPipelineService {
       throw new Error("This environment already belongs to a pipeline");
     return environment;
   }
-  private async sessions(id: string) {
+  /**
+   * Interactive sessions behind this environment's open tabs, active tab first.
+   * A session's `logicalSessionKey` is `env-<environmentId>:<tabId>`, never the
+   * bare tab id the pane layout and the renderer use.
+   */
+  private async sessions(
+    id: string,
+  ): Promise<{ tabId: string; session: PersistedNativeAgentSession }[]> {
     const layout = await this.context.storage.getPaneLayout(id);
     const leaves = paneLayoutLeaves(layout?.root);
     const activeTab = leaves.find((leaf) => leaf.id === layout?.activePaneId)?.activeTabId;
-    const tabs = leaves.flatMap((leaf) => leaf.tabs);
+    const tabIdByKey = new Map<string, string>();
+    for (const tab of leaves.flatMap((leaf) => leaf.tabs)) {
+      if (typeof tab.id === "string")
+        tabIdByKey.set(nativeTabLogicalSessionKey(id, tab.id), tab.id);
+    }
     const sessions = await this.context.storage.listNativeAgentSessions();
     return sessions
-      .filter(
-        (session) =>
-          session.environmentId === id &&
-          session.origin === "interactive-native" &&
-          tabs.some((tab) => tab.id === session.logicalSessionKey),
-      )
-      .sort(
-        (a, b) =>
-          Number(b.logicalSessionKey === activeTab) - Number(a.logicalSessionKey === activeTab),
-      );
+      .flatMap((session) => {
+        const tabId = tabIdByKey.get(session.logicalSessionKey);
+        return session.environmentId === id && session.origin === "interactive-native" && tabId
+          ? [{ tabId, session }]
+          : [];
+      })
+      .sort((a, b) => Number(b.tabId === activeTab) - Number(a.tabId === activeTab));
+  }
+  private async session(environmentId: string, tabId: string) {
+    return (await this.sessions(environmentId)).find((entry) => entry.tabId === tabId)?.session;
   }
   async sources(id: string): Promise<AutoPipelineSources> {
     let environment: Environment;
@@ -122,7 +134,7 @@ export class AutoPipelineService {
     const ports = this.ports();
     try {
       const sources = [];
-      for (const session of await this.sessions(id)) {
+      for (const { tabId, session } of await this.sessions(id)) {
         try {
           const provider = await ports.provider(environment, session.agent);
           const idle =
@@ -130,13 +142,13 @@ export class AutoPipelineService {
             !session.pendingSteer &&
             (await provider.status(session.providerSessionId)) === "idle";
           sources.push({
-            tabId: session.logicalSessionKey,
+            tabId,
             label: session.backendTitle?.title ?? session.agent,
             ...(!idle ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
           });
         } catch {
           sources.push({
-            tabId: session.logicalSessionKey,
+            tabId,
             label: session.backendTitle?.title ?? session.agent,
             disabledReason: "This tab is unavailable. Retry when its provider reconnects",
           });
@@ -202,9 +214,7 @@ export class AutoPipelineService {
     signal: AbortSignal,
   ): Promise<AutoPipelineDraft> {
     const environment = await this.environment(environmentId);
-    const source = (await this.sessions(environmentId)).find(
-      (session) => session.logicalSessionKey === tabId,
-    );
+    const source = await this.session(environmentId, tabId);
     if (!source) throw new Error("Choose an open interactive agent tab");
     const ports = this.ports();
     let drafting: { provider: BuildPipelineProvider; id: string } | undefined;
@@ -484,10 +494,10 @@ export class AutoPipelineService {
     const environment = await this.environment(record.environment.id);
     if (environment.status !== "running") throw new Error("The environment must be running");
     const source = (await this.sessions(environment.id)).find(
-      (session) =>
+      ({ session }) =>
         session.logicalSessionKey === record.source.logicalSessionKey &&
         session.providerSessionId === record.source.providerSessionId,
-    );
+    )?.session;
     if (!source || source.pendingDispatch || source.pendingSteer)
       throw new Error("The original idle tab is no longer available");
     if (!provider) throw new Error("Source provider is unavailable");

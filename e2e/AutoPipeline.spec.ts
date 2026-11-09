@@ -39,6 +39,7 @@ for (const state of ["ready", "running", "failure", "pipeline"]) {
         await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
           "Remember the selected workspace",
         );
+        await page.getByRole("tab", { name: "Acceptance criteria (2)" }).click();
         await page.getByRole("button", { name: "Move criterion 2 up" }).click();
         await expect(page.getByLabel("Criterion 1", { exact: true })).toHaveValue(
           "Deleted workspaces fall back to the first available workspace",

@@ -1,4 +1,5 @@
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
+import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
 import { useEffect, useState, useRef } from "react";
 import type { AutoPipelineDraft, AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -11,6 +12,11 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+type DraftTab = "description" | "criteria";
+/** Both panels share one height (editor plus a wrapped hint), so switching tabs never moves the dialog. */
+const TAB_PANEL = "min-h-[calc(min(55vh,34rem)+2.5rem)]";
 
 /** Only the manual toolbar supplies an environment; coordinator reviews never mount this. */
 export function AutoPipelineLaunch({
@@ -24,6 +30,7 @@ export function AutoPipelineLaunch({
   const [sources, setSources] = useState<AutoPipelineSources | null>(null);
   const [tabId, setTabId] = useState("");
   const [draft, setDraft] = useState<AutoPipelineDraft | null>(null);
+  const [tab, setTab] = useState<DraftTab>("description");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
@@ -81,7 +88,10 @@ export function AutoPipelineLaunch({
     setError(null);
     try {
       const value = await backend.draftAutoPipeline(environmentId, tabId);
-      if (request === generation.current) setDraft(value);
+      if (request === generation.current) {
+        setDraft(value);
+        setTab("description");
+      }
     } catch (failure) {
       if (request === generation.current)
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -165,7 +175,7 @@ export function AutoPipelineLaunch({
           if (!value) closeDraft();
         }}
       >
-        <DialogContent className="max-h-[90vh] overflow-y-auto [--modal-max-width:48rem]">
+        <DialogContent className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]">
           <DialogHeader>
             <DialogTitle>Review Auto-pipeline draft</DialogTitle>
             <DialogDescription>
@@ -190,74 +200,84 @@ export function AutoPipelineLaunch({
                   onChange={(event) => setDraft({ ...draft, title: event.target.value })}
                 />
               </label>
-              <label className="block text-sm">
-                Description
-                <textarea
-                  className="mt-1 block min-h-32 w-full rounded border bg-background p-2"
-                  value={draft.description}
-                  onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-                />
-              </label>
-              <div>
-                <h3 className="text-sm font-semibold">Acceptance criteria</h3>
-                {draft.acceptanceCriteria.map((criterion, index) => (
-                  <div key={index} className="my-2 flex flex-wrap gap-2">
-                    <input
-                      aria-label={`Criterion ${index + 1}`}
-                      className="min-w-0 flex-1 rounded border bg-background p-2"
-                      value={criterion}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          acceptanceCriteria: draft.acceptanceCriteria.map((value, i) =>
-                            i === index ? event.target.value : value,
-                          ),
-                        })
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={index === 0}
-                      aria-label={`Move criterion ${index + 1} up`}
-                      onClick={() => {
-                        const criteria = [...draft.acceptanceCriteria];
-                        [criteria[index - 1], criteria[index]] = [
-                          criteria[index]!,
-                          criteria[index - 1]!,
-                        ];
-                        setDraft({ ...draft, acceptanceCriteria: criteria });
-                      }}
-                    >
-                      ↑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      aria-label={`Remove criterion ${index + 1}`}
-                      onClick={() =>
-                        setDraft({
-                          ...draft,
-                          acceptanceCriteria: draft.acceptanceCriteria.filter(
-                            (_, i) => i !== index,
-                          ),
-                        })
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() =>
-                    setDraft({ ...draft, acceptanceCriteria: [...draft.acceptanceCriteria, ""] })
-                  }
-                >
-                  Add criterion
-                </Button>
-              </div>
+              <Tabs value={tab} onValueChange={(value) => setTab(value as DraftTab)}>
+                <TabsList className="w-full">
+                  <TabsTrigger value="description">Description</TabsTrigger>
+                  <TabsTrigger value="criteria">
+                    Acceptance criteria ({draft.acceptanceCriteria.length})
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="description" className={`${TAB_PANEL} space-y-1`}>
+                  <AutoPipelineDescriptionField
+                    value={draft.description}
+                    disabled={busy}
+                    onChange={(description) => setDraft({ ...draft, description })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Markdown. Click the description to edit it; click away to preview.
+                  </p>
+                </TabsContent>
+                <TabsContent value="criteria" className={TAB_PANEL}>
+                  {draft.acceptanceCriteria.map((criterion, index) => (
+                    <div key={index} className="my-2 flex flex-wrap items-start gap-2">
+                      <textarea
+                        aria-label={`Criterion ${index + 1}`}
+                        rows={1}
+                        className="field-sizing-content min-h-9 min-w-[min(100%,18rem)] flex-1 resize-none rounded border bg-background p-2 text-sm"
+                        value={criterion}
+                        onChange={(event) =>
+                          setDraft({
+                            ...draft,
+                            acceptanceCriteria: draft.acceptanceCriteria.map((value, i) =>
+                              i === index ? event.target.value : value,
+                            ),
+                          })
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={index === 0}
+                        aria-label={`Move criterion ${index + 1} up`}
+                        onClick={() => {
+                          const criteria = [...draft.acceptanceCriteria];
+                          [criteria[index - 1], criteria[index]] = [
+                            criteria[index]!,
+                            criteria[index - 1]!,
+                          ];
+                          setDraft({ ...draft, acceptanceCriteria: criteria });
+                        }}
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        aria-label={`Remove criterion ${index + 1}`}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            acceptanceCriteria: draft.acceptanceCriteria.filter(
+                              (_, i) => i !== index,
+                            ),
+                          })
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setDraft({ ...draft, acceptanceCriteria: [...draft.acceptanceCriteria, ""] })
+                    }
+                  >
+                    Add criterion
+                  </Button>
+                </TabsContent>
+              </Tabs>
               <section>
                 <h3 className="text-sm font-semibold">Build notes (read-only)</h3>
                 <AutoPipelineBuildNotes notes={draft.notes} />

@@ -45,7 +45,7 @@ function seed(storage: StorageService) {
       key: "original",
       environmentId: "env-1",
       agent: "codex",
-      logicalSessionKey: "original-tab",
+      logicalSessionKey: "env-env-1:original-tab",
       providerSessionId: "original-session",
       origin: "interactive-native",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -508,7 +508,7 @@ test("source enumeration places the active pane's native tab first", async () =>
       second: {
         ...original,
         key: "second",
-        logicalSessionKey: "second-tab",
+        logicalSessionKey: "env-env-1:second-tab",
         providerSessionId: "second-session",
       },
     });

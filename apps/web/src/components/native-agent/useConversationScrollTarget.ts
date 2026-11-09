@@ -107,6 +107,7 @@ export function useConversationScrollTarget({
           messageId: targetMessageId,
           generation: highlightGeneration.current,
           durationMs: highlightMs,
+          startedAt: performance.now(),
         });
         return;
       }
@@ -174,7 +175,10 @@ export function useConversationScrollTarget({
   // A new jump replaces the object, so the period restarts with it.
   useEffect(() => {
     if (!highlight) return;
-    const timer = setTimeout(() => setHighlight(null), highlight.durationMs);
+    const timer = setTimeout(
+      () => setHighlight(null),
+      Math.max(0, highlight.startedAt + highlight.durationMs - performance.now()),
+    );
     return () => clearTimeout(timer);
   }, [highlight]);
 

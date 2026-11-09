@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -102,6 +102,7 @@ const jump = (messageId: string, generation: number, durationMs = 2_500) => ({
   messageId,
   generation,
   durationMs,
+  startedAt: performance.now(),
 });
 
 describe("VirtualizedMessageList jump highlight", () => {
@@ -123,6 +124,35 @@ describe("VirtualizedMessageList jump highlight", () => {
       "2500ms",
     );
     expect(glowing()).toEqual(["item-card"]);
+  });
+
+  test("late mounts and remounts resume the original clock, and expired mounts do not glow", () => {
+    const clock = spyOn(performance, "now").mockReturnValue(100);
+    try {
+      const highlight = jump("card", 1);
+      clock.mockReturnValue(1100);
+      const first = render(<List highlight={highlight} />);
+      expect(item("card").style.getPropertyValue("--conversation-target-glow-delay")).toBe(
+        "-1000ms",
+      );
+      const oldItem = item("card");
+      first.unmount();
+      expect(oldItem.style.getPropertyValue("--conversation-target-glow-delay")).toBe("");
+      clock.mockReturnValue(2100);
+      const second = render(<List highlight={highlight} />);
+      expect(item("card").style.getPropertyValue("--conversation-target-glow-delay")).toBe(
+        "-2000ms",
+      );
+      expect(item("card").style.getPropertyValue("--conversation-target-glow-duration")).toBe(
+        "2500ms",
+      );
+      second.unmount();
+      clock.mockReturnValue(2600);
+      render(<List highlight={highlight} />);
+      expect(glowing()).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("the outermost marked box wins over a tile nested inside the item", () => {

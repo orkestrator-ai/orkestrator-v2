@@ -339,19 +339,22 @@ function TranscriptRow({
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const glowGeneration = highlight?.generation ?? null;
+  const glowStartedAt = highlight?.startedAt ?? null;
   const glowDurationMs = highlight?.durationMs ?? null;
   // The glow wraps the item's own box (its card, tile or content column), not
   // this full-width row, so the item neither moves nor resizes. A new
   // generation restarts it; the end of the period removes it.
   useLayoutEffect(() => {
     const content = contentRef.current;
-    if (glowGeneration === null || glowDurationMs === null || !content) return;
+    if (glowGeneration === null || glowDurationMs === null || glowStartedAt === null || !content)
+      return;
     return startConversationTargetGlow(
       findTranscriptItemElement(content, content),
       glowGeneration,
       glowDurationMs,
+      glowStartedAt,
     );
-  }, [glowGeneration, glowDurationMs]);
+  }, [glowGeneration, glowDurationMs, glowStartedAt]);
   // Observe before children's passive effects request render work.
   useLayoutEffect(() => {
     const element = ref.current;

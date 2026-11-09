@@ -128,13 +128,33 @@ for (const viewport of [
     expect(glow.rowBackground).toBe("rgba(0, 0, 0, 0)");
     expect(glow.rowOutline).toBe("none");
     await page.screenshot({
-      path: path.resolve(`output/visual-previews/jump-highlight-after-${viewport.name}.png`),
+      path: path.resolve(`output/visual-previews/jump-highlight-fixed-${viewport.name}.png`),
     });
 
-    // Part-way through, the glow is fading rather than at full strength.
-    await page.waitForTimeout(1_500);
+    // Sample the real CSS animation at fixed times so slow screenshots cannot
+    // race the hook's cleanup timer. A constant shadow must fail this check.
+    const shadowAt = async (time: number) =>
+      page.locator("[data-conversation-target-glow]").evaluate((element, time) => {
+        const animation = element.getAnimations()[0]!;
+        animation.pause();
+        animation.currentTime = time;
+        const shadow = getComputedStyle(element).boxShadow;
+        return Math.max(
+          ...Array.from(shadow.matchAll(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/g), (match) =>
+            Number(match[1]),
+          ),
+        );
+      }, time);
+    const initialAlpha = await shadowAt(0);
+    const fadingAlpha = await shadowAt(1500);
+    expect(initialAlpha).toBeGreaterThan(0.1);
+    expect(fadingAlpha).toBeGreaterThan(0);
+    expect(fadingAlpha).toBeLessThan(initialAlpha / 2);
+    const finalAlpha = await shadowAt(2400);
+    expect(finalAlpha).toBeLessThan(0.01);
+    expect(finalAlpha).toBeLessThan(fadingAlpha);
     await page.screenshot({
-      path: path.resolve(`output/visual-previews/jump-highlight-after-${viewport.name}-fading.png`),
+      path: path.resolve(`output/visual-previews/jump-highlight-fixed-${viewport.name}-fading.png`),
     });
     // A repeat jump to the same item restarts the glow.
     if (viewport.width < 800) await page.getByRole("button", { name: /^Actions/ }).focus();

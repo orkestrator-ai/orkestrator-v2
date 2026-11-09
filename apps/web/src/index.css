@@ -641,6 +641,7 @@ body[data-orkestrator-dev-profile]::before {
 
 [data-conversation-target-glow] {
   box-shadow: var(--conversation-target-glow-shadow);
+  animation-delay: var(--conversation-target-glow-delay, 0ms);
   animation-duration: var(--conversation-target-glow-duration, 2500ms);
   animation-fill-mode: forwards;
 }

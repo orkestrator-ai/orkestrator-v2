@@ -19,6 +19,8 @@ export const TRANSCRIPT_ITEM_ATTRIBUTE = "data-transcript-item";
 /** Set on the glowing item element; its value alternates per jump. */
 export const CONVERSATION_TARGET_GLOW_ATTRIBUTE = "data-conversation-target-glow";
 
+const GLOW_DELAY_PROPERTY = "--conversation-target-glow-delay";
+
 const GLOW_DURATION_PROPERTY = "--conversation-target-glow-duration";
 
 /** One jump: the row to highlight, and which jump it was. */
@@ -28,6 +30,8 @@ export interface ConversationTargetHighlight {
   generation: number;
   /** The highlight period: the glow fades over it and is removed at its end. */
   durationMs: number;
+  /** Monotonic jump time, shared by cleanup and virtualized row mounts. */
+  startedAt: number;
 }
 
 /**
@@ -49,17 +53,22 @@ export function findTranscriptItemElement(row: HTMLElement, fallback: HTMLElemen
  * the DOM node directly because the item is rendered by whichever message
  * renderer the list was given; React leaves attributes it does not own alone.
  * The animation's duration is the highlight period itself, so the fade ends as
- * the attribute is removed and never snaps off early.
+ * the attribute is removed. A negative delay resumes elapsed progress on remount.
  */
 export function startConversationTargetGlow(
   item: HTMLElement,
   generation: number,
   durationMs: number = CONVERSATION_TARGET_HIGHLIGHT_MS,
+  startedAt: number = performance.now(),
 ): () => void {
+  const elapsed = Math.max(0, performance.now() - startedAt);
+  if (elapsed >= durationMs) return () => {};
+  item.style.setProperty(GLOW_DELAY_PROPERTY, `-${elapsed}ms`);
   item.style.setProperty(GLOW_DURATION_PROPERTY, `${durationMs}ms`);
   item.setAttribute(CONVERSATION_TARGET_GLOW_ATTRIBUTE, conversationTargetGlowPhase(generation));
   return () => {
     item.removeAttribute(CONVERSATION_TARGET_GLOW_ATTRIBUTE);
     item.style.removeProperty(GLOW_DURATION_PROPERTY);
+    item.style.removeProperty(GLOW_DELAY_PROPERTY);
   };
 }

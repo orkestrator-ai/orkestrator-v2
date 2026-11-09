@@ -1,7 +1,8 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ActionsPanel } from "./CoordinatorActionsPanel";
+import { ActionsPanel, fitNewestCards } from "./CoordinatorActionsPanel";
+import { COORDINATOR_ACTIONS_DOCKED_KEY } from "./coordinator-actions-preference";
 import {
   coordinatorActionCards,
   visibleCoordinatorCards,
@@ -12,6 +13,7 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 let clocks: ReturnType<typeof installControlledTimeout>[] = [];
 afterEach(() => {
   cleanup();
+  localStorage.removeItem(COORDINATOR_ACTIONS_DOCKED_KEY);
   for (const clock of clocks) clock.restore();
   clocks = [];
 });
@@ -338,5 +340,162 @@ test("provider-qualified marks accept OpenCode but reject foreign servers", () =
         ]),
       ]),
     ).toHaveLength(0);
+  }
+});
+
+const header = () => screen.getByRole("button", { name: "Collapse actions", hidden: true });
+const region = () => document.querySelector<HTMLElement>('section[aria-label="Actions"]')!;
+
+test("wide header folds the docked panel to its icon and the icon reopens it", () => {
+  render(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  expect(header().getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(header());
+  const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  expect(region().getAttribute("aria-hidden")).toBe("true");
+  expect(document.activeElement).toBe(icon);
+  expect(localStorage.getItem(COORDINATOR_ACTIONS_DOCKED_KEY)).toBe("collapsed");
+  // Hover and focus never open a folded docked panel.
+  fireEvent.pointerEnter(icon, { pointerType: "mouse" });
+  fireEvent.focus(icon);
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(icon);
+  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+  expect(region().getAttribute("aria-hidden")).toBe("false");
+  expect(document.activeElement).toBe(header());
+  expect(localStorage.getItem(COORDINATOR_ACTIONS_DOCKED_KEY)).toBeNull();
+});
+
+test("wide panel stays open through outside clicks, leave, blur, Escape and card clicks", () => {
+  const grace = clock(160);
+  let anchor = "";
+  render(
+    <>
+      <button type="button">Elsewhere</button>
+      <ActionsPanel
+        docked
+        cards={cards}
+        onNavigate={(id) => {
+          anchor = id;
+        }}
+      />
+    </>,
+  );
+  const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+  fireEvent.pointerEnter(region(), { pointerType: "mouse" });
+  fireEvent.pointerLeave(region(), { pointerType: "mouse" });
+  fireEvent.focus(header());
+  fireEvent.blur(header(), { relatedTarget: elsewhere });
+  fireEvent.keyDown(header(), { key: "Escape" });
+  fireEvent.keyDown(document, { key: "Escape" });
+  fireEvent.pointerDown(elsewhere);
+  fireEvent.click(elsewhere);
+  act(() => {
+    grace.advance();
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Which option?" }));
+  expect(anchor).toBe("a");
+  expect(header().getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+});
+
+test("the docked choice persists and follows other windows", () => {
+  localStorage.setItem(COORDINATOR_ACTIONS_DOCKED_KEY, "collapsed");
+  render(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  expect(
+    screen.getByRole("button", { name: "Actions, 1 waiting" }).getAttribute("aria-expanded"),
+  ).toBe("false");
+  localStorage.removeItem(COORDINATOR_ACTIONS_DOCKED_KEY);
+  act(() => {
+    window.dispatchEvent(new StorageEvent("storage", { key: COORDINATOR_ACTIONS_DOCKED_KEY }));
+  });
+  expect(screen.queryByRole("button", { name: /Actions,/ })).toBeNull();
+  expect(header().getAttribute("aria-expanded")).toBe("true");
+});
+
+test("narrow overlay folds on an outside click or tap and from its header", () => {
+  render(
+    <>
+      <button type="button">Elsewhere</button>
+      <ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />
+    </>,
+  );
+  const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
+  fireEvent.pointerEnter(icon, { pointerType: "mouse" });
+  expect(icon.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.pointerDown(region());
+  fireEvent.pointerDown(icon);
+  expect(icon.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Elsewhere" }), {
+    pointerType: "touch",
+  });
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.focus(icon);
+  expect(icon.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(header());
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  expect(document.activeElement).toBe(icon);
+  // Still inside: the header's fold holds until pointer and focus leave.
+  fireEvent.focus(icon);
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  expect(localStorage.getItem(COORDINATOR_ACTIONS_DOCKED_KEY)).toBeNull();
+});
+
+test("resizing across the breakpoint keeps each mode's own state", () => {
+  const view = render(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  fireEvent.click(header());
+  view.rerender(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+  const icon = screen.getByRole("button", { name: "Actions, 1 waiting" });
+  expect(icon.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.pointerEnter(icon, { pointerType: "mouse" });
+  expect(icon.getAttribute("aria-expanded")).toBe("true");
+  // The narrow overlay's open state is not carried to the wide pane.
+  view.rerender(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  expect(
+    screen.getByRole("button", { name: "Actions, 1 waiting" }).getAttribute("aria-expanded"),
+  ).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Actions, 1 waiting" }));
+  view.rerender(<ActionsPanel docked={false} cards={cards} onNavigate={() => {}} />);
+  expect(
+    screen.getByRole("button", { name: "Actions, 1 waiting" }).getAttribute("aria-expanded"),
+  ).toBe("false");
+  view.rerender(<ActionsPanel docked cards={cards} onNavigate={() => {}} />);
+  expect(header().getAttribute("aria-expanded")).toBe("true");
+});
+
+test("fitting keeps the newest whole cards", () => {
+  expect(fitNewestCards([40, 40, 40], 4, 200)).toBe(3);
+  expect(fitNewestCards([40, 40, 40], 4, 84)).toBe(2);
+  expect(fitNewestCards([40, 40, 40], 4, 83)).toBe(1);
+  expect(fitNewestCards([10, 10, 60], 4, 50)).toBe(0);
+});
+
+test("a short pane hides the oldest cards instead of scrolling and keeps the waiting count", () => {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.tagName === "LI" ? 40 : this.tagName === "H2" ? 20 : 0;
+    },
+  });
+  try {
+    const view = render(
+      <div data-floating-notice-stack="">
+        <ActionsPanel docked cards={cards} onNavigate={() => {}} availableHeight={110} />
+      </div>,
+    );
+    expect(screen.queryByRole("button", { name: "New subject" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Which option?" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Done: #42/ })).toBeTruthy();
+    expect(screen.getByText("1 waiting")).toBeTruthy();
+    expect(view.container.querySelector(".overflow-y-auto")).toBeNull();
+    view.rerender(
+      <div data-floating-notice-stack="">
+        <ActionsPanel docked cards={cards} onNavigate={() => {}} availableHeight={300} />
+      </div>,
+    );
+    expect(screen.getByRole("button", { name: "New subject" })).toBeTruthy();
+  } finally {
+    if (original) Object.defineProperty(HTMLElement.prototype, "offsetHeight", original);
   }
 });

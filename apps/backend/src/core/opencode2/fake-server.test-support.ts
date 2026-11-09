@@ -14,9 +14,28 @@ export interface FakeOpenCode2Session {
   inbox: Row[];
   running: boolean;
   model?: unknown;
-  permissions: Array<{ id: string; sessionID: string; action: string; resources: string[] }>;
-  forms: Array<{ id: string; sessionID: string; title: string; fields: unknown }>;
-  replies: Array<{ kind: "permission" | "form"; id: string; decision?: string }>;
+  permissions: Array<{
+    id: string;
+    sessionID: string;
+    action: string;
+    resources: string[];
+    metadata?: Record<string, unknown>;
+  }>;
+  forms: Array<{
+    id: string;
+    sessionID: string;
+    title: string;
+    fields: unknown;
+    metadata?: Record<string, unknown>;
+  }>;
+  replies: Array<{
+    kind: "permission" | "form";
+    id: string;
+    decision?: string;
+    answer?: unknown;
+  }>;
+  /** `Session.Info` fields the provider reads beyond the id. */
+  info: Record<string, unknown>;
 }
 
 export class FakeOpenCode2Server {
@@ -24,6 +43,8 @@ export class FakeOpenCode2Server {
   readonly calls: Array<{ method: string; path: string; body?: unknown }> = [];
   /** Answer the next prompt with this status and body instead of admitting it. */
   failNextPrompt?: { status: number; body?: unknown } | "network";
+  /** Answer the next form reply with this status and body instead of applying it. */
+  failNextFormReply?: { status: number; body?: unknown };
   private readonly server: ReturnType<typeof Bun.serve>;
   private events = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private seq = new Map<string, number>();
@@ -62,17 +83,57 @@ export class FakeOpenCode2Server {
     session.rows.push({ id: this.id("msg"), type: "assistant", content: [], time: { created: 1 } });
     session.rows.push({ id: this.id("msg"), type: "idle", outcome, time: { created: 1 } });
     session.running = false;
+    session.info.outcome = outcome;
     this.emit(sessionId, "session.execution.succeeded");
+  }
+
+  /** Append a history row as the server would (a tool-call response, a shell row, …). */
+  pushRow(sessionId: string, row: Omit<Row, "id"> & { id?: string }): string {
+    const id = row.id ?? this.id("msg");
+    this.sessions.get(sessionId)!.rows.push({ time: { created: 1 }, ...row, id } as Row);
+    return id;
+  }
+
+  /** Replace a history row in place, the way a late tool result lands on its response. */
+  reviseRow(sessionId: string, id: string, patch: Record<string, unknown>): void {
+    const session = this.sessions.get(sessionId)!;
+    const index = session.rows.findIndex((row) => row.id === id);
+    session.rows[index] = { ...session.rows[index]!, ...patch };
+    this.emit(sessionId, "session.tool.success", { assistantMessageID: id }, false);
+  }
+
+  /** Send one event to every open stream; `durable: false` sends an ephemeral one. */
+  emitEvent(
+    sessionId: string,
+    type: string,
+    data: Record<string, unknown> = {},
+    durable = true,
+  ): void {
+    this.emit(sessionId, type, data, durable);
+  }
+
+  /** A fresh `msg_`/`ses_`/`per_`/`frm_` id in the server's ascending format. */
+  nextId(prefix: string): string {
+    return this.id(prefix);
   }
 
   private id(prefix: string): string {
     return `${prefix}_${String(++this.counter).padStart(12, "0")}fake`;
   }
 
-  private emit(sessionId: string, type: string): void {
+  private emit(
+    sessionId: string,
+    type: string,
+    data: Record<string, unknown> = {},
+    durable = true,
+  ): void {
     const seq = (this.seq.get(sessionId) ?? 0) + 1;
-    this.seq.set(sessionId, seq);
-    const frame = `data: ${JSON.stringify({ type, data: { sessionID: sessionId }, durable: { aggregateID: sessionId, seq, version: 1 } })}\n\n`;
+    if (durable) this.seq.set(sessionId, seq);
+    const frame = `data: ${JSON.stringify({
+      type,
+      data: { sessionID: sessionId, ...data },
+      ...(durable ? { durable: { aggregateID: sessionId, seq, version: 1 } } : {}),
+    })}\n\n`;
     const bytes = new TextEncoder().encode(frame);
     for (const controller of this.events) {
       try {
@@ -129,6 +190,10 @@ export class FakeOpenCode2Server {
         permissions: [],
         forms: [],
         replies: [],
+        info: {
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
       });
       return ok({ id, model: body?.model, metadata: body?.metadata });
     }
@@ -173,14 +238,63 @@ export class FakeOpenCode2Server {
       }
       return ok({ id: item.id, type: "user", payload: item.payload, delivery: item.delivery });
     }
+    if (rest === "" && request.method === "GET") {
+      return ok({ id: session.id, model: session.model, ...session.info });
+    }
     if (rest === "message") {
-      const order = url.searchParams.get("order") ?? "desc";
+      const rawCursor = url.searchParams.get("cursor");
+      // Like 2.2.6: a cursor carries its own order and refuses an explicit one.
+      if (rawCursor && url.searchParams.has("order")) {
+        return Response.json({ _tag: "InvalidCursorError", message: "order" }, { status: 400 });
+      }
+      const cursor = rawCursor
+        ? (JSON.parse(Buffer.from(rawCursor, "base64url").toString("utf8")) as {
+            id: string;
+            order: "asc" | "desc";
+          })
+        : undefined;
+      const order = cursor?.order ?? url.searchParams.get("order") ?? "desc";
       const limit = Number(url.searchParams.get("limit") ?? 50);
-      const rows =
-        order === "asc"
-          ? session.rows.slice(0, limit)
-          : [...session.rows].reverse().slice(0, limit);
-      return Response.json({ data: rows, cursor: {} });
+      // 2.2.6 refuses a page larger than 200 rows.
+      if (limit > 200) {
+        return Response.json(
+          { _tag: "InvalidRequestError", message: "Expected a value less than or equal to 200" },
+          { status: 400 },
+        );
+      }
+      const type = url.searchParams.get("type");
+      let rows = type ? session.rows.filter((row) => row.type === type) : [...session.rows];
+      if (order === "desc") rows.reverse();
+      if (cursor) {
+        const anchor = rows.findIndex((row) => row.id === cursor.id);
+        // A vanished anchor answers an empty page, as the real store does.
+        rows = anchor < 0 ? [] : rows.slice(anchor + 1);
+      }
+      rows = rows.slice(0, limit);
+      const encode = (id: string) =>
+        Buffer.from(JSON.stringify({ id, order, direction: "next" })).toString("base64url");
+      return Response.json({
+        data: rows,
+        cursor: rows.length > 0 ? { next: encode(rows.at(-1)!.id) } : {},
+      });
+    }
+    const messageRead = /^message\/([^/]+)$/.exec(rest);
+    if (messageRead) {
+      const row = session.rows.find((candidate) => candidate.id === messageRead[1]);
+      return row ? ok(row) : Response.json({ _tag: "NotFound", message: "row" }, { status: 404 });
+    }
+    const formReply = /^form\/([^/]+)\/reply$/.exec(rest);
+    if (formReply) {
+      const failure = this.failNextFormReply;
+      this.failNextFormReply = undefined;
+      if (failure)
+        return Response.json(failure.body ?? { _tag: "Refused" }, { status: failure.status });
+      if (!session.forms.some((f) => f.id === formReply[1])) {
+        return Response.json({ _tag: "Form.NotFoundError", message: "form" }, { status: 404 });
+      }
+      session.forms = session.forms.filter((f) => f.id !== formReply[1]);
+      session.replies.push({ kind: "form", id: formReply[1]!, answer: body!.answer });
+      return new Response(null, { status: 204 });
     }
     if (rest === "inbox") return ok(session.inbox);
     if (rest === "model") {
@@ -197,6 +311,9 @@ export class FakeOpenCode2Server {
     if (rest === "form") return ok(session.forms);
     const permissionReply = /^permission\/([^/]+)\/reply$/.exec(rest);
     if (permissionReply) {
+      if (!session.permissions.some((p) => p.id === permissionReply[1])) {
+        return Response.json({ _tag: "PermissionNotFoundError", message: "x" }, { status: 404 });
+      }
       session.permissions = session.permissions.filter((p) => p.id !== permissionReply[1]);
       session.replies.push({
         kind: "permission",

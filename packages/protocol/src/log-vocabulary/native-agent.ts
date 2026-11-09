@@ -117,6 +117,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
       "provider.dispose-failed":
         "Disposing the 2.x provider of a replaced server failed. Error class only.",
+      "transcript.unknown-row":
+        "A 2.x history row of a kind the transcript does not know was dropped (a newer server). Its kind name only, once per kind.",
       "host-server.ready":
         "A local environment's 2.x server answered `/api/info` as 2.x. Environment id and pid only.",
       "host-server.terminate-failed":

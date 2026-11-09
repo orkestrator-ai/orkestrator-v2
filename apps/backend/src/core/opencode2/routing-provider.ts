@@ -20,9 +20,10 @@
  *   bridge that is not running does. A replaced server (new port or
  *   password) gets a new 2.x provider; the old one is disposed.
  * - **No 1.x behaviour reaches a 2.x session.** Members the 2.x provider does
- *   not have answer what an absent capability would (empty catalogues, no
- *   interactions, no paging) or refuse with a clear error (fork, MCP
- *   actions, interaction answers). Snapshots carry `capabilityLimits`, which
+ *   not have answer what an absent capability would (empty catalogues) or
+ *   refuse with a clear error (fork, MCP actions). Transcript windows and
+ *   pages, session state, usage and interaction cards are the 2.x
+ *   provider's own (`reads.ts`). Snapshots carry `capabilityLimits`, which
  *   the projection uses to stop offering compact, undo, redo, fork,
  *   attachments and slash commands on a 2.x tab.
  *
@@ -42,7 +43,6 @@ import {
   type NativeAgentControlUpdate,
   type NativeAgentExecutionPolicy,
   type NativeAgentForkOutcome,
-  type NativeAgentNotice,
   type NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -74,6 +74,7 @@ import {
 import type { OpenCodeProvider } from "../opencode-provider.js";
 import { OpenCode2Client, type OpenCode2Connection } from "./client.js";
 import { OPENCODE2_EVIDENCE_SCAN_LIMIT, OpenCode2Provider } from "./provider.js";
+import type { OpenCode2SessionState } from "./session-state.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
 import { isOpenCode2IdleMessage, type OpenCode2Message } from "./types.js";
 
@@ -90,13 +91,6 @@ export const OPENCODE2_CAPABILITY_LIMITS: ProviderCapabilityLimits = {
   withoutAttachments: true,
   withoutSlashCommands: true,
   withoutFork: true,
-};
-
-const WAITING_NOTICE: NativeAgentNotice = {
-  kind: "warning",
-  message:
-    "OpenCode 2 is waiting for an approval or an answer that this preview cannot show yet. " +
-    "Stop the turn to continue.",
 };
 
 /** One 2.x server generation: a new port or password is a new generation. */
@@ -138,25 +132,39 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     this.messageReadLimit = legacy.messageReadLimit;
     const legacyInteractions = legacy.interactions;
     this.interactions = {
-      listPendingInteractions: async (sessionId) =>
-        (await this.lineOf(sessionId)) === "v2"
-          ? emptyInteractionSnapshot()
-          : legacyInteractions.listPendingInteractions(sessionId),
-      resolveInteraction: async (sessionId, interactionId, resolution) => {
-        if ((await this.lineOf(sessionId)) === "v2") {
-          throw new PromptRejectedError("OpenCode 2 sessions cannot answer requests here yet");
+      // Observers: a 2.x session with no server running has nothing pending.
+      listPendingInteractions: async (sessionId) => {
+        if ((await this.lineOf(sessionId)) !== "v2") {
+          return legacyInteractions.listPendingInteractions(sessionId);
         }
-        return legacyInteractions.resolveInteraction(sessionId, interactionId, resolution);
+        const provider = await this.observedV2();
+        return provider
+          ? provider.interactions.listPendingInteractions(sessionId)
+          : emptyInteractionSnapshot();
       },
-      ...(legacyInteractions.permissionRuleDetail
-        ? {
-            permissionRuleDetail: async (sessionId: string, interactionId: string) =>
-              (await this.lineOf(sessionId)) === "v2"
-                ? undefined
-                : legacyInteractions.permissionRuleDetail!(sessionId, interactionId),
-          }
-        : {}),
-    } as AgentInteractionProviderCapability;
+      resolveInteraction: async (sessionId, interactionId, resolution) => {
+        if ((await this.lineOf(sessionId)) !== "v2") {
+          return legacyInteractions.resolveInteraction(sessionId, interactionId, resolution);
+        }
+        const provider = await this.observedV2();
+        // No server, no run: whatever the card showed is gone.
+        if (!provider) return { result: "stale", sessionId, interactionId, revision: 0 };
+        return provider.interactions.resolveInteraction(sessionId, interactionId, resolution);
+      },
+      // Synchronous by contract: a session whose line is not known yet has
+      // listed nothing here, so it has no detail to give.
+      permissionRuleDetail: (sessionId: string, interactionId: string) => {
+        const line = this.lines.get(sessionId);
+        if (line === "v2") {
+          return (
+            this.current?.provider.interactions.permissionRuleDetail(sessionId, interactionId) ??
+            null
+          );
+        }
+        if (line !== "legacy") return null;
+        return legacyInteractions.permissionRuleDetail?.(sessionId, interactionId) ?? null;
+      },
+    } satisfies AgentInteractionProviderCapability;
   }
 
   /** Which line serves a session, as far as this provider has recorded it (tests, diagnostics). */
@@ -304,44 +312,41 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     if ((await this.lineOf(sessionId)) !== "v2") {
       return this.legacy.transcriptSnapshot(sessionId, options);
     }
-    const limit = Math.min(options.limit, OPENCODE2_EVIDENCE_SCAN_LIMIT);
-    const rows = await this.v2Rows(sessionId, limit);
-    return {
-      messages: normalizeOpenCode2Transcript(rows),
-      complete: rows.length < limit,
-      freshness: "current",
-    };
+    return (await this.requireV2()).transcriptSnapshot(sessionId, options);
   }
 
-  /** 2.x history paging arrives with the transcript phase; a 2.x session serves no pages. */
   async transcriptPage(
     sessionId: string,
     options: Parameters<LegacyOpenCodeProvider["transcriptPage"]>[1],
   ): Promise<ProviderTranscriptPage | undefined> {
-    if ((await this.lineOf(sessionId)) === "v2") return undefined;
+    if ((await this.lineOf(sessionId)) === "v2") {
+      return (await this.requireV2()).transcriptPage(sessionId, options);
+    }
     return this.legacy.transcriptPage(sessionId, options);
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.interactiveSnapshot(sessionId);
     const provider = await this.requireV2();
-    const [status, rows, models] = await Promise.all([
-      provider.status(sessionId),
-      this.v2Rows(sessionId, OPENCODE2_EVIDENCE_SCAN_LIMIT),
+    const [{ messages, messagesComplete, ...state }, models] = await Promise.all([
+      provider.interactiveState(sessionId),
       this.models(),
     ]);
-    return {
-      ...v2StateSnapshot(status, models),
-      messages: normalizeOpenCode2Transcript(rows),
-      messagesComplete: rows.length < OPENCODE2_EVIDENCE_SCAN_LIMIT,
-    };
+    return { ...v2StateSnapshot(state, models), messages, messagesComplete };
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.sessionStateSnapshot(sessionId);
     const provider = await this.requireV2();
-    const [status, models] = await Promise.all([provider.status(sessionId), this.models()]);
-    return v2StateSnapshot(status, models);
+    const [state, models] = await Promise.all([provider.sessionState(sessionId), this.models()]);
+    return v2StateSnapshot(state, models);
+  }
+
+  /** 2.x keeps the lifetime ledger on the session; 1.x reports usage on its snapshots. */
+  async refreshUsage(sessionId: string): Promise<NativeAgentContextUsage | undefined> {
+    if ((await this.lineOf(sessionId)) !== "v2") return undefined;
+    const provider = await this.observedV2();
+    return provider ? provider.refreshUsage(sessionId) : undefined;
   }
 
   async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
@@ -542,7 +547,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   ): void {
     if (this.disposed) return;
     if (line === "legacy") this.legacy.registerSession(sessionId, interaction);
-    else this.current?.provider.registerSession(sessionId);
+    else this.current?.provider.registerSession(sessionId, interaction);
   }
 
   private lineOf(sessionId: string): Promise<Line> {
@@ -618,17 +623,18 @@ function emptyInteractionSnapshot(): AgentInteractionSnapshot {
   return { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 0, requests: [] };
 }
 
+/**
+ * A 2.x session's state as the shared snapshot. A parked permission or form
+ * reads `blocked`, and its card comes from `interactions`.
+ */
 function v2StateSnapshot(
-  status: ProviderStatus,
+  state: OpenCode2SessionState,
   models: AgentModel[],
 ): ProviderSessionStateSnapshot {
   return {
-    status,
+    ...state,
     composer: { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models },
     capabilityLimits: OPENCODE2_CAPABILITY_LIMITS,
-    // A parked permission or form has no card on a 2.x tab yet; say so rather
-    // than leave a turn that looks stuck.
-    ...(status === "blocked" ? { notices: [WAITING_NOTICE] } : {}),
   };
 }
 

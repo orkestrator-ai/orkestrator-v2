@@ -42,11 +42,13 @@ import {
   type ProviderDispatchStatus,
   type ProviderNativeAgentSessionAction,
   type ProviderSendOptions,
+  type ProviderSessionRegistration,
   type ProviderStatus,
   type ProviderSteerDispatchStatus,
 } from "../agent-provider-contract.js";
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
+import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
 import { checkOpenCode2Admission, mintOpenCode2InputId, newestOpenCode2IdleId } from "./steer.js";
 import type { OpenCode2InboxItem, OpenCode2Message, OpenCode2ModelRef } from "./types.js";
 
@@ -91,22 +93,31 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   private readonly monitorTask: Promise<void> | undefined;
   private activityCache: { at: number; running: ReadonlySet<string> } | undefined;
   private disposed = false;
+  /** The event stream is open now, so a change reaches the read side as a hint. */
+  private streamConnected = false;
+  /** Transcript, state, usage and interaction cards (`reads.ts`). */
+  readonly reads: OpenCode2SessionReads;
+  readonly interactions: OpenCode2SessionReads["interactions"];
 
   constructor(
     private readonly client: OpenCode2Client,
     private readonly dependencies: OpenCode2ProviderDependencies = {},
   ) {
+    this.reads = new OpenCode2SessionReads(client, () => this.streamConnected);
+    this.interactions = this.reads.interactions;
     if (dependencies.monitorEvents !== false) this.monitorTask = this.watchEvents();
   }
 
-  registerSession(sessionId: string): void {
+  registerSession(sessionId: string, registration?: ProviderSessionRegistration): void {
     if (!this.sessions.has(sessionId)) this.sessions.set(sessionId, { dirty: true });
+    this.reads.register(sessionId, registration);
   }
 
   releaseSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     this.appliedModel.delete(sessionId);
     this.tracker.forget(sessionId);
+    this.reads.forget(sessionId);
   }
 
   async createSession(
@@ -207,6 +218,30 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {
     return this.history(sessionId, options.limit ?? OPENCODE2_EVIDENCE_SCAN_LIMIT);
+  }
+
+  // ── reads (`reads.ts`) ─────────────────────────────────────────────────────
+
+  transcriptSnapshot(...args: Parameters<OpenCode2SessionReads["transcriptSnapshot"]>) {
+    return this.reads.transcriptSnapshot(...args);
+  }
+
+  transcriptPage(...args: Parameters<OpenCode2SessionReads["transcriptPage"]>) {
+    return this.reads.transcriptPage(...args);
+  }
+
+  /** Status, usage, model and terminal outcome; never the transcript. */
+  async sessionState(sessionId: string) {
+    return this.reads.sessionState(sessionId, await this.status(sessionId));
+  }
+
+  /** {@link sessionState} plus the newest normalized rows. */
+  async interactiveState(sessionId: string) {
+    return this.reads.interactive(sessionId, await this.status(sessionId));
+  }
+
+  refreshUsage(sessionId: string) {
+    return this.reads.usage(sessionId);
   }
 
   /** Structured output arrives with the workflow-result tool (phase 5). */
@@ -429,21 +464,34 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     while (!this.disposed) {
       try {
         const body = await this.client.openEvents(this.monitor.signal);
+        // Whatever changed while the stream was down was never hinted.
+        this.reads.transcript.invalidateAll(true);
+        this.streamConnected = true;
         await readOpenCode2Events(
           body,
           (signal) => {
-            if (signal.kind === "desync") return this.markAllDirty();
+            if (signal.kind === "desync") {
+              this.reads.transcript.invalidateAll(true);
+              return this.markAllDirty();
+            }
+            const sessionId = openCode2EventSessionId(signal.event);
+            if (!sessionId || !this.sessions.has(sessionId)) return;
             const durable = signal.event.durable;
-            if (!durable || !this.sessions.has(durable.aggregateID)) return;
-            this.tracker.note(durable.aggregateID, durable.seq);
-            this.markDirty(durable.aggregateID);
+            if (durable && this.tracker.note(sessionId, durable.seq) === "gap") {
+              this.reads.transcript.invalidate(sessionId);
+            }
+            this.reads.observe(sessionId, signal.event);
+            if (durable) this.markDirty(sessionId);
           },
           this.monitor.signal,
         );
       } catch (error) {
         if (this.disposed) return;
         log.debug("events.dropped", { error: formatLogError(error, { message: false }) });
+      } finally {
+        this.streamConnected = false;
       }
+      this.reads.transcript.invalidateAll(true);
       this.markAllDirty();
       if (this.disposed) return;
       await new Promise<void>((resolve) => {

@@ -22,6 +22,21 @@ export interface OpenCode2ModelRef {
   variant?: string;
 }
 
+/** `TokenUsage.Info`: cumulative on a session, per response on an assistant row. */
+export interface OpenCode2TokenUsage {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cache?: { read?: number; write?: number };
+}
+
+/** `Session.StructuredError`. */
+export interface OpenCode2StructuredError {
+  type?: string;
+  message?: string;
+  status?: number;
+}
+
 export interface OpenCode2Session {
   id: string;
   projectID?: string;
@@ -29,8 +44,12 @@ export interface OpenCode2Session {
   agent?: string;
   model?: OpenCode2ModelRef;
   cost?: number;
+  tokens?: OpenCode2TokenUsage;
+  /** The latest settled run's outcome. */
+  outcome?: OpenCode2RunOutcome;
+  title?: string;
   metadata?: Record<string, unknown>;
-  time?: { created?: number; updated?: number };
+  time?: { created?: number; updated?: number; busy?: number; idle?: number };
 }
 
 export interface OpenCode2FileInput {
@@ -65,11 +84,27 @@ export interface OpenCode2ReasoningContent {
   text: string;
 }
 
+/** `Tool.Content`: what a settled tool call returned to the model. */
+export type OpenCode2ToolResultContent =
+  | { type: "text"; text: string }
+  | { type: "file"; uri: string; mime: string; name?: string | null };
+
+export interface OpenCode2ToolState {
+  status: "streaming" | "running" | "completed" | "error";
+  /** A partial JSON string while `streaming`, the decoded input after. */
+  input?: unknown;
+  content?: OpenCode2ToolResultContent[];
+  metadata?: Record<string, unknown>;
+  error?: OpenCode2StructuredError;
+}
+
 export interface OpenCode2ToolContent {
   type: "tool";
   id: string;
   name: string;
-  state?: { status: "streaming" | "running" | "completed" | "error"; input?: unknown };
+  executed?: boolean;
+  state?: OpenCode2ToolState;
+  time?: { created?: number; ran?: number; completed?: number };
 }
 
 export interface OpenCode2AssistantMessage extends MessageBase {
@@ -78,12 +113,17 @@ export interface OpenCode2AssistantMessage extends MessageBase {
   model?: OpenCode2ModelRef;
   content: Array<OpenCode2TextContent | OpenCode2ReasoningContent | OpenCode2ToolContent>;
   finish?: string;
+  cost?: number;
+  tokens?: OpenCode2TokenUsage;
+  error?: OpenCode2StructuredError;
+  retry?: { attempt?: number; at?: number; error?: OpenCode2StructuredError };
 }
 
 /** Appended when a run settles: the snapshot's run boundary. */
 export interface OpenCode2IdleMessage extends MessageBase {
   type: "idle";
   outcome: OpenCode2RunOutcome;
+  error?: OpenCode2StructuredError;
 }
 
 /** Any other row kind (synthetic, system, shell, compaction, switches, …). */
@@ -107,6 +147,11 @@ export interface OpenCode2PermissionRequest {
   sessionID: string;
   action: string;
   resources: string[];
+  /** Patterns an `always` reply would save; never used (owner decision 1, 2026-11-09). */
+  save?: string[];
+  /** Tool-specific detail, e.g. `{ files: [FileDiff] }` for an edit. */
+  metadata?: Record<string, unknown>;
+  source?: { type: "tool"; messageID: string; id: string };
   message?: string;
 }
 
@@ -114,6 +159,9 @@ export interface OpenCode2Form {
   id: string;
   sessionID: string;
   title: string;
+  /** `{ kind: "question", tool }` for the question tool. */
+  metadata?: Record<string, unknown>;
+  /** `Form.Fields`, validated by `forms.ts` (a newer server's field kind degrades). */
   fields: unknown;
 }
 

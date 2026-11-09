@@ -185,12 +185,55 @@ describe("OpenCodeRoutingProvider", () => {
     ]);
     const state = await router.sessionStateSnapshot(id);
     expect(state.capabilityLimits).toEqual(OPENCODE2_CAPABILITY_LIMITS);
-    expect(await router.transcriptPage(id, { cursor: "c", limit: 10, targetBytes: 1 })).toBe(
-      undefined,
-    );
+    // A cursor this provider never minted expires rather than paging from a guess.
+    expect(await router.transcriptPage(id, { cursor: "c", limit: 10, targetBytes: 1 })).toEqual({
+      status: "expired",
+    });
     expect((await router.commandCatalogue(id)).commands).toEqual([]);
     expect(await router.interactions.listPendingInteractions(id)).toMatchObject({ requests: [] });
     await expect(router.forkSession(id)).rejects.toBeInstanceOf(PromptRejectedError);
+  });
+
+  test("a 2.x session's cards, rule details, pages and usage come from the 2.x provider", async () => {
+    const { server, legacy, router, state } = setup();
+    const id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+    const session = server.sessions.get(id)!;
+    session.permissions.push({ id: "per_1", sessionID: id, action: "shell", resources: ["ls"] });
+    const [card] = (await router.interactions.listPendingInteractions(id)).requests;
+    expect(card).toMatchObject({
+      kind: "permission",
+      presentation: { confirmLabel: "Allow once" },
+    });
+    expect(legacy.interactions.listPendingInteractions).not.toHaveBeenCalled();
+    // Synchronous, as the permission-rule enforcer reads it.
+    expect(router.interactions.permissionRuleDetail!(id, card!.id)).toEqual({
+      subject: { kind: "command", command: "ls" },
+      allowOnceAnswers: [],
+    });
+    expect(router.interactions.permissionRuleDetail!("ses_unknown", card!.id)).toBeNull();
+    const applied = await router.interactions.resolveInteraction(id, card!.id, {
+      version: 1,
+      interactionId: card!.id,
+      sessionId: id,
+      action: "answer",
+      answer: { version: 1, interactionId: card!.id, sessionId: id, answers: [] },
+      resolvedAt: Date.now() + 1_000,
+    });
+    expect(applied.result).toBe("applied");
+    expect(session.replies).toEqual([{ kind: "permission", id: "per_1", decision: "once" }]);
+    session.info.cost = 0.5;
+    session.info.tokens = { input: 3, output: 4, reasoning: 0, cache: { read: 0, write: 0 } };
+    expect(await router.refreshUsage(id)).toMatchObject({ sessionTokens: 7, costUsd: 0.5 });
+    expect(await router.refreshUsage("ses_legacy_x")).toBeUndefined();
+    const window = await router.transcriptSnapshot(id, { limit: 10, targetBytes: 1e6 });
+    expect(window).toMatchObject({ complete: true, historyPageable: true });
+    // An observer never starts the server: with none running, nothing is pending.
+    state.running = false;
+    session.permissions.push({ id: "per_2", sessionID: id, action: "shell", resources: ["ls"] });
+    expect((await router.interactions.listPendingInteractions(id)).requests).toEqual([]);
+    expect(
+      (await router.interactions.resolveInteraction(id, card!.id, applied as never)).result,
+    ).toBe("stale");
   });
 
   test("a replaced 2.x server gets a new provider and the old one is disposed", async () => {

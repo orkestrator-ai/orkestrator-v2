@@ -96,6 +96,11 @@ export class OpenCode2Client {
     return this.connection.baseUrl;
   }
 
+  /** The project location every request is scoped to. */
+  get directory(): string {
+    return this.connection.directory;
+  }
+
   /** The 2.x health probe. 1.x's `/global/health` answers HTML on 2.x and must not be used. */
   async info(signal?: AbortSignal): Promise<OpenCode2Info> {
     const info = await this.request<OpenCode2Info>("GET", "/api/info", "OpenCode info", {
@@ -134,9 +139,20 @@ export class OpenCode2Client {
     });
   }
 
+  /**
+   * One page of history. A `cursor` carries its own order, and the server
+   * refuses one combined with `order` (`InvalidCursorError`), so `order` is
+   * dropped whenever a cursor is sent. `type` narrows to one row kind.
+   */
   async listMessages(
     sessionId: string,
-    options: { limit?: number; order?: "asc" | "desc"; cursor?: string; signal?: AbortSignal } = {},
+    options: {
+      limit?: number;
+      order?: "asc" | "desc";
+      cursor?: string;
+      type?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<OpenCode2MessagePage> {
     const envelope = await this.requestEnvelope(
       "GET",
@@ -145,8 +161,9 @@ export class OpenCode2Client {
       {
         query: {
           limit: options.limit === undefined ? undefined : String(options.limit),
-          order: options.order,
+          order: options.cursor === undefined ? options.order : undefined,
           cursor: options.cursor,
+          type: options.type,
         },
         maxBytes: OPENCODE2_MAX_MESSAGE_PAGE_BYTES,
         signal: options.signal,
@@ -163,6 +180,20 @@ export class OpenCode2Client {
         ...(typeof cursor?.next === "string" ? { next: cursor.next } : {}),
       },
     };
+  }
+
+  /** One history row by id; a 404 means the row (or session) no longer exists. */
+  getMessage(
+    sessionId: string,
+    messageId: string,
+    signal?: AbortSignal,
+  ): Promise<OpenCode2Message> {
+    return this.request(
+      "GET",
+      `/api/session/${seg(sessionId)}/message/${seg(messageId)}`,
+      "OpenCode message read",
+      { maxBytes: OPENCODE2_MAX_MESSAGE_PAGE_BYTES, signal },
+    );
   }
 
   /**

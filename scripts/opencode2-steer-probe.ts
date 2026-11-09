@@ -79,6 +79,9 @@ export class ScriptedModel {
         // A turn asking for a slow tool gets one bash call, then (after the tool result) an answer.
         // `RUN_BASH:<command>` runs that command instead (fixture-only; the model is scripted).
         if (lastRole === "user") {
+          // `CALL_TOOL:<name> <json args>` calls any tool once (fixture-only).
+          const call = /CALL_TOOL:(\S+)\s+(\{.*\})\s*$/s.exec(latestUser);
+          if (call) return sse(namedToolCallChunks(call[1]!, call[2]!));
           const bash = /RUN_BASH:(.+)$/s.exec(latestUser)?.[1];
           if (bash) return sse(toolCallChunks(bash.trim()));
           if (latestUser.includes("RUN_SLOW_TOOL")) return sse(toolCallChunks());
@@ -127,6 +130,32 @@ function toolCallChunks(command = `sleep ${STEP_SLEEP_SECONDS}`): Json[] {
                     description: "Run in the disposable workspace",
                   }),
                 },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    },
+    { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+  ];
+}
+
+function namedToolCallChunks(name: string, args: string): Json[] {
+  return [
+    {
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              {
+                index: 0,
+                id: `call_${name}`,
+                type: "function",
+                function: { name, arguments: args },
               },
             ],
           },
@@ -212,7 +241,11 @@ export interface OpenCode2Fixture {
  */
 export async function startOpenCode2Fixture(
   binary: string,
-  options: { env?: Record<string, string> } = {},
+  options: {
+    env?: Record<string, string>;
+    /** 2.x native rules (`{ action, resource, effect }`), applied after the defaults below. */
+    permissions?: Array<{ action: string; resource: string; effect: "allow" | "deny" | "ask" }>;
+  } = {},
 ): Promise<OpenCode2Fixture> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "ork-opencode2-")));
   const model = new ScriptedModel();
@@ -225,6 +258,7 @@ export async function startOpenCode2Fixture(
     join(dirs.work, "opencode.json"),
     JSON.stringify({
       permission: { bash: "allow", edit: "allow", external_directory: "allow" },
+      ...(options.permissions ? { permissions: options.permissions } : {}),
       provider: {
         fixture: {
           npm: "@ai-sdk/openai-compatible",

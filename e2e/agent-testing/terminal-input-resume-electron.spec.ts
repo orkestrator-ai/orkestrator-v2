@@ -269,7 +269,9 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     };
     const pidBefore = await shellPid(1);
 
-    await window.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
+    // macOS Vim starts with noruler under -u NONE; enable the readiness
+    // indicator explicitly rather than relying on nvim or distro defaults.
+    await window.keyboard.type(`${editor} -u NONE -N -n -c "set ruler" resume.txt`);
     await window.keyboard.press("Enter");
     // The shell echoes the filename before the editor is ready. Wait for
     // the empty editor's ruler so startup cannot discard the first input.

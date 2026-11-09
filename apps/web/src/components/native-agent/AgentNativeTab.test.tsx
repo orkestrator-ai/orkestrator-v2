@@ -12356,7 +12356,7 @@ describe("AgentNativeTab", () => {
         expect(
           appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text ?? "",
         ).toBe("");
-        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.queryByRole("alert") === null).toBe(true);
         expect(mockToastError).not.toHaveBeenCalled();
         // The backend owns the new turn or queue item; the renderer adds neither.
         expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();

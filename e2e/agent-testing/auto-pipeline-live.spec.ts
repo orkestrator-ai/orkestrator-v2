@@ -315,6 +315,13 @@ test.describe("Auto-pipeline on a fake model", () => {
       const launch = configure.getByRole("button", { name: "Auto-pipeline", exact: true });
       await expect(launch).toBeEnabled({ timeout: 30_000 });
       await shot(page, "launch-desktop");
+      await page.keyboard.press("Escape");
+      await expect(configure).toHaveCount(0);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole("button", { name: "Open tools", exact: true }).click();
+      await multiReview.click({ button: "right" });
+      await expect(launch).toBeEnabled({ timeout: 30_000 });
+      await shot(page, "launch-narrow");
       await launch.click();
 
       const review = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
@@ -322,15 +329,18 @@ test.describe("Auto-pipeline on a fake model", () => {
       await expect(title).toHaveValue(FAKE_DRAFT_TITLE, { timeout: TURN_TIMEOUT_MS });
       await expect(review.getByText(`?? ${FIXTURE_FILE}`)).toBeVisible();
       expect((await calls(model.origin)).submissions.submit_auto_pipeline_draft).toBe(1);
-      await shot(page, "draft-desktop");
+      await shot(page, "draft-narrow");
 
       await title.fill(EDITED_TITLE);
       await review.getByRole("tab", { name: /^Acceptance criteria/ }).click();
       await review.getByRole("button", { name: "Add criterion" }).click();
       await review.getByRole("textbox", { name: "Criterion 3", exact: true }).fill(ADDED_CRITERION);
+      await shot(page, "draft-edited-narrow");
       await review.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
       await expect(review).toHaveCount(0, { timeout: 120_000 });
       await expect(configure).toHaveCount(0);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
 
       // --- 3. What confirmation published -------------------------------------
       let pipeline: BuildPipeline | undefined;

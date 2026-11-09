@@ -647,14 +647,17 @@ users until phase 3 routes new sessions to it.
      (`opencode2`, 2.2.6), the Dockerfile and the version-drift test. Enabling
      `opencode` installs both binaries (`agentPlatformForToolchain`); see
      "Task 5: phase 2 toolchain pin".
-   - Open (launch half): start `opencode serve` with its own `OPENCODE_DB` and data directory, and
-     `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_FLAGS` set explicitly.
-   - Health on `/api/info`.
-   - Port the GitHub-token plugin to `@opencode/plugin`.
+   - **Done on 2026-11-08 for host environments (launch half).** `opencode serve`
+     runs with its own `OPENCODE_DB` and config directory,
+     `OPENCODE_DISABLE_AUTOUPDATE` and an explicit `OPENCODE_FLAGS`, health on
+     `/api/info`, and a 2.x credential plugin (`opencode2/server.ts`,
+     `opencode2-host-server.ts`).
+   - Open: the container launch, and porting the GitHub-token plugin
+     (`buildOpenCodeGitHubEnvironmentPluginSource`) to the 2.x plugin shape.
 3. **Provider core and routing.** Status: the provider core is done
    (2026-11-08, `opencode2/provider.ts`). Routing, the marker, the host
    server launch and the preview setting are done for host environments
-   (2026-11-08, branch `opencode2-routing`; see "Task 5: phase 3 routing and
+   (2026-11-08; see "Task 5: phase 3 routing and
    preview setting"). The container 2.x server is open: a container
    environment never gets a 2.x session, and the host server refuses one.
 

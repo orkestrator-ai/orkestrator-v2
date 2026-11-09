@@ -82,6 +82,9 @@ describe("signing a named account in again", () => {
     const context = {
       storage: {
         agentAccounts: {
+          agentAccountsDirectory: () => {
+            throw new Error("stop before spawn");
+          },
           loadAgentAccounts: async () => ({
             version: 1,
             accounts: [{ id: accountId, platform: "claude", label: "Work", createdAt: "" }],
@@ -93,7 +96,9 @@ describe("signing a named account in again", () => {
       runtime: { accounts: new AgentAccountsRuntime() },
       storageRoot: undefined,
     } as unknown as CommandContext;
-    await reauthenticate({ platform: "claude", accountId }, context).catch(() => undefined);
+    expect(await failureOf(() => reauthenticate({ platform: "claude", accountId }, context))).toBe(
+      "stop before spawn",
+    );
     expect(agentAccountLoginProgress(context)).toMatchObject({ mode: "reauthenticate", accountId });
   });
   test.each([{}, { accountId: "" }, { accountId: "   " }])(

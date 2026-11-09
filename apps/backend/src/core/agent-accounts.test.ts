@@ -809,6 +809,8 @@ describe("agent accounts", () => {
 
       test("renews that account in place and leaves the active one alone", async () => {
         const accountId = await addInactiveClaudeAccount("claude-two");
+        const resendAll = mock(() => undefined);
+        context.nativeAgents = { signInResends: { resendAll } } as never;
         await startAgentAccountLogin(context, "claude", {
           reauthenticate: true,
           accountId,
@@ -828,6 +830,8 @@ describe("agent accounts", () => {
         expect(progress).toMatchObject({ state: "succeeded", accountId, mode: "reauthenticate" });
         const snapshot = await listAgentAccounts(context);
         expect(snapshot.active.claude).toBe("default");
+        expect(resendAll).not.toHaveBeenCalled();
+        context.nativeAgents = undefined;
         expect(
           snapshot.accounts.find((a) => a.platform === "claude" && a.id === accountId),
         ).toMatchObject({ isActive: false, signedIn: true });
@@ -886,6 +890,9 @@ describe("agent accounts", () => {
             accountId: second,
             executable: "claude",
           }),
+        ).rejects.toThrow("Finish or cancel");
+        await expect(
+          startAgentAccountLogin(context, "claude", { reauthenticate: true }),
         ).rejects.toThrow("Finish or cancel");
         expect((await settledLogin()).accountId).toBe(first);
       });

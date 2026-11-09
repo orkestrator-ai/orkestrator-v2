@@ -754,6 +754,7 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
     if (entry.mode === "reauthenticate") {
       await finishReauthentication(context, entry);
+      const store = await context.storage.agentAccounts.loadAgentAccounts();
       entry.state = "succeeded";
       entry.completedAt = new Date().toISOString();
       // A first-run user who was never signed in has no model list yet; fetch it
@@ -763,9 +764,11 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );
-        // Whichever client signed in, prompts refused for want of this login
-        // go out now. Tracked and bounded by the service; never fails a sign-in.
-        context.nativeAgents?.signInResends.resendAll();
+        // Held prompts use the active login. Renewing an inactive slot must
+        // not consume them while the active login may still be signed out.
+        if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
+          context.nativeAgents?.signInResends.resendAll();
+        }
       }
       announceAccountsChanged(context, platform);
       return;
@@ -833,10 +836,20 @@ export async function startAgentAccountLogin(
   }
   const activeLogin = context.runtime.accounts.activeLogin();
   if (activeLogin?.state === "pending") {
+    const targetId =
+      mode === "reauthenticate"
+        ? (options.accountId ??
+          (await context.storage.agentAccounts.loadAgentAccounts()).active[platform] ??
+          DEFAULT_AGENT_ACCOUNT_ID)
+        : undefined;
+    // The slot may have changed or settled while resolving an implicit target.
+    if (context.runtime.accounts.activeLogin() !== activeLogin || activeLogin.state !== "pending") {
+      return startAgentAccountLogin(context, platform, options);
+    }
     if (
       activeLogin.platform === platform &&
       activeLogin.mode === mode &&
-      (options.accountId === undefined || activeLogin.accountId === options.accountId)
+      (mode === "add" || activeLogin.accountId === targetId)
     ) {
       return loginProgress(context);
     }
@@ -849,7 +862,7 @@ export async function startAgentAccountLogin(
     operationId: randomUUID(),
     platform,
     mode,
-    accountId: mode === "add" ? randomUUID() : DEFAULT_AGENT_ACCOUNT_ID,
+    accountId: mode === "add" ? randomUUID() : (options.accountId ?? DEFAULT_AGENT_ACCOUNT_ID),
     state: "pending",
   };
   context.runtime.accounts.claimLogin(entry);

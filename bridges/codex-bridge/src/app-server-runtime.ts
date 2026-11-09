@@ -161,6 +161,12 @@ export class AppServerRuntime {
     return this.lifecycle.start(...args);
   }
 
+  whenSessionsRestored(
+    ...args: Parameters<CodexRuntimeLifecycle["whenSessionsRestored"]>
+  ): ReturnType<CodexRuntimeLifecycle["whenSessionsRestored"]> {
+    return this.lifecycle.whenSessionsRestored(...args);
+  }
+
   stop(
     ...args: Parameters<CodexRuntimeLifecycle["stop"]>
   ): ReturnType<CodexRuntimeLifecycle["stop"]> {

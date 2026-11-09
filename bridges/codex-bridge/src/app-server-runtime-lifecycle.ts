@@ -116,6 +116,7 @@ export class CodexRuntimeLifecycle {
    */
   async start(): Promise<void> {
     if (this.ctx.started) return;
+    if (this.ctx.sessionRestore === "not-started") this.ctx.sessionRestore = "restoring";
     if (this.ctx.startPromise) return this.ctx.startPromise;
     const startPromise = this.startOnce();
     this.ctx.startPromise = startPromise;
@@ -167,6 +168,10 @@ export class CodexRuntimeLifecycle {
     for (const record of this.ctx.journal.unresolved()) {
       if (record.threadId) this.ctx.threadsAwaitingDispatchRecovery.add(record.threadId);
     }
+    // Session routes can now tell a missing session from one not yet read.
+    // Engine start can take far longer, and nothing it does changes the registry.
+    this.ctx.sessionRestore = "restored";
+    this.ctx.sessionsRestored.resolve();
 
     try {
       await this.ctx.options.engine.start();
@@ -185,6 +190,25 @@ export class CodexRuntimeLifecycle {
     if (interval > 0) {
       this.ctx.sweepTimer = setInterval(() => void this.sweepIdle(), interval);
       this.ctx.sweepTimer.unref?.();
+    }
+  }
+
+  /**
+   * True once a session route may answer from the registry: it has been
+   * restored, or this process never restores one. False when `timeoutMs`
+   * passes first, which the caller reports as unavailable, never as missing.
+   */
+  async whenSessionsRestored(timeoutMs: number): Promise<boolean> {
+    if (this.ctx.sessionRestore !== "restoring") return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([this.ctx.sessionsRestored.promise.then(() => true), timedOut]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

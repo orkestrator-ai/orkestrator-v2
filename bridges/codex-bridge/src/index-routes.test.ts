@@ -960,6 +960,31 @@ describe("session detail route outcomes", () => {
     expect(await response.json()).toEqual({ activity: "missing" });
   });
 
+  test("never answers a session missing while the persisted registry is still restoring", async () => {
+    // A session not restored yet may still be on disk, and the backend deletes
+    // a session's mapping on `missing` and on a status 404.
+    await withRuntimeMethod(
+      "whenSessionsRestored",
+      async () => false,
+      async () => {
+        const activity = await app.request("/session/session-on-disk/activity");
+        expect(activity.status).toBe(503);
+        expect(await activity.json()).toEqual({
+          error: "The Codex bridge is still restoring its sessions",
+        });
+        expect((await app.request("/session/session-on-disk/status")).status).toBe(503);
+        const batch = await app.request("/sessions/activity", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ version: 1, sessionIds: ["session-on-disk"] }),
+        });
+        expect(batch.status).toBe(503);
+        // Health is how the backend learns the bridge is up; it never waits.
+        expect((await app.request("/global/health")).status).toBe(200);
+      },
+    );
+  });
+
   test("serves the activity state for a known session", async () => {
     await withRuntimeMethod(
       "getActivitySnapshot",

@@ -69,6 +69,18 @@ export class CodexRuntimeContext {
   started = false;
   /** Shared by concurrent callers; cleared after failure so startup can retry. */
   startPromise: Promise<void> | null = null;
+  /**
+   * Whether the persisted session registry has been restored.
+   *
+   * The HTTP server listens before `start()` reads the registry from disk, and
+   * a session not restored yet is not a session this bridge lacks. Answering
+   * one `missing` (or 404) in that window had the backend delete a live
+   * session's mapping and dispatch history right after a bridge replacement.
+   * `not-started` is a process that never calls `start()` (tests without an
+   * engine); `start()` moves it to `restoring` synchronously.
+   */
+  sessionRestore: "not-started" | "restoring" | "restored" = "not-started";
+  readonly sessionsRestored = Promise.withResolvers<void>();
   stopping = false;
   sweepTimer: ReturnType<typeof setInterval> | null = null;
   detachedThreads = 0;

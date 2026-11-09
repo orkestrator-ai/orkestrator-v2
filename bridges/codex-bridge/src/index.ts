@@ -21,7 +21,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import { normalizePendingSignIn } from "@orkestrator/protocol/native-agent";
@@ -1066,6 +1066,24 @@ app.use("*", async (c, next) => {
   }
   await next();
 });
+
+/**
+ * Session routes answer only once the persisted registry is restored. Until
+ * then an unknown session may be one still on disk, and the backend acts on
+ * `missing` and on a 404 by deleting the session's mapping and dispatch history
+ * (seen right after an account switch replaced the bridge under load). The
+ * restore is a disk read; past the bound the answer is 503, which the backend
+ * treats as unavailable and retries.
+ */
+const SESSION_RESTORE_WAIT_MS = 10_000;
+const awaitRestoredSessions = async (c: Context, next: Next) => {
+  if (!(await appServerRuntime.whenSessionsRestored(SESSION_RESTORE_WAIT_MS))) {
+    return c.json({ error: "The Codex bridge is still restoring its sessions" }, 503);
+  }
+  await next();
+};
+app.use("/session/*", awaitRestoredSessions);
+app.use("/sessions/*", awaitRestoredSessions);
 
 // Transcript bodies dominate bridge bandwidth. Keep SSE uncompressed here —
 // its own flush-sensitive writer has different backpressure semantics.
@@ -2193,5 +2211,7 @@ if (parentPid !== null) {
   });
 }
 
-startBridgeServer();
+// The engine first: `start()` marks the session registry as restoring before
+// the server can hand any session route a request (see awaitRestoredSessions).
 void startSelectedEngine();
+startBridgeServer();

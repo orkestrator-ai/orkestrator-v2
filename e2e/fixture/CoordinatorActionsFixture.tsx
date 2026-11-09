@@ -103,15 +103,28 @@ export function CoordinatorActionsTranscriptFixture() {
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const [anchor, setAnchor] = useState("");
   const [done, setDone] = useState(false);
+  const [rowCount, setRowCount] = useState(50);
   const messages = useMemo<NativeMessage[]>(
     () =>
-      Array.from({ length: 50 }, (_, index) => ({
-        id: `row-${index}`,
-        role: "assistant",
+      Array.from({ length: rowCount }, (_, index) => ({
+        id: index === 1 ? "peer-mail-fixture" : `row-${index}`,
+        role: index === 2 ? "user" : "assistant",
+        ...(index === 1
+          ? {
+              peerMail: {
+                messageId: "mail",
+                warning: "",
+                kind: "notice" as const,
+                sender: "System",
+                subject: "Workflow ready",
+                body: "The workflow is ready for review.",
+              },
+            }
+          : {}),
         createdAt: "2026-11-09",
         content: `Conversation row ${index}`,
         parts:
-          index === 5 || index === 40
+          index === 5 || index === 40 || index >= 50
             ? [
                 {
                   type: "tool-invocation",
@@ -123,9 +136,9 @@ export function CoordinatorActionsTranscriptFixture() {
               ]
             : [{ type: "text", content: `Conversation row ${index}` }],
       })),
-    [],
+    [rowCount],
   );
-  const highlightedMessageId = useConversationScrollTarget({
+  const conversationHighlight = useConversationScrollTarget({
     environmentId: "actions-fixture",
     tabId: "coordinator",
     isActive: true,
@@ -152,6 +165,25 @@ export function CoordinatorActionsTranscriptFixture() {
         <button onClick={() => navigation.scrollToIndex(0)}>Read start</button>
         <button onClick={() => navigation.scrollToIndex(49)}>Read end</button>
         <button onClick={() => setDone(true)}>Answer question</button>
+        <button onClick={() => setRowCount((count) => count + 1)}>Append question</button>
+        {[
+          { id: "peer-mail-fixture", label: "mail" },
+          { id: "row-2", label: "user" },
+        ].map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() =>
+              useConversationScrollTargetStore
+                .getState()
+                .request(
+                  { nodeId, environmentId: "actions-fixture", tabId: "coordinator" },
+                  { messageId: id },
+                )
+            }
+          >
+            Jump {label}
+          </button>
+        ))}
         <output data-testid="anchor">{anchor}</output>
         <NativeChatShell
           agentLabel="Codex"
@@ -170,7 +202,7 @@ export function CoordinatorActionsTranscriptFixture() {
           scrollToBottom={navigation.scrollToBottom}
           scrollProps={navigation.scrollProps}
           virtuosoRef={navigation.virtuosoRef}
-          highlightedMessageId={highlightedMessageId}
+          conversationHighlight={conversationHighlight}
           coordinatorInteractions={[interaction]}
           coordinatorNavigate={(id) => {
             setAnchor(id);

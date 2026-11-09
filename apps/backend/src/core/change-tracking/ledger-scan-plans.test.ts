@@ -24,7 +24,7 @@ import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
 import { createHarness, spoolSource, type Harness } from "./service-test-support.js";
 
 const DAY = 86_400_000;
-const PAST_WINDOW = 91 * DAY;
+const PAST_WINDOW = 31 * DAY;
 const CONVERSATION = "conversation";
 
 /** Tables that grow with every turn: a plan may seek them, never walk them. */
@@ -346,7 +346,7 @@ describe("provider turn diffs past the window", () => {
     await recordTurn(h, "old");
     expect(providerTurns(h)).toBe(1);
     // Inside the window nothing goes, and the walk stops at the first row.
-    await h.service.retention.run(Date.now() + 80 * DAY);
+    await h.service.retention.run(Date.now() + 29 * DAY);
     expect(providerTurns(h)).toBe(1);
     await h.service.retention.run(Date.now() + PAST_WINDOW);
     expect(providerTurns(h)).toBe(0);

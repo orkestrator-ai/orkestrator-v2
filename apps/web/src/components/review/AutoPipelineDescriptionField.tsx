@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -14,15 +14,18 @@ export function AutoPipelineDescriptionField({
   value,
   disabled = false,
   onChange,
+  inputRef,
 }: {
   value: string;
   disabled?: boolean;
   onChange: (value: string) => void;
+  inputRef?: Ref<HTMLTextAreaElement>;
 }) {
   const [editing, setEditing] = useState(false);
   if (editing && !disabled)
     return (
       <Textarea
+        ref={inputRef}
         aria-label="Description"
         autoFocus
         value={value}
@@ -30,10 +33,10 @@ export function AutoPipelineDescriptionField({
         onBlur={() => setEditing(false)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
-            // Leave the editor, not the dialog.
+            // Dialog dismissal is intercepted by the owning DialogContent's capture hook.
             event.preventDefault();
             event.stopPropagation();
-            setEditing(false);
+            event.currentTarget.blur();
           }
         }}
         className={cn(PANE, "resize-none overflow-y-auto font-mono text-xs leading-relaxed")}

@@ -201,6 +201,45 @@ test("running source is disabled and cannot draft", async () => {
   });
 });
 
+test("sources exclude foreign environment keys and sessions without an open pane tab", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    const original = (await storage.listNativeAgentSessions())[0]!;
+    const sessions = { original };
+    for (const [key, environmentId, logicalSessionKey] of [
+      ["foreign-key", "env-1", "env-env-2:original-tab"],
+      ["closed-tab", "env-1", "env-env-1:closed-tab"],
+      ["foreign-environment", "env-2", "env-env-1:original-tab"],
+      ["bare-tab", "env-1", "original-tab"],
+    ] as const) {
+      Object.assign(sessions, {
+        [key]: {
+          ...original,
+          key,
+          environmentId,
+          logicalSessionKey,
+          providerSessionId: key,
+        },
+      });
+    }
+    seedStore(storage.getDataDir(), "native-agent-sessions.json", sessions);
+    expect(await storage.listNativeAgentSessions()).toHaveLength(5);
+    const status = spyOn(provider, "status");
+    try {
+      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+        gitPorts(async () => provider),
+      );
+      expect(await auto.sources("env-1")).toEqual({
+        available: true,
+        sources: [{ tabId: "original-tab", label: "codex" }],
+      });
+      expect(status.mock.calls).toEqual([["original-session"]]);
+    } finally {
+      status.mockRestore();
+    }
+  });
+});
+
 test("malformed and failed drafting leave the prompt environment without a ticket or pipeline", async () => {
   await withService(async (buildPipelines, storage, provider) => {
     seed(storage);

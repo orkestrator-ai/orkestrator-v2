@@ -35,6 +35,7 @@ export function AutoPipelineLaunch({
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const draftingTab = useRef<string | null>(null);
+  const descriptionEditor = useRef<HTMLTextAreaElement>(null);
   useEffect(
     () => () => {
       if (draftingTab.current)
@@ -175,7 +176,16 @@ export function AutoPipelineLaunch({
           if (!value) closeDraft();
         }}
       >
-        <DialogContent className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]">
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]"
+          onEscapeKeyDown={(event) => {
+            const editor = descriptionEditor.current;
+            if (editor && editor.ownerDocument.activeElement === editor) {
+              event.preventDefault();
+              editor.blur();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Review Auto-pipeline draft</DialogTitle>
             <DialogDescription>
@@ -209,6 +219,7 @@ export function AutoPipelineLaunch({
                 </TabsList>
                 <TabsContent value="description" className={`${TAB_PANEL} space-y-1`}>
                   <AutoPipelineDescriptionField
+                    inputRef={descriptionEditor}
                     value={draft.description}
                     disabled={busy}
                     onChange={(description) => setDraft({ ...draft, description })}
@@ -220,20 +231,34 @@ export function AutoPipelineLaunch({
                 <TabsContent value="criteria" className={TAB_PANEL}>
                   {draft.acceptanceCriteria.map((criterion, index) => (
                     <div key={index} className="my-2 flex flex-wrap items-start gap-2">
-                      <textarea
-                        aria-label={`Criterion ${index + 1}`}
-                        rows={1}
-                        className="field-sizing-content min-h-9 min-w-[min(100%,18rem)] flex-1 resize-none rounded border bg-background p-2 text-sm"
-                        value={criterion}
-                        onChange={(event) =>
-                          setDraft({
-                            ...draft,
-                            acceptanceCriteria: draft.acceptanceCriteria.map((value, i) =>
-                              i === index ? event.target.value : value,
-                            ),
-                          })
-                        }
-                      />
+                      <div className="min-w-[min(100%,18rem)] flex-1">
+                        <textarea
+                          aria-label={`Criterion ${index + 1}`}
+                          rows={1}
+                          aria-invalid={!criterion.trim()}
+                          aria-describedby={
+                            !criterion.trim() ? `criterion-${index}-error` : undefined
+                          }
+                          className="field-sizing-content min-h-9 w-full resize-none rounded border bg-background p-2 text-sm"
+                          value={criterion}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              acceptanceCriteria: draft.acceptanceCriteria.map((value, i) =>
+                                i === index ? event.target.value.replace(/[\r\n]+/g, " ") : value,
+                              ),
+                            })
+                          }
+                        />
+                        {!criterion.trim() && (
+                          <p
+                            id={`criterion-${index}-error`}
+                            className="mt-1 text-xs text-destructive"
+                          >
+                            Enter an acceptance criterion.
+                          </p>
+                        )}
+                      </div>
                       <Button
                         type="button"
                         variant="outline"

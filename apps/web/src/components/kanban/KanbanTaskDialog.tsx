@@ -214,7 +214,12 @@ export function KanbanTaskDialog({
   );
   // Which commit each Verify check judged, compared with the build
   // environment's HEAD now, so a pass on older code says the branch moved.
-  const criteriaHead = useCriteriaEnvironmentHead(task?.environmentId, task?.sections, open);
+  const criteriaHead = useCriteriaEnvironmentHead(
+    task?.environmentId,
+    task?.sections,
+    open,
+    ticketPipeline ? `${ticketPipeline.phase}:${ticketPipeline.backendRevision}` : undefined,
+  );
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);

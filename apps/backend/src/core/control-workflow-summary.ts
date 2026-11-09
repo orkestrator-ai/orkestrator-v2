@@ -26,14 +26,23 @@ function buildPipelineWorkers(workflow: Record<string, unknown>): Record<string,
   }
 }
 
-function buildPipelineCriteria(workflow: Record<string, unknown>): Record<string, unknown> {
+function buildPipelineCriteria(
+  workflow: Record<string, unknown>,
+  detail: boolean,
+): Record<string, unknown> {
   if (!Array.isArray(workflow.sessions)) return {};
   const criteria = buildPipelineCriteriaReport(workflow);
-  return criteria ? { criteria } : {};
+  if (!criteria) return {};
+  if (detail) return { criteria };
+  const { criteria: _entries, criteriaTruncated: _truncated, ...tally } = criteria;
+  return { criteria: tally };
 }
 
 /** Bounded control response; never include provider configuration or controller fences. */
-export function workflowSummary(workflow: Record<string, unknown>): Record<string, unknown> {
+export function workflowSummary(
+  workflow: Record<string, unknown>,
+  options: { criteriaDetail?: boolean } = {},
+): Record<string, unknown> {
   return {
     id: workflow.id,
     projectId: workflow.projectId,
@@ -48,13 +57,12 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
     // Build pipelines: one mailbox per worker; send_message with toTabId set
     // to `address` reaches that worker only.
     ...(Array.isArray(workflow.sessions) ? { workers: buildPipelineWorkers(workflow) } : {}),
-    // Build pipelines: the newest verdict, and each criterion's result with
-    // its evidence and the commit Verify judged, so a completion handoff can
-    // say what was proved on which code without reading the ticket.
+    // Build pipelines keep the verdict, tally and judged commit in general
+    // summaries. Only the explicit detail read includes criterion evidence.
     ...(workflow.verificationResult === "pass" || workflow.verificationResult === "fail"
       ? { verificationResult: workflow.verificationResult }
       : {}),
-    ...buildPipelineCriteria(workflow),
+    ...buildPipelineCriteria(workflow, options.criteriaDetail === true),
     ...("autoFix" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),

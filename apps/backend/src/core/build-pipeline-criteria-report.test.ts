@@ -262,6 +262,7 @@ describe("get_build_pipeline", () => {
         ],
         { environmentId: "env-1" },
       ),
+      { criteriaDetail: true },
     );
     expect(summary.verificationResult).toBe("pass");
     expect(summary.criteria).toMatchObject({

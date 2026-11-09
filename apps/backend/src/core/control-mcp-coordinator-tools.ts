@@ -500,7 +500,9 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ pipelineId, nodeId }) => {
       const target = await onNode(nodeId);
-      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target));
+      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target), {
+        criteriaDetail: true,
+      });
       // Re-reading an unchanged workflow is polling it; its status wake is the answer.
       const guidance = pollGuard?.(
         pollKey("get_build_pipeline", pipelineId, nodeId),

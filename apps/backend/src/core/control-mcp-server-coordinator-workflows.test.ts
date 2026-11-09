@@ -799,6 +799,119 @@ describe("Orkestrator control MCP server", () => {
     ).not.toBe(true);
   });
 
+  test("workflow lists and build controls keep a tally; only get_build_pipeline includes evidence", async () => {
+    const descriptor = coordinatorCredential(coordinatorRoleCapabilities("main"));
+    const commit = "a".repeat(40);
+    const record = {
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "complete",
+      verificationResult: "pass",
+      taskSnapshot: {
+        title: "Ticket",
+        description: "",
+        acceptanceCriteria: "- Private criterion text",
+        comments: [],
+        images: [],
+        acceptanceCriteriaItems: [{ id: "ac-1", text: "Private criterion text" }],
+      },
+      sessions: [
+        {
+          id: "verify-1",
+          phase: "verify",
+          status: "completed",
+          startedAt: new Date(0).toISOString(),
+          validationHeadAtStart: commit,
+          validationWorktreeStatusAtStart: "clean",
+          validationUncommittedPathsAtStart: [],
+          acceptanceCriteriaResults: [
+            { id: "ac-1", status: "passed", evidence: "Detailed test evidence" },
+          ],
+        },
+      ],
+    };
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+      workflows: [
+        {
+          id: "association-1",
+          kind: "build-pipeline",
+          resourceId: "pipeline-1",
+          requestId: "request-1",
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    }));
+    for (const command of [
+      "get_build_pipeline",
+      "start_coordinator_build_pipeline",
+      "cancel_build_pipeline",
+      "pause_build_pipeline",
+      "resume_build_pipeline",
+    ]) {
+      overrides.set(command, () => record);
+    }
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const { body } = await rpc(descriptor.url, descriptor.token, "tools/call", {
+        name,
+        arguments: args,
+      });
+      expect(body.result?.isError, `${name}: ${JSON.stringify(body)}`).not.toBe(true);
+      return body.result?.structuredContent as Record<string, any>;
+    };
+    const compact = (value: Record<string, any>) => {
+      expect(value.verificationResult).toBe("pass");
+      expect(value.criteria).toMatchObject({
+        total: 1,
+        passed: 1,
+        failed: 0,
+        notChecked: 0,
+        commit,
+      });
+      expect(value.criteria.criteria).toBeUndefined();
+      expect(JSON.stringify(value)).not.toContain("Detailed test evidence");
+      expect(JSON.stringify(value)).not.toContain("Private criterion text");
+    };
+    compact((await call("list_workflows", { openOnly: false })).workflows[0].resource);
+    compact(
+      (
+        await call("start_build_pipeline", {
+          requestId: "start-compact",
+          taskTitle: "Ticket",
+          taskSnapshot: record.taskSnapshot,
+          taskId: "task-1",
+          baseBranch: "main",
+          baseCommit: commit,
+        })
+      ).workflow,
+    );
+    compact((await call("cancel_build_pipeline", { pipelineId: "pipeline-1" })).workflow);
+    compact((await call("pause_build_pipeline", { pipelineId: "pipeline-1" })).workflow);
+    record.phase = "paused";
+    compact((await call("resume_build_pipeline", { pipelineId: "pipeline-1" })).workflow);
+    expect((await call("get_build_pipeline", { pipelineId: "pipeline-1" })).workflow).toMatchObject(
+      {
+        verificationResult: "pass",
+        criteria: {
+          commit,
+          criteria: [
+            {
+              id: "ac-1",
+              text: "Private criterion text",
+              evidence: "Detailed test evidence",
+              status: "passed",
+            },
+          ],
+        },
+      },
+    );
+  });
+
   test("list_workflows answers what the coordinator is waiting on", async () => {
     const now = new Date(0).toISOString();
     const worker = (id: string, delegation?: Record<string, unknown>) => ({

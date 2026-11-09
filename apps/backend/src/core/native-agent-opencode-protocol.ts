@@ -126,11 +126,12 @@ export async function persistedOpenCodeProtocol(
 
 /** The routing dependencies of one environment's OpenCode provider, or undefined without a 2.x host. */
 export function openCodeRoutingDependencies(
-  options: Pick<NativeAgentServiceOptions, "openCode2HostServer">,
+  options: Pick<NativeAgentServiceOptions, "openCode2HostServer" | "openCode2InContainer">,
   storage: SessionReader & {
     loadConfig?: () => Promise<{
       global: { openCodeProtocol?: unknown; openCodeModelProviders?: unknown };
     }>;
+    getEnvironment?: (environmentId: string) => Promise<OpenCode2SessionEnvironment | null>;
   },
   environmentId: string,
 ): OpenCodeRoutingDependencies | undefined {
@@ -143,8 +144,18 @@ export function openCodeRoutingDependencies(
     persistedProtocol: (sessionId) => persistedOpenCodeProtocol(storage, environmentId, sessionId),
     allowedModelProviders: async () =>
       normalizeOpenCodeModelProviders((await global()).openCodeModelProviders),
-    newSessionsUseV2: async () =>
-      resolveOpenCodeProtocol((await global()).openCodeProtocol) === "v2",
+    // Whether a new interactive tab here would take 2.x: the setting, and an
+    // environment that can serve it (local, or a container whose image runs 2.x).
+    newSessionsUseV2: async () => {
+      if (resolveOpenCodeProtocol((await global()).openCodeProtocol) !== "v2") return false;
+      if (!storage.getEnvironment) return true;
+      const environment = await storage.getEnvironment(environmentId).catch(() => null);
+      if (!environment || environment.environmentType === "local") return true;
+      if (environment.environmentType !== "containerized" || !options.openCode2InContainer) {
+        return false;
+      }
+      return options.openCode2InContainer(environment).catch(() => false);
+    },
   };
 }
 

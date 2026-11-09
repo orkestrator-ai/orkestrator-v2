@@ -1608,8 +1608,14 @@ export class NativeAgentService {
       this.options,
       input,
     );
+    // A new OpenCode 2.x session resolves even an explicit model: before a
+    // session exists the picker lists 1.x's catalogue, whose default can be a
+    // model 2.x has no sign-in for. One 2.x serves resolves to itself.
     const resolution =
-      !input.model || input.model === "default" || input.modelSource === "default"
+      !input.model ||
+      input.model === "default" ||
+      input.modelSource === "default" ||
+      openCodeProtocol === "v2"
         ? await this.resolveDefaultModel(provider, input.model, openCodeProtocol)
         : undefined;
     const modelSubstitution = resolution?.substitution;
@@ -2095,7 +2101,14 @@ export class NativeAgentService {
     let manualClaimSession: PersistedNativeAgentSession | null = null;
     try {
       if (this.turnRecovery.appliesTo(input)) {
-        manualClaimSession = await this.ensureSession(input);
+        const ensured = await this.ensureSession(input);
+        manualClaimSession = ensured;
+        // Creating the session here replaced the model this prompt names (a new
+        // OpenCode 2.x session); the later ensure finds it existing and cannot say so.
+        const substitution = ensured.modelSubstitution;
+        if (substitution && substitution.requestedModelId === input.model) {
+          input = { ...input, model: substitution.modelId };
+        }
         await this.turnRecovery.claimManualPrompt({
           environmentId: input.environmentId,
           agent: input.agent,
@@ -3701,7 +3714,7 @@ export class NativeAgentService {
       if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
-      const session: PersistedNativeAgentSession = await this.ensureSession(input);
+      const session: EnsuredNativeAgentSession = await this.ensureSession(input);
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
@@ -3710,6 +3723,10 @@ export class NativeAgentService {
           model: session.controls?.modelId ?? input.model,
           reasoningEffort: input.reasoningEffort ?? session.controls?.reasoningId,
         };
+      } else if (session.modelSubstitution?.requestedModelId === input.model) {
+        // The session this dispatch created replaced the model it named (a
+        // new OpenCode 2.x session); send the model the session runs on.
+        input = { ...input, model: session.modelSubstitution.modelId };
       }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {

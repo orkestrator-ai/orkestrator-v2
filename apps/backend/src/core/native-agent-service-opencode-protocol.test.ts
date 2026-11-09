@@ -225,3 +225,60 @@ describe("projection of an OpenCode 2.x session", () => {
     });
   }
 });
+
+describe("the first prompt of a new OpenCode 2.x session", () => {
+  test("names a model 2.x cannot serve: the session starts on 2.x's default and says so", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-opencode2-first-model-"));
+    const storage = await createStorage(root);
+    await addEnvironment(storage);
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, openCodeProtocol: "v2" });
+    const sent: Array<string | undefined> = [];
+    const { provider } = createProviderStub("opencode", {
+      createSession: async () => "ses_v2",
+      send: async (_sessionId, _prompt, options) => {
+        sent.push(options.model);
+      },
+    });
+    // 2.x serves only OpenCode's own models on this host (no OpenCode Go sign-in).
+    const resolveCalls: Array<{ modelId?: string; protocol?: string }> = [];
+    provider.resolveDefaultModel = async (modelId, options) => {
+      resolveCalls.push({ modelId, protocol: options?.openCodeProtocol });
+      return modelId === "opencode-go/beam-free"
+        ? {
+            modelId: "opencode/beam-free",
+            substitution: {
+              requestedModelId: "opencode-go/beam-free",
+              modelId: "opencode/beam-free",
+              message:
+                "beam-free isn't available in OpenCode 2 with your sign-ins; using Beam Free.",
+            },
+          }
+        : { modelId };
+    };
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+      openCode2HostServer: async () => undefined,
+    });
+    try {
+      // The picker sends its (1.x) default as an explicit model, with no source.
+      await service.dispatchIntent({
+        ...identity,
+        prompt: "Reply with exactly: ready",
+        requestId: "first",
+        model: "opencode-go/beam-free",
+      });
+      expect(resolveCalls[0]).toEqual({ modelId: "opencode-go/beam-free", protocol: "v2" });
+      expect(sent).toEqual(["opencode/beam-free"]);
+      const session = await storage.getNativeAgentSession(
+        (await service.ensureSession(identity)).key,
+      );
+      expect(session?.openCodeProtocol).toBe("v2");
+      expect(session?.controls?.modelId).toBe("opencode/beam-free");
+    } finally {
+      await service.shutdown();
+      storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

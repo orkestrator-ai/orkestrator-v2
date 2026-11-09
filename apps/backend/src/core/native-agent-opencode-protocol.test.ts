@@ -187,6 +187,37 @@ describe("persistedOpenCodeProtocol", () => {
   });
 });
 
+describe("whether new tabs here take 2.x (lists and pickers)", () => {
+  const storageWith = (setting: string, environment: unknown) => ({
+    loadConfig: async () => ({ global: { openCodeProtocol: setting } }),
+    getEnvironment: async () => environment as never,
+  });
+  const host = { openCode2HostServer: async () => undefined };
+
+  test("the setting and an environment that can serve 2.x", async () => {
+    const local = { environmentType: "local" };
+    const container = { environmentType: "containerized", containerId: "c-1" };
+    const use = (
+      setting: string,
+      environment: unknown,
+      inContainer?: boolean,
+    ): Promise<boolean | undefined> =>
+      openCodeRoutingDependencies(
+        {
+          ...host,
+          ...(inContainer === undefined ? {} : { openCode2InContainer: async () => inContainer }),
+        },
+        storageWith(setting, environment),
+        "env",
+      )!.newSessionsUseV2!();
+    expect(await use("v2", local)).toBe(true);
+    expect(await use("legacy", local)).toBe(false);
+    expect(await use("v2", container, true)).toBe(true);
+    expect(await use("v2", container, false)).toBe(false);
+    expect(await use("v2", container)).toBe(false);
+  });
+});
+
 describe("workflow sessions", () => {
   test("follow the same switch, except where 2.x cannot serve them yet", () => {
     const policy = { id: "host-default", approvals: "auto-approve" } as never;

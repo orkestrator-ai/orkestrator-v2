@@ -157,15 +157,16 @@ rm -rf "$TMPDIR/ork-ledger-scale-run"
 | --- | --- |
 | `ingest` | `--agents` agent loops: a turn frame, four edits and turn-diff revisions pulled through `pullEvidence`, then a 300-file environment scan, `--pace-ms` apart |
 | `queries` | Views, tool presentations, history, and measurement pages, counts and latest reads |
-| `retention` | Two hourly passes (90-day window) while three synthetic environments are purged |
+| `retention` | Two hourly passes (30-day window) while three synthetic environments are purged |
 | `manifest` | Serializing, storing and cold-reading a `--manifest-entries` capture manifest; parsing measurement JSON |
 | `mixed` | Ingestion, queries and back-to-back passes together |
 | `window` | Passes with a `--window-days` window (default 7), retiring the half of the history past it |
 
 `--disk-writers N` adds N child processes that write and fsync 4 MiB blocks
 for the whole run (at most 256 MiB each, in the data directory), the disk
-contention of builds and other suites on the same host; with it, the
-commits' fsyncs dominate. Other benchmarks on the host add to that load, so
+contention of builds and other suites on the same host. Ledger commits use
+NORMAL synchronization, so checkpoints still sync but individual commits do
+not. Other benchmarks on the host add to that load, so
 note what else was running.
 
 It also prints every statement that scans a large table or took 10 ms or

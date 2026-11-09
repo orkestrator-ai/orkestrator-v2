@@ -43,6 +43,7 @@ import {
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { TicketKindBadge, TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
 import { ticketContentOf } from "@/components/tickets/ticket-content";
+import { useCriteriaEnvironmentHead } from "@/components/tickets/useCriteriaEnvironmentHead";
 import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipeline";
 import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { toast } from "sonner";
@@ -210,6 +211,14 @@ export function KanbanTaskDialog({
       ? ((task.buildPipelineId ? s.pipelines.get(task.buildPipelineId) : undefined) ??
         s.getPipelineByTaskId(task.id))
       : undefined,
+  );
+  // Which commit each Verify check judged, compared with the build
+  // environment's HEAD now, so a pass on older code says the branch moved.
+  const criteriaHead = useCriteriaEnvironmentHead(
+    task?.environmentId,
+    task?.sections,
+    open,
+    ticketPipeline ? `${ticketPipeline.phase}:${ticketPipeline.backendRevision}` : undefined,
   );
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
@@ -1149,6 +1158,7 @@ export function KanbanTaskDialog({
               ) : (
                 <TicketSectionsGrid
                   sections={content?.sections ?? {}}
+                  environmentHead={criteriaHead}
                   deliveryControl={{
                     onChange: handleDeliveryPolicyChange,
                     disabled: isSavingDelivery,

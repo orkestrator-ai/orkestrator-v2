@@ -110,14 +110,18 @@ const MAX_CRITERIA_OUTPUT_BYTES = 32 * 1024;
  * full content, so each criterion is a short handle (id, result, the start of
  * its text) and the list is bounded.
  */
-export function ticketStructuredOutput(task: {
-  kind?: unknown;
-  sections?: TicketSections;
-}): Record<string, unknown> {
+export function ticketStructuredOutput(
+  task: {
+    kind?: unknown;
+    sections?: TicketSections;
+  },
+  /** The build environment's HEAD now, so a Verify pass on older code says so. */
+  environmentHead?: string,
+): Record<string, unknown> {
   const criteria: Array<Record<string, unknown>> = [];
   let bytes = 2;
   let truncated = false;
-  for (const criterion of ticketCriteriaSummary(task.sections)) {
+  for (const criterion of ticketCriteriaSummary(task.sections, environmentHead)) {
     const entry = {
       ...criterion,
       text: criterion.text.slice(0, MAX_CRITERION_OUTPUT_CHARS),

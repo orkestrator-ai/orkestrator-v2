@@ -1827,7 +1827,8 @@ by the pure `buildCoordinatorContext`
 (`coordinator-context-reads.ts` and the existing helpers) and passes the answers
 in, so a test can check the block's content and size without a service. A test
 holds a main coordinator's block, before the research, node and checkout lines,
-under 9,000 characters: it is paid on every turn, so raising that limit is a
+under 9,300 characters (including a 300-character increase for pattern-spotting
+AGENTS.md guidance): it is paid on every turn, so raising that limit is a
 decision about cost.
 
 The block names the project (`Project: <name> at <checkout> (id <id>)`), falling
@@ -2639,7 +2640,7 @@ stable key; a key is sent once, recorded on the association
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
 | Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
-| Build pipeline | `completed` (task, last verification), `failed` (error) | always |
+| Build pipeline | `completed` (task, last verification, acceptance criteria, delivery), `failed` (error, acceptance criteria) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
@@ -2680,6 +2681,29 @@ never applied (its failure was already reported) ends the association without
 a wake. Details are content-free: the plan's title, status and story count and
 the failure message, never the reply or the user's message;
 `get_feature_plan` reads those. Feature plans are this node's only.
+
+**Criteria and the handoff.** A completed or failed build's notice
+(`coordinator-build-pipeline-status.ts`) says how its newest live Verify judged
+the acceptance criteria and on which commit: a tally ("Acceptance criteria:
+4/5 passed, 1 failed; Verify judged commit abc1234."), then each failed or
+not-checked criterion's id and text, within the eight-line detail cap and
+before the delivery line, with a closing line naming how many more did not
+pass. Passed criteria are only counted. The facts come from the pipeline's own
+Verify session (`build-pipeline-criteria-report.ts`), not the ticket, so a
+Linear or GitHub build reports them too; a criterion Verify reported nothing
+for counts as not checked, and a session without a recorded baseline says
+"commit not recorded". `get_build_pipeline` returns the same report in full as
+`criteria` (every criterion with its evidence, failed first, bounded to 48 KiB)
+beside `verificationResult`. A terminal build or Multi Review notice ends with
+`COORDINATOR_HANDOFF_RULE` (`packages/protocol/src/coordinator.ts`) in place of
+"acknowledge it and finish the turn": close the work for the user in one message
+with Delivered, Criteria (on which commit), Open and Needs you, never letting
+"ready for review", "all criteria verified" and "merged" stand for one another.
+It rides on the wake rather than in the per-turn context block because it
+applies only then, and the block's budget is held by
+`coordinator-context.test.ts`. Criterion text and evidence reach the
+coordinator's mail and tool results, which already carry the ticket, and never
+logs or metrics.
 
 **Kinds a reader does not know.** A data directory can be shared by backends
 of two versions, and the coordinator store reader keeps an association of any
@@ -2984,7 +3008,9 @@ when the user has asked for a specific model, agent, effort or reviewer set.
 A build's delivery is not among them: `start_build_pipeline` has no override, and
 the build follows the ticket's delivery policy when Verify passes
 ([tickets](tickets.md#delivery)). A build that ends without a pull request says
-so in `get_build_pipeline` (`delivery`) and its completion notice.
+so in `get_build_pipeline` (`delivery`) and its completion notice, which also
+name each criterion's result and the commit Verify judged
+([status wakes](#status-wakes)).
 
 **A build is linked to its ticket.** `start_build_pipeline`'s `taskId` must be a
 ticket in the project; the build starts with
@@ -3515,12 +3541,24 @@ every agent reads, through a pull request, without a worker environment.
 
 **When it offers.** The main coordinator's per-turn context
 (`COORDINATOR_AGENTS_MD_RULE` in
-`packages/protocol/src/agents-md-orkestrator.ts`) tells it to ask once,
-briefly, at a natural pause after such a decision is agreed, whether to save
-it; to batch several decisions into one question and one call; to skip
-one-off task details; and not to ask again about a decision the user declined
-in the same conversation. The decline mail repeats that last rule. Side agents
-are not told and cannot call the tool.
+`packages/protocol/src/agents-md-orkestrator.ts`) tells it to notice durable decisions the user settles,
+repeated steering of the same regular behaviour (corrections or instructions),
+and an explicit standing preference meant to outlast the current task. For
+example, correcting it twice to group related work, repeatedly forbidding
+environments on a given machine, or saying "from now on, answer status questions
+without a plan" qualifies. Asking to group just today's three tasks, choosing
+a machine for one run, or giving a one-off status request does not.
+
+At a natural pause, outside urgent work, it asks once, briefly, whether to save the
+guidance, naming the pattern it noticed and quoting the exact proposed entries,
+one plain line each within the tool's limits. It asks at most one such question
+per turn and batches several suggestions into one question and one call. It
+calls the tool only after the user agrees, using any wording the user changed;
+the coordinator writes nothing itself. It skips one-off task details and does
+not re-suggest entries already in the section, left unanswered or declined in the same
+conversation unless the user raises them. The decline mail repeats the rule
+against re-asking after a decline. Side agents are not told and cannot call the
+tool.
 
 **The tool.** `propose_agents_md_update` (main only: capability
 `environments`) takes a `requestId`, a `reason`, an optional `nodeId` for the

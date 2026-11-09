@@ -377,17 +377,34 @@ describe("interactive preview in Chromium", () => {
             crash = `renderer crashed at ${new Date().toISOString()}; free memory ${freemem()} of ${totalmem()} bytes; load ${loadavg().map((load) => load.toFixed(1))}`;
           });
           await page.goto(`${sinkOrigin}/start`);
-          await page.setContent(
-            `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
-          );
+          // Flake 9876: the page navigates itself away (form submit, redirect,
+          // popup) before its `load` can fire. On a loaded CI runner Chromium
+          // sat there for seconds and then crashed the renderer, long after
+          // every request had reached the sink. The control is about those
+          // requests, so wait only for the content to commit and let the sink
+          // decide; a crash fails the case only when it cost a request.
+          let contentError: unknown;
+          await page
+            .setContent(
+              `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
+              { waitUntil: "commit" },
+            )
+            .catch((error: unknown) => {
+              contentError = error;
+            });
           // A positive observation: done as soon as every class has arrived.
           const deadline = Date.now() + 10_000;
           while (!crash && !CONTROL_PATHS.every(reached) && Date.now() < deadline)
             await new Promise((resolve) => setTimeout(resolve, 50));
-          if (crash) throw new Error("The unrestricted control page crashed");
           const missing = CONTROL_PATHS.filter((path) => !reached(path));
           if (missing.length > 0)
-            throw new Error(`The unrestricted control page missed requests: ${missing.join(", ")}`);
+            throw new Error(
+              [
+                `The unrestricted control page missed requests: ${missing.join(", ")}`,
+                ...(crash ? ["The unrestricted control page crashed"] : []),
+                ...(contentError ? [String(contentError)] : []),
+              ].join("\n"),
+            );
         } catch (error) {
           const log = existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n") : [];
           throw new Error(

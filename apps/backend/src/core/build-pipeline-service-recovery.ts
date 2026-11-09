@@ -24,6 +24,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
 import { boundPipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
+import { verifySessionJudgedCode } from "@orkestrator/protocol/build-pipeline-criteria";
 import {
   effectiveDeliveryPolicy,
   type DeliveryPolicy,
@@ -270,7 +271,7 @@ export class BuildPipelineRecovery {
       criteria,
       results: criterionResults,
     });
-    await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
+    await this.recordTicketCriteriaChecks(pipeline, session, criteria, criterionResults);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (passed) {
       await this.updateKanbanLifecycle(pipeline, buildPipelineKanbanUpdate("validation-complete"));
@@ -614,16 +615,20 @@ export class BuildPipelineRecovery {
   /**
    * Writes Verify's per-criterion results onto the Kanban ticket, so the board
    * shows the ticks. Best effort: the pipeline's own record is authoritative,
-   * and a ticket that was deleted or edited since keeps what it has.
+   * and a ticket that was deleted or edited since keeps what it has. Each
+   * check names the commit the session's read-only guard held the worktree
+   * to, so a later commit cannot make it look like a verdict on newer code.
    */
   private async recordTicketCriteriaChecks(
     pipeline: BuildPipeline,
+    session: PipelineSession,
     criteria: readonly TaskSnapshotCriterion[],
     results: readonly PipelineCriterionResult[],
   ): Promise<void> {
     const source = pipeline.source;
     if (source?.type !== "kanban" || results.length === 0) return;
     const checkedAt = new Date().toISOString();
+    const judged = verifySessionJudgedCode(session);
     const text = new Map(criteria.map((criterion) => [criterion.id, criterion.text]));
     try {
       await this.ctx.invoke("record_kanban_criteria_checks", {
@@ -637,6 +642,7 @@ export class BuildPipelineRecovery {
             checkedAt,
             source: "verify",
             pipelineId: pipeline.id,
+            ...judged,
           },
         })),
       });

@@ -2,6 +2,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { normalizeTicketLabelName, ticketLabelKey } from "@orkestrator/protocol/ticket-labels";
+import { criteriaEnvironmentHead } from "./ticket-criteria-head.js";
 import { describe, refine, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   ticketKindField,
@@ -82,10 +83,13 @@ function nodeTicketTag(result: JsonRecord): JsonRecord {
   };
 }
 
-function ticketDetail(task: JsonRecord): JsonRecord {
+function ticketDetail(task: JsonRecord, environmentHead?: string): JsonRecord {
   return {
     ...ticketSummary(task),
-    ...ticketStructuredOutput(task as Parameters<typeof ticketStructuredOutput>[0]),
+    ...ticketStructuredOutput(
+      task as Parameters<typeof ticketStructuredOutput>[0],
+      environmentHead,
+    ),
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
     comments: Array.isArray(task.comments) ? task.comments.slice(-50) : [],
@@ -146,7 +150,7 @@ export function registerTicketTools(
     {
       title: "Read a Kanban ticket",
       description:
-        "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy.",
+        "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy. A criterion Verify checked says in judged which commit it was judged on and whether the branch has moved since.",
       inputSchema: toolInput(
         Schema.Struct({
           projectId: str({ trim: true, min: 1, max: 200 }),
@@ -164,7 +168,13 @@ export function registerTicketTools(
         remote ? remote.tickets : await invoke("get_kanban_tasks", { projectId }),
       ).find((candidate) => candidate.id === ticketId);
       if (!task) throw new Error(`Kanban ticket not found in project: ${ticketId}`);
-      return toolResult({ ticket: ticketDetail(task), ...(remote ? nodeTicketTag(remote) : {}) });
+      // Another machine's environment cannot be read from here; its criteria
+      // still name their commit, just without the comparison.
+      const head = remote ? undefined : await criteriaEnvironmentHead(invoke, task);
+      return toolResult({
+        ticket: ticketDetail(task, head),
+        ...(remote ? nodeTicketTag(remote) : {}),
+      });
     },
   );
 

@@ -185,6 +185,22 @@ feedback the Fix step reads, and writes the results to the Kanban ticket
 (`record_kanban_criteria_checks`, best effort, only for criteria whose id and
 text still match).
 
+Each check written to the ticket names the code it judged: `commit` is the
+HEAD the Verify session's read-only guard held the worktree to for the whole
+turn (`validationHeadAtStart`), and `uncommittedChanges: true` says the
+worktree also had uncommitted paths then (`verifySessionJudgedCode` in
+`build-pipeline-criteria.ts`). Code can change after Verify (Ship's conflict
+resolution, a later fix round, the user's own commit), so the ticket view and
+`get_ticket` compare that commit with the build environment's HEAD when they
+read the ticket and say "the branch has moved since" when it differs
+(`criterionCheckBasis` in `ticket-sections.ts`). Nothing is rewritten when
+code moves: the record of what passed stays. A deleted or unreachable
+environment shows the commit with no comparison. A Verify check with no
+commit (recorded before this field, or by a session whose baseline could not
+be read) reads as "commit not recorded", never as current; a hand tick judged
+no code and shows neither. The graph engine's `update-ticket` system action
+records checks without a commit.
+
 ## Delivery
 
 The ticket is the source of truth for what a build does once its work is

@@ -401,9 +401,13 @@ const CHANGE_LEDGER_FILE_MIGRATIONS: readonly StorageMigration[] = [
 ];
 
 /**
- * Opens (creating on first use) the ledger's own database. It has the main
- * database's settings (WAL, full sync, secure delete) and, before a later
- * schema migration, its own `change-tracking-pre-migration-v<from>` snapshot.
+ * Opens (creating on first use) the ledger's own database. WAL and secure delete
+ * match the main database, but synchronous = NORMAL avoids
+ * syncing the WAL on every commit. In WAL mode this cannot corrupt the database;
+ * a power loss or OS crash may roll back the last few committed ledger transactions.
+ * An application crash or SIGKILL loses no committed transactions. The main
+ * database stays FULL. Before a later schema migration, the ledger gets its own
+ * `change-tracking-pre-migration-v<from>` snapshot.
  */
 export function openChangeLedgerDatabase(
   dataDir: string,
@@ -413,6 +417,7 @@ export function openChangeLedgerDatabase(
     cacheGaugeRegistry: recurringDiagnosticsRegistry,
     ...options,
     file: CHANGE_LEDGER_DATABASE_FILE,
+    synchronous: "normal",
     migrations: CHANGE_LEDGER_FILE_MIGRATIONS,
     beforeMigrate: (opened, from) =>
       snapshotBeforeMigration(opened, dataDir, from, Date.now(), "change-tracking-pre-migration"),

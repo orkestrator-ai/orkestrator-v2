@@ -80,6 +80,23 @@ function count(db: Database, table: string): number {
 }
 
 describe("the change ledger's own file (report 0760)", () => {
+  test("only the ledger uses NORMAL; the main store stays FULL on every open", async () => {
+    const directory = await dataDir();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const main = openBackendDatabase(directory);
+      const ledger = openChangeLedgerDatabase(directory);
+      try {
+        expect(main.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+        expect(ledger.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
+        expect(ledger.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+        expect(ledger.db.query("PRAGMA secure_delete").get()).toEqual({ secure_delete: 1 });
+      } finally {
+        ledger.close();
+        main.close();
+      }
+    }
+  });
+
   test("migration scrubs old non-incremental pages and production wiring preserves rows before writing", async () => {
     const directory = await dataDir();
     const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));

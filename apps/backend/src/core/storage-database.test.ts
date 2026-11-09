@@ -59,6 +59,16 @@ afterEach(async () => {
 });
 
 describe("StorageDatabase", () => {
+  test("WAL synchronization defaults to FULL and NORMAL requires an explicit option", async () => {
+    for (const synchronous of [undefined, "full", "normal"] as const) {
+      const db = database(await dataDir(), { synchronous });
+      expect(db.db.query("PRAGMA synchronous").get()).toEqual({
+        synchronous: synchronous === "normal" ? 1 : 2,
+      });
+      expect(db.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    }
+  });
+
   test("a library without octet_length falls back to the cast, with the same answer", async () => {
     const db = database(await dataDir());
     const selected = rowBytesExpression(db.db);

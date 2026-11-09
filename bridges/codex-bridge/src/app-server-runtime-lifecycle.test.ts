@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   AppServerRuntime,
   DEFAULT_THREAD_IDLE_MS,
@@ -98,6 +98,48 @@ describe("session lifecycle", () => {
 
     expect(attempts).toBe(2);
     expect(h.engine.getHealth().state).toBe("ready");
+  });
+
+  test("reports the registry restored only once persisted sessions are back", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-on-disk",
+        threadId: "thread-on-disk",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+      }),
+    );
+    const h = await harness({}, { deferStart: true });
+    // A process that never starts restores nothing, so it answers from what it has.
+    expect(await h.runtime.whenSessionsRestored(0)).toBe(true);
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realLoad = BridgeSessionStore.prototype.load;
+    const load = spyOn(BridgeSessionStore.prototype, "load").mockImplementation(async function (
+      this: BridgeSessionStore,
+    ) {
+      await gate;
+      return realLoad.call(this);
+    });
+    try {
+      const started = h.runtime.start();
+      // The registry alone would call it missing; the barrier says it cannot know yet.
+      expect(h.runtime.getActivity("session-on-disk")).toBe("missing");
+      expect(await h.runtime.whenSessionsRestored(20)).toBe(false);
+      const restored = h.runtime.whenSessionsRestored(5_000);
+      release();
+      expect(await restored).toBe(true);
+      expect(h.runtime.getActivity("session-on-disk")).toBe("idle");
+      await started;
+      expect(await h.runtime.whenSessionsRestored(0)).toBe(true);
+    } finally {
+      release();
+      load.mockRestore();
+    }
   });
 
   test("restores durable bridge session ids lazily after a runtime restart", async () => {

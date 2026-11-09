@@ -15,6 +15,7 @@ import { bodyIdFor, EvidenceBodyStore } from "./evidence-body-store.js";
 import { gitScopeResourceKey } from "./git-scopes.js";
 import { operationIdFor, threadIdFor, toolResourceKeys, turnResourceKeys } from "./identities.js";
 import { ChangeTrackingService } from "./service.js";
+import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { createHarness, spoolSource, type Harness } from "./service-test-support.js";
 import { turnIdFor } from "./turn-boundaries.js";
 
@@ -697,13 +698,13 @@ describe("a restore keeps what it needs", () => {
 });
 
 describe("age-based retention", () => {
-  const PAST_WINDOW = 91 * DAY;
+  const PAST_WINDOW = 31 * DAY;
 
   test("nothing inside the window is touched", async () => {
     const h = setup();
     const { turnId } = await runTurn(h, "env-1", "r1");
     await recordEdit(h, "env-1", "c1");
-    const report = await h.service.retention.run(Date.now() + 80 * DAY);
+    const report = await h.service.retention.run(Date.now() + 29 * DAY);
     expect(report.retiredRows).toBe(0);
     expect(h.service.ledger.latestMeasurement("turn", turnId, "turn-net")).not.toBeNull();
     expect(count(h, "change_frames")).toBeGreaterThan(0);
@@ -956,6 +957,79 @@ describe("age-based retention", () => {
     // A later pass walks nothing it already retired.
     const again = await h.service.retention.run(Date.now() + PAST_WINDOW);
     expect(again.releasedForQuota).toBe(0);
+  });
+
+  test("the first pass on an existing 31–89 day backlog yields between bounded batches", async () => {
+    const h = setup();
+    const { turnId } = await runTurn(h, "env-1", "r1");
+    const seed = h.service.ledger.turn(turnId)!;
+    const now = Date.now();
+    h.service.ledger.transaction(() => {
+      for (let index = 0; index < 200; index++) {
+        const finishedAt = new Date(now - (31 + (index % 59)) * DAY).toISOString();
+        h.service.ledger.insertTurn({
+          ...seed,
+          turn_id: `aged-${index}`,
+          ordinal: index + 10,
+          started_at: finishedAt,
+          finished_at: finishedAt,
+        });
+        h.service.ledger.addReference({
+          ownerKind: "turn",
+          ownerId: `aged-${index}`,
+          snapshotId: seed.start_snapshot_id!,
+          reason: "turn-start",
+        });
+      }
+    });
+    h.service.shutdown();
+    // A fresh connection/service sees committed rows from the previous instance.
+    const database = openChangeLedgerDatabase(h.dataDir);
+    const service = new ChangeTrackingService({
+      dataDir: h.dataDir,
+      database: () => database,
+      emit: () => {},
+      environmentTarget: async () => null,
+      durable: false,
+      manualScheduling: true,
+    });
+    const remaining = () =>
+      (
+        database.db
+          .query(
+            "SELECT COUNT(*) AS n FROM change_references WHERE owner_kind = 'turn' AND owner_id LIKE 'aged-%'",
+          )
+          .get() as { n: number }
+      ).n;
+    const observed: number[] = [];
+    const timer = setInterval(() => observed.push(remaining()), 0);
+    const transaction = service.ledger.transaction.bind(service.ledger);
+    const deletedPerTransaction: number[] = [];
+    const probe = spyOn(service.ledger, "transaction").mockImplementation((fn) => {
+      const before = remaining();
+      const result = transaction(fn);
+      deletedPerTransaction.push(before - remaining());
+      return result;
+    });
+    try {
+      expect(service.policies.policy.archivedBodyRetentionDays).toBe(30);
+      const report = await service.retention.run(now);
+      expect(report.releasedForQuota).toBe(200);
+      expect(remaining()).toBe(0);
+      expect(observed.some((n) => n > 0 && n < 200)).toBe(true);
+      const productive = deletedPerTransaction.filter((n) => n > 0);
+      expect(productive.length).toBeGreaterThan(1);
+      expect(Math.max(...productive)).toBeLessThanOrEqual(16);
+      // The recent turn is still retained; boundary history stays for every turn.
+      expect(service.ledger.latestMeasurement("turn", turnId, "turn-net")).not.toBeNull();
+      expect(count(h, "change_turn_boundaries")).toBe(201);
+      expect((await service.retention.run(now)).releasedForQuota).toBe(0);
+    } finally {
+      clearInterval(timer);
+      probe.mockRestore();
+      service.shutdown();
+      database.close();
+    }
   });
 
   test("the age walk seeks its index rather than scanning every boundary", async () => {

@@ -489,7 +489,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "Get a build pipeline",
       description:
-        "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address).",
+        "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address). verificationResult is the newest Verify verdict; criteria gives each acceptance criterion's result and evidence (failed first) and the commit Verify judged them on.",
       inputSchema: toolInput(
         Schema.Struct({
           pipelineId: str({ trim: true, min: 1, max: 200 }),
@@ -500,7 +500,9 @@ export function registerCoordinatorWorkflowTools(
     },
     async ({ pipelineId, nodeId }) => {
       const target = await onNode(nodeId);
-      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target));
+      const workflow = workflowSummary(await scopedWorkflow("build", pipelineId, target), {
+        criteriaDetail: true,
+      });
       // Re-reading an unchanged workflow is polling it; its status wake is the answer.
       const guidance = pollGuard?.(
         pollKey("get_build_pipeline", pipelineId, nodeId),

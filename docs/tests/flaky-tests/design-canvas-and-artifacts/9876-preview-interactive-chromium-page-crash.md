@@ -1,7 +1,7 @@
 # Interactive preview resource-escape page crashed on CI
 
 - **ID:** 9876
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `interactive preview in Chromium > resource escape > the sink detects requests from a deliberately unrestricted page`
 - **File:** `apps/backend/src/core/transcript-artifacts/preview-interactive.test.ts:346`
@@ -76,3 +76,48 @@ at `preview-interactive.test.ts:393`, the only backend failure of that run
 (17,062 passed, 1 failed). The owning file passed alone on 2026-11-04 on the Linux
 worktree host (`bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-interactive.test.ts --parallel=1 --only-failures`,
 exit zero, 12.2 s).
+
+## CI recurrence and resolution — 2026-11-08 / 2026-11-09
+
+**Recurrence.** CI pull-request run 42535048007 (#1991, `inline-login-card`),
+job "Tests (backend)" 128897384518, failed only this case at
+`preview-interactive.test.ts:393` (12,354.99 ms; 20,580 passed, 1 failed).
+`mise run flaky:recurrence -- 9876 --base a49fd2815` answered "open".
+Observed from branch `fix-ci-failures-46b27b2ba576-r1`, base `a49fd2815`.
+
+**What the diagnostics showed.** The error was `setContent: Page crashed`
+with the call log `waiting until "load"`; free memory 14.5 of 16.8 GB, load
+4.4. The Chromium log tail shows the escape script had already run by
+23:33:32.93 (the sink's `/script` evaluated, the font decode and the
+EventSource MIME refusal logged), and nothing after it until the renderer
+crash at 23:33:44.55, about 12 s later. The page navigates itself away
+before its `load` can fire (form submit, a `location.href` redirect, a
+popup), so `setContent` was still waiting for `load` when the renderer hung
+and then crashed.
+
+**Root cause (test).** The control case waited for the `load` event of a page
+built to navigate away, although what it asserts is only that the sink saw
+each request class. Why Chromium's renderer hangs and crashes in that state
+on the loaded runner is not established; the case no longer depends on it.
+
+**Fix.** `setContent` now waits only for `commit`, the polling loop decides
+as before, and a crash fails the case only when a control request is still
+missing (the failure then names the missing paths, the crash and the
+`setContent` error, plus the existing memory, load and log tail). The
+assertions on the control paths are unchanged.
+
+**Verification.**
+
+- Reproduced before the fix: temporary fault injection in the sink (no answer
+  for `/bg`, `/form`, `/after-redirect`, `/popup`, `/iframe`, so `load`
+  never fires) plus `page.goto("chrome://crash")` 2 s after the start page
+  failed with the CI signature, `setContent: Page crashed` /
+  `waiting until "load"` (2.5 s).
+- With the fix and the same injection: passed (0.5 s). With the crash moved
+  to 1 ms (before any request), it still failed, naming every missing path,
+  the crash and the `setContent` error. Injections removed afterwards.
+- The complete owning file passed unchanged through `mise run test:logged --
+  --name preview-interactive -- bun test --cwd apps/backend --preload
+  ../../tests/setup-node.ts
+  ./src/core/transcript-artifacts/preview-interactive.test.ts --parallel=1
+  --only-failures` (exit 0, Linux).

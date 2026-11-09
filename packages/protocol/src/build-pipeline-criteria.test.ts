@@ -4,7 +4,11 @@ import {
   type BuildPipeline,
   type PipelineSession,
 } from "./build-pipeline.js";
-import { pipelineCriteriaStatusWord, pipelineCriteriaView } from "./build-pipeline-criteria.js";
+import {
+  pipelineCriteriaStatusWord,
+  pipelineCriteriaView,
+  verifySessionJudgedCode,
+} from "./build-pipeline-criteria.js";
 
 const snapshot = {
   title: "Ticket",
@@ -61,5 +65,51 @@ describe("pipelineCriteriaView", () => {
     expect(view.verifySession).toBeUndefined();
     expect(view.criteria.map(({ text }) => text)).toEqual(["First", "Second"]);
     expect(pipelineCriteriaStatusWord(pipeline([]))).toBeUndefined();
+  });
+});
+
+describe("verifySessionJudgedCode", () => {
+  const HEAD = "ABC1234".toLowerCase() + "0".repeat(33);
+
+  test("names the commit the read-only guard held the worktree to", () => {
+    expect(
+      verifySessionJudgedCode({
+        validationHeadAtStart: HEAD.toUpperCase(),
+        validationWorktreeStatusAtStart: "clean",
+        validationUncommittedPathsAtStart: [],
+      }),
+    ).toEqual({ commit: HEAD });
+  });
+
+  test("marks a dirty worktree, by status or by its recorded paths", () => {
+    expect(
+      verifySessionJudgedCode({
+        validationHeadAtStart: HEAD,
+        validationWorktreeStatusAtStart: "dirty",
+      }),
+    ).toEqual({ commit: HEAD, uncommittedChanges: true });
+    expect(
+      verifySessionJudgedCode({
+        validationHeadAtStart: HEAD,
+        validationUncommittedPathsAtStart: ["src/a.ts"],
+      }),
+    ).toEqual({ commit: HEAD, uncommittedChanges: true });
+  });
+
+  test("records nothing without a usable HEAD", () => {
+    expect(verifySessionJudgedCode({})).toEqual({});
+    expect(verifySessionJudgedCode({ validationHeadAtStart: "not-a-commit" })).toEqual({});
+  });
+
+  test("the pipeline view's checks carry the judged commit", () => {
+    const view = pipelineCriteriaView(
+      pipeline([verify({ validationHeadAtStart: HEAD, validationWorktreeStatusAtStart: "dirty" })]),
+    );
+    for (const criterion of view.criteria) {
+      expect(criterion.check).toMatchObject({ commit: HEAD, uncommittedChanges: true });
+    }
+    // A Verify from before the baseline existed names no commit.
+    const legacy = pipelineCriteriaView(pipeline([verify({})]));
+    for (const criterion of legacy.criteria) expect(criterion.check?.commit).toBeUndefined();
   });
 });

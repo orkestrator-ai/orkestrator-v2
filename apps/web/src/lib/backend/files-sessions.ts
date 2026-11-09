@@ -460,6 +460,21 @@ export function createFilesSessionsApi(client: BackendClient) {
   }
 
   /**
+   * The environment's HEAD commit, or null when it cannot be read (deleted,
+   * stopped or unreachable). The ticket view compares it with the commit a
+   * Verify check judged; it never asks for the content fingerprint, so this
+   * is one cheap Git read.
+   */
+  async function getEnvironmentHead(environmentId: string): Promise<string | null> {
+    try {
+      const { head } = await gitDomain().get_environment_uncommitted_paths({ environmentId });
+      return typeof head === "string" && head ? head.toLowerCase() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * File-list and tree revisions of every environment the backend tracks
    * (`@orkestrator/protocol/worktree-snapshots`). Conditional with `known`, like
    * {@link getEnvironmentDiffStats}; a backend before step 03 does not know the
@@ -988,6 +1003,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     getLocalGitStatus,
     getLocalGitStatusSnapshot,
     getEnvironmentDiffStats,
+    getEnvironmentHead,
     getWorktreeSnapshotRevisions,
     refreshEnvironmentDiffStats,
     listEnvironmentDiffBaseBranches,
@@ -1064,6 +1080,7 @@ export const {
   getLocalGitStatus,
   getLocalGitStatusSnapshot,
   getEnvironmentDiffStats,
+  getEnvironmentHead,
   getWorktreeSnapshotRevisions,
   refreshEnvironmentDiffStats,
   listEnvironmentDiffBaseBranches,

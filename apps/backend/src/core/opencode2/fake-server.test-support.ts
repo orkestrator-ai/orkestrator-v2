@@ -258,6 +258,7 @@ export class FakeOpenCode2Server {
       return ok({
         id: session.id,
         model: session.model,
+        ...session.info,
         ...(session.metadata ? { metadata: session.metadata } : {}),
         ...(session.rules ? { permissions: session.rules } : {}),
       });
@@ -302,9 +303,6 @@ export class FakeOpenCode2Server {
         this.emit(session.id, "session.execution.started");
       }
       return ok({ id: item.id, type: "user", payload: item.payload, delivery: item.delivery });
-    }
-    if (rest === "" && request.method === "GET") {
-      return ok({ id: session.id, model: session.model, ...session.info });
     }
     if (rest === "message") {
       const rawCursor = url.searchParams.get("cursor");

@@ -191,8 +191,8 @@ describe("workflow sessions", () => {
   test("follow the same switch, except where 2.x cannot serve them yet", () => {
     const policy = { id: "host-default", approvals: "auto-approve" } as never;
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "v2", true)).toBe("v2");
-    // Without a policy the agent's defaults ask, and nobody would answer.
-    expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe(undefined);
+    // Without a policy the agent's defaults ask; the workflow's cards answer them.
+    expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe("v2");
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "legacy", true)).toBe(undefined);
     expect(
       newOpenCodeWorkflowSessionProtocol(
@@ -202,7 +202,7 @@ describe("workflow sessions", () => {
         true,
       ),
     ).toBe(undefined);
-    // No unattended answer surface on 2.x yet: a policy that asks stays on 1.x.
+    // A policy that asks is served: its approvals reach the workflow's cards.
     expect(
       newOpenCodeWorkflowSessionProtocol(
         { policy: { id: "x", approvals: "ask" } as never },
@@ -210,7 +210,7 @@ describe("workflow sessions", () => {
         "v2",
         true,
       ),
-    ).toBe(undefined);
+    ).toBe("v2");
     expect(
       newOpenCodeWorkflowSessionProtocol(
         { policy: { id: "coordinator-read-only", approvals: "deny" } as never },

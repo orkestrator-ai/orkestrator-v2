@@ -278,8 +278,8 @@ setup itself.
 
 A container terminal is a host `docker exec -it` client, and Docker does not
 end an exec when its client goes away. So each terminal shell is started with
-a fresh random token in `ORKESTRATOR_TERMINAL_SESSION` (one per PTY lifetime,
-never reused by a stable tab's next shell) and records its PID and session ID as
+a token in `ORKESTRATOR_TERMINAL_SESSION`: a process-wide backend instance UUID,
+`--`, and a fresh shell UUID (one per PTY lifetime, never reused by a stable tab's next shell) and records its PID and session ID as
 `/tmp/orkestrator-terminals-<uid>/<token>.pid`
 (`CONTAINER_TERMINAL_PID_RECORD_COMMAND`). Whenever the PTY goes away, closed
 by the user, superseded, reaped as an orphan or exited, the backend runs
@@ -293,8 +293,13 @@ survives, as it would a closed terminal. Each shell start sweeps its uid's
 records whose PID no longer carries its token, and the entrypoint removes
 `node`'s records at every container start. A container an explicit stop is
 draining gets no close exec, since the drain hangs up terminal shells itself.
-A close while the container is stopped or unreachable signals nothing; a backend that exits without closing
-its PTYs leaves their shells running until the container stops.
+A close while the container is stopped or unreachable signals nothing. A backend
+exit can leave its shells alive, but each new shell start closes this uid's
+records from other backend instances through the same close script. Legacy
+unprefixed tokens also count as orphans; the current instance's shells are kept.
+Consequently a long job left running in an orphaned tab now ends at the next
+terminal start for its uid, rather than waiting for the container to stop.
+Detached sessions and programs ignoring SIGHUP retain the close semantics above.
 
 ## Stop and drain
 

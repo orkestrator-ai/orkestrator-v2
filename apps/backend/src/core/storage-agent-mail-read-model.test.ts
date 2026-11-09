@@ -166,6 +166,47 @@ describe("agent mail read model", () => {
     });
   });
 
+  test("send, acknowledge, seen and delete reuse unchanged parsed rows", async () => {
+    await withWorld(async ({ storage, mailStore, send }) => {
+      const first = await send("e1", "e2");
+      await mailStore.snapshot();
+      const parse = spyOn(JSON, "parse");
+      try {
+        const operations = [
+          () => send("e3", "e2"),
+          () => storage.ackAgentMail("e2", "agent", first.id),
+          () => storage.markAgentMailSeen("e2", "agent", first.id),
+          () => storage.deleteAgentMailByEnvironment("e3"),
+        ];
+        for (const operation of operations) {
+          parse.mockClear();
+          await operation();
+          // No operation needs to parse e4's unchanged mailbox, even on save.
+          expect(
+            parse.mock.calls.some(
+              ([value]) => typeof value === "string" && value.includes('"environmentId":"e4"'),
+            ),
+          ).toBe(false);
+        }
+      } finally {
+        parse.mockRestore();
+      }
+    });
+  });
+
+  test("an abandoned mutable copy never changes committed mail", async () => {
+    await withWorld(async ({ mailStore, send }) => {
+      await send("e1", "e2");
+      const before = await mailStore.snapshot();
+      const draft = await mailStore.load();
+      mailbox(draft, "e2").messages[0]!.from = { kind: "user" };
+      mailbox(draft, "e2").messages[0]!.body = "not committed";
+      delete draft.mailboxes[agentMailboxId("e4", "agent")];
+      expect(await mailStore.snapshot()).toBe(before);
+      expect(await mailStore.load()).toEqual(before);
+    });
+  });
+
   test("sees a write committed by another connection", async () => {
     await withWorld(async ({ dataDir, mailStore, send }) => {
       await send("e1", "e2");

@@ -52,6 +52,16 @@ beforeEach(async () => {
     credentialSources: new Set(),
     emit: eventSink((event: string, payload: unknown) => emitted.push({ event, payload })),
   } as unknown as CommandContext;
+  for (const id of [A, B, NO_EMAIL]) {
+    const home = path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", id);
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(
+      path.join(home, "auth.json"),
+      JSON.stringify({
+        tokens: { access_token: "fixture-access", refresh_token: "fixture-refresh" },
+      }),
+    );
+  }
   await storage.agentAccounts.mutateAgentAccounts((store) => ({
     store: {
       ...store,
@@ -193,6 +203,18 @@ describe("a manual switch", () => {
 });
 
 describe("the feature's own switch", () => {
+  test("refuses a signed-out target under the account mutation lock", async () => {
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    await fs.rm(path.join(storage.agentAccounts.agentAccountsDirectory(), "codex", B, "auth.json"));
+    expect(
+      await applyAutomaticAccountSwitch(context, "codex", B, {
+        expectedActive: A,
+        reason: "threshold",
+      }),
+    ).toBe(false);
+    expect((await listAgentAccounts(context)).active.codex).toBe(A);
+  });
+
   test("does not count as manual, and records what it did", async () => {
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
     emitted = [];

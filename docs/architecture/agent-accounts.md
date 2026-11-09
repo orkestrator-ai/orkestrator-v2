@@ -866,9 +866,9 @@ older bridge still sends the fixed sentence, and so stays stopped.
 
 ### When it moves
 
-Among the included, signed-in accounts with room on both limits, the soonest weekly
-reset comes first; an account with no known weekly reset ranks after every account
-with one (`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
+Among the included, signed-in accounts with room on both limits, fresh usage ranks
+before stale or unknown usage. Within each freshness class the soonest weekly
+reset comes first; an unknown weekly reset ranks last (`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
 to the millisecond; two rules keep small differences from moving the machine:
 
 - **The same login is one account.** Entries with the same email (ignoring case),
@@ -984,39 +984,40 @@ shows it under the main tick until a later switch.
 
 ### Stale and unknown readings
 
-Only a fresh reading can say the active account has run out. A stale reading (a
-failed read answered with the last one, `stale: true`) or a missing one never
-moves the machine and never confirms a limit error. A limit error whose reading is
-stale waits (`wait`) up to 10 minutes for one that is not, for example through a
-429's wait, and then stays stopped.
+Only a fresh reading can say the active account has run out or confirm a limit
+error. The switcher treats a snapshot marked `stale: true`, fetched more than
+five minutes ago (`AUTO_SWITCH_MAX_READING_AGE_MS`), or carrying an invalid or
+future fetch time as stale. Five minutes matches the periodic evaluation
+interval and is well within the shortest supported five-hour quota window:
+usage can fill rapidly, so a future weekly reset does not establish headroom.
+A limit error whose reading stays stale waits up to ten minutes, then stops.
 
-For choosing where to go between turns, an idle Claude account's reading is usually
-stale, because its token has lapsed (a limit stop reads afresh; see
-[After a refusal](#after-a-refusal)). Neither limit falls before its reset, so a stale
-reading of either at or past 98% with its reset still ahead keeps that account out
-until the reset. A weekly reading with no reset to go on says too little to rule the
-account out, and it ranks last. A 5-hour window with no reset cannot outlast its own
-length from when it was read, so that is taken as its reset. A reset in the past is never a known reset: the window has
-started over (`stalePlanUsageSnapshot`, `usageLimitReading`), so it reads empty
-with its next reset unknown, and ranks last.
+Each check renews an included, signed-in account (including the active one) if
+its cached reading is stale or unknown, even when it has a future reset, and
+forces a usage read after successful renewal. `probe` mode still reads every
+candidate afresh and renews unread logins. If renewal or the fresh read fails,
+every account with fresh usage ranks ahead of every stale or unknown account,
+even when the older reading claims a sooner reset. Within each freshness class,
+the soonest weekly reset ranks first, with an unknown reset last. A stale
+reading at or above the existing threshold still conservatively keeps an idle
+account out until its reset; it never proves that the active account ran out.
+An unread account may be the last resort when no freshly read account has room.
+Thresholds and included-account preferences are unchanged.
 
-Ranking last would starve such an account: a fresh account always has a known
-reset, so the unknown one is never chosen, never used, and so never read again.
-Its real reset may be the soonest. So when a check finds an included, signed-in
-account (the active one included) whose reading is not fresh and has no reset to
-go on, it has Claude Code renew that account's sign-in and reads it again, forced
-(`renewAgentAccountLogin`, wired into `AgentAccountAutoSwitcher` as
-`renewLogin`). The renewal is `refreshHostClaudeLogin` run in the account's own
-directory: a request for a model no catalogue knows, which Claude Code renews the
-login for under its own lock and then fails before any inference, so it spends no
-usage and Orkestrator never handles the refresh token. It runs only for a login
-that has lapsed but can be renewed, never for Codex (whose tokens last days),
-never in an agent-test profile, and never for the host login while
-`useHostClaudeCredentials` is off. Each account is asked at most once per 30
-minutes, doubling after each failure up to 6 hours. One fresh reading gives the
-account a reset that ranks it until that reset passes, so a success is needed
-about once a week. Removing an account refuses while its renewal runs, because
-the CLI would recreate a directory deleted under it.
+A target must be signed in when ranked, immediately before the switch, and
+again inside the account mutation lock. A sign-out during asynchronous usage
+reads therefore cannot commit a switch onto that account.
+
+Renewal uses `renewAgentAccountLogin`, wired into the switcher as `renewLogin`:
+`refreshHostClaudeLogin` runs in the account's own directory with a model no
+catalogue knows. Claude Code renews under its own lock and fails before any
+inference, spending no usage; Orkestrator never handles its refresh token. It
+runs only for a renewable lapsed Claude login, never for Codex, never in an
+agent-test profile, and never for the host login while `useHostClaudeCredentials`
+is off. Regular checks share a thirty-minute renewal backoff, doubling after
+failures up to six hours. Limit stops use the existing urgent two-minute
+spacing. Removing an account refuses while its renewal runs, because the CLI
+would recreate a directory deleted underneath it.
 
 ### Paid overage
 

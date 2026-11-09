@@ -105,7 +105,10 @@ function harness(platform: AgentAccountPlatform, limits: Record<string, Limits>,
         [platform]: { mode: "automatic", includedAccountIds: Object.keys(limits) },
       },
     }),
-    readUsage: async (_platform, accountId) => reading(platform, state.limits[accountId]!),
+    readUsage: async (_platform, accountId) => {
+      const result = reading(platform, state.limits[accountId]!);
+      return result.stale ? result : { ...result, fetchedAt: new Date(clock).toISOString() };
+    },
     switchAccount,
     sessionAccount: async () => ({
       platform,

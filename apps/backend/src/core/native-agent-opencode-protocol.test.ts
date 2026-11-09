@@ -195,7 +195,12 @@ describe("workflow sessions", () => {
     expect(newOpenCodeWorkflowSessionProtocol({}, local, "v2", true)).toBe(undefined);
     expect(newOpenCodeWorkflowSessionProtocol({ policy }, local, "legacy", true)).toBe(undefined);
     expect(
-      newOpenCodeWorkflowSessionProtocol({ policy }, { environmentType: "container" }, "v2", true),
+      newOpenCodeWorkflowSessionProtocol(
+        { policy },
+        { environmentType: "containerized" },
+        "v2",
+        true,
+      ),
     ).toBe(undefined);
     // No unattended answer surface on 2.x yet: a policy that asks stays on 1.x.
     expect(

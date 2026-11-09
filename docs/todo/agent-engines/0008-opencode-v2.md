@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; open: coordinators, workflows in containers, graph describe/goal verifier/subork sessions, the user's global MCP servers, artifact grants on 2.x workflow turns, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; open: coordinators, the user's global MCP servers, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store). Done.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -764,11 +764,14 @@ users until phase 3 routes new sessions to it.
      result-tool grants are session permissions granted under the session's
      dispatch lock and restored after (`opencode2/turn-grants.ts`,
      `opencode2/workflow-results.ts`). Build pipelines, Multi Review and graph
-     agent nodes follow the preview switch. Still open in this phase: the
-     user's global MCP servers (the 2.x server reads Orkestrator's own config
-     directory, not `~/.config/opencode`), artifact grants and the design
-     connection on 2.x workflow turns, coordinators, and graph describe, goal
-     verifier and subork sessions (all still 1.x).
+     agent nodes follow the preview switch. **Done on 2026-11-09** (branch
+     `opencode2-workflows-rest`): workflows in containers whose image runs
+     2.x, graph describe, goal verifier and subork sessions, and artifact
+     grants, the design connection and worker mail on 2.x turns (see "Task
+     5: phase 5 workflows in containers, describe/verifier/subork sessions
+     and per-turn connections"). Still open in this phase: the user's global
+     MCP servers (the 2.x server reads Orkestrator's own config directory,
+     not `~/.config/opencode`) and coordinators.
    - **Session features: done for host sessions on 2026-11-09** (branch
      `opencode2-session-features`; see "Task 5: phase 5 session features").
      Sign-in on both lines (each 1.x change mirrored into the 2.x database),
@@ -1614,7 +1617,9 @@ Decisions:
   `enforced` tier is claimed for 2.x.
 - **Graph describe, goal verifier and suborks.** Not moved: they build their
   own `GraphAgentProviders` without `openCode2Workflow`. They need nothing
-  missing; adding the dependency in `index.ts` moves them.
+  missing; adding the dependency in `index.ts` moves them. **Moved on
+  2026-11-09**; see "Task 5: phase 5 workflows in containers,
+  describe/verifier/subork sessions and per-turn connections".
 - **Sub-agents during a result turn.** A child created during a result turn
   inherits that turn's grant and keeps it after the turn. The broker still
   refuses its tools once the attempt's capability is consumed, so this is
@@ -1918,6 +1923,148 @@ Not done: archiving from the resume picker (OpenCode's platform table has no
 with another model or instructions (2.x has neither), a container 2.x
 server, and command dispatch evidence (an ambiguous command reads `unknown`
 and is never re-sent).
+
+### Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections (2026-11-09)
+
+Branch `opencode2-workflows-rest`, from `5ed139cfc` (the tip of
+`upgrade-opencode-602d9d93f8a6-r1`). Owner decisions 2 and 4 applied.
+
+What exists now:
+
+- **Workflows in containers.** `newOpenCodeWorkflowSessionProtocol` takes a
+  `containerRunsV2` argument, and `openCodeWorkflowRoutingDependencies` an
+  `inContainer` option, wired in `index.ts` to the same
+  `containerRunsOpenCode2` check the interactive path uses. A workflow
+  session in a container environment takes 2.x when the setting says `v2`,
+  the record has capacity, the policy is not the coordinator's, and only
+  then the image runs 2.x (read last, so a 1.x answer never reads Docker; an
+  unreadable answer is 1.x). The 2.x connection is the in-container server,
+  through the `openCode2EnvironmentServer` routing that already served
+  interactive tabs.
+- **Graph describe, goal verifier and subork sessions** get
+  `openCode2Workflow` in their `GraphAgentProviders` dependencies, so they
+  follow the switch like graph agent nodes. They needed nothing else: all
+  three create reviewer sessions with the environment's `automated-review`
+  policy and run read-only turns that submit through the workflow-result
+  tool (or structured output), which 2.x already serves. A subork's result
+  turn denies `orkestrator_*` apart from its own result tools (1.x's rule,
+  translated), which on 2.x also covers the tab, design and artifact
+  servers, so its depth stays 1. The read-only tier stays
+  `provider-configured` (session rules), as on 1.x.
+- **Per-turn connections** (`opencode2/turn-connections.ts`). 1.x carries
+  the artifact grant, a pipeline worker's mail capability and the tab's
+  mailbox as trusted `system` text on its environment-wide connection. A 2.x
+  prompt has no `system` field and a 2.x server has no environment-wide
+  Orkestrator connection, so the 2.x provider turns them into connections,
+  the way the HTTP bridges carry them:
+  - a result turn (the broker connection) with an `artifactGrant` gets the
+    session's own artifact-only server, `orkestrator_artifacts_<id>` at
+    `/artifact-mcp`, authenticated by the grant (the bridges'
+    `orkestrator-artifacts`); a turn without a grant removes it;
+  - a tab-scoped connection that says `design` gets the session's own
+    `orkestrator_design_<id>` at `/design-mcp` with the same credential (the
+    bridges' `orkestrator-design`); a turn without it removes it; the broker
+    never gets one (design refuses workflow credentials);
+  - a pipeline worker turn with `workerMail` and no connection gets the
+    worker mailbox's own scoped connection (`AgentToolsServer.connection(…,
+    tabId)`, what a bridge worker gets), registered as the session's tab
+    server. It is issued only for the mailbox the turn's signed capability
+    names (`authenticatePipelineWorkerMailCapability`), in the provider's
+    environment and project; the capability itself is never sent;
+  - `tabMail`: an interactive 2.x tab already connects with its own
+    tab-scoped credential, which names the mailbox, so nothing is added.
+
+  Session rules deny every session's `orkestrator_design_*` and
+  `orkestrator_artifacts_*` servers and allow the session's own, as for the
+  tab server; closing a session removes all three. The per-kind bound on
+  registered servers is 256 each.
+
+Decisions:
+
+- **How the per-turn facts reach a 2.x turn.**
+  - **Per-session MCP servers built from the options callers already pass,
+    inside the 2.x provider (implemented).** Pros: owner decision 2's
+    mechanism; no caller changes (pipelines, Multi Review, graphs,
+    feature planning and the native service pass the same options to both
+    lines); the grant and capability never become model-visible text.
+    Cons: the provider needs one backend dependency (the worker mailbox
+    resolver) that it receives through the routing dependencies.
+  - **Make each caller line-aware and pass bridge-style connections for a
+    2.x session.** Pros: the provider stays generic. Cons: about eight call
+    sites (`build-pipeline-context.ts`, the review fan-outs, the agent
+    branch runner, Multi Review, feature planning) would each need an async
+    line lookup before the dispatch window.
+  - **Put the instructions into the prompt text.** Cons: the grant and
+    capability would be stored on the user row and shown in the transcript,
+    which the contract forbids.
+  - Recommendation: the first.
+- **Which turns get the artifact grant.**
+  - **Only turns whose connection is the result broker, as on the bridges
+    (implemented).** A tab's or worker's tab-scoped connection already
+    carries artifact authority (`resolveArtifactCaller`'s tab path). Pros:
+    no duplicate artifact tools in one session; identical to the bridges.
+    Cons: on a pipeline worker turn without a result tool, artifacts are
+    owned by the worker mailbox's conversation
+    (`env-<env>:pipeline-worker:<key>`), not the stage session's key, which
+    is where 1.x's grant puts them. The bridges have the same gap.
+  - **Every turn with a grant, beside the tab connection.** Pros: 1.x's
+    ownership on worker turns. Cons: the session would list two
+    `create_artifact` tools with different owners, and the model picks.
+  - Recommendation: the first; fix the ownership for bridges and 2.x
+    together if it matters (a worker connection whose artifact calls are
+    owned by the stage session).
+- **Worker mailbox issuance.**
+  - **Verify the signed capability, then issue (implemented).** Pros: a
+    turn can only be handed the mailbox the backend signed for it, even
+    though `workerMail` comes from backend code. Cons: one HMAC per worker
+    turn.
+  - **Trust `workerMail.tabId`.** Cons: no defence in depth.
+  - Recommendation: verify.
+- **Kept on 1.x.** Coordinators (worker 3's area) and containers whose image
+  does not carry `opencode2` or publish port 4102. Nothing in graph
+  describe, goal verifiers or suborks needed to stay on 1.x.
+
+Evidence:
+
+- Unit: `native-agent-opencode-protocol.test.ts` (container selection, image
+  read last, unreadable image, capacity, coordinator policy, the mailbox
+  dependency), `opencode2/turn-connections.test.ts` (each option's
+  conversion and the capability check), `opencode2/workflow-connections.test.ts`
+  (against the fake server: the artifact server per result turn, replaced
+  and removed; a subork result turn denying it; a tab's grant not
+  registered; the design server and its removal; worker mailbox
+  registration without the capability or grant reaching OpenCode),
+  `opencode2/permissions.test.ts` (confinement of the new kinds),
+  `graph-agent-providers-opencode2.test.ts` (a `GraphAgentProviders` with the
+  dependency creates and records 2.x sessions, and leaves 1.x alone).
+- Live against the real 2.2.6 binary with a scripted model
+  (`opencode2-workflow-connections.live.test.ts`): a tab's design tool
+  reached `/design-mcp` with the tab's bearer and was not offered to another
+  session; a result turn's artifact tool reached `/artifact-mcp` with the
+  grant as bearer, was not offered to another session, and was gone the next
+  turn (and from `GET /api/mcp`); a worker turn's tab tool reached `/mcp` with
+  the worker's own token, and neither the capability nor the grant appeared
+  in any model input. The existing 2.x live files (MCP, routing, provider,
+  interactions, features) still pass with the new isolation rules.
+
+- Real stack, 2026-11-09, throwaway profile `oc2-wrest-7c1` (`dev:test
+  --fixture --agent-platforms opencode --no-agent-credentials`, since stopped
+  and reset): the switch turned on in Settings → OpenCode; an OpenCode tab
+  in a local fixture environment ran on 2.x (OpenCode's free Big Pickle).
+  `session goal set … --verifier opencode` ended `complete` with
+  `verdict-passed`; the verifier ran as a 2.x session (labelled
+  `Goal · Verifier`, with the reviewer marker, in the 2.x database) and was
+  the one id recorded in `opencode2-sessions`. A `/subork ask opencode …`
+  prompt then ran a subork on 2.x (`Subork · …` in the 2.x database,
+  `resultTransport: "tool-v1"`, `certified`, answer delivered to the tab).
+  The verifier's verdict said its shell was denied; whether the goal
+  verifier passes `reviewShellPolicy` (so a reviewer's constrained shell
+  applies) was not investigated.
+
+Not checked live: a workflow in a container running 2.x (needs an image
+built from this branch), graph describe on 2.x, a build pipeline worker
+turn's mailbox through the real agent tools server, and artifact
+publication end to end on 2.x.
 
 ## Related
 

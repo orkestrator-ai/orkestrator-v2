@@ -5,6 +5,7 @@ import path from "node:path";
 import type { PersistedNativeAgentSession } from "./models.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { seedStore, storageDatabase, storageInternals } from "./storage-test-support.js";
+import { backfillNativeAgentSessionOwners } from "./storage-stores.js";
 
 const STORE = "native-agent-sessions";
 const FILE = "native-agent-sessions.json";
@@ -175,7 +176,8 @@ describe("native session mutations read one row", () => {
     const source = (file: string) => readFileSync(path.join(import.meta.dir, file), "utf8");
     expect(source("storage-native-deliveries.ts")).not.toContain("loadNativeAgentSessions");
     // The owner migration's walk, both document fallbacks, the list and the
-    // environment sweep's key search. None holds a key's lease.
+    // environment sweep's fallback for a store held whole or buffered by an
+    // atomic scope. None holds a key's lease.
     expect(source("storage-native.ts").match(/this\.loadNativeAgentSessions\(\)/g)).toHaveLength(5);
   });
 });
@@ -358,4 +360,113 @@ describe("concurrent native session writers", () => {
       );
     }
   }, 30_000);
+});
+
+/** Clears the indexed owner, as on a row written before the store had one or by an older build. */
+function clearOwner(storage: StorageService, key: string): void {
+  storageDatabase(storage)
+    .db.query("UPDATE store_rows SET owner = NULL WHERE store = ? AND key = ?")
+    .run(STORE, key);
+}
+
+function ownerOf(storage: StorageService, key: string): string | null | undefined {
+  return (rawRow(storage, key) as { owner: string | null } | null)?.owner;
+}
+
+describe("the environment sweep reads only its environment's rows (todo 6120 task 6)", () => {
+  test("every write records the session's environment as the row's indexed owner", async () => {
+    const storage = await service();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const session = await createSession(storage, environment.id, "a");
+    expect(ownerOf(storage, session.key)).toBe(environment.id);
+    await storage.dispatchNativeAgentPromptOnce(session.key, "request-1", async () => undefined);
+    expect(ownerOf(storage, session.key)).toBe(environment.id);
+  });
+
+  test("finds its keys by owner without decoding the store", async () => {
+    const storage = await service();
+    const doomed = await storage.addEnvironment(createEnvironment("project-1"));
+    const kept = await storage.addEnvironment(createEnvironment("project-1"));
+    const first = await createSession(storage, doomed.id, "a");
+    const second = await createSession(storage, doomed.id, "b");
+    const other = await createSession(storage, kept.id, "c");
+    const otherRow = rawRow(storage, other.key);
+    const database = storageDatabase(storage);
+    const wholeReads = spyOn(database, "readStore");
+    const wholeLoads = spyOn(
+      storageInternals(storage).repos.nativeAgentSessions,
+      "loadNativeAgentSessions",
+    );
+    try {
+      await storage.deleteNativeAgentSessionsByEnvironment(doomed.id);
+      expect(wholeReads.mock.calls.filter(([store]) => store === STORE)).toEqual([]);
+      expect(wholeLoads).not.toHaveBeenCalled();
+    } finally {
+      wholeReads.mockRestore();
+      wholeLoads.mockRestore();
+    }
+    expect(await storage.getNativeAgentSession(first.key)).toBeNull();
+    expect(await storage.getNativeAgentSession(second.key)).toBeNull();
+    expect(rawRow(storage, other.key)).toEqual(otherRow);
+  });
+
+  test("still finds a row that has no owner, and leaves another environment's", async () => {
+    const storage = await service();
+    const doomed = await storage.addEnvironment(createEnvironment("project-1"));
+    const kept = await storage.addEnvironment(createEnvironment("project-1"));
+    const unowned = await createSession(storage, doomed.id, "a");
+    const otherUnowned = await createSession(storage, kept.id, "b");
+    const damaged = await createSession(storage, doomed.id, "damaged");
+    clearOwner(storage, unowned.key);
+    clearOwner(storage, otherUnowned.key);
+    writeRawRow(storage, damaged.key, "{ not json");
+    clearOwner(storage, damaged.key);
+
+    await storage.deleteNativeAgentSessionsByEnvironment(doomed.id);
+
+    expect(await storage.getNativeAgentSession(unowned.key)).toBeNull();
+    expect((await storage.getNativeAgentSession(otherUnowned.key))?.environmentId).toBe(kept.id);
+    // Nothing can prove which environment an unreadable row belongs to.
+    expect(rawRow(storage, damaged.key)).toBeTruthy();
+  });
+
+  test("inside an atomic scope that buffers the store, reads the buffered value", async () => {
+    const storage = await service();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const session = await createSession(storage, environment.id, "a");
+    const { context, repos } = storageInternals(storage);
+    const buffered = { ...session, key: "key-buffered", logicalSessionKey: "buffered" };
+    await context.atomically(async () => {
+      await repos.nativeAgentSessions.saveNativeAgentSession(buffered.key, buffered);
+      expect(
+        context.listStoreRowKeysByOwner(path.join(storage.getDataDir(), FILE), environment.id),
+      ).toBeUndefined();
+    });
+    expect((await storage.getNativeAgentSession(buffered.key))?.key).toBe(buffered.key);
+    await storage.deleteNativeAgentSessionsByEnvironment(environment.id);
+    expect(await storage.listNativeAgentSessions()).toEqual([]);
+  });
+
+  test("open gives unowned rows their environment, once, without changing a value", async () => {
+    const storage = await service();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const session = await createSession(storage, environment.id, "a");
+    const damaged = await createSession(storage, environment.id, "damaged");
+    writeRawRow(storage, damaged.key, "{ not json");
+    clearOwner(storage, session.key);
+    clearOwner(storage, damaged.key);
+    const value = (rawRow(storage, session.key) as { value: string }).value;
+
+    const database = storageDatabase(storage);
+    expect(backfillNativeAgentSessionOwners(database)).toBe(1);
+    expect(ownerOf(storage, session.key)).toBe(environment.id);
+    expect((rawRow(storage, session.key) as { value: string }).value).toBe(value);
+    expect(ownerOf(storage, damaged.key)).toBeNull();
+    expect(backfillNativeAgentSessionOwners(database)).toBe(0);
+
+    // A backend opening the directory does the same.
+    clearOwner(storage, session.key);
+    const reopened = await service(storage.getDataDir());
+    expect(ownerOf(reopened, session.key)).toBe(environment.id);
+  });
 });

@@ -12,6 +12,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { leaseFamily, leaseLogName, leaseWaitMetrics } from "./storage-lease-metrics.js";
 import {
+  applyArrayRowUpdate,
+  assertArrayRowKey,
+  compareRowEntries,
+  decompose,
+  isUnchanged,
+  rowId,
+  stabilizePositions,
+  type StoreRow,
+} from "./storage-database-rows.js";
+import {
   instrumentSqliteConnection,
   storageDatabaseName,
   type SlowStorageOperations,
@@ -39,6 +49,7 @@ const log = createLogger("storage");
  */
 
 export { STORAGE_DATABASE_FILE };
+export { applyArrayRowUpdate };
 
 /**
  * The change-tracking ledger's own database file, beside
@@ -94,7 +105,6 @@ export interface StorageMigration {
   up(context: StorageMigrationContext): void;
 }
 
-type StoreRow = { collection: string; key: string; position: number; value: string };
 type CachedStore = {
   revision: number;
   layout: StoredLayoutKind;
@@ -286,6 +296,12 @@ export interface StorageDatabaseOptions {
     addCacheSource(name: CacheGaugeName, source: CacheGaugeSource): () => void;
   };
   /**
+   * Record stores whose rows without an owner get a partial index of their
+   * own, so {@link StorageDatabase.listUnownedRows} costs those rows rather
+   * than a walk of the store. For a store whose rows normally all have one.
+   */
+  unownedRowIndexes?: readonly string[];
+  /**
    * Where this connection reports its slow SQLite calls; the process-wide
    * `slowStorageOperations` by default. Tests pass their own.
    */
@@ -347,6 +363,8 @@ export class StorageDatabase {
   /** Revision each store was bumped to by row writes in the open transaction. */
   private readonly touchedRevisions = new Map<string, number>();
   private readonly layoutFor: (store: string) => StoreLayout;
+  /** Each `unownedRowIndexes` store's partial index: its name and its WHERE clause. */
+  private readonly unownedRowIndexes = new Map<string, { name: string; where: string }>();
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private readonly observeFetch: ((length: number) => void) | undefined;
   private readonly busyTimeoutMs: number;
@@ -364,6 +382,15 @@ export class StorageDatabase {
       throw new Error("Storage database must not be a symbolic link");
     }
     this.layoutFor = options.layoutFor ?? (() => ({ kind: "document" }));
+    for (const store of options.unownedRowIndexes ?? []) {
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(store) || this.layoutFor(store).kind !== "record") {
+        throw new Error(`An unowned-row index needs a record store with a plain name: ${store}`);
+      }
+      this.unownedRowIndexes.set(store, {
+        name: `store_rows_unowned_${store.replaceAll("-", "_")}`,
+        where: `store = '${store}' AND collection = '' AND owner IS NULL`,
+      });
+    }
     this.observe = options.observe;
     this.observeFetch = options.observeFetch;
     this.db = new Database(this.path, { create: true, strict: true });
@@ -508,13 +535,54 @@ export class StorageDatabase {
    * on the first open after an upgrade; afterwards this reads the schema.
    */
   private ensureIndexes(): void {
-    const present = this.db
-      .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'store_rows_position'")
-      .get();
-    if (present) return;
-    this.db.exec(
-      "CREATE INDEX IF NOT EXISTS store_rows_position ON store_rows (store, collection, position)",
+    const present = new Set(
+      (
+        this.db.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
     );
+    if (!present.has("store_rows_position")) {
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS store_rows_position ON store_rows (store, collection, position)",
+      );
+    }
+    // Partial indexes for `unownedRowIndexes`, the same way: SQLite keeps an
+    // older build's writes to them current.
+    for (const index of this.unownedRowIndexes.values()) {
+      if (present.has(index.name)) continue;
+      this.db.exec(
+        `CREATE INDEX IF NOT EXISTS ${index.name} ON store_rows (key) WHERE ${index.where}`,
+      );
+    }
+  }
+
+  /**
+   * The rows of a record store that have no owner, in key order: through the
+   * store's partial index when it has one (`unownedRowIndexes`), else a walk
+   * of the store's rows. Uncached, like {@link rows}.
+   */
+  listUnownedRows(store: string): Array<{ key: string; position: number; value: string }> {
+    const index = this.unownedRowIndexes.get(store);
+    // The planner uses a partial index only for a query whose WHERE repeats
+    // the index's terms, so the store's name is inlined (it is checked when
+    // the database opens); otherwise it is bound.
+    const rows = (
+      index
+        ? this.db
+            .query(
+              `SELECT key, position, value FROM store_rows INDEXED BY ${index.name} WHERE ${index.where} ORDER BY key`,
+            )
+            .all()
+        : this.db
+            .query(
+              "SELECT key, position, value FROM store_rows WHERE store = ? AND collection = '' AND owner IS NULL ORDER BY key",
+            )
+            .all(store)
+    ) as Array<{ key: string; position: number; value: string }>;
+    this.observe?.("read");
+    this.fetched(rows.reduce((length, row) => length + row.value.length, 0));
+    return rows;
   }
 
   schemaVersion(): number {
@@ -1042,6 +1110,133 @@ export class StorageDatabase {
         this.setCache(store, null);
       }
       return update.result;
+    }, store);
+  }
+
+  /**
+   * {@link updateStoreRow} for a change that spans several rows of a `record`
+   * store or of an `envelope`'s collections, plus (for an envelope) its
+   * document, in one IMMEDIATE transaction. The store's other rows are neither
+   * parsed nor reserialized. A row whose `value` is `undefined` is deleted.
+   * `document` changes the envelope's non-collection fields in place. With
+   * `maxBytes`, a write that grows the store (document and rows, UTF-8) past it
+   * throws {@link StoreTooLargeError}; one that shrinks it always commits.
+   * Returns `false`, writing nothing, when the store is absent or held whole as
+   * a document, so the caller can fall back to a whole-value write.
+   */
+  updateStoreRows(
+    store: string,
+    rows: ReadonlyArray<{ collection?: string; key: string; value: unknown }>,
+    options: { document?: (envelope: Record<string, unknown>) => void; maxBytes?: number } = {},
+  ): boolean {
+    const layout = this.layoutFor(store);
+    if (layout.kind !== "record" && layout.kind !== "envelope") {
+      throw new Error(`updateStoreRows requires a record or envelope store: ${store}`);
+    }
+    for (const { collection = "" } of rows) {
+      if (layout.kind === "record" ? collection !== "" : !layout.collections.includes(collection)) {
+        throw new Error(`Store ${store} has no collection ${collection}`);
+      }
+    }
+    if (options.document && layout.kind !== "envelope") {
+      throw new Error(`Store ${store} has no envelope document`);
+    }
+    const bytes = (text: string | null) => (text === null ? 0 : Buffer.byteLength(text, "utf8"));
+    return this.transaction(() => {
+      const header = this.readStoreHeader(store);
+      if (!header || header.mode !== "rows") return false;
+      this.observe?.("read");
+      // A store this connection holds at the committed revision answers the
+      // rows' old values without fetching them again.
+      const cached = this.pendingCache?.has(store)
+        ? this.pendingCache.get(store)
+        : this.cache.get(store);
+      const known = cached?.revision === header.revision && cached.mode === "rows" ? cached : null;
+      const select = this.db.query(
+        "SELECT position, value FROM store_rows WHERE store = ? AND collection = ? AND key = ?",
+      );
+      const written = new Map<string, StoreRow | null>();
+      const markers = new Set<string>();
+      let growth = 0;
+      for (const { collection = "", key, value } of rows) {
+        let existing: { position: number; value: string } | null;
+        if (known) {
+          existing = known.rows.get(rowId(collection, key)) ?? null;
+        } else {
+          existing = select.get(store, collection, key) as typeof existing;
+          this.fetched(existing?.value.length ?? 0);
+        }
+        if (value === undefined) {
+          if (!existing) continue;
+          this.db
+            .query("DELETE FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
+            .run(store, collection, key);
+          growth -= bytes(existing.value);
+          written.set(rowId(collection, key), null);
+          continue;
+        }
+        const serialized = JSON.stringify(value);
+        if (existing?.value === serialized) continue;
+        const position =
+          existing?.position ??
+          (
+            this.db
+              .query(
+                "SELECT coalesce(max(position) + 1, 0) AS next FROM store_rows WHERE store = ? AND collection = ?",
+              )
+              .get(store, collection) as { next: number }
+          ).next;
+        const owner = layout.kind === "record" ? layout.owner?.(value) : undefined;
+        this.db
+          .query(
+            `INSERT INTO store_rows (store, collection, key, position, owner, value)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (store, collection, key) DO UPDATE SET
+               owner = excluded.owner, value = excluded.value`,
+          )
+          .run(store, collection, key, position, owner ?? null, serialized);
+        growth += bytes(serialized) - bytes(existing?.value ?? null);
+        written.set(rowId(collection, key), { collection, key, position, value: serialized });
+        if (collection) markers.add(collection);
+      }
+      let document = header.document;
+      if (layout.kind === "envelope" && (options.document || markers.size > 0)) {
+        const envelope = (document === null ? {} : JSON.parse(document)) as Record<string, unknown>;
+        options.document?.(envelope);
+        for (const collection of markers) envelope[collection] = STORAGE_COLLECTION_MARKER;
+        document = JSON.stringify(envelope);
+        growth += bytes(document) - bytes(header.document);
+      }
+      if (written.size === 0 && document === header.document) return true;
+      if (options.maxBytes !== undefined && growth > 0) {
+        this.rowBytesSql ??= rowBytesExpression(this.db);
+        const total =
+          (
+            this.db
+              .query(
+                `SELECT coalesce(sum(${this.rowBytesSql}), 0) AS total FROM store_rows WHERE store = ?`,
+              )
+              .get(store) as { total: number }
+          ).total + bytes(document);
+        if (total > options.maxBytes) throw new StoreTooLargeError(store, total);
+      }
+      const revision = header.revision + 1;
+      this.db
+        .query("UPDATE stores SET revision = ?, document = ?, updated_at = ? WHERE name = ?")
+        .run(revision, document, Date.now(), store);
+      // Carried forward as updateStoreRow does, so the next whole-store reader
+      // fetches nothing for the rows this write did not touch.
+      if (known) {
+        const next = new Map(known.rows);
+        for (const [id, row] of written) {
+          if (row) next.set(id, row);
+          else next.delete(id);
+        }
+        this.setCache(store, { ...known, revision, document, rows: next });
+      } else {
+        this.setCache(store, null);
+      }
+      return true;
     }, store);
   }
 
@@ -1703,27 +1898,6 @@ export class StorageDatabase {
   }
 }
 
-/** Same mode, document and rows: persisting would only bump the revision. */
-function isUnchanged(
-  previous: CachedStore,
-  next: { mode: "rows" | "document"; document: string | null; rows: Map<string, StoreRow> },
-): boolean {
-  if (previous.mode !== next.mode || previous.document !== next.document) return false;
-  if (previous.rows.size !== next.rows.size) return false;
-  for (const [id, row] of next.rows) {
-    const before = previous.rows.get(id);
-    if (!before || before.value !== row.value || before.position !== row.position) return false;
-  }
-  return true;
-}
-
-/** `ORDER BY collection, position, key`; a position is unique within its collection. */
-function compareRowEntries(left: StoreRowEntry, right: StoreRowEntry): number {
-  if (left.collection !== right.collection) return left.collection < right.collection ? -1 : 1;
-  if (left.position !== right.position) return left.position - right.position;
-  return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
-}
-
 /**
  * The SQL for a row value's UTF-8 length. `octet_length` (SQLite 3.43) reads the
  * length from the record header, so sizing a value never reads its overflow
@@ -1737,150 +1911,4 @@ export function rowBytesExpression(db: Pick<Database, "query">): string {
   } catch {
     return "length(CAST(value AS BLOB))";
   }
-}
-
-function rowId(collection: string, key: string): string {
-  return `${collection}\u0000${key}`;
-}
-
-type ArrayStoreLayout = Extract<StoreLayout, { kind: "array" }>;
-
-function assertArrayRowKey(
-  store: string,
-  layout: ArrayStoreLayout,
-  key: string,
-  value: unknown,
-): void {
-  const field = layout.key ?? "id";
-  if (!key || !isPlainRecord(value) || value[field] !== key) {
-    throw new Error(`Array store ${store} row ${field} must equal its non-blank key`);
-  }
-}
-
-/**
- * {@link StorageDatabase.updateStoreRow} on an array value that is held whole,
- * in place: the first item carrying `key` is the row, and a delete removes
- * every item carrying it, since a value held whole may repeat a key.
- */
-export function applyArrayRowUpdate<T>(
-  store: string,
-  layout: ArrayStoreLayout,
-  items: unknown[],
-  key: string,
-  mutate: (current: unknown) => RowUpdate<T>,
-): { result: T; changed: boolean } {
-  const field = layout.key ?? "id";
-  const matches = (item: unknown) => isPlainRecord(item) && item[field] === key;
-  const index = items.findIndex(matches);
-  const update = mutate(index < 0 ? undefined : items[index]);
-  if (update.delete) {
-    if (index < 0) return { result: update.result, changed: false };
-    for (let at = items.length - 1; at >= index; at -= 1) {
-      if (matches(items[at])) items.splice(at, 1);
-    }
-    return { result: update.result, changed: true };
-  }
-  if (!("value" in update)) return { result: update.result, changed: false };
-  assertArrayRowKey(store, layout, key, update.value);
-  if (index < 0) items.push(update.value);
-  else items[index] = update.value;
-  return { result: update.result, changed: true };
-}
-
-/**
- * Keeps the stored positions of surviving rows when their relative order is
- * unchanged and new rows only append, so removing or adding one item writes
- * one row instead of renumbering every row after it. Any other reorder keeps
- * the dense positions {@link decompose} assigned.
- */
-function stabilizePositions(next: Map<string, StoreRow>, previous: Map<string, StoreRow>): void {
-  const byCollection = new Map<string, StoreRow[]>();
-  for (const row of next.values()) {
-    const rows = byCollection.get(row.collection) ?? [];
-    rows.push(row);
-    byCollection.set(row.collection, rows);
-  }
-  for (const [collection, rows] of byCollection) {
-    let last = -Infinity;
-    let max = -Infinity;
-    for (const row of previous.values()) {
-      if (row.collection === collection) max = Math.max(max, row.position);
-    }
-    let sawNew = false;
-    let appendOnly = true;
-    for (const row of rows) {
-      const before = previous.get(rowId(collection, row.key));
-      if (!before) {
-        sawNew = true;
-        continue;
-      }
-      if (sawNew || before.position <= last) {
-        appendOnly = false;
-        break;
-      }
-      last = before.position;
-    }
-    if (!appendOnly) continue;
-    let nextPosition = Number.isFinite(max) ? max + 1 : 0;
-    for (const row of rows) {
-      const before = previous.get(rowId(collection, row.key));
-      row.position = before ? before.position : nextPosition++;
-    }
-  }
-}
-
-function decompose(
-  layout: StoreLayout,
-  value: unknown,
-): { mode: "rows" | "document"; document: string | null; rows: Map<string, StoreRow> } {
-  const rows = new Map<string, StoreRow>();
-  const asDocument = () => ({
-    mode: "document" as const,
-    document: JSON.stringify(value),
-    rows: new Map<string, StoreRow>(),
-  });
-  if (layout.kind === "document") return asDocument();
-  if (layout.kind === "array") {
-    if (!Array.isArray(value)) return asDocument();
-    const field = layout.key ?? "id";
-    for (const [position, item] of value.entries()) {
-      const id = isPlainRecord(item) ? item[field] : undefined;
-      if (typeof id !== "string" || !id || rows.has(rowId("", id))) return asDocument();
-      rows.set(rowId("", id), { collection: "", key: id, position, value: JSON.stringify(item) });
-    }
-    return { mode: "rows", document: null, rows };
-  }
-  if (layout.kind === "record") {
-    if (!isPlainRecord(value)) return asDocument();
-    let position = 0;
-    for (const [key, item] of Object.entries(value)) {
-      if (item === undefined) continue;
-      rows.set(rowId("", key), { collection: "", key, position, value: JSON.stringify(item) });
-      position += 1;
-    }
-    return { mode: "rows", document: null, rows };
-  }
-  if (!isPlainRecord(value)) return asDocument();
-  const envelope: Record<string, unknown> = {};
-  for (const [field, fieldValue] of Object.entries(value)) {
-    if (!layout.collections.includes(field)) {
-      envelope[field] = fieldValue;
-      continue;
-    }
-    if (fieldValue === undefined) continue;
-    if (!isPlainRecord(fieldValue)) return asDocument();
-    envelope[field] = STORAGE_COLLECTION_MARKER;
-    let position = 0;
-    for (const [key, item] of Object.entries(fieldValue)) {
-      if (item === undefined) continue;
-      rows.set(rowId(field, key), {
-        collection: field,
-        key,
-        position,
-        value: JSON.stringify(item),
-      });
-      position += 1;
-    }
-  }
-  return { mode: "rows", document: JSON.stringify(envelope), rows };
 }

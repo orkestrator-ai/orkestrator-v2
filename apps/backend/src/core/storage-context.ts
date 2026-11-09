@@ -678,6 +678,56 @@ export class StorageContext {
   }
 
   /**
+   * The keys of a record store's rows whose indexed owner is `owner`, and the
+   * rows that have no owner (key and serialized value), which the caller must
+   * check itself: an owner extractor may not apply to every value, and a row an
+   * older build wrote carries none. Neither query parses a value, and a store
+   * with an unowned-row index (`StorageDatabaseOptions.unownedRowIndexes`)
+   * walks neither its other rows nor other stores'. `undefined`
+   * when the store is held whole as a document or an open atomic scope buffers
+   * a write to it, where the caller reads the whole value instead.
+   */
+  listStoreRowKeysByOwner(
+    filePath: string,
+    owner: string,
+  ): { owned: string[]; unowned: Array<{ key: string; value: string }> } | undefined {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("listStoreRowKeysByOwner requires a database store");
+    if (this.openAtomicScope()?.writes.has(store)) return undefined;
+    const header = this.database.readStoreHeader(store);
+    if (!header) return { owned: [], unowned: [] };
+    if (header.mode !== "rows") return undefined;
+    return {
+      owned: this.database
+        .rows(store)
+        .list({ collection: "", owner, values: false })
+        .map((row) => row.key),
+      unowned: this.database.listUnownedRows(store),
+    };
+  }
+
+  /**
+   * Several rows of a record store or of an envelope's collections, and an
+   * envelope's document, in one commit; see {@link StorageDatabase.updateStoreRows}.
+   * The other rows are neither parsed nor reserialized. `false`, writing
+   * nothing, when the caller must save the whole value instead: inside an
+   * atomic scope, while a retired JSON copy of the store remains (a whole-value
+   * sensitive save prunes it in the same commit), or when the store is absent
+   * or held whole as a document.
+   */
+  updateStoreRows(
+    filePath: string,
+    rows: ReadonlyArray<{ collection?: string; key: string; value: unknown }>,
+    options: { document?: (envelope: Record<string, unknown>) => void; maxBytes?: number } = {},
+  ): boolean {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("updateStoreRows requires a database store");
+    if (this.openAtomicScope() || hasLegacyJsonStore(this.dataDir, store)) return false;
+    recurringWorkMetrics.work("storage-write");
+    return this.database.updateStoreRows(store, rows, options);
+  }
+
+  /**
    * One row of a database store by key (an array item, a record key, or a key
    * of one envelope collection) without assembling the whole store, so a
    * lookup costs the row, not every other record. `undefined` when absent or

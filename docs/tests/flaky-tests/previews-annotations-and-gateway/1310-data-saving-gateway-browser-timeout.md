@@ -223,3 +223,10 @@ stays open. No assertion, timeout or skip changed.
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=1467 mise run test:logged -- --name gateway-isolated-final -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/gateway-isolated-final` passed both viewport cases, exit 0, in 57.4 seconds. Passing raw output was deleted by the logged runner.
 - **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
 - **Assessment:** intermittent deadline failure; the cause remains unconfirmed. No gateway implementation, assertion, timeout or skip changed.
+
+The subsequent exact complete browser rerun repeated the mobile 60-second deadline
+and context-close error. It had 1,586 passes, 152 skips and two failures across
+1,740 component cases in 1,281.6 seconds; the other failure was case 1249.
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fSAO2z/browser.log.gz`.
+The unchanged two-viewport owner had already passed in 57.4 seconds above.
+No gateway code, assertion, deadline or skip changed; the aggregate remains red.

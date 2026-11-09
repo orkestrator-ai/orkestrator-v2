@@ -72,3 +72,12 @@ The combined run remains non-green and is reported as such.
 - **Evidence:** aggregate `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.53aGI2/browser.log.gz`; first owner `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.cwpMcM/paging-settled-owner.log.gz`. Passing raw output was deleted by the logged runner.
 - **Recurrence check:** `mise run flaky:recurrence -- 1602 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
 - **Assessment:** confirmed intermittent recurrence; the cause of automatic paging stopping in these runs remains unconfirmed. The separate same-minute test now waits for its opening animations before measuring paging; its pixel bounds remain unchanged. The new coarse-pointer geometry check and both short-viewport paging cases passed in the failing owner too.
+
+The subsequent exact `mise run test:logged -- --name browser -- mise run test:browser`
+rerun passed every applicable paging case in both viewport projects, including
+automatic paging. It remained red only on the unrelated cases 1249 and 1310
+(1,586 passed, 152 skipped, two failed in 1,281.6 seconds). Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fSAO2z/browser.log.gz`.
+The final invisible hit-area adjustment was separately verified by the unchanged
+40px size and geometry assertions plus the new previous-content non-overlap
+assertion (`touch-hit-area-final`, exit 0, 11.0 seconds).

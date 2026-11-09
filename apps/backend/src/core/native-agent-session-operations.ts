@@ -543,7 +543,15 @@ export class NativeAgentSessionOperations {
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentAuthStatus | null> {
     const provider = await this.host.provider(input);
-    return provider.authStatus ? provider.authStatus() : null;
+    if (!provider.authStatus) return null;
+    // OpenCode answers for the tab's own line (1.x or 2.x); the others ignore it.
+    const session =
+      input.agent === "opencode"
+        ? await this.host.storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+          )
+        : null;
+    return provider.authStatus(session?.providerSessionId);
   }
 
   async beginProjectionSignIn(

@@ -185,6 +185,15 @@ export class ProviderRegistry {
     return this.providers.get(cacheKey);
   }
 
+  /** The environment (or runtime) ids that hold a cached provider. */
+  cachedEnvironmentIds(): string[] {
+    return [
+      ...new Set(
+        Array.from(this.providers.keys(), (cacheKey) => cacheKey.slice(0, cacheKey.indexOf("\0"))),
+      ),
+    ];
+  }
+
   /** The cached provider, only while it still serves this bridge generation. */
   cachedForConnection(
     cacheKey: string,

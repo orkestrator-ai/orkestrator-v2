@@ -1366,6 +1366,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
+  /**
+   * OpenCode 1.x has no steer: its prompts queue behind the running turn.
+   * The platform table advertises steer for OpenCode 2.x sessions
+   * (`nativeAgentCapabilities`), so a 1.x session must say no here; every
+   * steering surface consults this before it offers or sends one.
+   */
+  async steerSupported(): Promise<boolean> {
+    return false;
+  }
+
   async performSessionAction(
     sessionId: string,
     action: NativeAgentSessionAction,

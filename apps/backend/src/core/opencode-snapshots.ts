@@ -123,7 +123,7 @@ const DETAIL_REFERENCE = "0".repeat(32);
  * the detail cache — is counted in full. Counting it as a reference let a
  * window outgrow the live view, which then dropped the head the cursor named.
  */
-function openCodeDisplayBytes(row: unknown): number {
+export function openCodeDisplayBytes(row: unknown): number {
   try {
     const serialized = JSON.stringify(row, (key, value: unknown) => {
       if (key === "toolOutput" || key === "toolError") return DETAIL_REFERENCE;

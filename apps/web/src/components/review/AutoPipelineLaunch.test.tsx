@@ -3,12 +3,13 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
 import { MultiReviewLaunchDialog } from "./MultiReviewLaunchDialog";
+import { parseAutoPipelineTicket } from "@orkestrator/protocol/build-pipeline";
 
 afterEach(cleanupNodeScopes);
 const draft = {
   id: "draft-1",
   title: "Feature",
-  description: "Summary, problem and context",
+  description: "Summary: complete.\nProblem: missing feature.\nContext: fixture.",
   acceptanceCriteria: ["First check", "Second check"],
   notes: {
     summary: "Implemented fixture",
@@ -50,13 +51,87 @@ test("idle prompt tab offers Auto-pipeline and reviews editable criteria before 
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   expect(screen.getByText("Implemented fixture")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Reviewed feature" } });
+  // The description opens as rendered Markdown and turns into the raw text on activation.
+  expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /^Description, rendered/ }));
+  const description = screen.getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement;
+  expect(description.value).toBe(draft.description);
+  fireEvent.change(description, { target: { value: "## Summary\n\nReviewed **summary**" } });
+  fireEvent.blur(description);
+  expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
+  expect(await screen.findByRole("heading", { name: "Summary" })).toBeTruthy();
+  expect(screen.getByText("summary").tagName).toBe("STRONG");
+  // Criteria live on their own tab.
+  expect(screen.queryByLabelText("Criterion 1") === null).toBe(true);
+  const criteriaTab = screen.getByRole("tab", { name: "Acceptance criteria (2)" });
+  fireEvent.mouseDown(criteriaTab, { button: 0 });
+  fireEvent.click(criteriaTab);
   fireEvent.click(screen.getByRole("button", { name: "Move criterion 2 up" }));
-  expect((screen.getByLabelText("Criterion 1") as HTMLInputElement).value).toBe("Second check");
+  expect((screen.getByLabelText("Criterion 1") as HTMLTextAreaElement).value).toBe("Second check");
   fireEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));
   fireEvent.click(screen.getByRole("button", { name: "Add criterion" }));
   fireEvent.change(screen.getByLabelText("Criterion 2"), { target: { value: "New check" } });
   fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
   await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
+});
+
+test("criterion line breaks normalize and blank criteria explain why confirmation is disabled", async () => {
+  const node = client().respond(
+    "confirm_auto_pipeline",
+    (args: Readonly<Record<string, unknown>>) => {
+      parseAutoPipelineTicket(args.ticket);
+      return null;
+    },
+  );
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  const tab = await screen.findByRole("tab", { name: "Acceptance criteria (2)" });
+  fireEvent.mouseDown(tab, { button: 0 });
+  fireEvent.click(tab);
+  const criterion = screen.getByRole("textbox", { name: "Criterion 1" }) as HTMLTextAreaElement;
+  fireEvent.change(criterion, { target: { value: "First\r\nsecond\nthird\rfourth" } });
+  expect(criterion.value).toBe("First second third fourth");
+  fireEvent.change(criterion, { target: { value: "\n\r\n" } });
+  expect(criterion.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByText("Enter an acceptance criterion.").id).toBe(
+    criterion.getAttribute("aria-describedby")!,
+  );
+  const confirm = screen.getByRole("button", { name: "Confirm Auto-pipeline" });
+  expect(confirm.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(confirm);
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+  fireEvent.change(criterion, { target: { value: "First\nsecond" } });
+  expect(confirm.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(confirm);
+  await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
+  expect(
+    parseAutoPipelineTicket(node.calls("confirm_auto_pipeline")[0]!.args.ticket).acceptanceCriteria,
+  ).toEqual(["First second", "Second check"]);
+});
+
+test("Escape leaves the description editor open as a preview and preserves all draft edits", async () => {
+  const node = client();
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Edited title" } });
+  fireEvent.click(screen.getByRole("button", { name: /^Description, rendered/ }));
+  const editor = screen.getByRole("textbox", { name: "Description" });
+  const edited = "Summary: **Edited**.\nProblem: missing feature.\nContext: fixture.";
+  fireEvent.change(editor, { target: { value: edited } });
+  fireEvent.keyDown(editor, { key: "Escape", code: "Escape" });
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Description" }) === null).toBe(true);
+  expect((await screen.findByText("Edited")).tagName).toBe("STRONG");
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Edited title");
+  expect(node.calls("draft_auto_pipeline")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: /^Description, rendered/ }));
+  expect((screen.getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement).value).toBe(
+    edited,
+  );
 });
 test("running tab explains why drafting is disabled", async () => {
   renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {

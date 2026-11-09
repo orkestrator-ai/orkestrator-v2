@@ -94,7 +94,11 @@ path has been updated.
 
 `packages/toolchain/src/manifest.ts` is the authoritative artifact
 manifest for the five CLI-backed agents — Claude, Codex, OpenCode, Grok, and
-Pi. It contains one entry per supported platform and architecture:
+Pi. OpenCode has two binaries while it moves to 2.x: `opencode` (1.x) and
+`opencode2` (2.x, see [OpenCode 2.x](#opencode-2x-opencode2)). Enabling a
+platform installs every tool `agentPlatformForToolchain` assigns to it, so
+`opencode` brings both. Every pinned tool contains one entry per supported
+platform and architecture:
 
 - macOS arm64 and x64
 - Linux arm64 and x64
@@ -274,13 +278,14 @@ installs them from the registry before a publish.
 
 ### Container environments
 
-`docker/Dockerfile` has one exact build argument per CLI-backed agent —
+`docker/Dockerfile` has one exact build argument per pinned agent binary —
 `CLAUDE_CLI_VERSION`, `CODEX_CLI_VERSION`, `OPENCODE_CLI_VERSION`,
-`GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
+`OPENCODE2_CLI_VERSION`, `GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
 
 - `@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`
 - `@openai/codex@${CODEX_CLI_VERSION}`
-- OpenCode, Grok Build and Pi as pinned archives, each verified against a
+- OpenCode 1.x, OpenCode 2.x (as `/home/node/.opencode/bin/opencode2`,
+  `OPENCODE2_CLI_PATH`), Grok Build and Pi as pinned archives, each verified against a
   literal SHA-256 in the same `RUN` block. Those digests are a **second,
   independent** set from the manifest's — the image does not read the manifest —
   so a version bumped in only one place fails the build rather than shipping an
@@ -337,7 +342,7 @@ below.
      bun scripts/verify-toolchain-artifacts.ts --emit --tool=<name>
    ```
 
-   `--tool` accepts any of the five manifest names, including `grok` and `pi`.
+   `--tool` accepts any manifest name, including `grok`, `pi` and `opencode2`.
    Their artifact records are refreshed by exactly this command.
 
    Paste the emitted archive and executable sizes and SHA-256 values into the
@@ -1337,6 +1342,73 @@ the two calls together.
    `docker/Dockerfile`. It suppresses the check and the notice; `/update`
    stays reachable from the command palette as a deliberate user action.
    1.x now ships from upstream's `v1` branch; see `docs/todo/agent-engines/0008-opencode-v2.md`.
+
+### OpenCode 2.x (`opencode2`)
+
+OpenCode 2.x is pinned beside 1.x as a second binary of the `opencode`
+platform, for the 2.x provider being built in
+`docs/todo/agent-engines/0008-opencode-v2.md`. It is a separate pin, not a bump
+of the 1.x one: the 1.x pin, its SDK and its patch are unaffected, and the two
+move independently.
+
+- `PINNED_TOOLCHAIN_VERSIONS.opencode2` in `packages/toolchain/src/manifest.ts`
+  and `OPENCODE2_CLI_VERSION` in `docker/Dockerfile`. There is no SDK pin: the
+  2.x client is the backend's own (`apps/backend/src/core/opencode2/`), not
+  `@opencode/client`.
+- Artifacts are the per-platform npm packages `@opencode/cli-<target>`
+  (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`; the optional
+  dependencies of `@opencode/cli`), fetched from `registry.npmjs.org`. The
+  executable is `package/bin/opencode` in each tarball and is installed as
+  `opencode2`, so it never takes the 1.x binary's `opencode` name in the shared
+  activation directory. Use the glibc builds; the `-musl` and `-baseline`
+  variants are not used. The darwin binaries are published validly signed, so
+  `repairInvalidMacSignature` is not set and the installed bytes are the
+  upstream bytes.
+- The container installs it at `/home/node/.opencode/bin/opencode2`
+  (`OPENCODE2_CLI_PATH`), checks it with `--version` at build time and records
+  it as `agents.opencode2` in the image manifest. `OPENCODE_DISABLE_AUTOUPDATE=1`
+  covers both binaries.
+- Nothing launches it yet. Until the 2.x provider lands, a bump needs only the
+  artifact steps below.
+
+To bump it:
+
+1. Confirm all four `@opencode/cli-<target>@<version>` packages are published
+   (`npm view @opencode/cli-linux-x64@<version> version`, and so on).
+2. Set the version in `PINNED_TOOLCHAIN_VERSIONS.opencode2` and
+   `ARG OPENCODE2_CLI_VERSION`.
+3. Record each target's archive and executable size and SHA-256. The live
+   verifier downloads the tarballs the manifest's URLs name and prints them:
+
+   ```bash
+   RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 \
+     bun scripts/verify-toolchain-artifacts.ts --emit --tool=opencode2
+   ```
+
+   To cross-check by hand, in an empty directory per target:
+   `npm pack @opencode/cli-<target>@<version>` (archive: `stat` and
+   `shasum -a 256` of the `.tgz`), then `tar -xzf` it without running any
+   install script and hash `package/bin/opencode` the same way (executable).
+   The two must agree with the verifier's output.
+4. Paste the values into the four `openCode2Artifact(...)` calls, and copy the
+   two `linux` archive digests into the Dockerfile's `OPENCODE2_SHA` branches
+   (`amd64` is `linux-x64`, `arm64` is `linux-arm64`); `version-drift.test.ts`
+   holds them to the manifest.
+5. Assert the manifest against fresh downloads (the same command without
+   `--emit`). On macOS, check the darwin binary still verifies
+   (`codesign -v <extracted binary>`); if it does not, set
+   `repairInvalidMacSignature` on the darwin entries and drop nothing else.
+6. Prove the install path end to end with a temporary data directory, never the
+   app's own (`mise run toolchain:install` repoints the real app's toolchain):
+   call `installPinnedToolchains({ dataDir: <temp>, tools: ["opencode2"] })`
+   from `packages/toolchain/src/install.ts` with `HOME` and `XDG_*` pointed
+   into the same temporary directory. It downloads, verifies, probes
+   `--version` (2.2.6 prints `opencode v2.2.6`) and activates. 2.x's
+   `--version` creates its XDG directories and a log file but no database.
+7. Run `bun test ./tests/unit/version-drift.test.ts ./tests/unit/download-agent.test.ts --parallel=2`.
+
+Once the 2.x provider exists, a bump also follows that provider's own checks
+(the "Qualification" list in `0008-opencode-v2.md`).
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).

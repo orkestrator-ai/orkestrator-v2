@@ -2,6 +2,7 @@ import { attachmentsReferencedByPath } from "@orkestrator/protocol/initial-promp
 import {
   nativeAsyncQuestionItemId,
   type NativeAgentSessionActionOutcome,
+  type NativeAgentSteerDelivery,
 } from "@orkestrator/protocol/native-agent";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 
@@ -199,6 +200,34 @@ export function autoSteerNotice(
         tone: "info",
         message: `${label} finished the turn before it could be steered, so your message is queued.`,
       };
+  }
+}
+
+/**
+ * What to tell the user after a direct steer (the composer's `/steer`, the
+ * Agent Info steer box) was delivered. A steer that missed its turn is not an
+ * error: the backend sent it as a new turn, or queued it behind the turn that
+ * is running now (`deliveredAs`), so the draft is not given back to resend.
+ * `target` names the turn in the plain case ("the active Codex turn").
+ */
+export function directSteerNotice(
+  outcome: { deliveredAs?: NativeAgentSteerDelivery },
+  label: string,
+  target = `the active ${label} turn`,
+): NonNullable<AutoSteerNotice> {
+  switch (outcome.deliveredAs) {
+    case "new-turn":
+      return {
+        tone: "info",
+        message: `${label} finished the turn first, so your message was sent as a new turn.`,
+      };
+    case "queued":
+      return {
+        tone: "info",
+        message: "Your message missed the active turn, so it was queued as the next turn.",
+      };
+    default:
+      return { tone: "success", message: `Sent to ${target}` };
   }
 }
 

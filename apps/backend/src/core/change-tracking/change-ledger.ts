@@ -139,6 +139,19 @@ const lifecyclesWhere = (kind: "active" | "terminal"): TurnLifecycle[] =>
 
 export const TERMINAL_TURN_LIFECYCLES: ReadonlySet<string> = new Set(lifecyclesWhere("terminal"));
 
+/** A turn the provider accepted that has not ended. */
+const EXECUTING_TURN_LIFECYCLES = [
+  "running",
+  "settling",
+  "capturing-end",
+] as const satisfies readonly TurnLifecycle[];
+/** A turn the provider accepted that has ended (a refused one is `abandoned`). */
+const EXECUTED_TURN_LIFECYCLES = [
+  "finalized",
+  "interrupted",
+  "end-unavailable",
+] as const satisfies readonly TurnLifecycle[];
+
 /** The lifecycle states of one kind, as a SQL list. They are literals from this file. */
 export const turnLifecycleSqlList = (kind: "active" | "terminal"): string =>
   lifecyclesWhere(kind)
@@ -1026,6 +1039,25 @@ export class ChangeLedger {
     const [age, id] = JSON.parse(stored) as [string, string];
     const own = turn.finished_at ?? turn.started_at;
     return own < age || (own === age && turn.turn_id <= id);
+  }
+
+  /**
+   * How far a segment's turns have got: `executing` while one the provider
+   * accepted is still running, `executed` once one has run, `none` when every
+   * turn so far was refused or is still being prepared. A segment whose only
+   * turn was refused has no thread history to show.
+   */
+  segmentTurnProgress(threadId: string, segmentId: string): "none" | "executing" | "executed" {
+    const lifecycles = (list: readonly TurnLifecycle[]) =>
+      list.map((lifecycle) => `'${lifecycle}'`).join(", ");
+    const has = (list: readonly TurnLifecycle[]) =>
+      this.db
+        .query(
+          `SELECT 1 AS found FROM change_turn_boundaries WHERE thread_id = ? AND segment_id = ? AND lifecycle IN (${lifecycles(list)}) LIMIT 1`,
+        )
+        .get(threadId, segmentId) !== null;
+    if (has(EXECUTING_TURN_LIFECYCLES)) return "executing";
+    return has(EXECUTED_TURN_LIFECYCLES) ? "executed" : "none";
   }
 
   latestTurnForThread(threadId: string): TurnBoundaryRow | null {

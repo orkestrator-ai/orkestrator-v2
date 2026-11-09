@@ -135,6 +135,7 @@ function harness(
   };
   const createClient = mock(() => client);
   const onLoginChanged = mock(() => {});
+  const mirrorToOpenCode2 = mock(async (_context: unknown, _providerId: string) => "written");
   const login = createOpenCodeProviderLogin({
     withServer: async (_context, use) => {
       servers.push("started");
@@ -146,9 +147,10 @@ function harness(
     },
     createClient: createClient as unknown as typeof createOpencodeClient,
     onLoginChanged,
+    mirrorToOpenCode2,
     ...options,
   });
-  return { login, calls, servers, onLoginChanged, createClient };
+  return { login, calls, servers, onLoginChanged, createClient, mirrorToOpenCode2 };
 }
 
 afterEach(() => {
@@ -307,6 +309,36 @@ describe("OpenCode provider login", () => {
     expect(onLoginChanged).toHaveBeenCalledTimes(1);
   });
 
+  test("mirrors a saved key and a sign-out into OpenCode 2 after 1.x took them", async () => {
+    const { login, calls, mirrorToOpenCode2 } = harness();
+    await login.setApiKey(context, "opencode-go", SECRET_KEY);
+    await login.signOut(context, "openai");
+    expect(calls.map((call) => call.route)).toEqual(["set", "remove"]);
+    expect(mirrorToOpenCode2.mock.calls.map((call) => call[1])).toEqual(["opencode-go", "openai"]);
+    // The key itself never reaches the mirror; it reads the store 1.x wrote.
+    expect(JSON.stringify(mirrorToOpenCode2.mock.calls)).not.toContain(SECRET_KEY);
+  });
+
+  test("a failed OpenCode 2 mirror is reported after 1.x saved the key", async () => {
+    const { login, calls, onLoginChanged } = harness({
+      mirrorToOpenCode2: async () => {
+        throw new Error(`could not reach ${SECRET_KEY}`);
+      },
+    });
+    const { output } = await captureOutput(async () => {
+      await expect(login.setApiKey(context, "opencode-go", SECRET_KEY)).rejects.toThrow(
+        "OpenCode 2 could not be updated",
+      );
+    });
+    expect(calls.map((call) => call.route)).toEqual(["set"]);
+    expect(onLoginChanged).toHaveBeenCalledTimes(1);
+    expectNoCanary(output, "mirror failure output");
+    // The reservation is released, so a retry can repeat both writes.
+    await expect(login.signOut(context, "opencode-go")).rejects.toThrow(
+      "OpenCode 2 could not be updated",
+    );
+  });
+
   test.each(["save", "remove", "oauth"] as const)(
     "a pending save excludes %s across login instances through server shutdown",
     async (other) => {
@@ -418,7 +450,7 @@ describe("OpenCode provider login", () => {
 
   test("runs an automatic OAuth sign-in to completion", async () => {
     const approved = deferred<unknown>();
-    const { login, calls, servers, onLoginChanged, createClient } = harness({
+    const { login, calls, servers, onLoginChanged, createClient, mirrorToOpenCode2 } = harness({
       authorize: {
         data: { url: CANARY_LOGIN_URL, method: "auto", instructions: "Enter code: ABCD-EFGH" },
       },
@@ -460,6 +492,7 @@ describe("OpenCode provider login", () => {
     expect(calls[1]!.input).toEqual({ providerID: "openai", method: 1 });
     expect(servers).toEqual(["started", "stopped"]);
     expect(onLoginChanged).toHaveBeenCalledTimes(1);
+    expect(mirrorToOpenCode2.mock.calls.map((call) => call[1])).toEqual(["openai"]);
     expectNothingSecretLogged(output, "OAuth sign-in");
   });
 

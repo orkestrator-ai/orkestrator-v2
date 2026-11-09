@@ -7,6 +7,7 @@ import type {
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { LogDetail } from "@orkestrator/protocol/log-policy";
 import type { MultiReviewEngine } from "@orkestrator/protocol/multi-review";
+import type { OpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import {
   isShippedReviewLensPresetList,
   type ReviewLensPreset,
@@ -46,6 +47,8 @@ export interface CoreFieldsSnapshot {
   coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
   agentSettings: AgentSettingsTier;
   openCodeModelProviders: string[];
+  /** Which OpenCode line new interactive host sessions use; `legacy` is 1.x. */
+  openCodeProtocol: OpenCodeProtocol;
   codexMaxConcurrentThreads: number;
   claudeBackgroundCommandLimitHours: number;
   sessionTitleGeneration: SessionTitleGenerationPolicy;
@@ -88,6 +91,7 @@ const STORED_AS_IS = [
   "coordinatorResearchMcpServers",
   "agentSettings",
   "openCodeModelProviders",
+  "openCodeProtocol",
   "codexMaxConcurrentThreads",
   "terminalAppearance",
   "terminalScrollback",

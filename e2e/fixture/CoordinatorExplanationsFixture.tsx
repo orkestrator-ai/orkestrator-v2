@@ -3,6 +3,7 @@ import { NativeComposeDock } from "../../apps/web/src/components/chat/NativeComp
 import { NativeComposeBar } from "../../apps/web/src/components/chat/NativeComposeBar";
 import type { MentionableInputRef } from "../../apps/web/src/components/chat/MentionableInput";
 import { AgentModelPicker } from "../../apps/web/src/components/chat/AgentModelPicker";
+import { COORDINATOR_COMPOSER_PLACEHOLDER } from "../../apps/web/src/components/projects/CoordinatorPanelNotices";
 import { CoordinatorIntroCard } from "../../apps/web/src/components/projects/CoordinatorIntro";
 import { CoordinatorToolbar } from "../../apps/web/src/components/projects/CoordinatorToolbar";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
@@ -60,7 +61,7 @@ export function CoordinatorExplanationsFixture() {
             onKeyDown={() => {}}
             attachments={[]}
             onRemoveAttachment={() => {}}
-            placeholder="Ask the coordinator"
+            placeholder={COORDINATOR_COMPOSER_PLACEHOLDER}
             primaryControls={
               <AgentModelPicker
                 models={[{ platform: "codex", id: "model", label: "Fixture model" }]}
@@ -86,7 +87,6 @@ export function CoordinatorExplanationsFixture() {
               />
             }
             onSend={() => setSent(true)}
-            footer={<div>Start a message with ! to run a command yourself.</div>}
           />
           <button onClick={() => setText("Explain this project")}>Explain this project</button>
           {sent ? <output>Message sent</output> : null}

@@ -26,6 +26,7 @@ import {
   DOCKER_LABEL_RUNTIME_GENERATION,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
+  OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "./docker-ownership.js";
@@ -560,6 +561,7 @@ export async function createDockerContainer(
       CURSOR_BRIDGE_PORT,
       GROK_ACP_BRIDGE_PORT,
       PI_BRIDGE_PORT,
+      OPENCODE2_SERVER_PORT,
     ].flatMap((port) => ["-p", `127.0.0.1::${port}/tcp`]),
   ];
   // The namespace owner publishes: the gateway when there is one.

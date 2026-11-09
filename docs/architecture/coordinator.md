@@ -881,17 +881,19 @@ places the user acts:
 - **Side agents.** **New side agent**'s tooltip and a side composer's hint
   say that a side agent can read the project and talk to the main but cannot
   launch workers. A side composer has its own placeholder ("Ask a question
-  about this project") rather than the main's "What would you like to get
-  done?", and no starter prompts.
-- **`!` commands.** Every coordinator composer has a hint line under it:
-  "Start a message with ! to run a command yourself in this checkout." The
-  panel footer speaks of the coordinator's own work ("The coordinator hands
-  code changes, builds and fixes to build pipelines and prompt
-  environments"), so it does not contradict a command the user runs. A first
-  message cannot be a command (see [User `!` commands](#user--commands)); the
-  rule is shown inline under the composer, with the text kept, until the text
-  no longer starts with `!`.
-- **The read-only tier.** The toolbar badge names the selected
+  about this project. …") rather than the main's "What would you like to get
+  done? …", and no starter prompts.
+- **`@` and `!`.** Every coordinator composer's placeholder ends with "Type
+  @ to mention a file, or start with ! to run a command yourself.", so the
+  guidance shows in the empty box and is out of the way once the user types.
+  The main composer has no hint line under it and the panel has no footer:
+  where changes run is the toolbar badge's job. A first message cannot be a
+  command (see [User `!` commands](#user--commands)); the rule is shown
+  inline under the composer, with the text kept, until the text no longer
+  starts with `!`.
+- **The read-only tier.** The toolbar badge ("Changes run in isolated
+  environments") is coloured text with no box around it; only its tier pill
+  keeps an outline. It names the selected
   conversation's tier as a pill ("Read-only · Enforced",
   "Read-only · Provider-configured", "Read-only · Advisory"); only an
   `advisory` platform is called advisory. The badge opens a menu, so it
@@ -918,7 +920,7 @@ capability profile is rated by exactly the same rules as a coordinator.
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
 | `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox can run commands (macOS; Linux whose bubblewrap can nest a user namespace, with `socat` on `PATH`); Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode (1.x and the OpenCode 2 preview alike; see below), Cursor; Claude where the command sandbox cannot run commands (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace, such as Ubuntu's AppArmor `bwrap-userns-restrict`) |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Coordinator → Coordinator safety level** chooses the weakest
@@ -1014,7 +1016,51 @@ which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
 user sets their own `OPENCODE_CONFIG_DIR`
 ([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
 Both layers are qualified on the pinned binary with a loopback model
-(`opencode-coordinator-read-boundary-live.test.ts`). Cursor applies the sandbox
+(`opencode-coordinator-read-boundary-live.test.ts`).
+
+Under the OpenCode 2 preview (Settings → OpenCode, "Use OpenCode 2 for new
+sessions") a coordinator conversation started from then on runs on OpenCode
+2.x; one started earlier stays on 1.x (`opencode2/coordinator.ts`). Its 2.x
+server is its own process, keyed by the conversation's runtime id, so the
+boundary is held by that process's launch rather than by any session record:
+
+- It is launched with `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`,
+  the data directory, the research setting of the moment, and
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1`, so the checkout's `opencode.json`,
+  `.opencode/` agents, commands, plugins and MCP servers never load. This is
+  the axis 1.x cannot honour; a changed research setting replaces an idle
+  server, as it replaces the 1.x one.
+- Its configuration directory (`opencode2/coordinator-config` under the data
+  directory, never the ordinary one) holds the coordinator guard plugin
+  (`coordinator-plugin.ts`). In the server process, on every tool call a
+  sub-agent's included, it refuses any tool outside the read-only set, the
+  conversation's control tools and the research servers named at launch,
+  whatever a session's stored rules say, and refuses a `read`, `grep`, `glob`
+  or `list` that would reach the data directory, resolving links (2.2.6, like
+  1.x, judges `external_directory` from the path as written). The checkout and
+  the conversation's attachment directory stay readable.
+- The backend keeps the launch's policy beside the process. The provider built
+  for that server ignores a request's policy and a session's stored base:
+  create, resume, policy synchronization and every turn write the coordinator
+  rules (1.x's, translated) and read them back before the prompt, pin the
+  `plan` agent, and refuse provider commands (2.x does not say which agent a
+  command runs as). The conversation's Control MCP credential, the one its 1.x
+  server was launched with, is registered as the location's `orkestrator`
+  server, and the research servers as theirs.
+
+This is qualified against the pinned 2.2.6 binary with a scripted model
+(`opencode2-coordinator.live.test.ts`): no write, no command, no read of the
+data directory directly, through a link or from a sub-agent, the control and
+research tools reached, a session widened behind the backend's back refused
+by the server and restated by the next turn, and the project configuration
+not loaded where a server without the switch loads it. The tier stays
+`provider-configured`: the live coordinator suite has not been run against
+OpenCode 2 with a real model, the table rates one tier per platform while
+earlier conversations remain on 1.x, and the server process itself runs
+unsandboxed (its boundary is OpenCode's rules plus the in-process gate, not an
+OS sandbox).
+
+Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
 sandbox cannot be enabled. Its reading tools still reach the data directory
 ([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
@@ -3735,6 +3781,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `conformance-coordinator-sandbox-live.test.ts` (claude-bridge)
 - research servers on the pinned OpenCode, with a real `opencode serve` and a
   local MCP server: `opencode-coordinator-research-live.test.ts`
+- a coordinator on the OpenCode 2 preview, against the pinned 2.x binary with a
+  scripted model (`RUN_LIVE_OPENCODE2=1`): no write, command or data-directory
+  read, control and research tools reached, a widened session refused by the
+  server's guard and restated, project configuration off:
+  `opencode2-coordinator.live.test.ts`; the guard's source in
+  `coordinator-plugin.test.ts`, the rules, launch and routing in
+  `coordinator.test.ts`, `opencode2-host-server.test.ts` and
+  `native-agent-opencode-protocol.test.ts`
 - coordinator skills on Codex against the real pinned app-server with a
   loopback model (`RUN_LIVE_CODEX_APP_SERVER=1`): `live-coordinator-skills.test.ts`
   (codex-bridge); the extra roots, read grants and project-skill rule in
@@ -3833,9 +3887,44 @@ Coordinator conversations (including side conversations) show an Actions panel
 in the pane's existing floating-notice stack. It shares the mail banner's gutter
 measurement: with at least 14rem beside the 56rem transcript column it docks
 there, below the notices; otherwise it folds to an icon with a waiting count.
-Hover or keyboard focus opens the overlay, a 160ms grace period allows pointer
-travel, and leaving both pointer and focus closes it. Escape closes it
-immediately; touch clicks toggle it. Expansion respects reduced motion.
+
+The panel's header ("Actions", the waiting count and a minimise mark) is a
+button labelled "Collapse actions" with `aria-expanded`. Clicking it, or Enter
+or Space on it, folds the panel into the icon at the same top-right position,
+and focus moves to the icon.
+
+- **Wide panes (docked).** The panel is sticky. Folded, it stays folded until
+  the icon is clicked (hover and focus do not open it); open, it stays open
+  through clicks elsewhere, card clicks, pointer leave, focus leave and Escape,
+  until its header is clicked again. Opening from the icon moves focus to the
+  header. The choice is a local UI preference
+  (`coordinator-actions-preference.ts`, localStorage key
+  `orkestrator.coordinator-actions.docked`), shared by every coordinator
+  conversation and every window of the origin; other windows follow it through
+  the `storage` event. It is open by default.
+- **Narrow panes (overlay).** Hover or keyboard focus opens the overlay, a
+  160ms grace period allows pointer travel, and leaving both pointer and focus
+  closes it. Escape closes it immediately; touch clicks toggle it. A click or
+  tap outside the overlay and its icon closes it at once, and so does its
+  header. The overlay's open state is transient and never touches the
+  preference.
+- **Resizing.** Crossing the breakpoint starts each mode in its own state:
+  going narrow shows the folded icon, and going wide restores the remembered
+  docked choice rather than carrying over the overlay's open state.
+
+Showing and hiding animate a short contraction toward the icon; reduced motion
+shows and hides without a transition in both modes.
+
+The panel never scrolls. It shows only the newest whole cards (at most ten)
+that fit between its top and the pane's bottom margin, dropping the oldest
+first; no card is cut part-way. The floating-notice layer passes its measured
+available height to the panel (`FloatingNoticeSlot`'s `heightPx`). Each change
+of cards, width, available height or the panel's position in the stack (a
+notice above it appearing or resizing) renders every card once, measures it
+and hides the oldest that do not fit, before the browser paints. Scroll sync
+still decides which cards are eligible; the height fit then trims that set.
+The header and its waiting count always show, and the count includes cards
+trimmed for height.
 
 Cards represent structured PR status notices, question tools and asynchronous
 questions, and explicit topic/question marks. Merged or closed PRs and answered
@@ -3856,7 +3945,8 @@ Transcript replay derives topic anchors from the preceding actual user message
 and question anchors from the message holding the tool call; mail and automatic
 prompts do not start user subjects. The next actual user message handles a
 marked plain-text question. No additional model call or renderer persistence
-store is used.
+store is used for cards; the only renderer persistence is the docked panel's
+open or folded preference above.
 
 The panel replays historical action evidence together with the loaded transcript in order, then shows the newest ten
 cards whose anchor is at or above the viewport bottom. The virtual list measures

@@ -38,6 +38,7 @@ import type {
   NativeAgentCommandIntent,
   NativeAgentControlUpdate,
   NativeAgentExecutionPolicy,
+  NativeAgentModelSubstitution,
 } from "../../../native-agent.js";
 import type { NativeAgentGoal } from "../../../native-agent-goal.js";
 import type { TrustedUserPromptPresentation } from "../../../review-evidence-frames.js";
@@ -414,6 +415,8 @@ export const PendingSteerSchema = openRecord({
   text: Schema.String,
   inputDigest: Schema.String,
   expectedRunId: Schema.String,
+  onMissedTurn: Schema.optional(Schema.Literals(["refuse", "new-turn"])),
+  turnRequestId: optionalString,
   state: Schema.Literals(["prepared", "unknown"]),
   /** Source reservation survives until delivery or definitive non-delivery. */
   sourceQueue: Schema.optional(Schema.Literal(true)),
@@ -476,6 +479,12 @@ const nativeAgentSessionFields = {
   agent: NativeAgentProviderSchema,
   logicalSessionKey: Schema.String,
   providerSessionId: Schema.String,
+  /**
+   * The OpenCode line serving `providerSessionId`: `v2` for an OpenCode 2.x
+   * session. Absent means legacy (1.x), as for every record written before
+   * the 2.x preview. Set once, at creation; never changes.
+   */
+  openCodeProtocol: Schema.optional(Schema.Literal("v2")),
   origin: Schema.Literals(AGENT_INTERACTION_ORIGINS),
   interactionPolicy: protocolObject<AgentInteractionPolicy>(),
   /** Provider-neutral interactive choices that survive renderer and backend restarts. */
@@ -503,6 +512,13 @@ const nativeAgentSessionFields = {
    * platform with turn recovery.
    */
   openCodeIncompleteTurnNotice: Schema.optional(IncompleteTurnNoticeSchema),
+  /**
+   * The model this session was created on in place of the one it asked for, and
+   * the message saying so. Set once, at creation, so every tab reading the
+   * session shows it, including when the first dispatch created the session
+   * and no renderer saw the ensure answer.
+   */
+  modelSubstitutionNotice: selfValidated<NativeAgentModelSubstitution>(),
   /** Bounded, content-free outcomes of recent turns keyed by their request id. */
   turnOutcomes: Schema.optional(mutableArray(TurnOutcomeSchema)),
   /** "Continue in…" handoffs this session's journal delivered. */
@@ -585,6 +601,8 @@ export const DispatchOutcomeSchema = openRecord({
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
   origin: optionalString,
+  /** A retried steer that missed its turn: `new-turn` or `queued`. */
+  deliveredAs: optionalString,
 });
 
 /** `NativeAgentSessionActionOutcome` (native-agent.ts), including a verified steer refusal. */
@@ -594,6 +612,8 @@ export const SessionActionOutcomeSchema = openRecord({
   shareUrl: optionalString,
   preview: Schema.optional(Schema.Unknown),
   requestId: optionalString,
+  /** A steer that missed its turn: `new-turn` or `queued` (0005 task 10). */
+  deliveredAs: optionalString,
 });
 
 /** `AgentInteractionApplyOutcome` (agent-interactions.ts). */

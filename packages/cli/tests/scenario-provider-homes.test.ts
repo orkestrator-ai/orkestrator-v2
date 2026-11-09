@@ -22,7 +22,16 @@ import {
   prepareIsolatedBackendEnvironment,
 } from "../scenarios/provider-homes.js";
 import { prepareProviderRuntime, REPOSITORY_BRIDGES } from "../scenarios/provider-runtime.js";
-import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
+import {
+  PINNED_TOOLCHAIN_VERSIONS,
+  agentPlatformForToolchain,
+  agentToolchainsForPlatform,
+} from "@orkestrator/toolchain/manifest";
+
+/** Platforms with a pinned binary. `opencode2` is a second OpenCode binary, not one. */
+const PINNED_PLATFORMS = [
+  ...new Set(Object.keys(PINNED_TOOLCHAIN_VERSIONS).map(agentPlatformForToolchain)),
+];
 
 /**
  * Live scenarios must never write into the host's provider homes, and may see
@@ -597,12 +606,17 @@ describe("prepareProviderRuntime", () => {
     return { packageRoot, root, dataDir, repo: path.join(base, "repo") };
   }
 
-  test("every manifest agent installs its pinned tool; Cursor and support tools are excluded", async () => {
-    for (const provider of [...Object.keys(PINNED_TOOLCHAIN_VERSIONS), "cursor", "gh"]) {
+  test("every manifest agent installs its pinned tools; Cursor and support tools are excluded", async () => {
+    // `opencode2` is listed to prove a tool that is not a platform installs nothing on its own.
+    for (const provider of [...PINNED_PLATFORMS, "opencode2", "cursor", "gh"]) {
       const { packageRoot, root, dataDir } = await layout();
       const runtime = await prepareProviderRuntime({ root, dataDir, packageRoot, provider });
       expect(runtime.toolchainTools).toEqual(
-        Object.hasOwn(PINNED_TOOLCHAIN_VERSIONS, provider) ? [provider] : [],
+        provider === "opencode"
+          ? ["opencode", "opencode2"]
+          : PINNED_PLATFORMS.includes(provider)
+            ? [provider]
+            : [],
       );
     }
   });
@@ -619,7 +633,10 @@ describe("prepareProviderRuntime", () => {
         }),
         // An agent-test backend never falls back to PATH, so a packaged
         // provider still needs its pinned binary.
-      ).toEqual({ serveArgs: [], toolchainTools: provider ? [provider] : [] });
+      ).toEqual({
+        serveArgs: [],
+        toolchainTools: provider ? agentToolchainsForPlatform(provider) : [],
+      });
     }
     expect(await readdir(dataDir)).toEqual([]);
   });
@@ -660,7 +677,7 @@ describe("prepareProviderRuntime", () => {
     },
   );
 
-  test.each([...Object.keys(PINNED_TOOLCHAIN_VERSIONS), "cursor"])(
+  test.each([...PINNED_PLATFORMS, "cursor"])(
     "startIsolatedBackend wires %s resources and installs only its pinned tools",
     async (provider) => {
       const { packageRoot, root, dataDir } = await layout();
@@ -719,8 +736,7 @@ setInterval(() => {}, 1000);
             "--json",
             "--data-dir",
             dataDir,
-            "--tool",
-            provider,
+            ...agentToolchainsForPlatform(provider).flatMap((tool) => ["--tool", tool]),
           ]);
       } finally {
         await backend.stop();

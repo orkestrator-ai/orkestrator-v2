@@ -78,7 +78,7 @@ ever generated from a port scan.
 Container targets require the container to carry this backend's owner label
 and the environment's ID label. Orkestrator's own ports (gateway, Control MCP,
 agent tools, local agent servers, Docker API ports) and in-container agent
-servers (4096–4101) are refused with `forbidden`. Container targets are reached
+servers (4096–4102) are refused with `forbidden`. Container targets are reached
 only through Docker's loopback binding for that exact application port, and
 manual targets are backend-loopback only: an arbitrary remote host is never a
 target.

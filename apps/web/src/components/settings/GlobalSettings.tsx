@@ -14,6 +14,10 @@ import {
   type MultiReviewEngine,
 } from "@orkestrator/protocol/multi-review";
 import {
+  resolveOpenCodeProtocol,
+  type OpenCodeProtocol,
+} from "@orkestrator/protocol/opencode-protocol";
+import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
   type CoordinatorResearchMcpServer,
@@ -134,6 +138,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     ),
     agentSettings: normalizeAgentSettings(global.agentSettings),
     openCodeModelProviders: normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+    openCodeProtocol: resolveOpenCodeProtocol(global.openCodeProtocol),
     codexMaxConcurrentThreads:
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     claudeBackgroundCommandLimitHours: resolveClaudeBackgroundCommandLimitHours(
@@ -233,6 +238,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     coordinatorWebResearchSetting(global.coordinatorWebResearch),
     normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers),
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+    resolveOpenCodeProtocol(global.openCodeProtocol),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
@@ -321,6 +327,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   >(() => normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers));
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
+  );
+  const [openCodeProtocol, setOpenCodeProtocol] = useState<OpenCodeProtocol>(() =>
+    resolveOpenCodeProtocol(global.openCodeProtocol),
   );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
@@ -460,6 +469,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     );
     setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
+    setOpenCodeProtocol(resolveOpenCodeProtocol(global.openCodeProtocol));
     setCodexMaxConcurrentThreads(
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
@@ -658,6 +668,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       coordinatorResearchMcpServers,
       agentSettings: normalizeAgentSettings(agentSettings),
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
+      openCodeProtocol,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
@@ -703,6 +714,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       coordinatorResearchMcpServers,
       agentSettings,
       openCodeModelProviders,
+      openCodeProtocol,
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
@@ -1109,6 +1121,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
+    openCodeProtocol,
+    setOpenCodeProtocol,
     planUsageRefreshToken,
     setPlanUsageRefreshToken,
     openCodeProviderDraft,

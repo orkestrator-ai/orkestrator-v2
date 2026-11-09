@@ -172,8 +172,11 @@ The backend merges runtime actions into the provider list
 (`withSessionActionSlashCommands`):
 
 - `/steer` is **reserved** while steering is qualified: it acts on the live
-  turn and never starts a new one. When steering is unavailable a provider's
-  own `/steer` is kept, not deleted.
+  turn, and is offered only while one runs. When that turn ends (or another
+  starts) before the steer reaches it, the backend sends the text as the next
+  turn instead of refusing it: at once when nothing is running, through the
+  prompt queue otherwise (`native-agent-missed-steer.ts`). When steering is
+  unavailable a provider's own `/steer` is kept, not deleted.
 - `/compact` **defers**: a provider that ships its own `/compact` (Claude's
   SDK) keeps it; otherwise the row runs the existing compact session action.
   The action takes optional instructions for the summary
@@ -346,6 +349,14 @@ catalogue read cannot let `/clear` reach the CLI.
   another whole-directory check. A disposal failure keeps the catalogue
   `stale` and suppresses automatic retries until the next explicit refresh
   (`opencode-command-reload.ts`).
+- **OpenCode 2.x sessions** (the preview line): `GET /api/command` lists
+  `{ name, description }` only, through the same registry and resolver as
+  1.x (`opencode2/commands.ts`). A selection runs as `POST
+  /api/session/:id/command { name, text, delivery: "queue" }`, which answers
+  204 once the command's prompt is admitted (not when its turn ends); an
+  unknown name is 404 `CommandNotFoundError`, a refusal. The expanded prompt
+  carries no metadata, so an ambiguous command reads `unknown` afterwards and
+  is never re-sent. Refresh re-reads the list (`reread`). Observed on 2.2.6.
 - **Pi**: extensions win over skills and templates, as in the SDK, and only
   the effective winner is listed. Before a session attaches, the bridge lists
   its templates and skills from Pi's own `DefaultResourceLoader` with

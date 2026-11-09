@@ -4,6 +4,7 @@ import {
   attachmentsSteerByPath,
   autoSteerNotice,
   queuedPromptSteerable,
+  directSteerNotice,
   queuedSteerNote,
   shouldAutoSteer,
   steerRefusalNote,
@@ -281,4 +282,28 @@ test("refusal history evicts the oldest and clears a successful retry without mu
   history = updateSteerRefusals(history, "0", steerRefusalNote({ outcome: "applied" }, "Claude"));
   expect(history.has("0")).toBe(false);
   expect(updateSteerRefusals(history, "absent", undefined)).toBe(history);
+});
+
+describe("directSteerNotice", () => {
+  test("names the turn a steer reached", () => {
+    expect(directSteerNotice({}, "Codex")).toEqual({
+      tone: "success",
+      message: "Sent to the active Codex turn",
+    });
+    expect(directSteerNotice({}, "Codex", "the active turn")).toEqual({
+      tone: "success",
+      message: "Sent to the active turn",
+    });
+  });
+
+  test("says how a steer that missed its turn was delivered, never as an error", () => {
+    expect(directSteerNotice({ deliveredAs: "new-turn" }, "Codex")).toEqual({
+      tone: "info",
+      message: "Codex finished the turn first, so your message was sent as a new turn.",
+    });
+    expect(directSteerNotice({ deliveredAs: "queued" }, "Codex")).toEqual({
+      tone: "info",
+      message: "Your message missed the active turn, so it was queued as the next turn.",
+    });
+  });
 });

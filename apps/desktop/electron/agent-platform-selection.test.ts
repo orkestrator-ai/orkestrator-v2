@@ -139,6 +139,17 @@ describe("pinned artifacts for a platform selection", () => {
     ]);
   });
 
+  test("OpenCode installs its 1.x and 2.x binaries; opencode2 is not a platform", () => {
+    expect(pinnedArtifactsForPlatforms(["opencode"], "linux", "arm64").map((a) => a.name)).toEqual([
+      "opencode",
+      "opencode2",
+      "gh",
+    ]);
+    expect(pinnedArtifactsForPlatforms(["opencode2"], "linux", "arm64").map((a) => a.name)).toEqual(
+      ["gh"],
+    );
+  });
+
   test("selects nothing when no platform is enabled", () => {
     // A profile with no selected platform must not download any toolchain.
     expect(pinnedArtifactsForPlatforms([], "darwin", "arm64")).toEqual([]);

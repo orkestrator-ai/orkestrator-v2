@@ -4529,6 +4529,7 @@ describe("AgentInfoButton backend-owned steering", () => {
   function steerOutcome(outcome: {
     outcome: "applied" | "idle" | "mismatch" | "unknown";
     requestId?: string;
+    deliveredAs?: "new-turn" | "queued";
   }) {
     nativeInvokeMock.mockImplementation((command: string) => {
       if (command === "perform_native_agent_session_action") return Promise.resolve(outcome);
@@ -4612,6 +4613,26 @@ describe("AgentInfoButton backend-owned steering", () => {
     );
     expect(input.value).toBe("wait");
   });
+
+  for (const [deliveredAs, message] of [
+    ["new-turn", "Codex finished the turn first, so your message was sent as a new turn."],
+    ["queued", "Your message missed the active turn, so it was queued as the next turn."],
+  ] as const) {
+    test(`clears the text and says so when the steer was delivered as ${deliveredAs}`, async () => {
+      seedRunningCodex();
+      steerOutcome({ outcome: "applied", deliveredAs, requestId: "turn-1" });
+      renderInAppCommandScope(<AgentInfoButton activeTab={codexTab()} />);
+      open();
+
+      const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "wait" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+      await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+      expect(input.value).toBe("");
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+  }
 
   test("reports an authoritative run mismatch without clearing the text", async () => {
     seedRunningCodex();

@@ -3,6 +3,7 @@ import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -472,7 +473,6 @@ describe("delete_environment host cleanup", () => {
         await seedWorktree(storage);
       },
       async (_invokeDelete, storage, context) => {
-        const realSpawn = childProcess.spawn;
         const realSetTimeout = globalThis.setTimeout;
         // Fire the real stage deadline only after the removal helper starts.
         // No wall-clock race with Git startup is needed to reach this boundary.
@@ -494,23 +494,23 @@ describe("delete_environment host cleanup", () => {
           sawExit = resolve;
         });
         let exitSignal: unknown;
-        const spawnSpy = spyOn(childProcess, "spawn").mockImplementation(((
-          ...args: Parameters<typeof childProcess.spawn>
-        ) => {
-          const child = realSpawn(...args);
-          const emit = child.emit.bind(child);
-          child.emit = ((...emitArgs: Parameters<typeof child.emit>) => {
-            const [event, ...eventArgs] = emitArgs;
-            if (event !== "exit") return emit(event, ...eventArgs);
-            exitSignal = eventArgs[1];
-            releaseExit = () => {
-              emit(event, ...eventArgs);
-            };
-            sawExit();
-            return true;
-          }) as typeof child.emit;
+        // The boundary under test is acknowledgement of exit, not helper runtime.
+        // A real helper can finish before the deadline microtask on a busy host.
+        const spawnSpy = spyOn(childProcess, "spawn").mockImplementation((() => {
+          const child = new EventEmitter();
+          Object.assign(child, {
+            pid: fakePid(2),
+            kill: (signal: string) => {
+              exitSignal = signal;
+              releaseExit = () => {
+                child.emit("exit", null, signal);
+              };
+              sawExit();
+              return true;
+            },
+          });
           queueMicrotask(() => expire());
-          return child;
+          return child as childProcess.ChildProcess;
         }) as typeof childProcess.spawn);
         let settled = false;
         const deleting = deleteEnvironmentTask("e1", context, {

@@ -158,6 +158,14 @@ describe("build pipeline protocol", () => {
       currentSessionIndex: 0,
     });
     expect(isBuildPipeline(withTab("original-tab"))).toBe(true);
+    const withDigest = (adoptedAttemptDigest: unknown) => ({
+      ...withTab("original-tab"),
+      sessions: [{ ...session, adoptedFromTabId: "original-tab", adoptedAttemptDigest }],
+    });
+    expect(isBuildPipeline(withDigest("a".repeat(64)))).toBe(true);
+    for (const invalid of [null, "", "a".repeat(63), "z".repeat(64), 7]) {
+      expect(isBuildPipeline(withDigest(invalid))).toBe(false);
+    }
     expect(isBuildPipeline(withTab(undefined))).toBe(true);
     for (const invalid of [null, "", " ", "x".repeat(257), 7, {}]) {
       expect(isBuildPipeline(withTab(invalid))).toBe(false);

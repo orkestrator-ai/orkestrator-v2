@@ -292,12 +292,21 @@ export class BuildPipelineInteractions {
             (session) => session.sessionKey === pipeline.reviewFanout?.consolidation?.sessionKey,
           )
         : sessionForCurrentPhase(pipeline);
+    // Before preparation owns a session, an adopted Build retries from its
+    // setup handoff. Retrying the destination "fixing" phase would launch
+    // Rework instead of package preparation.
+    const adoptedBootstrap =
+      (pipeline.phase === "starting-environment" || pipeline.phase === "waiting-for-setup") &&
+      pipeline.sessions.some((session) => session.adoptedFromTabId);
     pipeline.failureContext = {
-      phase: preSessionFailure ? error.phase : (pipeline.phase as ResumableBuildPhase),
+      phase:
+        preSessionFailure && !adoptedBootstrap
+          ? error.phase
+          : (pipeline.phase as ResumableBuildPhase),
       kind: "stage-transition",
       sessionId: failedSession?.sdkSessionId,
     };
-    if (failedSession) {
+    if (failedSession && !failedSession.adoptedFromTabId) {
       failedSession.status = "error";
       failedSession.error = boundedPipelineSessionError(pipeline.error);
     }

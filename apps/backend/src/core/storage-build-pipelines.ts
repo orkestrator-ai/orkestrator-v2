@@ -622,26 +622,40 @@ export class BuildPipelinesRepository {
       // Admission and reservation uniqueness are checked against every control
       // record under this cross-pipeline lock, so two concurrent admissions can
       // never both commit one reservation.
-      const admissionKey = activeBuildAdmissionKey(storedSnapshot);
-      if (!previous && expectedRevision === 0 && admissionKey) {
-        const admitted = Object.values(pipelines).find(
-          (pipeline) => activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
-        );
-        if (admitted) return { record: structuredClone(admitted), commit: null };
-      }
-      // Promotion is exclusive even with two confirmations racing in
-      // different backend instances. Keep this under the cross-pipeline
-      // writer lease, after same-intent admission replay and before publication.
       const sessions = storedSnapshot.sessions;
       const adopted =
         Array.isArray(sessions) &&
         sessions.some(
           (session) => isRecord(session) && typeof session.adoptedFromTabId === "string",
         );
-      if (!previous && adopted) {
-        if (Object.values(pipelines).some((pipeline) => pipeline.environmentId === environmentId)) {
-          throw new Error("This environment is already linked to a build pipeline");
-        }
+      const admissionKey = adopted
+        ? storedSnapshot.admissionKey
+        : activeBuildAdmissionKey(storedSnapshot);
+      if (!previous && expectedRevision === 0 && admissionKey) {
+        const admitted = Object.values(pipelines).find(
+          (pipeline) =>
+            (adopted && isRecord(pipeline.snapshot)
+              ? pipeline.snapshot.admissionKey
+              : activeBuildAdmissionKey(pipeline.snapshot)) === admissionKey,
+        );
+        if (admitted) return { record: structuredClone(admitted), commit: null };
+      }
+      // A new owner must not reuse an adopted checkout, whichever admission wins first.
+      if (
+        !previous &&
+        environmentId &&
+        Object.values(pipelines).some(
+          (pipeline) =>
+            pipeline.environmentId === environmentId &&
+            (adopted ||
+              (isRecord(pipeline.snapshot) &&
+                Array.isArray(pipeline.snapshot.sessions) &&
+                pipeline.snapshot.sessions.some(
+                  (session) => isRecord(session) && typeof session.adoptedFromTabId === "string",
+                ))),
+        )
+      ) {
+        throw new Error("This environment is already linked to a build pipeline");
       }
       const reservation = activeGitHubBuildReservation(storedSnapshot);
       if (

@@ -891,6 +891,8 @@ export interface PipelineSession {
   sdkSessionId: string;
   /** Original prompt tab retained as the first Build attempt after promotion. */
   adoptedFromTabId?: string;
+  /** Immutable admission identity, retained when the transcript leaves the snapshot. */
+  adoptedAttemptDigest?: string;
   status: "running" | "idle" | "error";
   startedAt: string;
   /** End of this stage attempt, retained for settled runtime presentation. */
@@ -1876,6 +1878,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     value.sessionKey.length > 0 &&
     typeof value.sdkSessionId === "string" &&
     value.sdkSessionId.length > 0 &&
+    (value.adoptedAttemptDigest === undefined ||
+      (typeof value.adoptedAttemptDigest === "string" &&
+        /^[a-f0-9]{64}$/.test(value.adoptedAttemptDigest))) &&
     (value.adoptedFromTabId === undefined ||
       (isNonBlankString(value.adoptedFromTabId) &&
         value.adoptedFromTabId.trim().length > 0 &&

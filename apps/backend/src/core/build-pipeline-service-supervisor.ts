@@ -460,7 +460,7 @@ export class BuildPipelineSupervisor {
 
     if (pipeline.phase === "waiting-for-setup") {
       const completedBuild = pipeline.sessions.find(
-        (session) => session.phase === "build" && session.status === "idle" && session.completedAt,
+        (session) => session.phase === "build" && session.adoptedFromTabId && session.completedAt,
       );
       if (completedBuild) {
         // Interactive work already owns this checkout. Running setup or a
@@ -582,7 +582,12 @@ export class BuildPipelineSupervisor {
       const sessionPhase = sessionPhaseFor(phase);
       if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
       delete pipeline.stageRetryRequested;
-      await this.startStage(pipeline, sessionPhase, phase);
+      const current = pipeline.sessions[pipeline.currentSessionIndex];
+      if (current?.label === REVIEW_PACKAGE_SESSION_LABEL) {
+        await this.startReviewPackagePreparation(pipeline);
+      } else {
+        await this.startStage(pipeline, sessionPhase, phase);
+      }
       return;
     }
 

@@ -494,10 +494,22 @@ export class BuildPipelineLifecycle {
       controller: "backend",
     };
     if (completedBuild) {
-      if (!existingEnvironment || existingEnvironment.status !== "running") {
+      if (!existingEnvironment) {
         throw new Error("A completed Build requires a running existing environment");
       }
       adoptCompletedBuild(pipeline, completedBuild);
+      if (existingEnvironment.status !== "running") {
+        const admitted = await this.ctx.storage.listBuildPipelines(input.projectId);
+        if (
+          !admitted.some(
+            (record) =>
+              isBuildPipeline(record.snapshot) &&
+              record.snapshot.admissionKey === pipeline.admissionKey,
+          )
+        ) {
+          throw new Error("A completed Build requires a running existing environment");
+        }
+      }
     }
     if (!existingEnvironment) {
       // Installed before the reservation becomes visible to timer ticks.
@@ -516,7 +528,8 @@ export class BuildPipelineLifecycle {
           !existing.sessions.some(
             (session) =>
               session.adoptedFromTabId === completedBuild.tabId &&
-              session.sdkSessionId === completedBuild.sessionId,
+              session.sdkSessionId === completedBuild.sessionId &&
+              session.adoptedAttemptDigest === pipeline.sessions[0]?.adoptedAttemptDigest,
           )
         ) {
           throw new Error("This ticket already has a different Build attempt");
@@ -1758,7 +1771,11 @@ export class BuildPipelineLifecycle {
         delete candidate.stageRetryRequested;
       }
       const failedSession = sessionForCurrentPhase(candidate);
-      if (failedSession && failedSession.sdkSessionId === candidate.failureContext.sessionId) {
+      if (
+        failedSession &&
+        !failedSession.adoptedFromTabId &&
+        failedSession.sdkSessionId === candidate.failureContext.sessionId
+      ) {
         failedSession.status = "error";
       }
       delete candidate.error;

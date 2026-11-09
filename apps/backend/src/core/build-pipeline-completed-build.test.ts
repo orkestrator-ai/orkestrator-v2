@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import {
+  isBuildPipeline,
+  REVIEW_PACKAGE_SESSION_LABEL,
+} from "@orkestrator/protocol/build-pipeline";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 import { pipeline, startInput, withService } from "./build-pipeline-service-test-support.js";
 
@@ -194,4 +197,201 @@ test("rejects a transcript over the byte budget without publishing a pipeline", 
     ).rejects.toThrow("Invalid completed Build attempt");
     expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
   });
+});
+
+for (const phase of ["complete", "failed"] as const) {
+  test(`terminal ${phase} adoption replays its durable identity`, async () => {
+    await withService(async (service, storage) => {
+      const started = await service.startFromCompletedBuild(startInput(), completedBuild());
+      const record = (await storage.getBuildPipeline(started.id))!;
+      const snapshot = record.snapshot as typeof started;
+      snapshot.phase = phase;
+      await storage.saveBuildPipeline(
+        started.id,
+        started.projectId,
+        started.environmentId,
+        record.version,
+        snapshot,
+        record.revision,
+      );
+      await storage.updateEnvironment("env-1", { status: "stopped" });
+      const replay = await service.startFromCompletedBuild(startInput(), completedBuild());
+      expect(replay.id).toBe(started.id);
+      expect(replay.phase).toBe(phase);
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(1);
+    });
+  });
+}
+
+for (const patch of [
+  { commit: "2222222222222222222222222222222222222222" },
+  { notes: { summary: "Different notes" } },
+  { messages: [{ content: "Different transcript" }] },
+]) {
+  test(`rejects divergent attempt ${Object.keys(patch)[0]}`, async () => {
+    await withService(async (service, storage) => {
+      await service.startFromCompletedBuild(startInput(), completedBuild());
+      await expect(
+        service.startFromCompletedBuild(startInput(), { ...completedBuild(), ...patch }),
+      ).rejects.toThrow("different Build attempt");
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(1);
+    });
+  });
+}
+
+test("normal admission cannot take an adopted environment", async () => {
+  await withService(async (service, storage) => {
+    await service.startFromCompletedBuild(startInput(), completedBuild());
+    await expect(service.start(startInput({ taskId: "another" }))).rejects.toThrow(
+      "already linked",
+    );
+    expect(await storage.listBuildPipelines("project-1")).toHaveLength(1);
+  });
+});
+
+for (const command of ["update_kanban_task", "update_environment_agent_settings"]) {
+  test(`bootstrap failure in ${command} retains adoption on retry`, async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      controls.failCommandsOnce.set(command, 1);
+      const input = startInput({ source: { type: "kanban", taskId: "task-default" } });
+      let id: string;
+      if (command === "update_kanban_task") {
+        await expect(service.startFromCompletedBuild(input, completedBuild())).rejects.toThrow();
+        const replay = await service.startFromCompletedBuild(input, completedBuild());
+        id = replay.id;
+        expect(replay.phase).toBe("failed");
+        await service.retryStage(id);
+      } else {
+        const started = await service.startFromCompletedBuild(startInput(), completedBuild());
+        id = started.id;
+        await service.advanceNow(id);
+        expect((await pipeline(storage, id)).phase).toBe("failed");
+        await service.retryStage(id);
+      }
+      for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(id);
+      const finished = await pipeline(storage, id);
+      expect(finished.phase).toBe("complete");
+      expect(finished.sessions[0]?.status).toBe("idle");
+      expect(provider.created.every((session) => session.phase !== "build")).toBe(true);
+      expect(invocations.some((entry) => entry.command === "run_environment_setup")).toBe(false);
+    });
+  });
+}
+
+for (const name of ["circular", "bigint", "uncloneable", "notes"] as const) {
+  test(`normalizes malformed ${name} without admission`, async () => {
+    await withService(async (service, storage) => {
+      const attempt = completedBuild();
+      if (name === "circular") attempt.messages.push(attempt.messages);
+      if (name === "bigint") attempt.messages.push(1n);
+      if (name === "uncloneable") attempt.messages.push(() => {});
+      if (name === "notes")
+        attempt.notes = { tests: [null] } as unknown as CompletedBuildAttempt["notes"];
+      await expect(service.startFromCompletedBuild(startInput(), attempt)).rejects.toThrow(
+        "Invalid completed Build attempt",
+      );
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
+    });
+  });
+}
+
+test("a completed non-adopted session does not bypass setup", async () => {
+  await withService(async (service, storage, _provider, invocations) => {
+    const started = await service.startFromCompletedBuild(startInput(), completedBuild());
+    const record = (await storage.getBuildPipeline(started.id))!;
+    const snapshot = record.snapshot as typeof started;
+    snapshot.phase = "waiting-for-setup";
+    delete snapshot.sessions[0]!.adoptedFromTabId;
+    delete snapshot.sessions[0]!.adoptedAttemptDigest;
+    await storage.saveBuildPipeline(
+      started.id,
+      started.projectId,
+      started.environmentId,
+      record.version,
+      snapshot,
+      record.revision,
+    );
+    await service.advanceNow(started.id);
+    expect(invocations.some((entry) => entry.command === "run_environment_setup")).toBe(true);
+  });
+});
+
+test("code rewind uses the adopted commit and restarts with a new Build", async () => {
+  const target = completedBuild().commit;
+  const tip = "2222222222222222222222222222222222222222";
+  const refs = new Map<string, string>();
+  let head = tip;
+  const calls: string[][] = [];
+  await withService(
+    async (service, _storage, provider, _invocations, controls) => {
+      const started = await service.startFromCompletedBuild(startInput(), completedBuild());
+      for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
+      controls.currentHead = tip;
+      const preview = await service.previewCodeRewind(started.id, "original-session");
+      expect(preview.targetCommit).toBe(target);
+      expect(preview.blocked).toBeUndefined();
+      const rewound = await service.rewindCode(started.id, "original-session", tip);
+      expect(calls).toContainEqual(["reset", "--hard", target]);
+      expect(rewound.rewinds?.at(-1)?.code).toMatchObject({ from: tip, to: target });
+      expect(provider.created.at(-1)?.phase).toBe("build");
+      expect(provider.sent.every((turn) => turn.sessionId !== "original-session")).toBe(true);
+      expect(refs.size).toBe(1);
+    },
+    {
+      environmentGit: async (_environmentId, args) => {
+        calls.push([...args]);
+        if (args[0] === "status") return "";
+        if (args[0] === "log") return `${tip}\u001fLater work`;
+        if (args[0] === "rev-list") return args[2]?.startsWith("HEAD..") ? "0" : "1";
+        if (args[0] === "rev-parse") {
+          if (args[1] === "HEAD") return head;
+          const ref = refs.get(args[1]!);
+          if (ref) return ref;
+          throw new Error("Unknown ref");
+        }
+        if (args[0] === "update-ref") {
+          refs.set(args[1]!, args[2]!);
+          return "";
+        }
+        if (args[0] === "reset") {
+          head = args[2]!;
+          return "";
+        }
+        throw new Error(`Unexpected Git operation: ${args[0]}`);
+      },
+    },
+  );
+});
+
+test("review preparation startup failure retries without setup or another Build", async () => {
+  let fail = true;
+  await withService(
+    async (service, storage, provider, invocations) => {
+      const started = await service.startFromCompletedBuild(startInput(), completedBuild());
+      for (let pass = 0; pass < 4; pass += 1) {
+        await service.advanceNow(started.id);
+        if ((await pipeline(storage, started.id)).phase === "failed") break;
+      }
+      const failed = await pipeline(storage, started.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.sessions[0]?.status).toBe("idle");
+      const retried = await service.retryStage(started.id);
+      expect(retried.phase).toBe("fixing");
+      expect(retried.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
+      expect(retried.sessions.at(-1)?.status).toBe("running");
+      expect((await pipeline(storage, started.id)).sessions[0]?.status).toBe("idle");
+      expect(provider.created.every((session) => session.phase !== "build")).toBe(true);
+      expect(invocations.some((entry) => entry.command === "run_environment_setup")).toBe(false);
+    },
+    {
+      toolMode: true,
+      environmentType: "containerized",
+      assertAgentToolsReachable: async () => {
+        if (fail) {
+          fail = false;
+          throw new Error("Preparation tools unavailable");
+        }
+      },
+    },
+  );
 });

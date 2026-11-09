@@ -62,3 +62,17 @@ No real providers, logins or production data directories. Keep host reachability
 ## Needs verification
 
 The internal adoption tests use an in-process fake provider. They do not prove drafting, actual Git commits, rendered graph behavior, coordinator ownership, or the manual button flow.
+
+## Assumptions and decisions
+
+### Task 3: durable adoption replay and checkout ownership
+
+The review repair retains an immutable SHA-256 fingerprint of the full input attempt, including notes and transcript. Replay uses durable admission identities even after terminal outcomes, rejects changed attempts, and returns failed provisioning records for explicit stage retry. Adopted checkout exclusivity applies whichever admission order wins; ordinary non-adopted pipelines retain their existing shared-environment behavior.
+
+### Task 3: bootstrap recovery
+
+Failure recording and stage retry retain the adopted Build as idle. The setup handoff requires the durable adoption marker, rather than inferring adoption from any completed Build. Regression tests cover source-link and environment-configuration failure, explicit retry, and code rewind to the adopted commit.
+
+### Tasks 1, 2 and 4: outstanding product flow
+
+Drafting, manual UI, confirmed ticket publication and complete fake-model/browser qualification remain open. Backend adoption regression tests do not satisfy these acceptance criteria. No user-facing change was made in the review repair.

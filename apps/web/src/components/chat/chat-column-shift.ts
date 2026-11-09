@@ -4,11 +4,13 @@ import { useFloatingNoticeColumnShift } from "@/components/ui/floating-notice";
 /**
  * Moving the chat column left, to make room for a panel docked beside it.
  *
- * The chat shell publishes the shift as CSS variables; the transcript's
- * scroller and the composer dock reserve twice the shift on their right, so
- * their centred content moves left by exactly the shift while the scroller
- * keeps its scrollbar at the pane's edge. Padding rather than a transform,
- * because a transform would carry the scrollbar under the docked panel.
+ * The chat shell publishes the shift as CSS variables; the transcript's list,
+ * header, footer and empty state, and the composer dock, reserve twice the
+ * shift on their right, so their centred content moves left by exactly the
+ * shift while the scroller keeps its scrollbar at the pane's edge. Padding
+ * inside the scroller rather than a transform of it, because a transform
+ * would carry the scrollbar under the docked panel. The column never narrows:
+ * `shiftedColumnLayout` only shifts while the full column still fits.
  */
 
 /** How long the column takes to slide across. */

@@ -17,6 +17,7 @@ export { useElapsedTimer } from "./useElapsedTimer";
 export { useFileSearch } from "./useFileSearch";
 export { useFileMentions } from "./useFileMentions";
 export { useMediaQuery } from "./useMediaQuery";
+export { useWidthAtLeast } from "./useWidthAtLeast";
 export { useTimedCopyFeedback } from "./useTimedCopyFeedback";
 export { useFileSave } from "./useFileSave";
 export type { SaveFile } from "./useFileSave";

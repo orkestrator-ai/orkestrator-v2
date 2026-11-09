@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import {
   REVIEW_PACKAGE_SESSION_LABEL,
@@ -21,6 +21,7 @@ import {
   showOnlyFinalVerificationMessage,
 } from "@orkestrator/protocol/structured-review-transcript";
 import { useVirtuosoScrollState } from "@/hooks";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -33,6 +34,8 @@ import {
 } from "@/lib/chat/native-message-adapters";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { INSPECTOR_SPLIT_MIN_WIDTH_PX } from "@/components/review/MultiReviewInspectorViews";
+import { useWidthAtLeast } from "@/hooks/useWidthAtLeast";
 import { PipelineMessageComposer, usePipelineMessageComposer } from "./PipelineMessageComposer";
 import { toPipelineTranscriptRows } from "./pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
@@ -351,123 +354,157 @@ export function PipelineSessionTranscript({
     agentLabel,
   });
 
-  const showReviewReport = visible && reviewReport !== undefined;
+  // A wide inspector shows the report beside the transcript rather than under
+  // its last message, so both can be read at once.
+  const [measureRef, wide] = useWidthAtLeast<HTMLDivElement>(INSPECTOR_SPLIT_MIN_WIDTH_PX);
+  const reportBeside = wide && reviewReport !== undefined;
+  const showReviewReport = visible && reviewReport !== undefined && !reportBeside;
+  const reviewReportView = reviewReport ? (
+    <StructuredReviewReportView
+      className={reportBeside ? undefined : "mx-auto max-w-3xl"}
+      report={reviewReport}
+      heading={
+        (pipeline.reviewers?.length ?? 0) > 1
+          ? ownsCurrentReviewReport
+            ? "Consolidated Multi Review"
+            : "Reviewer report"
+          : undefined
+      }
+      collapsibleSections
+      sectionExpansionKey={`build-pipeline/${pipeline.id}/${session?.sessionKey ?? "review"}/report-section`}
+      showRawJson={false}
+    />
+  ) : null;
   return (
     <div
+      ref={measureRef}
       hidden={!visible}
       aria-hidden={!visible}
-      className={cn("flex min-h-0 min-w-0 flex-1 flex-col", !visible && "hidden")}
+      className={cn("flex min-h-0 min-w-0 flex-1 gap-4", !visible && "hidden")}
     >
-      <div className="@container relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <RichTranscriptScopeContext.Provider value={scope}>
-          <VirtualizedMessageList
-            messages={messages}
-            computeItemKey={(_index, message) => message.id}
-            resolvePreviousMessage={findPreviousNativeMessage}
-            renderMessage={(_index, message, previous) => (
-              <NativeMessage
-                message={message}
-                previousMessage={previous}
-                assistantLabel={agentLabel}
-                containerId={containerId}
-                agentExpansionScope={environmentId}
-                platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
-              />
-            )}
-            emptyState={
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                {!session
-                  ? "Waiting for the backend to start a build stage."
-                  : transcriptUnavailable
-                    ? "The stored transcript for this stage could not be read."
-                    : transcriptStale && session.messages === undefined
-                      ? "Loading this stage's transcript…"
-                      : session.status === "running"
-                        ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                        : "No text transcript was produced for this stage."}
-              </div>
-            }
-            header={
-              (session?.transcript && !session.transcript.complete) ||
-              session?.transcriptCheckpointError ? (
-                <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
-                  {session.transcript && !session.transcript.complete ? (
-                    <p>
-                      {session.transcript.omittedMessages ?? "Some"}{" "}
-                      {session.transcript.omittedMessages === 1 ? "message was" : "messages were"}{" "}
-                      not kept in the stored transcript because of its size limit.
-                    </p>
-                  ) : null}
-                  {session.transcriptCheckpointError ? (
-                    <p>The newest messages of this stage could not be stored yet.</p>
-                  ) : null}
+      {/* Always this column, so the list and the reader's place in it survive
+        the report moving beside it or back underneath. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="@container relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <RichTranscriptScopeContext.Provider value={scope}>
+            <VirtualizedMessageList
+              messages={messages}
+              computeItemKey={(_index, message) => message.id}
+              resolvePreviousMessage={findPreviousNativeMessage}
+              renderMessage={(_index, message, previous) => (
+                <NativeMessage
+                  message={message}
+                  previousMessage={previous}
+                  assistantLabel={agentLabel}
+                  containerId={containerId}
+                  agentExpansionScope={environmentId}
+                  platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
+                />
+              )}
+              emptyState={
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  {!session
+                    ? "Waiting for the backend to start a build stage."
+                    : transcriptUnavailable
+                      ? "The stored transcript for this stage could not be read."
+                      : transcriptStale && session.messages === undefined
+                        ? "Loading this stage's transcript…"
+                        : session.status === "running"
+                          ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                          : "No text transcript was produced for this stage."}
                 </div>
-              ) : undefined
-            }
-            footer={
-              showReviewReport || showThinking ? (
-                <>
-                  {showReviewReport && reviewReport ? (
-                    <div className="px-3 py-3 @sm:px-6">
-                      <StructuredReviewReportView
-                        className="mx-auto max-w-3xl"
-                        report={reviewReport}
-                        heading={
-                          (pipeline.reviewers?.length ?? 0) > 1
-                            ? ownsCurrentReviewReport
-                              ? "Consolidated Multi Review"
-                              : "Reviewer report"
-                            : undefined
-                        }
-                        collapsibleSections
-                        sectionExpansionKey={`build-pipeline/${pipeline.id}/${session?.sessionKey ?? "review"}/report-section`}
-                        showRawJson={false}
-                      />
-                    </div>
-                  ) : null}
-                  {showThinking ? (
-                    <div className="px-2 @sm:px-4">
-                      <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                        {session?.awaitingBackgroundWork ? (
-                          <span role="status" className="agent-thinking-shimmer text-xs">
-                            {agentLabel} is waiting on background work…
-                          </span>
-                        ) : (
-                          <AgentThinkingIndicator agentName={agentLabel} />
-                        )}
+              }
+              header={
+                (session?.transcript && !session.transcript.complete) ||
+                session?.transcriptCheckpointError ? (
+                  <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
+                    {session.transcript && !session.transcript.complete ? (
+                      <p>
+                        {session.transcript.omittedMessages ?? "Some"}{" "}
+                        {session.transcript.omittedMessages === 1 ? "message was" : "messages were"}{" "}
+                        not kept in the stored transcript because of its size limit.
+                      </p>
+                    ) : null}
+                    {session.transcriptCheckpointError ? (
+                      <p>The newest messages of this stage could not be stored yet.</p>
+                    ) : null}
+                  </div>
+                ) : undefined
+              }
+              footer={
+                showReviewReport || showThinking ? (
+                  <>
+                    {showReviewReport ? (
+                      <div className="px-3 py-3 @sm:px-6">{reviewReportView}</div>
+                    ) : null}
+                    {showThinking ? (
+                      <div className="px-2 @sm:px-4">
+                        <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+                          {session?.awaitingBackgroundWork ? (
+                            <span role="status" className="agent-thinking-shimmer text-xs">
+                              {agentLabel} is waiting on background work…
+                            </span>
+                          ) : (
+                            <AgentThinkingIndicator agentName={agentLabel} />
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
-                </>
-              ) : undefined
-            }
-            scrollProps={scrollProps}
-            virtuosoRef={virtuosoRef}
-            find={{
-              isActive: ownsGlobalShortcuts && visible,
-              getSearchText: getNativeMessageSearchText,
-            }}
-          />
-        </RichTranscriptScopeContext.Provider>
-      </div>
-      {visible && (composer || !isAtBottom) && (
-        <div className="shrink-0 px-3 pt-2 pb-4">
-          {!isAtBottom && (
-            <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
-              <button
-                type="button"
-                onClick={scrollToBottom}
-                className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-                aria-label="Scroll to bottom of transcript"
-              >
-                <ArrowDown className="h-3.5 w-3.5" />
-                <span>Scroll down</span>
-              </button>
-            </div>
-          )}
-          {composer && <PipelineMessageComposer state={composerState} />}
+                    ) : null}
+                  </>
+                ) : undefined
+              }
+              scrollProps={scrollProps}
+              virtuosoRef={virtuosoRef}
+              find={{
+                isActive: ownsGlobalShortcuts && visible,
+                getSearchText: getNativeMessageSearchText,
+              }}
+            />
+          </RichTranscriptScopeContext.Provider>
         </div>
-      )}
+        {visible && (composer || !isAtBottom) && (
+          <div className="shrink-0 px-3 pt-2 pb-4">
+            {!isAtBottom && (
+              <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                  aria-label="Scroll to bottom of transcript"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                  <span>Scroll down</span>
+                </button>
+              </div>
+            )}
+            {composer && <PipelineMessageComposer state={composerState} />}
+          </div>
+        )}
+      </div>
+      {reportBeside ? <ReportBeside>{reviewReportView}</ReportBeside> : null}
+    </div>
+  );
+}
+
+/**
+ * The review report in its own column beside the transcript. It scrolls on
+ * its own and takes the transcript's height, never adding its own: a long
+ * report must not grow the inspector past the window.
+ */
+function ReportBeside({ children }: { children: ReactNode }) {
+  const scrollRef = useRef<HTMLElement>(null);
+  useScrollOffsetAcrossHide(scrollRef);
+  return (
+    <div className="relative min-w-0 flex-1">
+      <section
+        ref={scrollRef}
+        aria-label="Report"
+        tabIndex={0}
+        data-testid="pipeline-report-beside"
+        className="absolute inset-0 overflow-y-auto overscroll-contain rounded-lg pb-4 focus-hairline"
+      >
+        {children}
+      </section>
     </div>
   );
 }

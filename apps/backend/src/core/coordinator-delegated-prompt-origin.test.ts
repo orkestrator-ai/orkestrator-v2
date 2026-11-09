@@ -7,6 +7,11 @@ import {
   createCoordinatorMailOriginPrompt,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { coordinatorScopeTurnOrigin } from "./control-mcp-tools-shared.js";
+import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
+import { NativeAgentService } from "./native-agent-service.js";
+import { createProviderStub } from "./native-agent-service-projection-test-support.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -191,4 +196,126 @@ test("scheduled mail uses the origin it carries, not the newest turn", async () 
   });
   // Without a carried origin, the newest turn decides, as before.
   expect("turnOrigin" in (await send(scope)).from).toBe(false);
+});
+
+for (const snapshot of [
+  null,
+  { workspace: { id: "wrong", conversations: [] } },
+  { workspace: { id: "coordinator", conversations: [] } },
+]) {
+  test(`MCP origin fails closed for absent or mismatched coordinator: ${JSON.stringify(snapshot)}`, async () => {
+    const value =
+      snapshot?.workspace.id === "coordinator"
+        ? { workspace: { id: scope.coordinatorId, conversations: [] } }
+        : snapshot;
+    expect(await coordinatorScopeTurnOrigin(async <T>() => value as T, scope)).toBe("mail");
+  });
+}
+
+test("MCP origin read failure marks mail and logs the diagnostic", async () => {
+  const capture = captureLogs();
+  try {
+    expect(
+      await coordinatorScopeTurnOrigin(async () => {
+        throw new Error("unavailable");
+      }, scope),
+    ).toBe("mail");
+    expect(
+      capture.records().some((entry) => entry.event === "delegation.turn-origin-unreadable"),
+    ).toBe(true);
+  } finally {
+    capture.restore();
+  }
+});
+
+test("registry origin fails closed for missing workspace or conversation", async () => {
+  const context = { storage: world.storage };
+  expect(
+    await coordinatorCallerTurnOrigin(
+      context,
+      { coordinatorId: "missing", conversationId: scope.conversationId },
+      undefined,
+    ),
+  ).toBe("mail");
+  expect(
+    await coordinatorCallerTurnOrigin(
+      context,
+      { coordinatorId: scope.coordinatorId, conversationId: "missing" },
+      undefined,
+    ),
+  ).toBe("mail");
+});
+
+for (const firstOrigin of ["user", "mail"] as const) {
+  test(`launch_job retry retains persisted ${firstOrigin} provenance after an origin change`, async () => {
+    const provider = createProviderStub("codex");
+    const service = new NativeAgentService(
+      world.storage,
+      async () => {
+        throw new Error("Unexpected invoke");
+      },
+      { provider: async () => provider.provider },
+    );
+    const context = {
+      storage: world.storage,
+      runtime: new BackendRuntime({ emit: () => undefined }),
+      emit: () => undefined,
+      nativeAgents: service,
+    } as unknown as CommandContext;
+    try {
+      const handler = createCommandRegistry().get("launch_control_job")!;
+      commands.set("launch_control_job", (args) => handler(args, context));
+      const input = {
+        requestId: crypto.randomUUID(),
+        environmentId: worker.environmentId,
+        agent: "codex",
+        prompt: "Check the fixture",
+      };
+      await setLastTurnOrigin(firstOrigin);
+      const first = await mcp.callCoordinatorTool(scope, "launch_job", input);
+      expect({ error: first.isError, text: first.isError ? first.text : "ok" }).toEqual({
+        error: false,
+        text: "ok",
+      });
+      await setLastTurnOrigin(firstOrigin === "user" ? "mail" : "user");
+      const retry = await mcp.callCoordinatorTool(scope, "launch_job", input);
+      expect({ error: retry.isError, text: retry.isError ? retry.text : "ok" }).toEqual({
+        error: false,
+        text: "ok",
+      });
+      expect(provider.send).toHaveBeenCalledTimes(1);
+      const sent = String(provider.send.mock.calls[0]![1]);
+      expect(sent.includes(COORDINATOR_MAIL_ORIGIN_NOTE)).toBe(firstOrigin === "mail");
+    } finally {
+      await service.shutdown();
+    }
+  });
+}
+
+test("send_prompt_to_tab retries retain the request identity across origin changes", async () => {
+  const input = {
+    requestId: crypto.randomUUID(),
+    environmentId: worker.environmentId,
+    tabId: worker.tabId,
+    prompt: "Continue",
+  };
+  const provider = createProviderStub("claude");
+  const service = new NativeAgentService(
+    world.storage,
+    async () => {
+      throw new Error("Unexpected invoke");
+    },
+    { provider: async () => provider.provider },
+  );
+  commands.set("dispatch_native_agent_intent", (args) => service.dispatchIntent(args as never));
+  try {
+    await setLastTurnOrigin("user");
+    expect((await mcp.callCoordinatorTool(scope, "send_prompt_to_tab", input)).isError).toBe(false);
+    await setLastTurnOrigin("mail");
+    expect((await mcp.callCoordinatorTool(scope, "send_prompt_to_tab", input)).isError).toBe(false);
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    expect(provider.send.mock.calls[0]![1]).toBe("Continue");
+  } finally {
+    await service.shutdown();
+  }
 });

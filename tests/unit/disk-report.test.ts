@@ -435,6 +435,8 @@ describe("probe network sweep", () => {
     // Not a value a backend writes: read as unlabelled, never echoed.
     "ork-1111111111111111-reach-probe-net": "unexpected creator with spaces\tand tabs",
     "ork-2222222222222222-reach-probe-net": "production/persistent",
+    // A malformed creator must not hide an otherwise stale cleanup candidate.
+    "ork-5555555555555555-reach-probe-net": "unexpected creator with spaces",
   };
 
   function fakeDocker(refuse = new Set<string>()): { run: DockerRun; calls: string[][] } {

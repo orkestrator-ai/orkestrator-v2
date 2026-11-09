@@ -33,7 +33,7 @@ Analysed 2026-11-06 against `main` at `c1724ab74`.
 
 **Problem.** OpenCode takes the plain password (Basic auth). An agent that kills the server and listens on 4096 reads it from the backend's next request and can answer every permission on a server started with it.
 
-**Context.** The bridges' signatures (`bridge-authority.ts`) need a verifier in the server, which OpenCode does not have; the credential plugin cannot add one to the server's own routes. The listener check proposed in [7250](7250-bridge-replaced-by-an-agent-process.md) applies here unchanged.
+**Context.** The bridges' signatures (`bridge-authority.ts`) need a verifier in the server, which OpenCode does not have; the credential plugin cannot add one to the server's own routes. The listener check from to-do 7250 was built for the five bridges on 2026-11-09 (`apps/backend/src/core/container-bridge-listener.ts`, described in [agent-approvals.md](../../architecture/agent-approvals.md#a-replaced-bridge-is-refused)): a start records the port's listening socket (inode and cookie) as root once the bridge answers, and `readContainerBridgeToken` refuses the token to any other socket. It deliberately skips `opencode` and `opencode2`. Extending it here means recording in `startContainerOpenCodeServer` and `opencode2-container-server.ts` after their health wait, dropping the `isContainerBridgeKind` guard in `readContainerBridgeToken` and `writeContainerBridgeCredential` for OpenCode's kinds and its port, and stopping the listener in `replaceRunningServer`. It does not stop the password reaching an imposter that is already listening when a request is made between two checks.
 
 **Investigation.** Reasoned from the routes; not exercised.
 
@@ -42,7 +42,7 @@ Analysed 2026-11-06 against `main` at `c1724ab74`.
 - **How should the backend stop giving the password to an imposter?**
   - **Use 7250's listener check before sending the password (recommended).**
     - Pros: one mechanism for bridges and OpenCode.
-    - Cons: waits for 7250; the same race between check and request.
+    - Cons: the same race between check and request; OpenCode sends the password on every SDK request and event stream, so the window is wider than a bridge's.
   - **Proxy OpenCode behind a small signed front of ours.**
     - Pros: the same signature guarantees as the bridges.
     - Cons: a new process in every container, in the path of every SDK request and event stream.
@@ -51,5 +51,5 @@ Analysed 2026-11-06 against `main` at `c1724ab74`.
 
 - `4980-agent-uid-process-control.md` (deleted 2026-11-06)
 - `4981-opencode-password-readable-by-agent.md` (deleted 2026-11-06)
-- [`7250-bridge-replaced-by-an-agent-process.md`](7250-bridge-replaced-by-an-agent-process.md)
+- `7250-bridge-replaced-by-an-agent-process.md` (deleted 2026-11-09; the bridges' listener check it built is in [agent-approvals.md](../../architecture/agent-approvals.md#a-replaced-bridge-is-refused))
 - [`docs/architecture/agent-approvals.md`](../../architecture/agent-approvals.md)

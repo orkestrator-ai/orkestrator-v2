@@ -73,6 +73,56 @@ An image without the capability keeps the login-shell start and unsigned
 requests until it is rebuilt (`containerCredentialMode`). OpenCode has no bridge
 of ours: on a launcher image it starts as on a `bridge-credential=1` image.
 
+## A replaced bridge is refused
+
+The verifier and the public key are not secret (both are in the launcher
+wrapper's argv), so a process running as the agent's uid can kill its bridge and
+start one of its own on the same port, through the launcher or not. That bridge
+accepts the token the backend reads from root's file. So the token belongs to a
+socket, not to a port (`container-bridge-listener.ts`):
+
+- **Writing a new token marks the record pending.** Beside the token,
+  `/run/orkestrator-bridge/<kind>-listener` holds `pending` from the moment a
+  start writes a fresh token.
+- **Once the bridge answers, its socket is recorded.** `startContainerServer`
+  reads the port's listening sockets as root with `ss -Hltne` and writes the one
+  socket's inode and cookie to the record. The kernel never reuses a socket
+  cookie while it runs, and the agent cannot obtain the bridge's socket: the
+  bridge is non-dumpable, so `pidfd_getfd` is refused, and it opens the socket
+  close-on-exec. A port with no socket or several, or a scan that could not
+  run, fails the start after stopping what listens.
+- **The launcher's session closes the window before the record.** The launcher
+  prints `orkestrator-bridge-session=<id>`, the session `setsid` gave the
+  bridge, and the record is written only while a `bun` lives in that session.
+  No process can join a session later, so a bridge the agent started after
+  killing the launched one is refused. A launcher from before the report
+  prints nothing, and the record is then written without that check.
+- **Every read of a running bridge's token compares the socket.**
+  `readContainerBridgeToken` scans in the same root exec that reads the token,
+  so it costs no extra exec. Start reuse, the `get_*_server_status` commands,
+  `peekContainerAgentBridge`, connection refreshes before a session or a
+  dispatch, and log-policy discovery all go through it. A different socket,
+  a second socket beside the recorded one, a pending record or an unfinished
+  scan returns no token and logs `docker` `bridge.listener-refused`; the start
+  path then replaces the bridge with a new token the agent never saw. An empty
+  port returns the token, because nothing can receive it there. A bridge an
+  older backend started has no record and is recorded as it stands
+  (`bridge.listener-adopted`): it is the process that backend already trusted.
+- **Replacing stops what listens, whatever its command line.** Besides the
+  usual `pkill` of the bridge's pattern, the start runs a scan as `node`, with a
+  fixed PATH and no login shell, that stops every process whose descriptors hold
+  the port's socket. Root cannot do this: a container exec has no
+  `CAP_SYS_PTRACE`, so root cannot read another uid's `/proc/<pid>/fd`. A
+  process that made itself non-dumpable hides its descriptors from `node` too;
+  if it does not match the bridge's pattern either, it survives and the start
+  fails with "did not stop" rather than trusting it.
+
+The check is on reuse, not on every request. A process that replaces the bridge
+between a check and the next request still gets that request, until the next
+refresh or start. The agent's uid can still kill the bridge, which it could
+already do. OpenCode has no bridge of ours and is not covered: to-do
+[7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).
+
 ## Where an approval is a boundary
 
 | Where | What an `ask` approval means |
@@ -102,10 +152,10 @@ need its own uid, and then its tools would too.
 
 ## What the agent's uid can still do
 
-- **Replace the bridge.** The verifier and the public key are not secret, so a
-  persistent process can kill the bridge and start one of its own that the
-  backend keeps trusting. To-do
-  [7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md).
+- **Kill the bridge, or replace it between two checks.** A replacement is
+  refused at the next start, status read or connection refresh
+  ([above](#a-replaced-bridge-is-refused)), but a request made before then
+  reaches it, and killing the bridge ends the agent's own session.
 - **Load code into Pi's bridge.** With project resources on, Pi runs repository
   extensions inside the bridge process. To-do
   [7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md).
@@ -121,3 +171,11 @@ the Pi bridge's port was refused on a bridge started from the same verifier
 and key while the backend's signed calls worked, a replayed signature was
 refused, and a `BUN_OPTIONS` preload and a `bun` function planted in
 `~/.bash_profile` ran in the agent's own login shell but not in the next bridge.
+On Linux Engine (beelink, x86_64) on 2026-11-09, with an image built from the
+listener check's branch, every bridge's socket was recorded at start under the
+launcher's session check, and the backend refused the token both to a plain
+`bun` server the agent's uid started on the Pi bridge's port and to a real Pi
+bridge it started through the launcher with the same verifier and key
+(`bridge.listener-refused reason=different-socket`). The next `start_pi_server`
+replaced that bridge with a new token, which the backend then read back, and
+the caught token was refused there.

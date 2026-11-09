@@ -171,6 +171,11 @@
       "version": "2.37.2-beta",
       "channel": "beta",
       "publishedAt": null
+    },
+    {
+      "version": "2.37.3-beta",
+      "channel": "beta",
+      "publishedAt": null
     }
   ]
 }

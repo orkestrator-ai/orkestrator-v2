@@ -40,6 +40,7 @@
  * `output/agent-testing/<run>/claude-warm-runtime/summary.json`; prompts,
  * replies and file contents are fixture strings and are not written there.
  */
+import { runWarmQualification, removeWarmProbeDefinition } from "./claude-warm-runtime-support";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -51,7 +52,6 @@ import {
   dispatchProbeTurn,
   invokeCommand,
   parseProbeLog,
-  PROBE_SERVER_NAME,
   probePrompt,
   TRANSIENT_APPLY_STATES,
 } from "./mcp-apply-live-support";
@@ -109,8 +109,8 @@ const METADATA_TTL_MS = 30_000;
 const APPROVAL_PAUSE_MS = 20_000;
 const APPLY_SETTLE_MS = 120_000;
 const PROBE_SERVER = path.join(import.meta.dirname, "mcp-probe-server.mjs");
-/** Matches `PROBE_SERVER_NAME`, so an interrupted run's entry is cleaned up by either spec. */
-const SERVER = "mqu8_warm";
+/** Unique to this run so cleanup cannot remove another run's definition. */
+const SERVER = `mqu${randomBytes(6).readUIntBE(0, 6)}_warm`;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function profileStatus(): Status {
@@ -197,7 +197,8 @@ test.describe("warm Claude CLI app path", () => {
     let fake: McpFakeModelHandle | null = null;
     let invoke: Invoke | null = null;
     let environmentId: string | null = null;
-    try {
+    let removeProbe: (() => Promise<void>) | undefined;
+    const qualify = async () => {
       const status = profileStatus();
       expect(status.profile).toBe(profile);
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
@@ -554,22 +555,6 @@ test.describe("warm Claude CLI app path", () => {
             ),
           };
         };
-        // An interrupted run's entry would shadow this one.
-        const leftover = await entryNamed();
-        if (leftover.definition && PROBE_SERVER_NAME.test(SERVER)) {
-          await call("mutate_mcp_definition", {
-            mutation: {
-              requestId: randomUUID(),
-              targetId: target.targetId,
-              applyIntent: "save",
-              operation: {
-                kind: "remove",
-                entryId: leftover.definition.entryId,
-                expectedRevision: leftover.revision,
-              },
-            },
-          });
-        }
         const apply = async (operation: Record<string, unknown>) => {
           const result = await call<{ operation: Operation }>("mutate_mcp_definition", {
             mutation: {
@@ -620,6 +605,18 @@ test.describe("warm Claude CLI app path", () => {
           };
         };
 
+        // Register before add: an ambiguous mutation response still needs cleanup.
+        removeProbe = () =>
+          removeWarmProbeDefinition(entryNamed, async (entryId, revision) => {
+            await call("mutate_mcp_definition", {
+              mutation: {
+                requestId: randomUUID(),
+                targetId: target.targetId,
+                applyIntent: "save",
+                operation: { kind: "remove", entryId, expectedRevision: revision },
+              },
+            });
+          });
         const added = await apply({
           kind: "add",
           sourceId: source.sourceId,
@@ -706,25 +703,56 @@ test.describe("warm Claude CLI app path", () => {
       } catch (error) {
         summary.screenshot = `not captured: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200)}`;
       }
-    } finally {
-      summary.finishedAt = new Date().toISOString();
-      summary.verdict = failures.length === 0 && steps.length > 0 ? "passed" : "failed";
-      mkdirSync(path.join(outputDir, "claude-warm-runtime"), { recursive: true });
-      writeFileSync(
-        path.join(outputDir, "claude-warm-runtime", "summary.json"),
-        `${JSON.stringify(summary, null, 2)}\n`,
-      );
-      await testInfo.attach("summary", {
-        body: JSON.stringify(summary, null, 2),
-        contentType: "application/json",
-      });
-      if (invoke && environmentId) {
-        await invoke("stop_environment", { environmentId }).catch(() => undefined);
-        await invoke("delete_environment", { environmentId }).catch(() => undefined);
-      }
-      if (fake) await fake.stop();
-      rmSync(scratch, { recursive: true, force: true });
-    }
+    };
+    await runWarmQualification({
+      failures,
+      run: qualify,
+      cleanup: [
+        {
+          name: "probe MCP definition",
+          run: async () => {
+            await removeProbe?.();
+          },
+        },
+        {
+          name: "stop environment",
+          run: async () => {
+            if (invoke && environmentId) await invoke("stop_environment", { environmentId });
+          },
+        },
+        {
+          name: "delete environment",
+          run: async () => {
+            if (invoke && environmentId) await invoke("delete_environment", { environmentId });
+          },
+        },
+        {
+          name: "fake model",
+          run: async () => {
+            if (fake) await fake.stop();
+          },
+        },
+        {
+          name: "scratch directory",
+          run: async () => {
+            rmSync(scratch, { recursive: true, force: true });
+          },
+        },
+      ],
+      finish: async (verdict) => {
+        summary.finishedAt = new Date().toISOString();
+        summary.verdict = verdict;
+        mkdirSync(path.join(outputDir, "claude-warm-runtime"), { recursive: true });
+        writeFileSync(
+          path.join(outputDir, "claude-warm-runtime", "summary.json"),
+          `${JSON.stringify(summary, null, 2)}\n`,
+        );
+        await testInfo.attach("summary", {
+          body: JSON.stringify(summary, null, 2),
+          contentType: "application/json",
+        });
+      },
+    });
     expect(failures, failures.join("\n")).toEqual([]);
   });
 });

@@ -427,6 +427,52 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     ).toEqual({ state: "attached" });
   });
 
+  test("cached generations are replaced and retired by authoritative refreshes", async () => {
+    let generation: number | undefined = 3;
+    let unavailable = false;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/runtime-health")) {
+        if (unavailable) return new Response("unavailable", { status: 503 });
+        return Response.json({
+          summary: {
+            state: generation === undefined ? "detached" : "attached",
+            ...(generation === undefined ? {} : { runtimeGeneration: generation }),
+          },
+          notices: [],
+        });
+      }
+      return Response.json({ status: "running" });
+    });
+    expect((await provider.interactiveSnapshot!("s-1")).runtime?.runtimeGeneration).toBe(3);
+    const metadata = (
+      provider as unknown as {
+        interactiveMetadata: Map<
+          string,
+          { expiresAt: number; runtimeHealthAuthoritative?: boolean }
+        >;
+      }
+    ).interactiveMetadata;
+    for (const next of [4, undefined]) {
+      generation = next;
+      metadata.get("s-1")!.expiresAt = 0;
+      await provider.interactiveSnapshot!("s-1");
+      await waitUntil(() => metadata.get("s-1")!.expiresAt > 0);
+      const fresh = await provider.interactiveSnapshot!("s-1");
+      expect(fresh.runtime?.runtimeGeneration).toBe(next);
+      if (next === undefined) expect(fresh.runtime).not.toHaveProperty("runtimeGeneration");
+    }
+    generation = 5;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => metadata.get("s-1")!.expiresAt > 0);
+    unavailable = true;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => metadata.get("s-1")!.runtimeHealthAuthoritative === false);
+    expect((await provider.interactiveSnapshot!("s-1")).runtime?.runtimeGeneration).toBe(5);
+  });
+
   test("an authoritative refresh without steer retires a cached saturated value", async () => {
     let saturated = true;
     const { provider } = httpProvider((url) => {

@@ -68,7 +68,7 @@ async function makeWorktree(): Promise<string> {
   return worktree;
 }
 
-async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatcherOptions> = {}) {
+function openWorktreeWatcher(worktree: string, overrides: Partial<WorktreeWatcherOptions> = {}) {
   const seen = new Set<string>();
   const hints: WorktreeChangeHint[] = [];
   const errors: unknown[] = [];
@@ -85,13 +85,18 @@ async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatche
     ...overrides,
   });
   cleanups.push(() => watcher.close());
+  return { seen, hints, errors, watcher };
+}
+
+async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatcherOptions> = {}) {
+  const opened = openWorktreeWatcher(worktree, overrides);
   const deadline = Date.now() + DELIVERY_DEADLINE_MS;
-  while (!watcher.qualified && Date.now() < deadline) {
+  while (!opened.watcher.qualified && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  expect(watcher.qualified).toBe(true);
-  expect(errors).toEqual([]);
-  return { seen, hints, errors, watcher };
+  expect(opened.watcher.qualified).toBe(true);
+  expect(opened.errors).toEqual([]);
+  return opened;
 }
 
 /** Writes distinct files until the watcher names one, since one event can be lost. */
@@ -238,6 +243,73 @@ describe("listIgnoredDependencyTrees", () => {
 });
 
 describe("worktree watcher on this platform's real watch", () => {
+  // Root bypasses mode bits, so this qualification needs a non-root Linux user.
+  describe.skipIf(process.platform !== "linux" || process.geteuid?.() === 0)(
+    "unreadable descendants on Linux as a non-root user",
+    () => {
+      test.each(["before attachment", "after qualification"])(
+        "a real permission error %s keeps existing and new source directories watched",
+        async (when) => {
+          const worktree = await makeWorktree();
+          const parent = path.join(worktree, "src/runtime-data");
+          const denied = path.join(parent, "unreadable");
+          await fs.mkdir(parent);
+          // Added after the fixture removal cleanup, so permissions are restored first.
+          cleanups.push(async () => {
+            await fs.chmod(denied, 0o700).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw error;
+            });
+          });
+          const makeUnreadable = async () => {
+            await fs.mkdir(denied, { mode: 0 });
+            await expect(fs.readdir(denied)).rejects.toMatchObject({ code: "EACCES" });
+          };
+          if (when === "before attachment") await makeUnreadable();
+          const permissionErrors: NodeJS.ErrnoException[] = [];
+          let coverageChanges = 0;
+          const options: Partial<WorktreeWatcherOptions> = {
+            plan: worktreeWatchPlanIo,
+            onCoverageChange: () => coverageChanges++,
+            startWatch: (target, listener, settings) => {
+              const handle = watch(target, { ...settings, persistent: false }, (event, name) =>
+                listener(event, name?.toString() ?? null),
+              );
+              handle.on("error", (error: NodeJS.ErrnoException) => permissionErrors.push(error));
+              return handle;
+            },
+          };
+          const opened =
+            when === "after qualification"
+              ? await watchWorktree(worktree, options)
+              : openWorktreeWatcher(worktree, options);
+          if (when === "after qualification") {
+            expect(coverageChanges).toBe(1);
+            await makeUnreadable();
+          }
+          const deadline = Date.now() + DELIVERY_DEADLINE_MS;
+          while (permissionErrors.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+          expect(permissionErrors.length).toBeGreaterThan(0);
+          expect(permissionErrors.every((error) => ["EACCES", "EPERM"].includes(error.code!))).toBe(
+            true,
+          );
+          expect(permissionErrors.some((error) => error.path === denied)).toBe(true);
+          expect(opened.watcher.watching).toBe(true);
+          expect(opened.watcher.qualified).toBe(false);
+          if (when === "after qualification") expect(coverageChanges).toBe(2);
+          // Even an existing unreadable child may be reported asynchronously,
+          // after the watch briefly announced coverage. Either ordering must
+          // end unqualified, with at most one withdrawal notification.
+          else expect([0, 2]).toContain(coverageChanges);
+          await expectNoticed(worktree, opened.seen, "src");
+          await expectNoticed(worktree, opened.seen, "src/created-after-permission-error");
+          expect(opened.errors).toEqual([]);
+          expect(opened.watcher.qualified).toBe(false);
+        },
+        DELIVERY_DEADLINE_MS * 3,
+      );
+    },
+  );
+
   test(
     "a write under an ignored node_modules goes unreported while a source write is noticed",
     async () => {

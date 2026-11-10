@@ -13,6 +13,7 @@ import {
 } from "@orkestrator/protocol/worktree-snapshots";
 import {
   DiffStatsService,
+  FILE_LIST_MAX_AGE_MS,
   LOCAL_SCAN_MIN_GAP_MS,
   WATCHER_STABLE_MS,
   type DiffScanResult,
@@ -766,6 +767,53 @@ describe("failure, fallback and retry", () => {
     await owner.time.advance(15_000);
     expect(scans()).toBe(before + 1);
     expect(owner.warnings).toEqual([]);
+    expect(owner.watchers).toHaveLength(1);
+    expect(owner.service.status().retryTimers).toBe(0);
+  });
+
+  test("withdrawing coverage age-bounds file-list and tree bodies cached while qualified", async () => {
+    const owner = createOwner({ qualified: true });
+    let changes = [change("a.ts")];
+    let tree = [{ name: "old" }];
+    owner.autoScan(() => result(changes));
+    owner.autoWalk(() => tree);
+    track(owner, local());
+    await flushMicrotasks();
+    await owner.service.readTree({ lookup: localLookup });
+
+    const reads = () =>
+      Promise.all([readList(owner, localLookup), owner.service.readTree({ lookup: localLookup })]);
+    const counts = () => [
+      owner.kinds()["diff-scan"]!.started,
+      owner.kinds()["file-tree-read"]!.started,
+    ];
+    const before = counts();
+    changes = [change("a.ts", 2)]; // Same membership: no tree invalidation from the list scan.
+    tree = [{ name: "after-permission-change" }];
+    await owner.time.advance(FILE_LIST_MAX_AGE_MS + 1);
+    const [cachedList, cachedTree] = await reads();
+    expect(cachedList.changes).toEqual([change("a.ts")]);
+    expect(cachedTree.tree).toEqual([{ name: "old" }]);
+    expect(counts()).toEqual(before);
+
+    const watcher = owner.watchers.at(-1)!;
+    watcher.qualified = false;
+    watcher.options.onCoverageChange?.();
+    const [freshList, freshTree] = await reads();
+    expect(freshList.changes).toEqual(changes);
+    expect(freshTree.tree).toEqual(tree);
+    expect(counts()).toEqual(before.map((count) => count + 1));
+
+    // Fresh unqualified bodies still share reads within the age bound.
+    await reads();
+    expect(counts()).toEqual(before.map((count) => count + 1));
+    changes = [change("a.ts", 3)];
+    tree = [{ name: "later-unwatched-change" }];
+    await owner.time.advance(FILE_LIST_MAX_AGE_MS + 1);
+    const [laterList, laterTree] = await reads();
+    expect(laterList.changes).toEqual(changes);
+    expect(laterTree.tree).toEqual(tree);
+    expect(counts()).toEqual(before.map((count) => count + 2));
     expect(owner.watchers).toHaveLength(1);
     expect(owner.service.status().retryTimers).toBe(0);
   });

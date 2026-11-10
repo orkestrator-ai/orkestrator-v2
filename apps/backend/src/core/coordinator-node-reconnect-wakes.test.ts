@@ -10,10 +10,14 @@ import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registrarFrom } from "./commands-registry-contracts.js";
-import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import {
+  coordinatorNodeTarget,
+  registerCoordinatorNodeCommands,
+} from "./commands-registry-coordinator-nodes.js";
 import { createNodeTargets } from "./control-mcp-nodes.js";
 import {
   CoordinatorNodeReconnectWakes,
+  connectCoordinatorNodeWakes,
   NODE_RECONNECT_WAKE_MAX_AGE_MS,
   NODE_RECONNECT_WAKE_MAX_NODES,
   NODE_RECONNECT_WAKE_MAX_WAITERS,
@@ -88,6 +92,14 @@ describe("CoordinatorNodeReconnectWakes", () => {
     expect(wakes.waitingOn("bk_other")).toBe(1);
   });
 
+  test("reconciliation and the reconnect callback drain a waiter only once", async () => {
+    const { wakes, sent } = fakeWakes();
+    wakes.noteRefused(attempt());
+    await Promise.all([wakes.nodeConnected("bk_leaf"), wakes.nodeConnected("bk_leaf")]);
+    expect(sent).toHaveLength(1);
+    expect(wakes.waitingOn("bk_leaf")).toBe(0);
+  });
+
   test("a node nobody tried says nothing when it connects", async () => {
     const { wakes, sent } = fakeWakes();
     await wakes.nodeConnected("bk_leaf");
@@ -148,7 +160,7 @@ describe("on the real coordinator", () => {
     for (const world of worlds.splice(0)) await world.close();
   });
 
-  async function world() {
+  async function world(connected = false) {
     const created = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
     worlds.push(created);
     const commands = new Map<string, CommandHandler>();
@@ -156,10 +168,11 @@ describe("on the real coordinator", () => {
     const context = {
       storage: created.storage,
       coordinators: created.coordinator,
+      nodes: { link: () => ({ connected }) },
     } as unknown as CommandContext;
     const note = (scope: Record<string, unknown>, nodeId = "bk_leaf") =>
       commands.get("note_coordinator_node_unavailable")!({ scope, nodeId }, context);
-    return { world: created, note };
+    return { world: created, note, context };
   }
 
   test("a refused conversation is woken with one message when the node reconnects", async () => {
@@ -178,6 +191,73 @@ describe("on the real coordinator", () => {
     expect(received[0]).toContain("bk_leaf");
     expect(received[0]).toContain("is connected again");
     await w.coordinator.nodeConnected("bk_leaf");
+    await w.deliver();
+    expect(w.received(main)).toHaveLength(1);
+  });
+
+  test("MCP stale offline summary is reconciled after reconnect and before registration", async () => {
+    const { world: w, note } = await world(true);
+    const main = await w.main();
+    const scope = {
+      projectId: w.projectId,
+      coordinatorId: w.coordinatorId,
+      conversationId: main.conversationId!,
+    };
+    const targets = createNodeTargets(
+      (async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_node_status")
+          return { mode: "command", nodeId: "bk_cmd", controllers: [] };
+        if (command === "get_node_summaries") {
+          // The old summary is on its way back while the live reconnect fires.
+          await w.coordinator.nodeConnected("bk_leaf");
+          return {
+            nodes: [
+              { nodeId: "bk_leaf", available: false, view: { displayName: "Leaf" }, projects: [] },
+            ],
+          };
+        }
+        if (command === "note_coordinator_node_unavailable")
+          return note(args.scope as Record<string, unknown>);
+        throw new Error(`unexpected ${command}`);
+      }) as never,
+      scope,
+    );
+    await expect(targets.targetOrSelf("bk_leaf")).rejects.toThrow("not connected");
+    await w.deliver();
+    expect(w.received(main)).toHaveLength(1);
+    await w.coordinator.nodeConnected("bk_leaf");
+    await w.deliver();
+    expect(w.received(main)).toHaveLength(1);
+  });
+
+  test("backend stale offline summary reconciles the live link without another reconnect", async () => {
+    const { world: w, context } = await world(true);
+    const main = await w.main();
+    context.nodes = {
+      status: async () => ({ mode: "command", nodeId: "bk_cmd" }),
+      link: () => ({ connected: true }),
+    } as never;
+    context.nodePortal = {
+      summaries: async () => {
+        await w.coordinator.nodeConnected("bk_leaf");
+        return {
+          nodes: [
+            { nodeId: "bk_leaf", available: false, view: { displayName: "Leaf" }, projects: [] },
+          ],
+        };
+      },
+    } as never;
+    await expect(
+      coordinatorNodeTarget(
+        context,
+        {
+          projectId: w.projectId,
+          coordinatorId: w.coordinatorId,
+          conversationId: main.conversationId!,
+        },
+        "bk_leaf",
+      ),
+    ).rejects.toThrow("not connected");
     await w.deliver();
     expect(w.received(main)).toHaveLength(1);
   });
@@ -279,6 +359,13 @@ describe("NodeCoordination.onNodeConnected", () => {
       emit: () => {},
     });
     try {
+      const main = await world.main();
+      world.coordinator.noteNodeUnavailable({
+        projectId: world.projectId,
+        coordinatorId: world.coordinatorId,
+        nodeId: "bk_leaf",
+      });
+      const unsubscribe = connectCoordinatorNodeWakes(instance, world.coordinator);
       const heard: string[] = [];
       instance.onNodeConnected((nodeId) => heard.push(nodeId));
       // A throwing listener does not stop the others.
@@ -298,6 +385,11 @@ describe("NodeCoordination.onNodeConnected", () => {
       connected = ["bk_leaf"];
       await settle();
       expect(heard).toEqual(["bk_leaf", "bk_leaf"]);
+      // The production subscription delivers to the real main-conversation mailbox.
+      await world.deliver();
+      expect(world.received(main)).toHaveLength(1);
+      expect(world.received(main)[0]).toContain("is connected again");
+      unsubscribe();
     } finally {
       instance.dispose();
       await world.close();

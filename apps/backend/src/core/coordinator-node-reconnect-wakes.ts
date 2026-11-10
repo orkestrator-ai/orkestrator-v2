@@ -166,3 +166,11 @@ export class CoordinatorNodeReconnectWakes {
     }
   }
 }
+
+/** Shared production subscription; returns the source's explicit cleanup handle. */
+export function connectCoordinatorNodeWakes(
+  source: { onNodeConnected(listener: (nodeId: string) => void): () => void },
+  target: { nodeConnected(nodeId: string): Promise<void> },
+): () => void {
+  return source.onNodeConnected((nodeId) => void target.nodeConnected(nodeId));
+}

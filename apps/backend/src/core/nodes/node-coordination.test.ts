@@ -1163,3 +1163,54 @@ test("a leaf's project list read starts a ticket sync on a command node", async 
     instance.dispose();
   }
 });
+
+test("ticket sync distinguishes unread summaries from loaded empty project lists", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  let loadedAt: string | null = null;
+  const instance = new NodeCoordination({
+    storage: world.storage,
+    nodes: {
+      selfIdentity: async () => "bk_cmd",
+      link: () => null,
+      subscribe: () => () => {},
+    } as never,
+    portal: {
+      readModel: { onNodeEvent: () => () => {}, onProjectsChanged: () => () => {} },
+      summaries: async () => ({
+        nodes: [
+          {
+            nodeId: "bk_leaf",
+            view: { displayName: "Leaf" },
+            available: true,
+            projects: [],
+            loadedAt,
+          },
+        ],
+      }),
+    } as never,
+    invoke: async () => undefined as never,
+    emit: () => {},
+  });
+  try {
+    // Inspect the real dependency supplied by NodeCoordination, rather than injecting summaryPending.
+    const deps = (
+      instance.ticketSync as unknown as { deps: import("./node-ticket-sync.js").NodeTicketSyncDeps }
+    ).deps;
+    expect(await deps.nodes()).toEqual([
+      {
+        nodeId: "bk_leaf",
+        displayName: "Leaf",
+        available: true,
+        projects: [],
+        summaryPending: true,
+      },
+    ]);
+    loadedAt = "2026-11-10T00:00:00Z";
+    expect(await deps.nodes()).toEqual([
+      { nodeId: "bk_leaf", displayName: "Leaf", available: true, projects: [] },
+    ]);
+  } finally {
+    instance.dispose();
+  }
+});

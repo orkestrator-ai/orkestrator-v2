@@ -227,7 +227,10 @@ function pointPiAt(profile: string, baseUrl: string): void {
 async function restartLeaf(): Promise<number> {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   const log = openSync(path.join(EVIDENCE_DIR, "leaf-restart.log"), "a");
-  const env = { ...process.env, ORKESTRATOR_HOST_REACHABILITY_CHECK: "off" };
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+  };
   delete env.DISPLAY;
   delete env.WAYLAND_DISPLAY;
   const child = spawn("mise", ["run", "dev:test", "--profile", leafProfile, ...LEAF_START_ARGS], {

@@ -150,6 +150,17 @@ export interface CoordinatorNodeTarget {
   environment(environmentId: string): Promise<JsonRecord>;
 }
 
+/** Register before checking the live link: the offline summary may already be stale. */
+async function noteUnavailable(
+  context: CommandContext,
+  attempt: import("./coordinator-node-reconnect-wakes.js").CoordinatorNodeAttempt,
+): Promise<void> {
+  context.coordinators?.noteNodeUnavailable(attempt);
+  if (isBackendId(attempt.nodeId) && context.nodes?.link(attempt.nodeId)?.connected) {
+    await context.coordinators?.nodeConnected(attempt.nodeId);
+  }
+}
+
 export async function coordinatorNodeTarget(
   context: CommandContext,
   caller: Caller,
@@ -173,7 +184,7 @@ export async function coordinatorNodeTarget(
   if (!node) throw new Error(`No connected node has ID ${nodeId}. Call list_nodes.`);
   if (!node.available) {
     // Nothing is queued; this conversation is woken once it reconnects (3800 task 8).
-    context.coordinators?.noteNodeUnavailable({
+    await noteUnavailable(context, {
       ...caller,
       nodeId,
       nodeName: node.view.displayName,
@@ -629,7 +640,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
   register(noteCoordinatorNodeUnavailableCommand, async ({ scope, nodeId }, context) => {
     const caller = await identity(scope, context);
     if (!context.coordinators) return { noted: false };
-    context.coordinators.noteNodeUnavailable({
+    await noteUnavailable(context, {
       ...caller,
       nodeId: asNonBlankString(nodeId, "nodeId"),
     });

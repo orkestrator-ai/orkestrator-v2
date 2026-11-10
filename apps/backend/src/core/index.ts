@@ -1,3 +1,4 @@
+import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
@@ -963,7 +964,7 @@ export class OrkestratorBackend {
     });
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
     // Coordinators refused this node while it was down hear that it is back.
-    this.nodeCoordination.onNodeConnected((nodeId) => void this.coordinators.nodeConnected(nodeId));
+    connectCoordinatorNodeWakes(this.nodeCoordination, this.coordinators);
     bridgeRemoteAutoSwitchNotices({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       nodeName: async (nodeId) =>

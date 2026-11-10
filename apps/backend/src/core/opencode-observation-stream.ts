@@ -59,6 +59,29 @@ export function isOpenCodeHeartbeat(raw: unknown): boolean {
   );
 }
 
+/** The time source and timers a silence watchdog runs on; tests substitute a fake. */
+export interface OpenCodeSilenceClock {
+  now(): number;
+  setTimer(callback: () => void, delayMs: number): unknown;
+  clearTimer(handle: unknown): void;
+}
+
+export interface OpenCodeSilenceOptions {
+  silenceMs?: number;
+  clock?: OpenCodeSilenceClock;
+}
+
+const REAL_SILENCE_CLOCK: OpenCodeSilenceClock = {
+  now: () => performance.now(),
+  setTimer(callback, delayMs) {
+    const timer = setTimeout(callback, delayMs);
+    // A deadline must never hold the process open on its own.
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  },
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /**
  * Notices an OpenCode event stream that stays open but goes quiet, so the
  * monitor replaces it instead of trusting frozen activity until TCP gives up.
@@ -75,16 +98,16 @@ export class OpenCodeStreamSilenceWatchdog {
   private lastFrameAt = 0;
   private armed = false;
   private stopped = false;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: unknown;
   private readonly silenceMs: number;
-  private readonly now: () => number;
+  private readonly clock: OpenCodeSilenceClock;
 
   constructor(
     private readonly onSilent: (silenceMs: number) => void,
-    options: { silenceMs?: number; now?: () => number } = {},
+    options: OpenCodeSilenceOptions = {},
   ) {
     this.silenceMs = Math.max(1, options.silenceMs ?? OPENCODE_EVENT_STREAM_SILENCE_MS);
-    this.now = options.now ?? (() => performance.now());
+    this.clock = options.clock ?? REAL_SILENCE_CLOCK;
   }
 
   get isArmed(): boolean {
@@ -94,7 +117,7 @@ export class OpenCodeStreamSilenceWatchdog {
   /** A frame arrived; a heartbeat arms the deadline. */
   frame(heartbeat: boolean): void {
     if (this.stopped) return;
-    this.lastFrameAt = this.now();
+    this.lastFrameAt = this.clock.now();
     if (heartbeat && !this.armed) {
       this.armed = true;
       this.schedule(this.silenceMs);
@@ -103,26 +126,64 @@ export class OpenCodeStreamSilenceWatchdog {
 
   stop(): void {
     this.stopped = true;
-    if (this.timer !== undefined) clearTimeout(this.timer);
+    if (this.timer !== undefined) this.clock.clearTimer(this.timer);
     this.timer = undefined;
   }
 
   private schedule(delayMs: number): void {
-    this.timer = setTimeout(() => this.check(), delayMs);
-    // A deadline must never hold the process open on its own.
-    (this.timer as { unref?: () => void }).unref?.();
+    this.timer = this.clock.setTimer(() => this.check(), delayMs);
   }
 
   private check(): void {
     this.timer = undefined;
     if (this.stopped) return;
-    const silentFor = this.now() - this.lastFrameAt;
+    const silentFor = this.clock.now() - this.lastFrameAt;
     if (silentFor < this.silenceMs) {
       this.schedule(this.silenceMs - silentFor);
       return;
     }
     this.stop();
     this.onSilent(this.silenceMs);
+  }
+}
+
+/** What {@link consumeOpenCodeEventStream} reports to the monitor that owns the connection. */
+export interface OpenCodeEventStreamHandlers {
+  disposed(): boolean;
+  /** The first frame of this connection arrived. */
+  connected(): void;
+  /** A frame that is not a heartbeat; heartbeats are liveness only. */
+  frame(raw: unknown): void;
+  /** The connection heartbeated and then went quiet; the owner replaces it. */
+  silent(silenceMs: number): void;
+}
+
+/**
+ * Reads one `/event` connection until it ends. Open but silent is a loss too
+ * (task 1 of to-do 7200), so a watchdog asks the owner to replace a stream
+ * that stopped heartbeating; it is stopped whenever the connection ends.
+ */
+export async function consumeOpenCodeEventStream(
+  stream: AsyncIterable<unknown>,
+  handlers: OpenCodeEventStreamHandlers,
+  options: OpenCodeSilenceOptions = {},
+): Promise<"ended" | "disposed"> {
+  const watchdog = new OpenCodeStreamSilenceWatchdog(handlers.silent, options);
+  let receivedFrame = false;
+  try {
+    for await (const raw of stream) {
+      if (handlers.disposed()) return "disposed";
+      if (!receivedFrame) {
+        receivedFrame = true;
+        handlers.connected();
+      }
+      const heartbeat = isOpenCodeHeartbeat(raw);
+      watchdog.frame(heartbeat);
+      if (!heartbeat) handlers.frame(raw);
+    }
+    return "ended";
+  } finally {
+    watchdog.stop();
   }
 }
 

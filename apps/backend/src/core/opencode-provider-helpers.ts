@@ -39,6 +39,7 @@ import type {
   ProviderTabMail,
   ProviderWorkerMail,
 } from "./agent-provider-contract.js";
+import type { OpenCodeSilenceClock } from "./opencode-observation-stream.js";
 import { abortableSleep } from "./abortable-timing.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
@@ -102,6 +103,8 @@ export interface OpenCodeProviderDependencies {
    * heartbeated (`OPENCODE_EVENT_STREAM_SILENCE_MS` by default).
    */
   monitorSilenceMs?: number;
+  /** Test seam for the silence watchdog's clock and timers. */
+  monitorClock?: OpenCodeSilenceClock;
   /** Test seam for the monitor's cancellable reconnect wait. */
   waitForMonitorRetry?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;

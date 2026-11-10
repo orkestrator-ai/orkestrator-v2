@@ -402,7 +402,7 @@ What makes up the idle rows, per minute, from Docker's labels:
   [7531](../containers-and-environments/7531-idle-tab-cleanup-execs.md).
 - **Not counted anywhere.** The tab loop's missing recurring kind, and
   after's extra presence reads below, are
-  [7565](../transcripts-and-observation/7565-tmux-tab-loop-recurring-kind.md).
+  [7567](../transcripts-and-observation/7567-tmux-tab-loop-recurring-kind.md).
 
 **Busy profile: per-pass costs (tasks 2 and 10).** The 0048 busy driver
 (`recurring-live-ab.ts --arms candidate --busy-rounds 3 --busy-clients 0
@@ -451,7 +451,7 @@ after 10.
   fetching bytes, on both sides, so the populated stores cost reads, not
   bytes. After's presence pass reads two more rows and checks the store
   revision twice where base does once (the doubled check was already seen
-  idle on macOS); neither was traced (7565 task 2).
+  idle on macOS); neither was traced (7567 task 2).
 - **Diff scans.** Base rescanned every environment, stopped or not; after
   scanned a third as often and halved again once they stopped.
 - **Not exercised here:** BG-9 needs a working Claude or Codex session (Pi
@@ -509,7 +509,7 @@ worktree signal were confirmed too.
   as on macOS; the other 6 a minute are tab cleanup (7531).
 - **Counters.** The backend charged 4–4.5 `docker exec` a minute to its
   kinds in the idle windows while Docker counted 32–33.5: the tab loop is
-  still uncounted ([7565](../transcripts-and-observation/7565-tmux-tab-loop-recurring-kind.md)).
+  still uncounted ([7567](../transcripts-and-observation/7567-tmux-tab-loop-recurring-kind.md)).
 - **Turns.** The tab went busy 0.7–1.5 s after a queued prompt and idle
   3.8–5.0 s after it, every turn of both passes.
 
@@ -536,7 +536,7 @@ while the revision stayed the same and read again when the 30 s reuse
 limit ran out, exactly task 10's rule. The activity sweep's own provider
 requests per session were three times base's on after, idle and working.
 That is not BG-9 and was not traced; it is task 3 of
-[7565](../transcripts-and-observation/7565-tmux-tab-loop-recurring-kind.md).
+[7567](../transcripts-and-observation/7567-tmux-tab-loop-recurring-kind.md).
 
 **DK-3 with a cold page cache (after only).** Dropping the whole page cache
 needs root, but an unprivileged user can evict one file's pages:
@@ -570,7 +570,7 @@ in the testing guide.
 
 | Measurement | Items | Status |
 | --- | --- | --- |
-| `storage-read` bytes for `mail-presence` and `activity` | ST-7 | Measured idle (macOS) and on a populated busy profile (Linux, 2026-11-10, above): idle windows fetch no bytes on either side even with stores full; during the busy phase the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB. After's presence pass reads 2 more cached rows than base's (7565 task 2). Done. |
+| `storage-read` bytes for `mail-presence` and `activity` | ST-7 | Measured idle (macOS) and on a populated busy profile (Linux, 2026-11-10, above): idle windows fetch no bytes on either side even with stores full; during the busy phase the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB. After's presence pass reads 2 more cached rows than base's (7567 task 2). Done. |
 | `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Measured on Linux 2026-11-10 (above) with a claude-tmux tab in the container on a container-local fake model, counted by Docker: idle unbound tab 469.5–471 → 124.5–125 execs a minute for the whole container, the tab's own loop 6.7 (unbound only) → 0.94–0.99 a second. The doorbell measured live the same day on a rootless daemon whose containers reach the backend (above): confirmed, the idle bound tab's loop 0.44–0.45 execs a second and the container 32–33.5 a minute. BG-8 showed no difference on an outside `docker stop` (both commits stop within 0.5 s). Done. |
 | `gh-spawn` per hour | BG-6, BG-13 (task 9) | Not measurable on an isolated profile: the fixture has no GitHub remote or PR, and the profile's `gh` configuration is isolated by design. It needs a real PR and a `gh` login, whose requests go to GitHub on the user's account. |
 | Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | BG-3 measured on Linux 2026-11-10 (above): with both mailboxes' environments stopped, presence reads per pass 9 → 3 on after, 7 → 7 on base. BG-9 measured on Linux 2026-11-10 (above): the monitor's bridge reads for a held native Claude turn 11.7–12 → 2 a minute. Open: BG-11, which needs a scripted build pipeline on a fake model, is [7566](7566-bg11-review-fanout-live-count.md); BG-12 needs a real Claude login handed to a container (the user's). Their unit counts in task 10 stand. |
@@ -3272,7 +3272,7 @@ fewer of its loops at all (its tab cleanup charged none of the 5 execs a
 minute it made), so the counters would have reported 64 a minute on both
 sides while Docker saw 469.5–471 against 124.5–125 (unbound only). Docker's count is the
 same instrument on both commits. Adding a recurring kind for the tab loop is
-[7565](../transcripts-and-observation/7565-tmux-tab-loop-recurring-kind.md).
+[7567](../transcripts-and-observation/7567-tmux-tab-loop-recurring-kind.md).
 
 ### Task 1: a container-local fake model for the container tab (2026-11-10)
 

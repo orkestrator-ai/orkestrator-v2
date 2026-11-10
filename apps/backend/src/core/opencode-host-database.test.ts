@@ -106,6 +106,11 @@ describe("host OpenCode database", () => {
   test("escapes URI metacharacters in an immutable database path", async () => {
     const file = path.join(dataDirectory, "space ? #.db");
     writeDatabase(file, ["session_v2"]);
+    // macOS's system SQLite keeps an empty `-wal` and the `-shm` after the
+    // last close (persistent WAL); a clean OpenCode close on Linux removes
+    // them. Remove them so the assertion below sees only what the read left.
+    await fs.rm(`${file}-wal`, { force: true });
+    await fs.rm(`${file}-shm`, { force: true });
     expect(inspectSharedOpenCodeDatabase(file)).toBe("incompatible");
     expect(await fs.readdir(dataDirectory)).toEqual(["space ? #.db"]);
   });

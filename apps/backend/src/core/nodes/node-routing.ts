@@ -88,6 +88,7 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "launch_coordinator_node_environment",
   "assert_coordinator_node_delegation_available",
   "assert_coordinator_environment_scope",
+  "note_coordinator_node_unavailable",
   "open_coordinator_node_delegation",
   "send_coordinator_node_mail",
   "get_coordinator_node_mailbox",

@@ -720,7 +720,7 @@ export function registerCoordinatorWorkerChanges(
     if (nodeId !== undefined && (typeof nodeId !== "string" || !nodeId.trim()))
       throw new Error("Expected nodeId");
     if (nodeId && (await context.nodes?.status())?.nodeId !== nodeId) {
-      const remote = await coordinatorNodeTarget(context, caller.projectId, nodeId);
+      const remote = await coordinatorNodeTarget(context, caller, nodeId);
       await remote.environment(environmentId);
       // A read changes nothing, so a lost answer is simply asked again.
       const answer = await withRetryAdvice("Call get_worker_changes again; it only reads.", () =>

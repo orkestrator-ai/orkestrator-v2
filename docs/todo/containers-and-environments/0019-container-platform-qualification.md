@@ -238,7 +238,11 @@ live set has since passed on Docker Desktop for Apple Silicon three times
 session resume after a rebuild is now qualified for every provider except
 Grok. A real Linux rootless Engine ran on 2026-10-25: storage and rebuilds
 pass there, and its gaps moved to
-[0109](0109-rootless-linux-runtime-gaps.md). What is still missing needs
+the to-do 0109, since retired: its
+[rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)
+is the evidence, and what it left is in
+[7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) and
+[7549](7549-rootless-docker-cp-refusals.md). What is still missing needs
 hardware, accounts or a host this pass did not have: a rootless host without
 `cpu` delegation, a live Grok login, a daemon-wide restart, and Linux Engine
 evidence from the new scheduled CI job.
@@ -1080,8 +1084,10 @@ Desktop. What remains of those items:
     the firewall modules and policy 3 (C23); and the budget read-back (C24).
   - Fail: staged-input UID mapping (C20), host-service reachability (C22),
     read-only file binds from `nosuid`/`nodev` sources (two C09 fixtures)
-    and ephemeral port collisions (one C15 run). These are new work in
-    [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md).
+    and ephemeral port collisions (one C15 run). These were the retired to-do 0109's work
+    ([rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09));
+    what is left is in [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md)
+    and [7549](7549-rootless-docker-cp-refusals.md).
   - A host that delegates `memory pids` without `cpu`: done 2026-11-10 (task
     2); Docker reports CPU unsupported there and the read-back stays
     truthful.
@@ -1413,8 +1419,9 @@ were removed.
 - [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
   dialog blocked by the projects drawer, found during the container settings
   real-stack run.
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
-  (what the rootless run found),
+- [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
+  and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
+  (what the rootless runs left, after the retired to-do 0109),
   [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md),
   [0023-environment-and-disk-cleanup.md](0023-environment-and-disk-cleanup.md)

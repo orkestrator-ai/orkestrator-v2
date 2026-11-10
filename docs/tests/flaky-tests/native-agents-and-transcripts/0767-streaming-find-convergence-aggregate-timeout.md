@@ -261,3 +261,24 @@ mise run test:logged -- --name isolate-streaming -- bunx playwright test --confi
 
 The isolated pass confirms intermittence; the cause remains unconfirmed. Status
 stays open. No assertion, timeout or skip changed.
+
+## Auto-pipeline address validation — 2026-11-10
+
+Observed on `autopipeline-text-boxes-7182fc46ef5e-r1` at `944b37af1`, based on
+`8d0ae2764e0a5875144d15ee0f526608e6c1c1e8`. The reviewed commit `02f72782c` remains in history.
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=15182 ORKESTRATOR_PUBLIC_E2E_PORT=15183 mise run test:logged -- --name browser -- mise run test:browser`.
+- **Aggregate result:** incomplete at the 1,800 s runner deadline; 69 named failures,
+  last progress 1,194/1,814, with no final pass/skip totals. Public-site tests were not reached.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pcV7xY/browser.log.gz`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=15212 mise run test:logged -- --name address-streamingtranscript-alone -- bunx playwright test --config e2e/playwright.config.ts --workers=1 --output output/agent-testing/address-streamingtranscript-alone e2e/StreamingTranscript.spec.ts`; exit 0, exit 0, one worker and both viewport projects.
+- **Recurrence check:** `mise run flaky:recurrence -- 0767 --base 8d0ae2764e0a5875144d15ee0f526608e6c1c1e8 --registry-ref origin/main` reported `open`.
+
+| Project | Location | Exact test |
+| --- | --- | --- |
+| mobile-chromium | `e2e/StreamingTranscript.spec.ts:361` | scrollbar departure after find stays put when streaming reapplies highlights |
+
+The owning spec and its implementation were unchanged. No assertion, deadline,
+retry or skip was changed. This establishes intermittency, not its cause.
+The full run and remaining undetermined failures are recorded in
+[9916](../aggregate-validation-runs/9916-auto-pipeline-fix-browser-owners.md).

@@ -109,3 +109,63 @@ export function openCodeRevertNotice(
     },
   ];
 }
+
+/** The part of the provider's stream state that tracks a session's revert marker. */
+export type OpenCodeRevertState = {
+  revertMarker(sessionId: string): OpenCodeRevertMarker | undefined;
+  revertMarkerKnown(sessionId: string): boolean;
+  revertVersion(sessionId: string): number;
+  observeRevert(
+    sessionId: string,
+    marker: OpenCodeRevertMarker | undefined,
+    expectedVersion?: number,
+  ): boolean;
+  invalidateRevert(sessionId: string): void;
+};
+
+/**
+ * OpenCode's pending revert for a transcript read. `session.updated` and the
+ * revert actions keep it current; after a stream gap, or before either has
+ * been seen, it is read from the session. A failed read serves the marker
+ * last seen and leaves it unknown, so the next read asks again.
+ */
+export async function readOpenCodeRevertMarker(
+  state: OpenCodeRevertState,
+  sessionId: string,
+  readSession: () => Promise<unknown>,
+): Promise<OpenCodeRevertMarker | undefined> {
+  if (state.revertMarkerKnown(sessionId)) return state.revertMarker(sessionId);
+  const version = state.revertVersion(sessionId);
+  try {
+    const session = asRecord(await readSession());
+    const marker = openCodeRevertMarker(session);
+    if (session?.id === sessionId && (session.revert === undefined || marker)) {
+      state.observeRevert(sessionId, marker, version);
+    }
+  } catch {
+    // The transcript stays readable; only the marker is stale.
+  }
+  return state.revertMarker(sessionId);
+}
+
+/**
+ * Install the Session an undo or redo answered with. An answer overtaken by
+ * another observation needs an authoritative reread, so the last observed
+ * marker is kept while a later read resolves the ambiguous ordering.
+ */
+export function observeOpenCodeRevertResult(
+  state: OpenCodeRevertState,
+  sessionId: string,
+  session: unknown,
+  version: number,
+): void {
+  const info = asRecord(session);
+  const marker = openCodeRevertMarker(session);
+  if (
+    info?.id === sessionId &&
+    (info.revert === undefined || marker) &&
+    state.observeRevert(sessionId, marker, version)
+  )
+    return;
+  state.invalidateRevert(sessionId);
+}

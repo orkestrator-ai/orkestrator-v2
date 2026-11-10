@@ -71,6 +71,7 @@ export default defineConfig({
     "multi-review-live.spec.ts",
     "transcript-paging-live.spec.ts",
     "cold-restart-live.spec.ts",
+    "dispatch-hold-live.spec.ts",
     "claude-revision-tokens-live.spec.ts",
     "agent-tab-requests-live.spec.ts",
     "conditional-reads-live.spec.ts",

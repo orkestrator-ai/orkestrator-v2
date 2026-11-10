@@ -3,6 +3,7 @@ import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
+import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -393,6 +394,8 @@ export class OrkestratorBackend {
   private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
+  /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
+  private uninstallDispatchHold?: () => void;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
@@ -653,6 +656,13 @@ export class OrkestratorBackend {
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;
+    // Agent-test profiles only: lets a live spec stop the backend inside the
+    // prompt dispatch window. Undefined (nothing installed) everywhere else.
+    const dispatchHold = agentTestDispatchHold({
+      dataDir: options.dataDir,
+      runtimeFlavor: options.runtimeFlavor,
+    });
+    if (dispatchHold) this.uninstallDispatchHold = installAgentTestDispatchHold(dispatchHold);
     this.runtime =
       options.runtime ??
       new BackendRuntime({
@@ -3079,6 +3089,7 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    stopStepNow("agent-test-dispatch-hold", () => this.uninstallDispatchHold?.());
     // Each synchronous stop is guarded: one that throws is logged and the rest
     // still run, since an exception here would skip the drain and every close.
     stopStepNow("log-policy", () => {

@@ -3,8 +3,10 @@ import { resolveOpenCodeMessageId } from "@orkestrator/protocol/opencode-message
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { openCodeMessageId } from "./opencode-history-test-support.js";
 import {
+  observeOpenCodeRevertResult,
   openCodeRevertMarker,
   openCodeRevertNotice,
+  readOpenCodeRevertMarker,
   withoutRevertedOpenCodeMessages,
 } from "./opencode-revert.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
@@ -198,5 +200,52 @@ describe("OpenCodeStreamState revert marker", () => {
     expect(state.revertMarkerKnown("session")).toBe(false);
     expect(state.revertVersion("session")).not.toBe(version);
     expect(state.revertMarker("session")).toEqual({ messageId: "msg_1" });
+  });
+});
+
+describe("revert marker reads and action results", () => {
+  test("reads an unknown marker from the session once, then serves the known one", async () => {
+    const state = new OpenCodeStreamState();
+    let reads = 0;
+    const readSession = async () => {
+      reads += 1;
+      return { id: "session", revert: { messageID: "msg_1" } };
+    };
+    expect(await readOpenCodeRevertMarker(state, "session", readSession)).toEqual({
+      messageId: "msg_1",
+    });
+    expect(await readOpenCodeRevertMarker(state, "session", readSession)).toEqual({
+      messageId: "msg_1",
+    });
+    expect(reads).toBe(1);
+  });
+
+  test("a failed or foreign read leaves the marker unknown", async () => {
+    const state = new OpenCodeStreamState();
+    expect(
+      await readOpenCodeRevertMarker(state, "session", async () => {
+        throw new Error("unreachable");
+      }),
+    ).toBeUndefined();
+    expect(state.revertMarkerKnown("session")).toBe(false);
+    await readOpenCodeRevertMarker(state, "session", async () => ({ id: "other", revert: {} }));
+    expect(state.revertMarkerKnown("session")).toBe(false);
+  });
+
+  test("installs a current action result and invalidates an overtaken one", () => {
+    const state = new OpenCodeStreamState();
+    const version = state.revertVersion("session");
+    observeOpenCodeRevertResult(
+      state,
+      "session",
+      { id: "session", revert: { messageID: "msg_2" } },
+      version,
+    );
+    expect(state.revertMarker("session")).toEqual({ messageId: "msg_2" });
+    expect(state.revertMarkerKnown("session")).toBe(true);
+
+    observeOpenCodeRevertResult(state, "session", { id: "session" }, version);
+    expect(state.revertMarker("session")).toEqual({ messageId: "msg_2" });
+    expect(state.revertMarkerKnown("session")).toBe(false);
   });
 });

@@ -302,13 +302,8 @@ describe("agent voice chat tools", () => {
   });
 
   test("a slow reply is heard later with listen", async () => {
-    let finish!: (reply: string) => void;
-    const harness = await open(
-      () =>
-        new Promise<string>((resolve) => {
-          finish = resolve;
-        }),
-    );
+    const reply = Promise.withResolvers<string>();
+    const harness = await open(() => reply.promise);
     const voice = await harness.credential("voice");
     const pending = await harness.call(voice.token, "agent_voice_chat_say", {
       projectId: harness.projectId,
@@ -321,7 +316,7 @@ describe("agent voice chat tools", () => {
     expect(spoken(pending)).toStartWith("Still thinking.");
     expect(spoken(pending)).toContain("agent_voice_chat_listen");
     const turnId = result.turnId as string;
-    finish("Nothing is failing.");
+    reply.resolve("Nothing is failing.");
     const heard = await harness.call(voice.token, "agent_voice_chat_listen", {
       chatId: result.chatId,
       afterTurnId: turnId,

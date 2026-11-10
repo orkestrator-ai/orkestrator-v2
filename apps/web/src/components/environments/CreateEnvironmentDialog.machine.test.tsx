@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
@@ -60,6 +60,9 @@ describe("CreateEnvironmentDialog target machine", () => {
     const remoteView = federated();
     renderInAppCommandScope(dialog());
     expect(screen.getByTestId("create-environment-machine").textContent).toContain("on Build Mac");
+    expect(screen.queryByText("Isolated Docker environment on Build Mac")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on Build Mac")).not.toBeNull();
     // The command scope never looks itself up among the other machines.
     expect(remoteView.mock.calls.every(([nodeId]) => nodeId === null)).toBe(true);
   });
@@ -75,6 +78,11 @@ describe("CreateEnvironmentDialog target machine", () => {
     const label = screen.getByTestId("create-environment-machine").textContent ?? "";
     expect(label).toContain("on Studio");
     expect(label).not.toContain("Build Mac");
+    // The type hint names the target machine too, not "your machine".
+    expect(screen.queryByText("Isolated Docker environment on Studio")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on Studio")).not.toBeNull();
+    expect(screen.queryByText(/your machine/)).toBeNull();
     expect(remoteView.mock.calls.some(([nodeId]) => nodeId === LEAF)).toBe(true);
   });
 });

@@ -82,29 +82,40 @@ export function describeRestartImpact(impact: HostRestartImpact): string {
 }
 
 /** One line describing an update job, for Settings and the banner. */
-export function describeHostUpdateJob(job: HostUpdateJob, secondsLeft: number | null): string {
+/**
+ * One line about a host update job. `host` names the machine being updated
+ * ("mini"); without it the text says "the host", for places where the
+ * machine is already clear from the surrounding row or page.
+ */
+export function describeHostUpdateJob(
+  job: HostUpdateJob,
+  secondsLeft: number | null,
+  host?: string,
+): string {
   const target = job.targetVersion ?? job.requestedVersion ?? "the newest release";
+  const on = host ?? "the host";
+  const On = host ?? "The host";
   switch (job.state) {
     case "requested":
       return `Starting the update to ${target}…`;
     case "downloading":
       return `Downloading ${target}${job.progressPercent !== null ? ` (${job.progressPercent}%)` : ""}…`;
     case "waiting-for-idle":
-      return `${target} is ready. Waiting until nothing is running on the host${
+      return `${target} is ready. Waiting until nothing is running on ${on}${
         job.idleDeadline
           ? ` (at most until ${new Date(job.idleDeadline).toLocaleTimeString()})`
           : ""
       }.`;
     case "awaiting-restart":
       return secondsLeft !== null && secondsLeft > 0
-        ? `${target} is ready. The host restarts in ${secondsLeft} s unless someone there postpones it.`
-        : `${target} is ready. The host is restarting…`;
+        ? `${target} is ready. ${On} restarts in ${secondsLeft} s unless someone there postpones it.`
+        : `${target} is ready. ${On} is restarting…`;
     case "restarting":
-      return `Restarting the host to install ${target}. This page reconnects when it is back.`;
+      return `Restarting ${on} to install ${target}. This page reconnects when it is back.`;
     case "succeeded":
       return `Updated from ${job.fromVersion} to ${job.targetVersion ?? target}.`;
     case "postponed":
-      return `Postponed at the host. ${target} installs the next time Orkestrator quits there.`;
+      return `Postponed on ${on}. ${target} installs the next time Orkestrator quits there.`;
     case "cancelled":
       return "The update was cancelled.";
     case "failed":

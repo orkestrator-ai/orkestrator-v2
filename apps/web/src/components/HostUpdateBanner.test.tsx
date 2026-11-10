@@ -20,7 +20,9 @@ import {
   mockToastWarning,
   resetSonnerMocks,
 } from "../../../../tests/mocks/sonner";
-import { HOST_UPDATE_TOAST_ID, HostUpdateBanner } from "./HostUpdateBanner";
+import * as federation from "@/components/federation/FederationProvider";
+import { portalStore } from "@/lib/portal/portal-store";
+import { HOST_UPDATE_TOAST_ID, HostUpdateBanner, hostUpdateMachineLabel } from "./HostUpdateBanner";
 
 const originalGateway = window.orkestratorGateway;
 const originalOrkestrator = window.orkestrator;
@@ -145,7 +147,7 @@ test("a failed update toast opens this machine's update settings from Details", 
     string,
     { id: string; description: string; action: { label: string; onClick: () => void } },
   ];
-  expect(title).toBe("The host update failed");
+  expect(title).toBe("The update on the host failed");
   expect(options.id).toBe(HOST_UPDATE_TOAST_ID);
   expect(options.description).toBe("The update failed: GitHub answered HTTP 503.");
   expect(options.action.label).toBe("Details");
@@ -159,4 +161,58 @@ test("a failed update toast opens this machine's update settings from Details", 
   } finally {
     unsubscribe();
   }
+});
+
+/** The window's command node is "mini"; other machines may be in view. */
+function connectedTo(name: string, enabled: boolean) {
+  spyOn(federation, "useFederation").mockReturnValue({
+    portal: portalStore,
+    portalState: portalStore.getState(),
+    bound: null,
+    supported: true,
+    enabled,
+    kind: "desktop",
+    boundMachine: { name, colorToken: "teal" },
+  });
+}
+
+test("names the command node it updates, not just 'the host'", async () => {
+  connectedTo("mini", true);
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(
+    hostMaintenanceSnapshotFixture({
+      job: hostUpdateJobFixture({
+        state: "awaiting-restart",
+        targetVersion: "2.37.4-beta",
+        restartAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    }),
+  );
+  render(<HostUpdateBanner />);
+  await waitFor(() => expect(mockToastWarning).toHaveBeenCalled());
+  const [title, options] = mockToastWarning.mock.calls.at(-1) as [string, { description: string }];
+  expect(title).toBe("Orkestrator is updating on mini (command node)");
+  expect(options.description).toMatch(/^2\.37\.4-beta is ready\. mini restarts at .+\.$/);
+  expect(options.description).not.toContain("host");
+});
+
+test("hostUpdateMachineLabel names the machine only when the client knows it", () => {
+  const machine = { name: "mini" };
+  expect(
+    hostUpdateMachineLabel({ supported: false, enabled: false, boundMachine: machine }),
+  ).toEqual({ name: undefined, title: "the host" });
+  expect(hostUpdateMachineLabel({ supported: true, enabled: false, boundMachine: null })).toEqual({
+    name: undefined,
+    title: "the host",
+  });
+  // One machine: its name is enough.
+  expect(
+    hostUpdateMachineLabel({ supported: true, enabled: false, boundMachine: machine }),
+  ).toEqual({ name: "mini", title: "mini" });
+  // Several machines in view: say which role it plays.
+  expect(hostUpdateMachineLabel({ supported: true, enabled: true, boundMachine: machine })).toEqual(
+    {
+      name: "mini",
+      title: "mini (command node)",
+    },
+  );
 });

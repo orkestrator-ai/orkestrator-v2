@@ -88,6 +88,13 @@ export interface TestGroup {
   env?: Record<string, string>;
   /** Absolute watchdog budget when this group is slower than a Bun suite. */
   timeoutMs?: number;
+  /**
+   * Wall-clock time (`Date.now()` milliseconds) by which the group must have
+   * finished, queue wait included. Admission gives up queuing at this time
+   * without starting the child, and once admitted shortens `timeoutMs` to
+   * what is left, so a budget set before queuing still holds after it.
+   */
+  deadline?: number;
 }
 
 export interface TestAllDependencies {
@@ -1200,7 +1207,8 @@ export function packageRerunTargets(
 /**
  * After a failed run, reruns each failing test file alone, once, and says
  * which passed alone (a load flake to record) and which failed alone (a real
- * failure). Bounded by {@link MAX_RERUN_FILES} and {@link RERUN_TIME_BUDGET_MS}.
+ * failure). Bounded by {@link MAX_RERUN_FILES} and {@link RERUN_TIME_BUDGET_MS},
+ * which also bounds any wait for host capacity (see {@link TestGroup.deadline}).
  * It only classifies: the run's exit status stays the failure.
  */
 async function rerunFailingFiles(
@@ -1242,10 +1250,13 @@ async function rerunFailingFiles(
   log(
     `\n--- Rerunning each failing test file alone, once (${chosen.length} of ${targets.length}${targets.length > chosen.length ? `; at most ${MAX_RERUN_FILES}` : ""}) ---`,
   );
-  const startedAt = Date.now();
+  // One absolute deadline covers every rerun, including any wait for host
+  // capacity: admission stops queuing at it and trims the child's watchdog to
+  // what is left once admitted, so the budget is never exceeded by a queue.
+  const budgetDeadline = Date.now() + RERUN_TIME_BUDGET_MS;
   const completed: CompletedGroup[] = [];
   for (const { file, group } of chosen) {
-    const remaining = RERUN_TIME_BUDGET_MS - (Date.now() - startedAt);
+    const remaining = budgetDeadline - Date.now();
     if (remaining <= 0) {
       log(
         `NOT RERUN     ${file}: the ${formatDuration(RERUN_TIME_BUDGET_MS)} rerun budget is spent`,
@@ -1253,7 +1264,11 @@ async function rerunFailingFiles(
       continue;
     }
     const fileStartedAt = Date.now();
-    const result = await run({ ...group, timeoutMs: Math.min(RERUN_FILE_TIMEOUT_MS, remaining) });
+    const result = await run({
+      ...group,
+      timeoutMs: Math.min(RERUN_FILE_TIMEOUT_MS, remaining),
+      deadline: budgetDeadline,
+    });
     const elapsedMs = Date.now() - fileStartedAt;
     completed.push({ group, result, elapsedMs });
     const incomplete =

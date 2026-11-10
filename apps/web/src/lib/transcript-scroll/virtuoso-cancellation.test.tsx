@@ -84,14 +84,29 @@ function Harness({
 
 const wait = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
 
+/** Extra windows `elapsePastEveryDeadline` may grant before the clock must be quiet. */
+const SETTLE_ROUNDS = 3;
+
 /**
  * Lets `ms` pass on the fake clock (installed before rendering), then proves
  * no library deadline is left to arrive: the refresh windows, throttles and
  * the 1200 ms navigation cleanup have all run, so a later write cannot follow
  * the assertions that come after.
+ *
+ * Happy DOM delivers animation frames on real immediates, outside the fake
+ * clock, so on a loaded host the final frame can arm one more fake timer
+ * after the window has elapsed. That timer is still due inside the same
+ * window measured from when it was armed, so the clock is advanced again, a
+ * bounded number of times, until nothing is pending. A timer that keeps
+ * re-arming itself past those rounds is a real leak and still fails here, and
+ * every caller's write-count assertion still sees any write a late timer
+ * makes.
  */
 async function elapsePastEveryDeadline(ms: number) {
   await elapseFakeTime(ms);
+  for (let round = 0; round < SETTLE_ROUNDS && jest.getTimerCount() > 0; round += 1) {
+    await elapseFakeTime(ms);
+  }
   expect(jest.getTimerCount()).toBe(0);
 }
 

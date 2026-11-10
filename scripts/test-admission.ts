@@ -21,9 +21,12 @@ export function createTestAdmission(
     clock?: () => number;
     /** Hold {@link AGGREGATE_SUITE_RESOURCE} so complete runs never overlap. */
     exclusiveSuite?: boolean;
+    /** Wall clock for queue waits and group deadlines; `Date.now` by default. */
+    now?: () => number;
   } = {},
 ) {
   const clock = options.clock ?? (() => performance.now());
+  const now = options.now ?? (() => Date.now());
   if (env.ORKESTRATOR_TEST_PARENT_RESERVATION) {
     throw new Error(
       "Nested aggregate validation requires this exact command in .orkestrator-test-scheduler.json; no tests were started (avoided double reservation)",
@@ -149,7 +152,8 @@ export function createTestAdmission(
         jobs.set(id, { state: "queued" });
         log(`QUEUED ${group.name}: waiting for host capacity`);
         publish();
-        const queuedAt = Date.now();
+        const queuedAt = now();
+        const { deadline } = group;
         let lastReason: string | undefined;
         while (true) {
           const status = scheduler.poll(id);
@@ -161,11 +165,26 @@ export function createTestAdmission(
             log(`QUEUED ${group.name}: ${lastReason}`);
           }
           if (cancelled) throw new Error("Validation was cancelled while queued");
-          if (Date.now() - queuedAt >= queueTimeout)
+          if (deadline !== undefined && now() >= deadline)
+            throw new Error(
+              "Group deadline passed while waiting for host capacity; tests did not run",
+            );
+          if (now() - queuedAt >= queueTimeout)
             throw new Error("Host capacity wait expired; tests did not run");
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
         if (cancelled) throw new Error("Validation was cancelled before execution");
+        // The deadline covers the queue wait, so the child gets only what is
+        // left of it, never a fresh full allowance.
+        let timeoutMs = group.timeoutMs;
+        if (deadline !== undefined) {
+          const remaining = deadline - now();
+          if (remaining <= 0)
+            throw new Error(
+              "Group deadline passed while waiting for host capacity; tests did not run",
+            );
+          timeoutMs = Math.min(timeoutMs ?? remaining, remaining);
+        }
         if (env.ORKESTRATOR_VALIDATION_HEAD_REF) {
           const options = {
             cwd: root,
@@ -198,11 +217,12 @@ export function createTestAdmission(
         }
         publish();
         log(
-          `RUNNING ${group.name} (${workers} worker slots; waited ${((Date.now() - queuedAt) / 1000).toFixed(1)}s)`,
+          `RUNNING ${group.name} (${workers} worker slots; waited ${((now() - queuedAt) / 1000).toFixed(1)}s)`,
         );
         const ticket = id;
         const result = await execute({
           ...group,
+          timeoutMs,
           onSpawn: (pid) => scheduler.registerChild(ticket, pid),
         });
         if (result.infrastructureError || result.timeoutReason || result.outputLimitExceeded)

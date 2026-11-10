@@ -201,18 +201,33 @@ export const REPOSITORY_GUARDS: readonly RepositoryGuard[] = [
   },
 ];
 
-interface GuardOutcome {
+export interface GuardOutcome {
   id: string;
   problems: string[];
   advice: string;
 }
 
+/**
+ * How the register tests run. Every field defaults to the real check; tests
+ * substitute a fixture so the subprocess path is exercised without the real
+ * registers.
+ */
+export interface RegisterTestsCommand {
+  command?: string;
+  args?: readonly string[];
+  timeoutMs?: number;
+}
+
 /** Runs the documentation register test files as one Bun child, bounded by a deadline. */
-function runRegisterTests(root: string): Promise<GuardOutcome> {
+export function runRegisterTests(
+  root: string,
+  options: RegisterTestsCommand = {},
+): Promise<GuardOutcome> {
+  const timeoutMs = options.timeoutMs ?? REGISTER_TESTS_TIMEOUT_MS;
   return new Promise((resolve) => {
     const child = spawn(
-      process.execPath,
-      [
+      options.command ?? process.execPath,
+      options.args ?? [
         "test",
         ...GUARD_STAGE_TEST_FILES.map((file) => `./${file}`),
         `--parallel=${GUARD_STAGE_TEST_FILES.length}`,
@@ -231,8 +246,12 @@ function runRegisterTests(root: string): Promise<GuardOutcome> {
     const deadline = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
-    }, REGISTER_TESTS_TIMEOUT_MS);
+    }, timeoutMs);
+    let settled = false;
     const finish = (status: number | null, error?: Error) => {
+      // A spawn error can be followed by `close`; the first answer stands.
+      if (settled) return;
+      settled = true;
       clearTimeout(deadline);
       const failed = status !== 0 || error !== undefined;
       resolve({
@@ -240,7 +259,7 @@ function runRegisterTests(root: string): Promise<GuardOutcome> {
         problems: failed
           ? [
               timedOut
-                ? `bun test did not finish within ${REGISTER_TESTS_TIMEOUT_MS} ms`
+                ? `bun test did not finish within ${timeoutMs} ms`
                 : (error?.message ?? output.trim()),
             ]
           : [],
@@ -275,8 +294,11 @@ export async function runGuards(
   options: {
     root?: string;
     guards?: readonly RepositoryGuard[];
-    /** `false` leaves out the register test files (the guard's own tests use fakes). */
-    registerTests?: boolean;
+    /**
+     * `false` leaves out the register test files (the guard's own tests use
+     * fakes); a command runs that instead of the real register tests.
+     */
+    registerTests?: boolean | RegisterTestsCommand;
     log?: (line: string) => void;
   } = {},
 ): Promise<number> {
@@ -284,7 +306,13 @@ export async function runGuards(
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const startedAt = performance.now();
   // Started first: the child runs while this process scans.
-  const registers = options.registerTests === false ? undefined : runRegisterTests(root);
+  const registers =
+    options.registerTests === false
+      ? undefined
+      : runRegisterTests(
+          root,
+          typeof options.registerTests === "object" ? options.registerTests : {},
+        );
   const index = RepositoryIndex.fromGit(root);
   const outcomes: GuardOutcome[] = [];
   for (const guard of options.guards ?? REPOSITORY_GUARDS) {

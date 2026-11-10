@@ -20,6 +20,8 @@ import {
   IOS_GROUP_TIMEOUT_MS,
   main,
   MAX_RERUN_FILES,
+  RERUN_FILE_TIMEOUT_MS,
+  RERUN_TIME_BUDGET_MS,
   packageRerunTargets,
   rerunFlags,
   MAX_AGGREGATE_TEST_WORKERS,
@@ -184,6 +186,7 @@ interface Invocation {
   args: string[];
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  deadline?: number;
 }
 
 function createDependencies(
@@ -195,6 +198,8 @@ function createDependencies(
     outputByName?: Record<string, string>;
     failureReportsByName?: Record<string, { reports: string[]; omitted?: number }>;
     failingFilesByName?: Record<string, FailingFile[]>;
+    /** Groups that end as infrastructure failures (no verdict), keyed by name. */
+    infrastructureErrorByName?: Record<string, string>;
     environment?: NodeJS.ProcessEnv;
     cores?: number;
     /** Blocks the named group until released, to observe concurrency. */
@@ -231,6 +236,7 @@ function createDependencies(
           args: group.args,
           env,
           timeoutMs: group.timeoutMs,
+          deadline: group.deadline,
         });
         if (options.gate && options.gate.name === group.name) {
           await options.gate.release;
@@ -246,6 +252,9 @@ function createDependencies(
           failureReports: options.failureReportsByName?.[group.name]?.reports,
           omittedFailureReports: options.failureReportsByName?.[group.name]?.omitted,
           failingFiles: options.failingFilesByName?.[group.name],
+          ...(options.infrastructureErrorByName && group.name in options.infrastructureErrorByName
+            ? { infrastructureError: true, output: options.infrastructureErrorByName[group.name] }
+            : {}),
         };
       },
     },
@@ -1674,6 +1683,38 @@ describe("rerunning failing test files alone", () => {
     expect(output).toContain(
       'Cannot rerun src/odd.test.ts alone: no suite for "@orkestrator/web:build:"',
     );
+    expect(output).toContain("The run still fails");
+  });
+
+  test("every rerun carries the budget's absolute deadline, and one that never ran keeps the run failing", async () => {
+    const queued = "Group deadline passed while waiting for host capacity; tests did not run";
+    const { dependencies, invocations, logs } = createDependencies({
+      statusByName: { [ROOT]: 1, "rerun tests/unit/queued.test.ts": 75 },
+      failingFilesByName: {
+        [ROOT]: [
+          { taskPrefix: "", file: "tests/unit/queued.test.ts" },
+          { taskPrefix: "", file: "tests/unit/next.test.ts" },
+        ],
+      },
+      infrastructureErrorByName: { "rerun tests/unit/queued.test.ts": queued },
+    });
+    dependencies.rerunFailedFiles = true;
+    dependencies.resolveRerun = resolveRerun;
+
+    const before = Date.now();
+    expect(await runAllTests(dependencies)).toBe(1);
+    const after = Date.now();
+    const reruns = invocations.filter((entry) => entry.name.startsWith("rerun "));
+    expect(reruns).toHaveLength(2);
+    // One deadline for the whole budget, not a fresh one per file, so a
+    // queue wait for one file is charged against every later one.
+    expect(new Set(reruns.map((entry) => entry.deadline)).size).toBe(1);
+    const deadline = reruns[0]!.deadline!;
+    expect(deadline).toBeGreaterThanOrEqual(before + RERUN_TIME_BUDGET_MS);
+    expect(deadline).toBeLessThanOrEqual(after + RERUN_TIME_BUDGET_MS);
+    for (const entry of reruns) expect(entry.timeoutMs).toBeLessThanOrEqual(RERUN_FILE_TIMEOUT_MS);
+    const output = logs.join("\n");
+    expect(output).toContain("INCOMPLETE    tests/unit/queued.test.ts");
     expect(output).toContain("The run still fails");
   });
 

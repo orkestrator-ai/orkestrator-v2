@@ -200,7 +200,7 @@ live set has since passed on Docker Desktop for Apple Silicon three times
 session resume after a rebuild is now qualified for every provider except
 Grok. A real Linux rootless Engine ran on 2026-10-25: storage and rebuilds
 pass there, and its gaps moved to
-the [rootless qualification record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09). What is still missing needs
+[0109](0109-rootless-linux-runtime-gaps.md). What is still missing needs
 hardware, accounts or a host this pass did not have: a rootless host without
 `cpu` delegation, a live Grok login, a daemon-wide restart, and Linux Engine
 evidence from the new scheduled CI job.
@@ -1020,9 +1020,8 @@ Desktop. What remains of those items:
     the firewall modules and policy 3 (C23); and the budget read-back (C24).
   - Fail: staged-input UID mapping (C20), host-service reachability (C22),
     read-only file binds from `nosuid`/`nodev` sources (two C09 fixtures)
-    and ephemeral port collisions (one C15 run). These were tracked in retired to-do 0109; the
-    [fresh-image re-run](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)
-    records the fixes and remaining gaps.
+    and ephemeral port collisions (one C15 run). These are new work in
+    [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md).
   - What remains here: a host that delegates `memory pids` without `cpu`, to
     check that the budget read-back stays truthful there.
 - C13 and the C21 live half for Grok. Both need a current host Grok login
@@ -1257,13 +1256,6 @@ shim's orphans on other worktrees' runs stop once those branches carry the
 fixed shim. None were left under systemd at the end of this run, and none
 were removed.
 
-### Reference maintenance for task 2 (2026-11-10)
-
-Replaced links to retired to-do 0109 with the living architecture or
-qualification record so its deletion leaves usable references. This review
-repair changes references only; the task statuses and live evidence stay as
-recorded. Retaining a stub would preserve the old URLs but undo retirement.
-
 ## Constraints and rationale
 
 - Never test against a production installation or the packaged user's Docker
@@ -1314,7 +1306,7 @@ recorded. Retaining a stub would preserve the old URLs but undo retirement.
 - [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
   dialog blocked by the projects drawer, found during the container settings
   real-stack run.
-- [Rootless qualification and remaining gaps](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)
+- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
   (what the rootless run found),
   [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md),
   [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md),

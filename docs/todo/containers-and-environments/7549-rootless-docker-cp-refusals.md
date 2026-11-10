@@ -3,8 +3,9 @@
 ## Task analysis
 
 Analysed 2026-11-09 against `main` at `c6de4733c`. Found by
-the [rootless re-run on a freshly built image](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)
-(retired to-do 0109 task 5).
+[0109](0109-rootless-linux-runtime-gaps.md) task 5, the rootless re-run on a
+freshly built image
+([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
 
 ### Tasks
 
@@ -212,21 +213,12 @@ neighbourhood.
   filesystem mounted without `nosuid`/`nodev`, or its two firewall-failure
   cases report `container-exited` (task 1).
 
-## Assumptions and decisions
-
-### Reference maintenance for tasks 1–3 (2026-11-10)
-
-Replaced links to retired to-do 0109 with the living architecture or
-qualification record so its deletion leaves usable references. This review
-repair changes references only; the task statuses and live evidence stay as
-recorded. Retaining a stub would preserve the old URLs but undo retirement.
-
 ## Related
 
-- [Rootless qualification](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)
-  (fresh-image evidence for these refusals).
-- [Rootless follow-up](../../development/container-qualification.md#rootless-follow-up-2026-10-26)
-  (the single start retry and its live port-collision evidence).
+- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
+  (task 3 classified the start refusal; task 5 found these).
+- [0109 task 4](0109-rootless-linux-runtime-gaps.md#4-start-retry-on-port-collision)
+  (the single retry).
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md)
   (the launcher used, which has no storage-driver option).
 - [Container lifecycle](../../architecture/container-lifecycle.md)

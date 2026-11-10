@@ -262,13 +262,39 @@ the running attempt.
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
 | B28 | `graph-run-tick` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts` | Keyed per run with an obligation (`provision`, `cancel`, `observe`, `advance`, `await-human`), 30 s discovery. Running activations are observed every 3 s plus a stable per-run spread of up to 1 s, admitting and provisioning runs every 1 s, a run waiting only for a person every 30 s. An accepted workflow result wakes only the run whose activation owns the slot; a released workspace lock wakes the environment's runs with ready work. Passes hold a `workflow-provider` slot (target: the run's environment) except while provisioning or waiting for a person; executor calls inside a pass are capped at 4 starting, 8 observing and 4 per provider. A pass reads only its run's row and writes only when something changed. |
 | B29 | `machine-load-sample` | `machine-load.ts` | Every 60 s, fixed rate, first reading 15 s after start, on every backend whether or not anything reads it. Own job, stops with the backend; its timer is unref'd. One `os.cpus()` and one read of the shared RAM cache, so one `vm_stat` on a Mac unless the title bar's read is still fresh. Measured on an M-series Mac: `vm_stat` about 1.6 ms, `os.cpus()` under 0.01 ms; about 2.3 s of subprocess time a day. No GPU or disk probe. History is at most about 160 small buckets, in memory. See [coordinator.md](coordinator.md#choosing-a-machine). |
-| C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. A filesystem source (`statfs`, GPU sysfs) that does not answer in 1.5 s loses only its own figure, and its one hung call is kept rather than repeated (`createBoundedRead`). |
+| C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. A filesystem source (`statfs`, GPU sysfs) that does not answer in 1.5 s loses only its own figure, and its one hung call is kept rather than repeated (`createBoundedRead`). A stalled source logs `[host] usage.source-stalled` at warn (throttled, `scope=disk` or `scope=gpu-sysfs`), and its recovery once the last stalled source settles. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 
 Other backend recurrence is event-scheduled lifecycle work rather than a
 standing timer: native projection hydration and display-tail debounce (B23),
 OpenCode agent-tool re-verification on a 5 min connected TTL (B24) and merge
 cleanup (B25).
+
+**Per-pass skips.** Several passes skip work an earlier read already answers;
+each skip gives the same answer the skipped read would have:
+
+- Mail presence (B10, `refreshPresenceOnce`) reads each environment once per
+  pass and records a stopped one's presence without a per-mailbox read:
+  native `environment_stopped` when the environment is missing, being
+  deleted or not running, tmux `environment_unready` when it is not ready
+  for agents. Tmux presence accepts the session's last `has-session` answer
+  if it is under 3 s old (`livenessMaxAgeMs`); a dispatch still probes.
+- The human-prompt monitor (`AgentHumanPromptMonitor`) reuses a working
+  session's last bridge observation for at most 30 s while
+  `NativeAgentService.humanPromptContentRevision` is unchanged. Background
+  task files are read every pass, because a background task's sign-in prompt
+  appears only there. Providers with no content revision (OpenCode, Cursor,
+  Pi, Grok) are read every pass.
+- The build pipeline's review fan-out builds the shared package prompt
+  (review instruction plus project notes) once per pass.
+- The container Claude login keeper skips the marker `docker exec` when a
+  matching keeper handover (same pinned account and generation) already
+  pushed the same digest; delivery still re-reads its fences after host I/O.
+- The PR monitor polls a quiet open PR every 2 min instead of 20 s (B01)
+  only when its reading has not moved for 15 min, its last rollup succeeded
+  with nothing pending, its mergeability is known and neither Orkestrator's
+  nor GitHub's auto-merge is on: a finishing check may not change
+  `updatedAt`. Any wake or changed reading returns it to 20 s at once.
 
 ### Renderer
 
@@ -282,7 +308,7 @@ None of these is recorded; the IDs are the only names.
 | C05 | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token; immediate on a workflow checkpoint. With data saving on, backs off through 8, 15 and 30 s. |
 | C06 | `ReviewValidationStatus.tsx` | 2 s, completion-scheduled, while the output modal is open and the result queued or running; byte-offset reads. |
 | C07 | `InitializationLogs.tsx` | 1 s while mounted; the backend shares the Docker log tail across clients. |
-| C08 | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. A read fails after 20 s; its request cannot be aborted, so that key sends no other until it settles (`useSystemUsage.ts`). |
+| C08 | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. A read fails after 20 s; its request cannot be aborted, so that key sends no other until it settles (`useSystemUsage.ts`). A failed read with no earlier sample, or a backend without the command (`unsupported`, which stops polling), shows "Couldn't read processes" and "Data unavailable" on the tiles; a failed read keeps polling and recovers by itself. |
 | C09 | `App.tsx` | Startup, explicit retry and every 60 s (`startCoordinatedPoll`). |
 | C10 | `ServerConnectionSwitcher.tsx` | Active connection every 30 s and on focus; inactive entries on demand with a 10 s cache; young in-flight probes are joined, probes older than 5 s superseded. |
 | C11 | `useCoordinatorPanelData.ts` | Event-led from scoped `coordinator` resource changes with conditional reads; a 60 s repository-status probe (the full 60 s poll only for older backends); focus probes at least 10 s apart. |

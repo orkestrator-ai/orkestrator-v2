@@ -19,31 +19,23 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
 
 ### Tasks
 
-1. **Live `live-session` for Pi, Cursor and Grok, and the completion flip** (qualification item 1). Status: blocked (on API-key credentials; Cursor is unblockable on this Linux host, see below).
+1. **Completion flip for Pi, Cursor and Grok** (qualification item 1; the live `live-session` runs moved to the manual-test checklist). Status: blocked (waits on 7568: 0014 task 1).
 2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: done (2026-11-01, credential-free; flake 0440 resolved).
 3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**. Status: done (2026-11-01; `stop`, `recreate` and `delete --wait` share it).
-4. **Token cost of a live run** (qualification item 5). Status: open (optional measurement).
+4. **Token cost of a live run: record usage in the manifest** (qualification item 5; the paid measurement run moved to the manual-test checklist). Status: open (optional).
 5. **Fresh Linux evidence**: the latest Linux CLI run was 2026-09-26. Status: done (2026-11-06, credential-free; Cursor's task 1 run left to task 1).
 6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: done (settled by #1491 on 2026-10-31).
-7. **Re-run qualified providers after an agent upgrade?** (open question 2, shared with 0031). Status: open (maintainer's call; recommendation below).
 
-### 1. Live `live-session` for Pi, Cursor and Grok, and the completion flip
+### 1. Completion flip for Pi, Cursor and Grok
 
 **Problem.** `PROVIDER_COMPLETION` marks Pi, Cursor and Grok `unqualified` (`apps/backend/src/core/public-api/providers.ts:46-57`), so `run wait` on those providers cannot report completion and scripts cannot use it as a success signal.
 
-**Context.** The scenario can drive all three since code item 1. The procedure is written in the item: flip the entry locally, run local and container, commit the flip only with a passing run, and check the host `~/.pi/agent`, `~/.grok` and Cursor state are untouched. Container input staging through `ORKESTRATOR_AGENT_TEST_HOST_HOME` has never been exercised by a container run.
+**Context.** The scenario can drive all three since code item 1. The live local and container `live-session` runs need API-key credentials and live tokens, so they moved to the manual-test checklist (7568: 0014 task 1). This task is what follows a passing run: flip that provider's entry, commit the flip only with the run's manifest as evidence, and update the provider matrix in `public-cli.md` "Request-specific completion". Flip per provider; a provider whose run fails stays `unqualified`.
 
-**Investigation.** Still accurate on `main`. Since 0166 the harness installs each provider's pinned binary (`packages/cli/scenarios/harness.ts:147-168`; Grok pin `1.0.67` in `packages/toolchain/src/manifest.ts:9`, the version 0016's picker run used without the older "Invalid params" failure). Credential presence on this Linux host, checked 2026-10-27 without reading values: `CURSOR_API_KEY` and `XAI_API_KEY` are unset in the shell, but the Orkestrator config holds a saved Cursor API key; `~/.pi/agent/auth.json` has only an OAuth entry (`openai-codex`), which the harness refuses; there is no Grok login. So Cursor could run here if that key is exported for the scenario only; Pi and Grok remain blocked. The scenario's selected-command step is Claude-only (`packages/cli/scenarios/cases.ts:1089`); the other new steps (refusals, `--literal`, `--attach`, `--enqueue`) run on every provider, so these runs also close 0017's per-provider gap.
+**Investigation.** Still accurate on `main`. Since 0166 the harness installs each provider's pinned binary (`packages/cli/scenarios/harness.ts:147-168`; Grok pin `1.0.67` in `packages/toolchain/src/manifest.ts:9`). The scenario's selected-command step is Claude-only (`packages/cli/scenarios/cases.ts:1089`); the other new steps (refusals, `--literal`, `--attach`, `--enqueue`) run on every provider, so these runs also close 0017's per-provider gap.
 
 **Decisions.**
 
-- **Run Cursor now, ahead of Pi and Grok?**
-  - **Yes: export the saved Cursor key into the scenario process only, run local and container, and flip Cursor alone if both pass (recommended).**
-    - Pros: one of three providers qualifies without waiting; the item already allows per-provider flips.
-    - Cons: needs the user's go-ahead to use that key for CLI scenarios (it was approved for `dev:test` profiles); costs live tokens.
-  - **Wait until all three have credentials and run them together.**
-    - Pros: one batch, one evidence entry.
-    - Cons: Cursor stays unqualified for no technical reason.
 - **What counts as a pass for the flip?**
   - **Local and container both pass every `live-session` stage, with no OpenCode-style false idle in the manifest and host provider state untouched (recommended).**
     - Pros: matches the qualification rule in "Constraints and rationale"; container proves the staging path never exercised before.
@@ -51,13 +43,6 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
   - **Local only, container as a follow-up.**
     - Pros: faster first flip.
     - Cons: `qualified` is provider-wide, so a container-only failure would ship as qualified.
-- **How to unblock Pi?**
-  - **Add a Pi `api_key` entry for a provider the user has a key for (recommended).**
-    - Pros: fits the harness's existing API-key-only rule.
-    - Cons: needs a paid API key for some Pi-fronted provider.
-  - **Let the harness share the OAuth login by path (`PI_BRIDGE_AUTH_FILE`), as 0015 did for its probes.**
-    - Pros: uses the login the host already has.
-    - Cons: a refresh during the run rotates the host's token; the harness refuses OAuth for exactly that reason (cleanup must never discard the only valid refresh token).
 
 ### 2. Re-run the slow-admission `--wait` recovery under load
 
@@ -121,18 +106,18 @@ deadline) and the `lost-response` scenario. `environment launch --wait ready`,
 `project remove --wait` and the `host` commands still exit 4 on a lost
 response; see "Assumptions and decisions".
 
-### 4. Token cost of a live run
+### 4. Token cost of a live run: record usage in the manifest
 
 **Problem.** Manifests record no usage, so the cost of a qualification run is unknown.
 
-**Context.** Optional; does not affect `mise run test`.
+**Context.** Optional; does not affect `mise run test`. This task is the harness change; running a paid live scenario to read the cost moved to the manual-test checklist (7568: 0014 task 4).
 
 **Investigation.** There is no public usage action (no usage field in `packages/protocol/src/public-api.ts`, no CLI command); usage lives in the backend's usage store (`apps/backend/src/core/commands-registry-usage.ts`). Reading it would need either a registry call outside `public_action` or a new public read.
 
 **Decisions.**
 
 - **How to collect it?**
-  - **Read the scenario data directory's usage store directly in the harness after the run, before cleanup (recommended).**
+  - **Read the scenario data directory's usage store directly in the harness after the run, before cleanup, and write it to the manifest (recommended).**
     - Pros: no public API change; the harness already owns the data directory.
     - Cons: couples the harness to a storage layout; counts only what each provider reports.
   - **Add a content-free usage summary to a public read.**
@@ -204,24 +189,6 @@ the worktree-built bridge with its SDKs vendored
 (`scenarios/provider-runtime.ts`) so a live run does not depend on the
 registry.
 
-### 7. Re-run qualified providers after an agent upgrade?
-
-**Problem.** `docs/development/upgrade-agents.md` lists `test:cli:scenarios` only for bundled native dependencies (`:1909`); a provider bump can break request-specific completion with no CLI re-run.
-
-**Context.** Shared with 0031, whose recommendation (2026-10-25) is no blanket re-run, only the bumped engine's opt-in live specs. Slash commands already have such a rule (`upgrade-agents.md:1829`, "Re-qualify slash commands for every provider whose pin moved").
-
-**Investigation.** Rechecked 2026-11-01: still open in 0031 (its task 6), and the runbook still has no CLI step. `live-session` is the only test that proves a provider's `qualified` entry. The evidence supports the recommended option: the slash-command rule is the precedent, and since 0166 a bump can change how a provider's turn ends (OpenCode's `--attach` failure shipped past unit tests and was caught only by `live-session`). Not applied to the runbook here: it commits every bump to live tokens, which is the maintainer's call.
-
-**Decisions.**
-
-- **Rule for the runbook?**
-  - **On a provider bump, run `live-session` for that provider only (recommended).**
-    - Pros: matches the slash-command rule and 0031's recommendation; protects the `qualified` claim the CLI shows.
-    - Cons: live tokens and a few minutes per bump.
-  - **No rule; rely on users noticing.**
-    - Pros: no runbook cost.
-    - Cons: a broken completion mapping would ship as `qualified`.
-
 Most shipped CLI behaviour has evidence at every layer: unit and contract
 tests, real-backend tests, packaged scenarios on Linux and macOS (local and
 container), live Claude, Codex and OpenCode runs, and a real browser. On
@@ -229,8 +196,8 @@ container), live Claude, Codex and OpenCode runs, and a real browser. On
 decoy, the per-run model record, other-provider browser cards (OpenCode) and
 the scenario measurements were done (see "Evidence log"). What is still
 missing is the live qualification run for Pi, Cursor and Grok (the scenario
-can drive them; see Qualification item 1), which needs API-key credentials
-this host does not have, and the token cost of live runs. Until Pi, Cursor
+can drive them; the run is on the manual-test checklist) and the token cost
+of live runs. Until Pi, Cursor
 and Grok are qualified, scripts on those providers cannot use `run wait` as
 a success signal.
 
@@ -366,22 +333,10 @@ a success signal.
 
 ### Qualification
 
-1. **Open: live `live-session` for Pi, Cursor and Grok**, local and container. Each
-   run needs the file assertion plus a follow-up turn. Look specifically for
-   OpenCode-style false success: an idle status after a failed turn, or idle
-   just after the prompt is accepted and before any answer exists. The
-   scenario can now run them (Code item 1); `PROVIDER_COMPLETION` reports
-   them `unsupported`, so a run is expected to end with `--wait` exiting on
-   `capability-unavailable` until a provider is flipped: qualify by flipping
-   the entry locally, running the scenario, and committing the flip only
-   with a passing run. Check after each run that the host `~/.pi/agent`,
-   `~/.grok` and Cursor state are untouched. Still owed on 2026-10-25: this
-   host has no usable credentials. Pi's `auth.json` holds only an OAuth
-   entry (the harness keeps `api_key` entries only), there is no
-   `CURSOR_API_KEY` or `XAI_API_KEY`, and the host Grok login expired on
-   2026-10-23. To close: export `CURSOR_API_KEY`, `XAI_API_KEY` (or sign in
-   to Grok again) and add an `api_key` entry to Pi's `auth.json`, build the
-   bridges, then run the scenario per provider as described above.
+1. **Moved (2026-11-10): live `live-session` for Pi, Cursor and Grok.** The
+   credentialed local and container runs are on the manual-test checklist
+   (7568: 0014 task 1); committing the `PROVIDER_COMPLETION` flip for each
+   provider that passes is task 1 here.
 2. **Done (2026-10-25): macOS.** The credential-free matrix and the container
    matrix on Docker Desktop passed on 2026-10-18 and again on 2026-10-25.
    - Packed install: `mise run smoke:cli` passed on macOS.
@@ -405,11 +360,11 @@ a success signal.
    cleanup removed the decoy.
 5. **Optional measurement.** Done for start-up time, time to failure
    evidence, flake rate and cleanup failures (2026-10-25, "Evidence log").
-   Still open: token cost of a live run. The manifest records no usage. To
-   collect it, read the provider's usage for the scenario's session before
-   cleanup (the backend's `usage-history` store in the scenario data
-   directory) or from the provider's billing console for a dedicated key.
-   None of this shortens `mise run test`.
+   Still open: token cost of a live run. The manifest records no usage.
+   Recording it from the backend's `usage-history` store in the scenario data
+   directory before cleanup is task 4; the paid run that reads the cost is on
+   the manual-test checklist (7568: 0014 task 4). None of this shortens
+   `mise run test`.
 
 Run prerequisites specific to the CLI scenarios (shared profile and
 credential setup is in
@@ -909,13 +864,6 @@ model).
   (`provider-runtime.ts`). Whether the published package should ship the Pi,
   ACP and Cursor bridges was settled by #1491: ACP is bundled, and Cursor and
   Pi install their SDKs on first use (task 6).
-- Should qualified providers be re-run after every agent SDK or binary
-  upgrade? [`upgrade-agents.md`](../../development/upgrade-agents.md) has no such
-  step, and
-  [`upgrade-agents.md` → Other dependencies](../../development/upgrade-agents.md#other-dependencies)
-  lists `test:cli:scenarios` only for bundled native dependencies. The shared
-  question is in
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ## Related
 
@@ -930,6 +878,7 @@ model).
   [`cli-testing.md`](../../development/cli-testing.md),
   [`testing-guide.md`](../../development/testing-guide.md#cli-scenarios),
   [`agent-testing.md`](../../development/agent-testing.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the live run of task 1, the paid measurement run of task 4, task 7) moved there on 2026-11-10.
 
 ## Replaces
 

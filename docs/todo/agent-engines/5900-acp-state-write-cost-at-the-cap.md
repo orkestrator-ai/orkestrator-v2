@@ -8,28 +8,8 @@ Analysed 2026-11-05 against `main` at `3baeaacf6`.
 
 ### Tasks
 
-1. **Find out whether a real bridge reaches the bound**: session count and state file size, no content. Status: open.
 2. **Repeat the write measurement on a quiet host**: the figures below were taken at load 28 to 53. Status: open.
-3. **Decide on the fragment cache from those two answers**: Status: open (depends on 1 and 2).
-4. **Read the size real ACP frames reach**: the report's unverified question. Status: open.
-
-### 1. Find out whether a real bridge reaches the bound
-
-**Problem.** A state write costs little at sizes one environment plausibly holds and a tenth to a fifth of the interval at the 256-session, 16 MB bound. Nothing shows whether a bridge ever gets there, so the measurement cannot say whether the cost matters.
-
-**Context.** `MAX_SESSIONS` is 256 and `MAX_STATE_FILE_BYTES` is 16 MiB (`bridges/acp-bridge/src/acp-context.ts`). Each write runs `persistedSnapshot()`, then `JSON.stringify` of the result (`acp-persist-writer.ts:285`), at most once per `STREAMING_PERSIST_INTERVAL_MS` (1 s) while a turn streams. All of that serialising is synchronous on the bridge's only event loop.
-
-**Investigation.** Not read: the E20 build was told not to touch a real data directory or run a provider turn, so only a local fixture was measured. See [Current state](#current-state).
-
-**Decisions.**
-
-- **How to read real sizes?**
-  - **Ask the maintainer to report `state.json` size and session count from their own environments, with a one-line `stat` and `jq '.sessions | length'` (recommended).**
-    - Pros: no code; no content leaves the machine; answers the question directly for the heaviest known user.
-    - Cons: one person's use.
-  - **Add a size and count to the bridge's health report.**
-    - Pros: every install; stays current.
-    - Cons: code and a contract field for a Low finding, before knowing it matters.
+3. **Decide on the fragment cache from those two answers**: Status: blocked (waits on 7568: 5900 task 1, and on task 2).
 
 ### 2. Repeat the write measurement on a quiet host
 
@@ -75,24 +55,6 @@ In the cap-over case most of the time is the per-session windowing in `boundPers
     - Pros: no risk to the state file.
     - Cons: a bridge at the bound stalls 100 to 200 ms per second while streaming.
 
-### 4. Read the size real ACP frames reach
-
-**Problem.** The report's question about real frame sizes was reasoned from the limit, not measured.
-
-**Context.** Framing is now linear in the frame's size (`acp-jsonl-framer.ts`), so the answer no longer decides a fix. It would only say how close real frames come to the 4 MiB limit, past which the bridge closes the connection.
-
-**Investigation.** Not read: it needs a real provider turn, which the E20 build was told not to run.
-
-**Decisions.**
-
-- **When to read it?**
-  - **On the next real Grok run done for another reason, by counting frame sizes in a throwaway patch (recommended).**
-    - Pros: no billed turn only for this; no permanent code.
-    - Cons: waits for such a run.
-  - **Add a largest-frame figure to the bridge's diagnostics.**
-    - Pros: always available.
-    - Cons: a permanent counter for a question with no decision behind it.
-
 ## Current state
 
 Measured on 2026-11-05 on an Intel Core Ultra 9 285H (16 CPUs, 62 GiB RAM, about 18 GiB available), Linux 7.1.8, Bun 1.4.4, state file on btrfs. Round 1 at `3baeaacf6`, load 28 to 46. Round 2 on the E20 bridge commit, load 45 to 53; of the code measured, that commit only removes a branch no session can reach. Each round is six fresh processes per fixture. Figures are the median across runs of each run's median write, in ms, with the lowest and highest run median in brackets.
@@ -114,8 +76,9 @@ Measured on 2026-11-05 on an Intel Core Ultra 9 285H (16 CPUs, 62 GiB RAM, about
 
 ## Related
 
-- [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md), BR-1 and BR-12
+- to-do 1202 task 6 (retired 2026-11-10), BR-1 and BR-12
 - Efficiency report, C (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 4) moved there on 2026-11-10.
 
 ## Replaces
 

@@ -8,29 +8,9 @@ From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: thei
 
 ### Tasks
 
-1. **Measure retained growth and table sizes**: real sizes on a long-lived data directory, with the projected growth figures checked against them. Status: open.
-2. **Decide on finished turn boundaries from that measurement**: keep leaving them, or prune them past the window. Status: open (depends on 1).
-3. **Time a first run on an old ledger**: how long the backlog takes, and whether requests stay responsive. Status: open.
+2. **Decide on finished turn boundaries from that measurement**: keep leaving them, or prune them past the window. Status: blocked (waits on 7568: 5821 task 1).
 4. **Exercise a client against retired rows**: open a thread and a transcript older than the window in a real renderer. Status: open.
 5. **Environments deleted before this change**: decide what happens to rows they left. Status: open.
-
-### 1. Measure retained growth and table sizes
-
-**Problem.** The growth figure behind 0730 (+70 to 100 MB a day retained, about 3 GB a month) is the logging report's estimate from one installation sampled on 2026-10-28, and 0540 asked for the real size of `change_turn_boundaries` on a long-lived data directory. Neither has been measured since retention landed.
-
-**Context.** 0730's Needs verification and 0540's Needs verification. The rule that no agent runs against the real data directory stands, so this needs a copy of a real data directory or a maintainer's own numbers. [5361](5361-retention-pass-on-a-large-real-store.md) measures the object store side of the same pass.
-
-**Investigation.** Not run. Generated fixtures only prove the rows go. `RetentionReport` now counts `retiredRows`, `purgedEnvironments` and `removedBodies`, without content.
-
-**Decisions.**
-
-- **Which ledger to measure?**
-  - **A copy of a real ledger, per table row counts and sizes before and after two passes (recommended).**
-    - Pros: real shape; repeatable; never touches the live directory.
-    - Cons: the copy holds file paths and evidence, so it must stay on its machine and be deleted after; a maintainer has to make it.
-  - **Counts a maintainer reads from their own install.**
-    - Pros: no copy.
-    - Cons: one point in time, and no before and after.
 
 ### 2. Decide on finished turn boundaries from that measurement
 
@@ -38,7 +18,7 @@ From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: thei
 
 **Context.** 0730 task 2 chose to leave them until a measured table size justifies a policy. `nextTurnOrdinal`, `latestTurnForThread` and `getHistory` read these rows, and a retired boundary still lists in a thread's history.
 
-**Investigation.** Not run; depends on task 1. Each row is small, about one per turn, and `activeTurns()` no longer reads finished rows. The age walk never revisits a retired row.
+**Investigation.** Not run; depends on task 1, the measurement on a copy of a real ledger, which is in the manual-test checklist (7568: 5821 task 1). Each row is small, about one per turn, and `activeTurns()` no longer reads finished rows. The age walk never revisits a retired row.
 
 **Decisions.**
 
@@ -49,24 +29,6 @@ From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: thei
   - **Prune boundaries past the window.**
     - Pros: bounded.
     - Cons: needs an audit of every reader, including anything that expects a thread's ordinals to be continuous, and the next ordinal must not restart from a pruned maximum.
-
-### 3. Time a first run on an old ledger
-
-**Problem.** A first pass on a long-lived ledger faces the whole backlog. It is bounded at 4,096 batches a pass and yields between transactions, but no real backlog has run through it.
-
-**Context.** 0730's constraints. The first pass also builds `change_turn_boundaries_environment`, `change_thread_segments_environment` and `change_turn_boundaries_age`, each one synchronous statement on small tables.
-
-**Investigation.** Live measurement remains open. On 2026-11-09 the ledger switched to WAL NORMAL and the default archive window fell from 90 to 30 days. A fresh-connection fixture with 200 turns aged 31–89 days proves the first pass releases their references in multiple transactions (at most 16 turns each), lets a timer observe partial progress, keeps recent history and does not revisit retired turns. The fixtures hold hundreds of rows; `retention-deletion.test.ts` proves the pass splits them into many transactions, not how long a real one takes. A synthetic ledger of mini's size (2.8M rows, 1.28 GB; [0741](0741-backend-responsiveness-under-load.md) task 6) with a 7-day window retired 773,000 rows over 8 passes (78 s), with a worst event-loop stall of 120 ms, after 0741 removed four whole-table statements from the pass. A real ledger has not run it.
-
-**Decisions.**
-
-- **What would change the bound?**
-  - **Keep 4,096 batches unless the pass or a longest stall is out of proportion (recommended).**
-    - Pros: one constant; leftovers go next pass.
-    - Cons: a very old ledger takes many hourly passes to come down.
-  - **Spread it further, with a pause between batches.**
-    - Pros: lighter on requests.
-    - Cons: a longer backlog, and a delay to tune.
 
 ### 4. Exercise a client against retired rows
 
@@ -92,7 +54,7 @@ From efficiency batch E3 (Retention and deletion), parts `0730` and `0540`: thei
 
 **Context.** Found while building 0730 task 1. The ledger holds no list of live environments; `environmentTarget` answers null for a stopped container too, so it cannot tell.
 
-**Investigation.** Not measured how much this holds on a real ledger; task 1 can count it. A reconcile would compare the ledger's environment ids with the environment store and request a purge for each missing one.
+**Investigation.** Not measured how much this holds on a real ledger; the measurement in the manual-test checklist (7568: 5821 task 1) can count it. A reconcile would compare the ledger's environment ids with the environment store and request a purge for each missing one.
 
 **Decisions.**
 
@@ -125,3 +87,4 @@ stall duration on a real disk.
 - [Change tracking](../../architecture/change-tracking.md#age-based-retention)
 - [5361](5361-retention-pass-on-a-large-real-store.md), the object store side of the pass
 - [5820](5820-removed-project-kanban-notes-plans.md), the rest of the same batch
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, measuring a copy of a real ledger; task 3, timing a first retention run on a copy of an old real ledger) moved there on 2026-11-10.

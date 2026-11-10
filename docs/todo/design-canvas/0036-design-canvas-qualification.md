@@ -25,16 +25,15 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
-3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the macOS menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle.
-4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures are a false reading, to-do 7440. A slower machine and the Electron decision stay open: beelink is not a slow laptop.
+3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle. The macOS menu-key pass needs a person at an unshared macOS desktop and moved to 7568 on 2026-11-10.
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures are a false reading, to-do 7440. The Electron decision stays open. The slower-machine run needs hardware the fleet lacks (beelink is not a slow laptop) and moved to 7568 on 2026-11-10.
 6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open. The v1 renderer fallback is retired (2026-11-06, decision 21); the run of a published v2.22.3 desktop build against this backend, and the reverse, is still open.
 7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
 8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
 10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
 11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
-12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux and on the Apple M5 Max at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: open. The Linux half is done (2026-11-06): all three runs converged at 1 and 64 frames, and window listeners and CDP frames stayed flat at 64 frames (see [Retention run on Linux](#retention-run-on-linux)). The Apple M5 Max half is still open.
+12. **Full 64-frame retention run after the bridge fix**: the `--frames 1,64 --cycles 100` harness converges on Linux at current `main`. Moved from to-do 2140 (deleted 2026-11-06). Status: done. The Linux half is done (2026-11-06): all three runs converged at 1 and 64 frames, and window listeners and CDP frames stayed flat at 64 frames (see [Retention run on Linux](#retention-run-on-linux)). The Apple M5 Max half needs the user's machine and moved to 7568 on 2026-11-10, so nothing is left here.
 
 ### 1. Opening prompt without the tab mounted
 
@@ -114,13 +113,7 @@ The menu gap has a concrete risk. The application menu binds the same keys the c
   - **A manual checklist on the release build.**
     - Pros: no harness work.
     - Cons: not repeatable; easy to skip.
-- **How to settle native menu key equivalents?**
-  - **A manual pass in a real macOS desktop session: ⌘0, ⌘=, ⌘- and ⌘Z with the canvas focused, checking that app zoom does not change (recommended).**
-    - Pros: answers the exact question in minutes; no code change unless it fails.
-    - Cons: needs an unshared desktop session; Linux and Windows menu accelerators remain unchecked.
-  - **Defensively ignore `menu-zoom` while the canvas owns shortcuts.**
-    - Pros: removes the double-reset whatever the OS does.
-    - Cons: a mouse click on View → Actual Size while the canvas is focused would stop resetting app zoom, which is wrong; a fix for an unproven bug.
+- **How to settle native menu key equivalents?** Moved on 2026-11-10 to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md): a person in an unshared macOS desktop session presses ⌘0, ⌘=, ⌘- and ⌘Z with the canvas focused. Defensively ignoring `menu-zoom` while the canvas owns shortcuts was rejected for now: a mouse click on View → Actual Size while the canvas is focused would stop resetting app zoom, a fix for an unproven bug.
 - **Keep the OS Save dialog check?**
   - **Retire it (recommended).** The product installs no `will-download` handler, so the dialog is Electron's own default, and the spec already proves the download manager path.
     - Pros: drops a check that tests Electron, not Orkestrator.
@@ -138,34 +131,6 @@ The menu gap has a concrete risk. The application menu binds the same keys the c
 
 **Outcome (2026-11-02), packaged renderer only.** The recommended option was taken, for Linux. The spec's journey moved to `e2e/agent-testing/design-canvas-electron-journey.ts`, which the Vite-served spec and the new `design-canvas-packaged-electron.spec.ts` both run. The new spec launches `release/linux-unpacked/orkestrator-v2` through `_electron.launch({ executablePath })` on a disposable profile, headless, with an allowlisted environment. It passed 3 of 3 runs on beelink (13–17 s each) and found no defect in the packaged renderer. It builds with the new `mise run package:linux:unpacked`, not `package:linux`, because `package:linux` would also install the app into the user's `~/.local`. The menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a macOS bundle run were not attempted. See [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02) and decisions 16–20.
 
-### 4. Human screen-reader pass
-
-**Problem.** No screen reader has been used on the canvas. Verbosity, live-region timing during nudge bursts, the `aria-description` on frames, Preview-mode frames and browse-mode navigation are unknown to screen-reader users.
-
-**Context.** The automated pass and 0054 fixed every defect the tree and focus checks could find. 0054 deliberately chose label-only inspector names and left verbosity to this pass.
-
-**Investigation.** The surfaces exist as described:
-- the frame `aria-description` at `apps/web/src/components/design/DesignFrameView.tsx:343`;
-- the layer tree's polite region at `DesignLayerTree.tsx:824`;
-- the save state and status at `DesignStatus.tsx:200` and `:294`;
-- the canvas announcer at `DesignCanvasTab.tsx:1150`.
-
-No screen-reader automation (for example Guidepup) is a dependency, and Orca is not installed on this Linux host. The pass still needs a person.
-
-**Decisions.**
-
-- **Which readers, and who?**
-  - **VoiceOver on macOS first, then NVDA on Windows, by someone who uses a screen reader daily, following a checklist built from the five areas above (recommended).**
-    - Pros: the two most-used desktop readers; a daily user catches verbosity problems a sighted tester accepts.
-    - Cons: needs access to such a person and a Windows machine.
-  - **VoiceOver only, by the team.**
-    - Pros: available now on the dev Macs.
-    - Cons: NVDA's browse mode and virtual cursor differ the most from VoiceOver, and that is where the canvas and iframes are riskiest.
-  - **Automate with Guidepup in CI.**
-    - Pros: repeatable.
-    - Cons: a new dependency and macOS/Windows runners with screen readers; it checks speech strings, not whether the experience is usable.
-- **What counts as a pass?** Every journey step of `DesignCanvasAccessibility.spec.ts` completed by speech alone, with findings filed as a new numbered todo (not added here), and the label-only naming either confirmed or reversed.
-
 ### 5. Client performance on other hosts and Electron
 
 **Problem.** The client numbers come from one Apple M5 Max running headless Chrome. A slower laptop or Linux GPU stack could drop pan frames or slow acknowledgments, and nobody would know.
@@ -178,13 +143,7 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
 
 **Decisions.**
 
-- **Where to run next?**
-  - **Run the same command on this Linux laptop on a quiet host, keeping the JSON report alongside the M5 Max one (recommended).**
-    - Pros: covers both missing host classes in one run; no harness change.
-    - Cons: the host is shared with production work, so load must be recorded and runs repeated.
-  - **Wait for a dedicated perf machine.**
-    - Pros: cleaner numbers.
-    - Cons: no such machine is planned; the gap stays open.
+- **Where to run next?** Linux is done (outcomes below). The slower-machine run moved on 2026-11-10 to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md), because no fleet host is a slow laptop.
 - **Measure the Electron renderer?**
   - **No: treat Chrome as a proxy and retire the Electron part unless an Electron-only regression is reported (recommended).**
     - Pros: same Blink and V8 lineage, three Chromium versions apart; avoids building an Electron mode for a measurement nobody is waiting on.
@@ -205,7 +164,8 @@ leak check reported `jsEventListeners` failures at every size; the counts
 alternate between two fixed values without growing, so this is the
 check's false reading, new to-do
 [7440](7440-design-perf-listener-count-two-states.md), not a client leak.
-Still open: a slower machine and the Electron decision.
+Still open: the Electron decision. The slower machine moved to the
+manual-test checklist on 2026-11-10.
 
 ### 6. Old renderer with new backend, and the reverse
 
@@ -403,8 +363,8 @@ now registers its listener in `open()` and is opened and closed in one effect
 2. Keep the final JSON report under `output/benchmarks/design-canvas/`.
 3. Check that all three runs report `converged true`, with `windowListeners`
    and `cdpFrames` settled at 64 frames and at most 8 iframes.
-4. Repeat on the Apple M5 Max at current `main` and compare with the
-   2026-10-22 run on `60a75b73`.
+4. The Apple M5 Max repeat (compare with the 2026-10-22 run on
+   `60a75b73`) moved to the manual-test checklist on 2026-11-10.
 
 **Decisions.**
 
@@ -425,7 +385,7 @@ listeners held at 32 and CDP frames at 9 (eight iframes and the page) from
 the first cycle to the hundredth in every run, against 34 → 61 and 10 → 37
 on 2026-11-01, so the frame bridge growth is gone. See
 [Retention run on Linux](#retention-run-on-linux). Step 4, the M5 Max run,
-is still open.
+moved to the manual-test checklist on 2026-11-10.
 
 The design canvas ([`design-canvas.md`](../../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -566,24 +526,20 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   (`mise run test:agent:electron:packaged` after
   `mise run package:linux:unpacked`; see
   [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02)).
-  The other two need OS-level input and dialogs in a real desktop session,
+  Native menu key equivalents need OS-level input in a real desktop session,
   which a shared host running other worktrees and a production instance is
-  not.
+  not; that pass moved to the manual-test checklist on 2026-11-10. The Save
+  dialog check is task 3's open decision (recommended: retire it).
 - **Manual accessibility.** The automated part is done (see
   [Accessibility](#accessibility)): the keyboard-only journey, focus survival
   across acknowledgment, drawers, culling and errors, reduced motion, 200%
   zoom and narrow panes, with observations in the header of
   `e2e/DesignCanvasAccessibility.spec.ts`. The nine focus, announcement and
-  layer-loading defects it found were fixed. Still open: a human pass with
-  VoiceOver and NVDA over the layer tree, frame list, inspector and both
-  status regions
-  (verbosity, live-region timing during nudge bursts, `aria-description` on
-  frame titles, Preview-mode frames, rotor and browse-mode navigation). The
+  layer-loading defects it found were fixed. The human pass with
+  VoiceOver and NVDA moved to the manual-test checklist on 2026-11-10. The
   400% zoom layout defect and the other findings were fixed on 2026-10-25 in
   todo 0054 (retired on 2026-10-29; see
   [design-canvas.md](../../architecture/design-canvas.md#client)).
-  Still not done on 2026-10-25: it needs a person listening to VoiceOver
-  (macOS) and NVDA (Windows); no automated run stands in for it.
 - **Large-canvas client performance.** Done on 2026-10-22 on one host and
   build, including a 100-cycle leak check on the committed fixes that
   converged at every size (see [Client performance](#client-performance)).
@@ -595,8 +551,9 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   Chromium (see [Client performance on Linux](#client-performance-on-linux)),
   and on 2026-11-06 again, with the 64-frame retention run converging (see
   [Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06)).
-  Still open: a slower machine, the Electron renderer, the M5 Max retention
-  run and [7440](7440-design-perf-listener-count-two-states.md).
+  Still open: the Electron renderer decision (task 5) and
+  [7440](7440-design-perf-listener-count-two-states.md). A slower machine and
+  the M5 Max retention run moved to the manual-test checklist on 2026-11-10.
 - **Mixed versions and migration on real binaries.** The backend half is
   done on 2026-10-25 with the published `orkestrator@2.22.3` (the oldest
   Stable release on npm, inside the support window) and this checkout's
@@ -1903,6 +1860,7 @@ Made on 2026-11-06 while working tasks 12, 6 and 5.
 ## Related
 
 - [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, the macOS menu-key pass of task 3, the slower-machine run of task 5, the Apple M5 Max run of task 12) moved there on 2026-11-10.
 - `2140-design-frame-bridge-growth-under-culling.md` (deleted 2026-11-06):
   the window listener and frame growth the 2026-11-01 Linux leak check found
   at 64 frames. Its Linux rerun converged on 2026-11-06 (task 12).

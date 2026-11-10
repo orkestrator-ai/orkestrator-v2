@@ -400,8 +400,8 @@ cons.
      the same `buildPromptWithTranscriptAnnotations` the locked composer uses).
    - Pros: design context is a removable chip everywhere, and any annotation in
      a new tab's draft is sent. Cons: a first prompt's fallback title can show
-     the fence; filed as
-     [0081](../agent-engines/0081-annotation-fence-in-session-titles.md)
+     the fence; filed as 0081 (retired 2026-11-10; the fix is under
+     [Session titles](../../architecture/agent-engines.md#session-titles))
      (not new: the inline path produced the same title).
 9. **Links closed before this change.** Options: guess a session from the
    provider's resume list; leave them as "no conversation to resume". Chosen:
@@ -475,7 +475,8 @@ Assumptions, each checked live on 2026-10-24 unless noted:
   close and retention semantics, and
   [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md) for
   archive behaviour.
-- [0081-annotation-fence-in-session-titles.md](../agent-engines/0081-annotation-fence-in-session-titles.md)
+- To-do 0081 (retired 2026-11-10; see
+  [Session titles](../../architecture/agent-engines.md#session-titles))
   and todo 0082 (retired on 2026-10-29), both found while qualifying this
   file.
 - [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md).

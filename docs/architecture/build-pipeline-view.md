@@ -105,6 +105,60 @@ stacked column in the panel that scrolls it, and scrolls back to the start. The 
 on, since its unrolled passes grow the line without bound. Multi Review leaves
 it off: it removed Fit in #1199 and its browser suite asserts it stays gone.
 
+A graph hidden by a pane switch keeps its size and its overview's scroll
+offset. `useMeasuredWidth` and `useMeasuredHeight` keep their last value when
+a hidden pane measures 0 (so zoom and pan are not reset on a switch), and
+`useScrollOffsetAcrossHide` (`apps/web/src/hooks/`) puts back the offset of a
+scroller that is, or holds, a container query container: Playwright WebKit
+resets such a scroller to the top across `display: none`. The Multi Review
+inspector's transcript tail and the Multi Review, pipeline and Graph Run
+overviews use it; where the browser keeps the offset, the restore writes the
+value already there. Whether desktop Safari and iOS Safari behave like
+Playwright WebKit here has not been checked.
+
+### The Multi Review graph
+
+`MultiReviewFlowGraph.tsx` draws review package, reviewer panel,
+consolidation and Fix left to right (`multiReviewFlowLayout`, edges from
+`multiReviewFlowEdges`; a finished source takes its edge style from its
+target), with `MultiReviewInspector.tsx` below:
+
+- **Zoom.** 20% to 200% with −, the level (reset to 100%), + and Fullscreen;
+  Ctrl/⌘ + wheel, a trackpad pinch, Safari's `gesture*` events and a
+  two-finger touch pinch zoom around the pointer, while a plain wheel scrolls
+  the page. The stacked layout (below 960 px) has the same controls in a
+  sticky row with 44 px targets and keeps its own view (workflow id plus
+  `stacked`). Real trackpad, Safari and phone gestures are checked by hand
+  only; the browser suite uses synthetic events.
+- **Failed nodes** show their error joined onto one line (`errorFace="joined"`),
+  with the whole text as the accessible description and a tooltip that also
+  opens on keyboard focus.
+- **Transcript tails.** Every node has one. Reviewers read
+  `getMultiReviewReviewerTranscript`; preparation, consolidation and Fix read
+  `get_multi_review_step_transcript` (at most 100 messages and 256 KiB, a
+  session-scoped `knownSourceToken`, `unchanged` answers). A tail reads on
+  selection and on each workflow checkpoint, and polls only while its node is
+  live, the window visible and the tab active. A session several steps share
+  is read only for the step using it now (`multiReviewStepSessionAccess`).
+- **Queue position.** A pending reviewer shows "queued · #3 of 7" or
+  "starting" from `admissionState` and `queuePosition`
+  (`review-fanout-admission.ts`). They are observations and can trail the
+  scheduler by one admission; there is no expected start time.
+- **Findings so far.** `mergeReviewerFindings` lists accepted reports' issues
+  plus `report_finding` rows (`reviewer.provisionalFindings`), deduplicated by
+  file, line and title, marked "provisional" while the reviewer runs and
+  "unconfirmed (reviewer failed)" or "(reviewer stopped)" if it ended without a
+  report. The accepted report replaces them, consolidation never reads them,
+  and they are removed once the workflow is `interactive` or `completed`. A
+  staged finding lives in memory until the next review pass records it, so one
+  staged when the backend stops is lost.
+
+Selection, zoom and pan are view state and never reach the workflow; no node
+state comes from a transcript tail. The reviewer fields `admissionState`,
+`queuePosition` and `provisionalFindings` exist only while a review runs, and
+an older backend's or renderer's strict validator rejects a workflow that
+carries them, so a downgrade affects only a workflow mid-review.
+
 ## The pipeline graph
 
 `pipelineFlowModel` (`components/build-pipeline/pipeline-flow.ts`) projects the
@@ -452,7 +506,9 @@ downgraded backend ignores the field and keeps the pipeline.
 `PipelineFlowView` owns selection, which follows the running step (or the last
 step reached) until the user clicks a node. A click selects; a double click
 opens the step's provider session in a tab of its own (`requireExistingResumeSession`,
-so a missing session never opens as an empty one). The inspector shows the
+so a missing session never opens as an empty one). Nothing else marks that tab
+as the pipeline's: a message typed into a running stage's tab goes to the
+provider session under that provider's own resume rules. The inspector shows the
 status, the actions, and for a session the full transcript with the same
 renderer, virtualization, find and report footer the tab always had
 (`PipelineSessionTranscript`). The message box shows only on the session the
@@ -705,12 +761,19 @@ action.
    pull request. The pull request then shows the rewound history.
 
 The previous-attempt inspector says the code was reset, from and to which
-commits and how many commits it dropped, and names the backup ref.
+commits and how many commits it dropped, and names the backup ref. The
+pipeline never prunes the backup refs. A code rewind that ages out of the
+50-rewind record also stops telling Ship to force-push.
 
 `retry_build_pipeline_reviewer` reruns one failed reviewer of the current pass,
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
-under its key; the retry gets `…:attempt-2`.
+under its key; the retry gets `…:attempt-2`. The retry keeps the slot's agent,
+model and effort, so a reviewer that failed on a bad model id fails again. It
+is refused once the pass has consolidated ("restart the review stage to rerun
+it"): after that only a restart from a reviewer or Consolidation reruns the
+pass, and it reruns the whole panel. A per-slot rerun after consolidation would
+need a supersede rule by panel slot beside the round rule, and is not built.
 
 ## Delivery after Verify
 
@@ -904,8 +967,9 @@ bound and that test fails until the template says the same.
   `reviewFanout.workspaceBaseline` predate the read-only guard and are not
   certified against one.
 
-Follow-ups: [0315-build-pipeline-flow-graph.md](../todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md),
-[0405-build-pipeline-rewind-follow-ups.md](../todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md).
+The graph's live qualification (to-do 0315, retired 2026-11-10) and the live
+rewind, re-Ship and phone checks (to-do 0405, retired 2026-11-10) are on the
+manual-test checklist (to-do 7568).
 
 ## Completed interactive Build attempts (internal foundation)
 

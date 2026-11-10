@@ -66,11 +66,8 @@ The first round of each layout started from a slightly higher measured height (1
     - Pros: no controller state.
     - Cons: the report's responsive layout depends on it, `contain-intrinsic-size` on the container did not change the clamp, and any other container that a transcript row gains later would bring it back.
 
-## Needs verification
-
-Real Safari, in the session that runs [0860](0860-multi-review-inspector-webkit-divergences.md) task 4. Serve the fixture the same way, then open `/pipeline-flow?scenario=building&longTranscript&paneControls`, `/pipeline-flow?scenario=fanout&longTranscript=report&paneControls` and `/graph-run-flow?longTranscript`. Scroll the transcript up, press Activate other pane, then Activate build pane or Activate graph pane: the transcript must land on the newest message and the page around it must not move. On the report fixture, also note whether a follower's view jumps on the show.
-
 ## Related
 
-- [0860-multi-review-inspector-webkit-divergences.md](0860-multi-review-inspector-webkit-divergences.md): the WebKit reset and `useScrollOffsetAcrossHide`.
+- to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)): the WebKit reset and `useScrollOffsetAcrossHide`.
 - [transcript-scroll.md](../../architecture/transcript-scroll.md#activation-and-persistence): the activation policies and the measurements of the inspector transcripts.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-Safari check from Needs verification) moved there on 2026-11-10.

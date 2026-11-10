@@ -6,37 +6,24 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Container run**: a container environment whose home holds a plugin, read by the real container reader and loaded by a real container session, including an install turned off on the host. Status: open.
+1. **Container run, real-reader half**: build a fresh dev image and run the credential-free real container reader test against it. The session half (an Orkestrator-created container loading the plugin in a real Claude session, with an install turned off on the host) needs Claude credentials and moved to 7568 on 2026-11-10, batched with 0040's provider-session run. Status: open.
 2. **Narrow-viewport check**: the 390×844 layout of the plugin rows was not exercised in the real-app pass. Status: open (low value).
-3. **Stale decision text and file retirement**: one decision row still describes the pre-0151 gap, and the file should be retired once task 1 is done. Status: open.
+3. **Stale decision text and file retirement**: one decision row still describes the pre-0151 gap (open now), and the file should be retired once task 1 and its moved session half are done. Status: open.
 
-### 1. Container run
+### 1. Container run, real-reader half
 
-**Problem.** The container path of the plugin editor is proven only with the fake reader in unit tests and with the real reader against a bare `docker run` container; no container environment created by Orkestrator has loaded a plugin in a real Claude session and had its live row joined to the editor's row. Since 0151, the same run is also the only end-to-end proof that a plugin turned off on the host stays off in a rebuilt container. Users of container environments with Claude plugins are the ones affected.
+**Problem.** The container path of the plugin editor is proven only with the fake reader in unit tests and with the real reader against a bare `docker run` container on an image that predates the current code. Users of container environments with Claude plugins are the ones affected.
 
-**Context.** The file asks for this run to be batched with the container session run in [0040](0040-mcp-environment-delivery.md) (its "Open for a live run" item). It needs an image built from a tree that includes `35081a81` ("fix(claude): honor plugin enablement across runtimes (#1289)"), because older images neither merge the staged `enabledPlugins` nor carry the filtering bridge. 0151 proved each piece separately in `orkestrator-v2:dev-0c3cd9a3dec9`.
+**Context.** The session half of this run (an Orkestrator-created container environment whose staged home has one enabled and one host-disabled install, one short Claude session, and the editor row, live row and join checked) needs Claude credentials. It moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10, batched with [0040](0040-mcp-environment-delivery.md)'s provider-session run. What stays here is credential-free. The image must be built from a tree that includes `35081a81` ("fix(claude): honor plugin enablement across runtimes (#1289)"), because older images neither merge the staged `enabledPlugins` nor carry the filtering bridge.
 
-**Investigation.** The pieces are all on `main`: the container reader path in `apps/backend/src/core/mcp-management/claude-plugins.ts`, the staging filter (`apps/backend/src/core/portable-inputs.ts:235`, `claudeContainerPluginSettings` at `packages/protocol/src/node/claude-plugin-set.ts:296`) and the entrypoint merge (`docker/entrypoint.sh:855-865`). The opt-in real-reader test is `apps/backend/tests/claude-plugin-mcp-container.test.ts` (gated by `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1` at `:14`); it defaults to the image `orkestrator-v2:latest` (`:90`) unless `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` is set. On this host `orkestrator-v2:latest` was built on 2026-10-07, before #1289, and the image named in 0151 is not present, so a run here must build a fresh image (`mise run docker:build:dev`) and pass it explicitly; the unset default would silently test a stale image. Pins are unchanged since the qualification: `@anthropic-ai/claude-agent-sdk` 0.3.309 (`bridges/claude-bridge/package.json:16`) and `CLAUDE_CLI_VERSION=2.1.309` (`docker/Dockerfile:193`), so the CLI rules recorded below still apply. `mise run test:agent:docker` exists but its Docker fixture does not install plugins, so it does not cover this on its own.
+**Investigation.** The pieces are all on `main`: the container reader path in `apps/backend/src/core/mcp-management/claude-plugins.ts`, the staging filter (`apps/backend/src/core/portable-inputs.ts:235`, `claudeContainerPluginSettings` at `packages/protocol/src/node/claude-plugin-set.ts:296`) and the entrypoint merge (`docker/entrypoint.sh:855-865`). The opt-in real-reader test is `apps/backend/tests/claude-plugin-mcp-container.test.ts` (gated by `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1` at `:14`); it defaults to the image `orkestrator-v2:latest` (`:90`) unless `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` is set. On the analysing host `orkestrator-v2:latest` was built on 2026-10-07, before #1289, so a run must build a fresh image (`mise run docker:build:dev`) and pass it explicitly; the unset default would silently test a stale image. Pins are unchanged since the qualification: `@anthropic-ai/claude-agent-sdk` 0.3.309 (`bridges/claude-bridge/package.json:16`) and `CLAUDE_CLI_VERSION=2.1.309` (`docker/Dockerfile:193`), so the CLI rules recorded below still apply.
 
 **Decisions.**
 
 - **How to run it?**
-  - **Batch with 0040's container session run on one fresh dev image (recommended).** Build with `mise run docker:build:dev`, run `claude-plugin-mcp-container.test.ts` with `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` set to that image, then in an isolated `dev:test` profile with `--fixture-environments local,container` create a container environment whose staged home has one enabled and one host-disabled install, start one short Claude session, and check the editor row, live row and join.
-    - Pros: one image build and one credentialed profile serve both files, as both already ask; proves staging, merge, bridge filter and editor together.
-    - Cons: blocks this low-rated file on 0040's larger run; needs Claude credentials and Docker time.
-  - **Run it alone now.** Same steps, without waiting for 0040.
-    - Pros: closes this file sooner; smaller scope per run.
-    - Cons: a second image build and credentialed session for the same machinery; 0040 would repeat most of it.
-  - **Retire the item, accepting the piecewise evidence from 0151.**
-    - Pros: no further cost; each component is already proven in a real image.
-    - Cons: never proves the pieces compose in an Orkestrator-created container, which is the case users hit.
-- **What counts as a pass?**
-  - **Editor rows equal the session's live plugin servers, every live row joins its editor row, and the host-disabled install is absent from the session and shown disabled with its reason (recommended).**
-    - Pros: the same pass criteria as the local live test, so results are comparable.
-    - Cons: requires reading the live panel inside a container session, not just a reader test.
-  - **Only the real-reader test passes on the fresh image.**
-    - Pros: credential-free and repeatable.
-    - Cons: does not load a session, so the bridge filter and the live join stay unproven in a container.
+  - **Build with `mise run docker:build:dev`, then run `claude-plugin-mcp-container.test.ts` with `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1` and `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` set to that image, and record the result under Qualification (recommended).**
+    - Pros: credential-free and repeatable; the same image then serves the moved session half.
+    - Cons: does not load a session, so the bridge filter and the live join stay with the session half.
 - **Should the container test's default image change?**
   - **Leave the default but always pass `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE` in the run notes (recommended).**
     - Pros: no code change in a research item; the env var already exists.
@@ -59,7 +46,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Drop it from this file, noting that the change is not layout-affecting (recommended).**
     - Pros: matches the documented verification rule; no extra profile run.
     - Cons: the mobile reachability of MCP settings remains unverified (but it is not this file's concern).
-  - **Run it with the container session in task 1, opening settings fresh at 390×844 rather than resizing.**
+  - **Run it in a disposable profile, opening settings fresh at 390×844 rather than resizing.**
     - Pros: cheap when a profile is already up; would show whether the mobile menu reaches settings.
     - Cons: scope creep; any finding belongs in a new todo, not here.
 
@@ -74,7 +61,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Decisions.**
 
 - **When to fix the stale con and retire the file?**
-  - **Correct the con now; retire the file (and repoint links from 0151's replacement text) as part of the change that records task 1 (recommended).**
+  - **Correct the con now; retire the file (and repoint links from 0151's replacement text) as part of the change that records task 1 and its moved session half (recommended).**
     - Pros: readers stop seeing a fixed gap described as current; retirement happens in one change with the final evidence.
     - Cons: two small docs edits instead of one.
   - **Leave everything until task 1 is done.**
@@ -92,7 +79,8 @@ reasons recorded there.
 
 Code items and the qualification were done on branch
 `todo-0121-claude-plugin-mcp-82b345b9f0c5` (base `20f6de91`, 2026-10-25). What
-is left is one container run.
+is left is the credential-free real-reader run on a fresh image (task 1); the
+container session run moved to the manual-test checklist on 2026-11-10.
 
 ## Current state
 
@@ -197,18 +185,14 @@ is left is one container run.
     when the viewport switches to the mobile layout, and the mobile menu did
     not expose the settings entry to the script); the change adds no layout,
     and `McpStatusAndStates.test.tsx` covers the rendering.
-- **Container run.** Not done: a container environment whose home holds a
-  plugin, read through the real container reader and loaded by a container
-  session. The container path is covered only with the fake reader
-  (`service-claude-plugins.test.ts`, "a container lists the plugins in its own
-  home"). It needs the workspace's development image built and a container
-  session, which this run did not do; batch it with the container session run
-  in [0040](0040-mcp-environment-delivery.md). Since todo 0151 (2026-10-26)
-  the same run should also turn one install off on the host (`claude plugin
-  disable`), rebuild, and confirm the container session does not load it and
-  its row says why; the pieces were each proven in an existing image (todo
-  0151's "Qualification", now in git history), and the real container reader
-  part passes with `RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`.
+- **Container run.** Not done: the container path is covered only with the
+  fake reader (`service-claude-plugins.test.ts`, "a container lists the
+  plugins in its own home") and with the real container reader
+  (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`) on an existing image; the pieces were
+  each proven in an existing image (todo 0151's "Qualification", now in git
+  history). Open here: the real-reader test on a fresh image (task 1). The
+  container session run, including an install turned off on the host, moved
+  to the manual-test checklist on 2026-11-10.
 
 ## Answers to the open question and rules read from the CLI
 
@@ -266,6 +250,7 @@ Read from the pinned CLI binary (Agent SDK 0.3.309, `claudeCodeVersion`
 - [0039-mcp-management.md](0039-mcp-management.md), item 7.
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Claude
   plugins").
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the container session half of task 1) moved there on 2026-11-10.
 
 ## Replaces
 

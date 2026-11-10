@@ -6,10 +6,10 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task
 
 ### Tasks
 
-1. **Measure read cost on a real profile**: whether any read is slow for want of page cache, now the ledger is capped and in its own file. Status: open (needs live evidence).
-2. **Decide `cache_size` and `mmap_size`**: only if task 1 finds a read problem. Status: open (depends on 1).
+1. **Add read timings**: the read latencies, beside the database waits E15 added, that a busy real profile will be measured with. Status: open (the measurement on a busy real profile is in 7568: 5181 task 1).
+2. **Decide `cache_size` and `mmap_size`**: only if the measurement finds a read problem. Status: blocked (waits on 7568: 5181 task 1).
 
-### 1. Measure read cost on a real profile
+### 1. Add read timings
 
 **Problem.** `cache_size`, `mmap_size` and `temp_store` are SQLite's defaults, with several connections per process each holding a small page cache. The report said to consider them once the ledger is smaller, which it now is.
 
@@ -23,6 +23,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task
   - **Use the database waits E15 added, plus read timings added for this, on a busy real profile (recommended).**
     - Pros: real read patterns.
     - Cons: the read timings are not built yet, and it needs a real session.
+    - Agent part: build the read timings and prove them on a `dev:test` profile; the busy real profile is in the manual-test checklist (7568: 5181 task 1).
   - **Time the hot reads (environment list, transcript pages, diff pages) on a generated large profile.**
     - Pros: no real turn needed.
     - Cons: a generated profile's cache behaviour says little about a real one's.
@@ -33,7 +34,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task
 
 **Context.** The report's options, as recommended there.
 
-**Investigation.** Nothing beyond task 1.
+**Investigation.** Nothing beyond task 1 and the measurement it serves (7568: 5181 task 1).
 
 **Decisions.**
 
@@ -47,6 +48,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried from part `0910` task
 
 ## Related
 
-- [5180](5180-sqlite-durability-tiers.md), [5182](5182-database-upkeep-live-evidence.md)
+- [5180](5180-sqlite-durability-tiers.md); to-do 5182 (retired 2026-11-10)
 - [Backend storage: Durability and deletion](../../architecture/storage.md#durability-and-deletion)
 - Logging and database report, R18 and D5 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: measuring read latency on a busy real profile) moved there on 2026-11-10.

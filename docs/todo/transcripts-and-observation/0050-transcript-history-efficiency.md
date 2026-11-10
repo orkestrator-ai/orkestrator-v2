@@ -15,10 +15,9 @@ analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed).
 
 Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joined `sync-v1` paging half moved to [0232](0232-direct-history-cursor-minting.md), which owns its retirement and register row; it is not repeated here.
 
-1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window; the Claude change is in `v2.33.0-beta` only).
-2. **Inactive Cursor run at a lowered trim threshold**: reach the producer trim while the environment is inactive, then check the bounded window, pages, sub-agent card and controls. Status: open (the pass-through is in place; no Cursor live spec exists).
+1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window, which the floor reaches for v2.36.0 on 2027-01-02; waits on 7568: 0050 task 1 counter reading). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10.
 3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
-4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
+4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: open. The runs with real providers moved to 7568 on 2026-11-10 (0050 task 4, Electron and container items) and need this harness first.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
 6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
 
@@ -40,37 +39,12 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
     - Pros: one place for item 3's history.
     - Cons: this file cannot finish until the floor moves, whatever happens to its live runs.
 - **What evidence is needed before removal, besides the floor?**
-  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).**
+  - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).** Reading it is a maintainer check, moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
     - Pros: catches a bridge that is somehow older than the floor suggests (a container image built before #1296).
     - Cons: needs the counter read from several machines.
   - **The floor alone.**
     - Pros: purely mechanical.
     - Cons: a stale container image could still need the fallback and would then show empty transcripts after a restart.
-
-### 2. Inactive Cursor run at a lowered trim threshold
-
-**Problem.** Cursor bounds its transcript while streaming with no reader, but trimming has never been observed live on an inactive environment. A trim bug would corrupt the window or wedge controls for long Cursor runs.
-
-**Context.** The production threshold is far past a qualification turn. Since 2026-10-26 an agent-test profile passes `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` through. The file gives the exact procedure, and decision 15 covers the choice.
-
-**Investigation.** The bound is `MAX_TRANSCRIPT_BYTES` (`bridges/cursor-bridge/src/config.ts:107`), overridable downwards to 256 KiB (`:108`); `MAX_MESSAGES` is 2,000. The variable is on the allowlist (`apps/desktop/electron/backend-process.ts:49`). The Cursor bridge `build` script exists, so `bun run --cwd bridges/cursor-bridge build` is valid. No Cursor live spec exists in `e2e/agent-testing/`. Decision 15 notes that a container bridge does not inherit the variable, so this run is local-environment only.
-
-**Decisions.**
-
-- **Manual run or a new spec?**
-  - **A manual run following the file's steps, with results recorded here (recommended).**
-    - Pros: closes the qualification soon; the steps are already written; one paid turn.
-    - Cons: not repeatable; the next Cursor SDK bump will not rerun it.
-  - **Write a Cursor live spec first (prompt, inactive switch, `transcriptBounds` and window checks).**
-    - Pros: repeatable, and usable at Cursor bumps.
-    - Cons: a new spec for one qualification; more up-front work.
-- **What counts as a pass?**
-  - **`/runtime-health` shows a trim, the window is `truncated` with pages to the prompt, the sub-agent card settles, and Stop and steer work on return (recommended).**
-    - Pros: matches the item; every check is content-free.
-    - Cons: a sub-agent in the trimmed range may be hard to force with a prompt.
-  - **`transcriptBounds` shows a trim and the window renders.**
-    - Pros: easy to reach.
-    - Cons: misses the controls and sub-agent lifecycle, which are the risky parts.
 
 ### 3. Pre-acceptance dispatch window live
 
@@ -95,18 +69,23 @@ Done on 2026-11-10 (see [Qualification results (2026-11-10)](#qualification-resu
     - Pros: no new seam.
     - Cons: the at-most-once dispatch path stays unproved end to end.
 
-### 4. Electron and Docker with real providers
+### 4. Electron and Docker paging harness
 
-**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers.
+**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers, and no spec can drive either of them through paging yet.
 
-**Context.** Batched with 0031. iOS only where the wrapper changes.
+**Context.** Batched with 0031. iOS only where the wrapper changes. The agent part is the harness below. The credentialed runs themselves (real provider turns in the Electron window and in a container environment) are human-only and moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; they record their results here.
 
-**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging.
+**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging. `transcript-paging-live.spec.ts` creates its environments with `environmentType: "local"` only (`createEnvironment`), so it cannot reach a container bridge. Its Codex loopback mode (`ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`) needs no login, so the harness can be proved on the loopback model before any paid run.
+
+Agent work left:
+
+- Add an environment-type switch to `transcript-paging-live.spec.ts` (proposed name `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, default `local`) that creates a container environment on a profile started with `--fixture-environments local,container`, and prove it once with the Codex loopback model.
+- Add a paging step to the Electron suite: a native tab whose transcript outgrows the live window, Load earlier messages, the reader's place kept, and a reload; prove it on the Codex loopback model.
 
 **Decisions.**
 
 - **How to cover it?**
-  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).**
+  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).** The harness is agent work here; the real-provider runs are the two 0050 task 4 items in 7568.
     - Pros: reuses the live spec's checks; the container run exercises the container bridge hop.
     - Cons: the Electron step is new work; the container run needs a profile started with `--fixture-environments local,container`.
   - **A manual pass in each, recorded in 0031.**
@@ -172,8 +151,8 @@ joined `sync-v1` history itself. The Claude bridge now loads those sessions on
 `/transcript`, which starts the fallback's retirement clock, and the joined
 path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
 browser document is measured. What remains is real-stack qualification not
-run here: a long inactive Cursor run (now reachable in a short run), and
-Electron and Docker with real providers. The mounted tab across a bridge-only
+run here: Electron and Docker with real providers (the paid inactive Cursor
+run moved to the manual-test checklist on 2026-11-10). The mounted tab across a bridge-only
 restart ran on 2026-11-06 and found two defects, both fixed. The
 pre-acceptance pipeline dispatch window ran on 2026-11-10 through a test-only
 dispatch hold and found no product defect.
@@ -479,27 +458,6 @@ an 8 MiB retained history, with `e2e/perf/hidden-resume-perf.ts`.
 
 Still open:
 
-- A Cursor run long enough to reach the producer trim thresholds while its
-  environment is inactive; return and check the bounded window, sub-agent
-  lifecycle and controls. Not run on 2026-10-24 or 2026-10-26. The
-  production threshold is `MAX_TRANSCRIPT_BYTES` (16 MiB minus 128 KiB, or
-  2,000 messages) in `bridges/cursor-bridge/src/config.ts`, far past a
-  qualification turn. `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES` lowers it (to
-  256 KiB at least), and since 2026-10-26 an agent-test profile passes it
-  through: it is on the backend's allowlist (`AGENT_TEST_SAFE_ENV_NAMES` in
-  `apps/desktop/electron/backend-process.ts`, covered in
-  `apps/desktop/tests/backend-process.test.ts`), and local bridges inherit
-  the backend's environment. To run it: rebuild the Cursor bridge
-  (`bun run --cwd bridges/cursor-bridge build`), start
-  `CURSOR_BRIDGE_MAX_TRANSCRIPT_BYTES=262144 mise run dev:test --profile
-  qa-0050-cursor --fixture --credential-source cursor --agent-platforms
-  cursor`, sign in with `mise run dev:login --profile qa-0050-cursor`, give
-  a Cursor tab a prompt that reads a chain of 20 KB files with a sub-agent
-  for part of it, switch to another environment for the turn, and on return
-  check `/runtime-health` `transcriptBounds`, the
-  `truncated` window and its history pages, the sub-agent card and the stop
-  and steer controls. Still owed: it is a paid provider run, and no Cursor
-  live spec exists yet to drive it.
 - Electron window and Docker environments with real providers; native iOS
   only where the wrapper changes.
 
@@ -1560,6 +1518,10 @@ All three checked on 2026-10-24.
   container file-tree watcher deferred from the file-tree cache work.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window): retiring
   the sync-v1 fallback.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
+  human-only parts of this to-do (task 2, the counter reading of task 1, and
+  the real-provider Electron and container runs of task 4) moved there on
+  2026-11-10.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).
 - `../architecture/storage.md` (display tails, pipeline transcripts),

@@ -40,9 +40,9 @@ and with an interactive artifact.
 2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+/ stays accepted. Status: done (decided).
 3. **Menu keyboard navigation does not toggle**: choosing View › Keyboard Shortcuts… with Enter opens the dialog; only the chord toggles it. Status: done.
 4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: done (2026-10-31: [workflow run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295) passed five menu and five cleanup iterations on each platform, with native input and no retries).
-5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame and Wayland not run; the realm surface is obsolete since 6002 and 6003, 2026-11-07).
-6. **Packaged macOS native qualification**: the matrix below, including the Cyrillic input source, on a packaged macOS build. Status: open (needs a macOS host).
-7. **Packaged About panel on macOS and Windows**: the panel reads "Orkestrator AI" with the right version and icon. Moved from to-do 1150 (deleted 2026-11-06). Status: open (needs a packaged macOS build; no Windows build is configured).
+5. **Packaged Linux native qualification on X11**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build in an isolated X11 session. Status: open (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact and design frame not run; the realm surface is obsolete since 6002 and 6003, 2026-11-07). The Wayland rows moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
+
+Tasks 6 (packaged macOS native qualification, with a Cyrillic input source) and 7 (packaged About panel on macOS and Windows) moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 
 ### 1. Windows/Linux menu layout
 
@@ -174,61 +174,6 @@ Update 2026-10-31: run on a packaged build of `931e5541`; results and setup are 
     - Pros: a real desktop, Wayland, real input methods and the packaged About panel.
     - Cons: needs a person and a second machine; installs into that desktop.
 - **What counts as a pass?** Every Linux row recorded with OS and display server, packaged commit, keyboard layout, surface, the separate-press result and the resumed-typing result, as the 2026-10-27 evidence section requires. A row that cannot run on Xvfb (for example one that depends on Wayland focus) is recorded as not run, not as passed.
-
-### 6. Packaged macOS native qualification
-
-**Problem.** macOS menu key equivalents run in AppKit before Chromium; no packaged macOS build has been checked with native input, including a Cyrillic input source.
-
-**Context.** The 2026-10-27 follow-up ran on macOS, but `cua-driver` 0.34.0 had no daemon and the OS did not activate the window, so native-focus assertions were unavailable. This host is Linux. `mise run package:mac` builds and installs an unpacked app (`mise.toml:381-389`).
-
-**Investigation.** Not started. The routing it must confirm now consumes ⌘⇧/ in main's `before-input-event` (`apps/desktop/electron/keyboard-shortcuts-routing.ts`), using the shared matcher's typed `/` or `?` and non-ASCII `Slash`-position fallback, and the menu item keeps `registerAccelerator: false` with the macOS key equivalent as a fallback (`apps/desktop/electron/application-menu.ts:148-166`).
-
-**Decisions.**
-
-- **Who runs it?**
-  - **A person on a Mac with `mise run package:mac`, following the matrix by hand (recommended).**
-    - Pros: real AppKit key equivalents, real input sources (Cyrillic), real window activation; no automation permissions to grant.
-    - Cons: manual; needs someone with a Mac.
-  - **Extend the native menu workflow to `macos-latest`.**
-    - Pros: repeatable.
-    - Cons: synthetic input on a hosted macOS runner needs accessibility permission, and switching input sources there is not straightforward; it covers the fixture, not the packaged app.
-  - **An agent on a Mac with a working `cua-driver` daemon.**
-    - Pros: unattended once set up.
-    - Cons: failed to start on 2026-10-27; window activation was not granted.
-- **What counts as a pass?** The same record as task 5, with the macOS version and input source per row.
-
-### 7. Packaged About panel on macOS and Windows
-
-**Problem.** The fixture's About panel showed "About electron" with no
-version, because the app set no About panel options. It now sets them, and a
-packaged Linux build was checked on 2026-11-01; macOS and Windows have not been
-looked at.
-
-**Context.** Moved from to-do 1150 (deleted 2026-11-06).
-`app.setAboutPanelOptions(aboutPanelOptions(...))` is called in
-`apps/desktop/electron/main.ts`, built in `about-panel.ts` from the profile title
-or product name, the version and `<resources>/icon.png`, which packaging copies
-(`package.json`). `apps/desktop/tests/about-panel.test.ts` pins the options.
-
-**Investigation.** Steps:
-
-1. On a packaged macOS build (`mise run package:mac`), open the app menu's
-   About and check that it reads "Orkestrator AI", not "OrkestratorV2", with
-   the right version and icon. Do it during task 6's run.
-2. On a Windows Electron build, open Help › About and check the name, version
-   and icon. No Windows build is configured (`build.win` is unset), so this
-   waits for one.
-3. Record a screenshot of each.
-
-**Decisions.**
-
-- **Wait for Windows?**
-  - **Close the task on macOS alone and note Windows as unconfigured (recommended).**
-    - Pros: macOS is a shipped platform; Windows has no build to check.
-    - Cons: the Windows panel stays unseen.
-  - **Keep it open until a Windows build exists.**
-    - Pros: covers every platform the options name.
-    - Cons: may never close.
 
 ## Current state
 
@@ -460,11 +405,13 @@ View menu already show the new chord.
 
 Automated Electron checks use Chromium input, which exercises
 `before-input-event` but does not qualify the OS's native key-equivalent pass.
-Record these checks on packaged macOS and Linux builds. On Linux (X11), the
+Record these checks on a packaged Linux build (the packaged macOS run and
+the Wayland rows are in [7568](../manual-test/7568-manual-test-checklist.md)).
+The macOS-specific rows below stay as the matrix 7568 runs. On Linux (X11), the
 sidebar, terminal and Monaco rows, the Ctrl+K rows for those surfaces and the
 whole menu-bar row passed on 2026-10-31 (Current state). Still open on Linux:
 the composer, browser/service preview, interactive artifact and design frame
-surfaces, the preview-origin rows, and any Wayland run. macOS is open in full.
+surfaces and the preview-origin rows.
 The workspace-realm surface was dropped on 2026-11-07: 6002 and 6003 deleted
 realms, and another node's workspace is now part of the window's own renderer
 (see Assumptions and decisions).
@@ -477,11 +424,6 @@ realms, and another node's workspace is now part of the window's own renderer
   dialog and refocuses search.
 - Dismiss a preview-originated dialog with Escape, the chord and an outside
   pointer click; typing resumes in that preview. Hidden or disposed previews never regain focus.
-- With a Cyrillic input source on macOS, ⌘⇧ and the physical `Slash` key
-  open the dialog when it reports a non-ASCII character. On layouts that type
-  ASCII, the typed `/` or `?` wins even on another physical key; a different
-  ASCII character on `Slash` must not open the dialog. Record the input source,
-  physical key and typed character for each case.
 - With Monaco focused, ⌘⇧K on macOS / Ctrl+Shift+K on Linux deletes the
   current line without opening the shortcuts dialog, and typing stays in the editor.
 - Linux only, in the in-window menu bar: View › Keyboard Shortcuts… shows
@@ -491,7 +433,7 @@ realms, and another node's workspace is now part of the window's own renderer
   no Hide, Hide Others, Show All or Zoom item. File › Close Tab has no key, and
   Super+H does nothing in Orkestrator. File › Quit (Ctrl+Q) quits, and Help ›
   About opens the about panel, which shows the app name, version and icon from
-  `about-panel.ts` (task 7).
+  `about-panel.ts`.
 - ⌘K with focus in the sidebar, composer, Monaco, an interactive artifact and
   a design frame opens the window's search, which takes typing. Ctrl+K does the same on Linux. On macOS, Ctrl+K stays with a focused
   text field (composer, Monaco, a design frame's input) and with an
@@ -731,6 +673,7 @@ isolated X11 session" below; it still holds for macOS.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 6 and 7, the Wayland rows of task 5) moved there on 2026-11-10.
 - [Keyboard shortcuts](../../architecture/keyboard-shortcuts.md) (living doc).
 - [1295](../../tests/flaky-tests/aggregate-validation-runs/1295-keyboard-shortcuts-windows-linux-validation.md)
   (the branch's aggregate validation run).

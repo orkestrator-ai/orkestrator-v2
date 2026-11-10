@@ -7,7 +7,6 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`, plus the shared terminal stre
 ### Tasks
 
 1. **A bearer client in a real browser**: see one terminal stream carry several terminals from a real bearer or cross-origin client, with `/invoke` still answering promptly. From report 0120, task 1 ("Share one filtered stream on the fetch path"), whose code is done. Status: open.
-2. **Which real routes still use HTTP/1.1**: find out which real clients reach the gateway over HTTP/1.1 on this path. From report 0120, "Needs verification". Status: open.
 
 ### 1. A bearer client in a real browser
 
@@ -27,31 +26,14 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`, plus the shared terminal stre
     - Pros: repeatable once written.
     - Cons: injecting the token bypasses the real connection flow, and the spec must keep the token out of traces and artifacts.
 
-### 2. Which real routes still use HTTP/1.1
-
-**Problem.** Report 0120 noted that Tailscale Serve and hosted routes may negotiate HTTP/2, which removes the six-connection limit but not the gzip slot use. It was never observed which real clients use HTTP/1.1.
-
-**Context.** The fix does not depend on the answer: one stream per client helps on both protocols, on HTTP/2 by freeing gzip slots. The answer matters for 0052's remote-route measurements and for judging how often the old behaviour hurt.
-
-**Investigation.** Boot metrics already report `nextHopProtocol` for the page's navigation (`sendBootMetrics` in `web-gateway.ts`, `/client-metrics`), which names the protocol a client used. No real route's metrics were read for this report.
-
-**Decisions.**
-
-- **How to find out?**
-  - **Read `nextHopProtocol` from the boot metrics of a real Tailscale Serve client and a hosted client, alongside 0052's remote-route matrix (recommended).**
-    - Pros: no code; the same run 0052 already owes.
-    - Cons: waits on 0052's Tailscale run.
-  - **Add the protocol to the gateway's own request metrics.**
-    - Pros: every route reports it continuously.
-    - Cons: a new metric for a question the fix no longer depends on.
-
 ## Current state
 
-Every web client shares one terminal stream; the bearer and cross-origin paths read it with `fetch`. Unit tests cover the behaviour; real-browser evidence and the HTTP/1.1 question are open here.
+Every web client shares one terminal stream; the bearer and cross-origin paths read it with `fetch`. Unit tests cover the behaviour; real-browser evidence is open here. Which real routes (Tailscale Serve, hosted) still negotiate HTTP/1.1 is on the manual-test checklist (7568: 5380 task 2); the fix does not depend on the answer.
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 4 (GW-3)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, `nextHopProtocol` from a real Tailscale Serve client and a hosted client) moved there on 2026-11-10.
+- to-do 1202 efficiency follow-ups, task 4 (retired 2026-11-10) (GW-3)
 - [0052 remote client bandwidth](0052-remote-client-bandwidth.md)
 - Efficiency report, A (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), GW-3
 - [Remote gateway, event stream reconnects](../../architecture/remote-gateway.md#event-stream-reconnects)

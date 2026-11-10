@@ -11,10 +11,10 @@ Checked against `main` at `930189337` (2026-10-26).
 ### Tasks
 
 1. **Signals and their diagnostics (Code 1–4)**: Linux Engine exec cost, Claude signal health, the container worktree signal and the revert fetch through the policy. Status: done.
-2. **Linux Engine real stack: terminal Claude spec**: run `container-claude-terminal-signal.spec.ts` on a Linux Engine host. Status: open (depends on [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1). Run on beelink on 2026-11-06 with a fake Messages API: both turns met both budgets on the fallback poll, but no ring reached the backend because the host firewall drops the profile's agent tools port.
-3. **Linux Engine real stack: profile sample**: run `container-signal-profile-sample.ts` with and without `--demote` on the same profile. Status: open (depends on [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1). Both runs recorded on 2026-11-06; for the same reason both measure the fallback, not a confirmed signal.
-4. **Auto-mode offer after a restart**: whether Claude Code's "make auto mode your default?" offer comes back after a container restart and breaks the Claude CLI tab or the spec. Status: done (2026-11-06): it comes back on every container start unless the staged host config carries the answer. The spec already answers it; the image fix is [7081](7081-container-claude-cli-tab-leftovers.md) task 2.
-5. **Retire the file**: what happens to it once tasks 2 and 3 have their evidence. Status: open (depends on 2 and 3).
+2. **Linux Engine real stack: terminal Claude spec**: run `container-claude-terminal-signal.spec.ts` on a Linux Engine host. Status: blocked (waits on 7568: [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1, the beelink firewall rule). Run on beelink on 2026-11-06 with a fake Messages API: both turns met both budgets on the fallback poll, but no ring reached the backend because the host firewall drops the profile's agent tools port.
+3. **Linux Engine real stack: profile sample**: run `container-signal-profile-sample.ts` with and without `--demote` on the same profile. Status: blocked (waits on 7568: [7080](7080-linux-host-firewall-blocks-profile-signals.md) task 1, the beelink firewall rule). Both runs recorded on 2026-11-06; for the same reason both measure the fallback, not a confirmed signal.
+4. **Auto-mode offer after a restart**: whether Claude Code's "make auto mode your default?" offer comes back after a container restart and breaks the Claude CLI tab or the spec. Status: done (2026-11-06): it comes back on every container start unless the staged host config carries the answer. The spec already answers it; the image fix was to-do 7081 task 2 (retired 2026-11-10; see [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
+5. **Retire the file**: what happens to it once tasks 2 and 3 have their evidence. Status: blocked (depends on 2 and 3).
 
 ### 1. Signals and their diagnostics
 
@@ -38,7 +38,7 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Investigation (2026-10-27).** The spec exists (`e2e/agent-testing/container-claude-terminal-signal.spec.ts`) and `docker:build:dev` exists (`mise.toml:371`). The obvious Linux host, omarchy-hp (this machine), is not ready:
 - Its root filesystem has 6.2 GB free (98% used), and its newest signal-carrying image is `orkestrator-review-rootless:d03790`, not a `dev-` image of HEAD. A dev image is about 5.6 GB.
-- Its rootful daemon again holds 29 leaked probe networks (see [0241](0241-leaked-reach-probe-networks.md)), which uses up the default address pools, so new environment networks fail.
+- Its rootful daemon again holds 29 leaked probe networks (see to-do 0241, retired 2026-11-10, and [disk usage](../../development/disk-usage.md#what-you-clean-yourself)), which uses up the default address pools, so new environment networks fail.
 
 **Decisions.**
 
@@ -84,7 +84,7 @@ Checked against `main` at `930189337` (2026-10-26).
 
 **Context.** This is recorded as a con of the "Consent and updater fixed in the image" decision, not as an item.
 
-**Investigation (2026-11-06).** Checked with the fake-API harness on a credential-free container: answering "No, keep bypass permissions" makes Claude Code 2.1.314 write `hasSeenAutoDefaultNudge` and `hasResetAutoModeOptInForDefaultOffer` to `~/.claude.json`. After `stop_environment` and `start_environment` the entrypoint had rebuilt the file without them, and the offer was back. The spec's handling of the offer is therefore needed on every run, and users see the dialog in every Claude CLI tab after a start unless their staged host config already carries `hasSeenAutoDefaultNudge`. The fix is [7081](7081-container-claude-cli-tab-leftovers.md) task 2.
+**Investigation (2026-11-06).** Checked with the fake-API harness on a credential-free container: answering "No, keep bypass permissions" makes Claude Code 2.1.314 write `hasSeenAutoDefaultNudge` and `hasResetAutoModeOptInForDefaultOffer` to `~/.claude.json`. After `stop_environment` and `start_environment` the entrypoint had rebuilt the file without them, and the offer was back. The spec's handling of the offer is therefore needed on every run, and users see the dialog in every Claude CLI tab after a start unless their staged host config already carries `hasSeenAutoDefaultNudge`. The fix was to-do 7081 task 2 (retired 2026-11-10; see [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 
 **Investigation (2026-10-27).** The entrypoint writes `skipDangerousModePermissionPrompt` but nothing that records the auto-mode answer. The answer lives in the CLI's own state under `~/.claude`, so whether it survives a restart depends on whether a rebuild or restart keeps that state: provider state is volume-backed on `volume-v1` storage.
 
@@ -279,7 +279,7 @@ started headless with `--fixture --fixture-environments local,container
 `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. The fixture container is
 restricted, behind its egress gateway, on `172.16.240.0/29`: the daemon's
 automatic pools were exhausted by other owners' probe networks
-([3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)), so
+(to-do 3320, retired 2026-11-10), so
 the profile ran with the isolated runner's `docker-qualification-bin` shim
 first on `PATH`.
 
@@ -602,7 +602,7 @@ explicit home in 0048 task 19. No qualification is claimed by this pointer repai
   Code. The fake holds each reply for 3 s, because an instant turn fits
   between two 1 s polls and its `working` edge is never read.
 - **Pros:** free, repeatable on any host, and it found task 4's answer and
-  two defects ([7081](7081-container-claude-cli-tab-leftovers.md)).
+  two defects (to-do 7081, retired 2026-11-10; see [Terminal close](../../architecture/container-lifecycle.md#terminal-close)).
   **Cons:** a Claude Code release that changes its API use can break the
   fixture; the spec then fails, it does not pass.
 
@@ -624,7 +624,7 @@ explicit home in 0048 task 19. No qualification is claimed by this pointer repai
 ### Defects found that are not specific to Linux (2026-11-06)
 
 - **Options.** (a) Fix them here. (b) Record them in a new to-do.
-- **Chosen:** (b), [7081](7081-container-claude-cli-tab-leftovers.md):
+- **Chosen:** (b), to-do 7081 (retired 2026-11-10):
   closing a container terminal leaves its processes running in the
   container, and the entrypoint drops the auto-mode answer on every start.
 - **Why.** This work was limited to fixing Linux-only defects; both reproduce
@@ -723,9 +723,11 @@ None; see "Open questions answered" above.
 
 - [7080-linux-host-firewall-blocks-profile-signals.md](7080-linux-host-firewall-blocks-profile-signals.md)
   (the Linux Engine run left open by the host firewall) and
-  [7081-container-claude-cli-tab-leftovers.md](7081-container-claude-cli-tab-leftovers.md)
+  to-do 7081 (retired 2026-11-10; see
+  [Terminal close](../../architecture/container-lifecycle.md#terminal-close))
   (found during the 2026-11-06 run).
-- [0199-idle-observation-spec-sidebar-probe.md](../transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md)
+- to-do 0199 (retired 2026-11-10; its sidebar `data-state` rule is in
+  [agent-testing.md](../../development/agent-testing.md#manual-browser-qa))
   and `0200-dev-test-reused-profile-bind-mount.md` (deleted 2026-11-06;
   completed fix retained in git history)
   (found during the 2026-10-26 qualification).

@@ -11,7 +11,7 @@
 - **Assessment:** a single write's event did not arrive within minutes, so raising the deadline does not help. On the same host and volume, `worktree-watcher-real.test.ts` passes because it keeps writing distinct files until one is reported, and a separate probe saw the first event take 3 to 35 s. Lost or very late delivery from a saturated `fseventsd` fits all of this, but what keeps it busy was not established, and no restart of it was tried. No watcher delivery fix was made, and no deadline, assertion or skip was loosened.
 - **Root cause:** the host's `fseventsd` loses and delays events for every program, and the file waited on one write's event. See the section below.
 - **Fix:** `6c454e5c5`. On macOS each detection repeats its change until a published scan shows it; Linux keeps one change, one event and the 15 s deadline.
-- **Follow-up:** whether one write's event arrives promptly on a healthy macOS host; [5060](../../../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 3.
+- **Follow-up:** whether one write's event arrives promptly on a healthy macOS host; to-do 5060 (retired 2026-11-10), task 3, whose result is in [git-scan-caches.md](../../../architecture/git-scan-caches.md#measured) (one write reaches the watcher 10–35 ms after it is made on a healthy `fseventsd`).
 
 ## 2026-11-05 address-findings observation
 

@@ -9,11 +9,11 @@ Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
 
 1. **Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance**: built. Status: done (2026-10-31).
 2. **Live check across two real machines**: `list_nodes` on a real command node with a real leaf, including a leaf on an older release. Status: open.
-3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: Linux done (2026-11-01); Windows open, as it cannot be run here.
+3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: done for Linux (2026-11-01); the Windows check moved to the manual-test checklist on 2026-11-10.
 4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: done (2026-11-01).
 5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: open (deferred).
 6. **Retire the older-node path**: remove it when the support window allows. Status: open.
-7. **`list_nodes` reports each real node's build commit**: release builds report the commit they were built from, and an older or development node reports `buildCommit: null`. Moved from to-do 4840 (deleted 2026-11-06). Status: open (needs a release built from `533acf703` or later).
+7. **`list_nodes` reports each real node's build commit**: an older or development node reports `buildCommit: null` and still lists normally, checked on task 2's two `dev:test` profiles (one from a commit before `buildCommit` existed). Moved from to-do 4840 (deleted 2026-11-06). Status: open. The check that real release builds report their own commit, on two real machines, moved to the manual-test checklist on 2026-11-10.
 
 ### 1. Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance
 
@@ -133,16 +133,12 @@ No real release has carried it yet.
 [`releasing.md`](../../development/releasing.md). Task 2's two-machine run can
 take this check at the same time.
 
-**Investigation.** Steps:
+**Investigation.** Steps (the release-build half, on two real machines, is on
+the manual-test checklist):
 
-1. After the first desktop release and CLI publish built from a commit at or
-   after `533acf703`, install them on a command node and a second real machine
-   linked as a leaf.
-2. Ask the main coordinator to call `list_nodes`. Check that each node's
-   `buildCommit` is the commit its release was built from, and that `version`
-   is still shown.
-3. Link a leaf on an older release and one running a development build. Check
-   that both report `buildCommit: null` and still list normally.
+1. On task 2's two `dev:test` profiles, link as leaves one built from a commit
+   before `buildCommit` existed and one running the current development build.
+   Check that both report `buildCommit: null` and still list normally.
 
 **Decisions.**
 
@@ -156,7 +152,7 @@ take this check at the same time.
 
 ## Current state
 
-`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink); Windows and a real node link are unproved (tasks 2 and 3). Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`).
+`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink); a real node link is unproved (task 2), and the Windows check is on the manual-test checklist. Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`).
 
 ## Constraints and rationale
 
@@ -206,3 +202,4 @@ Never shown. An offline or timed-out node has `status: "unavailable"` and no fig
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md): recurring-work qualification.
 - [1000](1000-coordinator-self-timers-and-account-switching.md): the routed read tools this follows.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows part of task 3, the user part of task 7: release builds on two real machines) moved there on 2026-11-10.

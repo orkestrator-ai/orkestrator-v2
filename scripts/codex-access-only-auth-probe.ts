@@ -1,7 +1,7 @@
 /**
  * Offline check: what a pinned Codex does with the access-only `auth.json` a
- * coordinator home receives (docs/todo/agent-engines/0722-per-machine-agent-accounts.md,
- * "Needs verification"). Rerun it after a Codex bump.
+ * coordinator home receives (docs/architecture/agent-accounts.md,
+ * "Coordinator conversations"). Rerun it after a Codex bump.
  *
  * The login is synthetic: unsigned JWTs and a made-up refresh token, reduced
  * by the product's own `restrictCodexAuthSnapshot` (refresh token blanked,

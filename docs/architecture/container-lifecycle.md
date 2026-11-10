@@ -731,6 +731,16 @@ Staged per provider (`portableInputSpec`):
 | Shared skills (`staged-inputs=4`) | `/agents-skills` | `~/.agents/skills`, one unit per top-level entry with the credential guard, copied to `~/.agents/skills`. Staged once, as the `shared-skills` summary entry, when Codex, Cursor, Grok, OpenCode or Pi is staged (`SHARED_SKILL_READERS`; Claude does not read it). It holds no login, so it has no revoke action |
 | Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
 
+The entrypoint rebuilds `~/.claude.json` on every boot, from the staged host
+file through `CLAUDE_JSON_ALLOWED_KEYS` or from a minimal fallback, so any
+answer Claude Code wrote there in the container is gone at the next start.
+Every path therefore sets `bypassPermissionsModeAccepted`,
+`hasCompletedOnboarding` and `hasSeenAutoDefaultNudge` itself; without the
+last, terminal Claude asks "Make auto mode your default permission mode?" in
+every Claude CLI tab after each start (`tests/unit/container-claude-settings.test.ts`
+pins it). The key is Claude Code's internal state, so a release that renames it
+brings the offer back.
+
 User-authored extension directories (Claude's `commands`, `skills`,
 `agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
 `skills`, `prompts`, `extensions`, `themes`) are staged one top-level entry at
@@ -996,7 +1006,7 @@ full copy's, apart from the removal below.
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
 relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
 applies. Timings are in
-[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
@@ -1940,7 +1950,7 @@ need it once cloned.
   remote, it dropped the history the mirror held (31,276 objects missing on
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
-  [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
+  the measurements (to-do 1202, retired 2026-11-10).
 - **`--reference-if-able`, checked again afterwards.** A mirror removed between
   the check and the clone does not fail the clone: Git clones from the remote
   alone, with the full history. The script then checks the mirror again and, if

@@ -3,12 +3,12 @@
 ## Task analysis
 
 Analysed 2026-11-10 against `main` at `04639b12b`. Found while measuring
-[5060](5060-worktree-watch-leftovers.md) task 3 on a healthy `fseventsd`.
+to-do 5060 (retired 2026-11-10) task 3 on a healthy `fseventsd`.
 
 ### Tasks
 
 1. **Decide how a watch owner learns that its events were lost by a stream rebuild**: choose between telling every other watch after a rebuild, one helper per worktree, and leaving it to the next event and the safety scan; then implement and test the choice. Status: open.
-2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: report upstream with the reproduction below. Status: open.
+2. **Ask Bun to rebuild its FSEvents stream from the last event it saw**: read Bun's macOS `fs.watch` source to confirm the rebuild starts from "now", and draft the upstream report with the reproduction below in this file. Status: open (approving and filing the report is in 7568: 7551 task 2).
 
 ### 1. Tell a watch when a rebuild may have lost its events
 
@@ -103,8 +103,9 @@ rebuild has not been read in Bun's source.
 - **Report upstream?**
   - **Yes, with the reproduction and a request for `sinceWhen` on rebuild (recommended).**
     - Pros: fixes it for every Bun program; no workaround to maintain here.
-    - Cons: an outward-facing action, so it needs the user's go-ahead; no
-      timeline, so task 1 is still wanted.
+    - Cons: an outward-facing action, so it needs the user's go-ahead (in the
+      manual-test checklist, 7568: 7551 task 2); no timeline, so task 1 is
+      still wanted.
   - **No.**
     - Pros: nothing to track outside this repository.
     - Cons: the loss stays for as long as Bun keeps one stream per process.
@@ -117,6 +118,7 @@ Never answer by restarting `fseventsd` on a shared host.
 
 ## Related
 
-- [5060 worktree watch leftovers](5060-worktree-watch-leftovers.md), task 3
+- 5060 worktree watch leftovers (retired 2026-11-10), task 3; its measurements are in [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out)
 - [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out)
 - [environment-deletion.md](../../architecture/environment-deletion.md#watches-and-the-event-loop)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: approving and filing the Bun upstream report) moved there on 2026-11-10.

@@ -9,8 +9,8 @@ Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against 
 1. **Self-timers on the existing scheduler**: `create_schedule` action type `remind_me`, delivered to the setting conversation, relative and absolute times in the user's zone, limits, restart persistence. Status: done.
 2. **List and switch provider accounts**: `list_provider_accounts` and `switch_provider_account` through the Settings switch path, with a user-approved request by default and a self-timer permission as the one exception. Status: done.
 3. **Usage-limit reader**: `get_usage_limits` across the project's environments without bridge or transcript reads. Status: done.
-4. **Live qualification of the scenario**: a real Claude and Codex coordinator sets a timer, is woken, finds a limited worker and switches, on an isolated `dev:test` profile with two logins. Status: open (depends on 1, 2 and 3; needs live providers).
-5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: done (2026-11-05; no live provider has sent either signal yet, see Needs verification).
+4. **Account-switch scenario in the live suite**: an `account-switch` scenario in `coordinator-live.ts` that seeds a usage-limit turn outcome and two fake account directories in the disposable profile and checks the coordinator sets a timer, is woken, lists, and files (or, with a granted timer, makes) a switch; tested over a scripted transport. Status: open (1, 2 and 3 are done). Its billed run on a real Claude and Codex coordinator moved to the manual-test checklist on 2026-11-10.
+5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: done (2026-11-05; no live provider has sent either signal yet; the real-provider check is on the manual-test checklist).
 6. **The user's zone when the coordinator's machine is not the user's**: absolute times use the backend host's zone. Status: done (2026-11-05).
 7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: done (2026-11-05; switches under the standing permission were already shown since 2026-11-04).
 8. **Resume limited workers after a switch**: the coordinator must prompt each limited tab itself. Status: done (2026-11-05, the recommended option: the coordinator resumes, guided by the tool results).
@@ -52,6 +52,9 @@ Analysed 2026-10-30 against `main` at `361dc0a6`; re-checked 2026-11-05 against 
 **Context.** The live coordinator suite (`apps/desktop/scripts/dev/coordinator-live.ts`) has scenarios `read-only`, `async`, `family`, `status`, `peer`.
 
 **Investigation.** A real run needs two signed-in logins of one provider in an isolated profile, and a worker that genuinely hits a usage limit, which cannot be produced on demand without spending a plan. The parts that can be qualified cheaply are: the model choosing `remind_me` with the right body for the scenario prompt, the timer waking it, `get_usage_limits` on a seeded failed turn outcome, and the approval request appearing in the real dialog.
+
+This task builds the scenario; its billed run on real Claude and Codex
+coordinators is on the manual-test checklist.
 
 **Decisions.**
 
@@ -268,7 +271,8 @@ coordinator exactly which tabs to resume.
 
 ## Outstanding work
 
-Task 4 above.
+Task 4 above: the `account-switch` scenario (its billed run is on the
+manual-test checklist).
 
 ## Constraints and rationale
 
@@ -277,13 +281,12 @@ Task 4 above.
 
 ## Needs verification
 
-- Task 4 in full. Until then nothing shows a real model choosing `remind_me`, or a real approval dialog for `switch-agent-account` on screen.
-- Task 5's signals have been seen in fixtures only: no real Codex turn has been observed reaching `turn/completed` with `codexErrorInfo: "usageLimitExceeded"`, nor a real Claude refusal preceded by `rate_limit_event` with `status: "rejected"`. Task 4's run, or the `usage-limit.text-classified` counter staying quiet on a machine that hits limits, would confirm them.
 - Task 6 has no browser check: the renderer change is a field on two requests, covered by unit tests.
 
 ## Related
 
-- [0722-per-machine-agent-accounts.md](../agent-engines/0722-per-machine-agent-accounts.md) decision (c), why a switch is the user's act.
+- [agent-accounts.md](../../architecture/agent-accounts.md#machines) ("Preferred login"; to-do 0722's decision (c), retired 2026-11-10), why a switch is the user's act.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md).
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md), where task 4's scenario would live.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 4: its billed live run; the real-provider check of task 5's usage-limit signals) moved there on 2026-11-10.
 - `docs/architecture/scheduled-jobs.md` (Self-timers), `docs/architecture/agent-accounts.md` (Coordinator switching), `docs/architecture/coordinator.md`.

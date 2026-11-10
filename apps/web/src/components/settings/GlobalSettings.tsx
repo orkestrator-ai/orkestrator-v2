@@ -162,6 +162,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     experimentalScheduling: global.experimentalScheduling ?? false,
     localWindowGatewayTransport: global.localWindowGatewayTransport ?? false,
     experimentalGraphs: global.experimentalGraphs ?? false,
+    experimentalSelfImprovement: global.experimentalSelfImprovement ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     logDetail: resolveLogDetail(global),
@@ -254,6 +255,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.experimentalScheduling ?? false,
     global.localWindowGatewayTransport ?? false,
     global.experimentalGraphs ?? false,
+    global.experimentalSelfImprovement ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     resolveLogDetail(global),
@@ -377,6 +379,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.localWindowGatewayTransport ?? false,
   );
   const [experimentalGraphs, setExperimentalGraphs] = useState(global.experimentalGraphs ?? false);
+  const [experimentalSelfImprovement, setExperimentalSelfImprovement] = useState(
+    global.experimentalSelfImprovement ?? false,
+  );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -498,6 +503,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setExperimentalScheduling(global.experimentalScheduling ?? false);
     setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? false);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
+    setExperimentalSelfImprovement(global.experimentalSelfImprovement ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setLogDetail(resolveLogDetail(global));
@@ -686,6 +692,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
+      experimentalSelfImprovement,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -730,6 +737,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalScheduling,
       localWindowGatewayTransport,
       experimentalGraphs,
+      experimentalSelfImprovement,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -1157,6 +1165,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
+    experimentalSelfImprovement,
+    setExperimentalSelfImprovement,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

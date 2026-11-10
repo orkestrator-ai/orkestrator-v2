@@ -62,6 +62,7 @@ export interface CoreFieldsSnapshot {
   experimentalScheduling: boolean;
   localWindowGatewayTransport: boolean;
   experimentalGraphs: boolean;
+  experimentalSelfImprovement: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
   logDetail: LogDetail;
@@ -102,6 +103,7 @@ const STORED_AS_IS = [
   "experimentalScheduling",
   "localWindowGatewayTransport",
   "experimentalGraphs",
+  "experimentalSelfImprovement",
   "debugLogging",
   "debugLogRetentionDays",
   "logDetail",

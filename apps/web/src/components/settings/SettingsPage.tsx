@@ -30,6 +30,7 @@ import {
   ChartArea,
   GitBranch,
   Workflow,
+  TrendingUp,
 } from "lucide-react";
 import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { DockerSettings } from "@/components/docker";
@@ -44,6 +45,7 @@ import { MessagingSettings } from "./MessagingSettings";
 import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import { SchedulesSettings } from "./SchedulesSettings";
+import { SelfImprovementSettings } from "./SelfImprovementSettings";
 import { PermissionsSettings } from "./PermissionsSettings";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import {
@@ -107,6 +109,11 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "mcp", label: "Control MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
   { id: "schedules", label: "Schedules", icon: <CalendarClock className="h-4 w-4" /> },
+  {
+    id: "self-improvement",
+    label: "Self-improvement",
+    icon: <TrendingUp className="h-4 w-4" />,
+  },
   { id: "permissions", label: "Permissions", icon: <ShieldCheck className="h-4 w-4" /> },
   { id: "sounds", label: "Sounds", icon: <Volume2 className="h-4 w-4" /> },
   { id: "docker", label: "Docker", icon: <DockerIcon className="h-4 w-4" /> },
@@ -223,10 +230,18 @@ export function SettingsPage({
   const schedulingEnabled = useConfigStore(
     (state) => state.config.global.experimentalScheduling === true,
   );
-  // Scheduling is experimental: its section exists only while it is on.
+  const selfImprovementEnabled = useConfigStore(
+    (state) => state.config.global.experimentalSelfImprovement === true,
+  );
+  // Scheduling and self-improvement are experimental: each section exists only while it is on.
   const menuItems = useMemo(
-    () => (schedulingEnabled ? MENU_ITEMS : MENU_ITEMS.filter((item) => item.id !== "schedules")),
-    [schedulingEnabled],
+    () =>
+      MENU_ITEMS.filter(
+        (item) =>
+          (schedulingEnabled || item.id !== "schedules") &&
+          (selfImprovementEnabled || item.id !== "self-improvement"),
+      ),
+    [schedulingEnabled, selfImprovementEnabled],
   );
   const isLoading = useConfigStore((state) => state.isLoading);
   const setLoading = useConfigStore((state) => state.setLoading);
@@ -300,6 +315,8 @@ export function SettingsPage({
                 <MessagingSettings />
               ) : activeSection === "schedules" && schedulingEnabled ? (
                 <SchedulesSettings />
+              ) : activeSection === "self-improvement" && selfImprovementEnabled ? (
+                <SelfImprovementSettings />
               ) : activeSection === "permissions" ? (
                 <PermissionsSettings />
               ) : activeSection === "docker" ? (

@@ -1,6 +1,6 @@
 # Virtuoso cancellation: fake-clock timer count after the deadline window
 
-- **ID:** 9929
+- **ID:** 9932
 - **Status:** resolved
 - **Date observed:** 2026-11-10
 - **File:** `apps/web/src/lib/transcript-scroll/virtuoso-cancellation.test.tsx:95`

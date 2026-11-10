@@ -42,6 +42,7 @@ import type { McpManagementRolloutSettings } from "../../../mcp-management.js";
 import { MULTI_REVIEW_ENGINES } from "../../../multi-review.js";
 import { OPENCODE_PROTOCOLS } from "../../../opencode-protocol.js";
 import type { NotificationSoundSettings } from "../../../notification-sounds.js";
+import type { SelfImprovementSettings } from "../../../self-improvement.js";
 import {
   PERMISSION_RULE_KINDS,
   PERMISSION_RULE_SCOPES,
@@ -156,6 +157,10 @@ export const globalSettingsFields = {
   localWindowGatewayTransport: optionalBoolean,
   /** Experimental gate for graphs in the web UI. */
   experimentalGraphs: optionalBoolean,
+  /** Experimental gate for self-improvement (`self-improvement.ts`). Off when absent. */
+  experimentalSelfImprovement: optionalBoolean,
+  /** Self-improvement settings; see `resolveSelfImprovementSettings`. */
+  selfImprovement: Schema.optional(ownedObject<SelfImprovementSettings>()),
   /** "Save logs to disk". */
   debugLogging: optionalBoolean,
   debugLogRetentionDays: optionalNumber,

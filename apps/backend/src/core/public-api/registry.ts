@@ -18,6 +18,7 @@ import { PULL_REQUEST_HANDLERS } from "./actions-pull-requests.js";
 import { REVIEW_HANDLERS } from "./actions-reviews.js";
 import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
 import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
+import { SELF_IMPROVEMENT_HANDLERS } from "./actions-self-improvement.js";
 import { SESSION_COMMAND_HANDLERS } from "./actions-session-commands.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
 import { SESSION_GOAL_HANDLERS } from "./actions-session-goals.js";
@@ -64,6 +65,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,
     ...DIAGNOSTICS_HANDLERS,
+    ...SELF_IMPROVEMENT_HANDLERS,
   ];
   handlers.push(
     ...createRunReadHandlers((action) => handlers.find((handler) => handler.action === action)),

@@ -22,10 +22,30 @@ test("Home placeholder exposes its panel, loading, error and no-checkout states"
   expect(screen.getByRole("alert").textContent).toContain("offline");
   fireEvent.click(screen.getByRole("button", { name: "Retry opening Home" }));
   expect(retry).toHaveBeenCalledTimes(1);
-  appCommandStore(projectStore).setState({ projects: [] });
+  appCommandStore(projectStore).setState({
+    projects: [{ id: "project", localPath: null } as unknown as Project],
+  });
   view.rerender(<ProjectWorkspace projectId="project" />);
   expect(screen.getByRole("tabpanel").textContent).toContain("Set a local checkout");
   expect(screen.queryByText("Opening project home…") === null).toBe(true);
+
+  // A project id this node does not have (ids are per node) is not a missing checkout.
+  appCommandStore(projectStore).setState({ projects: [], hasLoaded: false, isLoading: true });
+  view.rerender(<ProjectWorkspace projectId="project" />);
+  expect(screen.getByRole("tabpanel").textContent).toContain("Loading project…");
+  appCommandStore(projectStore).setState({ hasLoaded: true, isLoading: false });
+  view.rerender(<ProjectWorkspace projectId="project" />);
+  expect(screen.getByRole("tabpanel").textContent).toContain("no project with this id");
+  expect(screen.getByRole("tabpanel").textContent).not.toContain("Set a local checkout");
+
+  // A list that could not be read is not an absence: the read error is shown.
+  appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false, error: "offline" });
+  view.rerender(<ProjectWorkspace projectId="project" />);
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Could not load this machine's projects: offline",
+  );
+  expect(screen.getByRole("tabpanel").textContent).not.toContain("no project with this id");
+  appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false, error: null });
 });
 
 test("Notes tab shows the project notes editor in its own panel", () => {

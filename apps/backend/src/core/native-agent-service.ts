@@ -1032,9 +1032,11 @@ export class NativeAgentService {
       ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
       : {};
     const research = this.options.openCodeCoordinatorResearch;
+    const listener = this.options.openCodeListenerRecheck;
     const optional = {
       ...signInGuidance,
       ...(research ? { openCodeCoordinatorResearch: research } : {}),
+      ...(listener ? { openCodeListenerRecheck: () => listener(environmentId) } : {}),
     };
     return typeof this.storage.getDataDir === "function"
       ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...optional }

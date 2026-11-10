@@ -70,6 +70,14 @@ const REQUIRED_GLOBAL_CONFIG = {
   terminalScrollback: 1000,
 };
 
+/** The redacted global settings, as `get_config` answers them. */
+async function readGlobalConfig(
+  commands: ReturnType<typeof createCommandRegistry>,
+  context: CommandContext,
+): Promise<unknown> {
+  return ((await commands.get("get_config")!({}, context)) as { global: unknown }).global;
+}
+
 describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -326,7 +334,7 @@ describe("storage-backed command delegation", () => {
       },
       repositories: {},
     });
-    await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
+    await expect(readGlobalConfig(commands, context)).resolves.toEqual({
       ...REQUIRED_GLOBAL_CONFIG,
       allowedDomains: [],
       githubTokenConfigured: true,
@@ -337,42 +345,6 @@ describe("storage-backed command delegation", () => {
       openCodeZenApiKeyConfigured: true,
       openCodeZenApiKeySource: "config",
     });
-
-    await expect(
-      commands.get("save_config")?.(
-        {
-          // The renderer writes the whole record back.
-          config: {
-            version: "1.0.0",
-            global: {
-              ...REQUIRED_GLOBAL_CONFIG,
-              allowedDomains: ["api.example.com"],
-              githubToken: "renderer_attempted_secret",
-              githubTokenConfigured: false,
-              anthropicApiKey: "renderer_attempted_anthropic_secret",
-              anthropicApiKeyConfigured: false,
-              anthropicApiKeySource: "none",
-              cursorApiKey: "renderer_attempted_cursor_secret",
-              cursorApiKeyConfigured: false,
-              cursorApiKeySource: "none",
-            },
-            repositories: {},
-          },
-        },
-        context,
-      ),
-    ).resolves.toBeUndefined();
-    expect(storage.saveConfig).toHaveBeenLastCalledWith(
-      {
-        version: "1.0.0",
-        global: {
-          ...REQUIRED_GLOBAL_CONFIG,
-          allowedDomains: ["api.example.com"],
-        },
-        repositories: {},
-      },
-      { preserveCredentials: true },
-    );
 
     await expect(
       commands.get("update_global_config")?.(
@@ -670,11 +642,6 @@ describe("storage-backed command delegation", () => {
       context,
     );
     expect(storage.reorderSessions).toHaveBeenCalledWith("env-1", ["session-2", "session-1"]);
-    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toEqual([
-      "orphan-1",
-      "orphan-2",
-      "orphan-3",
-    ]);
     await commands.get("delete_session")?.({ sessionId: "session-1" }, context);
     expect(storage.removeSession).toHaveBeenCalledWith("session-1");
     await commands.get("delete_sessions_by_environment")?.({ environmentId: "env-1" }, context);
@@ -932,7 +899,7 @@ exit 1
 `,
         async (logPath) => {
           await commands.get("start_environment")?.({ environmentId: environment.id }, context);
-          await commands.get("pr_monitor_refresh")?.({ environmentId: environment.id }, context);
+          await context.runtime.prMonitor.requestRefresh(environment.id, context);
           await waitForCondition(() => {
             if (!existsSync(logPath)) return false;
             const log = readFileSync(logPath, "utf8");
@@ -1065,20 +1032,8 @@ exit 1
         },
         context,
       ),
-      await commands.get("set_environment_pending_agent_launch")?.(
-        { environmentId: environment.id, pending: true },
-        context,
-      ),
       await commands.get("acknowledge_startup_agent_session")?.(
         { environmentId: environment.id },
-        context,
-      ),
-      await commands.get("set_environment_initial_prompt")?.(
-        {
-          environmentId: environment.id,
-          initialPrompt: "updated",
-          initialPromptAttachments: environment.initialPromptAttachments,
-        },
         context,
       ),
       await commands.get("update_environment_allowed_domains")?.(
@@ -1579,7 +1534,7 @@ exit 0
         },
       );
 
-      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+      await expect(readGlobalConfig(commands, context)).resolves.toMatchObject({
         cursorApiKeyConfigured: false,
         cursorApiKeySource: "none",
       });
@@ -1701,18 +1656,18 @@ exit 0
 
       // Nothing is stored, so no edit in the settings pane can revoke this key.
       // The renderer has to be told, or the empty field implies no key is in play.
-      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+      await expect(readGlobalConfig(commands, context)).resolves.toMatchObject({
         cursorApiKeyConfigured: false,
         cursorApiKeySource: "host-env",
       });
 
       // A stored key takes precedence, and the source says so.
       global = { ...global, cursorApiKey: "cursor_configured_key" };
-      await expect(commands.get("get_global_config")?.({}, context)).resolves.toMatchObject({
+      await expect(readGlobalConfig(commands, context)).resolves.toMatchObject({
         cursorApiKeyConfigured: true,
         cursorApiKeySource: "config",
       });
-      expect(JSON.stringify(await commands.get("get_global_config")?.({}, context))).not.toContain(
+      expect(JSON.stringify(await readGlobalConfig(commands, context))).not.toContain(
         "cursor_configured_key",
       );
     } finally {

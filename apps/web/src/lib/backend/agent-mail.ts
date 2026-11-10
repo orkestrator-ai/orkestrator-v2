@@ -8,7 +8,6 @@ import type {
   AgentMailMailboxBatchSnapshot,
   AgentMailInboxSnapshot,
   AgentMailMessage,
-  AgentMailMessageSummary,
   AgentMailSummarySnapshot,
   AgentMessagingSettings,
   MailboxDescriptor,
@@ -75,14 +74,6 @@ export function createAgentMailApi(client: BackendClient) {
     });
   }
 
-  function getAgentMailMessage(
-    environmentId: string,
-    tabId: string,
-    messageId: string,
-  ): Promise<AgentMailMessage> {
-    return mail().get_agent_mail_message({ environmentId, tabId, messageId });
-  }
-
   /** Every pair that has exchanged mail, or only one participant's. */
   function listAgentMailConversations(participant?: string): Promise<AgentMailConversationList> {
     return mail().list_agent_mail_conversations(participant ? { participant } : {});
@@ -114,29 +105,6 @@ export function createAgentMailApi(client: BackendClient) {
     replyToMessageId?: string;
   }): Promise<AgentMailMessage> {
     return mail().send_agent_mail(input);
-  }
-
-  function listAgentMailSent(address?: {
-    environmentId: string;
-    tabId: string;
-  }): Promise<AgentMailMessageSummary[]> {
-    return mail().list_agent_mail_sent(address ?? {});
-  }
-
-  function ackAgentMail(
-    environmentId: string,
-    tabId: string,
-    messageId: string,
-  ): Promise<AgentMailMessage> {
-    return mail().ack_agent_mail({ environmentId, tabId, messageId });
-  }
-
-  function markAgentMailSeen(
-    environmentId: string,
-    tabId: string,
-    messageId: string,
-  ): Promise<AgentMailMessage> {
-    return mail().mark_agent_mail_seen({ environmentId, tabId, messageId });
   }
 
   function updateAgentMailboxPolicy(input: {
@@ -178,10 +146,6 @@ export function createAgentMailApi(client: BackendClient) {
     return mail().discard_agent_mail_inject({ environmentId, tabId, messageId });
   }
 
-  function setAgentMessagingPaused(paused: boolean): Promise<{ paused: boolean }> {
-    return mail().set_agent_messaging_paused({ paused });
-  }
-
   /** Every agent tab and what it is doing, optionally for one project or environment. */
   function getAgentRegistry(filter: {
     projectId?: string;
@@ -196,19 +160,14 @@ export function createAgentMailApi(client: BackendClient) {
     getAgentMailMailboxes,
     getAgentMailInboxSnapshot,
     getAgentMailMailbox,
-    getAgentMailMessage,
     listAgentMailConversations,
     getAgentMailConversation,
     markAgentMailConversationSeen,
     sendAgentMail,
-    listAgentMailSent,
-    ackAgentMail,
-    markAgentMailSeen,
     updateAgentMailboxPolicy,
     retryAgentMailInject,
     deliverAgentMailNow,
     discardAgentMailInject,
-    setAgentMessagingPaused,
     getAgentRegistry,
   };
 }
@@ -222,18 +181,13 @@ export const {
   getAgentMailMailboxes,
   getAgentMailInboxSnapshot,
   getAgentMailMailbox,
-  getAgentMailMessage,
   listAgentMailConversations,
   getAgentMailConversation,
   markAgentMailConversationSeen,
   sendAgentMail,
-  listAgentMailSent,
-  ackAgentMail,
-  markAgentMailSeen,
   updateAgentMailboxPolicy,
   retryAgentMailInject,
   deliverAgentMailNow,
   discardAgentMailInject,
-  setAgentMessagingPaused,
   getAgentRegistry,
 } = createAgentMailApi(commandBackendClient);

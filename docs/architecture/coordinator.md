@@ -3598,8 +3598,7 @@ answer.
 
 ### Worker goals
 
-A coordinator can give a worker tab a goal, and is woken once when it stops
-(`plans/goals/403`). The tools sit on the same service as `/goal` and
+A coordinator can give a worker tab a goal, and is woken once when it stops. The tools sit on the same service as `/goal` and
 `session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
 Coordinator tools cannot configure shell checks; a person configures checks
 through the composer or public API. A coordinator goal ends as an unverified claim.
@@ -3652,8 +3651,7 @@ the coordinator would be woken between iterations. A person's `/goal` on a remot
 worker the coordinator delegated to has that problem today.
 
 A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
-[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
-it has passed is recorded in `plans/goals/403`.
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite).
 
 ## Saved graphs
 

@@ -10,10 +10,9 @@ import { createKanbanApi } from "@/lib/backend/kanban";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
-import {
-  isTerminalFeaturePlanningPhase,
-  type FeaturePlanningKind,
-  type FeaturePlanningRecord,
+import type {
+  FeaturePlanningKind,
+  FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -116,15 +115,6 @@ function staleFeaturePlanning(
   if (!incoming) return false;
   if (incoming.operationId !== current.operationId) return false;
   return incoming.backendRevision < current.backendRevision;
-}
-
-/** The planning exchange attached to a plan, if the backend is still running one. */
-export function activeFeaturePlanning(
-  feature: FeaturePlan | undefined,
-): FeaturePlanningRecord | undefined {
-  const record = feature?.planning;
-  if (!record || isTerminalFeaturePlanningPhase(record.phase)) return undefined;
-  return record;
 }
 
 /**

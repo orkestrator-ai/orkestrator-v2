@@ -30,7 +30,7 @@
  * `test-admission.ts`); overlapping suites slowed each other into timeouts.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
@@ -39,9 +39,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -126,7 +123,6 @@ export const TEST_MAX_OUTPUT_BYTES_ENV = "ORKESTRATOR_TEST_MAX_OUTPUT_BYTES";
 export const TEST_NO_PROGRESS_TIMEOUT_MS_ENV = "ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS";
 export const TEST_GROUP_TIMEOUT_MS_ENV = "ORKESTRATOR_TEST_GROUP_TIMEOUT_MS";
 export const TEST_ALLOW_CONCURRENT_ENV = "ORKESTRATOR_TEST_ALLOW_CONCURRENT";
-export const TEST_LEASE_DIRECTORY_ENV = "ORKESTRATOR_TEST_LEASE_DIRECTORY";
 export const TEST_AFFECTED_ENV = "ORKESTRATOR_TEST_AFFECTED";
 export const TEST_TIMINGS_DIRECTORY_ENV = "ORKESTRATOR_TEST_TIMINGS_DIR";
 export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
@@ -264,19 +260,10 @@ export const DEFAULT_TEST_GROUP_TIMEOUT_MS = 30 * 60 * 1_000;
 export const TEST_PROGRESS_HEARTBEAT_MS = 60 * 1_000;
 /** iOS builds and boots a simulator, which is far slower than any Bun group. */
 export const IOS_GROUP_TIMEOUT_MS = 60 * 60 * 1_000;
-/** Longest a group may hold an unreadable lease before we call it contended. */
-export const LEASE_HANDOVER_GRACE_MS = 30_000;
 export const TEST_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TEST_LOG_DIRECTORY_PREFIX = "orkestrator-test-run.";
 const TEST_LOG_SENTINEL = ".orkestrator-test-log";
-const TEST_LEASE_DIRECTORY_PREFIX = "orkestrator-test-suite.";
 const TEST_TIMINGS_DIRECTORY_PREFIX = "orkestrator-test-timings.";
-const TEST_LEASE_METADATA = "owner.json";
-
-export interface FullSuiteLease {
-  directory: string;
-  release: () => void;
-}
 
 function configuredPositiveInteger(
   environment: NodeJS.ProcessEnv,
@@ -313,92 +300,6 @@ export function createTestTimingsDirectory(repositoryRoot: string): string {
   );
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   return directory;
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/**
- * @deprecated Legacy compatibility helper, not used by the aggregate runner.
- * Prevents linked worktrees from starting full suites concurrently on one
- * host. The system-temp lock is keyed by Git's common directory, so all of a
- * repository's worktrees contend for the same lease.
- */
-export function acquireFullSuiteLease(
-  repositoryRoot: string,
-  environment: NodeJS.ProcessEnv = process.env,
-): FullSuiteLease | undefined {
-  if (environment[TEST_ALLOW_CONCURRENT_ENV] === "1") return undefined;
-  const key = repositoryStateKey(repositoryRoot);
-  const directory =
-    environment[TEST_LEASE_DIRECTORY_ENV] ||
-    path.join(tmpdir(), `${TEST_LEASE_DIRECTORY_PREFIX}${key}.lock`);
-  const metadataPath = path.join(directory, TEST_LEASE_METADATA);
-  const token = randomUUID();
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      mkdirSync(directory, { mode: 0o700 });
-      writeFileSync(
-        metadataPath,
-        `${JSON.stringify({ version: 1, pid: process.pid, token, root: repositoryRoot, startedAt: new Date().toISOString() })}\n`,
-        { mode: 0o600 },
-      );
-      return {
-        directory,
-        release: () => {
-          try {
-            const current = JSON.parse(readFileSync(metadataPath, "utf8")) as { token?: unknown };
-            if (current.token === token) rmSync(directory, { recursive: true, force: true });
-          } catch {
-            // A replaced or already-cleaned lease no longer belongs to us.
-          }
-        },
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      let owner: { pid?: unknown; root?: unknown; startedAt?: unknown } = {};
-      try {
-        owner = JSON.parse(readFileSync(metadataPath, "utf8")) as typeof owner;
-      } catch {
-        // No readable owner. Either a live acquirer is between its `mkdir` and
-        // its metadata write, or the lease is a leftover we may clear. A lease
-        // that disappears underneath us is neither: fall through to the
-        // cleanup-and-retry path with no owner rather than throwing its ENOENT.
-        let ageMs: number | undefined;
-        try {
-          ageMs = Date.now() - statSync(directory).mtimeMs;
-        } catch (statError) {
-          if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
-        }
-        if (ageMs !== undefined && ageMs < LEASE_HANDOVER_GRACE_MS) {
-          throw new Error(`Another test suite is acquiring the host lease at ${directory}.`);
-        }
-      }
-      const ownerPid = typeof owner.pid === "number" ? owner.pid : 0;
-      if (ownerPid > 0 && processIsAlive(ownerPid)) {
-        const location = typeof owner.root === "string" ? ` in ${owner.root}` : "";
-        const since = typeof owner.startedAt === "string" ? ` since ${owner.startedAt}` : "";
-        throw new Error(
-          `Another full test suite is already running (PID ${ownerPid}${location}${since}).`,
-        );
-      }
-      const staleDirectory = `${directory}.stale.${process.pid}.${Date.now()}`;
-      try {
-        renameSync(directory, staleDirectory);
-        rmSync(staleDirectory, { recursive: true, force: true });
-      } catch (cleanupError) {
-        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
-      }
-    }
-  }
-  throw new Error(`Could not acquire the full-suite lease at ${directory}.`);
 }
 
 function safeLogName(name: string): string {
@@ -1387,16 +1288,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const sanitizedEnvironment = { ...dependencies.env };
     // Runtime diagnostic flags change assertion inputs and must not leak from a
     // development profile into an authoritative aggregate test run.
-    for (const name of [
-      "ORKESTRATOR_BRIDGE_DEBUG",
-      "CLAUDE_BRIDGE_DEBUG",
-      "CODEX_BRIDGE_DEBUG",
-      "ACP_BRIDGE_DEBUG",
-      "PI_BRIDGE_DEBUG",
-      "CURSOR_BRIDGE_DEBUG",
-    ]) {
-      delete sanitizedEnvironment[name];
-    }
+    delete sanitizedEnvironment.ORKESTRATOR_BRIDGE_DEBUG;
     // Bun only defaults NODE_ENV to "test" when it is unset. An inherited
     // "production" (for example from an agent session launched by the packaged
     // app) loads React's production build, which has no `act`, and fails every

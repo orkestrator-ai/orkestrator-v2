@@ -203,7 +203,6 @@ const getCheckoutTurn = mock(async (): Promise<CoordinatorCheckoutTurn | null> =
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,

@@ -290,18 +290,18 @@ describe("CompatibilityPathUsage", () => {
         return {
           version: 1,
           paths: {
-            "mcp-report.unmarked-config": { ...pending.get("mcp-report.unmarked-config")! },
+            "preview.tunnel-v1": { ...pending.get("preview.tunnel-v1")! },
           },
         };
       },
     };
     const usage = new CompatibilityPathUsage(clock().now);
     usage.attach(sink);
-    usage.record("mcp-report.unmarked-config");
-    expect(usage.snapshot().paths["mcp-report.unmarked-config"]?.count).toBe(1);
+    usage.record("preview.tunnel-v1");
+    expect(usage.snapshot().paths["preview.tunnel-v1"]?.count).toBe(1);
     fail = false;
-    usage.record("mcp-report.unmarked-config");
-    expect(usage.snapshot().paths["mcp-report.unmarked-config"]?.count).toBe(2);
+    usage.record("preview.tunnel-v1");
+    expect(usage.snapshot().paths["preview.tunnel-v1"]?.count).toBe(2);
     usage.detach(sink);
   });
 

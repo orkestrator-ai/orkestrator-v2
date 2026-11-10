@@ -514,7 +514,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     // A person must answer it (Codex `humanCommand`): one-time answers only,
     // so no session-wide approval either, whatever the bridge advertised.
     const markers = forwardedMarkers(request);
-    // `request.amendments` (bridges before todo 0160, such as an older
+    // `request.amendments` (bridges before #1325, such as an older
     // container image) is ignored on purpose. Accepting one saves a rule in the
     // user's Codex home that Orkestrator can list read-only but cannot revoke, so the
     // card offers plain approval only.
@@ -965,16 +965,14 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     if (fetched.every((response) => response.status === 404)) {
       return this.interactionTracker.snapshot(sessionId, []);
     }
-    // A Claude bridge that predates `/interactions` parks no elicitations or
-    // tool approvals; its questions and plan approvals still count.
-    const responses =
-      this.agent === "claude" && fetched[2]?.status === 404 ? fetched.slice(0, 2) : fetched;
-    for (const response of responses) assertOk(response, `${this.agent} interaction snapshot`);
+    // Every Claude bridge from v2.21.0 serves `/interactions`, so any other
+    // 404 fails the snapshot like any failed read.
+    for (const response of fetched) assertOk(response, `${this.agent} interaction snapshot`);
     const snapshotBudget = {
       remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
     };
     const payloads = await Promise.all(
-      responses.map((response) =>
+      fetched.map((response) =>
         boundedJson(response, `${this.agent} interaction snapshot`, snapshotBudget),
       ),
     );
@@ -982,7 +980,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const second = asRecord(payloads[1]);
     const firstRequests = first?.[this.agent === "claude" ? "questions" : "approvals"];
     const secondRequests = second?.[this.agent === "claude" ? "approvals" : "interactions"];
-    const claudeInteractions = payloads[2] === undefined ? [] : asRecord(payloads[2])?.interactions;
+    const claudeInteractions = this.agent === "claude" ? asRecord(payloads[2])?.interactions : [];
     if (
       !Array.isArray(firstRequests) ||
       !Array.isArray(secondRequests) ||

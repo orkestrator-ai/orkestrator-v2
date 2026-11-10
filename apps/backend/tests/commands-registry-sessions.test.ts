@@ -219,7 +219,7 @@ describe("port-aware domain commands", () => {
         "service.example:443/udp",
         "service.example:443/tcp",
       ];
-      for (const command of ["test_domain_resolution", "validate_domains"]) {
+      for (const command of ["test_domain_resolution"]) {
         lookup.mockClear();
         const results = await commands.get(command)?.(
           {

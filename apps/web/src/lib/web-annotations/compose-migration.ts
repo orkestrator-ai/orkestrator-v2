@@ -29,10 +29,6 @@ export function hasUnmigratedBrowserNotes(
   );
 }
 
-export function isMigratedReference(annotation: TranscriptAnnotation): boolean {
-  return annotation.source === "browser" && Boolean(annotation.migratedTo);
-}
-
 /**
  * Replace the named legacy notes with lightweight references and drop only
  * their linked attachments. Returns null when nothing changes.

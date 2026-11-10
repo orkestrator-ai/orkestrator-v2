@@ -16,10 +16,6 @@ import {
 } from "@/lib/node-scope/app-window-scope";
 import { invokeInScope } from "@/lib/node-scope/scope-transport";
 import { WindowScope } from "@/lib/node-scope/window-scope";
-import {
-  clearPrefetchedCommandResponses,
-  primePrefetchedCommandResponses,
-} from "@/lib/prefetched-command-responses";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { listenAuthoritativeWith } from "./authoritative-events";
 
@@ -47,7 +43,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearPrefetchedCommandResponses();
+  getWindowScope().commandScope().prefetched.clear();
   leafWindow?.dispose();
   leafWindow = null;
   resetWindowScopeForTests();
@@ -75,7 +71,9 @@ describe("invoke through the command scope", () => {
 
   test("a primed read is answered from the command scope's cache until a write drops it", async () => {
     fake.respond("get_projects", ["fresh"]).respond("create_project", null);
-    primePrefetchedCommandResponses([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
+    getWindowScope()
+      .commandScope()
+      .prefetched.prime([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
     expect(getWindowScope().commandScope().prefetched.size).toBe(1);
     await expect(invoke("get_projects", {})).resolves.toEqual(["primed"]);
     expect(fake.invocations).toEqual([]);
@@ -88,7 +86,9 @@ describe("invoke through the command scope", () => {
   });
 
   test("the cache belongs to the scope: a new command scope starts empty", async () => {
-    primePrefetchedCommandResponses([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
+    getWindowScope()
+      .commandScope()
+      .prefetched.prime([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
     const replacement = new FakeNodeClient({ nodeId: COMMAND }).respond("get_projects", ["new"]);
     resetWindowScopeForTests(replacement);
     await expect(invoke("get_projects", {})).resolves.toEqual(["new"]);
@@ -99,7 +99,9 @@ describe("invoke through the command scope", () => {
     leafWindow = new WindowScope();
     const leafClient = new FakeNodeClient({ nodeId: LEAF }).respond("get_projects", ["leaf"]);
     const leaf = leafWindow.open({ role: "leaf", client: leafClient });
-    primePrefetchedCommandResponses([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
+    getWindowScope()
+      .commandScope()
+      .prefetched.prime([{ command: "get_projects", args: {}, snapshot: ["primed"] }]);
     await expect(invokeInScope(leaf, "get_projects", {})).resolves.toEqual(["leaf"]);
     leaf.prefetched.prime([{ command: "get_kanban_tasks", args: {}, snapshot: ["leaf-primed"] }]);
     await expect(invokeInScope(leaf, "get_kanban_tasks", {})).resolves.toEqual(["leaf-primed"]);

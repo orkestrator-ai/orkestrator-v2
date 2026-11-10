@@ -30,7 +30,6 @@ import type { GlobalConfig, PreferredEditor, TerminalAppearance } from "@/types"
  * config is what stops a save that changes nothing from re-arming the debounce.
  */
 export interface CoreFieldsSnapshot {
-  containerResources: { cpuCores: number; memoryGb: number };
   envFilePatterns: string[];
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
@@ -78,7 +77,6 @@ export interface CoreFieldsSnapshot {
 
 /** Fields stored exactly as the form snapshot holds them. */
 const STORED_AS_IS = [
-  "containerResources",
   "envFilePatterns",
   "allowedDomains",
   "useHostGitHubCredentials",

@@ -1,13 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { BackendRuntime } from "./backend-runtime.js";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DESIGN_CONFLICT,
-  DESIGN_MAX_DOCUMENT_BYTES,
-  type DesignCanvas,
-} from "@orkestrator/protocol/design-canvas";
+import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignCommandResult,
   DesignOperationStatus,
@@ -116,21 +112,12 @@ describe("design command registry", () => {
     return result.value;
   };
 
-  test("validates environments and exercises action, changes and import", async () => {
-    expect(await invoke("design_status", {})).toMatchObject({ ready: true });
+  test("validates environments and exercises action and import", async () => {
     const canvas = (await invoke("design_action", {
       environmentId: "local",
       action: "create_canvas",
       input: { name: "Commands" },
     })) as DesignCanvas;
-    expect(
-      await invoke("design_changes", {
-        environmentId: "local",
-        canvasId: canvas.id,
-        generation: design.generation,
-        after: canvas.revision,
-      }),
-    ).toMatchObject({ reset: false, revision: 1 });
     const imported = (await invoke("design_import", {
       environmentId: "container",
       document: JSON.stringify(await design.get(canvas.id)),
@@ -250,67 +237,7 @@ describe("design command registry", () => {
     });
   });
 
-  test("legacy save writes the exact revision safely into the local worktree", async () => {
-    const local = await design.create("local", "Local", undefined, "user");
-    const other = await design.create("local", "Other", undefined, "user");
-    expect(
-      await invoke("design_save", {
-        environmentId: "local",
-        canvasId: local.id,
-        expectedRevision: 1,
-        filePath: "local.orkdes",
-      }),
-    ).toEqual({ filePath: "local.orkdes", revision: 1 });
-    expect(JSON.parse(await readFile(join(worktree, "local.orkdes"), "utf8"))).toEqual(
-      await design.get(local.id),
-    );
-    // Saving the same canvas again to its own export replaces it.
-    await design.createFrame(local.id, "local", 1, frame, "user");
-    expect(
-      await invoke("design_save", {
-        environmentId: "local",
-        canvasId: local.id,
-        expectedRevision: 2,
-        filePath: "local.orkdes",
-      }),
-    ).toEqual({ filePath: "local.orkdes", revision: 2 });
-    expect(JSON.parse(await readFile(join(worktree, "local.orkdes"), "utf8"))).toMatchObject({
-      revision: 2,
-    });
-    // Another canvas can never silently replace it.
-    await expect(
-      invoke("design_save", {
-        environmentId: "local",
-        canvasId: other.id,
-        expectedRevision: 1,
-        filePath: "local.orkdes",
-      }),
-    ).rejects.toThrow("already exists");
-    await expect(
-      invoke("design_save", {
-        environmentId: "local",
-        canvasId: local.id,
-        expectedRevision: 1,
-        filePath: "stale.orkdes",
-      }),
-    ).rejects.toThrow(DESIGN_CONFLICT);
-    await expect(
-      invoke("design_save", {
-        environmentId: "local",
-        canvasId: local.id,
-        expectedRevision: 2,
-        filePath: "../escape.orkdes",
-      }),
-    ).rejects.toThrow();
-    await expect(
-      invoke("design_save", {
-        environmentId: "container",
-        canvasId: local.id,
-        expectedRevision: 2,
-        filePath: "x.orkdes",
-      }),
-    ).rejects.toThrow("not found");
-    expect((await readdir(worktree)).sort()).toEqual(["local.orkdes"]);
+  test("resolves a container environment's design destination", async () => {
     expect(await resolveDesignDestination(storage, "container")).toEqual({
       kind: "container",
       containerId: "container-id",

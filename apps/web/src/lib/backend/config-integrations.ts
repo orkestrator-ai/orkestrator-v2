@@ -23,14 +23,10 @@ import type {
   GatewayTokenSettings,
   WebClientStatus,
   RepositoryConfig,
-  PrState,
-  EnsureEnvironmentSetupResult,
-  ClaudeModelCatalogSnapshot,
   CursorSdkAuthStatus,
   CursorSdkLoginProgress,
 } from "@/types";
 import type {
-  LinearCompletionCommentResult,
   LinearConnectionStatus,
   LinearIssueComment,
   LinearIssueDetail,
@@ -43,15 +39,11 @@ import type {
   GitHubIssuesSnapshot,
   GitHubIssueStatus,
 } from "@/types/github";
-import type { CodexModel } from "@/lib/codex-models";
 import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import type { AgentModelCatalogCache } from "@orkestrator/protocol/contract/domains/agent-servers";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { accountsOn } from "@/lib/node-scope/domains/accounts";
-/** PR detection result containing URL, state, and merge conflict status */
-
-import type { PrDetectionResult } from "./projects-environments";
 import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import { systemApiOn } from "@/lib/node-scope/domains/system";
 import { type AccountMachine } from "./agent-accounts";
@@ -272,9 +264,6 @@ export type { GitHubCompletionCommentResult };
 
 // --- GitHub Commands ---
 
-import type { VerifiedEnvironmentPr } from "@orkestrator/protocol/contract/domains/pull-requests";
-export type { VerifiedEnvironmentPr };
-
 /** What a held setup would run, and what the default branch runs instead. */
 export interface EnvironmentSetupApproval {
   environmentId: string;
@@ -401,15 +390,10 @@ export function createConfigIntegrationsApi(client: BackendClient) {
         agentServers().get_native_agent_model_catalog({ environmentId }),
       );
     }
-    const result = await asWebModel<
-      | import("@orkestrator/protocol/native-agent").AgentModel[]
-      | {
-          models: import("@orkestrator/protocol/native-agent").AgentModel[];
-          status: "ready" | "empty" | "failed";
-        }
-    >(agentServers().get_native_agent_model_catalog({ environmentId, ensureAgent }));
-    // Older backends return an ensured catalogue directly.
-    if (Array.isArray(result)) return result;
+    const result = await asWebModel<{
+      models: import("@orkestrator/protocol/native-agent").AgentModel[];
+      status: "ready" | "empty" | "failed";
+    }>(agentServers().get_native_agent_model_catalog({ environmentId, ensureAgent }));
     if (!result || !Array.isArray(result.models)) {
       throw new Error("The native model catalogue response was malformed");
     }
@@ -421,28 +405,11 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return result.models;
   }
 
-  /** Persist an authoritative catalogue for the next application launch. */
-  async function cacheAgentModelCatalog(
-    agent: "claude" | "codex",
-    models: ClaudeModelCatalogSnapshot["models"] | CodexModel[],
-  ): Promise<AgentModelCatalogCache> {
-    return asWebModel<AgentModelCatalogCache>(
-      agentServers().cache_agent_model_catalog({ agent, models }),
-    );
-  }
-
-  async function saveConfig(config: AppConfig): Promise<void> {
-    return settings().save_config({ config });
-  }
-
   /**
    * The client's node's own global settings, without inherited preferences.
    * The effective view is `getConfig()` (or `runConfigCommand` for explicit
    * scopes).
    */
-  async function getGlobalConfig(): Promise<GlobalConfig> {
-    return (await settings().get_global_config({})) as GlobalConfig;
-  }
 
   /** Read one platform's plan/quota windows from the backend. */
   async function getPlanUsage(
@@ -485,12 +452,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
 
   async function getControlMcpSettings(): Promise<ControlMcpSettings> {
     return coordinator().get_control_mcp_settings(
-      undefined as never,
-    ) as Promise<ControlMcpSettings>;
-  }
-
-  async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
-    return coordinator().rotate_control_mcp_token(
       undefined as never,
     ) as Promise<ControlMcpSettings>;
   }
@@ -590,16 +551,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     );
   }
 
-  async function postLinearCompletionComment(
-    pipelineId: string,
-    issueId: string,
-    body: string,
-  ): Promise<LinearCompletionCommentResult> {
-    return asKanbanModel<LinearCompletionCommentResult>(
-      kanban(client).post_linear_completion_comment({ pipelineId, issueId, body }),
-    );
-  }
-
   async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
     return prDomain().get_github_issues({ projectId });
   }
@@ -653,24 +604,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     });
   }
 
-  async function postGitHubCompletionComment(
-    pipelineId: string,
-    projectId: string,
-    repositoryOwner: string,
-    repositoryName: string,
-    issueNumber: number,
-    body: string,
-  ): Promise<GitHubCompletionCommentResult> {
-    return prDomain().post_github_completion_comment({
-      pipelineId,
-      projectId,
-      repositoryOwner,
-      repositoryName,
-      issueNumber,
-      body,
-    });
-  }
-
   async function openInBrowser(url: string): Promise<void> {
     // The Electron main process always runs on the client, even when this
     // renderer's backend commands are routed to a remote Orkestrator server.
@@ -694,34 +627,8 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return environments().getEnvironmentPrUrl({ environmentId });
   }
 
-  async function verifyEnvironmentPr(
-    environmentId: string,
-    prUrl: string,
-    targetBranch: string,
-  ): Promise<VerifiedEnvironmentPr> {
-    return prDomain().verify_environment_pr({
-      environmentId,
-      prUrl,
-      targetBranch,
-    });
-  }
-
   async function clearEnvironmentPr(environmentId: string): Promise<void> {
     return environments().clearEnvironmentPr({ environmentId });
-  }
-
-  async function setEnvironmentPr(
-    environmentId: string,
-    prUrl: string,
-    prState: PrState,
-    hasMergeConflicts: boolean | null,
-  ): Promise<Environment> {
-    return environments().setEnvironmentPr({
-      environmentId,
-      prUrl,
-      prState,
-      hasMergeConflicts,
-    });
   }
 
   async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
@@ -748,25 +655,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     remember: boolean,
   ): Promise<Environment> {
     return environments().approveEnvironmentSetup({ environmentId, hash, remember });
-  }
-
-  async function ensureEnvironmentSetup(
-    environmentId: string,
-  ): Promise<EnsureEnvironmentSetupResult> {
-    return environments().ensureEnvironmentSetup({ environmentId });
-  }
-
-  /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
-  async function detectPr(containerId: string, branch: string): Promise<PrDetectionResult | null> {
-    return prDomain().detect_pr({ containerId, branch });
-  }
-
-  /** Detect PR URL and state for local (worktree-based) environments (uses --head to check correct branch) */
-  async function detectPrLocal(
-    environmentId: string,
-    branch: string,
-  ): Promise<PrDetectionResult | null> {
-    return prDomain().detect_pr_local({ environmentId, branch });
   }
 
   /**
@@ -815,30 +703,17 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return prDomain().merge_pr({ containerId, method, deleteBranch });
   }
 
-  /** Merge the local environment's PR through the GitHub API */
-  async function mergePrLocal(
-    environmentId: string,
-    method?: MergeMethod,
-    deleteBranch?: boolean,
-  ): Promise<MergePrResult> {
-    return prDomain().merge_pr_local({ environmentId, method, deleteBranch });
-  }
-
   return {
     getAgentModelCatalogCache,
     ensureHostPiModelCatalog,
     refreshHostAgentModelCatalog,
     getNativeAgentModelCatalog,
-    cacheAgentModelCatalog,
-    saveConfig,
-    getGlobalConfig,
     getPlanUsage,
     cursorSdkLoginStart,
     cursorSdkLoginStatus,
     cursorSdkLoginCancel,
     cursorSdkLogout,
     getControlMcpSettings,
-    rotateControlMcpToken,
     createControlMcpCredential,
     rotateControlMcpCredential,
     revokeControlMcpCredential,
@@ -855,7 +730,6 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     getLinearIssues,
     getLinearIssue,
     postLinearIssueComment,
-    postLinearCompletionComment,
     getGitHubIssues,
     getGitHubIssue,
     updateGitHubIssue,
@@ -863,24 +737,17 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     closeGitHubIssue,
     addGitHubIssueComment,
     updateGitHubIssueComment,
-    postGitHubCompletionComment,
     openInBrowser,
     revealInFileManager,
     getEnvironmentPrUrl,
-    verifyEnvironmentPr,
     clearEnvironmentPr,
-    setEnvironmentPr,
     overrideEnvironmentSetup,
     runEnvironmentSetup,
     getEnvironmentSetupApproval,
     approveEnvironmentSetup,
-    ensureEnvironmentSetup,
-    detectPr,
-    detectPrLocal,
     mergeEnvironmentPr,
     setEnvironmentAutoMerge,
     mergePr,
-    mergePrLocal,
   };
 }
 
@@ -892,16 +759,12 @@ export const {
   ensureHostPiModelCatalog,
   refreshHostAgentModelCatalog,
   getNativeAgentModelCatalog,
-  cacheAgentModelCatalog,
-  saveConfig,
-  getGlobalConfig,
   getPlanUsage,
   cursorSdkLoginStart,
   cursorSdkLoginStatus,
   cursorSdkLoginCancel,
   cursorSdkLogout,
   getControlMcpSettings,
-  rotateControlMcpToken,
   createControlMcpCredential,
   rotateControlMcpCredential,
   revokeControlMcpCredential,
@@ -918,7 +781,6 @@ export const {
   getLinearIssues,
   getLinearIssue,
   postLinearIssueComment,
-  postLinearCompletionComment,
   getGitHubIssues,
   getGitHubIssue,
   updateGitHubIssue,
@@ -926,23 +788,16 @@ export const {
   closeGitHubIssue,
   addGitHubIssueComment,
   updateGitHubIssueComment,
-  postGitHubCompletionComment,
   openInBrowser,
   revealInFileManager,
   getEnvironmentPrUrl,
-  verifyEnvironmentPr,
   clearEnvironmentPr,
-  setEnvironmentPr,
   overrideEnvironmentSetup,
   runEnvironmentSetup,
   getEnvironmentSetupApproval,
   approveEnvironmentSetup,
-  ensureEnvironmentSetup,
-  detectPr,
-  detectPrLocal,
   mergeEnvironmentPr,
   setEnvironmentAutoMerge,
   mergePr,
-  mergePrLocal,
 } = createConfigIntegrationsApi(commandBackendClient);
 // --- Docker Commands ---

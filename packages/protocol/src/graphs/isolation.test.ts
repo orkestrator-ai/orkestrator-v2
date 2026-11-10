@@ -18,7 +18,7 @@ import {
   resolveGraphSelectChoice,
   type GraphSelectCandidate,
 } from "./isolation.js";
-import { graphCompetingImplementationsTemplate } from "./isolation-template.js";
+import { graphCompetingImplementationsTemplate } from "../testing/graph-isolation-template.js";
 import { graphRunCodeRewindBlocker } from "./run-rewind.js";
 import { validateGraphRun } from "./run-guards.js";
 import {

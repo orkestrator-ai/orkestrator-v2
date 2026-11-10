@@ -597,15 +597,12 @@ afterAll(async () => {
 });
 
 describe("process and platform command behavior", () => {
-  test("checks Docker availability, version, and base image failures", async () => {
+  test("checks Docker availability and its failures", async () => {
     expect(await invoke("check_docker")).toEqual({ available: true, reason: null });
-    expect(await invoke("docker_version")).toBe("26.1.4");
-    expect(await invoke("check_base_image")).toBe(true);
 
     process.env.FAKE_DOCKER_FAIL_INFO = "1";
     process.env.FAKE_DOCKER_FAIL_IMAGE = "1";
     expect(await invoke("check_docker")).toEqual({ available: false, reason: "unknown" });
-    expect(await invoke("check_base_image")).toBe(false);
 
     process.env.FAKE_DOCKER_FAIL_INFO =
       "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock";
@@ -751,40 +748,18 @@ describe("process and platform command behavior", () => {
     expect(allowed).toEqual(["github.com", "chatgpt.com", "auth.openai.com"]);
   });
 
-  test("parses container status, listings, ports, logs, prune output, and aggregate stats", async () => {
+  test("parses container status, logs and aggregate stats", async () => {
     expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("running");
     process.env.FAKE_DOCKER_STATUS = "paused";
     expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("stopped");
     process.env.FAKE_DOCKER_STATUS = "unexpected";
     expect(await invoke("docker_container_status", { containerId: "container-a" })).toBe("error");
 
-    // container-a is owned by this registry and container-b predates the owner
-    // label, so both are listed; container-c belongs to another registry.
-    expect(await invoke("list_docker_containers")).toEqual([
-      ["container-a", "alpha"],
-      ["container-b", "beta"],
-    ]);
-    // An earlier test's create prunes its input revisions in the background, by owner.
-    const listings = (await readCommandLog())
-      .split("\n")
-      .filter((line) => !line.includes("orkestrator-inputs-revision"));
-    expect(listings.join("\n")).not.toContain(
-      `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
-    );
-    expect(
-      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
-    ).toBe(43123);
-    process.env.FAKE_DOCKER_NO_PORT = "1";
-    expect(
-      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
-    ).toBeNull();
-    delete process.env.FAKE_DOCKER_NO_PORT;
-
     expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe(
       "historical container log\n",
     );
     // Log content is never pushed as events: it is read by cursor.
-    const stream = (await invoke("stream_container_logs", { containerId: "container-a" })) as {
+    const stream = (await invoke("open_container_logs", { containerId: "container-a" })) as {
       subscriptionId: string;
       sourceId: string;
     };
@@ -802,10 +777,6 @@ describe("process and platform command behavior", () => {
     expect(fixture.events.filter((entry) => entry.event === "container-log")).toEqual([]);
     await invoke("close_container_logs", { subscriptionId: stream.subscriptionId });
 
-    // Unreviewed removal is refused; cleanup goes through the reviewed preview.
-    await expect(invoke("docker_system_prune", { pruneVolumes: true })).rejects.toThrow(
-      "ContainerLifecycleError:invalid-request",
-    );
     // Capacity is the daemon's and usage this installation's; anything the
     // fake daemon does not answer is reported unknown, not as host values.
     expect(await invoke("get_docker_system_stats")).toMatchObject({
@@ -1277,7 +1248,7 @@ describe("process and platform command behavior", () => {
     }
   });
 
-  test("loads and validates the durable OpenCode model catalogue", async () => {
+  test("loads the durable OpenCode model catalogue", async () => {
     const cached = {
       schemaVersion: 2 as const,
       projectId: "project-a",
@@ -1286,224 +1257,20 @@ describe("process and platform command behavior", () => {
       models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
     };
     const getOpenCodeModelCatalog = mock(async (_projectId: string) => cached);
-    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
-      ...cached,
-      catalogVersion: "updated",
-      models,
-    }));
     const context = {
       ...fixture.context,
-      storage: {
-        ...fixture.context.storage,
-        getOpenCodeModelCatalog,
-        cacheOpenCodeModelCatalog,
-      },
+      storage: { ...fixture.context.storage, getOpenCodeModelCatalog },
     } as unknown as CommandContext;
 
     expect(
       await invoke("get_opencode_model_catalog_cache", { projectId: " project-a " }, context),
     ).toEqual(cached);
     expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-a");
-
-    const models = [
-      {
-        id: " opencode/openai/gpt-5 ",
-        name: " GPT-5 ",
-        provider: " opencode ",
-        variants: [" low ", "high"],
-        inputCost: 0,
-        outputCost: Number.MAX_VALUE,
-        contextWindow: Number.MAX_SAFE_INTEGER,
-      },
-    ];
-    expect(
-      await invoke("cache_opencode_model_catalog", { projectId: " project-a ", models }, context),
-    ).toEqual({
-      ...cached,
-      catalogVersion: "updated",
-      models: [
-        {
-          id: "opencode/openai/gpt-5",
-          name: "GPT-5",
-          provider: "opencode",
-          variants: ["low", "high"],
-          inputCost: 0,
-          outputCost: Number.MAX_VALUE,
-          contextWindow: Number.MAX_SAFE_INTEGER,
-        },
-      ],
-    });
-    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
-      {
-        id: "opencode/openai/gpt-5",
-        name: "GPT-5",
-        provider: "opencode",
-        variants: ["low", "high"],
-        inputCost: 0,
-        outputCost: Number.MAX_VALUE,
-        contextWindow: Number.MAX_SAFE_INTEGER,
-      },
-    ]);
-
-    await expect(
-      invoke(
-        "cache_opencode_model_catalog",
-        { projectId: "project-a", models: [{ id: "missing-fields" }] },
-        context,
-      ),
-    ).rejects.toThrow("models[0].name");
-  });
-
-  test("caches the valid models in a batch instead of rejecting it wholesale", async () => {
-    // The catalogue is best-effort data assembled from whatever a provider
-    // reports and the renderer only logs a rejection, so one rogue model must
-    // not silently disable caching for the whole project.
-    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown) => ({
-      schemaVersion: 2,
-      projectId: "project-a",
-      catalogVersion: "v1",
-      updatedAt: "2026-07-27T12:00:00.000Z",
-      models,
-    }));
-    const context = {
-      ...fixture.context,
-      storage: { ...fixture.context.storage, cacheOpenCodeModelCatalog },
-    } as unknown as CommandContext;
-
-    await invoke(
-      "cache_opencode_model_catalog",
-      {
-        projectId: "project-a",
-        models: [
-          { id: "opencode/good", name: "Good", provider: "opencode" },
-          // Every rejection reason, one per entry.
-          { id: "opencode/nan-cost", name: "NaN", provider: "opencode", inputCost: Number.NaN },
-          { id: "opencode/unknown-key", name: "Unknown", provider: "opencode", tier: "pro" },
-          { id: " ", name: "Blank id", provider: "opencode" },
-          null,
-          { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
-        ],
-      },
-      context,
-    );
-
-    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
-      { id: "opencode/good", name: "Good", provider: "opencode" },
-      { id: "opencode/also-good", name: "Also Good", provider: "opencode", variants: ["high"] },
-    ]);
-  });
-
-  test("reports why a batch was rejected when no model in it is usable", async () => {
-    await expect(
-      invoke("cache_opencode_model_catalog", {
-        projectId: "project-a",
-        models: [
-          { id: "opencode/a", name: "A", provider: "opencode", contextWindow: 1.5 },
-          { id: "opencode/b", name: "B", provider: "opencode", inputCost: -1 },
-        ],
-      }),
-    ).rejects.toThrow(/at least one model.*contextWindow to be a positive safe integer/s);
   });
 
   test.each([
     ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
     ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],
-    [
-      "models is not an array",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: {} },
-      "models to be an array",
-    ],
-    [
-      "empty models",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [] },
-      "at least one model",
-    ],
-    [
-      "model is not an object",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [null] },
-      "models[0] to be an object",
-    ],
-    [
-      "unexpected model field",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", extra: true }] },
-      "Unexpected models[0] field",
-    ],
-    [
-      "blank model id",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: " ", name: "A", provider: "p" }] },
-      "models[0].id to be a non-blank string",
-    ],
-    [
-      "blank model name",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: " ", provider: "p" }] },
-      "models[0].name to be a non-blank string",
-    ],
-    [
-      "blank model provider",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: " " }] },
-      "models[0].provider to be a non-blank string",
-    ],
-    [
-      "variants is not an array",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: "fast" }] },
-      "variants to be an array",
-    ],
-    [
-      "non-string variant",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [1] }] },
-      "variants[0] to be a string",
-    ],
-    [
-      "blank variant",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [" "] }] },
-      "variants[0] to be a non-blank string",
-    ],
-    [
-      "negative input cost",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", inputCost: -1 }] },
-      "inputCost to be non-negative",
-    ],
-    [
-      "infinite output cost",
-      "cache_opencode_model_catalog",
-      {
-        projectId: "p",
-        models: [{ id: "a", name: "A", provider: "p", outputCost: Number.POSITIVE_INFINITY }],
-      },
-      "outputCost to be a number",
-    ],
-    [
-      "zero context",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 0 }] },
-      "contextWindow to be a positive safe integer",
-    ],
-    [
-      "fractional context",
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 1.5 }] },
-      "contextWindow to be a positive safe integer",
-    ],
-    [
-      "unsafe context",
-      "cache_opencode_model_catalog",
-      {
-        projectId: "p",
-        models: [{ id: "a", name: "A", provider: "p", contextWindow: Number.MAX_SAFE_INTEGER + 1 }],
-      },
-      "contextWindow to be a positive safe integer",
-    ],
   ] as const)(
     "rejects malformed OpenCode catalogue command input: %s",
     async (_label, command, args, message) => {
@@ -1511,13 +1278,7 @@ describe("process and platform command behavior", () => {
     },
   );
 
-  test.each([
-    ["get_opencode_model_catalog_cache", { projectId: "p", extra: true }],
-    [
-      "cache_opencode_model_catalog",
-      { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true },
-    ],
-  ] as const)(
+  test.each([["get_opencode_model_catalog_cache", { projectId: "p", extra: true }]] as const)(
     "%s refuses an unknown argument only when the sender marks it critical",
     async (command, args) => {
       // Defined commands (plan item 7009) drop unknown keys; a critical one is
@@ -1600,7 +1361,6 @@ describe("process and platform command behavior", () => {
 
   test("reports credentials and GitHub CLI availability from isolated filesystem state", async () => {
     expect(await invoke("has_claude_credentials")).toBe(false);
-    expect(await invoke("get_credential_status")).toEqual({ available: false, expiresAt: null });
     expect(await invoke("check_claude_config")).toBe(false);
     expect(await invoke("check_github_cli")).toBe(true);
 
@@ -1608,7 +1368,6 @@ describe("process and platform command behavior", () => {
     await fs.writeFile(path.join(fakeHome, ".claude", ".credentials.json"), "{}");
     await fs.writeFile(path.join(fakeHome, ".claude.json"), "{}");
     expect(await invoke("has_claude_credentials")).toBe(true);
-    expect(await invoke("get_credential_status")).toEqual({ available: true, expiresAt: null });
     expect(await invoke("check_claude_config")).toBe(true);
   });
 
@@ -1792,7 +1551,7 @@ describe("process and platform command behavior", () => {
     }
   });
 
-  test("resolves domains and validate_domains delegates to the same behavior", async () => {
+  test("resolves domains", async () => {
     const resolved = (await invoke("test_domain_resolution", {
       domains: ["localhost", "bad domain"],
     })) as Array<Record<string, unknown>>;
@@ -1811,16 +1570,6 @@ describe("process and platform command behavior", () => {
       ips: [],
     });
     expect(resolved[1]?.error).toBeString();
-
-    const delegated = (await invoke("validate_domains", { domains: ["localhost"] })) as Array<
-      Record<string, unknown>
-    >;
-    expect(delegated[0]).toMatchObject({
-      domain: "localhost",
-      valid: true,
-      resolvable: true,
-      error: null,
-    });
   });
 });
 

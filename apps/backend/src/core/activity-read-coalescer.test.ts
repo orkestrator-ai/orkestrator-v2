@@ -249,7 +249,7 @@ describe("ActivityReadCoalescer", () => {
       ]);
     });
 
-    test("an older bridge is read per session and not re-probed on the next round", async () => {
+    test("a bridge without the batch route is read per session on every round", async () => {
       const { provider, requests } = bridge("absent");
       const coalescer = new ActivityReadCoalescer(5);
 
@@ -261,7 +261,7 @@ describe("ActivityReadCoalescer", () => {
       expect(first.map((read) => read.state)).toEqual(["working", "idle"]);
       expect(second.map((read) => read.state)).toEqual(["working", "idle"]);
       const paths = requests.map((request) => new URL(request.url).pathname);
-      expect(paths.filter((path) => path === "/sessions/activity")).toHaveLength(1);
+      expect(paths.filter((path) => path === "/sessions/activity")).toHaveLength(2);
       expect(paths.filter((path) => path !== "/sessions/activity").sort()).toEqual([
         "/session/fix-1/activity",
         "/session/fix-1/activity",

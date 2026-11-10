@@ -385,6 +385,10 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
   credential verifier (2026-11-04) it cannot authenticate with today's
   backend. The step stays optional in the spec; the backend's pre-marker
   path is now unreachable from any supported bridge (see the decision).
+  Both were removed on 2026-11-10: the spec step, and the backend's
+  unmarked-`mcpConfig` reading and provider-specific older-bridge outcome
+  (a body without the marker now gets one generic `restart-required`;
+  [version compatibility](../../architecture/version-compatibility.md#retired)).
 - **Codex process-wide variant (new spec).**
   `e2e/agent-testing/mcp-apply-inactive-codex.spec.ts`: environment A with
   two Codex threads on one bridge, the browser on environment B. 1 passed,
@@ -749,9 +753,8 @@ collects the live evidence the shipped behaviour has never had.
 - Apply-path guards (see "Runtime application" in
   [`mcp-management.md`](../../architecture/mcp-management.md)): every outcome
   names the runtime generation (bridge pid plus provider session) it was
-  observed against; a bridge older than the `mcpConfigReporting` marker is
-  reported as such (`restart-required`, or an unconfirmable Claude
-  `pending-next-turn`); an edit made to the source after the save is merged
+  observed against; a bridge without the `mcpConfigReporting` marker is
+  reported as one that does not report (`restart-required`); an edit made to the source after the save is merged
   (flagged) or supersedes the change (waiting runtimes `cancelled`, re-apply
   refused) by `external-edits.ts`; one apply tracks 256 runtimes, lists 64 and
   counts the rest by state in `omittedStates`.

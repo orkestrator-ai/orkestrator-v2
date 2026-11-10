@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, Loader2, RefreshCw, ShieldOff } from "lucide-react";
 import {
-  isUnknownPreviewCommandError,
   previewErrorFromUnknown,
   type PreviewCapabilities,
 } from "@orkestrator/protocol/preview-services";
@@ -67,7 +66,6 @@ function Availability({
 
 interface CapabilitiesLoad {
   capabilities: PreviewCapabilities | null;
-  unsupported: boolean;
   error: string | null;
 }
 
@@ -76,11 +74,10 @@ async function loadWindowCapabilities(scope: NodeScope): Promise<CapabilitiesLoa
   ensurePreviewServiceSync(scope);
   const previews = scope.store(previewServiceStore);
   const capabilities = await previews.getState().loadCapabilities({ force: true });
-  if (capabilities) return { capabilities, unsupported: false, error: null };
+  if (capabilities) return { capabilities, error: null };
   const { status, error } = previews.getState();
   return {
     capabilities: null,
-    unsupported: status === "unsupported",
     error: status === "error" ? (error ?? "Preview services are unavailable.") : null,
   };
 }
@@ -97,18 +94,13 @@ async function loadMachineCapabilities(
     if (!capabilities || typeof capabilities.backendInstanceId !== "string") {
       return {
         capabilities: null,
-        unsupported: false,
         error: "The backend returned malformed preview capabilities.",
       };
     }
-    return { capabilities, unsupported: false, error: null };
+    return { capabilities, error: null };
   } catch (error) {
-    if (isUnknownPreviewCommandError(error)) {
-      return { capabilities: null, unsupported: true, error: null };
-    }
     return {
       capabilities: null,
-      unsupported: false,
       error: previewErrorFromUnknown(error)?.message ?? "Preview services are unavailable.",
     };
   }
@@ -125,7 +117,6 @@ export function PreviewSettings() {
   const [publication, setPublication] = useState<Publication | null>(null);
   const [diagnostics, setDiagnostics] = useState<backend.PreviewDiagnosticsSnapshot | null>(null);
   const [capabilities, setCapabilities] = useState<PreviewCapabilities | null>(null);
-  const [unsupported, setUnsupported] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const { machine } = useAccountMachine();
@@ -147,7 +138,6 @@ export function PreviewSettings() {
         : loadMachineCapabilities(machine)
       ).then(async (loaded) => {
         if (!loaded.capabilities) {
-          setUnsupported(loaded.unsupported);
           if (loaded.error) setLoadError(loaded.error);
           return;
         }
@@ -187,13 +177,6 @@ export function PreviewSettings() {
     }
   };
 
-  if (unsupported) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        The connected backend predates service previews. Browser tabs use backend ports directly.
-      </p>
-    );
-  }
   const loadFailure =
     loadError === null ? null : (
       <div role="alert" className="flex items-center gap-2 text-sm text-destructive">

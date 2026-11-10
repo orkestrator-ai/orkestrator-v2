@@ -16,11 +16,6 @@ export const IMAGE_MANIFEST_PATH = "/usr/local/share/orkestrator/image-manifest.
 export const IMAGE_MANIFEST_SCHEMA_VERSION = 1;
 export const MAX_IMAGE_MANIFEST_BYTES = 64 * 1024;
 
-/** Image label carrying the manifest schema version (informational). */
-export const IMAGE_LABEL_MANIFEST_SCHEMA = "org.orkestrator.image.manifest-schema";
-/** Image label with the compact `name=version,…` capability list (informational). */
-export const IMAGE_LABEL_CAPABILITIES = "org.orkestrator.image.capabilities";
-
 /**
  * Every capability a container contract can depend on, with the highest
  * version this code understands. An image declares the versions it

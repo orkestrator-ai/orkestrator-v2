@@ -12,7 +12,6 @@
 import { dockerClient } from "@orkestrator/protocol/contract/domains/docker";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
 import type { BackendId, EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
-import { nodesApi } from "@/lib/node-scope/domains/nodes";
 import type { PortalStore } from "@/lib/portal/portal-store";
 import { routedBackendClient } from "@/lib/portal/routed-backend-client";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
@@ -91,12 +90,4 @@ export async function deleteFederatedEnvironment(
   await nodeEnvironments(portal, ref.backendId).deleteEnvironment({
     environmentId: ref.environmentId,
   });
-}
-
-export async function updateFederatedMachineProfile(
-  portal: PortalStore,
-  backendRef: { backendId: ProjectRef["backendId"] },
-  update: { expectedRevision: number; displayName?: string; colorToken?: string },
-): Promise<unknown> {
-  return nodesApi(routedBackendClient(portal, backendRef.backendId)).update_backend_profile(update);
 }

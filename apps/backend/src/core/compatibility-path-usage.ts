@@ -47,10 +47,6 @@ export const COMPATIBILITY_PATH_IDS = [
   "history.joined-v1-page.unpaged-source",
   /** A joined page for a view whose source pages directly but could name or wrap no cursor. */
   "history.joined-v1-page.unnamed-cursor",
-  /** A runtime-health body had `mcpConfig` but no `mcpConfigReporting` marker. */
-  "mcp-report.unmarked-config",
-  /** An MCP apply outcome was decided by the older-bridge rule. */
-  "mcp-report.older-bridge-outcome",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
   /** A desktop opened a v1 preview tunnel socket: it predates tunnel v2. */

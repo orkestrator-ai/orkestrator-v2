@@ -891,8 +891,9 @@ backend that cannot report access gets 403. An equivalence test compared the
 new set with the deny-lists' effective set. The final difference is 33
 commands the deny-lists admitted and the allow-list refuses; no client sends
 any of them, and none differs the other way. For one release a debug-only
-cross-check (`nodes/workspace-grant-legacy-check.ts`) logs content-free
-disagreements with the old verdict. `WORKSPACE_ADMINISTRATION_COMMANDS`, the
+cross-check (`nodes/workspace-grant-legacy-check.ts`) logged content-free
+disagreements with the old verdict; it was removed on 2026-11-10, after
+v2.37.0-alpha to v2.37.4-beta had shipped it. `WORKSPACE_ADMINISTRATION_COMMANDS`, the
 inline list and `isWorkspaceExcludedCommand` are deleted. The
 `invoke_on_node` exclusions are kept, renamed `NODE_ROUTING_EXCLUDED_COMMANDS`
 (`nodes/node-routing.ts`). They cannot be derived from `access`, because

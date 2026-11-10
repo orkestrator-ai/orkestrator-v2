@@ -210,7 +210,6 @@ mock.module("@/lib/backend", () => ({
     { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
   ]),
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,

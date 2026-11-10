@@ -38,7 +38,7 @@ describe("NativeSessionInvalidationMetrics", () => {
     });
   });
 
-  test("names the discovery section and changed paths of each announcement (todo 7530)", () => {
+  test("names the discovery section and changed paths of each announcement (#2062)", () => {
     const metrics = new NativeSessionInvalidationMetrics();
     metrics.recordDiscoveryRenewal("runtime", "codex", ["summary.notices[].occurrences[]"]);
     metrics.recordDiscoveryRenewal("runtime", "codex", [

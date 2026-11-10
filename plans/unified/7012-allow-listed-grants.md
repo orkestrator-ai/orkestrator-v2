@@ -125,3 +125,4 @@ A workspace grant can run exactly the commands whose definition says `access: "w
   - Switched grants and the relay to the allow-list, failing closed, with the debug cross-check; deleted the deny-lists and renamed the routing exclusions (`ce1d49a5b`).
   - Updated the docs (`7e881484b`).
   - Re-ran 0006's live checks on two `dev:test` profiles, direct and relayed: no 403 for any realm request, and administration, narrowed and unknown commands refused.
+- 2026-11-10: the debug cross-check (`nodes/workspace-grant-legacy-check.ts`) and its equivalence assertion are removed, as planned for the first release after 2.36 (v2.37.0-alpha to v2.37.4-beta shipped it). `NARROWED` in `workspace-grant-allow-list.test.ts` still records each narrowed command's justified access.

@@ -1,8 +1,8 @@
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
- * Remote client bandwidth baseline (todo 0052; plans/stream-efficience.md,
- * Phase 2). Runs the real gateway in this process against a fake backend and
- * synthetic workloads, and measures what remote clients would receive:
+ * Remote client bandwidth baseline (todo 0052, task 2: the baseline matrix).
+ * Runs the real gateway in this process against a fake backend and synthetic
+ * workloads, and measures what remote clients would receive:
  *
  *   mise exec -- bun apps/backend/scripts/remote-bandwidth-baseline.ts \
  *     [--transports body,on,websocket] [--workloads quiet,interactive,build,...] \

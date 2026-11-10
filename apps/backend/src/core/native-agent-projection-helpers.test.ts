@@ -189,7 +189,7 @@ describe("native agent projection helpers", () => {
     );
   });
 
-  test("MCP servers keep their order and list their tools in one fixed order (todo 7530)", () => {
+  test("MCP servers keep their order and list their tools in one fixed order (#2062)", () => {
     const servers = [
       { id: "b", tools: ["zeta", "alpha"] },
       { id: "a", tools: ["mid"] },
@@ -204,7 +204,7 @@ describe("native agent projection helpers", () => {
     expect(servers[0]?.tools).toEqual(["zeta", "alpha"]);
   });
 
-  test("discovery changed paths name where a value moved, never what it holds (todo 7530)", () => {
+  test("discovery changed paths name where a value moved, never what it holds (#2062)", () => {
     const notice = (receivedAt: string) => ({
       message: "Codex reported something private-marker",
       occurrences: [{ receivedAt }],

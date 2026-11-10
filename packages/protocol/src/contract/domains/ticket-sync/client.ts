@@ -16,7 +16,7 @@
  * gated on `syncs`: a renderer's client often carries no capabilities, and a
  * backend that predates it answers `unknown-command` itself. At version 0 it
  * is today's untyped call, answered as sent. The board's other calls
- * (`leafStatus`, `share`, `dismissConflicts`, to-do 3800) are the same.
+ * (`leafStatus`, `share`, `dismissConflicts`, #2027) are the same.
  * `readImage` and `putImage` are the image calls between machines, gated
  * like the rest of the sync.
  *

@@ -35,10 +35,9 @@ import {
   nativeAgentDenialsAreReadOnly,
   type NativeAgentExecutionPolicy,
 } from "../native-agent.js";
-import { GRAPH_ENFORCEMENT_TIERS, type GraphEnforcementTier } from "./template-model.js";
+import { type GraphEnforcementTier } from "./template-model.js";
 
 export type AgentEnforcementTier = GraphEnforcementTier;
-export const AGENT_ENFORCEMENT_TIERS = GRAPH_ENFORCEMENT_TIERS;
 
 /** Strongest first. */
 const TIER_RANK: Readonly<Record<AgentEnforcementTier, number>> = Object.freeze({

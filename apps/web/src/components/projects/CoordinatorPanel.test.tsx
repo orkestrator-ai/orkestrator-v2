@@ -165,7 +165,6 @@ const prepareSwitch = mock(async (_projectId: string, ref: string) => ({
 }));
 const syncGit = mock(async () => ensuredGit);
 const fetchGit = mock(async () => ensuredGit);
-const getCoordinator = mock(async () => ensuredSnapshot);
 /** Conditional view reads: a stand-in owner that stamps by body identity. */
 let viewRevision = 0;
 let viewBody: CoordinatorSnapshot | null = null;
@@ -296,7 +295,6 @@ mock.module("@/lib/backend", () => ({
     { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
   ]),
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: getCoordinator,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
@@ -410,7 +408,6 @@ describe("CoordinatorPanel", () => {
     syncGit.mockImplementation(async () => ensuredGit);
     fetchGit.mockReset();
     fetchGit.mockImplementation(async () => ensuredGit);
-    getCoordinator.mockClear();
     getCoordinatorView.mockClear();
     viewBody = null;
     assignAgent.mockClear();

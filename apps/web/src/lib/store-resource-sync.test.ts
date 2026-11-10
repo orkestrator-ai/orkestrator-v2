@@ -4,6 +4,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ScopedResourceRevisionManifest } from "@orkestrator/protocol/resource-events";
 import type { Environment } from "@/types";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 
@@ -101,6 +102,22 @@ const startTestStoreResourceSync = (options: Parameters<typeof startStoreResourc
   });
 
 const tick = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function scopedManifest(
+  overrides: Partial<ScopedResourceRevisionManifest> = {},
+): ScopedResourceRevisionManifest {
+  return {
+    generation: "a".repeat(32),
+    cursor: 1,
+    highWater: 1,
+    reset: false,
+    resetResources: [],
+    changes: [],
+    revisions: {},
+    hasMore: false,
+    ...overrides,
+  };
+}
 
 async function waitForState(
   predicate: () => boolean,
@@ -2995,11 +3012,13 @@ describe("authoritative resync", () => {
           (await invokeCommand("get_agent_mail_summary", {})) as never,
       });
       stopTransport = startResourceSync({
-        loadManifest: async (knownGeneration, knownRevisions) => {
+        loadScopedManifest: async (knownGeneration, cursor, knownRevisions, highWater) => {
           manifestCalls.push({ knownGeneration, knownRevisions });
-          return (await invokeCommand("get_resource_revision_manifest", {
+          return (await invokeCommand("get_scoped_resource_revision_manifest", {
             knownGeneration,
+            cursor,
             knownRevisions,
+            highWater,
           })) as never;
         },
       });
@@ -3497,14 +3516,15 @@ describe("authoritative resync", () => {
       .mockImplementation(async () => null);
     detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
     const manifestArguments: Array<{ generation?: string; revisions?: unknown }> = [];
-    const loadManifest = mock(async (generation?: string, revisions?: unknown) => {
-      manifestArguments.push({ generation, revisions });
-      return {
-        generation: "a".repeat(32),
-        reset: false,
-        revisions: { "pane-layout": "b".repeat(32) },
-      };
-    });
+    const loadScopedManifest = mock(
+      async (generation: string | undefined, _cursor: number, revisions: unknown) => {
+        manifestArguments.push({ generation, revisions });
+        return scopedManifest({
+          resetResources: ["pane-layout"],
+          revisions: { "pane-layout": "b".repeat(32) },
+        });
+      },
+    );
     const originalSetInterval = globalThis.setInterval;
     const originalClearInterval = globalThis.clearInterval;
     let intervalCallback: (() => void) | undefined;
@@ -3515,7 +3535,7 @@ describe("authoritative resync", () => {
     globalThis.clearInterval = mock(() => undefined) as unknown as typeof clearInterval;
     let stopResourceSync: (() => void) | null = null;
     try {
-      stopResourceSync = startResourceSync({ loadManifest });
+      stopResourceSync = startResourceSync({ loadScopedManifest });
       await tick(10);
       expect(getPaneLayout).not.toHaveBeenCalled();
       appCommandStore(paneLayoutStore).getState().finishHydration("env-1");
@@ -3574,19 +3594,23 @@ describe("authoritative resync", () => {
     const stableGeneration = "a".repeat(32);
 
     startResourceSync({
-      loadManifest: async () => ({
-        generation: stableGeneration,
-        reset: false,
-        revisions: { config: "b".repeat(32) },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          generation: stableGeneration,
+          reset: false,
+          resetResources: ["config"],
+          revisions: { config: "b".repeat(32) },
+        }),
     });
     await tick(0);
     startResourceSync({
-      loadManifest: async () => ({
-        generation: stableGeneration,
-        reset: false,
-        revisions: { kanban: "c".repeat(32) },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          generation: stableGeneration,
+          reset: false,
+          resetResources: ["kanban"],
+          revisions: { kanban: "c".repeat(32) },
+        }),
     });
     await tick(10);
     expect(getConfig).toHaveBeenCalledTimes(1);
@@ -3617,20 +3641,24 @@ describe("authoritative resync", () => {
     const stableGeneration = "a".repeat(32);
 
     startResourceSync({
-      loadManifest: async () => ({
-        generation: stableGeneration,
-        reset: false,
-        revisions: { config: "b".repeat(32) },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          generation: stableGeneration,
+          reset: false,
+          resetResources: ["config"],
+          revisions: { config: "b".repeat(32) },
+        }),
     });
     await tick(0);
     requestResourceResync();
     startResourceSync({
-      loadManifest: async () => ({
-        generation: stableGeneration,
-        reset: false,
-        revisions: { "feature-plan": "c".repeat(32) },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          generation: stableGeneration,
+          reset: false,
+          resetResources: ["feature-plan"],
+          revisions: { "feature-plan": "c".repeat(32) },
+        }),
     });
     await tick(10);
     releaseConfig();
@@ -3652,11 +3680,12 @@ describe("authoritative resync", () => {
     });
 
     startResourceSync({
-      loadManifest: async () => ({
-        generation: "a".repeat(32),
-        reset: false,
-        revisions: { config: "b".repeat(32) },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          reset: false,
+          resetResources: ["config"],
+          revisions: { config: "b".repeat(32) },
+        }),
     });
     await tick();
 
@@ -3685,14 +3714,15 @@ describe("authoritative resync", () => {
     });
 
     startResourceSync({
-      loadManifest: async () => ({
-        generation: "a".repeat(32),
-        reset: true,
-        revisions: {
-          project: "b".repeat(32),
-          environment: "c".repeat(32),
-        },
-      }),
+      loadScopedManifest: async () =>
+        scopedManifest({
+          reset: true,
+          resetResources: ["project", "environment"],
+          revisions: {
+            project: "b".repeat(32),
+            environment: "c".repeat(32),
+          },
+        }),
     });
     await tick();
 

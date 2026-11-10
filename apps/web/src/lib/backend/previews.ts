@@ -126,10 +126,6 @@ export function createPreviewsApi(client: BackendClient) {
     return previews().createAttachment(args);
   }
 
-  function releasePreviewAttachment(attachmentId: string): Promise<{ released: boolean }> {
-    return previews().releaseAttachment({ attachmentId });
-  }
-
   function getPreviewSettings(machine?: AccountMachine): Promise<PreviewSettingsResponse> {
     return on(machine).settings({});
   }
@@ -178,7 +174,6 @@ export function createPreviewsApi(client: BackendClient) {
     resolvePreviewTarget,
     probePreviewService,
     createPreviewAttachment,
-    releasePreviewAttachment,
     getPreviewSettings,
     updatePreviewSettings,
     revokePreviewAccess,
@@ -201,7 +196,6 @@ export const {
   resolvePreviewTarget,
   probePreviewService,
   createPreviewAttachment,
-  releasePreviewAttachment,
   getPreviewSettings,
   updatePreviewSettings,
   revokePreviewAccess,

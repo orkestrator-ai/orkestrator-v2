@@ -14,8 +14,6 @@ import type { FieldError } from "./field-validation.js";
 import { ORKESTRATOR_MCP_SERVER_NAME } from "./agent-mail.js";
 import type { WorkflowSnapshotV1 } from "./workflow-snapshot.js";
 
-export const TRANSCRIPT_ARTIFACT_SCHEMA_VERSION = 1;
-
 export const ARTIFACT_KINDS = [
   "html-static",
   "html-interactive",
@@ -478,9 +476,6 @@ export const NOT_APPLICABLE = "not-applicable";
 
 /** Logical asset names: bounded, no path separators, no traversal. */
 export const ARTIFACT_ASSET_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-
-/** Opaque identifiers minted by the backend. */
-export const ARTIFACT_ID_PATTERN = /^(?:art|pub|op|rcpt|asset)_[A-Za-z0-9_-]{8,64}$/;
 
 /** A filename derived independently from untrusted titles. */
 export function safeArtifactFilename(title: string, extension: string): string {

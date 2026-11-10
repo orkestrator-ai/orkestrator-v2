@@ -287,9 +287,6 @@ exit 0
           "legacy-unadopted",
         );
         expect(containerRows.find((row) => row.id === foreignId)).toBeUndefined();
-        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).rejects.toThrow(
-          "ContainerLifecycleError:invalid-request",
-        );
         await commands.get("docker_cleanup_execute")?.(
           { selectionToken: preview.selectionToken, containerIds: [orphanId, legacyOrphanId] },
           context,

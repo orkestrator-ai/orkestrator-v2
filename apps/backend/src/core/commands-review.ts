@@ -25,7 +25,6 @@ import { CommandFailedError, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
-import { resolveGitHubRepository } from "./github.js";
 import type { Environment, PrState } from "./models.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
@@ -951,72 +950,6 @@ export async function verifyEnvironmentReviewPackage(
       reason: error instanceof Error ? error.message : "Review package verification failed",
     };
   }
-}
-
-export async function verifyEnvironmentPullRequest(
-  environmentId: string,
-  prUrl: string,
-  targetBranch: string,
-  context: CommandContext,
-): Promise<{
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  state: "OPEN";
-}> {
-  const environment = await context.storage.getEnvironment(environmentId);
-  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const project = await context.storage.getProject(environment.projectId);
-  if (!project) throw new Error(`Project not found: ${environment.projectId}`);
-  const repository = resolveGitHubRepository(project.gitUrl);
-  const branch = validateGitRefName(targetBranch, "target branch");
-  const submittedUrl = prUrl.trim();
-  const submitted = parseGitHubPullRequestUrl(submittedUrl);
-  const canonical = `https://github.com/${submitted.owner}/${submitted.repo}/pull/${submitted.number}`;
-  if (submittedUrl !== canonical) {
-    throw new Error("Pull request URL must be a canonical github.com URL");
-  }
-  if (
-    submitted.owner.toLowerCase() !== repository.owner.toLowerCase() ||
-    submitted.repo.toLowerCase() !== repository.name.toLowerCase()
-  ) {
-    throw new Error("Pull request belongs to a different repository");
-  }
-
-  const runner = createEnvironmentCommandRunner(
-    environment,
-    context.runtime.environments.fence,
-    context.storage,
-    context.runtime.gitHubCli,
-  );
-  const raw = await runner(
-    "gh",
-    ["pr", "view", submittedUrl, "--json", "url,headRefName,baseRefName,state"],
-    30_000,
-  );
-  let result: Record<string, unknown>;
-  try {
-    result = asRecord(JSON.parse(raw), "gh pr view response");
-  } catch {
-    throw new Error("GitHub returned malformed pull request metadata");
-  }
-  const verifiedUrl = asString(result.url, "pull request URL");
-  const headRefName = asString(result.headRefName, "pull request head branch");
-  const baseRefName = asString(result.baseRefName, "pull request base branch");
-  const state = asString(result.state, "pull request state").toUpperCase();
-  if (verifiedUrl !== canonical) {
-    throw new Error("GitHub did not return the canonical pull request URL");
-  }
-  if (headRefName !== environment.branch) {
-    throw new Error("Pull request head branch does not match the environment branch");
-  }
-  if (baseRefName !== branch) {
-    throw new Error("Pull request base branch does not match the requested target branch");
-  }
-  if (state !== "OPEN") {
-    throw new Error("Pull request is not open");
-  }
-  return { url: verifiedUrl, headRefName, baseRefName, state: "OPEN" };
 }
 
 export function parseGitPorcelainPaths(output: string): string[] {

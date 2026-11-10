@@ -422,7 +422,9 @@ describe("node-addressed invoke and events through main", () => {
       code: "unknown-node",
       message: expect.stringContaining("[unknown-node]"),
     });
-    await expect(w.api.nodes.open("bk_nobody")).rejects.toMatchObject({ code: "unknown-node" });
+    await expect(
+      Promise.resolve().then(() => w.raw("orkestrator:nodes:open", "bk_nobody")),
+    ).rejects.toMatchObject({ code: "unknown-node" });
     expect(h.opens()).toEqual([]);
     expect(w.context.nodes.size).toBe(0);
   });
@@ -536,7 +538,7 @@ describe("node-addressed invoke and events through main", () => {
       if (failing) throw new Error("unreachable");
       return scope.includes(":node:") ? { installationId: "bk_a", domains: {} } : null;
     };
-    const snapshot = (await w.api.nodes.open("bk_a")) as Record<string, unknown>;
+    const snapshot = (await w.raw("orkestrator:nodes:open", "bk_a")) as Record<string, unknown>;
     expect(snapshot.hello).toEqual({ installationId: "bk_a", domains: {} });
     expect(reads).toEqual(["scope-1:node:bk_a"]);
     // The command node's snapshot answers its own scope's (here: none, pre-contract).
@@ -556,7 +558,7 @@ describe("node-addressed invoke and events through main", () => {
     const states: string[] = [];
     a.eventStreamConnection.subscribe((state) => void states.push(state));
     expect(await w.api.nodes.gateway("bk_a")).toBeNull();
-    const snapshot = await w.api.nodes.open("bk_a");
+    const snapshot = await w.raw("orkestrator:nodes:open", "bk_a");
     expect(snapshot).toEqual({
       nodeId: "bk_a",
       commandNode: false,

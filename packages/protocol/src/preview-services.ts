@@ -603,17 +603,6 @@ export function previewErrorFromUnknown(error: unknown): PreviewError | null {
   return previewError(category, detail ? { message: detail } : {});
 }
 
-/**
- * A *specifically unsupported* command from an old backend. Authentication,
- * network, and malformed responses must not be mistaken for this.
- */
-export function isUnknownPreviewCommandError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return /Unknown (?:backend )?command:?\s*(?:get_preview_|register_preview_|resolve_preview_|create_preview_)/i.test(
-    message,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Validation helpers (pure; shared by backend and clients)
 

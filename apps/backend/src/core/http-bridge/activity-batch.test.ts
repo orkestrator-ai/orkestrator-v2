@@ -7,10 +7,7 @@ import {
   httpProvider,
   type RequestRecord,
 } from "../agent-provider-test-support.js";
-import {
-  ACTIVITY_BATCH_UNSUPPORTED_RECHECK_MS,
-  HttpBridgeActivityBatchReader,
-} from "./activity-batch.js";
+import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
 
 function batchAnswer(observations: Record<string, unknown>): Response {
   return Response.json({ version: 1, observations });
@@ -20,23 +17,12 @@ function reader(
   handler: (url: string, init: RequestInit) => Response | Promise<Response>,
   connection: BridgeConnection = claudeConnection,
 ) {
-  let clock = 1_000;
   const requests: RequestRecord[] = [];
-  const instance = new HttpBridgeActivityBatchReader(
-    connection,
-    (async (input, init = {}) => {
-      requests.push({ url: String(input), init });
-      return handler(String(input), init);
-    }) as typeof fetch,
-    () => clock,
-  );
-  return {
-    reader: instance,
-    requests,
-    advance: (ms: number) => {
-      clock += ms;
-    },
-  };
+  const instance = new HttpBridgeActivityBatchReader(connection, (async (input, init = {}) => {
+    requests.push({ url: String(input), init });
+    return handler(String(input), init);
+  }) as typeof fetch);
+  return { reader: instance, requests };
 }
 
 describe("HTTP bridge activity batch", () => {
@@ -92,28 +78,18 @@ describe("HTTP bridge activity batch", () => {
     expect(map.get("f")).toBe("deferred");
   });
 
-  test("remembers an old bridge's 404/405 for this connection until the recheck expires", async () => {
+  test("a 404/405 answers unsupported for that read only", async () => {
     for (const status of [404, 405]) {
       let supported = false;
-      const {
-        reader: batch,
-        requests,
-        advance,
-      } = reader(() =>
+      const { reader: batch, requests } = reader(() =>
         supported
           ? batchAnswer({ a: { activity: "idle" } })
           : new Response("Not Found", { status }),
       );
 
       expect(await batch.read(["a"])).toBe("unsupported");
-      expect(await batch.read(["a"])).toBe("unsupported");
-      expect(requests).toHaveLength(1);
-
-      // An in-place upgrade behind the same coordinates is found again.
+      // Nothing is remembered: the next sweep asks the bridge again.
       supported = true;
-      advance(ACTIVITY_BATCH_UNSUPPORTED_RECHECK_MS - 1);
-      expect(await batch.read(["a"])).toBe("unsupported");
-      advance(1);
       expect(await batch.read(["a"])).toEqual(new Map([["a", { state: "idle" }]]));
       expect(requests).toHaveLength(2);
     }

@@ -78,7 +78,7 @@ function idleCodex() {
     authoritative: true,
   }));
   // Codex app-server lists an MCP server's tools as a map, in a different
-  // order on each read (todo 7530): a flag the tests flip to reproduce it.
+  // order on each read (#2062): a flag the tests flip to reproduce it.
   let mcpReads = 0;
   const mcpServers = mock(async () => {
     mcpReads += 1;
@@ -272,7 +272,7 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
     });
   }, 30_000);
 
-  test("an MCP tool list read in a new order each time announces nothing (todo 7530)", async () => {
+  test("an MCP tool list read in a new order each time announces nothing (#2062)", async () => {
     await withIdleCodex(async ({ service, state, counted, advance }) => {
       state.reorderMcpTools = true;
       const tokens: Record<string, string | undefined> = {};
@@ -299,7 +299,7 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
     await withIdleCodex(async ({ service, state, counted, advance }) => {
       const tokens: Record<string, string | undefined> = {};
       await warmUp(service, tokens);
-      // Todo 7530: the announcement also names its section and changed path.
+      // #2062: the announcement also names its section and changed path.
       const metricsWereEnabled = nativeSessionInvalidationMetrics.enabled;
       nativeSessionInvalidationMetrics.setEnabled(true);
       nativeSessionInvalidationMetrics.reset();

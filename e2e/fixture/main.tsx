@@ -325,7 +325,6 @@ function installDesignLaunchFixture() {
     invoke: async <T,>(command: string, args?: unknown) => {
       if (command === "write_local_file")
         return `/tmp/design-fixture/${(args as { filePath: string }).filePath}` as T;
-      if (command === "design_status") return { ready: true } as T;
       if (command === "design_action") return [] as T;
       if (command === "design_capabilities") return ok<T>(capabilities);
       if (command === "design_readiness")

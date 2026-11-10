@@ -490,21 +490,13 @@ describe("Claude interaction adapter", () => {
     expect(plain.presentation.body).toBe("Tool: WebSearch");
   });
 
-  test("a Claude bridge without the interactions route still serves its questions", async () => {
-    const expiresAt = Date.now() + 60_000;
+  test("a Claude interactions read that fails fails the snapshot", async () => {
+    // Every Claude bridge from v2.21.0 serves the route, so a lone 404 there
+    // is not an older bridge.
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/interactions")) return new Response(null, { status: 404 });
-      return Response.json(
-        url.endsWith("/questions")
-          ? {
-              questions: [
-                { id: "question-1", expiresAt, questions: [{ question: "Go?", options: [] }] },
-              ],
-            }
-          : { approvals: [] },
-      );
+      return Response.json(url.endsWith("/questions") ? { questions: [] } : { approvals: [] });
     });
-    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
-    expect(snapshot.requests.map((request) => request.kind)).toEqual(["question"]);
+    await expect(provider.interactions!.listPendingInteractions("session-1")).rejects.toThrow();
   });
 });

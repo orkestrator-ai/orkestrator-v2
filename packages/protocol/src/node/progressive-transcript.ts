@@ -1,6 +1,5 @@
 import { boundTranscriptResponse } from "./transcript-window.js";
 
-export const BRIDGE_TRANSCRIPT_VERSION = 1 as const;
 export const BRIDGE_TRANSCRIPT_MAX_MESSAGES = 100;
 export const BRIDGE_TRANSCRIPT_TARGET_BYTES = 512 * 1024;
 

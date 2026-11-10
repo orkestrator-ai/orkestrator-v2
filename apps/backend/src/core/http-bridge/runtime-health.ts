@@ -28,7 +28,6 @@ import {
   providerAdvisoryNotices,
   providerInventoryCount,
 } from "../agent-provider-runtime.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 
 /**
  * Codex reports drift as `protocol.unknownNotifications` plus the last method
@@ -264,15 +263,10 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
 /**
  * Whether the bridge that wrote a runtime-health body reports MCP
  * configuration at all: it carries the `mcpConfigReporting` marker, which
- * current bridges send for every session, or an `mcpConfig` of any shape,
- * which bridges between the first report and the marker send once something
- * loaded. Neither means the bridge is older than the report.
+ * every bridge that reports sends for every session, an unknown one included.
+ * Without it the bridge cannot report what it loaded.
  */
 export function bridgeReportsMcpConfig(payload: unknown): boolean {
   const body = asRecord(payload);
-  if (!body) return false;
-  if (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) return true;
-  if (asRecord(body.mcpConfig) === null) return false;
-  compatibilityPathUsage.record("mcp-report.unmarked-config");
-  return true;
+  return typeof body?.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1;
 }

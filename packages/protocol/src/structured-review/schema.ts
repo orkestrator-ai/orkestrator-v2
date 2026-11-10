@@ -464,8 +464,3 @@ export const REVIEW_RECONCILIATION_JSON_SCHEMA = {
     },
   },
 } as const satisfies ReviewJsonSchema;
-
-// Concise aliases for callers that already establish structured-review context.
-export const REVIEW_REPORT_SCHEMA = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
-export const REVIEW_FINDING_POOL_SCHEMA = REVIEW_FINDING_POOL_JSON_SCHEMA;
-export const REVIEW_RECONCILIATION_SCHEMA = REVIEW_RECONCILIATION_JSON_SCHEMA;

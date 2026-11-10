@@ -149,19 +149,6 @@ export function createKanbanApi(client: BackendClient) {
     return filesDomain().read_file_base64({ filePath: path });
   }
 
-  /** Read a binary file from the local filesystem (deprecated: use readFileBase64 instead) */
-  async function readBinaryFile(path: string): Promise<Uint8Array> {
-    // Use our custom Electron command instead of the fs plugin (which has permission issues)
-    const base64 = await readFileBase64(path);
-    // Convert base64 to Uint8Array
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
-  }
-
   /**
    * Where each machine with a copy of this project stands in syncing its
    * tickets with this board. Empty on a backend without leaves, or one that
@@ -227,12 +214,6 @@ export function createKanbanApi(client: BackendClient) {
         userMessage,
         ...(storyId ? { storyId } : {}),
       }),
-    );
-  }
-
-  async function getFeaturePlanningSnapshot(projectId: string): Promise<FeaturePlanningRecord[]> {
-    return asKanbanModel<FeaturePlanningRecord[]>(
-      domain().get_feature_planning_snapshot({ projectId }),
     );
   }
 
@@ -425,13 +406,11 @@ export function createKanbanApi(client: BackendClient) {
 
   return {
     readFileBase64,
-    readBinaryFile,
     getTicketSyncStatus,
     getTicketSyncLeafStatus,
     shareTicketsWithCommandNode,
     dismissTicketSyncConflicts,
     startFeaturePlanning,
-    getFeaturePlanningSnapshot,
     retryFeaturePlanning,
     cancelFeaturePlanning,
     getKanbanTasks,
@@ -461,13 +440,11 @@ export type KanbanApi = ReturnType<typeof createKanbanApi>;
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
   readFileBase64,
-  readBinaryFile,
   getTicketSyncStatus,
   getTicketSyncLeafStatus,
   shareTicketsWithCommandNode,
   dismissTicketSyncConflicts,
   startFeaturePlanning,
-  getFeaturePlanningSnapshot,
   retryFeaturePlanning,
   cancelFeaturePlanning,
   getKanbanTasks,

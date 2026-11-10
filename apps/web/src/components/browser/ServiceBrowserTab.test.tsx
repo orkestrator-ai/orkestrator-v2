@@ -1238,19 +1238,6 @@ describe("service browser tabs", () => {
     );
   });
 
-  test("older backends keep the original link behaviour", async () => {
-    installBackend({ capabilities: null, services: [] });
-    seedTab(
-      formatPreviewIntentUri({
-        environmentId: FIXTURE_ENVIRONMENT_ID,
-        source: "container-terminal",
-        url: "http://localhost:3000/",
-      }),
-    );
-    renderTab();
-    await waitFor(() => expect(tabUrl()).toBe("http://localhost:3000/"));
-  });
-
   test("a tab saved against another backend asks for a new service", async () => {
     const { browserPreview } = installBackend({
       capabilities: fixturePreviewCapabilities({ backendInstanceId: "bk_other_backend_01" }),

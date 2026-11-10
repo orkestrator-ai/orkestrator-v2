@@ -2243,32 +2243,6 @@ describe("TerminalContainer", () => {
     ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
   });
 
-  test("keeps a completed setup tab when an older backend does not report hasOutput", async () => {
-    // A backend that predates `hasOutput` says nothing about its transcript.
-    // Unknown is not empty, so a rolling upgrade must not discard setup history
-    // it cannot prove is gone.
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: false,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      completedAt: "2026-01-01T00:01:00.000Z",
-      success: true,
-      terminalRunning: false,
-    });
-
-    restoreBackendSetupTabLayout();
-
-    await waitFor(() => {
-      expect(
-        appCommandStore(terminalSessionStore)
-          .getState()
-          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
-      ).toBe("env-hidden:setup");
-    });
-    expect(setupTabIds()).toEqual(["default"]);
-  });
-
   test("converts a setup tab after preserving renderer-local replay", async () => {
     // The backend drops a retained setup buffer minutes after the PTY exits, so
     // `hasOutput` goes false while PersistentTerminal can still paint the

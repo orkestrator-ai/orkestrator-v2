@@ -480,10 +480,6 @@ export function createNodeApis(ipcRenderer: IpcRendererLike) {
   return {
     node,
     nodes: {
-      /** Open the node's scope in this window (with a hold); answers its snapshot. */
-      open(nodeId: string): Promise<unknown> {
-        return ipcRenderer.invoke("orkestrator:nodes:open", nodeId);
-      },
       /** Close the node's scope in this window now. */
       release(nodeId: string): Promise<void> {
         const entry = entries.get(nodeId);

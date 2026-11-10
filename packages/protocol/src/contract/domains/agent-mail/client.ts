@@ -28,6 +28,10 @@ const legacyAgentMailApi = (_call: CommandCall, context: DomainAdapterContext): 
   legacyCommandApi(context, AGENT_MAIL_COMMANDS);
 
 export const agentMailClient = domainClient(agentMailDomain, {
+  2: agentMailApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: agentMailApi,
   0: legacyAgentMailApi,
 });

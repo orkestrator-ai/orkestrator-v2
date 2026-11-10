@@ -171,15 +171,12 @@ describe("telling an older bridge from one with nothing loaded", () => {
     });
   });
 
-  test("a bridge that reports mcpConfig without the marker still reports", async () => {
-    // Grok's process-level report before any child listed its servers.
+  test("a readable body without the marker is a bridge that does not report", async () => {
+    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
+    // An `mcpConfig` alone no longer counts: every published bridge marks its body.
     expect(
       await read({ summary: {}, notices: [], mcpConfig: { inventoryScope: "process" } }),
-    ).toEqual({ state: "none" });
-  });
-
-  test("a readable body with neither is a bridge older than the report", async () => {
-    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
+    ).toEqual({ state: "unsupported" });
   });
 
   test("a failure that is not 404 or 405 says nothing about the version", async () => {

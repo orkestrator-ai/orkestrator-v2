@@ -13,8 +13,8 @@ export interface EnvironmentDiffState {
   /** Diff stats keyed by environment ID */
   stats: Map<string, EnvironmentDiffStats>;
   /**
-   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale`,
-   * `degraded` and `unsupported` mean the counts may lag the backend.
+   * Freshness of this mirror (see `@/lib/bounded-hydration`). `stale` and
+   * `degraded` mean the counts may lag the backend.
    */
   syncStatus: HydrationStatus;
   setSyncStatus: (status: HydrationStatus) => void;

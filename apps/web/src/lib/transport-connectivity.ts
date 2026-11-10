@@ -47,7 +47,6 @@ const CONNECTED: TransportConnectivity = { disconnected: false, since: null };
 
 interface NodeConnectivity {
   readonly disconnectedSince: Map<TransportConnectivitySource, number>;
-  readonly listeners: Set<() => void>;
   snapshot: TransportConnectivity;
 }
 
@@ -59,7 +58,6 @@ let now: () => number = Date.now;
 const nodeConnectivity = defineScopedStore<NodeConnectivity>("transport-connectivity", (scope) => {
   const state: NodeConnectivity = {
     disconnectedSince: new Map(),
-    listeners: new Set(),
     snapshot: CONNECTED,
   };
   // A closing node no longer counts towards the window's outage.
@@ -67,7 +65,6 @@ const nodeConnectivity = defineScopedStore<NodeConnectivity>("transport-connecti
     const wasDisconnected = state.snapshot.disconnected;
     state.disconnectedSince.clear();
     state.snapshot = CONNECTED;
-    state.listeners.clear();
     if (wasDisconnected) notifyWindow();
   });
   return () => state;
@@ -110,7 +107,6 @@ function recompute(scope: NodeScope, state: NodeConnectivity): void {
   if (next.disconnected !== previous.disconnected) {
     readCoordinatorFor(scope).setDisconnected(next.disconnected);
   }
-  for (const listener of Array.from(state.listeners)) listener();
   notifyWindow();
 }
 
@@ -135,15 +131,6 @@ export function setTransportDisconnected(
 /** One node's connectivity. */
 export function getNodeConnectivity(scope: NodeScope): TransportConnectivity {
   return scope.disposed ? CONNECTED : connectivityOf(scope).snapshot;
-}
-
-export function subscribeNodeConnectivity(scope: NodeScope, listener: () => void): () => void {
-  if (scope.disposed) return () => undefined;
-  const { listeners } = connectivityOf(scope);
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
 }
 
 /** The window aggregate: disconnected while any open node is. */
@@ -251,7 +238,6 @@ export function resetTransportConnectivityForTests(clock: () => number = Date.no
     const state = connectivityOf(scope);
     state.disconnectedSince.clear();
     state.snapshot = CONNECTED;
-    state.listeners.clear();
   }
   windowSnapshot = CONNECTED;
   now = clock;

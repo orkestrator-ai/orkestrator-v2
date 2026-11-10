@@ -37,7 +37,6 @@ export type {
 import type {
   AppConfig as ProtocolAppConfig,
   GlobalConfig as ProtocolGlobalConfig,
-  RepositoryConfig,
 } from "@orkestrator/protocol/contract/domains/config";
 export type {
   AgentLaunchMode as AgentStyle,
@@ -190,16 +189,6 @@ export type GlobalConfig = Omit<ProtocolGlobalConfig, RendererOptionalGlobalFiel
   Partial<Pick<ProtocolGlobalConfig, RendererOptionalGlobalField>>;
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";
-
-/**
- * Legacy last-create state retained so older config and renderer versions can
- * still be decoded. Current create dialogs ignore it and use Settings defaults.
- *
- * @deprecated
- */
-export type LastEnvironmentAgentSelection = NonNullable<
-  RepositoryConfig["lastEnvironmentAgentSelection"]
->;
 
 /** The settings as the renderer holds them: the protocol's `AppConfig` with {@link GlobalConfig}. */
 export type AppConfig = Omit<ProtocolAppConfig, "global"> & { global: GlobalConfig };

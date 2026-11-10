@@ -47,7 +47,6 @@ export function fetchEnvironmentDiffStatsView(
   scope: NodeScope = appCommandScope(),
 ) {
   return readViewSnapshot(
-    "get_environment_diff_stats",
     () =>
       backendApiForScope(scope, createFilesSessionsApi, {
         getEnvironmentDiffStats: backend.getEnvironmentDiffStats,
@@ -80,8 +79,7 @@ export function toEnvironmentDiffStatsUpdate(
  *
  * Subscribe-before-snapshot through the bounded hydration controller: changes
  * that land while a snapshot is in flight are coalesced per environment within
- * fixed bounds and applied only when newer than the snapshot's revision (or,
- * for a legacy backend without revisions, replayed over it as before).
+ * fixed bounds and applied only when newer than the snapshot's revision.
  *
  * Mount it once, at the sidebar level.
  */

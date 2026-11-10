@@ -530,7 +530,7 @@ What differs on the graph engine:
   the bespoke engine never shows.
 
 Parity evidence for each Phase 3 checklist item, with the test names, is
-recorded in `plans/graphs/301-multi-review-on-graph-runtime.md`.
+recorded in the retired plan item `plans/graphs/301-multi-review-on-graph-runtime.md` (removed in #1979; git history keeps it).
 
 ## Performance boundary and verification
 

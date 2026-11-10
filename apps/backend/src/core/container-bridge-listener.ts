@@ -3,7 +3,7 @@ import { runCommand } from "./shell.js";
 
 /**
  * Whether the socket listening on a container bridge's port is the one the
- * bridge the backend started opened (to-do 7250).
+ * bridge the backend started opened (#2030).
  *
  * The bridge shares the agent's uid, so an agent's background process can kill
  * it and start a bridge of its own on the same port from the verifier and the

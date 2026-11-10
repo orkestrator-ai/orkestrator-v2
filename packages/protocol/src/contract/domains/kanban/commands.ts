@@ -400,18 +400,6 @@ export const startFeaturePlanningCommand = defineCommand({
   critical: ["operationId"],
 });
 
-/** Every planning record of a project, terminal ones included. */
-export const getFeaturePlanningSnapshotCommand = defineCommand({
-  domain: kanbanDomain,
-  name: "get_feature_planning_snapshot",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({ projectId: Schema.String }),
-  result: Schema.mutable(Schema.Array(FeaturePlanningRecordSchema)),
-  critical: [],
-});
-
 export const retryFeaturePlanningCommand = defineCommand({
   domain: kanbanDomain,
   name: "retry_feature_planning",
@@ -540,7 +528,6 @@ export const KANBAN_COMMANDS = [
   appendFeaturePlanMessageCommand,
   appendFeatureStoryMessageCommand,
   startFeaturePlanningCommand,
-  getFeaturePlanningSnapshotCommand,
   retryFeaturePlanningCommand,
   cancelFeaturePlanningCommand,
   getLinearConnectionCommand,

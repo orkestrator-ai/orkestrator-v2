@@ -265,18 +265,4 @@ describe("usePrMonitorService revision-aware recovery", () => {
     act(() => requestViewSafetyChecks("interval"));
     expect(getPrMonitorState).toHaveBeenCalledTimes(2);
   });
-
-  test("an unknown snapshot command selects the unsupported capability", async () => {
-    getPrMonitorState.mockImplementation(async () => {
-      throw new Error("Unknown backend command: get_pr_monitor_state");
-    });
-    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
-    await waitFor(() =>
-      expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("unsupported"),
-    );
-
-    act(() => requestViewSafetyChecks("interval"));
-    expect(getPrMonitorState).toHaveBeenCalledTimes(1);
-    observer.unmount();
-  });
 });

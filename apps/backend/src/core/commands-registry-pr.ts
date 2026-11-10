@@ -22,10 +22,8 @@ import {
   mergePrLocalCommand,
   prMonitorAgentTurnCompletedCommand,
   prMonitorProbeEnvironmentCommand,
-  prMonitorRefreshCommand,
   prMonitorWatchCommand,
   setEnvironmentAutoMergeCommand,
-  verifyEnvironmentPrCommand,
   verifyReviewPackageCommand,
 } from "@orkestrator/protocol/contract/domains/pull-requests";
 import {
@@ -60,7 +58,6 @@ import {
   parseReviewRound,
   parseReviewPreparationValidation,
   parseReviewPreparationFileNotes,
-  verifyEnvironmentPullRequest,
   verifyEnvironmentReviewPackage,
   generateReviewPackage,
   mergePullRequestInContainer,
@@ -155,16 +152,6 @@ export function registerPullRequestCommands(
   // argument is still a rejection.
   const registerDefined = <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>) =>
     register(def, handler, ASYNC_HANDLER);
-  registerDefined(
-    verifyEnvironmentPrCommand,
-    async ({ environmentId, prUrl, targetBranch }, context) =>
-      verifyEnvironmentPullRequest(
-        asString(environmentId, "environmentId"),
-        asString(prUrl, "prUrl"),
-        asString(targetBranch, "targetBranch"),
-        context,
-      ),
-  );
   registerDefined(generateReviewPackageCommand, async (args, context) => {
     const { environmentId, packageId, round, targetBranch, preparation, additionalLimitations } =
       args;
@@ -501,13 +488,6 @@ export function registerPullRequestCommands(
     context.runtime.prMonitor.service.requestMode(
       environmentToPrMonitorTarget(environment),
       requestedMode,
-    );
-  });
-  /** Requests an immediate check for an environment already being monitored. */
-  registerDefined(prMonitorRefreshCommand, async ({ environmentId }, context) => {
-    await context.runtime.prMonitor.requestRefresh(
-      asString(environmentId, "environmentId"),
-      context,
     );
   });
   /**

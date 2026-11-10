@@ -1852,11 +1852,7 @@ isolated `~/.claude.json`, and its fixture server lives under
 `output/agent-testing/<profile>/`. A profile's provider homes are always its
 own, including a Codex or OpenCode source it authorizes (that adds only a
 restricted copy of the host's `auth.json`), so a user-scope save never reaches
-the operator's own `config.toml` or `opencode.json`. Set
-`ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
-Claude bridge built before the `mcpConfigReporting` marker to add the
-older-bridge step. That step swaps the build in only while it starts the
-environment's bridge, then restores the current one.
+the operator's own `config.toml` or `opencode.json`.
 `ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model.
 `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and UI
 check but drops the ones that need the model to answer: Claude's bridge
@@ -2669,7 +2665,7 @@ the `steer-unsupported` hold note before its gate opens, and it is injected
 `coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
 runs the orchestration over a scripted command transport.
 
-The `goal` case (`plans/goals/403`) proves a coordinator can give a worker a goal
+The `goal` case proves a coordinator can give a worker a goal
 and react to its end. It runs only where the platform's `actions.goal` capability
 is on, so other platforms record a skip, gives the coordinator two prompts and
 waits at most six step budgets:

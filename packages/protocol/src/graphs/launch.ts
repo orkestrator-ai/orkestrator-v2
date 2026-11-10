@@ -36,13 +36,11 @@ import type { CompiledGraphPlan, GraphCompileCost } from "./plan.js";
 import { graphNodeBranches } from "./run-branches.js";
 import {
   GRAPH_RUN_BOUNDS,
-  GRAPH_RUN_LAUNCHERS,
   type GraphModelBinding,
   type GraphRunBindings,
   type GraphRunLauncher,
   type GraphRunStatus,
 } from "./run-model.js";
-import { GRAPH_RUN_ID_PATTERN } from "./run-identity.js";
 import type {
   GraphEnvironmentKind,
   GraphParameter,
@@ -475,15 +473,6 @@ export function parseGraphLaunchRequest(value: unknown): GraphLaunchRequest {
     request.requestId = value.requestId;
   }
   return request;
-}
-
-export function isGraphRunLauncher(value: unknown): value is GraphRunLauncher {
-  return GRAPH_RUN_LAUNCHERS.includes(value as GraphRunLauncher);
-}
-
-/** True when `id` is a run id (`GRAPH_RUN_ID_PATTERN`). */
-export function isGraphLaunchRunId(id: string): boolean {
-  return GRAPH_RUN_ID_PATTERN.test(id);
 }
 
 // ------------------------------------------------------------ role defaults

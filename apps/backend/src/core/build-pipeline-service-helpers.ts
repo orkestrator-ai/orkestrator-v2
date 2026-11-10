@@ -69,12 +69,6 @@ const log = createLogger("build-pipeline");
  */
 export const WORKTREE_PROBE_ATTEMPTS = 3;
 
-/** Stage names used in the certification errors a user reads on a failure. */
-export const VALIDATION_STAGE_LABELS = {
-  review: "Review",
-  verify: "Verification",
-} as const;
-
 export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 // The transcript renderer recognizes a verification answer by the same contract

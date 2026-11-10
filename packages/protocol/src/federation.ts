@@ -58,11 +58,6 @@ export function isRouteId(value: unknown): value is RouteId {
   return typeof value === "string" && ROUTE_ID_PATTERN.test(value);
 }
 
-export function parseRouteId(value: unknown, label = "routeId"): RouteId {
-  if (!isRouteId(value)) throw new Error(`Expected ${label} to be a route identity.`);
-  return value;
-}
-
 function parseEntityId(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > ENTITY_ID_MAX_LENGTH) {
     throw new Error(`Expected ${label} to be a non-empty identifier.`);
@@ -104,17 +99,6 @@ export function projectRef(backendId: BackendId, projectId: string): ProjectRef 
 
 export function environmentRef(backendId: BackendId, environmentId: string): EnvironmentRef {
   return { backendId, environmentId: parseEntityId(environmentId, "environmentId") };
-}
-
-export function sessionRef(
-  backendId: BackendId,
-  environmentId: string,
-  sessionId: string,
-): SessionRef {
-  return {
-    ...environmentRef(backendId, environmentId),
-    sessionId: parseEntityId(sessionId, "sessionId"),
-  };
 }
 
 export function parseProjectRef(value: unknown): ProjectRef {
@@ -207,10 +191,6 @@ export function parseEnvironmentKey(key: string): EnvironmentRef | null {
   } catch {
     return null;
   }
-}
-
-export function sameBackend(a: BackendRef, b: BackendRef): boolean {
-  return a.backendId === b.backendId;
 }
 
 export function sameEnvironment(a: EnvironmentRef, b: EnvironmentRef): boolean {

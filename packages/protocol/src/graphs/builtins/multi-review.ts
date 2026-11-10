@@ -5,7 +5,7 @@
  * the flow keeps running there (`engine: "multi-review"`). Duplicating it gives
  * a user template for the graph runtime. Where the graph model cannot say what
  * the engine does, the template says the nearest thing and the difference is
- * recorded beside it and in plans/graphs/108-builtin-templates.md. The
+ * recorded beside it and in docs/architecture/graphs.md (built-ins). The
  * backend's `graph-builtin-templates.test.ts` pins this file to the engine.
  * Browser-safe.
  */

@@ -58,14 +58,15 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("terminals, files and claude-tmux definitions", () => {
-  it("define 26, 28 and 28 commands, each in version 1 of its domain", () => {
-    expect(TERMINALS_COMMANDS).toHaveLength(26);
+  it("define 25, 28 and 28 commands, each since version 1 of its domain", () => {
+    expect(TERMINALS_COMMANDS).toHaveLength(25);
     expect(FILES_COMMANDS).toHaveLength(28);
     expect(CLAUDE_TMUX_COMMANDS).toHaveLength(28);
     expect(new Set(ALL.map((def) => def.name)).size).toBe(ALL.length);
     for (const def of ALL) {
       expect(def.since).toBe(1);
-      expect(def.domain.version).toBe(1);
+      // terminals is at 2 since attach_terminal was removed (2026-11-10).
+      expect(def.domain.version).toBe(def.domain.name === "terminals" ? 2 : 1);
       expect(def.domain.min).toBe(1);
     }
     expect(new Set(TERMINALS_COMMANDS.map((def) => def.domain.name))).toEqual(
@@ -158,10 +159,12 @@ describe("terminals, files and claude-tmux definitions", () => {
   it("are listed in the adapter list with a legacy adapter each", () => {
     for (const client of [terminalsClient, filesClient, claudeTmuxClient]) {
       expect(DOMAIN_CLIENTS).toContain(client);
-      expect(client.versions).toEqual([1, 0]);
+      const current = client.domain.name === "terminals" ? 2 : 1;
+      const versions = current === 2 ? [2, 1, 0] : [1, 0];
+      expect(client.versions).toEqual(versions);
       expect(buildAdapterList().domains[client.domain.name]).toEqual({
-        current: 1,
-        adapters: [1, 0],
+        current,
+        adapters: versions,
       });
     }
   });
@@ -204,13 +207,13 @@ function fakeNode(answer: (command: string, args: unknown) => unknown) {
 }
 
 const CURRENT: NegotiatedDomains = {
-  terminals: { min: 1, max: 1 },
+  terminals: { min: 1, max: 2 },
   files: { min: 1, max: 1 },
   "claude-tmux": { min: 1, max: 1 },
 };
 
 describe("terminals client", () => {
-  it("version 1 sends the envelope, with requestId critical on a job launch", async () => {
+  it("version 2 sends the envelope, with requestId critical on a job launch", async () => {
     const node = fakeNode(() => ({
       jobId: "j",
       environmentId: "e",
@@ -219,7 +222,7 @@ describe("terminals client", () => {
       status: "started",
     }));
     const client = createDomainClient(terminalsClient, node.options(CURRENT));
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     await client.api().launch_terminal_job({
       environmentId: "e",
       requestId: "r",
@@ -228,7 +231,7 @@ describe("terminals client", () => {
     });
     expect(node.sent[0]?.envelope).toEqual({
       domain: "terminals",
-      version: 1,
+      version: 2,
       critical: ["requestId"],
     });
     expect(node.usage).toEqual([]);

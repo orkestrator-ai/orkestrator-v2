@@ -30,11 +30,7 @@
  * start order, and React starts them synchronously.
  */
 
-import {
-  getResourceRevisionManifest,
-  getScopedResourceRevisionManifest,
-  getScopedResourceSnapshots,
-} from "@/lib/backend";
+import { getScopedResourceRevisionManifest, getScopedResourceSnapshots } from "@/lib/backend";
 import { buildPipelineCompletionNotesService } from "@/lib/build-pipeline-completion-notes";
 import { dataSavingReadPolicyService } from "@/lib/data-saving";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
@@ -53,7 +49,6 @@ import { storeResourceSyncService } from "@/lib/store-resource-sync";
 import { transportConnectivityService } from "@/lib/transport-connectivity";
 import { windowSelectionPersistenceService } from "@/stores/windowSelectionStore";
 import {
-  isResourceRevisionManifest,
   isScopedResourceRevisionManifest,
   isScopedResourceSnapshotBatch,
 } from "@orkestrator/protocol/resource-events";
@@ -66,7 +61,6 @@ import {
 export function scopeResourceSyncOptions(scope: NodeScope): ResourceSyncOptions {
   if (isAppCommandScope(scope)) {
     return {
-      loadManifest: getResourceRevisionManifest,
       loadScopedManifest: getScopedResourceRevisionManifest,
       loadScopedSnapshots: getScopedResourceSnapshots,
     };
@@ -83,15 +77,6 @@ export function scopeResourceSyncOptions(scope: NodeScope): ResourceSyncOptions 
     return value;
   };
   return {
-    loadManifest: (knownGeneration, knownRevisions = {}) =>
-      read(
-        "get_resource_revision_manifest",
-        system().get_resource_revision_manifest({
-          ...(knownGeneration === undefined ? {} : { knownGeneration }),
-          knownRevisions,
-        }),
-        isResourceRevisionManifest,
-      ),
     loadScopedManifest: (knownGeneration, cursor, knownRevisions, highWater) =>
       read(
         "get_scoped_resource_revision_manifest",

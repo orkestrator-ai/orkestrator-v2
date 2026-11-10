@@ -1,8 +1,4 @@
-import {
-  PUBLIC_API_LIMITS,
-  type PublicActionName,
-  type PublicReceipt,
-} from "@orkestrator/protocol/public-api";
+import { type PublicActionName, type PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
 import {
   classifyReceiptForWait,
@@ -50,16 +46,6 @@ export const DEFAULT_WAIT_MS = 10 * 60 * 1000;
 export function stringOption(options: Record<string, unknown>, name: string): string | undefined {
   const value = options[name];
   return typeof value === "string" ? value : undefined;
-}
-
-export function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new CliError("invalid-input", `${label} is required`);
-  }
-  if (value.length > PUBLIC_API_LIMITS.pathMaxChars) {
-    throw new CliError("input-too-large", `${label} is too long`);
-  }
-  return value;
 }
 
 export function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {

@@ -870,7 +870,6 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
 
 /** Re-exported so hosts do not each import the progress module directly. */
 export {
-  MultiReviewProgressTracker as ReviewProgressTracker,
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
   PROGRESS_TRANSCRIPT_TAIL_MESSAGES,

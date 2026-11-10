@@ -14,12 +14,10 @@ import { DOMAIN_CLIENTS } from "../../client-adapters.js";
 import { decodeCommandArgs, decodeCommandResult } from "../../command.js";
 import { DOCKER_COMMANDS, dockerClient } from "./index.js";
 
-/** The 29 commands `contract-domain-map.ts` listed under `docker` (2026-11-07). */
+/** The 29 commands `contract-domain-map.ts` listed under `docker` (2026-11-07), less the seven nothing called (removed 2026-11-10). */
 const DOCKER_COMMAND_NAMES = [
-  "check_base_image",
   "check_container_host_reachability",
   "check_docker",
-  "cleanup_orphaned_containers",
   "close_container_logs",
   "docker_cleanup_execute",
   "docker_cleanup_preview",
@@ -27,9 +25,6 @@ const DOCKER_COMMAND_NAMES = [
   "docker_remove_container",
   "docker_start_container",
   "docker_stop_container",
-  "docker_system_prune",
-  "docker_version",
-  "get_container_host_port",
   "get_container_host_reachability",
   "get_container_logs",
   "get_container_usage",
@@ -38,13 +33,11 @@ const DOCKER_COMMAND_NAMES = [
   "get_docker_system_stats",
   "get_docker_topology",
   "get_orkestrator_containers",
-  "list_docker_containers",
   "open_container_logs",
   "propagate_github_token_to_containers",
   "provision_environment",
   "read_container_logs",
   "reattach_container",
-  "stream_container_logs",
 ];
 
 const WORKSPACE_EXCLUDED = new Set(["docker_cleanup_execute", "docker_cleanup_preview"]);
@@ -70,7 +63,7 @@ function fakeNode(domains: NegotiatedDomains | null, answers: Record<string, unk
 }
 
 describe("docker commands", () => {
-  it("defines every docker command once, at version 1", () => {
+  it("defines every docker command once, since version 1", () => {
     expect(DOCKER_COMMANDS.map((def) => def.name as string).sort()).toEqual(DOCKER_COMMAND_NAMES);
     for (const def of DOCKER_COMMANDS) {
       expect(def.domain.name).toBe("docker");
@@ -150,9 +143,9 @@ describe("docker commands", () => {
 });
 
 describe("docker client", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(dockerClient);
-    expect(dockerClient.versions).toEqual([1, 0]);
+    expect(dockerClient.versions).toEqual([2, 1, 0]);
   });
 
   it("sends the envelope to a node with the domain, critical keys included", async () => {

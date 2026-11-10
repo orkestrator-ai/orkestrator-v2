@@ -174,6 +174,14 @@ function createHarness(
     discardPendingCapture: mock(async () => undefined),
     showPins: mock(async () => []),
     clearPins: mock(async () => undefined),
+    getCaptureCapabilities: mock(() => ({}) as never),
+    recordPendingCaptureReceipt: mock(async () => null),
+    listExpiredCaptureNotices: mock(async () => []),
+    dismissExpiredCaptureNotices: mock(async () => undefined),
+    getPinResults: mock(async () => null),
+    getCaptureDiagnostics: mock(async () => ({}) as never),
+    showOnPage: mock(async () => ({}) as never),
+    captureResponsiveSet: mock(async () => ({}) as never),
     destroy: mock(() => undefined),
   };
 

@@ -32,7 +32,7 @@ export class BackgroundAttemptLimiter {
  *
  * Each delay is drawn from the upper half of its rung (`reconnectDelayMs`'s
  * equal jitter), so desktops that lost the same remote backend at the same
- * moment do not retry it in lock-step (todo 7200, task 2). Jitter only ever
+ * moment do not retry it in lock-step (#1940). Jitter only ever
  * shortens a rung, never by more than half.
  */
 export class ReconnectScheduler {

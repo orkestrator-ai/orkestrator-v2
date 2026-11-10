@@ -17,7 +17,7 @@ import {
 import {
   COORDINATOR_FOCUS_PROBE_MIN_INTERVAL_MS,
   GIT_STATUS_PROBE_INTERVAL_MS,
-  LEGACY_COORDINATOR_POLL_INTERVAL_MS,
+  COORDINATOR_VIEW_POLL_INTERVAL_MS,
   useCoordinatorPanelData,
   type CoordinatorPanelData,
 } from "./useCoordinatorPanelData";
@@ -61,7 +61,6 @@ class FakeBackend {
   statuses = new Map<string, ProjectGitStatus>();
   revisions = new Map<string, { body: CoordinatorSnapshot; revision: number }>();
   nextRevision = 0;
-  legacy = false;
   calls: Array<{ command: string; projectId: string; known?: number }> = [];
   ensureGate: Map<string, Promise<void>> = new Map();
   viewGate: Promise<void> | null = null;
@@ -89,7 +88,6 @@ class FakeBackend {
       case "get_project_coordinator":
         return this.bodies.get(projectId) ?? null;
       case "get_project_coordinator_view": {
-        if (this.legacy) throw new Error("Unknown backend command: get_project_coordinator_view");
         const gate = this.viewGate;
         const body = this.bodies.get(projectId)!;
         await gate;
@@ -450,42 +448,16 @@ describe("useCoordinatorPanelData", () => {
     expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("from a mutation");
   });
 
-  test("an older backend keeps the conservative full poll", async () => {
-    fake.legacy = true;
+  test("re-reads the conditional view on the safety cadence", async () => {
     render(<Harness projectId="p1" />);
     await settle();
     await waitFor(() => expect(latest.snapshot).not.toBeNull());
     await announce("p1");
-    expect(fake.count("get_project_coordinator")).toBe(1);
-    fake.bodies.set("p1", coordinator("p1", "legacy poll"));
-    await settle(LEGACY_COORDINATOR_POLL_INTERVAL_MS);
-    expect(fake.count("get_project_coordinator")).toBe(2);
-    expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("legacy poll");
-    expect(fake.count("get_project_coordinator_view")).toBe(1);
-  });
-
-  test("probes the view command again after a server switch within the same mount", async () => {
-    reads.coordinator.setConnection("older-server");
-    fake.legacy = true;
-    render(<Harness projectId="p1" />);
-    await settle();
-    await waitFor(() => expect(latest.snapshot).not.toBeNull());
-    await announce("p1");
-    expect(fake.count("get_project_coordinator_view")).toBe(1);
-    expect(fake.count("get_project_coordinator")).toBe(1);
-    // Legacy is remembered for this server: the safety cadence skips it.
-    act(() => requestViewSafetyChecks("interval"));
-    await settle();
-    expect(fake.count("get_project_coordinator")).toBe(1);
-
-    // The window switches to a current server; the mount survives.
-    fake.legacy = false;
-    fake.bodies.set("p1", coordinator("p1", "current server"));
-    act(() => reads.coordinator.setConnection("current-server"));
-    await settle(1_000);
-    await waitFor(() => expect(fake.count("get_project_coordinator_view")).toBe(2));
-    await settle();
-    expect(fake.count("get_project_coordinator")).toBe(1);
-    expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("current server");
+    const before = fake.count("get_project_coordinator_view");
+    fake.bodies.set("p1", coordinator("p1", "missed change"));
+    await settle(COORDINATOR_VIEW_POLL_INTERVAL_MS);
+    expect(fake.count("get_project_coordinator_view")).toBe(before + 1);
+    expect(latest.snapshot?.workspace.conversations[0]?.title).toBe("missed change");
+    expect(fake.count("get_project_coordinator")).toBe(0);
   });
 });

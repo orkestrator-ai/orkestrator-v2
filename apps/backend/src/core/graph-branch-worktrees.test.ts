@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { compile, type CompiledGraphPlan } from "@orkestrator/protocol/graphs/compile";
-import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/graphs/isolation-template";
+import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/testing/graph-isolation-template";
 import {
   GRAPH_ISOLATION_BOUNDS,
   graphActivationKey,

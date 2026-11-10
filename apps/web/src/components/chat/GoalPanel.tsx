@@ -107,7 +107,7 @@ function GoalPanelBody({
     </div>
   ) : null;
   // Grok's approvals and read-only rules are advisory, so an unattended goal
-  // relies on the agent honouring them (`plans/goals/303`).
+  // relies on the agent honouring them (`docs/architecture/goals.md`).
   const advisory =
     platform === "grok" ? (
       <p data-testid="goal-advisory-note" className="text-xs text-muted-foreground">

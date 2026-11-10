@@ -1,9 +1,9 @@
 # Graphs
 
 Status: Living. Describes the composable-graphs feature as built: Phases 0–2 of
-[`plans/composable-graphs.md`](../../plans/composable-graphs.md) and Phase 4
-items 401–405. The plan holds the decisions (D1–D21); the work items in
-[`plans/graphs/`](../../plans/graphs/000-index.md) hold the record of the work.
+the composable-graphs plan and Phase 4 items 401–405. The plan
+(`plans/composable-graphs.md`, decisions D1–D21) and its work items
+(`plans/graphs/`) were removed in #1979; git history keeps it.
 The user-facing walkthrough is [graphs-user-guide.md](graphs-user-guide.md).
 
 ## Overview
@@ -49,7 +49,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
-| Isolated branch worktrees (403) | `isolation.ts`, `isolation-template.ts` | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
+| Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
 | Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode-user-mcp.ts` | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
 | CLI (214) | `public-api-inputs-graph.ts` | `public-api/actions-graphs.ts` | `packages/cli/src/client/commands/graphs.ts` |
 
@@ -147,8 +147,8 @@ end.
 ### Items fan-out
 
 `replicate: {over: "items", input, maxBranches, truncate?}` runs one branch per
-item of a list input (report §4.4, §5.8; D9, D10). The design note is in
-[`plans/graphs/401-items-fanout.md`](../../plans/graphs/401-items-fanout.md).
+item of a list input (report §4.4, §5.8; D9, D10). The design note was
+`plans/graphs/401-items-fanout.md` (removed in #1979; git history keeps it).
 
 - **Input.** The port must be `list<T>` (one item per element artifact) or of a
   named type that declares `items` (one item per entry of its item list);
@@ -565,7 +565,7 @@ alone. A built-in cannot be saved, launched or mock-run as a graph
 (`engine-template`); duplicating it drops `engine`, and the copy runs on the
 graph runtime. What the templates cannot express (engine-only behaviours such
 as conflict handling and mergeability waits) is listed in
-[`108-builtin-templates.md`](../../plans/graphs/108-builtin-templates.md).
+`plans/graphs/108-builtin-templates.md` (removed in #1979; git history keeps it).
 
 ## Library, trust and sharing
 
@@ -1148,8 +1148,7 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
 
 A way for several branches to write at once, each in a workspace of its own
 ("three competing implementations, a judge picks one", report §6.7, §9.3).
-Design note:
-[`plans/graphs/403-isolated-branch-worktrees.md`](../../plans/graphs/403-isolated-branch-worktrees.md).
+Design note: `plans/graphs/403-isolated-branch-worktrees.md` (removed in #1979; git history keeps it).
 
 - **Opting in.** `isolation: "worktree"` on a replicated writer with exactly
   one single `workspace@1` input and at most 8 branches (`isolation-*` codes).
@@ -1894,5 +1893,5 @@ environment is away, and a wait surviving a backend restart).
   host; a live `open-pull-request`, which opens a real pull request and needs
   the user's approval; a backend restart mid fan-out on a real stack (the
   seeded interleavings cover it with fakes); and the coordinator's graph
-  wakes with a live coordinator. The Phase 2 exit criteria in
-  [`000-index.md`](../../plans/graphs/000-index.md) track them.
+  wakes with a live coordinator. The Phase 2 exit criteria in the
+  retired `plans/graphs/000-index.md` (removed in #1979; git history keeps it) tracked them.

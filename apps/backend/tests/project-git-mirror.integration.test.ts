@@ -15,6 +15,10 @@ import { randomBytes } from "node:crypto";
 import { promises as fs, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { syncRuntimeGitHubCredential } from "../src/core/container-github-credential";
+import type { Environment } from "../src/core/models";
+import { withDockerScript } from "./container-lifecycle-fixtures";
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { cleanupProjectForRemoval } from "../src/core/commands-registry-projects";
 import type { CommandContext } from "../src/core/commands-context";
 import {
@@ -1165,19 +1169,27 @@ clone_repository "$2" "$3"
       const first = refresh({ run }, project(), {
         kind: "github-pat",
         token: "old-token",
+        generation: "11111111-1111-1111-1111-111111111111",
         localRemote: true,
       });
       await entered;
       const second = refresh({}, project(), {
         kind,
         token: kind === "anonymous" ? undefined : "new-token",
+        generation: kind === "anonymous" ? undefined : "22222222-2222-2222-2222-222222222222",
         localRemote: true,
       });
       release();
       expect(await first).toBe("built");
       expect(await second).toBe("built");
-      expect(existsSync(mirrorPath(kind))).toBe(true);
-      if (kind === "anonymous") expect(existsSync(mirrorPath("github-pat"))).toBe(false);
+      expect(
+        existsSync(
+          mirrorPath(
+            kind === "anonymous" ? kind : "github-pat-22222222-2222-2222-2222-222222222222",
+          ),
+        ),
+      ).toBe(true);
+      expect(existsSync(mirrorPath("github-pat-11111111-1111-1111-1111-111111111111"))).toBe(false);
       expect(await readState()).toMatchObject({ access: kind });
     },
   );
@@ -1459,4 +1471,129 @@ test("a clone report during fetch survives publication and is verified next time
   expect(JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8")).suspect).toBe(
     false,
   );
+});
+
+describe("review regressions", () => {
+  const access = (generation: string): GitMirrorAccess => ({
+    kind: "github-pat",
+    token: "token",
+    localRemote: true,
+    generation,
+  });
+  const first = "11111111-1111-1111-1111-111111111111";
+  const second = "22222222-2222-2222-2222-222222222222";
+
+  test("oversized backoff survives a fresh authenticated generation", async () => {
+    const options = { force: false, now: () => 100000000, maxBytes: 1 };
+    expect(await refresh(options, project(), access(first))).toBe("oversized");
+    let commands = 0;
+    expect(
+      await refresh(
+        {
+          ...options,
+          run: async () => {
+            commands++;
+            throw new Error("unexpected transfer");
+          },
+        },
+        project(),
+        access(second),
+      ),
+    ).toBe("skipped-oversized");
+    expect(commands).toBe(0);
+    expect(existsSync(mirrorPath("github-pat-" + first))).toBe(false);
+  });
+
+  test("failed-attempt backoff survives a fresh authenticated generation", async () => {
+    const options = {
+      force: false,
+      now: () => 100000000,
+      run: async () => {
+        throw new Error("refused");
+      },
+    };
+    expect(await refresh(options, project(), access(first))).toBe("failed");
+    expect(await refresh(options, project(), access(second))).toBe("skipped-recent");
+  });
+
+  test("successful-attempt interval survives a fresh authenticated generation", async () => {
+    const options = { force: false, now: () => 100000000 };
+    expect(await refresh(options, project(), access(first))).toBe("built");
+    expect(await refresh(options, project(), access(second))).toBe("skipped-recent");
+    expect(existsSync(mirrorPath("github-pat-" + first))).toBe(false);
+    expect(existsSync(mirrorPath("github-pat-" + second))).toBe(false);
+  });
+
+  test.each([undefined, "less-privileged-token"])(
+    "credential sync withdraws old publication and drains a blocked fetch (%s)",
+    async (token) => {
+      const old = access(first);
+      expect(await refresh({}, project(), old)).toBe("built");
+      let release!: () => void;
+      let started!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const run: typeof runCommand = async (command, args, options) => {
+        if (args?.includes("fetch")) {
+          started();
+          await blocked;
+        }
+        return runCommand(command, args, options);
+      };
+      const running = refresh({ run }, project(), old);
+      await entered;
+      try {
+        await withDockerScript(
+          `#!/bin/sh
+[ ! -e '${mirrorPath("github-pat-" + first)}' ] || exit 1
+cat >/dev/null
+exit 0
+`,
+          async () => {
+            const sync = syncRuntimeGitHubCredential(
+              { projectId: PROJECT_ID } as Environment,
+              "fixture-container",
+              token,
+              context,
+            );
+            release();
+            await sync;
+          },
+        );
+        expect(await running).toBe("cancelled");
+        expect(existsSync(mirrorPath("github-pat-" + first))).toBe(false);
+      } finally {
+        release();
+        await running;
+      }
+    },
+  );
+
+  test("outer permission failure includes the ownership remediation", async () => {
+    const entries: Array<{ event: string; fields?: Record<string, unknown> }> = [];
+    configureLogger({
+      sink: (entry) => {
+        if (entry.record) entries.push(entry.record);
+      },
+    });
+    try {
+      const error = Object.assign(new Error("denied"), { code: "EACCES" });
+      expect(
+        await refresh({
+          freeBytes: async () => {
+            throw error;
+          },
+        }),
+      ).toBe("failed");
+      expect(
+        entries.find((entry) => entry.event === "git-mirror.refresh-failed")?.fields?.remediation,
+      ).toContain("Restore backend-user ownership");
+    } finally {
+      resetLogger();
+    }
+  });
 });

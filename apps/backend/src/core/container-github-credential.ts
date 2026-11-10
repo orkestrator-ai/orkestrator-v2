@@ -2,6 +2,7 @@ import type { CommandContext } from "./commands-context.js";
 import { syncContainerGitHubCredential } from "./commands-files.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { readImageManifest } from "./docker-image.js";
+import { withdrawAuthenticatedGitMirrors } from "./project-git-mirror.js";
 import type { Environment } from "./models.js";
 
 /**
@@ -16,6 +17,9 @@ export async function syncRuntimeGitHubCredential(
   context: Pick<CommandContext, "storage">,
   readManifest = readImageManifest,
 ): Promise<void> {
+  if (environment) {
+    await withdrawAuthenticatedGitMirrors(context.storage.getDataDir(), environment.projectId);
+  }
   const imageId = environment ? currentRuntimeIdentity(environment, context)?.imageId : undefined;
   const read = imageId ? await readManifest(imageId, context).catch(() => null) : null;
   await syncContainerGitHubCredential(containerId, token, {

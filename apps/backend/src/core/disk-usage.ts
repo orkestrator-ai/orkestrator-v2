@@ -447,7 +447,14 @@ async function holdsGitMirror(directory: string): Promise<boolean> {
     if (await pathExists(path.join(directory, mount, GIT_MIRROR_NAME))) return true;
   }
   const names = await readdir(directory).catch(() => [] as string[]);
-  return names.some((name) => name.startsWith(".building-"));
+  for (const name of names) {
+    if (
+      name.startsWith(".building-") &&
+      (await pathExists(path.join(directory, name, GIT_MIRROR_NAME)))
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Every environment, for the disk usage overview; sizes are asked per environment. */

@@ -357,7 +357,7 @@ export async function createDockerContainer(
   // The container reads only the mirror of the access it is given itself: the
   // same GitHub token or none, so the mount never holds a branch its own
   // credential could not fetch (container-lifecycle.md#project-git-mirror).
-  const gitMirrorAccess =
+  const resolvedMirrorAccess =
     mirrorEligible && mirrorRemoteReachable
       ? await resolveGitMirrorAccess({
           gitUrl: project.gitUrl,
@@ -368,6 +368,10 @@ export async function createDockerContainer(
           containersGetGitHubCredential: context.runtimeFlavor !== "agent-test",
         })
       : null;
+  // Authenticated generations cannot be reused at startup. Do not download a
+  // private cache after its only reader has already cloned. Anonymous mirrors
+  // remain safe even if credential synchronization observes a newer setting.
+  const gitMirrorAccess = resolvedMirrorAccess?.kind === "anonymous" ? resolvedMirrorAccess : null;
   const gitMirrorArguments = gitMirrorAccess
     ? await gitMirrorContainerArguments(
         context.storage.getDataDir(),

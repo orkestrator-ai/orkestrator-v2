@@ -377,6 +377,25 @@ export async function stopProjectGitMirrorRefreshes(dataDir: string): Promise<vo
   await Promise.all(active.map(([, writer]) => writer.done));
 }
 
+/** Withdraw historical privileged binds before a runtime credential is replaced.
+ * New runtimes mount only anonymous mirrors. Drain the old writer first so it
+ * cannot publish into a retired bind after the token has been removed.
+ */
+export async function withdrawAuthenticatedGitMirrors(
+  dataDir: string,
+  projectId: string,
+): Promise<void> {
+  const directory = projectDirectory(dataDir, projectId);
+  const writer = writers.get(directory);
+  if (writer) {
+    writer.stopped = true;
+    writer.controller.abort();
+    await writer.done;
+  }
+  if (!(await isDirectory(directory))) return;
+  await retireOtherAccessMirrors(directory, "anonymous");
+}
+
 /**
  * Creates or updates a project's mirror for `access`, the access containers are
  * given now, and retires every other kind's. Failures are logged, never thrown.
@@ -425,6 +444,7 @@ export function refreshProjectGitMirror(
         log.warn("git-mirror.refresh-failed", {
           projectId: project.id,
           error: formatLogError(error, { message: false }),
+          remediation: permissionRemediation(error),
         });
         return writer.controller.signal.aborted ? ("cancelled" as const) : ("failed" as const);
       });
@@ -483,10 +503,11 @@ async function runRefresh(
   const account = access.token ? ((await readAccount(access.token)) ?? null) : undefined;
   const accountUnknown = account === null;
   const accessChanged =
-    state.generation !== access.generation ||
-    state.access !== access.kind ||
-    (typeof account === "string" && state.account !== account);
-  const withdrawn = (accessChanged || accountUnknown) && (await retireMirror(directory, mirror));
+    state.access !== access.kind || (typeof account === "string" && state.account !== account);
+  const generationChanged = state.generation !== access.generation;
+  const withdrawn =
+    (accessChanged || generationChanged || accountUnknown) &&
+    (await retireMirror(directory, mirror));
   if (retiredKinds.length > 0 || withdrawn) {
     log.info("git-mirror.access-changed", {
       projectId: project.id,
@@ -524,6 +545,7 @@ async function runRefresh(
     !exists ||
     !verified ||
     accessChanged ||
+    generationChanged ||
     state.remote !== remote ||
     (state.failures ?? 0) >= GIT_MIRROR_REBUILD_AFTER_FAILURES;
   const free = await (options.freeBytes ?? availableBytes)(directory);
@@ -935,7 +957,10 @@ async function removeScratch(directory: string): Promise<void> {
 async function isDirectory(target: string): Promise<boolean> {
   return lstat(target).then(
     (stats) => stats.isDirectory(),
-    () => false,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+      throw error;
+    },
   );
 }
 

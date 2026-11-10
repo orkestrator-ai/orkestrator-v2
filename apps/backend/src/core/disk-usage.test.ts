@@ -413,6 +413,7 @@ test("lists Git mirrors with their size, largest first, and names only live proj
     },
   );
   await fs.mkdir(path.join(directory("gone"), "mount", "mirror.git"), { recursive: true });
+  await fs.mkdir(path.join(directory(empty.id), ".building-home-xyz"), { recursive: true });
   // Only bind sources: this project has had no mirror built.
   await fs.mkdir(path.join(directory(empty.id), "mount"), { recursive: true });
   await fs.mkdir(path.join(directory(empty.id), "mount-github-host-cli"), { recursive: true });

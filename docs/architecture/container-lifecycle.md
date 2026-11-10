@@ -1922,8 +1922,11 @@ need it once cloned.
   remote, as the container's clone converts it, is GitHub over HTTPS and
   `resolveContainerGitHubToken` returns a token; otherwise `anonymous`, which
   is also every agent-test profile's, since those never sync a credential in.
-  Anonymous containers use `mount-anonymous/`; authenticated containers use a fresh generation of their kind, and the refresh
-  it starts is handed the same access, token in memory.
+  Anonymous containers use `mount-anonymous/`. Authenticated containers receive no mirror
+  mount and schedule no mirror refresh: a fresh authenticated generation cannot help
+  its initial clone, and a background download would be wasted. They clone directly
+  with their runtime credential. This also removes the need to coordinate a token
+  snapshot between mirror selection and credential delivery.
   - **The fetch is the container's.** The URL converted as
     `convert_ssh_to_https` converts it, `GIT_ALLOW_PROTOCOL` limited to its
     scheme (`file` only for the agent-test fixture, which the container
@@ -1952,15 +1955,17 @@ need it once cloned.
     login that cannot be read (no `gh`, no network, a refused token) withdraws
     the mirror too, without bypassing the interval, and records `null`, so the
     next refresh builds it anew with the current token.
-  - **Reader generations.** Every authenticated container gets a fresh random
-    bind directory, `mount-<kind>-<uuid>`, initially empty. Only the refresh
-    carrying that container's token can publish there. No account lookup is
-    needed before binding an empty directory; unknown identity never publishes.
-    This also separates tokens with different repository permissions for the
-    same account. The next refresh retires earlier generations but keeps their
-    bind directories. Old containers never see a replacement reader's mirror.
-    Authenticated readers therefore cannot reuse an existing cache at creation;
-    anonymous readers retain the shared cache.
+  - **Historical authenticated mounts.** Before runtime credential synchronization
+    (including restart and token propagation), the backend cancels and drains the
+    project's active mirror writer, then withdraws every authenticated and legacy
+    mirror. Bind directories remain for existing containers, but are empty before
+    the token is replaced or removed. A withdrawal failure prevents credential
+    synchronization. Anonymous mirrors contain only anonymously fetched objects
+    and remain safe through credential changes.
+  - **Retry bounds.** The lower-level authenticated refresh path retains its
+    oversized and attempt deadlines across fresh reader generations when access
+    kind and account are unchanged. A generation changes publication, not retry
+    eligibility. New production containers do not use this path.
   - **Access transitions during refresh.** A different access request aborts
     the active writer and queues the latest request. The writer settles before
     the queued reconciliation runs; shutdown also drains it without restarting.

@@ -124,7 +124,7 @@ test("an image with the capability gets the read-only mount and the variable", a
   expect(create).toContain("-e GIT_URL=https://example.invalid/repo.git");
 });
 
-test("a container is bound to the mirror of the GitHub credential it is given", async () => {
+test("authenticated containers skip mirrors while anonymous readers retain the cache", async () => {
   const github = {
     capabilities: { "git-mirror": 1 },
     gitUrl: "git@github.com:acme/repo.git",
@@ -137,7 +137,8 @@ test("a container is bound to the mirror of the GitHub credential it is given", 
     ...github,
     global: { containerGitHubCredential: "pat", githubToken: "container-pat" },
   });
-  expect(pat.create).toMatch(/mount-github-pat-[a-f0-9-]{36}:/);
+  expect(pat.create).not.toContain("orkestrator-git-mirror");
+  await expect(fs.stat(path.join(pat.dataDir, "git-mirrors"))).rejects.toThrow();
   // The token reaches the refresh in memory, never the create command.
   expect(pat.create).not.toContain("container-pat");
 

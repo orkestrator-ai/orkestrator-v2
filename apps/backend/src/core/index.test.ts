@@ -1461,8 +1461,8 @@ describe("native-agent activity reconciliation lifecycle", () => {
       expect(intervals.filter((interval) => interval.handle === logPolicyExpiryTimer)).toHaveLength(
         1,
       );
-      // The shared usage-readings fallback is its own 60 s timer too, and a
-      // repeated `init` must not start a second one either.
+      // The shared usage readings' last-resort sync is a third separate 60 s
+      // timer, also started once however many times init runs.
       const usageSyncTimer = (backend as unknown as { usageSyncTimer: unknown }).usageSyncTimer;
       expect(usageSyncTimer).toBeTruthy();
       expect(intervals.filter((interval) => interval.handle === usageSyncTimer)).toHaveLength(1);

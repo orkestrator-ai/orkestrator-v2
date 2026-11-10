@@ -3757,8 +3757,9 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
-      // Discovered extensions are excluded under every policy, so nothing can
-      // add a command at attach and the pre-attach read is the whole inventory.
+      // Every policy excludes extensions (`projectResourceDiscoveryOptions`),
+      // so nothing can add a command at attach: the preview is the whole
+      // inventory and is published `ready`, with no attach pending.
       expect(body).toMatchObject({
         catalogueVersion: 1,
         status: "ready",

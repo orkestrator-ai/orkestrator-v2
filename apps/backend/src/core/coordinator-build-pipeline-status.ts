@@ -4,9 +4,16 @@
  * names how its newest Verify judged each acceptance criterion and on which
  * commit (`build-pipeline-criteria-report.ts`), so the coordinator can tell
  * the user what was proved without reading the ticket.
+ *
+ * A cancelled build is reported as cancelled, never as failed: a cancel is
+ * someone's decision to stop the work, and a coordinator that read it as a
+ * failure restarted it (to-do 7545 task 4).
  */
 import {
+  BUILD_CANCELLED_ERROR,
+  isCancelledBuildPipeline,
   pipelineDeliverySummary,
+  type BuildPipeline,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
@@ -28,6 +35,15 @@ const BUILD_STAGE_LABELS: Record<string, string> = {
   "creating-pr": "verification",
   "resolving-conflicts": "pull request",
 };
+
+/**
+ * What a cancelled build's notice tells its coordinator. Coordinators and
+ * users both cancel through `cancel_build_pipeline`, and the pipeline does not
+ * record which one did, so the coordinator is told how to tell: a cancel it did
+ * not make itself is the user's.
+ */
+export const BUILD_CANCELLED_NOTICE =
+  "It was stopped on purpose, not by an error. If you did not cancel it yourself, the user did: that is their decision to stop this work. Do not restart, resume or rebuild it, and do not start another build for this ticket, unless the user asks you to.";
 
 /** The settled status of a build pipeline snapshot, or null while it is just making progress. */
 export function buildPipelineStatus(
@@ -68,6 +84,28 @@ export function buildPipelineStatus(
       terminal: true,
       headline: "completed",
       details: [...task, ...verification, ...criteria, ...delivery],
+      tools: [read],
+      mode: "off",
+    };
+  }
+  if (
+    phase === "failed" &&
+    isCancelledBuildPipeline(
+      snapshot as Pick<BuildPipeline, "phase" | "error" | "failureContext" | "cancelledAt">,
+    )
+  ) {
+    const error = text(snapshot.error);
+    // Only an unconfirmed stop says more than "Build cancelled".
+    const unconfirmed =
+      error && error !== BUILD_CANCELLED_ERROR ? [`Error: ${boundedLine(error)}`] : [];
+    return {
+      // A build restarted from the UI and cancelled again is a new cancel.
+      key: `cancelled:${hash(text(snapshot.cancelledAt) ?? "")}`,
+      state: "cancelled",
+      tone: "info",
+      terminal: true,
+      headline: "was cancelled",
+      details: [...task, ...unconfirmed, BUILD_CANCELLED_NOTICE],
       tools: [read],
       mode: "off",
     };

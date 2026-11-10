@@ -683,6 +683,7 @@ export async function createCommandFixtures() {
         deleteMultiReviewWorkflowsByEnvironment: mock(async () => undefined),
         deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
         deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
+        // Synchronous in `StorageService`; environment deletion calls it unguarded.
         deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         deleteComposeDraftsByEnvironment: mock(async () => undefined),
         deleteFileDraftsByEnvironment: mock(async () => undefined),

@@ -699,6 +699,31 @@ describe("coordinator status wakes", () => {
     expect(world.received(coordinator)[0]).toContain("Error: The fix changed nothing");
   });
 
+  test("a cancelled build wakes its coordinator with a cancel, not a failure to restart", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("build-env");
+    await savePipeline(world, worker, "pipeline-1", { phase: "building" });
+    await associate(world, "build-pipeline", "pipeline-1");
+
+    await savePipeline(world, worker, "pipeline-1", {
+      phase: "failed",
+      cancelledAt: new Date().toISOString(),
+      error: "Build cancelled",
+      failureContext: { phase: "building", kind: "stage-transition" },
+    });
+    await settle(context);
+
+    expect(world.carriers(coordinator).map((turn) => turn[0]!.notice)).toEqual([
+      expect.objectContaining({ state: "cancelled", tone: "info" }),
+    ]);
+    const received = world.received(coordinator)[0]!;
+    expect(received).toContain("was cancelled");
+    expect(received).toContain("If you did not cancel it yourself, the user did");
+    expect(received).not.toContain("restart_build_pipeline_step");
+  });
+
   test("stage completions wake only under the opt-in stages setting", async () => {
     const settled = await createWorld();
     const worker = await settled.world.addEnvironment("build-env");

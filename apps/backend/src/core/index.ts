@@ -2813,8 +2813,8 @@ export class OrkestratorBackend {
     // anything an event did not trigger (a node with nothing new costs a collect).
     // `init()` can be re-entered by a supervisor retrying a partial startup;
     // a second interval would double the collects and leak the first handle.
-    void this.usageSync.syncAll();
     if (!this.usageSyncTimer) {
+      void this.usageSync.syncAll();
       this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
       this.usageSyncTimer.unref?.();
     }

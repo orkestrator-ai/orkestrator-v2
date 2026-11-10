@@ -200,6 +200,13 @@ runtime or shared directory are root-owned, which `stop` removes through a
 throwaway container (covered by a unit test with a fake CLI, not live).
 Everything else ran live on 2026-11-09.
 
+Review follow-up (2026-11-10): task 4 remains blocked on this host. The
+current user is uid/gid 1000, in groups 1000 and wheel (998); the host
+socket is root:docker, mode 0660, and the user cannot read or write it.
+No group, sudo or host-daemon configuration change was made. Socket group
+access, real root-owned leftovers, restart and final resource absence on
+a rootful outer daemon still need the recommended host run.
+
 **Decisions.**
 
 - **Where to run it?**
@@ -368,6 +375,28 @@ namespace, so the run proves the launcher and rootful `dockerd` behaviour
 and leaves the rootful-host case to task 4. The image was the published
 `ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta` (built from `480cf0296`,
 no `docker/` change since), pulled without credentials.
+
+### Task 1: review cleanup boundaries and lifecycle failure coverage
+
+Chosen: derive the shared path from the instance directory, require both
+recorded shared paths to match, and reject symbolic links or non-directory
+roots before bind mounting or deleting. Invalid paths retain the record.
+Trusting the recorded path would be simpler but lets cleanup leave its
+instance boundary.
+
+Chosen: retain an unknown nested state when inspection fails, skip it during
+automatic reaping, and recheck the container before removal. Automatic removal
+uses no force flag, so Docker can also refuse a container that starts after
+inspection; explicit stop keeps its force-removal behavior. Treating errors
+as stopped would make stale cleanup more aggressive but can terminate a live
+suite.
+
+Fake-CLI coverage now includes forged and symlinked shared paths for stop and
+reap, one-shot inspection failures during reap and another start, a container
+returning to running between inspections, reachable exited-container reaping,
+and failed exec or missing generation advance during restart. Restart failures
+keep the instance and allow a later retry and stop. These checks do not replace
+task 4's real rootful-host evidence.
 
 ## Related
 

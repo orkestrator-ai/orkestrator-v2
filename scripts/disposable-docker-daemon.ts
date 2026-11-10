@@ -25,6 +25,7 @@ import {
   isNestedRunning,
   nestedDaemonConfig,
   nestedNames,
+  nestedRunningState,
   outerDocker,
   outerEnvironment,
   removeNested,
@@ -799,11 +800,20 @@ async function launch(record: InstanceRecord, options: LauncherOptions): Promise
 async function reapStaleUnlocked(options: LauncherOptions): Promise<string[]> {
   const reaped: string[] = [];
   for (const record of listRecords(options.root)) {
-    if (isRunning(record)) continue;
+    if (record.settings.mode === "rootful") {
+      const running = nestedRunningState(record);
+      if (running !== false) {
+        if (running === null)
+          launcherDefaults(options).log(
+            `Left stale instance ${record.name}: nested daemon state is unknown`,
+          );
+        continue;
+      }
+    } else if (isRunning(record)) continue;
     if (record.settings.mode === "rootful") {
       // An unreachable outer daemon cannot confirm removal: keep the record for a later stop.
       try {
-        await remove(record, options);
+        await remove(record, options, true);
       } catch (error) {
         launcherDefaults(options).log(
           `Left stale instance ${record.name}: ${error instanceof Error ? error.message : error}`,
@@ -949,11 +959,15 @@ async function restartInstanceUnlocked(
   }
 }
 
-async function remove(record: InstanceRecord, options: LauncherOptions): Promise<void> {
+async function remove(
+  record: InstanceRecord,
+  options: LauncherOptions,
+  staleOnly = false,
+): Promise<void> {
   const settings = launcherDefaults(options);
   const directories = removableDirectories(record, options.root);
   if (record.settings.mode === "rootful") {
-    removeNested(record, { log: settings.log });
+    removeNested(record, { log: settings.log }, staleOnly);
     for (const directory of directories) removeTree(directory, null, record.runtimeBase);
     return;
   }

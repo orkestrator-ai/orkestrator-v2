@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -44,6 +45,8 @@ import {
   outerEnvironment,
   readGeneration,
   resolveOuterHost,
+  restartNested,
+  removeNested,
   type NestedState,
 } from "../../scripts/disposable-docker-daemon-nested";
 
@@ -101,6 +104,8 @@ type FakeState = {
     { name: string; labels: Record<string, string>; running: boolean; mounts: string[] }
   >;
   cleanups: number;
+  inspectFailures?: number;
+  reviveOnInspect?: boolean;
 };
 
 function state(): FakeState {
@@ -168,9 +173,12 @@ else if (command === "volume" && sub === "inspect") {
 }
 else if (command === "volume" && sub === "rm") { delete state.volumes[args.at(-1)]; save(); }
 else if (command === "container" && sub === "inspect") {
+  if (state.inspectFailures > 0) { state.inspectFailures--; save(); fail("temporary inspection failure"); }
   const found = find(args.at(-1));
   if (!found) fail("Error: No such container: " + args.at(-1));
-  console.log(found[0] + "|" + found[1].running + "|" + (found[1].labels["${NESTED_MARKER_LABEL}"] ?? "<no value>"));
+  const running = found[1].running;
+  if (state.reviveOnInspect) { found[1].running = true; state.reviveOnInspect = false; save(); }
+  console.log(found[0] + "|" + running + "|" + (found[1].labels["${NESTED_MARKER_LABEL}"] ?? "<no value>"));
 }
 else if (command === "run" && args.includes("--rm")) {
   // The cleanup container: deletes what it was given, as root would.
@@ -191,6 +199,8 @@ else if (command === "run") {
   save(); console.log(id);
 }
 else if (command === "exec") {
+  if (process.env.FAKE_EXEC_FAIL === "1") fail("missing pidfile");
+  if (process.env.FAKE_GENERATION_STUCK === "1") process.exit(0);
   const [, c] = find(args[1]);
   const runtime = c.mounts[0];
   const generation = Number(fs.readFileSync(path.join(runtime, "generation"), "utf8").split(" ")[0]);
@@ -486,6 +496,114 @@ describe("rootful lifecycle against a fake outer daemon", () => {
     expect(readRecord(root, "dies")).toBeNull();
     expect(existsSync(instancePaths(root, runtimeBase, "dies").runtimeDir)).toBe(false);
   });
+
+  for (const kind of ["symlink", "nested path", "recorded path"] as const) {
+    linuxTest(`stop and reap refuse an unsafe share: ${kind}`, async () => {
+      fakeOuterDocker({ images: [NESTED_DIND_IMAGE] });
+      const started = await startInstance("unsafe", { mode: "rootful" }, options());
+      const outside = path.join(scratch, "outside");
+      mkdirSync(outside);
+      const sentinel = path.join(outside, "sentinel");
+      writeFileSync(sentinel, "keep");
+      const record = readRecord(root, "unsafe")!;
+      if (kind === "symlink") {
+        rmSync(started.paths.share, { recursive: true });
+        symlinkSync(outside, started.paths.share);
+      } else if (kind === "nested path") record.nested!.shareDir = outside;
+      else record.paths.share = outside;
+      writeFileSync(started.paths.record, JSON.stringify(record));
+      expect(() => nestedRunArguments(record, record.nested!)).toThrow("shared directory");
+      await expect(stopInstance("unsafe", options())).rejects.toThrow("shared directory");
+      const current = state();
+      current.containers[started.nested!.containerId!]!.running = false;
+      writeFileSync(process.env.FAKE_OUTER_STATE!, JSON.stringify(current));
+      const before = calls().length;
+      expect(await reapStale(options())).toEqual([]);
+      expect(readFileSync(sentinel, "utf8")).toBe("keep");
+      expect(existsSync(started.paths.record)).toBe(true);
+      expect(
+        calls()
+          .slice(before)
+          .some((c) => c.args[0] === "rm" || c.args[0] === "run"),
+      ).toBe(false);
+      expect(state().cleanups).toBe(0);
+      if (kind === "symlink") {
+        rmSync(started.paths.share);
+        mkdirSync(started.paths.share);
+      }
+      writeFileSync(started.paths.record, JSON.stringify(started));
+    });
+  }
+
+  linuxTest(
+    "transient inspect failure preserves a running instance during reap and start",
+    async () => {
+      fakeOuterDocker({ images: [NESTED_DIND_IMAGE] });
+      const started = await startInstance("active", { mode: "rootful" }, options());
+      const failOnce = () => {
+        const current = state();
+        current.inspectFailures = 1;
+        writeFileSync(process.env.FAKE_OUTER_STATE!, JSON.stringify(current));
+      };
+      failOnce();
+      expect(await reapStale(options())).toEqual([]);
+      expect(state().inspectFailures).toBe(0);
+      failOnce();
+      await startInstance("second", { mode: "rootful" }, options());
+      expect(state().containers[started.nested!.containerId!]!.running).toBe(true);
+      expect(existsSync(started.paths.record)).toBe(true);
+      expect(calls().some((c) => c.args[0] === "rm")).toBe(false);
+    },
+  );
+
+  linuxTest("automatic removal rechecks stopped state and never forces removal", async () => {
+    fakeOuterDocker({ images: [NESTED_DIND_IMAGE] });
+    const started = await startInstance("revived", { mode: "rootful" }, options());
+    expect(() => removeNested(started, { log: () => undefined }, true)).toThrow("running");
+    const current = state();
+    current.containers[started.nested!.containerId!]!.running = false;
+    current.reviveOnInspect = true;
+    writeFileSync(process.env.FAKE_OUTER_STATE!, JSON.stringify(current));
+    expect(await reapStale(options())).toEqual([]);
+    expect(existsSync(started.paths.record)).toBe(true);
+    expect(calls().some((c) => c.args[0] === "rm")).toBe(false);
+    const stopped = state();
+    stopped.containers[started.nested!.containerId!]!.running = false;
+    writeFileSync(process.env.FAKE_OUTER_STATE!, JSON.stringify(stopped));
+    expect(await reapStale(options())).toEqual(["revived"]);
+    expect(state()).toMatchObject({ containers: {}, volumes: {} });
+    expect(existsSync(started.paths.record)).toBe(false);
+    expect(calls().find((c) => c.args[0] === "rm")!.args).not.toContain("--force");
+  });
+
+  for (const failure of ["exec", "generation"] as const) {
+    linuxTest(`restart retains recoverable state after ${failure} failure`, async () => {
+      fakeOuterDocker({ images: [NESTED_DIND_IMAGE] });
+      const started = await startInstance("restartfail", { mode: "rootful" }, options());
+      const key = failure === "exec" ? "FAKE_EXEC_FAIL" : "FAKE_GENERATION_STUCK";
+      process.env[key] = "1";
+      try {
+        await expect(
+          restartNested(started, {
+            persist: () => undefined,
+            ready: async () => true,
+            readyTimeoutMs: 100,
+            stopTimeoutMs: 100,
+            restartGenerationTimeoutMs: 1,
+            log: () => undefined,
+          }),
+        ).rejects.toThrow(failure === "exec" ? "missing pidfile" : "did not restart");
+        expect(existsSync(started.paths.record)).toBe(true);
+        expect(state().containers[started.nested!.containerId!]!.running).toBe(true);
+        expect(readGeneration(started.paths.runtimeDir)).toBe(1);
+      } finally {
+        delete process.env[key];
+      }
+      await restartInstance("restartfail", options());
+      expect(readGeneration(started.paths.runtimeDir)).toBe(2);
+      expect(await stopInstance("restartfail", options())).toBe(true);
+    });
+  }
 
   linuxTest("an outer daemon that does not answer is refused before anything is made", async () => {
     fakeOuterDocker();

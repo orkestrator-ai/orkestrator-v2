@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -59,6 +59,7 @@ export type NestedDependencies = {
   ready: (record: InstanceRecord) => Promise<boolean>;
   readyTimeoutMs: number;
   stopTimeoutMs: number;
+  restartGenerationTimeoutMs?: number;
   log: (line: string) => void;
 };
 
@@ -177,10 +178,28 @@ function mountSource(directory: string): string {
   return directory;
 }
 
+/** Validate the recorded share before any bind mount or recursive deletion. */
+function validateShare(paths: InstanceRecord["paths"], state: NestedState): void {
+  const expected = path.join(paths.instanceDir, "share");
+  if (paths.share !== expected || state.shareDir !== expected) {
+    throw new Error("Refusing shared directory outside the derived instance share path");
+  }
+  for (const directory of [paths.instanceDir, expected]) {
+    try {
+      if (!lstatSync(directory).isDirectory()) {
+        throw new Error("Refusing shared directory: symbolic link or non-directory");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export function nestedRunArguments(
   record: Pick<InstanceRecord, "name" | "marker" | "settings" | "paths">,
   state: NestedState,
 ): string[] {
+  validateShare(record.paths, state);
   return [
     "run",
     "--detach",
@@ -268,7 +287,7 @@ export function inspectOwned(
   return { id: id!, running: running === "true" };
 }
 
-export function isNestedRunning(record: InstanceRecord): boolean {
+export function nestedRunningState(record: InstanceRecord): boolean | null {
   const state = record.nested;
   if (!state) return false;
   try {
@@ -280,8 +299,12 @@ export function isNestedRunning(record: InstanceRecord): boolean {
     );
     return owned?.running ?? false;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function isNestedRunning(record: InstanceRecord): boolean {
+  return nestedRunningState(record) === true;
 }
 
 function imagePresent(outerHost: string, image: string): boolean {
@@ -407,14 +430,10 @@ export async function restartNested(
       `Could not signal the nested dockerd of ${record.name}: ${signal.stderr.trim()}`,
     );
   }
-  const replaced = await waitFor(
-    () => readGeneration(record.paths.runtimeDir) > before,
-    deps.stopTimeoutMs + 30_000,
-  );
+  const timeoutMs = deps.restartGenerationTimeoutMs ?? deps.stopTimeoutMs + 30_000;
+  const replaced = await waitFor(() => readGeneration(record.paths.runtimeDir) > before, timeoutMs);
   if (!replaced) {
-    throw new Error(
-      `The nested dockerd of ${record.name} did not restart within ${deps.stopTimeoutMs + 30_000} ms`,
-    );
+    throw new Error(`The nested dockerd of ${record.name} did not restart within ${timeoutMs} ms`);
   }
   await waitUntilAnswering(record, deps);
 }
@@ -439,9 +458,14 @@ function clearAsUser(directory: string): boolean {
  * instance pulled it and nothing else uses it, the dind image. Throws, leaving
  * the record for a later stop, when the outer daemon cannot confirm removal.
  */
-export function removeNested(record: InstanceRecord, deps: Pick<NestedDependencies, "log">): void {
+export function removeNested(
+  record: InstanceRecord,
+  deps: Pick<NestedDependencies, "log">,
+  staleOnly = false,
+): void {
   const state = record.nested;
   if (!state) return;
+  validateShare(record.paths, state);
   inspectOuter(state.outerHost);
   const container = inspectOwned(
     state.outerHost,
@@ -450,15 +474,19 @@ export function removeNested(record: InstanceRecord, deps: Pick<NestedDependenci
     record.marker,
   );
   if (container) {
+    if (staleOnly && container.running) {
+      throw new Error("Refusing to reap a running nested daemon");
+    }
     const removed = outerDocker(
       state.outerHost,
-      ["rm", "--force", "--volumes", container.id],
+      ["rm", ...(staleOnly ? [] : ["--force"]), "--volumes", container.id],
       120_000,
     );
     if (removed.status !== 0) {
       throw new Error(`Could not remove ${state.container}: ${removed.stderr.trim()}`);
     }
   }
+  validateShare(record.paths, state);
   const directories = [record.paths.runtimeDir, state.shareDir];
   const leftovers = directories.filter((directory) => !clearAsUser(directory));
   if (leftovers.length > 0) {
@@ -467,6 +495,7 @@ export function removeNested(record: InstanceRecord, deps: Pick<NestedDependenci
         `Root-owned files remain in ${leftovers.join(", ")} and ${state.image} is gone`,
       );
     }
+    validateShare(record.paths, state);
     // A throwaway container of the same image removes them as the root that made them.
     const cleanup = outerDocker(
       state.outerHost,

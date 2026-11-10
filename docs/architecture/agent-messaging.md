@@ -297,6 +297,15 @@ settings under **Settings → Messaging**:
   `hourly-limit` and the drain releases it, oldest first, as the window moves
   (checked every 30 s). Resume releases it early.
 
+Mail held by either budget stays held when the user replaces a main
+coordinator. Closing the main tombstones its mailbox but keeps the hold, and
+the next main takes the message over still `inject-held` with the same reason
+(`moveClosedCoordinatorMail`). It is released by Resume on the new main, or by
+the drain for the hourly limit once the earlier admissions age out. Hourly
+accounting includes earlier main conversations of the same coordinator; side
+conversations remain separate. Replacing a main therefore cannot bypass the
+hourly window or restart the loop the budget stopped (found live, to-do 2900).
+
 When a worker's mail to its coordinator is held by either, the coordinator
 gets one workflow notice per budget (or per hour), so it can read the held
 mail and decide. Peers get no notice; the sender's `send_message` result and

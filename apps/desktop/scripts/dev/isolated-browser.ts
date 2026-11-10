@@ -162,6 +162,13 @@ export interface IsolatedBrowserOptions {
   suite?: IsolatedSuite;
   /** The disposable profile's name; generated when absent. */
   profile?: string;
+  /**
+   * Further disposable profiles, started one after another with the same
+   * flags once the main profile is ready, and stopped and reset with it. For
+   * a suite that needs more than one node (the main profile stays
+   * `ORKESTRATOR_AGENT_TEST_PROFILE`; the suite's own env names the others).
+   */
+  companionProfiles?: readonly string[];
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -221,21 +228,71 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
   // run cut off here reports no result for the cases it never reached.
   const testTimeout = options.testTimeoutMs ?? 1_500_000;
   const cleanupTimeout = options.cleanupTimeoutMs ?? 45_000;
+  const companions = [...(options.companionProfiles ?? [])];
+  if (new Set([profile, ...companions]).size !== companions.length + 1)
+    throw new Error("Companion profiles must be distinct from each other and the main profile");
   const launchTask = (
     task: string,
     args: string[],
     timeoutMs: number,
     capture = false,
     signal?: AbortSignal,
+    name = profile,
   ) =>
-    launch("mise", ["run", task, "--profile", profile, ...args], {
+    launch("mise", ["run", task, "--profile", name, ...args], {
       root,
       env,
       timeoutMs,
       capture,
       signal,
     });
-  let launcher: ReturnType<typeof launch> | undefined;
+  /** Starts one profile's foreground launcher and waits for it to report ready. */
+  const startProfile = async (name: string) => {
+    const started = launchTask(
+      "dev:test",
+      profileArgs,
+      startupTimeout * (companions.length + 1) + testTimeout,
+      false,
+      options.signal,
+      name,
+    );
+    launchers.push(started);
+    startedNames.add(name);
+    const deadline = performance.now() + startupTimeout;
+    while (true) {
+      options.signal?.throwIfAborted();
+      if (started.finished) throw new Error("Isolated profile exited before browser readiness");
+      if (performance.now() >= deadline) throw new Error("Isolated profile startup timed out");
+      const status = await launchTask(
+        "dev:status",
+        ["--json"],
+        Math.min(10_000, Math.max(1, deadline - performance.now())),
+        true,
+        options.signal,
+        name,
+      ).done;
+      if (status.failure) throw new Error(status.failure);
+      let snapshot: { status?: string; profile?: string; live?: Record<string, boolean> };
+      try {
+        snapshot = JSON.parse(status.output);
+      } catch {
+        throw new Error("Isolated profile returned invalid status JSON");
+      }
+      if (snapshot.profile !== name)
+        throw new Error("Isolated profile status did not match its owner");
+      if (snapshot.status === "failed" || snapshot.status === "stopped")
+        throw new Error("Isolated profile startup failed");
+      if (
+        status.code === 0 &&
+        snapshot.status === "ready" &&
+        ["launcher", "vite", "electron", "backend"].every((key) => snapshot.live?.[key])
+      )
+        return;
+      await Bun.sleep(250);
+    }
+  };
+  const launchers: Array<ReturnType<typeof launch>> = [];
+  const startedNames = new Set<string>();
   let tests: ReturnType<typeof launch> | undefined;
   let result = 1;
   let failure: unknown;
@@ -271,46 +328,14 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
       console.log(`Image qualification passed: ${IMAGE_QUALIFICATION_TESTS.join(", ")}`);
     }
     console.log(`Starting isolated browser profile ${profile}`);
-    launcher = launchTask(
-      "dev:test",
-      profileArgs,
-      startupTimeout + testTimeout,
-      false,
-      options.signal,
-    );
-    const deadline = performance.now() + startupTimeout;
-    while (true) {
-      options.signal?.throwIfAborted();
-      if (launcher.finished) throw new Error("Isolated profile exited before browser readiness");
-      if (performance.now() >= deadline) throw new Error("Isolated profile startup timed out");
-      const status = await launchTask(
-        "dev:status",
-        ["--json"],
-        Math.min(10_000, Math.max(1, deadline - performance.now())),
-        true,
-        options.signal,
-      ).done;
-      if (status.failure) throw new Error(status.failure);
-      let snapshot: { status?: string; profile?: string; live?: Record<string, boolean> };
-      try {
-        snapshot = JSON.parse(status.output);
-      } catch {
-        throw new Error("Isolated profile returned invalid status JSON");
-      }
-      if (snapshot.profile !== profile)
-        throw new Error("Isolated profile status did not match its owner");
-      if (snapshot.status === "failed" || snapshot.status === "stopped")
-        throw new Error("Isolated profile startup failed");
-      if (
-        status.code === 0 &&
-        snapshot.status === "ready" &&
-        ["launcher", "vite", "electron", "backend"].every((name) => snapshot.live?.[name])
-      )
-        break;
-      await Bun.sleep(250);
+    await startProfile(profile);
+    for (const companion of companions) {
+      console.log(`Starting companion profile ${companion}`);
+      await startProfile(companion);
     }
     options.signal?.throwIfAborted();
-    if (launcher.finished) throw new Error("Isolated profile exited before browser tests");
+    if (launchers.some((started) => started.finished))
+      throw new Error("Isolated profile exited before browser tests");
     console.log(
       `Profile ${profile} ready; running ${options.suite?.label ?? (options.design ? "design canvas" : "browser agent")} tests`,
     );
@@ -329,9 +354,11 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     );
     const completed = await Promise.race([
       tests.done,
-      launcher.done.then(() => {
-        throw new Error("Isolated profile exited during browser tests");
-      }),
+      ...launchers.map((started) =>
+        started.done.then(() => {
+          throw new Error("Isolated profile exited during browser tests");
+        }),
+      ),
     ]);
     if (completed.failure) throw new Error(completed.failure);
     result = completed.code;
@@ -342,16 +369,22 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     // fresh profile state after cleanup has already finished.
     tests?.stop();
     if (tests) await tests.done;
-    launcher?.stop();
-    if (launcher) await launcher.done;
-    console.log(`Cleaning isolated browser profile ${profile}`);
-    const stopped = await launchTask("dev:stop", [], cleanupTimeout).done;
-    const reset = await launchTask("dev:reset", [], cleanupTimeout).done;
+    for (const started of launchers) started.stop();
+    await Promise.all(launchers.map((started) => started.done));
+    const failed: string[] = [];
+    // The main profile is always cleaned, as before; a companion only once
+    // something started it.
+    for (const name of [profile, ...companions.filter((name) => startedNames.has(name))]) {
+      console.log(`Cleaning isolated browser profile ${name}`);
+      const stopped = await launchTask("dev:stop", [], cleanupTimeout, false, undefined, name).done;
+      const reset = await launchTask("dev:reset", [], cleanupTimeout, false, undefined, name).done;
+      if (stopped.code !== 0 || reset.code !== 0) failed.push(name);
+    }
     // dockerImage belongs to the checkout, not this disposable profile.
     // Leave it for the shared-image-aware profile prune workflow.
-    if (stopped.code !== 0 || reset.code !== 0)
+    if (failed.length > 0)
       cleanupFailure = new Error(
-        `Isolated profile cleanup failed for ${profile}; inspect dev:status before retrying`,
+        `Isolated profile cleanup failed for ${failed.join(", ")}; inspect dev:status before retrying`,
       );
   }
   if (cleanupFailure)

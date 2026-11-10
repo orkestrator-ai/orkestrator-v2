@@ -1208,6 +1208,12 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
    * publishes it as the shared request's `humanRequired`.
    */
   humanRequired?: true;
+  /**
+   * For an `mcp__*` tool, the safety hints its server declares for it, read
+   * from the CLI's MCP status when the call was parked. Self-declared by the
+   * server: display only, never a reason to set `ruleEligible`.
+   */
+  toolHints?: import("@orkestrator/protocol/agent-interactions").AgentInteractionToolHints;
   /** `WebFetch` only: the host of the URL it fetches. */
   networkHost?: string;
   /**

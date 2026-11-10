@@ -195,6 +195,9 @@ describe("OpenCode close retains the conversation", () => {
       expect(live.has(sessionId)).toBe(true);
       const listed = await provider.listResumableSessions!();
       expect(listed.map((entry) => entry.sessionId)).toContain(sessionId);
+      // 1.x rows share OpenCode's picker with archivable 2.x rows, so each says
+      // it cannot be archived.
+      expect(listed.every((entry) => entry.archivable === false)).toBe(true);
       // The session can be deliberately re-registered afterwards.
       provider.registerSession?.(sessionId);
     } finally {

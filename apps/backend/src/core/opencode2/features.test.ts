@@ -266,6 +266,12 @@ describe("OpenCode 2.x session actions", () => {
       `opencode2:${fork.sessionId}`,
       `opencode2:${id}`,
     ]);
+    // A conversation the server still holds for a tab is not archived.
+    await expect(
+      provider.setResumableSessionArchived(`opencode2:${fork.sessionId}`, true),
+    ).rejects.toThrow("open in a tab");
+    expect(server.sessions.get(fork.sessionId)?.archived).toBeFalsy();
+    provider.releaseSession(fork.sessionId);
     await provider.setResumableSessionArchived(`opencode2:${fork.sessionId}`, true);
     expect((await provider.listResumableSessions()).map((entry) => entry.sessionId)).toEqual([
       `opencode2:${id}`,
@@ -305,5 +311,64 @@ describe("OpenCode 2.x status reads", () => {
       summary: { todos: 1, commands: 2 },
       authoritative: true,
     });
+  });
+});
+
+describe("OpenCode 2.x archive admission", () => {
+  test("resume holds admission from its archived read through registration", async () => {
+    const { server, provider } = setup();
+    const id = await provider.createSession("build", "x");
+    provider.releaseSession(id);
+    const read = provider.features.resumableSession.bind(provider.features);
+    const entered = Promise.withResolvers<void>();
+    const proceed = Promise.withResolvers<void>();
+    provider.features.resumableSession = async (value) => {
+      const result = await read(value);
+      entered.resolve();
+      await proceed.promise;
+      return result;
+    };
+    const resume = provider.resumeSession(`opencode2:${id}`);
+    await entered.promise;
+    // Bare and picker ids must share admission.
+    const archive = provider.setResumableSessionArchived(id, true);
+    const rejected = archive.catch((error: unknown) => error);
+    proceed.resolve();
+    expect(await resume).toBe(id);
+    expect(await rejected).toBeInstanceOf(PromptRejectedError);
+    expect(server.sessions.get(id)?.archived).toBeFalsy();
+  });
+
+  test("archive holds admission through PATCH and a queued resume rejects the archived row", async () => {
+    const { server, provider } = setup();
+    const id = await provider.createSession("build", "x");
+    provider.releaseSession(id);
+    const patch = provider.features.setArchived.bind(provider.features);
+    const entered = Promise.withResolvers<void>();
+    const proceed = Promise.withResolvers<void>();
+    provider.features.setArchived = async (value, archived) => {
+      entered.resolve();
+      await proceed.promise;
+      await patch(value, archived);
+    };
+    const archive = provider.setResumableSessionArchived(`opencode2:${id}`, true);
+    await entered.promise;
+    const resume = provider.resumeSession(id);
+    const rejected = resume.catch((error: unknown) => error);
+    proceed.resolve();
+    await archive;
+    expect(await rejected).toBeInstanceOf(PromptRejectedError);
+    expect(server.sessions.get(id)?.archived).toBe(true);
+    // No failed resume registration may block another archive.
+    await provider.setResumableSessionArchived(id, true);
+  });
+
+  test("restore succeeds while the session is held and keeps archive protection", async () => {
+    const { server, provider } = setup();
+    const id = await provider.createSession("build", "x");
+    server.sessions.get(id)!.archived = true;
+    await provider.setResumableSessionArchived(`opencode2:${id}`, false);
+    expect(server.sessions.get(id)?.archived).toBe(false);
+    await expect(provider.setResumableSessionArchived(id, true)).rejects.toThrow("open in a tab");
   });
 });

@@ -21,6 +21,7 @@ export default defineConfig({
     "application-menu-electron.spec.ts",
     "electron-main.spec.ts",
     "electron-cleanup.spec.ts",
+    "headless-stop-electron.spec.ts",
     "web-annotations-electron.spec.ts",
     "terminal-input-resume-electron.spec.ts",
     "service-preview-electron.spec.ts",

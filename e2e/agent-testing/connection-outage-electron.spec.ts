@@ -15,6 +15,7 @@ import { closeElectronWithin } from "./design-electron-cleanup";
 import { expect, test } from "./electron-fixtures";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment, startElectronSpecBackend } from "./electron-spec-environment";
 
 /**
  * The desktop half of client freshness
@@ -115,21 +116,23 @@ test("a remote connection shows the banner, pauses reads and recovers, on a rest
     const controlPort = process.env.ORKESTRATOR_CONTROL_MCP_PORT;
     process.env.ORKESTRATOR_CONTROL_MCP_PORT = "0";
     try {
-      await backend.start({
-        isDev: true,
-        appRoot: repositoryRoot,
-        resourceRoot: repositoryRoot,
-        dataDir: remoteProfile.dataDir,
-        gatewayHost: "127.0.0.1",
-        gatewayPort: remotePort,
-        allowNonTailscaleBind: true,
-        runtimeFlavor: "agent-test",
-        runtimeProfileId: remoteProfile.id,
-        worktreeDir: remoteProfile.worktreeDir,
-        strictGatewayPort: true,
-        strictDockerOwner: true,
-        onEvent: () => undefined,
-      });
+      await startElectronSpecBackend(() =>
+        backend.start({
+          isDev: true,
+          appRoot: repositoryRoot,
+          resourceRoot: repositoryRoot,
+          dataDir: remoteProfile.dataDir,
+          gatewayHost: "127.0.0.1",
+          gatewayPort: remotePort,
+          allowNonTailscaleBind: true,
+          runtimeFlavor: "agent-test",
+          runtimeProfileId: remoteProfile.id,
+          worktreeDir: remoteProfile.worktreeDir,
+          strictGatewayPort: true,
+          strictDockerOwner: true,
+          onEvent: () => undefined,
+        }),
+      );
     } finally {
       if (controlPort === undefined) delete process.env.ORKESTRATOR_CONTROL_MCP_PORT;
       else process.env.ORKESTRATOR_CONTROL_MCP_PORT = controlPort;
@@ -167,13 +170,12 @@ test("a remote connection shows the banner, pauses reads and recovers, on a rest
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      },
+      }),
     });
     dismissStartupDialogs(app);
     const window = await app.firstWindow();

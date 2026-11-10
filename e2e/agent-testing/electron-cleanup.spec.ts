@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { closeElectronWithin, electronProcessTree } from "./design-electron-cleanup";
 import { processAlive, signalProcess, waitForStopped } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 test("bounded cleanup stops a real Electron close blocked by before-quit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "electron-close-regression-"));
@@ -32,10 +33,6 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
       app.whenReady().then(() => new BrowserWindow({ show: false }));
     `,
     );
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") env[key] = value;
-    }
     const app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
@@ -44,7 +41,7 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env,
+      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     owned = electronProcessTree(app);
     const helper = Number(await readFile(helperFile, "utf8"));

@@ -17,6 +17,7 @@ export { parseNodeFileScope, seedFilesDir } from "./node-files.js";
 export { NodeUnavailableError, type ContractEnvelope, type NodeLink } from "./node-link.js";
 export { routedDomainApi } from "./node-domain-clients.js";
 export { leafSyncsTickets } from "./node-ticket-sync.js";
+export { NodeUsageSync } from "./node-usage-sync.js";
 export { leafTakesCoordinatorNotices } from "./node-mail-collector.js";
 export { NodePortal } from "./node-portal.js";
 export {

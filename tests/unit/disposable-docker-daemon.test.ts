@@ -116,11 +116,13 @@ describe("arguments", () => {
     const parsed = parseArguments(["start"], root);
     expect(parsed).toMatchObject({ command: "start", name: "default", root, settings: {} });
     expect(DEFAULT_SETTINGS).toEqual({
+      mode: "rootless",
       network: "slirp4netns",
       hostLoopback: false,
       liveRestore: false,
       addressPool: "172.30.0.0/16",
       poolSize: 24,
+      ipv6: false,
     });
   });
 

@@ -1,3 +1,6 @@
+import { registerProjectCommands } from "./commands-registry-projects.js";
+import { registrarFrom } from "./commands-registry-contracts.js";
+import { AgentAccountSharedUsage } from "./agent-accounts-shared-usage.js";
 import { eventSink } from "./backend-emit.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
@@ -86,7 +89,7 @@ function fakeCodexLogin(auth: string): SpawnLike {
   };
 }
 
-function fakeClaudeLogin(identity?: string): SpawnLike {
+function fakeClaudeLogin(identity?: string, email = "claude@example.com"): SpawnLike {
   return (_command, _args, options) => {
     const child = new EventEmitter() as ChildProcess;
     const stdout = new PassThrough();
@@ -109,7 +112,7 @@ function fakeClaudeLogin(identity?: string): SpawnLike {
           await fs.writeFile(
             path.join(options.env.CLAUDE_CONFIG_DIR!, ".claude.json"),
             JSON.stringify({
-              oauthAccount: { accountUuid: identity, emailAddress: "claude@example.com" },
+              oauthAccount: { accountUuid: identity, emailAddress: email },
             }),
           );
         Object.assign(child, { exitCode: 0 });
@@ -386,6 +389,34 @@ describe("agent accounts", () => {
       cancelAgentAccountLogin(context);
       return progress.accountId!;
     }
+
+    test("an in-flight usage read cannot publish under a reauthenticated replacement identity", async () => {
+      const id = await addActiveClaudeAccount("old");
+      const started = deferred<void>();
+      const response = deferred<PlanUsageSnapshot>();
+      const pending = readAgentAccountUsage(context, "claude", id, {
+        reader: (async () => {
+          started.resolve();
+          return response.promise;
+        }) as unknown as PlanUsageReader,
+      }).catch((error: unknown) => error);
+      await started.promise;
+      await startAgentAccountLogin(context, "claude", {
+        reauthenticate: true,
+        executable: "claude",
+        spawnImpl: fakeClaudeLogin("replacement", "replacement@example.com"),
+      });
+      expect((await settledLogin()).state).toBe("succeeded");
+      response.resolve(usageReading("claude", 99));
+      expect(await pending).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("account changed") }),
+      );
+      expect(
+        await context.runtime.accounts.sharedUsage.all(
+          context.storage.agentAccounts.agentAccountsDirectory(),
+        ),
+      ).toEqual([]);
+    });
 
     test("renews the active account in place and flags running bridges", async () => {
       const accountId = await addActiveClaudeAccount("claude-one");
@@ -1188,6 +1219,112 @@ describe("agent accounts", () => {
     expect(inactive.status).toBe("unavailable");
     expect(inactive.message).toContain("expired");
     expect(calls).toHaveLength(1);
+  });
+
+  test("get_plan_usage merges remote readings and publishes forced active reads for another node", async () => {
+    const id = (await addCodexAccount("shared@example.com", "org")).accountId!;
+    await setActiveAgentAccount(context, "codex", id);
+    const old = {
+      ...usageReading("codex", 12),
+      fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    const reader = mock(async (..._args: Parameters<PlanUsageReader>) => old);
+    const handlers = new Map<string, (args: unknown, context: CommandContext) => unknown>();
+    registerProjectCommands(
+      registrarFrom((name, handler) => handlers.set(name, handler as never)),
+      { commands: handlers, planUsageReader: reader } as never,
+    );
+    const invoke = (args: Record<string, unknown>) =>
+      handlers.get("get_plan_usage")!(
+        { platform: "codex", ...args },
+        context,
+      ) as Promise<PlanUsageSnapshot>;
+    const root = context.storage.agentAccounts.agentAccountsDirectory();
+    const identity = {
+      platform: "codex" as const,
+      email: "shared@example.com",
+      organizationId: "org",
+    };
+    await context.runtime.accounts.sharedUsage.record(
+      root,
+      [
+        {
+          identity,
+          windows: [{ window: "primary", usedPercent: 88 }],
+          fetchedAt: new Date(Date.now() - 10_000).toISOString(),
+          source: { nodeId: "bk_leaf", nodeName: "leaf" },
+        },
+      ],
+      Date.now(),
+    );
+    expect((await invoke({})).windows[0]?.usedPercent).toBe(88);
+    expect((await invoke({ cacheOnly: true })).readOn?.nodeName).toBe("leaf");
+    expect(reader).toHaveBeenCalledTimes(1);
+    reader.mockResolvedValue(usageReading("codex", 99));
+    const forced = await invoke({ force: true });
+    expect(forced.windows[0]?.usedPercent).toBe(99);
+    expect(reader.mock.calls.at(-1)).toEqual([context, "codex", { force: true }]);
+    const recipient = new AgentAccountSharedUsage();
+    const otherRoot = path.join(root, "recipient");
+    await recipient.record(
+      otherRoot,
+      await context.runtime.accounts.sharedUsage.all(root),
+      Date.now(),
+    );
+    expect((await recipient.get(otherRoot, identity))?.windows[0]?.usedPercent).toBe(99);
+  });
+
+  test("event refresh of expired account caches never calls a provider", async () => {
+    const id = (await addCodexAccount("shared@example.com", "org")).accountId!;
+    const reader = mock(async () => usageReading("codex", 10));
+    const now = Date.now();
+    context.runtime.accounts.cacheUsage(
+      `${context.storage.agentAccounts.agentAccountsDirectory()}:codex:${id}`,
+      { expiresAt: now - 1, snapshot: usageReading("codex", 40) },
+    );
+    const retained = await readAgentAccountUsage(context, "codex", id, {
+      reader: reader as never,
+      cacheOnly: true,
+    });
+    expect(retained.windows[0]?.usedPercent).toBe(40);
+    expect(reader).toHaveBeenCalledTimes(0);
+  });
+
+  test("an account answers the newest reading of its login from any machine", async () => {
+    const { accountId } = await addCodexAccount("Second@Example.com", "acct-2");
+    const reader = (async () => usageReading("codex", 12)) as unknown as PlanUsageReader;
+    // This machine cannot read the added account (its token has expired).
+    expect((await readAgentAccountUsage(context, "codex", accountId!, { reader })).status).toBe(
+      "unavailable",
+    );
+    // beelink read the same login a minute ago, under its own account id.
+    const fetchedAt = new Date(Date.now() - 60_000).toISOString();
+    await context.runtime.accounts.sharedUsage.record(
+      path.join(root, "data", "agent-accounts"),
+      [
+        {
+          identity: { platform: "codex", email: "second@example.com", organizationId: "acct-2" },
+          windows: [{ window: "primary", usedPercent: 77 }],
+          fetchedAt,
+          source: { nodeId: "bk_beelink", nodeName: "beelink" },
+        },
+      ],
+      Date.now(),
+    );
+    const shown = await readAgentAccountUsage(context, "codex", accountId!, { reader });
+    expect(shown).toMatchObject({
+      status: "ok",
+      windows: [{ usedPercent: 77 }],
+      fetchedAt,
+      readOn: { nodeId: "bk_beelink", nodeName: "beelink" },
+    });
+    expect(shown.stale).toBeUndefined();
+
+    // The host login here has no email to match on, so its reading is not shared.
+    emitted = [];
+    const host = await readAgentAccountUsage(context, "codex", "default", { reader });
+    expect(host.readOn).toBeUndefined();
+    expect(emitted.filter((entry) => entry.event === "agent-usage-readings-changed")).toEqual([]);
   });
 
   test("an account left behind shows its last known usage until removed", async () => {

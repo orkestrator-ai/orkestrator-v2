@@ -835,8 +835,11 @@ When touching the Pi bridge:
   pending otherwise).
 - Project-local `.pi/` resources load only when the session's execution
   policy turns `projectResources` on, on both host and container runs. Host
-  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
-  (arbitrary TypeScript) to run on the host.
+  project resources are off by default. Enabling them permits repository MCP processes to run on the host.
+  Every policy excludes discovered extensions and configured packages (`src/project-extensions.ts`): they
+  run inside the bridge process, where persistent hooks could answer another session’s approvals.
+  Its skills and prompt templates still load, and the reported policy's
+  note says why the extensions did not.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,

@@ -42,7 +42,7 @@ against `main` at `e6c3da899`.
 
 **Problem.** Rootless Docker puts the container network inside RootlessKit's namespace (slirp4netns or pasta). Whether `SO_MARK`, the `nat` DNAT to the namespace's own address and `SO_ORIGINAL_DST` behave the same there is unproven.
 
-**Context.** [0109](0109-rootless-linux-runtime-gaps.md) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
+**Context.** The [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) (from the retired to-do 0109) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
 
 **Investigation.** Not run. No rootless daemon was available on the build host. Not run on 2026-11-06 either: that run on beelink was scoped to its rootful Engine, and no rootless daemon was started.
 

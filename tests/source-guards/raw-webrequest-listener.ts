@@ -4,8 +4,9 @@ import { isTestSource } from "./paths";
 
 /**
  * A webRequest listener installed in Electron main without the shared wrapper
- * (to-do 7060). A listener that throws before calling Electron's callback
- * leaves its request unanswered and gives main an uncaught exception; on
+ * (docs/architecture/renderer-security.md, "webRequest listeners"). A
+ * listener that throws before calling Electron's callback leaves its request
+ * unanswered and gives main an uncaught exception; on
  * 2026-10-21 that stopped main before a closed window released its preview
  * attachments (flake 0622). `answering` and `observing`
  * (`apps/desktop/electron/webrequest-listener.ts`) always answer, so every
@@ -81,7 +82,7 @@ export const rawWebRequestListener: SourceGuard = {
     "Electron main installs every webRequest listener through answering(name, decide, " +
     "failClosed) or observing(name, observe, onFailure) from " +
     "apps/desktop/electron/webrequest-listener.ts, so a listener that throws still answers " +
-    "its request with a fail-closed response (to-do 7060, flake 0622). Pass null to remove one.",
+    "its request with a fail-closed response (flake 0622; docs/architecture/renderer-security.md). Pass null to remove one.",
   productionRoots: RAW_WEBREQUEST_LISTENER_ROOTS,
   appliesTo: appliesToElectronMainSource,
   mayOffend: (source) => source.includes("webRequest"),

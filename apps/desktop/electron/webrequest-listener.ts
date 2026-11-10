@@ -32,8 +32,9 @@ function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
  *
  * A listener that throws before calling back leaves its request unanswered and
  * gives main an uncaught exception; a session outlives its window, so a
- * listener can run after whatever it looks up for that window is gone (to-do
- * 7060, flake 0622). Every `webRequest.on*` call in main goes through this or
+ * listener can run after whatever it looks up for that window is gone (flake
+ * 0622; docs/architecture/renderer-security.md, "webRequest listeners").
+ * Every `webRequest.on*` call in main goes through this or
  * {@link observing}; the `raw-webrequest-listener` source guard enforces it.
  *
  * `failClosed` is the answer that is safe for this listener when its decision

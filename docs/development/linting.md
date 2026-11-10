@@ -110,9 +110,10 @@ holds an Electron main rule:
   `apps/desktop/electron` whose listener is not wrapped in `answering` or
   `observing` (`apps/desktop/electron/webrequest-listener.ts`), or `null`. A
   listener that throws before calling Electron's callback leaves its request
-  unanswered and gives main an uncaught exception (flake 0622, to-do 7060);
-  the wrappers always answer, with the listener's fail-closed response. The
-  baseline is zero.
+  unanswered and gives main an uncaught exception (flake 0622); the wrappers
+  always answer, with the listener's fail-closed response
+  ([renderer-security.md](../architecture/renderer-security.md#webrequest-listeners)).
+  The baseline is zero.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test

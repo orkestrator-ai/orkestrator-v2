@@ -847,7 +847,8 @@ ticket outbox, conflicts, tombstones) is in
   `sync_node_tickets` syncs now.
 - **Disconnection.** Ticket changes wait durably on both sides (the board
   itself, the leaf's outbox) and apply in order, once each, on reconnect.
-  Launches and other changes to a disconnected node are refused, not queued
+  Launches and other changes to a disconnected node are refused, not queued;
+  the coordinator that tried is woken once when the node reconnects
   (see [coordinator.md](coordinator.md#tickets-on-other-machines)).
 - **Compatibility.** Gated on the `ticket-sync` capability. An older leaf is
   never sent tickets and the board says to update it; coordinator ticket

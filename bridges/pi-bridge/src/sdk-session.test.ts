@@ -461,3 +461,48 @@ test("a real Pi session completes through a loopback provider without a login", 
   }
   expect(requests).toEqual([{ url: "/v1/chat/completions", method: "POST" }]);
 });
+
+describe("exact branch selection", () => {
+  for (const kind of ["user", "custom"] as const) {
+    test(`switching to a ${kind} leaf retains it in the SDK context and after reattach`, async () => {
+      await withSdkSession(
+        { clientSessionKey: `branch-leaf-${kind}` },
+        async ({ state, reattach }) => {
+          const session = state.session!;
+          const manager = session.sessionManager;
+          const root = manager.appendMessage({ role: "user", content: "root", timestamp: 0 });
+          const leaf =
+            kind === "user"
+              ? manager.appendMessage({ role: "user", content: "abandoned prompt", timestamp: 0 })
+              : manager.appendCustomMessageEntry("test", "abandoned custom", true);
+          manager.branch(root);
+          session.refreshContext();
+          const listed = await call(`/session/${state.id}/branches`);
+          const list = await listed.json();
+          expect(list.branches.some((branch: { entryId: string }) => branch.entryId === leaf)).toBe(
+            true,
+          );
+          const switched = await call(`/session/${state.id}/branches/${leaf}`, { method: "POST" });
+          expect(switched.status).toBe(200);
+          expect(manager.getLeafId()).toBe(leaf);
+          expect(
+            session.messages.some((message) => JSON.stringify(message).includes("abandoned")),
+          ).toBe(true);
+          expect(state.historyLeaf?.entryId).toBe(leaf);
+          const after = await (await call(`/session/${state.id}/branches`)).json();
+          expect(after.activeEntryId).toBe(leaf);
+          expect(
+            after.branches.some((branch: { entryId: string }) => branch.entryId === leaf),
+          ).toBe(false);
+          await reattach();
+          expect(state.session!.sessionManager.getLeafId()).toBe(leaf);
+          expect(
+            state.session!.messages.some((message) =>
+              JSON.stringify(message).includes("abandoned"),
+            ),
+          ).toBe(true);
+        },
+      );
+    });
+  }
+});

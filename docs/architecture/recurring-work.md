@@ -59,7 +59,10 @@ fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
 cadence, and demotions by reason) and native session invalidations
 (`sessionInvalidations`: counts by content-free cause and by platform, from
-`native-session-invalidation-metrics.ts`), all aggregate and content-free. It is served by the
+`native-session-invalidation-metrics.ts`, plus `discoveryRenewals`: discovery
+announcements by platform and section with the value paths that changed,
+such as `value[].tools[order]`, structural names only), all aggregate and
+content-free. It is served by the
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 

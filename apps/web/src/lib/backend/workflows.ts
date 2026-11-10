@@ -34,6 +34,7 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
   NativeAgentResumeEntry,
@@ -583,6 +584,18 @@ export function createWorkflowsApi(client: BackendClient) {
     return asWebModel(native().perform_native_agent_session_action(input));
   }
 
+  /**
+   * The conversation's branches other than the active one (Pi only), by the
+   * entry ids a `switch-branch` action takes. Read when a picker opens.
+   */
+  async function listNativeAgentBranches(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+  }): Promise<NativeAgentSessionBranchList> {
+    return asWebModel(native().list_native_agent_branches(input));
+  }
+
   async function performNativeAgentMcpAction(input: {
     environmentId: string;
     agent: NativeAgentClientPlatform;
@@ -998,6 +1011,7 @@ export function createWorkflowsApi(client: BackendClient) {
     updateNativeAgentControls,
     steerNativeAgentQueuedPrompt,
     performNativeAgentSessionAction,
+    listNativeAgentBranches,
     performNativeAgentMcpAction,
     getNativeAgentAuthStatus,
     beginNativeAgentSignIn,
@@ -1065,6 +1079,7 @@ export const {
   updateNativeAgentControls,
   steerNativeAgentQueuedPrompt,
   performNativeAgentSessionAction,
+  listNativeAgentBranches,
   performNativeAgentMcpAction,
   getNativeAgentAuthStatus,
   beginNativeAgentSignIn,

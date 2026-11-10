@@ -25,6 +25,7 @@ import {
   getNativeAgentToolDetailsCommand,
   getNativeAgentTranscriptUpdateCommand,
   holdNativeAgentInteractionCommand,
+  listNativeAgentBranchesCommand,
   listNativeAgentResumableSessionsCommand,
   nativeAgentGoalCommand,
   performNativeAgentMcpActionCommand,
@@ -229,6 +230,9 @@ export function registerNativeAgentCommands(
     return session;
   });
 
+  // Not marked spliceable: splicing this whole-session projection measured
+  // slower than `JSON.stringify` ("Response encoding" in
+  // docs/architecture/native-transcripts.md).
   register(getNativeAgentProjectionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
@@ -597,6 +601,15 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       action: asNativeAgentSessionAction(args.action),
+    });
+  });
+
+  register(listNativeAgentBranchesCommand, async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.listProjectionBranches({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 

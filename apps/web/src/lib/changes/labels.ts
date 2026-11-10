@@ -41,6 +41,8 @@ const REASONS: Record<string, string> = {
   "changes.reason.stale": "Last refresh failed; showing the previous result",
   "changes.reason.start-unavailable": "The turn's starting state could not be captured",
   "changes.reason.end-unavailable": "The ending state could not be captured",
+  "changes.reason.end-captured-later":
+    "The ending state took too long to capture, so it was captured after the turn ended",
   "changes.reason.baseline-unavailable": "The thread's starting state is unknown",
   "changes.reason.baseline-mutable-ref": "Compared against a branch name, not a fixed commit",
   "changes.reason.untracked-scan-capped": "Too many untracked files to count them all",

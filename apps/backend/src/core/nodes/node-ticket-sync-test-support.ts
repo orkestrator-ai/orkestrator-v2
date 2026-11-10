@@ -51,6 +51,9 @@ export async function fleet(
     domains?: Record<string, { min: number; max: number }>;
     /** How long the leaf waits for an image it asked for. */
     imageTimeoutMs?: number;
+    /** While true, the command node has not read the leaf's projects yet. */
+    summaryPending?: () => boolean;
+    retryDelayMs?: number;
   } = {},
 ) {
   const command = await storageIn("command");
@@ -114,6 +117,7 @@ export async function fleet(
             ? { repositoryHint: repositoryHint(project.gitUrl) }
             : {}),
         })),
+        ...(options.summaryPending?.() ? { summaryPending: true, projects: [] } : {}),
       },
     ],
     localProjects: () => command.loadProjects(),
@@ -121,7 +125,7 @@ export async function fleet(
     localImage: (imageId) => command.kanban.getKanbanImageData(imageId).catch(() => null),
     emit: eventSink((event, payload) => events.push({ event, payload })),
     debounceMs: 1,
-    retryDelayMs: 60_000,
+    retryDelayMs: options.retryDelayMs ?? 60_000,
   });
   cleanups.push(async () => sync.dispose());
   const leafTicket = async (id: string) => leaf.kanban.getKanbanTask(id);

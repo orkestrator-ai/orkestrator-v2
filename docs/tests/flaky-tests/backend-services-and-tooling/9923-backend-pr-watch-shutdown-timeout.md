@@ -1,6 +1,6 @@
 # Backend PR-watch shutdown test times out during merge validation
 
-- **ID:** 9922
+- **ID:** 9923
 - **Status:** open
 - **Date observed:** 2026-11-10
 - **Test:** `shutdown clears backend-owned PR watch state before a new backend starts`

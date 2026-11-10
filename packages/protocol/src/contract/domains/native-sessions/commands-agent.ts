@@ -26,6 +26,7 @@ import {
   DispatchOutcomeSchema,
   EnsuredNativeAgentSessionSchema,
   ForkOutcomeSchema,
+  SessionBranchListSchema,
   GoalCommandResultSchema,
   GoalDetailSchema,
   InteractionApplyOutcomeSchema,
@@ -555,6 +556,21 @@ export const performNativeAgentSessionActionCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * The conversation's branches other than the active one (Pi), by the entry
+ * ids `switch-branch` takes. A rewind leaves its turns on such a branch.
+ */
+export const listNativeAgentBranchesCommand = defineCommand({
+  domain: nativeSessionsDomain,
+  name: "list_native_agent_branches",
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: sessionKeyArgs,
+  result: SessionBranchListSchema,
+  critical: [],
+});
+
 /** Reconnects, enables, disables or signs in to one MCP server of the session. */
 export const performNativeAgentMcpActionCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -746,6 +762,7 @@ export const NATIVE_AGENT_COMMANDS = [
   updateNativeAgentControlsCommand,
   steerNativeAgentQueuedPromptCommand,
   performNativeAgentSessionActionCommand,
+  listNativeAgentBranchesCommand,
   performNativeAgentMcpActionCommand,
   getNativeAgentAuthStatusCommand,
   beginNativeAgentSignInCommand,

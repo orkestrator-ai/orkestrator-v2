@@ -31,6 +31,14 @@
  * event-loop stall, how many manifests each pass parsed or found cached, and
  * how long a capture's write waited while a sweep ran.
  *
+ * One fixture for undoing a bulk turn (todo 7310): `restore-apply` runs one
+ * turn that writes `--restore-files` new files through the whole service,
+ * finalizes it (retrying a timed-out end capture as the backend would), then
+ * times the restore preview and `apply` end to end. It reports the turn's end
+ * capture, the apply's checkpoint and result captures with their deadlines
+ * and outcomes, and how many files were restored. Each restored file is one
+ * conditional-write helper process, so this is the slow one.
+ *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
  *
@@ -39,14 +47,15 @@
  *     [--blob-mib=16] [--durable-files=1000] [--manifest-entries=100000]
  *     [--bulk-files=20000] [--moving-passes=6] [--idle-passes=6] [--env-scans=12]
  *     [--retention-snapshots=400] [--retention-files=10000] [--live-views=8]
- *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention]
+ *     [--restore-files=10000,20000] [--restore-cold] [--restore-finalization-ms=N]
+ *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention,restore-apply]
  *     [--json]
  */
 
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { countRawLineChanges } from "../packages/protocol/src/node/change-tracking/raw-line-diff";
 import {
@@ -61,6 +70,7 @@ import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-track
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 import { ChangeTrackingService } from "../apps/backend/src/core/change-tracking/service";
+import { turnIdFor } from "../apps/backend/src/core/change-tracking/turn-boundaries";
 import {
   CHANGE_LEDGER_DATABASE_FILE,
   openChangeLedgerDatabase,
@@ -88,10 +98,15 @@ const envScans = Number(arg("env-scans", "12"));
 const retentionSnapshots = Number(arg("retention-snapshots", "400"));
 const retentionFiles = Number(arg("retention-files", "10000"));
 const liveViews = Number(arg("live-views", "8"));
+const restoreFiles = arg("restore-files", "10000,20000").split(",").map(Number);
+/** Drop the owner's stat cache before the apply, as after an idle owner was swept. */
+const restoreCold = process.argv.includes("--restore-cold");
+/** A shorter turn finalization deadline, to exercise the end-capture recovery. */
+const restoreFinalizationMs = Number(arg("restore-finalization-ms", "0")) || undefined;
 const only = new Set(
   arg(
     "only",
-    "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention",
+    "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest,measurement-rows,retention,restore-apply",
   ).split(","),
 );
 
@@ -672,6 +687,97 @@ async function benchMeasurementRows() {
   }
 }
 
+/** Undo a turn that wrote `files` new files: end capture, preview and apply. */
+async function benchRestoreApply(files: number) {
+  const repo = makeRepo(50);
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ork-bench-restore-"));
+  const database = openChangeLedgerDatabase(dataDir);
+  const service = new ChangeTrackingService({
+    dataDir,
+    database: () => database,
+    emit: () => undefined,
+    environmentTarget: async () => ({ kind: "local", worktreePath: repo }),
+    durable: false,
+    manualScheduling: true,
+    policy: restoreFinalizationMs ? { finalizationDeadlineMs: restoreFinalizationMs } : {},
+  });
+  service.start();
+  const load = () => Math.round(loadavg()[0]! * 10) / 10;
+  const row: Row = { workload: `restore-apply (${files} files)`, cores: availableParallelism() };
+  try {
+    const requestId = "bench";
+    const session = { environmentId: "env", logicalSessionKey: "env-env:tab", requestId };
+    await service.prepareTurnStart({ ...session, provider: "claude" });
+    service.markTurnDispatched("env", "env-env:tab", requestId, "accepted");
+    const bulk = path.join(repo, "generated");
+    mkdirSync(bulk, { recursive: true });
+    for (let index = 0; index < files; index++)
+      writeFileSync(path.join(bulk, `file${index}.txt`), `generated ${index}\n`);
+    row.loadAtTurnEnd = load();
+    let started = performance.now();
+    await service.finalizeTurn(session);
+    row.endCaptureMs = Math.round(performance.now() - started);
+    const id = turnIdFor("env", "env-env:tab", requestId);
+    row.turnEnd = `${service.ledger.turn(id)?.lifecycle}/${service.ledger.turn(id)?.reason ?? "-"}`;
+    if (service.ledger.turn(id)?.reason === "capture-timeout") {
+      started = performance.now();
+      const recovered = await service.endRecovery.attempt(id);
+      row.endRecoveryMs = Math.round(performance.now() - started);
+      row.endRecovery = recovered.kind === "recovered" ? "recovered" : recovered.reason;
+    }
+    const measurement = service.ledger.latestMeasurement("turn", id, "turn-net");
+    if (!measurement) throw new Error("no turn measurement");
+    row.loadAtPreview = load();
+    started = performance.now();
+    const preview = await service.restore.prepare({ measurementId: measurement.measurementId });
+    row.previewMs = Math.round(performance.now() - started);
+    if (preview.kind !== "preview") {
+      row.preview = preview.kind === "disabled" ? preview.reasonKey : preview.error.reasonKey;
+      return;
+    }
+    row.planned = preview.files.filter((file) => file.action !== "skip").length;
+    const owner = service.registry.ownerById(measurement.worktreeId)!;
+    if (restoreCold) owner.invalidate();
+    row.checkpointStatCache = restoreCold ? "cold" : "warm";
+    const capture = owner.capture.bind(owner);
+    owner.capture = async (options) => {
+      const began = performance.now();
+      const outcome = await capture(options);
+      row[`${options.purpose}Ms`] = Math.round(performance.now() - began);
+      row[`${options.purpose}DeadlineMs`] = options.deadlineMs;
+      row[options.purpose] = outcome.kind === "published" ? "published" : outcome.reason;
+      return outcome;
+    };
+    row.loadAtApply = load();
+    started = performance.now();
+    const applied = await service.restore.apply({
+      actionToken: preview.actionToken,
+      idempotencyKey: "bench",
+    });
+    row.applyMs = Math.round(performance.now() - started);
+    row.loadAfterApply = load();
+    if (applied.kind === "applied") {
+      row.outcome = applied.outcome;
+      row.restored = applied.completedPathIds.length;
+      row.failed = applied.failedPathIds.length;
+      const writesMs =
+        Number(row.applyMs) -
+        Number(row["restore-checkpointMs"] ?? 0) -
+        Number(row["restore-resultMs"] ?? 0);
+      row.writesMs = writesMs;
+      row.msPerRestoredFile = Math.round((writesMs / Math.max(1, row.restored)) * 100) / 100;
+    } else {
+      row.outcome = applied.error.reasonKey;
+    }
+  } finally {
+    rows.push(row);
+    service.shutdown();
+    database.close();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * The hourly pass over a history of distinct trees. Snapshot rows are written
  * straight to the ledger, every one referenced, so the pass removes nothing
@@ -794,6 +900,7 @@ if (only.has("durable-cold")) await benchDurableCold();
 if (only.has("manifest")) await benchManifest();
 if (only.has("measurement-rows")) await benchMeasurementRows();
 if (only.has("retention")) await benchRetention();
+if (only.has("restore-apply")) for (const size of restoreFiles) await benchRestoreApply(size);
 const peakRssDeltaMiB = Math.round((process.memoryUsage().rss - startedRss) / 1024 / 1024);
 
 if (asJson) {

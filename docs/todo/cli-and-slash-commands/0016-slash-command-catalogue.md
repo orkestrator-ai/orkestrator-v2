@@ -12,7 +12,7 @@ upstream-blocked item and two small verification or hygiene points.
 
 ### Tasks
 
-1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311).
+1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311, and rechecked 2026-11-10 at the 0.3.319 pin: `SlashCommand` is still `{ name, description, argumentHint, aliases?, builtin? }`).
 2. **Codex cold-settle wait in a slow container** (Needs verification): confirm two 1 s re-reads are enough where plugin loading is slower. Status: open.
 3. **Real v2.21.0 pairings** (Needs verification): mixed-version run against real old builds. Status: open, owned by 0015 item 1.
 4. **Stale OpenCode pin comment**: `opencode-commands.ts` named 1.19.0 as the pin while the pin had moved on. Status: done (2026-10-31).
@@ -564,6 +564,14 @@ Made on 2026-10-24 while completing this file.
       "pinned", which is what went stale twice. Cons: the case-sensitive lookup,
       built-in templates and read-once facts stay dated to 1.19.0 until the
       OpenCode row in `native-agent-commands.md` is re-run.
+
+14. **Index row and task 1 recheck (2026-11-10 housekeeping).**
+    - The folder index said only the terminal marker was left, while task 2
+      (the Codex settle wait in a slow container) is still open here.
+      Chosen: correct the index to name task 2 and leave task 2 open, since
+      no container measurement exists and closing it per its recommendation
+      is a decision for whoever works it. Task 1 was rechecked against the
+      Agent SDK 0.3.319 pin's `sdk.d.ts`: no terminal marker yet.
 
 Assumptions:
 

@@ -25,6 +25,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentToolDetails,
   Environment,
   PersistedNativeAgentSession,
@@ -2616,6 +2617,10 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput & { action: NativeAgentSessionAction },
   ): Promise<NativeAgentSessionActionOutcome> {
     return this.sessionOperations.performProjectionAction(input);
+  }
+
+  listProjectionBranches(input: NativeAgentProjectionInput): Promise<NativeAgentSessionBranchList> {
+    return this.sessionOperations.listProjectionBranches(input);
   }
 
   performProjectionMcpAction(

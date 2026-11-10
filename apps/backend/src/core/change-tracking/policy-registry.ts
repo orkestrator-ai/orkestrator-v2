@@ -20,6 +20,15 @@ export interface ChangeTrackingPolicy {
   // Boundary capture.
   foregroundBoundaryDeadlineMs: number;
   finalizationDeadlineMs: number;
+  /**
+   * A turn whose end capture ran out of `finalizationDeadlineMs` is captured
+   * again in the background, without holding the turn: up to this many
+   * attempts, this long after the turn ended and between attempts, each with
+   * its own longer deadline. A new turn on the worktree cancels the retry.
+   */
+  endRecoveryAttempts: number;
+  endRecoveryDelayMs: number;
+  endRecoveryDeadlineMs: number;
   stableReadAttempts: number;
   captureMaxCandidates: number;
   captureMaxFileBytes: number;
@@ -79,6 +88,9 @@ export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.
   remoteCaptureSlots: 2,
   foregroundBoundaryDeadlineMs: 10_000,
   finalizationDeadlineMs: 30_000,
+  endRecoveryAttempts: 3,
+  endRecoveryDelayMs: 5_000,
+  endRecoveryDeadlineMs: 5 * 60_000,
   stableReadAttempts: 2,
   captureMaxCandidates: 100_000,
   captureMaxFileBytes: 16 * 1024 * 1024,

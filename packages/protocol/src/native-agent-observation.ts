@@ -22,6 +22,7 @@
  * task 4): clients invalidate the same way whatever it says.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
+import type { NativeAgentDiscoverySection } from "./native-agent.js";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "./view-sync.js";
 
 export const NATIVE_AGENT_ACTIVITY_EVENT = "native-agent-session-activity";
@@ -171,6 +172,29 @@ export interface NativeSessionInvalidationSnapshot {
   >;
   /** Invalidations whose cause or agent was outside the vocabulary; counted, never kept. */
   droppedLabels: number;
+  /**
+   * Which discovery section each `discovery-renewal` and `discovery-deadline`
+   * announcement was about, and which parts of its value changed (todo 7530).
+   * Absent from an older backend.
+   */
+  discoveryRenewals?: Partial<
+    Record<
+      NativeSessionInvalidationScope,
+      Partial<Record<NativeAgentDiscoverySection, NativeDiscoveryRenewalCounts>>
+    >
+  >;
+}
+
+/**
+ * Announced changes of one discovery section. `changed` counts value paths
+ * such as `summary.notices[].occurrences[count]`: structural names from the
+ * backend's own types (object keys, `[]` for an array entry, `[count]` and
+ * `[order]` for a length or ordering change), never a value. A key that is
+ * not a plain identifier reads as `other`.
+ */
+export interface NativeDiscoveryRenewalCounts {
+  count: number;
+  changed: Record<string, number>;
 }
 
 export interface NativeAgentActivityAnnouncement {

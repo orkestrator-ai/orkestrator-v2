@@ -140,6 +140,56 @@ describe("NativeChatShell", () => {
     cleanup();
   });
 
+  test("action search lists history and loaded actions beyond the visible ten and navigates to an unloaded one", async () => {
+    const props = shellProps();
+    const mark = (id: string, title: string): NativeMessage => ({
+      id,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-09",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "orkestrator_mark_question",
+          toolState: "success",
+          toolArgs: { title },
+        },
+      ],
+    });
+    const history = [mark("old-row", "Archived decision")];
+    const messages = Array.from({ length: 12 }, (_, i) => mark(`row-${i}`, `Loaded ${i}`));
+    const targets: string[] = [];
+    renderInAppCommandScope(
+      <NativeChatShell
+        {...props}
+        messages={messages}
+        coordinatorActionHistory={history}
+        coordinatorNavigate={(id) => {
+          targets.push(id);
+        }}
+      />,
+    );
+    // The narrow overlay offers search once it is expanded.
+    fireEvent.focus(screen.getByRole("button", { name: /Actions, \d+ waiting/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Search actions" }));
+    const listbox = await screen.findByRole("listbox", { name: "Actions" });
+    const names = within(listbox)
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("aria-label"));
+    // Thirteen actions, newest first: the panel's ten plus older loaded and history-only ones.
+    expect(names).toHaveLength(13);
+    expect(names[0]).toBe("Loaded 11");
+    expect(names.at(-1)).toBe("Archived decision");
+    fireEvent.change(screen.getByRole("combobox", { name: "Search actions" }), {
+      target: { value: "archived" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search actions" }), { key: "Enter" });
+    // The tab's navigation requests this id; its scroll target pages earlier history to reach it.
+    expect(targets).toEqual(["old-row"]);
+    cleanup();
+  });
+
   test("mounts the prompt rail only with a controller and an uncentered composer, using dock measurements", () => {
     const props = shellProps();
     const controller = new TranscriptScrollController({ current: null });

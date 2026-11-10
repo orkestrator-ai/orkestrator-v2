@@ -8,6 +8,8 @@ import {
   claudeTurnPolicy,
 } from "./claude-query-config.js";
 import { recordClaudeToolAwaitingApproval } from "./change-evidence.js";
+import { readClaudeMcpToolHints } from "./claude-mcp-tool-hints.js";
+import { readableControl } from "./session-manager-catalog.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -382,7 +384,14 @@ export async function turnCanUseTool(
   const approvals = turnPolicy?.approvals;
   if (claudeAsksForApproval(turnPolicy, turn.options)) {
     recordClaudeToolAwaitingApproval(sessionId, permissionContext?.toolUseID, toolName, input);
-    return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
+    // The CLI is waiting on this answer and still serves its status read, the
+    // only place an MCP tool's annotations reach the bridge.
+    const toolHints = await readClaudeMcpToolHints(
+      readableControl(session),
+      permissionContext?.mcpServer?.name,
+      toolName,
+    );
+    return requestClaudeToolApproval(sessionId, toolName, input, permissionContext, toolHints);
   }
   if (approvals === "deny") {
     return {

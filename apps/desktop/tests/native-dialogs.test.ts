@@ -55,6 +55,7 @@ function harness(
   input: {
     platform?: NodeJS.Platform;
     hiddenWindows?: boolean;
+    noDisplay?: boolean;
     current?: FakeWindow | null;
     createHostWindow?: () => Promise<FakeWindow>;
   } = {},
@@ -83,6 +84,7 @@ function harness(
   const dialogs = createNativeDialogs<FakeWindow>({
     dialog,
     hiddenWindows: input.hiddenWindows,
+    noDisplay: input.noDisplay,
     platform: input.platform ?? "darwin",
     currentWindow: () => input.current ?? null,
     createHostWindow,
@@ -168,6 +170,63 @@ describe("native dialogs", () => {
     expect(run.errorBox).not.toHaveBeenCalled();
     expect(run.createHostWindow).not.toHaveBeenCalled();
     expect(run.requestAttention).not.toHaveBeenCalled();
+  });
+
+  test("headless Ozone cancels Electron, error-box and uncaught-exception dialogs", async () => {
+    // Electron's GTK message box fails a CHECK with no display and the process
+    // dies with SIGTRAP (to-do 7554): a headless profile must never open one.
+    const run = harness({ platform: "linux", noDisplay: true });
+    run.dialogs.install();
+    const window = fakeWindow("main");
+    expect(await run.dialogs.showMessageBox("backend-error", OPTIONS, window)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    expect(await run.dialog.showMessageBox(OPTIONS)).toEqual({
+      response: 1,
+      checkboxChecked: false,
+    });
+    run.dialog.showErrorBox("secret title", "secret content");
+    let listener!: (error: Error) => void;
+    installUncaughtExceptionDialog(
+      {
+        on: (_event, added) => {
+          listener = added;
+        },
+      },
+      run.dialogs,
+      { error: mock(() => undefined) },
+    );
+    listener(new Error("secret exception"));
+    await Bun.sleep(0);
+    expect(run.logs).toEqual([
+      "[desktop.dialog] no-display-cancelled source=backend-error response=1",
+      "[desktop.dialog] no-display-cancelled source=unrouted response=1",
+      "[desktop.dialog] no-display-cancelled source=error-box response=0",
+      "[desktop.dialog] no-display-cancelled source=uncaught-exception response=0",
+    ]);
+    expect(run.calls).toEqual([]);
+    expect(run.errorBox).not.toHaveBeenCalled();
+    expect(run.createHostWindow).not.toHaveBeenCalled();
+    expect(run.requestAttention).not.toHaveBeenCalled();
+  });
+
+  test("headless Ozone still lets a test that replaced showMessageBox answer it", async () => {
+    // The Electron agent specs stub the method after install to answer prompts.
+    const run = harness({ platform: "linux", noDisplay: true });
+    run.dialogs.install();
+    const answered: Electron.MessageBoxOptions[] = [];
+    const routed = run.dialog.showMessageBox;
+    run.dialog.showMessageBox = (async (...args: unknown[]) => {
+      answered.push(args.at(-1) as Electron.MessageBoxOptions);
+      return { response: 0, checkboxChecked: false };
+    }) as typeof run.dialog.showMessageBox;
+    expect(await run.dialogs.showMessageBox("backend-error", OPTIONS)).toEqual({
+      response: 0,
+      checkboxChecked: false,
+    });
+    expect(answered).toEqual([OPTIONS]);
+    run.dialog.showMessageBox = routed;
   });
 
   test("logs the source and parent before opening and the time after, never the text", async () => {

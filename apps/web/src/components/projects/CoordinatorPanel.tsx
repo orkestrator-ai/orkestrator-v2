@@ -1,6 +1,6 @@
 import { flushSync } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, GitBranch, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
+import { AlertCircle, Loader2, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
 import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
@@ -11,6 +11,8 @@ import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkerPrompts } from "./CoordinatorWorkerPrompts";
+import { ProjectCheckoutNotice } from "./ProjectCheckoutNotice";
+import { useProjectCheckout } from "./useProjectCheckout";
 import { coordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
   COORDINATOR_SIDE_AGENT_EXPLANATION,
@@ -47,13 +49,11 @@ import {
   FloatingNoticeLayer,
 } from "@/components/ui/floating-notice";
 import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
-import { useAppDialogStore } from "@/stores/appDialogStore";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { nativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import { useProjectStore } from "@/stores/projectStore";
 import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -69,7 +69,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const paneLayouts = useNodeScope().store(coordinatorPaneLayoutStore);
   // The same node's compose drafts (plan item 3013).
   const composeDrafts = useNodeScope().store(nativeComposeStore);
-  const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
+  // Read from this node's own project list: a project id is per node.
+  const checkout = useProjectCheckout(projectId);
   const {
     snapshot,
     git,
@@ -250,32 +251,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     mountedConversationIds,
   );
 
-  if (!project?.localPath) {
-    return (
-      <div
-        id="project-panel-coordinator"
-        role="tabpanel"
-        className="grid h-full place-items-center p-8"
-      >
-        <div className="max-w-lg rounded-xl border border-border bg-card p-6 text-center">
-          <GitBranch className="mx-auto mb-3 size-8 text-muted-foreground" />
-          <h2 className="text-lg font-semibold">Connect a local checkout</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Coordinator reads the project’s real local checkout. Set a valid local path in
-            Repository settings to continue.
-          </p>
-          <Button
-            className="mt-4"
-            variant="outline"
-            onClick={() =>
-              useAppDialogStore.getState().open({ kind: "repository-settings", nodeId, projectId })
-            }
-          >
-            Repository settings
-          </Button>
-        </div>
-      </div>
-    );
+  if (checkout !== "ready") {
+    return <ProjectCheckoutNotice projectId={projectId} state={checkout} />;
   }
 
   if (loading && !snapshot) {

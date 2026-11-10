@@ -33,6 +33,7 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 
 const log = createLogger("web.environment");
 
@@ -171,6 +172,9 @@ export function CreateEnvironmentFlowDialog({
   startEnvironment,
 }: CreateEnvironmentFlowDialogProps) {
   const nodeBackend = useScopeBackend();
+  // The node the environment is created on: its activation and selection
+  // belong to that node, never to the window's command node.
+  const scope = useScopesWithCommandFallback().scope;
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   const [pendingCredentialWarning, setPendingCredentialWarning] =
@@ -299,7 +303,7 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.pendingAgentLaunch &&
         usesNativeStartupAgentTab(config, projectId, agentSettings)
       ) {
-        armStartupAgentTabActivation(configuredEnvironment.id);
+        armStartupAgentTabActivation(configuredEnvironment.id, scope);
       }
 
       setOptions(configuredEnvironment.id, {
@@ -419,7 +423,7 @@ export function CreateEnvironmentFlowDialog({
       // idempotent retry may return before its concurrent winner has attached
       // the environment, so the one-shot activation follows the authoritative
       // pipeline snapshot in that case and survives this dialog closing.
-      activateFeatureBuildEnvironment(projectId, result);
+      activateFeatureBuildEnvironment(projectId, result, scope);
       toast.success("Build started", {
         description: "The ticket was added and its environment is being created.",
       });

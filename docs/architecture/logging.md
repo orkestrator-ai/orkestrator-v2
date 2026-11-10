@@ -480,6 +480,8 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
 | `local-server` | `bridge.orphans-reaped` | `key`, `pid`, `result` | What a bridge left in its group after exiting on its own was stopped. |
 | `docker` | `bridge.launched` | `provider`, `containerPort` | A bridge was launched in a container, for the first time there or as a relaunch. |
+| `docker` | `bridge.listener-refused` | `provider`, `reason` | The socket on a container bridge's port is not the one recorded for the bridge the backend started, so its token was not handed out. See [agent-approvals.md](agent-approvals.md#a-replaced-bridge-is-refused). |
+| `docker` | `bridge.listener-unrecorded` | `provider`, `reason` | A bridge just launched could not be recorded as its port's listener; what listened was stopped and the start failed. |
 | `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
 | `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |
 | `docker` | `writer-lease.not-acquired` | `reason` | This backend started without it. |

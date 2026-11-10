@@ -87,24 +87,30 @@ type Environment = { id: string; name?: string; environmentType?: string; status
 
 const log = (message: string) => console.error(`[busy-item-counts-live] ${message}`);
 
-export async function runItemCounts(options: Options, signal: AbortSignal): Promise<number> {
-  const statusRun = spawnSync(
-    "mise",
-    ["run", "dev:status", "--profile", options.profile, "--json"],
-    {
-      encoding: "utf8",
-      env: checkoutEnv(options.checkout),
-      ...(options.checkout ? { cwd: options.checkout } : {}),
-    },
-  );
+export async function runItemCounts(
+  options: Options,
+  signal: AbortSignal,
+  runtime: {
+    gateway?: ReturnType<typeof gatewayFor>;
+    sleep?: (ms: number) => Promise<unknown>;
+    now?: () => number;
+  } = {},
+): Promise<number> {
+  const statusRun = runtime.gateway
+    ? { stdout: '{"status":"ready"}' }
+    : spawnSync("mise", ["run", "dev:status", "--profile", options.profile, "--json"], {
+        encoding: "utf8",
+        env: checkoutEnv(options.checkout),
+        ...(options.checkout ? { cwd: options.checkout } : {}),
+      });
   const status = JSON.parse(statusRun.stdout) as {
     status?: string;
     browserUrl?: string;
     authFile?: string;
   };
   if (status.status !== "ready") throw new Error("Profile is not ready");
-  const gateway = gatewayFor(status, signal);
-  const sleep = (ms: number) => delay(ms, undefined, { signal });
+  const gateway = runtime.gateway ?? gatewayFor(status, signal);
+  const sleep = runtime.sleep ?? ((ms: number) => delay(ms, undefined, { signal }));
   const environments = async (): Promise<Environment[]> => {
     const all: Environment[] = [];
     for (const project of await gateway.invoke<Array<{ id: string }>>("get_projects"))
@@ -113,14 +119,18 @@ export async function runItemCounts(options: Options, signal: AbortSignal): Prom
       );
     return all;
   };
-  const publicAction = async (action: string, input: Record<string, unknown>) => {
-    const response = (await gateway.invoke("public_action", {
-      schemaVersion: 1,
-      action,
-      actionVersion: 1,
-      input,
-      request: { requestId: `q1202-${randomUUID()}` },
-    })) as { ok?: unknown; error?: { code?: unknown } } | null;
+  const publicAction = async (action: string, input: Record<string, unknown>, cleanup = false) => {
+    const response = (await gateway.invoke(
+      "public_action",
+      {
+        schemaVersion: 1,
+        action,
+        actionVersion: 1,
+        input,
+        request: { requestId: `q1202-${randomUUID()}` },
+      },
+      cleanup,
+    )) as { ok?: unknown; error?: { code?: unknown } } | null;
     if (response?.ok !== true)
       throw new Error(`${action} refused: ${String(response?.error?.code ?? "unknown")}`);
   };
@@ -130,13 +140,14 @@ export async function runItemCounts(options: Options, signal: AbortSignal): Prom
     dockerExecPerMinute: number;
     kinds: Record<string, KindRate>;
   }> = [];
+  const now = runtime.now ?? Date.now;
   const measure = async (name: string) => {
     log(`window ${name}: ${Math.round(options.windowMs / 1000)} s`);
     const before = await gateway.kinds();
-    const startedAt = Date.now();
+    const startedAt = now();
     await sleep(options.windowMs);
     const after = await gateway.kinds();
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = now() - startedAt;
     const kinds = windowRates(before, after, elapsedMs);
     windows.push({ name, elapsedMs, dockerExecPerMinute: dockerExecPerMinute(kinds), kinds });
   };
@@ -187,9 +198,11 @@ export async function runItemCounts(options: Options, signal: AbortSignal): Prom
     log(`failed: ${String(result.error)}`);
   } finally {
     for (const environmentId of stopped)
-      await publicAction("environment.start", { environmentId }).catch(() =>
-        log("could not start an environment again; dev:reset removes it"),
-      );
+      await publicAction("environment.start", { environmentId }, true).catch(() => {
+        exitCode = 1;
+        result.cleanupFailed = true;
+        log("could not start an environment again; dev:reset removes it");
+      });
     mkdirSync(path.dirname(options.out), { recursive: true });
     writeFileSync(options.out, `${JSON.stringify(result, null, 2)}\n`);
     log(`wrote ${options.out}`);

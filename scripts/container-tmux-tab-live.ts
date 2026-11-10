@@ -169,8 +169,12 @@ export function execLabel(action: string): string {
  * count across commits: an older backend does not instrument every loop in
  * its `recurringWork` counters.
  */
-function execCounter(containerId: string) {
-  const child = spawn(
+export function execCounter(
+  containerId: string,
+  start: typeof spawn = spawn,
+  settle: () => Promise<unknown> = () => delay(1_000),
+) {
+  const child = start(
     "docker",
     [
       "events",
@@ -183,6 +187,22 @@ function execCounter(containerId: string) {
     ],
     { stdio: ["ignore", "pipe", "ignore"] },
   );
+  let stopping = false;
+  let failed = false;
+  // Observe errors immediately; neither a spawn error nor an early clean exit
+  // proves a complete event stream. Never retain Docker's potentially sensitive output.
+  const closed = new Promise<void>((resolve) => {
+    child.on("error", () => {
+      failed = true;
+    });
+    child.once("exit", () => {
+      if (!stopping) failed = true;
+    });
+    child.once("close", () => {
+      if (!stopping) failed = true;
+      resolve();
+    });
+  });
   const labels: Record<string, number> = {};
   let total = 0;
   const lines = createInterface({ input: child.stdout! });
@@ -201,12 +221,42 @@ function execCounter(containerId: string) {
   return {
     async stop(): Promise<{ total: number; labels: Record<string, number> }> {
       // Docker delivers events a moment after they happen.
-      await delay(1_000);
-      lines.close();
+      await settle();
+      if (child.exitCode !== null || child.signalCode !== null) failed = true;
+      stopping = true;
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      const escalation = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      try {
+        await closed;
+      } finally {
+        clearTimeout(escalation);
+        lines.close();
+      }
+      if (failed) throw new Error("Docker event collector interrupted; measurement invalid");
       return { total, labels };
     },
   };
+}
+
+/** A failed read or body never publishes a window; the owned collector is always reaped. */
+export async function collectWindow<T>(
+  start: () => { stop(): Promise<{ total: number; labels: Record<string, number> }> },
+  kinds: () => Promise<Record<string, KindCounters>>,
+  body: () => Promise<T>,
+) {
+  const collector = start();
+  let counted;
+  let measurement;
+  try {
+    const before = await kinds();
+    const startedAt = Date.now();
+    const value = await body();
+    const after = await kinds();
+    measurement = { value, before, after, elapsedMs: Date.now() - startedAt };
+  } finally {
+    counted = await collector.stop();
+  }
+  return { ...measurement, counted };
 }
 
 /** Every `docker exec` a window's kinds made, per minute. */
@@ -396,30 +446,24 @@ export async function runContainerTabBenchmark(
   const sleep = (ms: number) => delay(ms, undefined, { signal });
   /** Runs `body` inside a window: counters and Docker's exec count on either side. */
   const inWindow = async <T>(name: string, body: () => Promise<T>, note?: string): Promise<T> => {
-    const execs = execCounter(containerId);
-    const before = await gateway.kinds();
-    const startedAt = Date.now();
-    try {
-      return await body();
-    } finally {
-      const after = await gateway.kinds().catch(() => null);
-      const elapsedMs = Date.now() - startedAt;
-      const counted = await execs.stop();
-      if (after) {
-        const kinds = windowRates(before, after, elapsedMs);
-        windows.push({
-          name,
-          elapsedMs,
-          containerExecs: {
-            ...counted,
-            perMinute: Math.round((counted.total * 60_000 * 100) / elapsedMs) / 100,
-          },
-          dockerExecPerMinute: dockerExecPerMinute(kinds),
-          kinds,
-          ...(note ? { note } : {}),
-        });
-      }
-    }
+    const { value, before, after, elapsedMs, counted } = await collectWindow(
+      () => execCounter(containerId),
+      () => gateway.kinds(),
+      body,
+    );
+    const kinds = windowRates(before, after, elapsedMs);
+    windows.push({
+      name,
+      elapsedMs,
+      containerExecs: {
+        ...counted,
+        perMinute: Math.round((counted.total * 60_000 * 100) / elapsedMs) / 100,
+      },
+      dockerExecPerMinute: dockerExecPerMinute(kinds),
+      kinds,
+      ...(note ? { note } : {}),
+    });
+    return value;
   };
   const measure = async (name: string, ms: number, note?: string) => {
     log(`window ${name}: ${Math.round(ms / 1000)} s`);

@@ -94,7 +94,7 @@ Done on 2026-11-09 on beelink2 ([evidence](../../development/container-qualifica
 
 ### 6. Retire the file
 
-**Problem.** Every code item is done. The file stays open only for task 5.
+**Problem.** Every code item is done, and task 5's fresh-image rootless qualification was completed on 2026-11-09. The file stays open only for retirement (task 6).
 
 **Context.** README rule: once the last item is done, move durable behaviour into `architecture/` and delete the file.
 
@@ -232,6 +232,10 @@ qualification described below.
   otherwise.
 
 ## Assumptions and decisions
+
+### Task 6: clarify the remaining work (2026-11-10 review fix)
+
+Corrected task 6's stale Problem paragraph to reflect task 5's completion on 2026-11-09. Retirement remains open and outside this task 5 qualification change; the task list and index already record that status.
 
 1. **Staged inputs on rootless (item 1).** Options: `docker cp` the
    revision in; write it as the mapped UID (`unshare --map-auto` and chown);

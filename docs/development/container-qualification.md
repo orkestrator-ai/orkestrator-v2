@@ -52,7 +52,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
-| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
+| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `container-exited`, because the daemon refuses `docker cp` from those containers ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)) |
@@ -284,6 +284,98 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## Egress name checks on rootless Docker (2026-11-10)
+
+To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+task 2: the gateway's name checks (`egress-filter=1`) on rootless Docker,
+where the container network lives in RootlessKit's namespace. Run in
+worktree `orkestrator-v2-20261110-012508-43321f71f84f` at `main`
+`04639b12b` plus this change.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, cgroup v2). The
+  host's rootful Engine 29.9.2 was only read, for the images.
+- **Daemons:** `mise run docker:disposable -- start` twice, each a host
+  rootless Engine 29.9.2 (containerd v2.4.2, runc 1.5.2) under RootlessKit
+  3.3.0 with `--detach-netns`, the builtin port driver, host loopback
+  refused, `live-restore` off, the systemd cgroup driver and pool
+  `172.30.0.0/16` as /24s:
+  - `q6101r`: slirp4netns 1.3.3 (the default). Started with the image in
+    47 s; the older image copied in 43 s.
+  - `q6101g`: `--net gvisor-tap-vsock`, RootlessKit's built-in driver.
+- **Image:** `orkestrator-v2:dev-8bff8877f7f8`
+  (`sha256:afdb91660fa791fa89694d4588984cd222dd2df3c147fbfc72990026be328ab4`,
+  6.04 GB, `2.37.3-beta`, source `53e936b37`), already on the host and
+  copied in by id. Capabilities include `egress-gateway=1`,
+  `egress-filter=1`, `network-policy=3` and `network-refresh=1`. Its
+  `init-firewall.sh`, `update-firewall.sh`, `orkestrator-egress-gateway`,
+  `orkestrator-egress-filter`, `firewall-domains.sh`, `entrypoint.sh` and
+  `network-policy-entrypoint.sh` match the checkout byte for byte
+  (SHA-256); `docker/` differs from `04639b12b` only in
+  `orkestrator-bridge-launch.sh` and a log-writer test. Older image, read
+  only: `ghcr.io/orkestrator-ai/orkestrator-v2:2.34.4-beta`
+  (`egress-gateway=1`, no `egress-filter`), on `q6101r` only.
+
+Each suite ran through `test:logged` with the variables from
+`docker:disposable -- env`, `RUN_LIVE_DOCKER_TESTS=1`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, `--parallel=1`, a JUnit report
+kept, and `TMPDIR` on a directory on the home filesystem (btrfs), not the
+`nosuid,nodev` `/tmp` ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)).
+GitHub's anonymous allowance stayed above 40 throughout.
+
+| Daemon | Suite | Result |
+| --- | --- | --- |
+| slirp4netns | Live egress name checks (M12), with the older image | **6/6, 124 assertions**, 53.9 s, and again 55.7 s |
+| gvisor-tap-vsock | Live egress name checks (M12) | **5 pass, 1 skip** (older image not loaded there), 109 assertions, 50.3 s |
+| slirp4netns | Live egress conditions, `ORKESTRATOR_LIVE_IPV6_NETWORK=1` and the printed restart command | **3/3, 66 assertions**, 49.6 s: IPv6 4.8 s, DNS rotation 16.8 s, daemon restart 25.7 s (two rootless daemon restarts) |
+
+- **The rootless questions.** Every M12 case passed in RootlessKit's
+  namespace, so the three mechanisms the to-do asked about behave as on
+  rootful Engine: the name-check daemon set `SO_MARK` on its sockets while
+  the workload got `EPERM` as `node` and as root; the gateway's `nat` rules
+  redirected TCP to allowed addresses to its own address and DNS to its
+  resolver port, and `127.0.0.11:53` to the same port; and the relay found
+  each connection's real destination through `SO_ORIGINAL_DST`. The
+  headline cases: an allowed name answered 200, a foreign SNI on its
+  address got `access denied`, the HTTP Host check refused a request before
+  it reached the fixture, a name off the list got `REFUSED` with EDE 18
+  over UDP, over TCP and sent to `192.0.2.53`, a killed daemon failed closed
+  and came back on refresh, and a full-mode runtime was not filtered.
+- **Topology recorded by the suite** (identical on both drivers apart from
+  Docker's embedded resolver ports):
+
+  ```json
+  {"daemonRootless":true,
+   "resolvers":["nameserver 127.0.0.11","# ExtServers: [host(127.0.0.53)]"],
+   "nat":["-A OUTPUT -p tcp -m tcp ! --dport 53 -m mark ! --mark 0x6f726b -m set --match-set allowed-domains dst,dst -j DNAT --to-destination 172.30.1.3:31443",
+          "-A OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -j DNAT --to-destination 127.0.0.11:34675",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -j DNAT --to-destination 127.0.0.11:36307"]}
+  ```
+
+  With `--detach-netns` the rootless daemon stays in the host's network
+  namespace, so Docker names the host's stub resolver as `host(...)` and
+  contacts it itself: the name checks used Docker's embedded resolver for
+  every query, as on Docker Desktop. The addressed-upstream path (6101 task
+  3) ran on rootless only through the suite's controlled-upstream case,
+  which passed on both drivers.
+- **Suite change.** The topology line above is new: the M12 suite's first
+  case prints it and appends it to `ORKESTRATOR_QUALIFICATION_EVIDENCE` when
+  set. It asserts nothing.
+- **Cleanup.** Every suite's `afterAll` removed its labelled resources, and
+  afterwards each daemon held no container, custom network or volume.
+  `docker:disposable -- stop` took 3.9 s and 2.9 s and left no instance,
+  runtime directory or `docker-*` user scope. Other builds' disposable
+  daemons running on the host at the same time were not touched.
+- **Not covered:** pasta (not installed on beelink; 6101 task 4), VPNKit,
+  arm64, host loopback enabled, `live-restore` on, a real addressed upstream
+  on rootless (the daemon here named its upstream through `host(...)`), and
+  a rootless daemon restart on gvisor-tap-vsock
+  ([7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)).
+  No provider turns, credentials or app profile were used.
 
 ## Agent-tools peer gate on nested rootful Linux Engine (2026-11-10)
 

@@ -42,7 +42,7 @@ against `main` at `e6c3da899`.
 
 **Problem.** Rootless Docker puts the container network inside RootlessKit's namespace (slirp4netns or pasta). Whether `SO_MARK`, the `nat` DNAT to the namespace's own address and `SO_ORIGINAL_DST` behave the same there is unproven.
 
-**Context.** [0109](0109-rootless-linux-runtime-gaps.md) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
+**Context.** The [rootless qualification record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
 
 **Investigation.** Not run. No rootless daemon was available on the build host. Not run on 2026-11-06 either: that run on beelink was scoped to its rootful Engine, and no rootless daemon was started.
 
@@ -114,6 +114,13 @@ failure and timeout behavior reproducible on Docker Desktop and in the existing
 Linux CI job. The alternative of relying on CI's ambient resolver configuration
 needs less fixture code but cannot force a failed primary or forged reply.
 The fixture does not qualify a rootless or native Linux host.
+
+### Reference maintenance for task 2 (2026-11-10)
+
+Replaced links to retired to-do 0109 with the living architecture or
+qualification record so its deletion leaves usable references. This review
+repair changes references only; the task statuses and live evidence stay as
+recorded. Retaining a stub would preserve the old URLs but undo retirement.
 
 ## Current state
 

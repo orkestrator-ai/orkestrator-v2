@@ -85,8 +85,17 @@ gvisor-tap-vsock.
     - Pros: complete.
     - Cons: more text in a dialog for a detail most users do not need.
 
+## Assumptions and decisions
+
+### Reference maintenance for tasks 1 and 2 (2026-11-10)
+
+Replaced links to retired to-do 0109 with the living architecture or
+qualification record so its deletion leaves usable references. This review
+repair changes references only; the task statuses and live evidence stay as
+recorded. Retaining a stub would preserve the old URLs but undo retirement.
+
 ## Related
 
 - [6820](6820-agent-tools-peer-gate-linux-evidence.md) task 2 (the gate's rootless evidence)
-- [0109](0109-rootless-linux-runtime-gaps.md) (rootless runtime gaps)
+- [Agent-tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (current rootless behavior)
 - [4730](4730-disposable-docker-daemon-for-live-suites.md) (the disposable daemon used to observe this)

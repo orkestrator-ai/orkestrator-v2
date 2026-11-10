@@ -48,7 +48,7 @@ that namespace; then fill in the Linux Engine row of
 
 ### 2. Run it on rootless Docker with host loopback
 
-**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [0109](0109-rootless-linux-runtime-gaps.md)). The peer address the server then sees has not been observed.
+**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [agent-tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)). The peer address the server then sees has not been observed.
 
 **Context.** slirp4netns (and pasta) connect to the host from a process in the host's network namespace, so the peer should be `127.0.0.1`, which the gate admits without reading Docker. If it is instead an address in RootlessKit's namespace, the gate refuses it, because no Docker network of the rootless daemon is visible from the host's namespace in that form.
 
@@ -297,6 +297,13 @@ both 2026-11-09 runs showed on a host whose ufw drops incoming traffic by
 default. The rejected alternative (per-gateway listeners) keeps the reasons
 the report gave. The doc now states the accepted residual exposure.
 
+### Reference maintenance for task 2 (2026-11-10)
+
+Replaced links to retired to-do 0109 with the living architecture or
+qualification record so its deletion leaves usable references. This review
+repair changes references only; the task statuses and live evidence stay as
+recorded. Retaining a stub would preserve the old URLs but undo retirement.
+
 ## Current state
 
 Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS and, on 2026-11-09, on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`). What is left is native rootful Linux Engine (task 1), the C22 case on Linux CI (task 3) and Docker Desktop for Linux (task 4).
@@ -311,4 +318,4 @@ outstanding live topology evidence.
 
 - [Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
 - Security index, L15 (`git show 413bd6219:docs/reports/security/0000-index.md`)
-- [Todo 0109](0109-rootless-linux-runtime-gaps.md)
+- [Agent-tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)

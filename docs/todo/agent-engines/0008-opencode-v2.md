@@ -2369,6 +2369,78 @@ providers, models and `AGENTS.md` as a 1.x one. The guard plugin still
 refuses every tool outside the read-only set, so the user's MCP servers load
 but their tools are refused, as the session rules already did.
 
+### Task 5: terminal tabs on 2.x (2026-11-10)
+
+Reported: with terminal mode and the OpenCode 2 setting on, a new local
+environment's OpenCode tab printed OpenCode 2's usage and `ERROR` instead of
+starting. The tab ran `OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model … --prompt
+…`, a bare `opencode` that the login shell (`zsh -l`) resolved. macOS's
+`path_helper` moves the managed toolchain directory that
+`envWithManagedBinaries` prepends behind Homebrew, mise shims and
+`~/.local/bin`, so the user's own `opencode`, a 2.x install, ran instead of
+the pinned 1.19.5. The 2.x TUI has no `--model` (only `opencode run` does), so
+it refused the line. The setting was not involved: terminal tabs ignored it.
+
+Chosen (owner, 2026-11-10): terminal tabs follow the setting. A new tab is
+rewritten when `bootstrap_terminal_session` delivers it
+(`apps/backend/src/core/opencode2/terminal-launch.ts`):
+
+- Only the exact line `buildTerminalAgentLaunchCommand` builds for OpenCode is
+  rewritten (`parseTerminalOpenCodeLaunchCommand`), only in a local
+  environment, and only while the setting is `v2`. Anything else, and an
+  unreadable environment or setting, keeps the 1.x line and its private
+  `OPENCODE_DB` exactly as before. A tab restored later is never
+  re-bootstrapped, so existing tabs stay on the line they started on.
+- The managed `opencode2` runs by its full path with `--standalone`, so it
+  starts no background service that outlives the tab. It uses the host 2.x
+  servers' database and configuration directory (`openCode2HostPaths`,
+  `writeOpenCode2HostConfig`), the same flags, autoupdate off, the server
+  credentials a shell may export unset, and a user `OPENCODE_CONFIG` only as
+  its mirror. Sign-ins Orkestrator mirrors into the 2.x database therefore
+  reach the tab, and the user's `opencode.db` is never opened.
+- The model overrides only `model` in the terminal shell's existing
+  `OPENCODE_CONFIG_CONTENT`. A managed Bun helper parses JSONC at launch time,
+  outside the worktree and without dotenv loading; invalid or non-object input
+  refuses the launch with a fixed error. The override is confined to a subshell.
+  The earlier model-selection probe against 2.2.6 in an isolated `HOME`/XDG
+  started the TUI on
+  `opencode/glm-5.3-flash-free` when that was named, and on Big Pickle when it
+  was not. The reasoning level is dropped, as for 1.x.
+- With the setting on and no managed `opencode2`, the tab prints the same
+  "not installed yet" message the native path raises rather than running 1.x.
+
+Not changed: container terminal tabs stay on the image's 1.x `opencode`, even
+on an image that carries `opencode2` (not checked: whether anything in a
+container can put a 2.x `opencode` ahead of the image's). A 1.x tab on a host whose own
+`opencode` is 2.x, with the setting off, still runs the user's binary. Not
+run: a live terminal tab in a `dev:test` profile.
+
+### Task 5: terminal bootstrap review fixes (2026-11-10)
+
+**Choice: bootstrap ownership.** Pending ownership in the backend runtime
+(recommended) adds a transient claim but preserves delivery semantics. The runtime owns one pending
+preparation per PTY, duplicates await that operation, and snapshots report
+`bootstrapped` only after a successful write. Cleanup and shutdown invalidate
+pending ownership; continuations compare their claim, PTY and session config
+before writing. This replaces publishing success before preparation: the old
+form was smaller but could acknowledge failed launches and write to replaced
+PTYs. Tests cover concurrent same/different data, preparation/write failure,
+retry, replacement, close, shutdown and a second registry rehydrating state.
+
+**Choice: inline configuration.** A shell-time merge (recommended) overrides only `model` in the effective shell
+JSONC at execution time. A backend-only merge would be simpler but miss settings
+exported by login scripts; replacing the document drops providers and permissions.
+The Bun helper adds a short process for explicit-model launches, but preserves
+those settings and refuses malformed input without echoing it. Shell tests cover
+model/default selection, quoting, parent-environment isolation, invalid input and
+project preload avoidance.
+
+**Choice: canonical recognition.** A builder round trip (recommended) requires the parsed line to round-trip through
+the existing builder, including its line ending. Expanding the regex exclusions
+would be smaller but leave another escaping convention to maintain. Tests reject
+raw variable/command expansion, empty arguments and extra trailing newlines,
+while retaining escaped prompts and CRLF lines.
+
 ### Task 2: the start is settled by the preview (2026-11-10 housekeeping)
 
 Checked against `main` at `04639b12b`. The task list still read "open ...

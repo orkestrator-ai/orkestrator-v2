@@ -103,7 +103,16 @@ the walk is `listProductionSources`, which skips test files and test-support
 modules). They hold the node-scope boundaries of the unified federation work and
 are described in [Transports only through a scope](#transports-only-through-a-scope):
 `window-orkestrator-direct`, `direct-transport-import`,
-`lib-backend-command-default` and `workspace-command-bound-call`.
+`lib-backend-command-default` and `workspace-command-bound-call`. One more
+holds an Electron main rule:
+
+- **`raw-webrequest-listener`**: a `webRequest.on*(...)` call in
+  `apps/desktop/electron` whose listener is not wrapped in `answering` or
+  `observing` (`apps/desktop/electron/webrequest-listener.ts`), or `null`. A
+  listener that throws before calling Electron's callback leaves its request
+  unanswered and gives main an uncaught exception (flake 0622, to-do 7060);
+  the wrappers always answer, with the listener's fail-closed response. The
+  baseline is zero.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
 `tests/source-guards/baseline.json` holds a count per guard and file. The test

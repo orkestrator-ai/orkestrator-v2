@@ -1,11 +1,14 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import type {
+  BeforeSendResponse,
+  HeadersReceivedResponse,
   OnBeforeSendHeadersListenerDetails,
   OnHeadersReceivedListenerDetails,
   WebFrameMain,
   WebRequest,
 } from "electron";
 import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
+import { answering } from "./webrequest-listener.js";
 
 const log = createLogger("gateway");
 
@@ -166,11 +169,11 @@ function gatewayResponseHeaders(
 }
 
 /**
- * Both listeners always call back. A listener that throws never does: its
- * request stays unanswered and main gets an uncaught exception. A session
- * outlives its window, so a closed window's last requests reach these hooks
- * after its connection was released (flake 0622). A failed lookup sends the
- * request with no credential.
+ * Both listeners always call back (`answering`). A listener that throws never
+ * does: its request stays unanswered and main gets an uncaught exception. A
+ * session outlives its window, so a closed window's last requests reach these
+ * hooks after its connection was released (flake 0622). A failed lookup sends
+ * the request with no credential, and reads the response as it came.
  */
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
@@ -178,25 +181,31 @@ export function installRemoteGatewayRequestAuth(
   options: RemoteGatewayRequestAuthOptions = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
-  webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    let requestHeaders: Record<string, string>;
-    try {
-      requestHeaders = gatewayRequestHeaders(details, getAuthorization, options);
-    } catch {
-      // Do not log the exception: option callbacks may put URLs or credentials in it.
-      log.debug("request-auth.fallback", { phase: "request" });
-      requestHeaders = withoutAmbientGatewayCredentials(details.requestHeaders);
-    }
-    callback({ requestHeaders });
-  });
-  webRequest.onHeadersReceived(filter, (details, callback) => {
-    let responseHeaders: Record<string, string[]> | undefined;
-    try {
-      responseHeaders = gatewayResponseHeaders(details, getAuthorization, options);
-    } catch {
-      log.debug("request-auth.fallback", { phase: "response" });
-      responseHeaders = details.responseHeaders;
-    }
-    callback({ responseHeaders });
-  });
+  webRequest.onBeforeSendHeaders(
+    filter,
+    answering<OnBeforeSendHeadersListenerDetails, BeforeSendResponse>(
+      "gateway-request-auth.before-send-headers",
+      (details) => ({
+        requestHeaders: gatewayRequestHeaders(details, getAuthorization, options),
+      }),
+      (details) => {
+        // Do not log the exception: option callbacks may put URLs or credentials in it.
+        log.debug("request-auth.fallback", { phase: "request" });
+        return { requestHeaders: withoutAmbientGatewayCredentials(details.requestHeaders) };
+      },
+    ),
+  );
+  webRequest.onHeadersReceived(
+    filter,
+    answering<OnHeadersReceivedListenerDetails, HeadersReceivedResponse>(
+      "gateway-request-auth.headers-received",
+      (details) => ({
+        responseHeaders: gatewayResponseHeaders(details, getAuthorization, options),
+      }),
+      (details) => {
+        log.debug("request-auth.fallback", { phase: "response" });
+        return { responseHeaders: details.responseHeaders };
+      },
+    ),
+  );
 }

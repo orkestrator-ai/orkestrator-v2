@@ -110,11 +110,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import {
-  keyedSchedulingEnabled,
-  type KeyedWorkflowOwner,
-  type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { MachineLoadSampler } from "./machine-load.js";
@@ -405,11 +401,8 @@ export class OrkestratorBackend {
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
-  private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
-  private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
-  /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
+  /** Step 08 named due jobs: the activity bundle and maintenance. */
   private activityJobs: BackendActivityJobs | null = null;
-  private readonly keyedActivityJobs: boolean;
   private readonly activityJobClock:
     | { now: () => number; timers: import("./recurring-scheduler.js").RecurringTimerFactory }
     | undefined;
@@ -542,12 +535,6 @@ export class OrkestratorBackend {
      */
     dockerFollowers?: Pick<BackendRuntimeOptions, "containerOom" | "containerLogs">;
     environmentLifecycleDrainTimeoutMs?: number;
-    /**
-     * Step 08 named due jobs for the activity bundle and maintenance. `false`
-     * selects the previous 2 s bundle and 60 s timer (never both); defaults
-     * to `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` not naming `backend-activity`.
-     */
-    keyedActivityJobs?: boolean;
     /** Test seam: the activity jobs' monotonic clock and timers. */
     activityJobClock?: {
       now: () => number;
@@ -566,8 +553,6 @@ export class OrkestratorBackend {
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
     const emit = createBackendEmit((event, payload) => options.emit(event, payload));
-    this.keyedActivityJobs =
-      options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
     this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
@@ -2584,8 +2569,6 @@ export class OrkestratorBackend {
           orphanReconcileInFlight = null;
         });
     };
-    let mailRetentionTick = 0;
-    let coordinatorWorkflowTick = 0;
     let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
     const reconcileCoordinatorWorkflows = () =>
       runCoordinatorMaintenance(
@@ -2627,7 +2610,7 @@ export class OrkestratorBackend {
           });
         },
       );
-    if (this.keyedActivityJobs && !this.activityJobs) {
+    if (!this.activityJobs) {
       // Step 08: every part of the former 2 s bundle and the 60 s maintenance
       // is its own named due job (see backend-activity-jobs.ts).
       const jobLog = (name: string) => ({
@@ -2780,88 +2763,6 @@ export class OrkestratorBackend {
           : {},
       );
       this.activityJobs.start();
-    } else if (!this.keyedActivityJobs) {
-      const sweepFailed = (name: string, error: unknown): void => {
-        activityLog.throttled("warn", "job.failed", {
-          scope: `${this.logScope}:${name}`,
-          error,
-          fields: () => ({ error: formatLogError(error, { stack: false }) }),
-        });
-      };
-      this.nativeActivitySweep ??= setInterval(() => {
-        void this.nativeAgents
-          .reconcileAgentActivity()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:native-agent-activity`))
-          .catch((error) => {
-            sweepFailed("native-agent-activity", error);
-          });
-        if (reconcileClaudeState) {
-          void observeSweepStep("claude-state-reconcile", () =>
-            reconcileClaudeState({}, this.context),
-          )
-            .then(() =>
-              activityLog.recovered("job.failed", `${this.logScope}:claude-terminal-activity`),
-            )
-            .catch((error: unknown) => {
-              sweepFailed("claude-terminal-activity", error);
-            });
-        }
-        void this.promptQueues
-          .drainAll()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:tmux-prompt-queues`))
-          .catch((error) => {
-            sweepFailed("tmux-prompt-queues", error);
-          });
-        void this.agentMail
-          .refreshPresence()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-presence`))
-          .catch((error) => {
-            sweepFailed("agent-mail-presence", error);
-          });
-        void this.agentMail
-          .drainInjects()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-drain`))
-          .catch((error) => {
-            sweepFailed("agent-mail-drain", error);
-          });
-        coordinatorWorkflowTick += 1;
-        if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
-        mailRetentionTick += 1;
-        if (mailRetentionTick % 30 === 0) {
-          void observeSweepStep("mail-retention", () =>
-            this.context.storage
-              .loadConfig()
-              .then((config) =>
-                this.context.storage.pruneAgentMail(
-                  config.global.agentMessaging?.retentionDays ?? 14,
-                ),
-              ),
-          )
-            .then(() => activityLog.recovered("job.failed", `${this.logScope}:mail-retention`))
-            .catch((error) => {
-              sweepFailed("mail-retention", error);
-            });
-        }
-        if (reconcilePendingEnvironmentRenames) {
-          void observeSweepStep("pending-rename-reconcile", () =>
-            reconcilePendingEnvironmentRenames({}, this.context),
-          )
-            .then(() => activityLog.recovered("job.failed", `${this.logScope}:pending-renames`))
-            .catch((error: unknown) => {
-              sweepFailed("pending-renames", error);
-            });
-        }
-      }, 2_000);
-      this.nativeActivitySweep.unref?.();
-      // Interrupted tab cleanup is durable and orphan reaping has a one-hour
-      // grace period. A one-minute, coalesced sweep is responsive enough without
-      // repeatedly parsing layouts or overlapping destructive work.
-      this.tabResourceSweep ??= setInterval(() => {
-        void reconcileRetiredReviews();
-        reconcileTabTeardownsOnce();
-        reconcileOrphanedTabResourcesOnce();
-      }, 60_000);
-      this.tabResourceSweep.unref?.();
     }
     // This credential persists across restarts, so an already configured MCP
     // client can reconnect the instant the listener binds. Publish it only
@@ -2907,9 +2808,13 @@ export class OrkestratorBackend {
     this.nodeCoordination.start();
     // Shared usage readings: once now, then a minute apart as a last resort for
     // anything an event did not trigger (a node with nothing new costs a collect).
+    // `init()` can be re-entered by a supervisor retrying a partial startup;
+    // a second interval would double the collects and leak the first handle.
     void this.usageSync.syncAll();
-    this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
-    this.usageSyncTimer.unref?.();
+    if (!this.usageSyncTimer) {
+      this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
+      this.usageSyncTimer.unref?.();
+    }
     this.coordinators.startStatusWakes();
     this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();
@@ -3227,14 +3132,6 @@ export class OrkestratorBackend {
     });
     stopStepNow("container-oom", () => this.runtime.containerOom.stop());
     stopStepNow("container-logs", () => this.runtime.containerLogs.shutdown());
-    stopStepNow("native-activity-sweep", () => {
-      if (this.nativeActivitySweep) clearInterval(this.nativeActivitySweep);
-      this.nativeActivitySweep = null;
-    });
-    stopStepNow("tab-resource-sweep", () => {
-      if (this.tabResourceSweep) clearInterval(this.tabResourceSweep);
-      this.tabResourceSweep = null;
-    });
     stopStepNow("activity-jobs", () => {
       const jobs = this.activityJobs;
       this.activityJobs = null;

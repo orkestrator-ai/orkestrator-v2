@@ -942,7 +942,9 @@ disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
+activity stay keyed in both arms, since their rollback drivers were removed)
+and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.
 

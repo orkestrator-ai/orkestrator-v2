@@ -418,6 +418,14 @@ export class StorageDatabase {
           ? "PRAGMA synchronous = NORMAL"
           : "PRAGMA synchronous = FULL",
       );
+      // A checkpoint copies WAL frames into the database file and then resets
+      // the WAL, so it must sync in order. On macOS Bun links the system
+      // SQLite, which syncs a checkpoint with F_BARRIERFSYNC only because
+      // Apple builds it with DEFAULT_CKPTFULLFSYNC; plain fsync there neither
+      // flushes the drive cache nor orders writes. Set it rather than inherit
+      // the build default. A no-op on Linux. `fullfsync` (each commit) stays
+      // off: storage.md, "Durability and deletion", and to-do 5180.
+      this.db.exec("PRAGMA checkpoint_fullfsync = ON");
       // Deleting user content must not leave it readable in free pages.
       this.db.exec("PRAGMA secure_delete = ON");
       // No table declares a foreign key, so `foreign_keys` is left off: setting

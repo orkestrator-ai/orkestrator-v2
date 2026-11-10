@@ -6878,7 +6878,12 @@ describe("NativeMessage permission-denied tool rows", () => {
 });
 
 describe("NativeMessage shell command changes", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    // Every test reuses one call id, and a call's expansion is remembered by
+    // its id within the transcript: each test starts collapsed.
+    useMessagePartExpansionStore.getState().reset();
+  });
 
   const command = (commandChanges?: NativeMessagePart["commandChanges"]): NativeMessagePart => ({
     type: "tool-invocation",

@@ -1,11 +1,11 @@
 {
   "sleep-before-negative-assertion": {
     "apps/backend/src/core/agent-accounts-login.test.ts": 1,
-    "apps/backend/src/core/agent-mail-service.test.ts": 2,
+    "apps/backend/src/core/agent-mail-service.test.ts": 1,
     "apps/backend/src/core/backend-runtime.test.ts": 2,
     "apps/backend/src/core/build-pipeline-key-information.test.ts": 2,
     "apps/backend/src/core/change-tracking/object-store-write-path.test.ts": 2,
-    "apps/backend/src/core/change-tracking/review-regressions.test.ts": 2,
+    "apps/backend/src/core/change-tracking/review-regressions.test.ts": 1,
     "apps/backend/src/core/commands-agent-tools.test.ts": 3,
     "apps/backend/src/core/commands-environment-cleanup.test.ts": 1,
     "apps/backend/src/core/commands-merge-cleanup-recovery.test.ts": 4,
@@ -24,7 +24,6 @@
     "apps/backend/src/core/index.test.ts": 1,
     "apps/backend/src/core/mcp-management/source-store.test.ts": 1,
     "apps/backend/src/core/multi-review-service.test.ts": 1,
-    "apps/backend/src/core/native-agent-launch-activity-reconciler.test.ts": 1,
     "apps/backend/src/core/native-agent-live-update.test.ts": 1,
     "apps/backend/src/core/native-agent-provider-registry.test.ts": 4,
     "apps/backend/src/core/native-agent-service-dispatch.test.ts": 1,

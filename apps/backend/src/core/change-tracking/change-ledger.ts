@@ -139,6 +139,11 @@ const lifecyclesWhere = (kind: "active" | "terminal"): TurnLifecycle[] =>
 
 export const TERMINAL_TURN_LIFECYCLES: ReadonlySet<string> = new Set(lifecyclesWhere("terminal"));
 
+/** The reason an `end-unavailable` turn records when its end capture ran out of time. */
+export const END_CAPTURE_TIMEOUT_REASON = "capture-timeout";
+/** Recovery stopped permanently, through exhaustion or superseding restore writes. */
+export const END_RECOVERY_EXHAUSTED_REASON = "capture-timeout-unrecovered";
+
 /** A turn the provider accepted that has not ended. */
 const EXECUTING_TURN_LIFECYCLES = [
   "running",
@@ -1029,6 +1034,66 @@ export class ChangeLedger {
         `SELECT * FROM change_turn_boundaries WHERE lifecycle IN (${turnLifecycleSqlList("active")})`,
       )
       .all() as TurnBoundaryRow[];
+  }
+
+  /**
+   * Turns whose end capture ran out of its deadline and that no later capture
+   * has measured yet, newest first. Seeks the lifecycle index.
+   */
+  turnsAwaitingEndRecovery(limit: number): TurnBoundaryRow[] {
+    return this.db
+      .query(
+        "SELECT * FROM change_turn_boundaries WHERE lifecycle = 'end-unavailable' AND (reason = ? OR EXISTS (SELECT 1 FROM change_references r WHERE r.owner_kind = 'turn' AND r.owner_id = change_turn_boundaries.turn_id AND r.reason = 'turn-recovery-pending')) ORDER BY finished_at DESC LIMIT ?",
+      )
+      .all(END_CAPTURE_TIMEOUT_REASON, limit) as TurnBoundaryRow[];
+  }
+
+  /** Restore writes cannot be attributed to a turn's delayed endpoint. */
+  restoreRanOnWorktreeSince(worktreeId: string, afterIso: string): boolean {
+    return (
+      this.db
+        .query(
+          `SELECT 1 FROM change_restore_operations o
+       JOIN change_measurements m ON m.id = o.measurement_id
+       WHERE m.worktree_id = ? AND (o.state = 'applying' OR o.created_at >= ?)
+       LIMIT 1`,
+        )
+        .get(worktreeId, afterIso) !== null
+    );
+  }
+
+  /** Restore owns subsequent writes: uncaptured ends must never retry, even after restart. */
+  invalidateEndRecoveries(worktreeId: string): void {
+    this.db
+      .query(
+        "UPDATE change_turn_boundaries SET reason = ? WHERE worktree_id = ? AND lifecycle = 'end-unavailable' AND reason = ?",
+      )
+      .run(END_RECOVERY_EXHAUSTED_REASON, worktreeId, END_CAPTURE_TIMEOUT_REASON);
+  }
+
+  pendingEndRecoverySnapshot(turnId: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT snapshot_id FROM change_references WHERE owner_kind = 'turn' AND owner_id = ? AND reason = 'turn-recovery-pending' LIMIT 1",
+      )
+      .get(turnId) as { snapshot_id: string } | null;
+    return row?.snapshot_id ?? null;
+  }
+
+  /**
+   * Whether any other turn on the worktree that may have written (anything
+   * but a refused dispatch) was still running after `afterIso`. Its writes
+   * would land in a later capture of the worktree. Scans the table: only the
+   * rare end-capture recovery asks.
+   */
+  turnRanOnWorktreeSince(worktreeId: string, exceptTurnId: string, afterIso: string): boolean {
+    return (
+      this.db
+        .query(
+          "SELECT 1 AS found FROM change_turn_boundaries WHERE worktree_id = ? AND turn_id != ? AND lifecycle != 'abandoned' AND (finished_at IS NULL OR finished_at > ?) LIMIT 1",
+        )
+        .get(worktreeId, exceptTurnId, afterIso) !== null
+    );
   }
 
   /** Whether age-based retention has retired this turn, leaving only its boundary row. */

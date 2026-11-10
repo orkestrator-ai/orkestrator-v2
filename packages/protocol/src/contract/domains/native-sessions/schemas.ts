@@ -600,6 +600,8 @@ export const DispatchOutcomeSchema = openRecord({
   error: optionalString,
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
+  /** A temporary refusal with nothing sent: a new request id may succeed. */
+  transient: optionalBoolean,
   origin: optionalString,
   /** A retried steer that missed its turn: `new-turn` or `queued`. */
   deliveredAs: optionalString,
@@ -643,6 +645,20 @@ export const ForkOutcomeSchema = openRecord({
   controls: optionalObject,
   title: optionalString,
   draft: optionalString,
+});
+
+/** `NativeAgentSessionBranchList` (native-agent.ts): a Pi conversation's other branches. */
+export const SessionBranchListSchema = openRecord({
+  activeEntryId: Schema.NullOr(Schema.String),
+  branches: mutableArray(
+    openRecord({
+      entryId: Schema.String,
+      prompt: Schema.String,
+      entries: Schema.Finite,
+      updatedAt: Schema.String,
+    }),
+  ),
+  truncated: Schema.Boolean,
 });
 
 /** `NativeAgentAuthStatus` (native-agent.ts). */

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   NODE_STATUS_CHANGED_EVENT,
@@ -8,7 +8,14 @@ import {
 } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
 
-import { settle, TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
+import {
+  stopTestNodeNetworks,
+  settle,
+  TestNodeNetwork,
+  type TestNode,
+} from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 
 function httpsRoute(node: TestNode, id = "primary"): NodeRoute {
   return { id: id as RouteId, kind: "https", enabled: true, origin: node.origin };

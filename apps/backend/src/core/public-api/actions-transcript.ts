@@ -15,7 +15,7 @@ import {
   sessionTarget,
 } from "./input.js";
 import { resolveSession } from "./sessions.js";
-import type { PublicActionHandler, ReadActionHandler } from "./types.js";
+import type { PublicActionContext, PublicActionHandler, ReadActionHandler } from "./types.js";
 
 /**
  * Bounded, ordered transcript pages for one explicit session.
@@ -345,3 +345,41 @@ const sessionTranscript: ReadActionHandler<{
 };
 
 export const TRANSCRIPT_HANDLERS: PublicActionHandler[] = [sessionTranscript];
+
+/** Fail closed when the prompt cannot be established from provider history. */
+export async function assertRewindPrompt(
+  context: PublicActionContext,
+  sessionId: string,
+  messageId: string,
+): Promise<void> {
+  let before: string | undefined;
+  const cursors = new Set<string>();
+  // Bound work even for a malicious or non-advancing history source.
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const input = sessionTranscript.parse({
+      sessionId,
+      limit: PUBLIC_API_LIMITS.transcriptMaxMessages,
+      ...(before ? { before } : {}),
+    });
+    const { result } = await sessionTranscript.run(input, context);
+    const page = result as PublicTranscriptPage;
+    if (page.freshness !== "current") {
+      throw new PublicActionError(
+        "connection-failed",
+        "A current provider transcript is required to rewind",
+      );
+    }
+    const message = page.messages.find((row) => row.id === messageId);
+    if (message) {
+      if (message.role === "user") return;
+      break;
+    }
+    if (!page.olderCursor || cursors.has(page.olderCursor)) break;
+    before = page.olderCursor;
+    cursors.add(before);
+  }
+  throw new PublicActionError(
+    "invalid-input",
+    "Rewind requires a persisted prompt (user message) ID from this session",
+  );
+}

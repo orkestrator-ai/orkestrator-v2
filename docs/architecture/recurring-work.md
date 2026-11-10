@@ -59,7 +59,10 @@ fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
 cadence, and demotions by reason) and native session invalidations
 (`sessionInvalidations`: counts by content-free cause and by platform, from
-`native-session-invalidation-metrics.ts`), all aggregate and content-free. It is served by the
+`native-session-invalidation-metrics.ts`, plus `discoveryRenewals`: discovery
+announcements by platform and section with the value paths that changed,
+such as `value[].tools[order]`, structural names only), all aggregate and
+content-free. It is served by the
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 
@@ -193,11 +196,16 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
-  runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
-  disables graph runs (launches are refused, nothing advances; stored runs stay
-  readable and can be cancelled).
+  list of `feature-planning`, `build-pipeline`, `multi-review`, `graph-run`, or
+  `all`. A named domain runs its old whole-store driver; `multi-review` falls
+  back to `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling
+  it back disables graph runs (launches are refused, nothing advances; stored
+  runs stay readable and can be cancelled). `native-queues` and
+  `backend-activity` are no longer revertible: their rollback drivers (the
+  2 s timer over every environment and queue, and the 2 s activity bundle
+  with its 60 s tab timer) were removed after the busy live profile and the
+  long soak (todo 0048 task 13), so naming them, or `all`, leaves them on
+  their keyed drivers.
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.

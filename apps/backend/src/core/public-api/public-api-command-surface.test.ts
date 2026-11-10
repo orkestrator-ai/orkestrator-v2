@@ -7,7 +7,11 @@ import {
   nativeTabLogicalSessionKey,
   type PublicSessionCommandList,
 } from "@orkestrator/protocol/public-api-resources";
-import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "../agent-provider-contract.js";
 import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent-provider.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
@@ -122,6 +126,29 @@ describe("session.commands", () => {
 });
 
 describe("session.command", () => {
+  test("transient command refusal is retryable and a new key sends once", async () => {
+    const { harness, stub, sessionId } = await idleSession();
+    stub.setSend(async () => {
+      throw new ProviderUnavailableError("Bridge busy");
+    });
+    const input = { sessionId, command: "review" };
+    const refused = await harness.call("session.command", input, { requestId: "busy-command" });
+    expect(!refused.ok && refused.error).toMatchObject({
+      code: "operation-failed",
+      exitCode: 1,
+      retryable: true,
+    });
+    const sends = stub.sends.length;
+    stub.setSend(async () => undefined);
+    const replay = await harness.call("session.command", input, { requestId: "busy-command" });
+    expect(replay.receipt?.replayed).toBe(true);
+    expect(stub.sends).toHaveLength(sends);
+    expect((await harness.call("session.command", input, { requestId: "retry-command" })).ok).toBe(
+      true,
+    );
+    expect(stub.sends).toHaveLength(sends + 1);
+  });
+
   test("submits a selection with verbatim arguments through the dispatch journal", async () => {
     const { harness, stub, sessionId, sendOptions } = await idleSession();
     const response = await harness.call<{ runId: string; commandId: string }>(

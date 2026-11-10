@@ -197,7 +197,6 @@ export class NativeAgentLaunchActivityReconciler {
   private activityScanNumber = 0;
   /** One follow-up scan shared by every consumer demanding a newer read. */
   private activityScanFollowUp: Promise<void> | null = null;
-  private launchTimer: ReturnType<typeof setInterval> | null = null;
   private readonly launchRerunRequests = new Set<string>();
 
   private readonly storage: StorageService;
@@ -319,7 +318,7 @@ export class NativeAgentLaunchActivityReconciler {
     this.activityAttempts.delete(cacheKey);
   }
 
-  /** One observed launch scan; the timer-driven sweep. */
+  /** One observed launch scan (startup and the keyed driver's safety discovery). */
   launchScan(): Promise<void> {
     return this.observedLaunchScan();
   }
@@ -327,24 +326,6 @@ export class NativeAgentLaunchActivityReconciler {
   /** The keyed scheduler's launch job: resolves with environments still holding an intent. */
   countedLaunchScan(): Promise<number> {
     return this.trackCount(this.observedLaunchCount());
-  }
-
-  /**
-   * The rollback driver: one interval running the launch scan and
-   * `queueScan`. The keyed queue scheduler replaces it when enabled.
-   */
-  startTimer(intervalMs: number, queueScan: () => Promise<void>): void {
-    this.launchTimer = setInterval(() => {
-      if (this.host.isStopped()) return;
-      void this.host.trackScan(this.observedLaunchScan()).catch(() => undefined);
-      void this.host.trackScan(queueScan()).catch(() => undefined);
-    }, intervalMs);
-    this.launchTimer.unref?.();
-  }
-
-  stopTimer(): void {
-    if (this.launchTimer) clearInterval(this.launchTimer);
-    this.launchTimer = null;
   }
 
   /** Startup launches still running, for shutdown to drain. */
@@ -364,7 +345,6 @@ export class NativeAgentLaunchActivityReconciler {
       activityAttempts: this.activityAttempts,
       observedSessionActivity: this.observedSessionActivity,
       pendingPrRefreshEnvironmentIds: this.pendingPrRefreshEnvironmentIds,
-      launchTimer: () => this.launchTimer,
       reconcilePendingLaunches: () => this.reconcilePendingLaunches(),
       reconcileAgentActivityOnce: () => this.reconcileAgentActivityOnce(),
     };

@@ -54,6 +54,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentCommandIntent,
   NativeAgentSlashCommand,
   NativeAgentSlashCommandSource,
@@ -659,12 +660,6 @@ export interface NativeAgentServiceOptions {
    * before. Dispatch/generation fences and the mail freshness gate stay.
    */
   observationSharing?: boolean;
-  /**
-   * Keyed launch/queue scheduling (step 08). `false` is the rollback to the
-   * 2 s timer that lists every environment and queue; never both run.
-   * Defaults to `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` not naming `native-queues`.
-   */
-  keyedQueueScheduling?: boolean;
   /** Safety discovery for the keyed launch/queue driver. */
   queueDiscoveryIntervalMs?: number;
   /** Test seam: the keyed launch/queue driver's monotonic clock and timers. */
@@ -736,6 +731,22 @@ export const ACTIVITY_RETRY_CEILING_MS = 60_000;
 export const PARKED_DISPATCH_CONFLICT_MESSAGE =
   "An earlier message is still awaiting confirmation." +
   " Retry or discard it before sending another.";
+
+/**
+ * Whether a refused dispatch was a temporary provider refusal with nothing
+ * sent, so the same prompt may succeed under a new request id (7260).
+ *
+ * Only a `ProviderUnavailableError` that is not ambiguous qualifies: a bridge's
+ * 503 before dispatch, an unreachable bridge, a failed attach. The caller must
+ * also have cleared the request's dispatch record; a recovery retry that keeps
+ * its parked record is not transient, because the parked record still blocks
+ * every new id until it is retried or discarded.
+ */
+export function isTransientDispatchRefusal(error: unknown): boolean {
+  return (
+    error instanceof ProviderUnavailableError && !(error instanceof AmbiguousPromptDispatchError)
+  );
+}
 
 /**
  * How long a parked dispatch gets to confirm itself before it becomes a choice.
@@ -1143,6 +1154,7 @@ export type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSlashCommand,
   NativeAgentSlashCommandSource,
   NativeAgentMcpServer,

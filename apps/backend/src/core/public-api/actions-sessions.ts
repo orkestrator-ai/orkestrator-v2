@@ -148,10 +148,18 @@ export async function resolveSelection(
   };
 }
 
+/**
+ * Map a dispatch outcome onto the operation. `transient` is the dispatch's own
+ * marker for a temporary refusal with nothing sent (7260): the failure stays
+ * `operation-failed` (exit 1), and `retryable: true` tells a script that the
+ * same prompt under a new request key may succeed. The same key replays this
+ * failure, as every key does.
+ */
 export function dispatchOutcome(
   status: string,
   error: string | undefined,
   result: Record<string, unknown>,
+  transient?: boolean,
 ): ExecuteOutcome {
   if (status === "accepted") {
     return {
@@ -191,6 +199,7 @@ export function dispatchOutcome(
       code: "operation-failed",
       message: error?.slice(0, 500) ?? "The provider rejected the prompt",
     },
+    ...(status === "rejected" && transient === true ? { retryable: true } : {}),
   };
 }
 
@@ -320,41 +329,48 @@ export async function prepareSessionStart(
       // The same durable job path the desktop and Control MCP use: stable
       // tab and session identity from (environment, request ID), and an
       // exactly-once first prompt. The tab is created without focusing it.
-      const job = await context.invoke<{ tabId: string; status: string; error?: string }>(
-        "launch_native_agent_job",
-        {
-          environmentId: environment.id,
-          requestId,
-          agent: input.agent,
-          prompt: input.prompt,
-          conversationMode: input.mode ?? "build",
-          ...(input.title ? { title: input.title } : {}),
-          // Only a model the caller named is pinned. An inherited default is
-          // left for the launch to resolve as one (`modelSource: "default"`),
-          // so the runtime can replace a default this login cannot serve (the
-          // shipped Codex `gpt-5.4` on a ChatGPT login) instead of every
-          // `session start` failing its first turn.
-          ...(input.model ? { modelId: input.model } : {}),
-          ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
-          ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-          ...(input.literal ? { literal: true } : {}),
-          ...(attachments.length ? { attachments } : {}),
-          ...(extras.completionAction ? { completionAction: extras.completionAction } : {}),
-          ...(extras.reviewTab ? { reviewTab: true } : {}),
-          activateTab: false,
-        },
-      );
-      const outcome = dispatchOutcome(job.status, job.error, {
-        sessionId,
-        tabId: job.tabId,
-        runId: operation.operationId,
-        selection: {
-          agent: input.agent,
-          model: resolved.model ?? null,
-          reasoning: resolved.reasoningEffort ?? null,
-          source: input.model || input.reasoning ? "requested" : "default",
-        },
+      const job = await context.invoke<{
+        tabId: string;
+        status: string;
+        error?: string;
+        transient?: boolean;
+      }>("launch_native_agent_job", {
+        environmentId: environment.id,
+        requestId,
+        agent: input.agent,
+        prompt: input.prompt,
+        conversationMode: input.mode ?? "build",
+        ...(input.title ? { title: input.title } : {}),
+        // Only a model the caller named is pinned. An inherited default is
+        // left for the launch to resolve as one (`modelSource: "default"`),
+        // so the runtime can replace a default this login cannot serve (the
+        // shipped Codex `gpt-5.4` on a ChatGPT login) instead of every
+        // `session start` failing its first turn.
+        ...(input.model ? { modelId: input.model } : {}),
+        ...(resolved.reasoningEffort ? { reasoningId: resolved.reasoningEffort } : {}),
+        ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
+        ...(input.literal ? { literal: true } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(extras.completionAction ? { completionAction: extras.completionAction } : {}),
+        ...(extras.reviewTab ? { reviewTab: true } : {}),
+        activateTab: false,
       });
+      const outcome = dispatchOutcome(
+        job.status,
+        job.error,
+        {
+          sessionId,
+          tabId: job.tabId,
+          runId: operation.operationId,
+          selection: {
+            agent: input.agent,
+            model: resolved.model ?? null,
+            reasoning: resolved.reasoningEffort ?? null,
+            source: input.model || input.reasoning ? "requested" : "default",
+          },
+        },
+        job.transient,
+      );
       if (job.status === "accepted") {
         // Advisory follow-up: the run is already the provider's.
         await extras.afterAccepted?.(environment).catch(() => undefined);
@@ -538,20 +554,21 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
           stage: "dispatching",
           resources: { dispatchRequestId: requestId },
         });
-        const outcome = await context.invoke<{ outcome: string; error?: string }>(
-          "dispatch_native_agent_intent",
-          {
-            environmentId: session.environment.id,
-            agent: session.agent,
-            logicalSessionKey: session.logicalSessionKey,
-            requestId,
-            prompt: input.prompt,
-            ...(mode ? { mode } : {}),
-            ...(command ? { command } : {}),
-            ...(attachments.length ? { attachments } : {}),
-          },
-        );
-        return dispatchOutcome(outcome.outcome, outcome.error, result);
+        const outcome = await context.invoke<{
+          outcome: string;
+          error?: string;
+          transient?: boolean;
+        }>("dispatch_native_agent_intent", {
+          environmentId: session.environment.id,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          requestId,
+          prompt: input.prompt,
+          ...(mode ? { mode } : {}),
+          ...(command ? { command } : {}),
+          ...(attachments.length ? { attachments } : {}),
+        });
+        return dispatchOutcome(outcome.outcome, outcome.error, result, outcome.transient);
       },
     };
   },

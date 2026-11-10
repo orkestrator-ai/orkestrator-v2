@@ -70,6 +70,8 @@ export function providerCapabilities(agent: AgentPlatform): PublicProviderCapabi
     stop: true,
     resume: native.resume,
     fork: native.fork,
+    rewind: native.actions?.rewindMessages === true,
+    branches: native.actions?.branches === true,
     queue: native.queue,
     interactions: (native.interactions?.kinds.length ?? 0) > 0,
     controls: {

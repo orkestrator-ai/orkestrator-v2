@@ -42,4 +42,4 @@ The owning spec and its implementation were unchanged. No assertion, deadline,
 retry or skip was changed. This establishes intermittency, not its cause.
 This observation was a reload timeout, not the duplicate-ready assertion in the original case.
 The full run and remaining undetermined failures are recorded in
-[9920](../aggregate-validation-runs/9920-auto-pipeline-fix-browser-owners.md).
+[9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).

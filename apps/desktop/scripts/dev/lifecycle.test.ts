@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -36,6 +36,9 @@ import {
   configuredDevWorktreeRoot,
   profileWorktreeLocation,
 } from "./lifecycle.js";
+
+// This file starts a real shell; allow subprocess startup under aggregate load.
+setDefaultTimeout(30_000);
 
 const complete = {
   authFile: "/tmp/gateway-auth.json",

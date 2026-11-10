@@ -105,6 +105,8 @@ describe("answering", () => {
   test("a thenable whose then throws still answers", () => {
     const callback = mock((_response: Response) => undefined);
     const broken = {
+      // The point of this case is a malformed thenable whose `then` throws.
+      // oxlint-disable-next-line unicorn/no-thenable
       then() {
         throw new Error("window is gone");
       },

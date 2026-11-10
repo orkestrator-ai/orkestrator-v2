@@ -51,6 +51,7 @@ export default defineConfig({
     "container-terminal-close.spec.ts",
     "container-approval-stop.spec.ts",
     "container-claude-terminal-signal.spec.ts",
+    "container-multi-review-read-only.spec.ts",
     "container-fake-engines.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",

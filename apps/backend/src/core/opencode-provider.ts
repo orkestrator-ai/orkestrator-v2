@@ -8,10 +8,9 @@ import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import {
+  consumeOpenCodeEventStream,
   createOpenCodeMonitorBackoff,
-  isOpenCodeHeartbeat,
   OpenCodeObservationStream,
-  OpenCodeStreamSilenceWatchdog,
   readOpenCodeActivityBatch,
 } from "./opencode-observation-stream.js";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
@@ -211,13 +210,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly waitForMonitorRetry: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private readonly requestTasks = new Set<Promise<void>>();
-  /**
-   * SSE event types this provider had no branch for.
-   *
-   * Shared across sessions because the subscription is: one stream serves the
-   * whole OpenCode server, so drift is a property of the connection rather than
-   * of any one session.
-   */
+  /** SSE event types with no branch here: drift of the one stream serving every session. */
   private readonly health = new RuntimeHealthRecorder();
   private readonly streamState = new OpenCodeStreamState();
   private readonly actionRetry: OpenCodeActionRetryCoordinator;
@@ -455,35 +448,28 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
-        let receivedFrame = false;
         let startupError: unknown;
         const startup = this.reconcileStreamState().catch((error) => {
           startupError = error;
           if (this.activeStreamController === streamController) streamController.abort();
         });
-        // Open but silent is a loss too: replace the stream (task 1 of to-do 7200).
-        const watchdog = new OpenCodeStreamSilenceWatchdog(
-          (silenceMs) => {
-            log.warn("monitor.silent", { silenceMs });
-            streamController.abort();
-          },
-          { silenceMs: this.dependencies.monitorSilenceMs },
-        );
-        try {
-          for await (const raw of response.stream as AsyncIterable<unknown>) {
-            if (this.disposed) return;
-            if (!receivedFrame) {
-              receivedFrame = true;
+        const ended = await consumeOpenCodeEventStream(
+          response.stream as AsyncIterable<unknown>,
+          {
+            disposed: () => this.disposed,
+            connected: () => {
               this.monitorBackoff.connected();
               this.observation.connected();
-            }
-            const heartbeat = isOpenCodeHeartbeat(raw);
-            watchdog.frame(heartbeat);
-            if (!heartbeat) this.dispatchRequest(raw);
-          }
-        } finally {
-          watchdog.stop();
-        }
+            },
+            frame: (raw) => this.dispatchRequest(raw),
+            silent: (silenceMs) => {
+              log.warn("monitor.silent", { silenceMs });
+              streamController.abort();
+            },
+          },
+          { silenceMs: this.dependencies.monitorSilenceMs, clock: this.dependencies.monitorClock },
+        );
+        if (ended === "disposed") return;
         await startup;
         if (startupError) throw startupError;
         if (this.activeStreamController === streamController) {

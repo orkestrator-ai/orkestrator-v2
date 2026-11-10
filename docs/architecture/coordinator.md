@@ -1361,14 +1361,41 @@ The boundary is shown, not silent:
   step (`stepRuntimes.consolidate.commandSandboxOff`). The reviewer's and the
   consolidation step's inspector show it as a warning note. A restarted
   reviewer or step starts without it.
+- **The reason names where it is.** In a container (`/.dockerenv` or
+  `/run/.containerenv`) the probe says the sandbox cannot run "in this
+  container" and that bubblewrap and socat are not in the container's image;
+  only a host is told to install the packages, since nobody installs into an
+  environment's image.
+
+Without the sandbox the hook refuses every Git command, because a
+repository's Git configuration can run helpers (an external diff, a
+textconv, `core.fsmonitor`). A packaged reviewer is told to run the
+package's `diffCommand`, which is Git, so in a container it could not see
+the change at all. The backend therefore seals the reviewed diff as a file
+beside the package when it builds it (`review-diff-artifact.ts`): it runs
+the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
+<base>...<head>` the package names, writes it read-only and Git-excluded as
+`review-diff-<sha256>.patch` in the round's artifact directory, records
+`diffArtifact: { path, bytes, sha256 }` in the package, and checks its bytes
+and digest with the package before each reviewer is dispatched. The
+reviewer instructions say to read that file when the session refuses Git. A
+diff over 16 MiB, or one Git or the write could not produce, is left out
+and the package's limitations say so; the review itself never fails for
+it. The runner decodes the output as UTF-8. If it contains a replacement
+character (including a literal U+FFFD), the backend leaves the artifact out
+and records a fidelity limitation instead of sealing potentially altered bytes.
 
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of
 `conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
 `socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
-case that pins the CLI's own refusal of a required sandbox runs only on Linux.
-Not yet run: a real Multi Review in a container environment and on stock
-Ubuntu
+case that pins the CLI's own refusal of a required sandbox runs only on Linux
+(all 19 cases passed on Linux on 2026-11-10). A real Multi Review in a
+container environment, with two Claude reviewers and a Claude consolidation
+on the image's real `claude` against a scripted Messages API, is
+`container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
+[container qualification](../development/container-qualification.md)). Not
+yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
 ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get

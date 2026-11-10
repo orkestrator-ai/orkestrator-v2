@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -365,9 +365,9 @@ describe("dev:test bridge builds", () => {
     };
   }
 
-  test.each([false, true])(
+  test.each([0, 1, 3])(
     "a successful start records bridges before launching the runtime and accepts backend readiness (renderer port taken after reservation: %p)",
-    async (rendererPortTaken) => {
+    async (collisions) => {
       const roots = await profileRoots("ork-dev-bridge-success-");
       const repository = await temporaryDirectory("ork-dev-bridge-repo-");
       const args = parseAgentTestArguments(["--profile", "bridge-success"]);
@@ -406,10 +406,15 @@ describe("dev:test bridge builds", () => {
         Symbol.for("orkestrator.tests.native-web-platform"),
       ) as { fetch: typeof fetch } | undefined;
       const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
-      const request = spyOn(globalThis, "fetch").mockImplementation(((input, init) => {
+      const collisionObserved = path.join(roots.homeDir, "collision-observed");
+      const request = spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
         if (!String(input).startsWith("http://127.0.0.1:"))
           throw new Error("Outbound fetch forbidden in lifecycle test");
-        return fetchRuntime(input, init);
+        const response = await fetchRuntime(input, init);
+        if (response.ok && !response.headers.has("x-orkestrator-renderer-instance")) {
+          await writeFile(collisionObserved, "observed");
+        }
+        return response;
       }) as typeof fetch);
       const signals = new Map(
         (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
@@ -429,20 +434,30 @@ describe("dev:test bridge builds", () => {
       ) => {
         expect(order).toContain("record");
         const vite = command === "bun";
+        if (!vite) {
+          const stored = JSON.parse(
+            readFileSync(path.join(profile.profileRoot, "profile.json"), "utf8"),
+          );
+          expect(options?.env?.VITE_DEV_SERVER_URL).toBe(`http://127.0.0.1:${stored.rendererPort}`);
+        }
         order.push(vite ? "vite" : "electron/backend");
-        if (vite && rendererPortTaken && takenPorts.length === 0) {
-          const holder = Bun.listen({
+        if (vite && takenPorts.length < collisions) {
+          const holder = Bun.serve({
             hostname: "127.0.0.1",
             port: Number(options?.env?.VITE_DEV_PORT),
-            socket: {
-              open: (socket) => void socket.end(),
-              data: () => undefined,
-            },
+            fetch: () => new Response("foreign renderer", { status: 200 }),
           });
-          takenPorts.push({ port: holder.port, stop: () => holder.stop(true) });
+          takenPorts.push({
+            port: Number(options?.env?.VITE_DEV_PORT),
+            stop: () => holder.stop(true),
+          });
         }
+        const collided =
+          vite && takenPorts.some(({ port }) => port === Number(options?.env?.VITE_DEV_PORT));
         const script = vite
-          ? `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready")});`
+          ? collided
+            ? `while (!(await Bun.file(${JSON.stringify(collisionObserved)}).exists())) await Bun.sleep(5); process.exit(1);`
+            : `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready", {headers: {"x-orkestrator-renderer-instance": process.env.ORKESTRATOR_RENDERER_INSTANCE}})});`
           : `
           console.log(JSON.stringify({
             type: "orkestrator-electron-ready", profile: "bridge-success",
@@ -462,7 +477,7 @@ describe("dev:test bridge builds", () => {
         launchStandIn as typeof childProcess.spawn,
       );
       try {
-        await startDevelopment(args, "agent-test", {
+        const started = startDevelopment(args, "agent-test", {
           roots,
           prune: async () => [],
           typecheck: () => {
@@ -478,18 +493,26 @@ describe("dev:test bridge builds", () => {
             bundles: Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, `// ${bridge}`])),
           }),
         });
+        if (collisions === 3) {
+          await expect(started).rejects.toThrow("Vite exited before serving");
+          expect(order.filter((entry) => entry === "vite")).toHaveLength(3);
+          expect(order).not.toContain("electron/backend");
+          expect((await profileIo.readStatus(statusPath))?.status).toBe("failed");
+          return;
+        }
+        await started;
         expect(order).toEqual([
           "typecheck",
           "bundle",
           "record",
-          ...(rendererPortTaken ? ["vite", "vite"] : ["vite"]),
+          ...(collisions ? ["vite", "vite"] : ["vite"]),
           "electron/backend",
         ]);
         const status = await profileIo.readStatus(statusPath);
         expect(status?.status).toBe("stopped");
         expect(status?.browserUrl).toBe("http://fixture/");
         expect(status?.pids.backend).toBe(children.at(-1)?.pid);
-        expect(takenPorts.length).toBe(rendererPortTaken ? 1 : 0);
+        expect(takenPorts.length).toBe(collisions);
         for (const { port } of takenPorts) {
           // The launcher moved Vite, its status and the profile to a new port.
           expect(status?.rendererUrl).not.toBe(`http://127.0.0.1:${port}`);

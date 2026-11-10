@@ -154,7 +154,7 @@ export function withOutputTails(message: string, tails: Record<string, () => str
 
 async function waitForUrl(
   url: string,
-  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal; rendererInstance?: string } = {},
 ): Promise<void> {
   const deadline = Date.now() + (options.timeoutMs ?? 45_000);
   while (Date.now() < deadline) {
@@ -162,7 +162,12 @@ async function waitForUrl(
     if (options.signal?.aborted) return;
     try {
       const response = await fetch(url, { signal: options.signal });
-      if (response.ok) return;
+      if (
+        response.ok &&
+        (!options.rendererInstance ||
+          response.headers.get("x-orkestrator-renderer-instance") === options.rendererInstance)
+      )
+        return;
     } catch {
       // The strict-port child is still starting.
     }
@@ -179,18 +184,22 @@ function childExit(child: ChildProcess): Promise<ChildExit> {
 }
 
 /**
- * Waits for `url` while `exited` is pending. Returns null once the URL serves,
- * or the child's exit if it ended first: polling a dead child's URL would only
- * time out after the full 45 s.
+ * Waits for this attempt's unique response header while `exited` is pending.
+ * Returns null when ready, or the child's exit if it ended first; polling a
+ * dead child's URL would otherwise time out after the full 45 s.
  */
 async function waitForUrlWhileRunning(
   url: string,
   exited: Promise<ChildExit>,
   wait: typeof waitForUrl,
+  rendererInstance: string,
 ): Promise<ChildExit | null> {
   const stop = new AbortController();
   try {
-    return await Promise.race([wait(url, { signal: stop.signal }).then(() => null), exited]);
+    return await Promise.race([
+      wait(url, { signal: stop.signal, rendererInstance }).then(() => null),
+      exited,
+    ]);
   } finally {
     stop.abort();
   }
@@ -861,6 +870,7 @@ export async function startDevelopment(
     let viteTail: () => string = () => "";
     let viteExited: Promise<ChildExit> | null = null;
     for (let attempt = 1; ; attempt += 1) {
+      const rendererInstance = crypto.randomUUID();
       vite = (dependencies.spawn ?? spawn)("bun", ["run", "dev"], {
         cwd: webRoot,
         detached: true,
@@ -868,6 +878,7 @@ export async function startDevelopment(
         env: {
           ...process.env,
           VITE_DEV_HOST: profile.rendererHost,
+          ORKESTRATOR_RENDERER_INSTANCE: rendererInstance,
           VITE_DEV_PORT: String(profile.rendererPort),
           VITE_ORKESTRATOR_PROFILE: profile.id,
           // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
@@ -886,6 +897,7 @@ export async function startDevelopment(
         rendererUrl,
         viteExited,
         dependencies.waitForUrl ?? waitForUrl,
+        rendererInstance,
       );
       if (!early) break;
       const exitMessage = `Vite exited before serving ${rendererUrl} (code ${early.code ?? "unknown"}, signal ${early.signal ?? "none"})`;

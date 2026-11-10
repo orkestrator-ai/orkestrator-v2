@@ -11,8 +11,18 @@
 // a whole-file rewrite from one bridge could drop an entry another bridge had
 // just written, while per-session files never contend.
 
-import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  link,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { claudeSessionPreferencesDir } from "./claude-home.js";
 import {
   currentProcessIdentity,
@@ -472,9 +482,31 @@ async function recoverStaleLock(lockPath: string, candidate: LockSnapshot): Prom
   }
 }
 
+/** Reclaim only our staging names, keeping live or unverifiable writers intact. */
+async function reclaimOwnerStagingFiles(lockPath: string): Promise<void> {
+  const directory = dirname(lockPath);
+  const prefix = `${basename(lockPath)}.`;
+  for (const name of await readdir(directory)) {
+    if (!name.startsWith(prefix) || !/\.[0-9a-f-]{36}\.owner$/.test(name)) continue;
+    const path = join(directory, name);
+    const candidate = await readLockSnapshot(path);
+    if (!candidate || !snapshotIsRecoverable(candidate)) continue;
+    const current = await readLockSnapshot(path);
+    if (
+      current &&
+      current.dev === candidate.dev &&
+      current.ino === candidate.ino &&
+      snapshotIsRecoverable(current)
+    ) {
+      await rm(path, { force: true });
+    }
+  }
+}
+
 async function withPreferenceFileLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
   await mkdir(claudeSessionPreferencesDir(), { recursive: true });
   const lockPath = `${path}.lock`;
+  await reclaimOwnerStagingFiles(lockPath);
   const startedAt = Date.now();
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   while (!handle) {

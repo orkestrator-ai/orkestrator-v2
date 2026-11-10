@@ -285,6 +285,131 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Agent-tools peer gate on nested rootful Linux Engine (2026-11-10)
+
+To-do [6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md)
+task 1: `apps/backend/scripts/agent-tools-peer-evidence.ts` on a rootful
+Linux daemon, through the launcher's [nested rootful mode](#nested-rootful-mode).
+
+- **Host:** beelink (Omarchy, kernel 7.1.8, x86_64), host Engine 29.9.2,
+  rootful, which this account may use. It was the outer daemon
+  (`outerRootless: false`), so the dind container was privileged on a rootful
+  host. The script's networks were created on the inner daemon only.
+- **Daemon:** `start --mode rootful --name s6820rf` (12.9 s with the dind
+  pull). Inner Engine 29.9.3, Alpine 3.24 (containerized), no `rootless`
+  option, `bip` `10.213.0.1/24`, pool `172.30.0.0/16`, `INPUT` policy
+  `ACCEPT`. The pinned busybox was pulled into it.
+- **Runner:** the script ran in an `oven/bun:1.4.4` container on the outer
+  daemon with `--network container:<dind container>`, so the server, the
+  inner bridges and `host-gateway` shared one namespace as on a host. It ran
+  as uid 1000 with the worktree mounted read-only, the instance's runtime
+  directory (the inner socket) mounted, the qualification shim first on
+  `PATH` and the dind image's static `docker` CLI behind it
+  (`ORKESTRATOR_QUALIFICATION_DOCKER`). The exact command is in the to-do.
+- **Result, twice, identical:** environment-network (`172.30.0.2`) and
+  default-bridge (`10.213.0.2`) containers arrived from their own addresses,
+  were admitted by subnet and got 405; the unowned network's `172.30.1.2` was
+  refused (connection reset, no response). The environment-container probe
+  and both host-check probes were `reachable`/405. The host's own addresses
+  (`172.17.0.2` and the three bridge gateways) were closed with no bytes, each
+  arriving from `172.17.0.2`. Admitted subnets `10.213.0.0/24` and
+  `172.30.0.0/24`, then `10.213.0.0/24` after the environment network was
+  removed. No leftovers; exit 0.
+- **Cleanup:** `stop` removed the dind container, its volume, the runtime
+  directory and the dind image it had pulled. The busybox and
+  `oven/bun:1.4.4` images were already on the host and were left.
+
+## Rootless budget read-back without `cpu` delegation (2026-11-10)
+
+To-do [0019](../todo/containers-and-environments/0019-container-platform-qualification.md)
+task 2: on a rootless daemon whose user is delegated `memory pids` but not
+`cpu`, does Docker's reported capacity match what the cgroup enforces, and
+does the budget read-back stay truthful?
+
+- **Why a container as the host.** The launcher's rootless daemon gets the
+  delegation of the user manager it runs under, and beelink's
+  `user@1000.service` delegates `cpu memory pids`. Changing that needs root
+  and a user-manager restart that would end this user's sessions on a shared
+  host, so a throwaway systemd host was built instead (the 0019 decision
+  records the options).
+- **The systemd host.** Built from this Dockerfile, with Docker's static
+  `docker-29.9.2.tgz` (SHA-256
+  `9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb`,
+  downloaded from `download.docker.com`) beside it in `dl/`:
+
+  ```dockerfile
+  FROM oven/bun:1.4.4
+  RUN apt-get update \
+   && apt-get install -y --no-install-recommends systemd systemd-sysv dbus dbus-user-session uidmap iproute2 iptables util-linux procps ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+  COPY dl/docker-29.9.2.tgz /tmp/docker.tgz
+  RUN tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 --no-same-owner && rm /tmp/docker.tgz
+  RUN echo 'bun:100000:65536' > /etc/subuid && echo 'bun:100000:65536' > /etc/subgid \
+   && mkdir -p /etc/systemd/system/user@.service.d \
+   && printf '[Service]\nDelegate=\nDelegate=memory pids\n' > /etc/systemd/system/user@.service.d/delegate.conf \
+   && systemctl mask getty.target console-getty.service systemd-networkd-wait-online.service \
+   && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/bun
+  STOPSIGNAL SIGRTMIN+3
+  ENTRYPOINT ["/sbin/init"]
+  ```
+
+  Run as `docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs
+  /run/lock --tmpfs /tmp:exec,mode=1777 --tmpfs
+  /home/bun/ddd:exec,uid=1000,gid=1000,size=2g -v "$PWD:$PWD:ro" -v
+  "$PWD/output/disposable-docker/tools:/home/bun/ddd/tools:ro" <image>`
+  (the tools are the launcher's verified download from a host start). The
+  lingering `bun` user (uid 1000) gets `user@1000.service`; `user.slice`,
+  `user-1000.slice` and `user@1000.service` all listed `memory pids` as
+  their controllers. Three details mattered: `Delegate=` lists merge, so
+  without the empty reset Debian's own `cpu` stayed delegated; RootlessKit's
+  tap setup runs `ip`, so `iproute2` is required; and the data root must be
+  on the tmpfs, since overlayfs refused an upper directory on the
+  container's overlay root (`failed to mount ... overlay ... invalid argument`).
+- **The daemon.** As `bun`, with `XDG_RUNTIME_DIR=/run/user/1000` and the
+  user bus: `bun scripts/disposable-docker-daemon.ts start --name s0019md
+  --root /home/bun/ddd`, then the pinned busybox pulled into it. `docker
+  info`: Engine 29.9.2, cgroup v2, systemd driver, `rootless`; warnings for
+  CPU CFS quota, period and shares, cpuset and every `io` axis.
+- **The check.** `DOCKER_HOST=<its socket> bun
+  apps/backend/scripts/rootless-budget-readback-evidence.ts`, then the same
+  script against a `docker:disposable` rootless daemon started directly on
+  beelink (`s0019rl`) as the control.
+
+  | | `memory pids` delegated | `cpu memory pids` delegated (control) |
+  | --- | --- | --- |
+  | Production capacity (`cpuQuota`, `memoryLimit`, `pidsLimit`) | false, true, true | true, true, true |
+  | Built-in default | 8192 MiB, 4096 PIDs, no CPU cap, nothing unenforced | same |
+  | Admission of 64 MiB, 32 PIDs | accepted | accepted |
+  | Admission of the same plus 0.5 CPU | refused, `unsupported-topology` (CPU) | accepted |
+  | Container `cgroup.controllers` | `memory pids` | `cpu memory pids` |
+  | `cpu.max` with no CPU limit | absent | `max 100000` |
+  | `memory.max`, `memory.swap.max`, `pids.max` | 67108864, 0, 32 | same |
+  | Inspect read-back and environment policy | `{ cpus: null, memoryMiB: 64, pids: 32 }`, `unsupported: []` | same |
+  | 100 MiB held under 64 MiB | OOM-killed (`oom_kill` 2) | OOM-killed |
+  | 40 forks under 32 PIDs | stopped, `pids.peak` 32, `max 1` | same |
+  | CPU time of a 3 s busy loop | 2.97 s (no limit) | 2.94 s, and 1.51 s under 0.5 CPU |
+  | `docker run --cpus 0.5` | refused by Docker: `NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted` | created, `cpu.max` `50000 100000`, read-back `cpus: 0.5` |
+
+  The table is the fourth run on the `memory pids` daemon. The first ran
+  before the data root moved to the tmpfs, so no container started; the next
+  two had probe defects (busybox `sleep` as PID 1 left the PID probe's
+  zombies holding the limit, and with `--init` the OOM kill stopped the
+  shared container). The script now runs the CPU and PID probes in a
+  container with `--init` and the memory probe in a separate one. Capacity,
+  admission and Docker's CPU refusal were the same in all four runs, and the
+  read-back the same in the three that created containers.
+- **What this means.** Docker's report matched the cgroup on both daemons,
+  and a CPU limit cannot reach a container where it would not be enforced,
+  so the read-back cannot misreport one. No code change. Not covered: a
+  host whose `user-<uid>.slice` exposes a controller its `user@<uid>.service`
+  does not; both matched here.
+- **Cleanup.** The inner daemon was stopped by its launcher, the systemd
+  container and image removed, `s0019rl` stopped, and the tarball and tools
+  cache deleted. The BuildKit cache of the image builds stays on the host
+  daemon: removing it would take a prune, which the rules forbid. Evidence
+  (git-ignored): `output/agent-testing/s0019/memory-pids.json` and
+  `cpu-memory-pids-control.json`.
+
 ## Nested rootful disposable daemon on beelink2 (2026-11-09)
 
 To-do [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)

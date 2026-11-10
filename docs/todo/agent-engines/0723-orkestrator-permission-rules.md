@@ -231,79 +231,11 @@ None.
 
 ### Live run steps
 
-The procedure for the 7568 card runs (this file's former tasks 1 to 5,
-moved on 2026-11-10). These spend real provider credits. Run them only on an isolated profile,
-never on the production instance or its ports, and never change the host's
-`~/.claude`, `~/.codex`, `~/.grok` or `~/.pi`.
-
-**Set-up, once per provider.**
-
-1. In a long-lived terminal, start a disposable profile with only that
-   provider's host login copied in:
-   `mise run dev:test --profile perm-rules-<agent> --fixture --credential-source <agent> --agent-platforms <agent>`.
-   Use `claude`, `codex`, `grok`, `opencode` or `pi`.
-2. Wait for `mise run dev:status --profile perm-rules-<agent> --json` to show
-   `status: "ready"`. Open its `browserUrl`, and sign in through the
-   `loginCommand` it prints.
-3. Open Settings → Permissions and note the paths under "Rules outside
-   Orkestrator". Record `shasum -a 256` of each file that exists for this
-   provider: the account's Claude `settings.json`, the Codex `rules/` folder
-   listing, and Grok's settings under the profile's `$GROK_HOME`.
-4. In the profile's `testProject`, create a local environment. Open a native
-   tab for the agent with the "Ask" approval setting: an `interactive-native`
-   session, `approvals: ask`, not plan mode.
-
-**The cycle, once per approval kind.** Steps 2 to 5 are the pass bar.
-
-1. Prompt the agent to run the request named below. When the card appears,
-   choose "Approve and remember…". Check that the panel lists the exact
-   pattern first. For Claude `Bash` and Codex commands, also check that the
-   provider's proposal is preselected. Save it with "This project".
-2. Prompt the identical request again. No card appears; the transcript shows
-   "Approved once by your rule …".
-3. Settings → Permissions shows the rule with "Used 1 time" and a recent last
-   use.
-4. Choose "Remove rule" on the transcript note, then prompt the identical
-   request a third time. The card asks again. Deny it.
-5. Re-hash the files from set-up step 3. They are unchanged, and "Rules
-   outside Orkestrator" shows nothing new.
-
-**Requests per provider.**
-
-- **Claude (tasks 1 and 6):**
-  - `Bash`: `npm run test -- --watch` in the fixture. Record which pattern the
-    panel preselected; with the 2.1.309 `prefix *` suggestion it should be
-    the suggested prefix, not the narrowest.
-  - file: an `Edit` to a file inside the worktree (an absolute path);
-  - `WebFetch`: `https://example.com/`.
-- **Pi (task 2):** `bash` with `git status --short`.
-- **Grok (task 3):** one plain command, such as `git status --short`.
-  Confirm the card offered `allow_once` (the rule answer chooses it). Before
-  and after, snapshot `$GROK_HOME` for the profile; find it from the
-  process's environment with `ps eww` on the Grok child of the profile's
-  backend.
-- **OpenCode (task 4):**
-  - `bash`: `git status --short`. Also prompt `cd src && ls` once and confirm
-    it keeps asking with no offer, because its one pattern is `ls`.
-  - `edit`: a single-file edit;
-  - `webfetch`: `https://example.com/`.
-- **Codex (task 5):**
-  - Create a second environment B in the same project.
-  - In environment A, prompt "Run `touch policy-probe.txt`". While its card is
-    waiting, type and send a second prompt, "Run `touch policy-probe.txt`
-    again", so it is queued behind the turn.
-  - On the card, open "Approve and remember…", look at the panel (exact
-    pattern first, Codex's proposal preselected), and save it. Switch to B at
-    once.
-  - Stay on B until A's queued turn has finished; the rule answers its
-    approval from the backend sweep. The sidebar shows no attention badge for
-    A meanwhile.
-  - Back in A, the second turn shows the "Approved once by your rule …" note
-    and no card. Then run the removal check (cycle steps 4 and 5).
-
-**Afterwards.** Record the outcome and date here, in a dated "Live card runs" section after Current state, one line per provider. Stop the
-profile with `mise run dev:stop --profile perm-rules-<agent>`, then
-`mise run dev:reset --profile perm-rules-<agent>`.
+Moved with tasks 1 to 5 to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+("Permission-rule card runs (0723 tasks 1 to 5)") on 2026-11-10. Results are
+recorded here, in a dated "Live card runs" section after Current state, one
+line per provider.
 
 ## Constraints and rationale
 

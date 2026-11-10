@@ -17,7 +17,7 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window, which the floor reaches for v2.36.0 on 2027-01-02; waits on 7568: 0050 task 1 counter reading). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10.
 3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
-4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
+4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: open. The runs with real providers moved to 7568 on 2026-11-10 (0050 task 4, Electron and container items) and need this harness first.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
 6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
 
@@ -69,18 +69,23 @@ Done on 2026-11-10 (see [Qualification results (2026-11-10)](#qualification-resu
     - Pros: no new seam.
     - Cons: the at-most-once dispatch path stays unproved end to end.
 
-### 4. Electron and Docker with real providers
+### 4. Electron and Docker paging harness
 
-**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers.
+**Problem.** The v2 summary, detail and page paths have run live only in the browser against local environments. Electron's IPC path and container bridges (ports, restarts) are unproved with real providers, and no spec can drive either of them through paging yet.
 
-**Context.** Batched with 0031. iOS only where the wrapper changes.
+**Context.** Batched with 0031. iOS only where the wrapper changes. The agent part is the harness below. The credentialed runs themselves (real provider turns in the Electron window and in a container environment) are human-only and moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; they record their results here.
 
-**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging.
+**Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging. `transcript-paging-live.spec.ts` creates its environments with `environmentType: "local"` only (`createEnvironment`), so it cannot reach a container bridge. Its Codex loopback mode (`ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`) needs no login, so the harness can be proved on the loopback model before any paid run.
+
+Agent work left:
+
+- Add an environment-type switch to `transcript-paging-live.spec.ts` (proposed name `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, default `local`) that creates a container environment on a profile started with `--fixture-environments local,container`, and prove it once with the Codex loopback model.
+- Add a paging step to the Electron suite: a native tab whose transcript outgrows the live window, Load earlier messages, the reader's place kept, and a reload; prove it on the Codex loopback model.
 
 **Decisions.**
 
 - **How to cover it?**
-  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).**
+  - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).** The harness is agent work here; the real-provider runs are the two 0050 task 4 items in 7568.
     - Pros: reuses the live spec's checks; the container run exercises the container bridge hop.
     - Cons: the Electron step is new work; the container run needs a profile started with `--fixture-environments local,container`.
   - **A manual pass in each, recorded in 0031.**
@@ -1514,8 +1519,9 @@ All three checked on 2026-10-24.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window): retiring
   the sync-v1 fallback.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
-  human-only parts of this to-do (task 2, the counter reading of task 1) moved
-  there on 2026-11-10.
+  human-only parts of this to-do (task 2, the counter reading of task 1, and
+  the real-provider Electron and container runs of task 4) moved there on
+  2026-11-10.
 - [0232-direct-history-cursor-minting.md](0232-direct-history-cursor-minting.md):
   the renderer's cursor mint that keeps joined `sync-v1` paging in use (item 3).
 - `../architecture/storage.md` (display tails, pipeline transcripts),

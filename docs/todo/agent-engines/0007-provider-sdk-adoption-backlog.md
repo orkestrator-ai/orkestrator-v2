@@ -24,7 +24,7 @@ pins undercut one of them is it raised below (task 1).
 1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: done (pins, verification note and Codex-goals wording refreshed; see Assumptions and decisions).
 2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: done (`refactor(claude-bridge): delete dead compact-boundary guard`).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
-4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: blocked (re-arm waits on 0001's live runs); provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: blocked (re-arm waits on 7568: 0001 tasks 3 to 6, the real-login live runs, which moved there from 0001 on 2026-11-10); provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
@@ -120,7 +120,7 @@ Re-arm is still untouched.
 **Decisions.**
 
 - **Adopt re-arm?**
-  - **Yes, after 0001's live runs, re-arming as a fresh card that still denies on timeout (recommended).**
+  - **Yes, after 0001's live runs (now 7568, 0001 tasks 3 to 6), re-arming as a fresh card that still denies on timeout (recommended).**
     - Pros: closes a "lost prompt" window after warm-CLI restarts (0005 made those more common).
     - Cons: risk of showing a card for a request the CLI has already answered; needs careful tests.
   - **No; treat a restart as denying everything pending.**

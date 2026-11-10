@@ -305,8 +305,13 @@ can act), just as its rating is, and keep the counts in
   that folder's index, then update the counts. A new folder also needs its own
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
   The layout example the repository instructions name, to-do 0241, was
-  retired on 2026-11-10; read it with
-  `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`.
+  retired on 2026-11-10 (read it with
+  `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`).
+  Until those instructions are repointed, copy the layout of a live one-task
+  to-do in the same format instead:
+  [`7500-agent-tools-port-auto-choice.md`](todo/containers-and-environments/7500-agent-tools-port-auto-choice.md).
+  Repointing the line in `AGENTS.md` is a follow-up for the coordinator's
+  `AGENTS.md` proposal, which owns edits to that file.
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans

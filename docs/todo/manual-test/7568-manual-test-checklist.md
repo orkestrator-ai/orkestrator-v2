@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (279 items): run each check under
+1. **Manual tests and live checks** (281 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (47 items): make each call
@@ -78,8 +78,8 @@ agent can apply it.
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
-| Transcripts, observation and bandwidth | 21 | 3 |
-| **Total** | 279 | 47 |
+| Transcripts, observation and bandwidth | 23 | 3 |
+| **Total** | 281 | 47 |
 
 ## Outstanding work
 
@@ -108,11 +108,6 @@ agent can apply it.
 - [ ] **0722 (retired) task 4: a Codex coordinator on an added account.** (Background: [Coordinator conversations](../../architecture/agent-accounts.md#coordinator-conversations).) On one machine, in a disposable `dev:test` profile with a real added Codex account, start a Codex coordinator and send a turn: it answers. The coordinator home's `auth.json` has an empty `refresh_token`, and the account's own Codex sessions keep working while the coordinator lives. Record the Codex version and the outcomes, and reply to the coordinator.
 - [ ] **0722 (retired) task 5: change propagation across machines.** (Background: [Machines](../../architecture/agent-accounts.md#machines).) On two real machines with two logins each, open the command node's Settings → Machines → Agent accounts and a leaf tab's information panel. Then switch the account in the leaf's own Settings. Both views should update without a reload; under a few seconds, timed by eye, is a pass. Record the rough delay and reply to the coordinator.
 - [ ] **0722 (retired) task 6: MBP3 credential diagnosis.** (Background: [Machines](../../architecture/agent-accounts.md#machines).) On MBP3, read only: compare the modification time of `~/.claude/.credentials.json` with the Keychain item's metadata, without reading the secret. Then retry `claude auth login` and read the failure message it now prints. Record which credential is newer and the failure reason (the suspected cause is a locked login keychain under a LaunchAgent started over SSH). Reply to the coordinator.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 1: Claude live card run (billed).** Follow 0723's "Live run steps" with `mise run dev:test --profile perm-rules-claude --fixture --credential-source claude --agent-platforms claude`. Run the cycle for three kinds: `Bash` `npm run test -- --watch`, an `Edit` inside the worktree, and `WebFetch` `https://example.com/`. Record in 0723, for each kind: the rule saved, the next request answered with the note, the use count in Settings → Permissions, the request asking again after removal, and the Claude `settings.json` hash unchanged. Also record which `Bash` pattern was preselected (expected: Claude's suggested prefix).
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 2: Pi live card run (billed).** Follow 0723's "Live run steps" with `--profile perm-rules-pi --credential-source pi --agent-platforms pi`, and run the cycle for `bash` `git status --short`. Record the cycle's outcome and date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 3: Grok live card run.** Follow 0723's "Live run steps" with a valid Grok login (`--profile perm-rules-grok --credential-source grok --agent-platforms grok`), and run the cycle for one plain command such as `git status --short`. Confirm the card offered `allow_once`, and that the profile's `$GROK_HOME` settings snapshot is unchanged. Record the outcome and date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 4: OpenCode live card run (billed).** Follow 0723's "Live run steps" with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in 0723.
-- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in 0723's "Live run steps" (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in 0723.
 - [ ] **[0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md) task 3: stock Ubuntu desktop, picker and Agent Info.** On a stock Ubuntu 24.04 or 26.04 desktop that has AppArmor's `bwrap-userns-restrict` and bubblewrap and socat installed, start Orkestrator from a checkout.
   - Before the profile change: the coordinator picker shows Claude `provider-configured` with the profile named in the reason. A coordinator turn runs `cat`/`rg`. An interactive Claude session with sandbox `provider` (Settings → Execution policy) fails its first prompt with the same reason. Note Agent Info's tier.
   - Then apply the change from `.github/workflows/ci.yml`, or a local profile, and wait 5 minutes or restart: expect `enforced`, and `printf x > out.txt` refused. Restore the profile.
@@ -191,6 +186,91 @@ agent can apply it.
 - [ ] **[7040](../agent-engines/7040-container-cells-on-real-cursor-and-pi.md) task 2: real Pi provider in the container.** Once 7040 task 2's opt-in variant lands, start a container profile with a Pi provider login (`--credential-source pi --agent-platforms pi`, `--fixture-environments container`) and run the Pi cell with a cheap model as its live model. Record: the `bash` tool result under `auto-approve` and under `ask` (card shown and answered), and any blocked provider host, in 7040's task 2 Investigation.
 - [ ] **7280 (retired) task 1: stop a real Pi compaction.** On an isolated profile with a Pi provider credential (`mise run dev:test --profile pi-compact-qa --fixture --credential-source pi --agent-platforms pi`), build a conversation long enough that a summary takes a few seconds, run `/compact`, and press Stop while it compacts. Record: whether the compacting state and Stop showed, whether the composer said "Compaction was stopped before it finished; the conversation was not compacted.", and whether the conversation was unchanged. Reply to the coordinator. How it works: [native-agent-commands.md](../../architecture/native-agent-commands.md).
 - [ ] **7280 (retired) task 2: Auto-compact toggle in a real Pi tab.** On the same profile, check that the composer shows "Auto-compact". Copy the profile's Pi `settings.json` (the profile's Pi directory, never your own), turn the toggle off, reload, switch model, send one turn, and compare. Record: the toggle state after the reload and after the model switch, and whether `settings.json` was unchanged. Reply to the coordinator.
+
+##### Permission-rule card runs (0723 tasks 1 to 5)
+
+The shared procedure for the five 0723 items below (0723's former tasks 1
+to 5, moved here with them on 2026-11-10). These spend real provider credits.
+Run them only on an isolated profile,
+never on the production instance or its ports, and never change the host's
+`~/.claude`, `~/.codex`, `~/.grok` or `~/.pi`.
+
+**Set-up, once per provider.**
+
+1. In a long-lived terminal, start a disposable profile with only that
+   provider's host login copied in:
+   `mise run dev:test --profile perm-rules-<agent> --fixture --credential-source <agent> --agent-platforms <agent>`.
+   Use `claude`, `codex`, `grok`, `opencode` or `pi`.
+2. Wait for `mise run dev:status --profile perm-rules-<agent> --json` to show
+   `status: "ready"`. Open its `browserUrl`, and sign in through the
+   `loginCommand` it prints.
+3. Open Settings → Permissions and note the paths under "Rules outside
+   Orkestrator". Record `shasum -a 256` of each file that exists for this
+   provider: the account's Claude `settings.json`, the Codex `rules/` folder
+   listing, and Grok's settings under the profile's `$GROK_HOME`.
+4. In the profile's `testProject`, create a local environment. Open a native
+   tab for the agent with the "Ask" approval setting: an `interactive-native`
+   session, `approvals: ask`, not plan mode.
+
+**The cycle, once per approval kind.** Steps 2 to 5 are the pass bar.
+
+1. Prompt the agent to run the request named below. When the card appears,
+   choose "Approve and remember…". Check that the panel lists the exact
+   pattern first. For Claude `Bash` and Codex commands, also check that the
+   provider's proposal is preselected. Save it with "This project".
+2. Prompt the identical request again. No card appears; the transcript shows
+   "Approved once by your rule …".
+3. Settings → Permissions shows the rule with "Used 1 time" and a recent last
+   use.
+4. Choose "Remove rule" on the transcript note, then prompt the identical
+   request a third time. The card asks again. Deny it.
+5. Re-hash the files from set-up step 3. They are unchanged, and "Rules
+   outside Orkestrator" shows nothing new.
+
+**Requests per provider.**
+
+- **Claude (tasks 1 and 6):**
+  - `Bash`: `npm run test -- --watch` in the fixture. Record which pattern the
+    panel preselected; with the 2.1.309 `prefix *` suggestion it should be
+    the suggested prefix, not the narrowest.
+  - file: an `Edit` to a file inside the worktree (an absolute path);
+  - `WebFetch`: `https://example.com/`.
+- **Pi (task 2):** `bash` with `git status --short`.
+- **Grok (task 3):** one plain command, such as `git status --short`.
+  Confirm the card offered `allow_once` (the rule answer chooses it). Before
+  and after, snapshot `$GROK_HOME` for the profile; find it from the
+  process's environment with `ps eww` on the Grok child of the profile's
+  backend.
+- **OpenCode (task 4):**
+  - `bash`: `git status --short`. Also prompt `cd src && ls` once and confirm
+    it keeps asking with no offer, because its one pattern is `ls`.
+  - `edit`: a single-file edit;
+  - `webfetch`: `https://example.com/`.
+- **Codex (task 5):**
+  - Create a second environment B in the same project.
+  - In environment A, prompt "Run `touch policy-probe.txt`". While its card is
+    waiting, type and send a second prompt, "Run `touch policy-probe.txt`
+    again", so it is queued behind the turn.
+  - On the card, open "Approve and remember…", look at the panel (exact
+    pattern first, Codex's proposal preselected), and save it. Switch to B at
+    once.
+  - Stay on B until A's queued turn has finished; the rule answers its
+    approval from the backend sweep. The sidebar shows no attention badge for
+    A meanwhile.
+  - Back in A, the second turn shows the "Approved once by your rule …" note
+    and no card. Then run the removal check (cycle steps 4 and 5).
+
+**Afterwards.** Record the outcome and date in
+[0723](../agent-engines/0723-orkestrator-permission-rules.md), in a dated
+"Live card runs" section after Current state, one line per provider. Stop the
+profile with `mise run dev:stop --profile perm-rules-<agent>`, then
+`mise run dev:reset --profile perm-rules-<agent>`.
+
+- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 1: Claude live card run (billed).** Follow the permission-rule card-run steps above with `mise run dev:test --profile perm-rules-claude --fixture --credential-source claude --agent-platforms claude`. Run the cycle for three kinds: `Bash` `npm run test -- --watch`, an `Edit` inside the worktree, and `WebFetch` `https://example.com/`. Record in 0723, for each kind: the rule saved, the next request answered with the note, the use count in Settings → Permissions, the request asking again after removal, and the Claude `settings.json` hash unchanged. Also record which `Bash` pattern was preselected (expected: Claude's suggested prefix).
+- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 2: Pi live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-pi --credential-source pi --agent-platforms pi`, and run the cycle for `bash` `git status --short`. Record the cycle's outcome and date in 0723.
+- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 3: Grok live card run.** Follow the permission-rule card-run steps above with a valid Grok login (`--profile perm-rules-grok --credential-source grok --agent-platforms grok`), and run the cycle for one plain command such as `git status --short`. Confirm the card offered `allow_once`, and that the profile's `$GROK_HOME` settings snapshot is unchanged. Record the outcome and date in 0723.
+- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 4: OpenCode live card run (billed).** Follow the permission-rule card-run steps above with `--profile perm-rules-opencode --credential-source opencode --agent-platforms opencode`. Run the cycle for `bash` `git status --short`, a single-file `edit` and `webfetch` `https://example.com/`. Also prompt `cd src && ls` once and confirm it keeps asking with no offer. Record each outcome and the date in 0723.
+- [ ] **[0723](../agent-engines/0723-orkestrator-permission-rules.md) task 5: Codex card and inactive environment (billed).** Follow the Codex steps in the permission-rule card-run steps above (`--profile perm-rules-codex --credential-source codex --agent-platforms codex`). In environment A, queue a second `touch policy-probe.txt` turn, save the rule from the card, and switch to environment B. Look at the "Approve and remember…" panel: the exact pattern is first and Codex's proposal is preselected. While on B, there should be no attention badge for A. Back on A, the second turn shows the "Approved once by your rule" note, and removing the rule asks again. Record the outcome and date in 0723.
 
 #### CLI and slash commands
 
@@ -526,6 +606,8 @@ agent can apply it.
   - whether the sub-agent card settles;
   - whether Stop and steer work on return.
 - [ ] **[0050](../transcripts-and-observation/0050-transcript-history-efficiency.md) task 1: `/messages` fallback counter on the maintainer's machines.** After the support-window floor reaches v2.36.0 (2027-01-02), and for one whole Stable cycle after that, read the `bridge-transcript.messages-fallback` counter on every machine you run Orkestrator on, including any long-lived container images. Use the `get_compatibility_path_usage` backend command or the `compatibilityPaths` block of the gateway's `/__orkestrator/metrics`. Record: each machine's app version, `count` and `lastSeenAt`, written into 0050 task 1. A zero or stale counter everywhere unblocks the removal.
+- [ ] **[0050](../transcripts-and-observation/0050-transcript-history-efficiency.md) task 4: transcript paging in the Electron window with a real provider.** Needs 0050 task 4's Electron paging step first; until it lands, skip this item. Start a disposable profile with a real Claude or Codex login (`mise run dev:test --profile qa-0050-electron --fixture --credential-source <claude or codex> --agent-platforms <claude or codex> --no-headless`, on a disposable display) and run that Electron paging step with the real provider instead of the loopback model. Stop and reset the profile afterwards. Record in 0050's Qualification section: the date, provider and model, whether the window reported `truncated` with a cursor, whether Load earlier messages reached the first prompt with no row missing or repeated, whether the reader's place held (within the spec's 8 px, clamp-aware check), and whether the same held after a reload.
+- [ ] **[0050](../transcripts-and-observation/0050-transcript-history-efficiency.md) task 4: transcript paging in a container environment with a real provider.** Needs 0050 task 4's container target for `transcript-paging-live.spec.ts` first (proposed `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`); until it lands, skip this item. Start `mise run dev:test --profile qa-0050-container --fixture --fixture-environments local,container --credential-source <claude or codex> --agent-platforms <claude or codex>`, sign in with `mise run dev:login --profile qa-0050-container`, then run `ORKESTRATOR_AGENT_TEST_PROFILE=qa-0050-container ORKESTRATOR_AGENT_TEST_RUN_ID=qa-0050-container ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container mise run test:logged -- --name transcript-paging-container -- mise run test:agent:browser -- e2e/agent-testing/transcript-paging-live.spec.ts --workers=1` (add `ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex` for a Codex native tab, which also restarts the container's bridge under the mounted tab). Stop and reset the profile afterwards. These are paid turns. Record in 0050's Qualification section: the date, provider and model, the pass or fail of each case, and the Playwright annotations from `results.json` (window size, pages, rows, held-place offset); file a new to-do for any failure.
 - [ ] **[0232](../transcripts-and-observation/0232-direct-history-cursor-minting.md) task 4: joined-page counters on the maintainer's machines.** On each machine you run that has v2.36.0 or later, read `history.joined-v1-page`, `history.joined-v1-page.unpaged-source` and `history.joined-v1-page.unnamed-cursor`. Use `get_compatibility_path_usage` or the `compatibilityPaths` block of the gateway's `/__orkestrator/metrics`. Read again once the floor reaches v2.36.0 (2027-01-02). Record: per machine and counter, `lastSeenAt` (not `count`: the base id's older totals mix causes) and a rough rate, written into 0232 task 4. Flag any `lastSeenAt` after 2026-11-03 at more than an occasional page, which is the trigger for TX-10's interim map.
 
 - [ ] **[4650](../transcripts-and-observation/4650-static-html-presentation-follow-ups.md) task 1: hosted header precedence on a real Vercel deployment.** Once the hosted policy change is approved (see the decision item for 4650 task 1), deploy `apps/web-public` to a Vercel preview deployment with a path-specific header rule for `/static-html-frame.html` (`sandbox allow-scripts; frame-ancestors 'self'`) beside the existing `/(.*)` rule in `apps/web-public/vercel.json` (which sets `script-src 'self'` and `frame-ancestors 'none'`), then run `curl -sI <preview-url>/static-html-frame.html` and `curl -sI <preview-url>/`. Record: in 4650's task 1 Investigation, the exact `Content-Security-Policy` each path returned, and whether the path rule replaced or was merged with the general one.

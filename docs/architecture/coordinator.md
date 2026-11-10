@@ -1617,6 +1617,13 @@ a side agent, a paused coordinator and a steered message (one taken into a
 running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
+Both paths are qualified against a slow remote on a real profile by
+`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+[agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
+In that run a worker's mail to a coordinator whose turn is running waits on
+the coordinator's presence (`agent-mail delivery.waiting reason=working`)
+before it reaches this step, and reaches it once the turn has ended.
+
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout
 (`project-checkout-merge-follow.ts`, owned by the PR monitor runtime). Every

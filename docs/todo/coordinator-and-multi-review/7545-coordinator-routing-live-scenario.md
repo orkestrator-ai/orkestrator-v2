@@ -17,7 +17,7 @@ against `main` at `04639b12b`.
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
 2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified, other provider findings remain open).
 3. **Decide what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. Status: open (the user's decision).
-4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed); whether Codex now obeys needs a billed run (Needs verification).
+4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed; the backend test failures the full suite tied to it were repaired); whether Codex now obeys needs a billed run (Needs verification).
 
 ### 1. Add a `routing` scenario to the live coordinator suite
 
@@ -425,6 +425,45 @@ The runner stopped and removed both profiles (`dev:status` reports them
 `missing`). At the first profile's teardown its headless Electron dumped core
 (`core.<pid>`, 1 GB, written to the worktree root at 01:36 UTC, after the case
 had passed); the file was deleted and the crash was not investigated.
+
+### Full-suite failures repaired with task 4 (task 4, 2026-11-10)
+
+The branch's `mise run test:full` failed in backend tests that triage tied
+to this change through the backend files it touches. Each failure reproduced
+on its own, and none came from task 4's wording; all four causes were already
+on `main`. They were repaired here rather than left, because the ticket could
+not close with them open:
+
+- Environment deletion and merged-PR cleanup (`commands-integration`,
+  `commands-registry-environments`, `commands-registry-pr`): deletion calls
+  `storage.deleteAutoPipelineDraftsByEnvironment` (#2000), which the shared
+  storage fake in `apps/backend/tests/command-fixtures.ts` did not have. The
+  fake now has it. Production storage already did.
+- `index.test.ts`, "runs the activity bundle as named due jobs": every
+  backend `init()` started a new shared-usage sync timer (#2023) without
+  clearing the last, so a repeated init leaked a 60 s interval. `init` now
+  starts it once, the way node coordination's timers already are, and the test
+  names that timer and requires exactly one.
+- `opencode2-host-server.test.ts`: an agent-test start reconciles OpenCode
+  2.x logins from `$XDG_DATA_HOME/opencode/auth.json`. The test isolated
+  `XDG_CONFIG_HOME` only, so on a host that sets `XDG_DATA_HOME` (beelink
+  does) it read the developer's real credential store and its fake server,
+  which had no credential route, failed the start. The test now points
+  `XDG_DATA_HOME` at its own empty directory and the fake answers the
+  credential list.
+- Pi bridge `http.test.ts` (slow tier), "a new tab lists its templates and
+  skills before the first turn": since #2022 every Pi policy excludes
+  extensions, so the pre-attach catalogue is the whole inventory and is
+  published `ready`. The test still expected the earlier `stale` with
+  `attachPending`; it now expects the current contract.
+
+The other recorded failures were checked where they could be on this node:
+every `apps/backend/tests/commands-registry-*.test.ts` file, the backend's
+model-catalogue tests (Pi seeding included) and the Pi bridge's default tier
+pass. A WebKit failure was environmental (the host lacks WebKit's libraries)
+and is not repaired. A direct `bun test` from a shell that inherits
+`NODE_ENV=production` fails the local-bridge tests with "bridge directory not
+found"; `mise run test` strips that variable, so those are not real failures.
 
 ## Needs verification
 

@@ -6,7 +6,8 @@
  *
  * - Anthropic Messages (`POST /v1/messages`) for Claude;
  * - OpenAI Responses over a WebSocket (`/v1/responses`) for Codex;
- * - OpenAI chat completions (`POST /v1/chat/completions`) for Pi.
+ * - OpenAI chat completions (`POST /v1/chat/completions`) for Pi, and for
+ *   OpenCode through a custom provider (`opencode-fake-provider.ts`).
  *
  *   bun mcp-fake-model.ts
  *
@@ -159,7 +160,9 @@ export type ChatBody = {
   model?: string;
   stream?: boolean;
   messages?: ChatMessage[];
-  tools?: Array<{ function?: { name?: string } }>;
+  tools?: Array<{
+    function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
+  }>;
 };
 
 function chatText(content: ChatMessage["content"]): string {
@@ -194,12 +197,25 @@ export function chatRequest(body: ChatBody) {
   return { prompt: withoutReminders(raw) || raw.trim(), tools, results };
 }
 
+/** Whether the offered `bash` tool takes a description (OpenCode's does; Pi's does not). */
+export function bashTakesDescription(body: ChatBody): boolean {
+  const bash = (body.tools ?? []).find((tool) => tool.function?.name === "bash");
+  return Boolean(bash?.function?.parameters?.properties?.description);
+}
+
 /** The assistant message (text or one tool call) for one step. */
-export function chatMessage(step: FakeStep, id: number) {
+export function chatMessage(step: FakeStep, id: number, options: { describeShell?: boolean } = {}) {
   if (step.kind === "text") return { content: step.text, toolCall: undefined };
   // A file write is scripted for Claude only (the warm-runtime spec).
   if (step.kind === "code" || step.kind === "write")
     return { content: "Done.", toolCall: undefined };
+  const input =
+    step.kind === "shell"
+      ? {
+          command: step.command,
+          ...(options.describeShell ? { description: "Run the requested command" } : {}),
+        }
+      : step.input;
   return {
     content: undefined,
     toolCall: {
@@ -207,7 +223,7 @@ export function chatMessage(step: FakeStep, id: number) {
       type: "function" as const,
       function: {
         name: step.kind === "shell" ? "bash" : step.name,
-        arguments: JSON.stringify(step.kind === "shell" ? { command: step.command } : step.input),
+        arguments: JSON.stringify(input),
       },
     },
   };
@@ -221,7 +237,7 @@ function chatResponse(
 ): Response {
   const Response = ResponseType;
   const model = String(body.model ?? "mcpq-1");
-  const message = chatMessage(step, id);
+  const message = chatMessage(step, id, { describeShell: bashTakesDescription(body) });
   const finish = message.toolCall ? "tool_calls" : "stop";
   const usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
   const created = Math.floor(Date.now() / 1000);

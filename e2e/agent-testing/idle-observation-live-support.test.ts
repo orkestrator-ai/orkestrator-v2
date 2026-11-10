@@ -248,6 +248,8 @@ test("fake Pi overrides cannot escape loopback and real runs preserve overrides"
   expect(idleObservationModel("pi", true)).toBe("idleqa-fake/idleqa-1");
   expect(idleObservationModel("pi", false, "openai/real")).toBe("openai/real");
   expect(idleObservationModel("codex", true, "custom")).toBe("custom");
+  expect(idleObservationModel("opencode", true, "opencode/real")).toBe("idleqa-fake/idleqa-1");
+  expect(idleObservationModel("opencode", false, "opencode/real")).toBe("opencode/real");
 });
 test("async question prompt requests both replies the watcher expects", () => {
   const prompt = asyncQuestionPrompt("Choose a codeword", "IDLEQA-ASKED-1");

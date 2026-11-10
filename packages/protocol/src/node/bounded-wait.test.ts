@@ -14,8 +14,8 @@ function spyTimers() {
   };
 }
 
-/** Let the timer phase and the microtasks after it run. */
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Cross an event-loop turn so late promise handlers and rejection reporting run. */
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 afterEach(() => {
   mock.restore();
@@ -31,8 +31,7 @@ describe("boundedWait", () => {
     expect(result).toEqual({ settled: true, value: "value" });
     expect(timers.setSpy).toHaveBeenCalledTimes(1);
     expect(timers.clearSpy).toHaveBeenCalledWith(timers.timer());
-    mock.restore();
-    await pause(30);
+    // Settlement cleared the deadline; no wall-clock wait is needed to prove it.
     expect(onLate).not.toHaveBeenCalled();
   });
 
@@ -61,7 +60,7 @@ describe("boundedWait", () => {
     expect(onLate).not.toHaveBeenCalled();
     const late = { close: () => undefined };
     work.resolve(late);
-    await pause(0);
+    await nextTurn();
     expect(onLate).toHaveBeenCalledTimes(1);
     expect(onLate).toHaveBeenCalledWith(late);
   });
@@ -72,7 +71,7 @@ describe("boundedWait", () => {
     const onLate = mock();
     expect(await boundedWait(work.promise, 5, { onLate })).toEqual({ settled: false });
     work.reject(new Error("late failure"));
-    await pause(10);
+    await nextTurn();
     expect(onLate).not.toHaveBeenCalled();
     expect(unhandled).toEqual([]);
   });
@@ -91,7 +90,7 @@ describe("boundedWait", () => {
     });
     throwing.resolve("a");
     rejecting.resolve("b");
-    await pause(10);
+    await nextTurn();
     expect(unhandled).toEqual([]);
   });
 });
@@ -109,7 +108,7 @@ describe("boundedWaitOrThrow", () => {
       timeout,
     );
     work.resolve("late");
-    await pause(0);
+    await nextTurn();
     expect(onLate).toHaveBeenCalledTimes(1);
     expect(onLate).toHaveBeenCalledWith("late");
   });

@@ -300,7 +300,9 @@ A project's board is shared by every machine in a fleet that has a copy of
 the same repository (matched by repository identity, as everything else
 across nodes is). Code: `@orkestrator/protocol/ticket-sync` (wire shapes,
 limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
-`KanbanRepository` (the sync methods, under the Kanban lease),
+`KanbanSyncRepository` (`storage-kanban-sync-repository.ts`, reached as
+`storage.ticketSync`: the sync methods, under the Kanban lease it shares with
+`KanbanRepository` through `KanbanBoardStore`),
 `nodes/node-ticket-sync.ts` (the command node's runs),
 `commands-registry-ticket-sync.ts` (the leaf commands) and
 `coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). The
@@ -312,7 +314,9 @@ ticket is recognisable on every machine and a coordinator never needs a
 leaf-local id. A replica row carries `sync.replica` (the command node, its
 project, and the revisions it last saw). Each command node project pairs with
 the first leaf project of the same repository; a second copy on the same leaf
-is left alone.
+is left alone (one ticket id is one row on a machine), and both boards say so:
+the command node's sync line names the leaf copy that syncs and counts the
+others, and the other copy's sync line names the copy that syncs.
 
 **Down.** Every synced change to a ticket on any machine is stamped with that
 machine's next change sequence (`sync.seq`) and the revision of each field
@@ -342,14 +346,23 @@ anything.
 
 **New tickets on a leaf.** A ticket created on a leaf after the command node
 first synced that project goes up under its own id and becomes the board's.
-Tickets that existed on the leaf before sync began stay on the leaf only.
+Tickets that existed on the leaf before sync began stay on the leaf until the
+user shares them: the leaf board's sync line offers "Share N older tickets
+with <command node>", and each such card's menu "Share with <command node>"
+(`share_tickets_with_command_node`, `KanbanSyncRepository.shareTicketsWithCommandNode`).
+Sharing queues the same creation a new leaf ticket does. Nothing is adopted
+on first sync: that could copy tickets a user had already duplicated by hand,
+and could not be undone.
 
 **Conflicts.** A leaf change to `title`, `content` or `status` made against
 the revision the board still has is applied. Against an older one (the field
 changed on the command node meanwhile) the board's value is kept, and the
-conflict is recorded: in the board's conflict list (`get_ticket_sync_status`,
-the last 200) and as a comment on the ticket naming the machine and quoting
-its value, which every machine then sees. A change that follows the same
+conflict is recorded: in the board's conflict list (the last 200, each with an
+id; `get_ticket_sync_status` returns the latest 20 and the total) and as a
+comment on the ticket naming the machine and quoting its value, which every
+machine then sees. The sync line's conflict count opens the list, where each
+conflict opens its ticket or is dismissed, or all are
+(`dismiss_ticket_sync_conflicts`); dismissing keeps the ticket's comment. A change that follows the same
 leaf's own earlier change is not a conflict. Comments merge by id; criteria
 results merge as Verify's do (by id and text), so they never conflict with a
 text edit. A change to a ticket deleted on the command node is recorded as a
@@ -360,9 +373,30 @@ tombstone stops a reconnecting leaf from bringing it back, and a leaf keeps
 its own so that a snapshot sent before its deletion was collected does not
 revive it.
 
-**Images are not synced.** Each machine keeps the images attached on it; a
-build's ticket snapshot carries the images the coordinator or the launcher
-send with it. See 3800 for syncing references or bytes.
+**Images.** Images sync as references (`id`, `filename`, `createdAt` and the
+machine holding the bytes, `nodeId`); each machine keeps the bytes of images
+attached on it. A command node's snapshots list a ticket's images; a leaf
+sends `add-image` and `delete-image` (and its images on a creation) only to a
+command node that declared the `images` feature when it collected
+(`collect_ticket_sync_outbox` `features`), so an older command node never
+receives a change it cannot read, and a snapshot without `images` (an older
+command node) leaves a leaf's list alone. Reading an image whose bytes are
+elsewhere (`ticket-sync-images.ts`): a command node reads it from the leaf
+that holds it (`read_ticket_image`); a leaf, which never reaches its command
+node, records a want, announces it like queued changes, and the command node
+delivers it on that collection (`wantedImages`, `put_ticket_image`), reading
+it from another leaf first when needed. Both keep the copy, so an image
+crosses a link once. A machine that is not connected cannot serve its images;
+the board says so. Images are bounded per ticket (200 references) and per read
+(16 MiB of base64). A leaf's own image the board never listed (attached before
+image sync) stays on the leaf; one the board listed and then dropped is
+removed there too. A build's ticket snapshot still carries the images the
+coordinator or the launcher send with it.
+
+**Order within a column is per machine.** Status syncs, but the order of
+tickets within a column does not: `order` changes on every drag and status
+move, so syncing it would make most drags conflict. Each machine keeps its
+own order; a moved ticket goes to the end of its new column there.
 
 **Where the work runs.** A ticket whose build pipeline or environment runs on
 another machine carries `sync.work` (machine, pipeline, environment, pull
@@ -372,8 +406,10 @@ leaf's own reports keep it current. The board's cards name that machine.
 **The board's sync line.** Above the columns the board names each machine
 that shares it, with its state: in sync, syncing, behind, offline (changes
 wait here), update needed (an older machine) or failed (retried), and how
-many leaf changes lost a conflict. Nothing shows on a board no other machine
-shares.
+many leaf changes lost a conflict. On a leaf it names the command node its
+copies come from (`get_ticket_sync_leaf_status`), with the changes waiting for
+it and Share for older tickets, and each copy's card carries a small mark with
+the command node's name. Nothing shows on a board no other machine shares.
 
 **Older leaves.** A leaf that does not advertise `ticket-sync` is never sent
 tickets; the board says to update it. Coordinator tools with its `nodeId`

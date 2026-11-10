@@ -86,6 +86,7 @@ describe("packaged Electron app launch", () => {
       XDG_STATE_HOME: "/tmp/run/home/.local/state",
       ORKESTRATOR_RUNTIME_PROFILE_FILE: "/tmp/run/profile.json",
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
+      ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
     });
   });
 

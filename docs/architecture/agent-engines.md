@@ -1708,11 +1708,14 @@ workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 (`bridgePromptBody`). The review fan-out's reviewers, every Multi Review step
 (preparation, consolidation and Fix, and their reminder and restart turns) and
 Build Pipeline consolidation declare the pair, with the key set to the turn's
-request id, which is also the result key. Feature Planning
-(`feature-planning.ts`) and Build
-Pipeline stage sends and follow-ups (`build-pipeline-service-supervisor.ts`)
-still omit `workflowResultKey`; declaring their attempts remains outstanding.
-Those paths do not receive this exemption under deny/ask or read-only gating.
+request id, which is also the result key. Build Pipeline stage sends
+(`build-pipeline-service-supervisor.ts`) and their durable re-sends
+(`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
+single Pi reviewer's read-only Review in a pipeline could never submit its
+report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
+Planning (`feature-planning.ts`) still omits `workflowResultKey`; declaring its
+attempts remains outstanding, and it does not receive this exemption under
+deny/ask or read-only gating.
 The warm-up attach does not declare the pair; the bridges read it from the
 prompt only. The bridge keeps them for that turn only (`state.workflowResultTurn`,
 memory only, replaced by every prompt; a malformed pair is refused with 400

@@ -25,8 +25,9 @@ import { parseSync, visitorKeys, type CallExpression, type Node } from "oxc-pars
  * A call is resolved through the declared types of the fields it goes through:
  * `this.repos.projects.saveEnvironment()` is `ProjectsRepository`'s method,
  * `this.context.saveJson()` is the `StorageContext` primitive. A whole-value
- * write is `saveJson`, `saveSensitiveJson`, `deleteStore`, a raw
- * `database.writeStore*`/`deleteStore*`, or an `updateStore`/`updateStoreRow`
+ * write is `saveJson`, `saveSensitiveJson`, `deleteStore`, `updateStoreRows`
+ * (rows planned from an earlier read), a raw `database.writeStore*`/
+ * `deleteStore*`/`updateStoreRows`, or an `updateStore`/`updateStoreRow`
  * reached from inside `atomically`, which buffers the value and commits it
  * whole.
  *
@@ -82,6 +83,10 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageContext.updateDocumentArrayRows", { kind: "write", write: "transactional" }],
   ["StorageContext.updateStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.updateSensitiveStoreRow", { kind: "write", write: "transactional" }],
+  // A row diff of a value read earlier, like a whole-value save: it commits
+  // what was planned from a read, so it must hold the lease every other writer
+  // of the store holds (todo 6120 task 6, agent mail's environment delete).
+  ["StorageContext.updateStoreRows", { kind: "write", write: "whole" }],
   ["StorageContext.atomically", { kind: "atomically" }],
   ["StorageContext.serialize", { kind: "lease" }],
   ["StorageContext.file", { kind: "path" }],
@@ -98,6 +103,7 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageDatabase.deleteStoreInTransaction", { kind: "write", write: "whole" }],
   ["StorageDatabase.updateStore", { kind: "write", write: "transactional" }],
   ["StorageDatabase.updateStoreRow", { kind: "write", write: "transactional" }],
+  ["StorageDatabase.updateStoreRows", { kind: "write", write: "whole" }],
   ["StorageDatabase.transaction", { kind: "synchronous-callback" }],
 ]);
 
@@ -1407,6 +1413,7 @@ const RAW_WRITERS = new Set([
   "updateStore",
   "updateDocumentArrayRows",
   "updateStoreRow",
+  "updateStoreRows",
   "rows",
 ]);
 
@@ -1417,7 +1424,7 @@ const RAW_WRITER_EXEMPTIONS = new Map([
   ["storage-test-support.ts", "seeds stores for tests, like another process"],
   [
     "storage-stores.ts",
-    "the legacy import and migrations run in the migration transaction at open, before any writer",
+    "the legacy import and migrations run in the migration transaction at open, before any writer; the open-time native-session owner backfill reads and writes in one transaction, as a row writer does",
   ],
   ["storage-record-upgrades.ts", "a one-shot upgrade inside a migration at open"],
   ["storage-retired-features.ts", "a one-shot retirement inside a migration at open"],
@@ -1800,6 +1807,8 @@ export const REPOSITORIES = [
   "AgentMailInjects",
   "AgentMailBudgets",
   "KanbanRepository",
+  "KanbanBoardStore",
+  "KanbanSyncRepository",
   "PreviewServicesRepository",
   "NodesRepository",
   "PublicOperationsRepository",

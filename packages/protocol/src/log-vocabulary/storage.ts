@@ -54,6 +54,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",
+      "native-session-owners.backfill-failed":
+        "Native-session rows could not be given their environment as owner at open; an environment delete then parses those rows instead, and the next open retries.",
       "lease.timed-out":
         "A waiter gave up on a lease; `lease` and `family` name it, `holderAgeMs` is the time since its holder's last heartbeat (null when the holder had just gone), `waitedMs` how long the waiter waited.",
       "lease.heartbeat-failed":

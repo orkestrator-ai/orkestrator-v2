@@ -31,6 +31,19 @@ function agentMailRevision(dataDir: string): number | null {
   }
 }
 
+/**
+ * Polls until a condition holds. The service converges on debounced timers and
+ * background drains, so a fixed sleep or a short bounded loop fails whenever a
+ * loaded worker runs that work late.
+ */
+async function eventually(done: () => boolean | Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 4_000;
+  while (!(await done())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 describe("AgentMailService", () => {
   for (const state of ["submitting", "verifying"] as const) {
     for (const canonicalExists of [false, true]) {
@@ -541,7 +554,13 @@ describe("AgentMailService", () => {
         },
         opened.revision,
       );
-      await new Promise((resolve) => setTimeout(resolve, 325));
+      await eventually(
+        async () =>
+          (await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.some(
+            ({ tabId }) => tabId === "agent-2",
+          ),
+        "the opened tab's mailbox",
+      );
       expect(
         (await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.map(
           ({ tabId }) => tabId,
@@ -571,7 +590,13 @@ describe("AgentMailService", () => {
         },
         closed.revision,
       );
-      await new Promise((resolve) => setTimeout(resolve, 325));
+      await eventually(
+        async () =>
+          !(await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.some(
+            ({ tabId }) => tabId === "agent-2",
+          ),
+        "the closed tab's mailbox to be removed",
+      );
       expect(
         (await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.map(
           ({ tabId }) => tabId,
@@ -800,6 +825,7 @@ describe("AgentMailService", () => {
       releaseFirst = resolve;
     });
     let dispatches = 0;
+    let service: AgentMailService | undefined;
     try {
       const first = await storage.sendAgentMail(
         { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
@@ -810,7 +836,7 @@ describe("AgentMailService", () => {
           body: "Hold this one.",
         },
       );
-      const service = new AgentMailService(
+      service = new AgentMailService(
         storage,
         {
           reconcileMailInject: async () => "unknown",
@@ -829,9 +855,7 @@ describe("AgentMailService", () => {
       );
       await service.init();
       const draining = service.drainInjects();
-      for (let attempt = 0; attempt < 50 && dispatches === 0; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
+      await eventually(() => dispatches > 0, "the first dispatch");
       expect(dispatches).toBe(1);
       const second = await storage.sendAgentMail(
         { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
@@ -844,11 +868,12 @@ describe("AgentMailService", () => {
       );
       releaseFirst();
       await draining;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const delivered = await storage.getAgentMailMessage("recipient", "agent", second.id);
-        if (delivered.placement === "injected") break;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
+      await eventually(
+        async () =>
+          (await storage.getAgentMailMessage("recipient", "agent", second.id)).placement ===
+          "injected",
+        "the second message to be injected",
+      );
       expect(dispatches).toBe(2);
       expect(await storage.getAgentMailMessage("recipient", "agent", first.id)).toMatchObject({
         placement: "pending-inject",
@@ -860,8 +885,11 @@ describe("AgentMailService", () => {
       expect(await storage.getAgentMailMessage("recipient", "agent", second.id)).toMatchObject({
         placement: "injected",
       });
-      await service.shutdown();
     } finally {
+      // A failed wait must not leave the drain and its timers writing into the
+      // removed directory, where they fail whichever test runs next.
+      releaseFirst();
+      await service?.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -869,6 +897,7 @@ describe("AgentMailService", () => {
   test("rechecks deferred delivery and injects as soon as the recipient is idle", async () => {
     const { storage, dataDir } = await fixture();
     let dispatches = 0;
+    let service: AgentMailService | undefined;
     try {
       const message = await storage.sendAgentMail(
         { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
@@ -879,7 +908,7 @@ describe("AgentMailService", () => {
           body: "Deliver on the next idle sweep.",
         },
       );
-      const service = new AgentMailService(
+      service = new AgentMailService(
         storage,
         {
           reconcileMailInject: async () => "unknown",
@@ -903,8 +932,8 @@ describe("AgentMailService", () => {
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
         placement: "injected",
       });
-      await service.shutdown();
     } finally {
+      await service?.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

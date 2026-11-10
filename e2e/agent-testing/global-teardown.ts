@@ -7,10 +7,12 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 
+/** The agent-testing suites whose artifacts live under `output/agent-testing/<run>/<suite>`. */
+export type ArtifactSuite =
+  "browser" | "coordinator" | "goals" | "auto-pipeline" | "coordinator-slow-remote";
+
 /** Redacts one suite's artifacts under `output/agent-testing/<run>/<suite>`. */
-export async function sanitizeRunArtifacts(
-  suite: "browser" | "coordinator" | "goals",
-): Promise<void> {
+export async function sanitizeRunArtifacts(suite: ArtifactSuite): Promise<void> {
   const statusResult = spawnSync(
     "bun",
     ["run", "dev:status", "--", "--profile", profile, "--json"],

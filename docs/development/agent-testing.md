@@ -155,8 +155,13 @@ through the command scope's client. It is off by default.
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host
 interface change can reach Chromium. A host that cannot create the namespace
-(no unprivileged user namespaces, or no `ip`) runs them on the host network and
-prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
+runs them on the host network and prints one `[loopback-network]` line naming
+the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
+host refused the namespace, with the kernel's own message (for example Ubuntu
+24.04's AppArmor restriction or a container's seccomp profile).
+`ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
+`test:browser` fails on a Linux host other than the one it was qualified on
+(to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -2060,6 +2065,88 @@ and the backend reads the matching hashed Keychain entry or that directory's
 the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
+
+### Auto-pipeline flow (fake model)
+
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
+end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
+then stops and resets the profile. The real backend, Pi bridge, Pi SDK
+sessions, Git worktree, ticket store and renderer all run; only the model is
+fake. The spec points the profile's isolated Pi `models.json` at a loopback
+model (`auto-pipeline-fake-model.ts`, script in
+`auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
+defaults as Pi on that model with one reviewer. The fake answers each stage's
+result tool with a fixed, valid, finding-free result, keeps only counts, and
+parks Verify until the spec releases it.
+
+The one case walks the user's path: an interactive Pi tab writes a file and
+goes idle; in the browser the user right-clicks **Multi Review**, chooses
+**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+then checks the ticket, the promotion commit and its trailer, and the adopted
+Build; sets the ticket's delivery to commit-only while Verify is parked;
+switches to another environment, releases Verify, and waits for the pipeline
+to finish unwatched. Back on the environment, and again after a reload and at
+a 390 px viewport, the graph must show the commit-only completion from backend
+state, and the source tab must have received no further turn. Screenshots go to
+`output/visual-previews/auto-pipeline-live-*.png`.
+
+To run the spec against a profile you started yourself, start it with the same
+flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
+fixture project's Build defaults and leaves its environments behind, so reset
+the profile afterwards.
+
+### Coordinator checkout sync with a slow remote (fake model)
+
+`mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
+fast-forward to an already fetched upstream when the remote is slow (to-do
+4720), without a login, a billed turn or the network. It starts a disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
+stops and resets the profile. The real backend, project Git service, Pi
+bridge, agent mail and renderer run; the model is
+`coordinator-slow-remote-fake-model.ts` on loopback, named in the profile's
+isolated Pi `models.json` and `settings.json`.
+
+The spec adds two disposable projects under the profile's fixture directory,
+each a checkout of its own local bare repository. Each checkout's origin is
+`ssh://git@slow.invalid/repo.git` with a checkout-local `core.sshCommand`
+shim and `ssh.variant simple`; the shim runs `git-upload-pack` on its own bare
+repository, records only a start time per invocation, and sleeps 15 s while a
+delay marker exists. No host SSH or global Git configuration changes. With the
+delay off, a direct and a backend fetch through each shim must succeed. The
+mail project's main coordinator then starts a turn that the fake model parks,
+both remotes gain two commits that each checkout fetches without merging, and
+the delay markers are created. Then:
+
+- **Typed.** Once the backend's 60 s fetch cooldown has passed, a message typed
+  in the browser to the first project's main coordinator must log
+  `checkout.message-check outcome=fast-forwarded fetch=timed-out` with
+  `durationMs` of at least 3000, move `HEAD` to the recorded upstream with one
+  new reflog entry before the late fetch can finish, and turn the toolbar's
+  "2 commits behind" into "Up to date".
+- **Mail.** A Pi worker tab in the second project sends its coordinator a
+  report through Orkestrator's `send_message` tool (same-project trust,
+  `coordinator` route). The mail must wait behind the running turn
+  (`delivery.waiting reason=working`) with the checkout still behind. When the
+  turn is released, with the delay still on, the redelivery must log
+  `checkout.mail-follow outcome=fast-forwarded-fetched` at least 5 s after the
+  shim started and before it could finish, move `HEAD` to the upstream with
+  one new reflog entry, and be injected.
+
+The content-free summary is
+`output/agent-testing/<profile>/coordinator-slow-remote/summary.json`, and
+screenshots are `output/visual-previews/coordinator-slow-remote-*.png`. To run
+the spec against a profile you started yourself, use the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-slow-remote.config.ts`. It
+reads backend log lines from the profile's `logs/electron.log`, so it needs a
+`dev:test` profile rather than a standalone backend. The shim's timestamps use
+GNU `date`, so the spec runs on Linux.
 
 ### Live goal suite
 

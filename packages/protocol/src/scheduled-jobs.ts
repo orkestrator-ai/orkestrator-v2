@@ -142,6 +142,15 @@ export type ScheduleOwner =
       coordinatorId: string;
       conversationId: string;
       role: "main" | "side";
+      /**
+       * What started the coordinator turn that created the schedule, made
+       * `mail` by any later change from a turn the user did not start. Each
+       * fire's mail and delegated prompts are framed from it rather than from
+       * whichever turn the conversation ran last. Absent on schedules created
+       * before it, which fall back to the newest turn. Not part of the owner's
+       * identity (`scheduleOwnerKey`).
+       */
+      turnOrigin?: "user" | "mail";
     };
 
 /**

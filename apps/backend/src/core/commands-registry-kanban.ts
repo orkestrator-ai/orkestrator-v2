@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/ticket-sections";
 import { normalizeTicketLabels } from "@orkestrator/protocol/ticket-labels";
 import type { KanbanTaskContentInput } from "./storage-kanban.js";
+import { readKanbanImageData } from "./ticket-sync-images.js";
 import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import {
@@ -258,8 +259,8 @@ export function registerKanbanCommands(
   register(deleteKanbanImageCommand, ({ taskId, imageId }, { storage }) =>
     storage.kanban.deleteKanbanImage(asString(taskId, "taskId"), asString(imageId, "imageId")),
   );
-  register(getKanbanImageDataCommand, ({ imageId }, { storage }) =>
-    storage.kanban.getKanbanImageData(asString(imageId, "imageId")),
+  register(getKanbanImageDataCommand, ({ imageId }, context) =>
+    readKanbanImageData(context, asString(imageId, "imageId")),
   );
   register(getProjectNotesCommand, (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "project-notes", () =>

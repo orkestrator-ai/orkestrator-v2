@@ -52,9 +52,16 @@ async function call(path: string, body?: unknown): Promise<Response> {
   });
 }
 
-test.each([false, true])(
-  "revalidates a preview selection through the first prompt attach (shadowed: %s)",
-  async (shadowed) => {
+// Extensions never load in this shared bridge process, so nothing an attach
+// binds can shadow a template. What can still differ between the preview read
+// and the first attach is the template itself: the attach reads the
+// filesystem again, and a file moved or deleted in between must not run under
+// the binding the user selected from the preview.
+type AttachChange = "unchanged" | "moved" | "removed";
+
+test.each<AttachChange>(["unchanged", "moved", "removed"])(
+  "revalidates a preview selection through the first prompt attach (template %s)",
+  async (change) => {
     const state = newSessionState(undefined, {
       id: "interactive-host",
       sandbox: "provider",
@@ -63,20 +70,23 @@ test.each([false, true])(
       networkAccess: "full",
     });
     sessions.set(state.id, state);
-    const path = "/fixture/.pi/prompts/review.md";
-    const templates = [
-      {
-        name: "review",
-        description: "Review the tree",
-        content: "Review $@",
-        filePath: path,
-        sourceInfo: { path, source: "local", scope: "project", origin: "top-level" },
-      },
-    ];
+    const template = (path: string, scope: string) => ({
+      name: "review",
+      description: "Review the tree",
+      content: "Review $@",
+      filePath: path,
+      sourceInfo: { path, source: "local", scope, origin: "top-level" },
+    });
+    const previewTemplates = [template("/fixture/.pi/prompts/review.md", "project")];
+    const attachedTemplates =
+      change === "unchanged"
+        ? previewTemplates
+        : change === "moved"
+          ? [template("/home/user/.pi/agent/prompts/review.md", "user")]
+          : [];
     let reads = 0;
     let attaches = 0;
     let binds = 0;
-    const extensions: Array<{ name: string; description: string }> = [];
     const prompts: Array<{ text: string; expandPromptTemplates?: boolean }> = [];
     let finish!: () => void;
     const run = new Promise<void>((resolve) => {
@@ -85,16 +95,15 @@ test.each([false, true])(
     const session = {
       sessionId: "pi-preview-first-turn",
       sessionFile: "/tmp/pi-preview-first-turn.jsonl",
-      promptTemplates: templates,
+      promptTemplates: attachedTemplates,
       resourceLoader: { getSkills: () => ({ skills: [], diagnostics: [] }) },
+      // Only the bridge's own inline extensions bind, and they add no commands.
       extensionRunner: {
-        getRegisteredCommands: () => extensions,
-        getCommand: (name: string) => extensions.find((command) => command.name === name),
+        getRegisteredCommands: () => [],
+        getCommand: () => undefined,
       },
       bindExtensions: async () => {
         binds += 1;
-        // Commands only become visible after the real attach binds extensions.
-        if (shadowed) extensions.push({ name: "review", description: "Extension review" });
       },
       subscribe: () => () => undefined,
       dispose: () => undefined,
@@ -127,7 +136,7 @@ test.each([false, true])(
     refreshModels();
     setCommandPreviewReaderForTests(async () => {
       reads += 1;
-      return buildCommandCatalogue({ promptTemplates: templates as never });
+      return buildCommandCatalogue({ promptTemplates: previewTemplates as never });
     });
 
     try {
@@ -135,7 +144,9 @@ test.each([false, true])(
       const listed = await call(`/session/${state.id}/commands`);
       expect(listed.status).toBe(200);
       const catalogue = await listed.json();
-      expect(catalogue).toMatchObject({ status: "stale", attachPending: true });
+      // The resource-only read is the complete list: no attach is pending.
+      expect(catalogue).toMatchObject({ status: "ready" });
+      expect(catalogue).not.toHaveProperty("attachPending");
       const row = catalogue.commands.find(
         (command: { id: string }) => command.id === "pi:template:review",
       );
@@ -161,7 +172,14 @@ test.each([false, true])(
       expect(state.session).toBe(session);
       expect(state.commandPreview).toBeUndefined();
       expect(state.commandCatalogue.status).toBe("ready");
-      if (shadowed) {
+      if (change === "unchanged") {
+        expect(response.status).toBe(202);
+        expect(prompts).toEqual([{ text: `/review ${args}`, expandPromptTemplates: true }]);
+        expect(state.slashCommands.find((command) => command.id === row.id)?.bindingRevision).toBe(
+          row.bindingRevision,
+        );
+        expect(state.promptJournal.get("preview-first-prompt")?.state).toBe("accepted");
+      } else {
         expect(response.status).toBe(422);
         expect(await response.json()).toMatchObject({ kind: "command-unavailable" });
         expect(prompts).toEqual([]);
@@ -169,14 +187,14 @@ test.each([false, true])(
         expect(state.messages).toEqual([]);
         expect(state.dispatching).toBe(false);
         expect(state.promptClaim).toBeUndefined();
-        expect(state.slashCommands.map((command) => command.id)).toEqual(["pi:extension:review"]);
-      } else {
-        expect(response.status).toBe(202);
-        expect(prompts).toEqual([{ text: `/review ${args}`, expandPromptTemplates: true }]);
-        expect(state.slashCommands.find((command) => command.id === row.id)?.bindingRevision).toBe(
-          row.bindingRevision,
-        );
-        expect(state.promptJournal.get("preview-first-prompt")?.state).toBe("accepted");
+        if (change === "moved") {
+          // Same id, new binding: the selection's revision no longer matches.
+          const attached = state.slashCommands.find((command) => command.id === row.id);
+          expect(attached?.bindingRevision).toBeString();
+          expect(attached?.bindingRevision).not.toBe(row.bindingRevision);
+        } else {
+          expect(state.slashCommands).toEqual([]);
+        }
       }
     } finally {
       finish();

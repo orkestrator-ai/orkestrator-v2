@@ -2,15 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
+Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; tasks 1, 2 and 5 acted on 2026-11-09 against main at `c6de4733c5beb87a578f82a8548725305e1ff254`; task 1 run 2026-11-10 against main at `04639b12b`.
 
 ### Tasks
 
-1. **Run the evidence script on Linux Engine**: the topology where the subnets matter. Status: open.
-2. **Run it on rootless Docker with host loopback**: the peer is expected to be loopback. Status: open.
+1. **Run the evidence script on Linux Engine**: the topology where the subnets matter. Status: done 2026-11-10 (in the network namespace of `docker:disposable`'s nested rootful daemon on beelink's rootful Engine; every peer was decided as expected, no code change).
+2. **Run it on rootless Docker with host loopback**: the peer is expected to be loopback. Status: done 2026-11-09 (the peer is `127.0.0.1`; no new code needed).
 3. **Run the C22 live qualification case on Linux CI**: its filter now follows the scene's owner. Status: open.
 4. **Check Docker Desktop on Linux and Windows**: expected to match macOS. Status: open.
-5. **Decide whether the host firewall question still matters**: the report's second verification item. Status: open.
+5. **Decide whether the host firewall question still matters**: the report's second verification item. Status: done 2026-11-09 (closed: the gate answers it without a firewall).
 
 ### 1. Run the evidence script on Linux Engine
 
@@ -30,6 +30,87 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
     - Pros: repeats on every relevant PR on both architectures.
     - Cons: a new live case in a workflow that is already not a required check; task 3 already covers the path the backend uses.
 
+**Result (2026-11-09).** Not run that day (superseded by the 2026-11-10 result below). The build ran on beelink2
+(Linux 7.2.15, x86_64), but this account cannot reach the host daemon:
+`/var/run/docker.sock` is `root:docker` mode `0660`, the `docker` group has no
+members, and `docker.service` is inactive behind its socket unit, so every
+call (the qualification shim included) answers `permission denied`. Starting,
+reconfiguring or joining that daemon was out of scope. The disposable daemon
+already on main ([4730](4730-disposable-docker-daemon-for-live-suites.md)
+task 1) is rootless only, and on a rootless daemon the filter grants no
+subnets, so a run there is not Linux Engine evidence. What remains: run
+`mise exec -- bun apps/backend/scripts/agent-tools-peer-evidence.ts` once
+against a rootful Linux daemon whose bridges live in the script's own network
+namespace, which is either a host Engine the account may use or 4730's nested
+rootful mode (`docker:29-dind`, then still being built; merged in #2028) with the script run inside
+that namespace; then fill in the Linux Engine row of
+[Who may connect](../../architecture/container-lifecycle.md#who-may-connect).
+
+**Result (2026-11-10).** Done. The build ran on beelink (Omarchy, kernel
+7.1.8, x86_64), where this account can use the host's rootful Engine 29.9.2
+(`SecurityOptions` without `rootless`). [4730](4730-disposable-docker-daemon-for-live-suites.md)'s
+nested rootful mode gave the rootful daemon, so the script never created a
+network on the shared host daemon:
+
+```bash
+# PATH starts with apps/desktop/scripts/dev/docker-qualification-bin
+mise run docker:disposable -- start --mode rootful --name s6820rf
+# record: outerHost unix:///var/run/docker.sock, outerRootless false
+DOCKER_HOST=unix:///tmp/ork-ddd-1000-s6820rf/docker.sock docker pull <CONTAINER_HOST_PROBE_IMAGE>
+# the dind image's static docker CLI, for the runner
+docker cp ork-ddd-1000-s6820rf-<marker>:/usr/local/bin/docker output/s6820-runner/docker
+# the script, inside the nested daemon's own network namespace
+docker run --rm --network container:ork-ddd-1000-s6820rf-<marker> -u 1000:1000 \
+  -e HOME=/tmp -e DOCKER_HOST=unix:///tmp/ork-ddd-1000-s6820rf/docker.sock \
+  -e ORKESTRATOR_QUALIFICATION_DOCKER=/opt/s6820/docker \
+  -e PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:/opt/s6820:/usr/local/bin:/usr/bin:/bin" \
+  -v /tmp/ork-ddd-1000-s6820rf:/tmp/ork-ddd-1000-s6820rf -v "$PWD:$PWD:ro" \
+  -v "$PWD/output/s6820-runner/docker:/opt/s6820/docker:ro" -w "$PWD" \
+  --entrypoint bun oven/bun:1.4.4 apps/backend/scripts/agent-tools-peer-evidence.ts
+mise run docker:disposable -- stop --name s6820rf
+```
+
+The runner is an `oven/bun:1.4.4` container (the image `docker/` is built
+from) sharing the dind container's network namespace, so the server's
+`0.0.0.0` listener, `host-gateway` (the inner `docker0`, `10.213.0.1`) and
+the inner bridges are all in one namespace, as on a host. Start took 12.9 s
+including the dind pull. Inner daemon: Engine 29.9.3, Alpine Linux 3.24
+(containerized), no `rootless` option, `INPUT` policy `ACCEPT`.
+
+Observed, identical in both runs (ports 64731 and 53897):
+
+- `dockerRootless: false`; environment network `172.30.0.0/24`.
+- `containerSources` (`host-gateway`): environment network `172.30.0.2` and
+  default bridge `10.213.0.2` arrived **from their own addresses (admit)**
+  and got `HTTP/1.1 405 Method Not Allowed`. The unowned network's
+  `172.30.1.2` arrived as itself and was **refused**: busybox reported
+  `Connection reset by peer`, with no HTTP response.
+- Environment-container probe: `reachable`/405. Host check: `reachable`,
+  `dockerRootless: false`; its default-bridge and environment-network probes
+  `reachable`/405 (the probe network, `172.30.2.0/24`, was admitted while it
+  existed: the filter logged three subnets).
+- The host's own addresses, `172.17.0.2` (the dind container's outer
+  address) and the gateways `10.213.0.1`, `172.30.0.1` and `172.30.1.1`: all
+  closed with no bytes. Every one arrived from `172.17.0.2`, which no
+  admitted subnet covers: a local connection to a gateway address is
+  masqueraded by Docker's per-bridge `MASQUERADE` rule (for the default
+  bridge `-s 10.213.0.0/24 ! -o docker0`), since it leaves through `lo`.
+  Loopback: 405.
+- Admitted subnets `["10.213.0.0/24", "172.30.0.0/24"]`, then
+  `["10.213.0.0/24"]` after the environment network was removed
+  (`removal: removed`). Unresolved cleanup and every leftover list empty;
+  exit status 0.
+
+`stop` then removed the dind container, its volume, the runtime directory and
+the dind image it had pulled; nothing labelled
+`orkestrator-disposable-docker` was left on the host daemon. The busybox and
+`oven/bun:1.4.4` images were already on the host daemon and were left.
+Local evidence (git-ignored):
+`output/agent-testing/s6820/rootful-nested-host-outer.json` and
+`rootful-nested-host-outer-2.log`. The Linux Engine row of
+[Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
+now records this.
+
 ### 2. Run it on rootless Docker with host loopback
 
 **Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [0109](0109-rootless-linux-runtime-gaps.md)). The peer address the server then sees has not been observed.
@@ -47,6 +128,52 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
   - **Leave rootless refused and say so in the reachability verdict.**
     - Pros: no new code.
     - Cons: breaks agent tools on rootless hosts that work today.
+
+**Result (2026-11-09).** Done on a disposable rootless daemon on beelink2:
+`mise run docker:disposable -- start --name s6820-loop --host-loopback`
+(Engine 29.9.2 linux/amd64, RootlessKit 3.3.0, slirp4netns 1.3.3, pool
+`172.30.0.0/16`), the pinned busybox pulled into it, and the evidence script
+run with that `DOCKER_HOST` and the qualification shim first on `PATH`. The
+script now reads Docker info's security options and, on a rootless daemon,
+runs the three sources a second time with `host.docker.internal` naming
+`10.0.2.2` (`rootlessHostLoopbackSources`), as the backend does after its
+check. Observed:
+
+- `dockerRootless: true`.
+- `containerSources` (`host-gateway`): all three containers
+  (`172.30.1.2`, `172.30.0.2`, `172.30.2.2`) got `can't connect to remote host
+  (172.30.0.1): Connection refused`; the server saw no peer.
+- `rootlessHostLoopbackSources` (`10.0.2.2`): environment network, default
+  bridge and unowned network all arrived as **`127.0.0.1 (admit)`** and got
+  `HTTP/1.1 405 Method Not Allowed`.
+- Environment-container probe: `refused` through `host-gateway`,
+  `reachable`/405 through `10.0.2.2`. Host check: `reachable`,
+  `dockerRootless: true`, `hostAddress: 10.0.2.2`; its two `host-gateway`
+  probes `refused`, its two `10.0.2.2` probes `reachable`/405.
+- The host's LAN (`192.168.4.61`) and tailnet (`100.64.228.48`) addresses:
+  closed with no bytes, refused by the gate. Loopback: 405.
+- Admitted subnets `[]` before and after the environment network was
+  removed (`removal: removed`); unresolved cleanup and every leftover list
+  empty. The daemon was then stopped and removed.
+
+The peer is loopback, so the recommended branch above is not needed: the
+filter stays loopback-only on rootless and no RootlessKit address is
+admitted. A second run of the final script on a fresh daemon
+(`s6820-final`) gave the same result field for field, exit status 0. Local
+evidence (git-ignored):
+`output/agent-testing/s6820/rootless-slirp4netns-host-loopback.json` and
+`rootless-slirp4netns-host-loopback-final.json` beside it.
+
+A second run on the same launcher with `--net gvisor-tap-vsock
+--host-loopback` saw `10.0.2.2` answer `Host is unreachable` from every
+container and the host check report `blocked`; no peer reached the server, so
+the gate decided nothing there (evidence:
+`output/agent-testing/s6820/rootless-gvisor-host-loopback.json`). A direct
+check on that driver, a busybox container calling a plain host listener,
+found its host loopback at `10.0.2.1`, seen by the host as `127.0.0.1` with
+host loopback on and timing out with it off; `10.0.2.2` timed out either
+way. So the gate would admit that driver's peer too, but the backend never
+probes `10.0.2.1`: [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md).
 
 ### 3. Run the C22 live qualification case on Linux CI
 
@@ -101,6 +228,18 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`.
   - **Also bind per-gateway listeners so nothing on the LAN accepts at all.**
     - Pros: invisible to a scan.
     - Cons: the report's rejected option: listeners follow networks, and ports must be free on each.
+
+**Result (2026-11-09).** Closed with the recommended option. The question was
+whether a typical host's firewall already hides the port; the gate now makes
+the answer irrelevant. On beelink2 the reachability check found ufw enabled
+with a default incoming policy of DROP, and the gate still refused the host's
+own LAN and tailnet addresses itself (closed, no bytes) in both task 2 runs,
+which is the behaviour a host without a firewall gets. The residual exposure
+(a port scan sees the handshake complete before the close) is accepted and
+written into
+[Who may connect](../../architecture/container-lifecycle.md#who-may-connect),
+together with why per-gateway listeners stay rejected. No host survey or code
+change follows.
 
 ## Assumptions and decisions
 
@@ -171,9 +310,86 @@ all leftover lists were empty. Evidence is in
 `output/agent-testing/s0170-address-r4/desktop-peer-evidence.json` (git-ignored).
 This run does not establish the outstanding Linux topologies.
 
+### Task 2: what the evidence script measures on rootless (2026-11-09)
+
+The script's original `containerSources` use `host-gateway`, which on a
+rootless daemon names RootlessKit's own bridge, so they can only show a
+refusal. The task asked for a `10.0.2.2` container when those fail. The
+script now detects a rootless daemon from Docker info's `SecurityOptions`,
+using the same `ROOTLESS_SECURITY_OPTION` pattern the production filter uses
+(exported from `agent-tools-peer-filter.ts`), and repeats the three sources
+and the environment-container probe through `10.0.2.2`. It also reports the
+host check's `hostAddress` and each probe's target. Alternative considered:
+a manual `docker run --add-host host.docker.internal:10.0.2.2` beside the
+script. It would not record what the server saw, which is the point of the
+task. `tests/agent-tools-peer-evidence.test.ts` covers the detection.
+
+### Task 2: no RootlessKit permission (2026-11-09)
+
+The recommended decision was conditional on a non-loopback peer. The peer was
+`127.0.0.1` for every source, so the filter keeps granting no subnets on
+rootless. Adding a permission anyway would admit addresses in RootlessKit's
+namespace that, as the filter's comment says, cannot identify a container on
+the host.
+
+### Task 2: gvisor-tap-vsock is a reachability question, not a gate one (2026-11-09)
+
+Docker's `dockerd-rootless.sh` 29.9.2 picks slirp4netns when it is installed,
+then pasta, then vpnkit, and falls back to gvisor-tap-vsock. This host has
+slirp4netns (through the launcher) but no pasta or vpnkit, so slirp4netns is
+task 2's evidence, and gvisor-tap-vsock was checked as well. Its host
+loopback address is `10.0.2.1`, and through it the peer is `127.0.0.1`, which
+the gate admits without new code. What fails is the backend's reachability
+check, which only tries `10.0.2.2` and then shows a remediation (enable host
+loopback) that cannot help. That is outside this gate and outside tasks 1, 2
+and 5, so it became follow-up
+[7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) rather than a change
+here.
+
+### Task 1: left open rather than run on a substitute (2026-11-09; superseded 2026-11-10)
+
+The disposable rootless daemon could run the script, but the filter grants no
+subnets on rootless, so it would exercise loopback admission again rather
+than the subnet path task 1 exists to prove. Running the script inside
+RootlessKit's namespace would be refused for the same reason. Task 1 was
+left for a rootful daemon a build could reach instead of counting a
+substitute; the 2026-11-10 run below used 4730's nested rootful mode.
+
+### Task 1: run in the nested daemon's namespace, on a rootful outer (2026-11-10)
+
+The nested daemon's bridges, `host-gateway` and NAT live in the dind
+container's network namespace, so the script had to run there to see what a
+host process sees. Options: run it in a container on the **outer** daemon
+with `--network container:<dind>` (chosen), or in a `--network host`
+container on the **inner** daemon, as 5510 did. The chosen form needs only
+`oven/bun:1.4.4` (already on the host) and the dind image's static CLI, not a
+6 GB qualification image copied into the inner daemon; both put the server in
+the same namespace. Running the script directly against the host's own
+Engine was possible on beelink but not chosen: the ticket asked for the
+disposable daemon, and it keeps the script's networks off a daemon other
+builds share. The outer daemon was the host's rootful Engine
+(`outerRootless: false`), so the nested daemon is root in the initial user
+namespace, unlike 5510's run inside a rootless outer daemon; that makes this
+a privileged dind on a rootful host, the topology 4730 task 4 asks about, but
+only the launcher's start and stop were observed for that task.
+
+### Task 1: no code change (2026-11-10)
+
+Every source was decided as the design expected: owned and default-bridge
+peers admitted by subnet, the unowned network and the host's own addresses
+refused, the list shrinking when the network went. Nothing in the filter
+changes.
+
+### Task 5: closed without a host survey (2026-11-09)
+
+Recorded as the recommended option: the gate closes outside peers itself, as
+both 2026-11-09 runs showed on a host whose ufw drops incoming traffic by
+default. The rejected alternative (per-gateway listeners) keeps the reasons
+the report gave. The doc now states the accepted residual exposure.
+
 ## Current state
 
-Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS only. What is left needs a Linux host.
+Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS, on 2026-11-09 on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`), and on 2026-11-10 on rootful Linux Engine (`docker:disposable`'s nested rootful daemon on beelink's rootful Engine), where containers arrive from their own addresses and are admitted by their network's subnet. What is left is the C22 case on Linux CI (task 3) and Docker Desktop for Linux (task 4).
 
 The 2026-11-06 review fixes measure freshness and failure backoff from read
 completion. Null reads warn and clear permissions. Inspect failures other than

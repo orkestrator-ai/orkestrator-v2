@@ -22,6 +22,7 @@ import {
   withoutDisplay,
 } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * The desktop's relay of another node's events through the real main process,
@@ -126,14 +127,12 @@ test("main takes a node's relayed events only for the windows listening", async 
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...(headless ? withoutDisplay(process.env) : process.env),
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
         HOME: temporaryRoot,
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;

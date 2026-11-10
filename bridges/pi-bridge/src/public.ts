@@ -7,6 +7,7 @@
  * this boundary.
  */
 import {
+  appendNativeAgentPolicyNote,
   withoutProviderSandbox,
   type BridgePromptDispatchStatus,
   type NativeAgentContextUsage,
@@ -18,6 +19,10 @@ import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-windo
 import { publicComposer } from "./compaction-controls.js";
 import { MAX_REQUEST_ID_BYTES, PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
+import {
+  PROJECT_EXTENSIONS_REFUSED_NOTE,
+  projectExtensionsRefusedForApprovals,
+} from "./project-extensions.js";
 import {
   isPendingRemoval,
   piRunId,
@@ -35,15 +40,20 @@ import {
  * sandbox and a restriction it would hold are reported as what actually
  * applies. Only the approval gate can keep commands off the network: a
  * read-only session or a `deny` policy refuses every command it would run.
+ * An `ask` session with project resources on loads no extensions, and its
+ * note says why (`project-extensions.ts`).
  */
 export function piReportedPolicy(
   policy: NativeAgentExecutionPolicy,
   readOnly: boolean | undefined,
 ): NativeAgentExecutionPolicy {
-  return withoutProviderSandbox(policy, {
+  const reported = withoutProviderSandbox(policy, {
     agent: "Pi",
     toolsetBlocksNetwork: readOnly === true || policy.approvals === "deny",
   });
+  return projectExtensionsRefusedForApprovals(policy, readOnly === true)
+    ? appendNativeAgentPolicyNote(reported, PROJECT_EXTENSIONS_REFUSED_NOTE)
+    : reported;
 }
 
 export function publicSession(state: SessionState): JsonObject {

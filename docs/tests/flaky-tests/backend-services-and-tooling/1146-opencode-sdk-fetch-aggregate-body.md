@@ -1,7 +1,7 @@
 # openCodeSdkFetch read another body in the aggregate
 
 - **ID:** 1146
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-27, todo 0223 branch validation
 - **Test:** `openCodeSdkFetch > charges one provider request per call to the job that made it`
 - **File:** `apps/backend/src/core/opencode-sdk-fetch.test.ts:19`
@@ -92,3 +92,36 @@ Status stays open. The wrong bodies (`{}`, `{"error":"Unauthorized"}`, and `unde
 - An in-process probe ruled out a pooled keep-alive connection to an earlier server on the same port: a fetch after `old.stop()` and a rebind of the port reached the new server.
 
 Not checked: a keep-alive connection to a server in a different process that stops listening but keeps serving open connections, and a sibling file's `HTTP_PROXY`/`http_proxy` (Bun's `fetch` honours them, and `process.env` is per worker process). Next step: when it recurs, record the worker's environment proxy variables and which other files that worker ran.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** the fixtures listened with `Bun.serve({ port: 0 })`, which
+  binds the dual-stack wildcard, while the requests went to
+  `127.0.0.1:<port>`. On macOS a wildcard listener and another process's
+  `127.0.0.1` listener can hold the same port at once, and a connection to
+  `127.0.0.1` reaches the more specific one. The kernel picks a `port: 0`
+  wildcard port without regard to IPv4 `127.0.0.1` listeners, so in a busy
+  aggregate the fixture could be given a port a sibling worker's server
+  already held on `127.0.0.1` (or the reverse), and its requests were
+  answered by that server: the recorded `{}`, `{"error":"Unauthorized"}` and
+  missing `data` bodies. The 2026-11-06 investigation ruled port sharing out
+  on Linux, where the two binds conflict.
+- **Fix:** `opencode-sdk-fetch.test.ts` binds every fixture to `127.0.0.1`
+  (`hostname: HOST`) and requests that same address, so the kernel refuses
+  or avoids a port another `127.0.0.1` listener holds. No assertion changed.
+  Other suites use the same `port: 0` plus `127.0.0.1` pattern; they are not
+  changed here.
+- **Reproduced:** yes, as a held-port reproduction of the mechanism on this
+  macOS host (Bun 1.4.x): with one process serving `Bun.serve({ port: 0 })`,
+  a second process bound `127.0.0.1` on the same port and a `fetch` of
+  `http://127.0.0.1:<port>/session` returned the second server's `{}`. In the
+  reverse order, a wildcard bind on a port held by a `127.0.0.1` server that
+  answers `{"error":"Unauthorized"}` succeeded and its fetch returned
+  `{"error":"Unauthorized"}`, while the fixed shape (`hostname:
+  "127.0.0.1"`) failed to bind (`Is port <port> in use?`). The aggregate
+  collision itself depends on the kernel's random port choice and was not
+  forced; the recorded observations did not name their platform.
+- **Stress:** `mise run test:logged -- --name stress-opencode-sdk-fetch --
+  bun scripts/test-under-contention.ts -- bun test --cwd apps/backend
+  --preload ../../tests/setup-node.ts ./src/core/opencode-sdk-fetch.test.ts
+  --rerun-each=50` passed (macOS, host load ~35 to 55).

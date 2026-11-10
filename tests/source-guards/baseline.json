@@ -1,11 +1,11 @@
 {
   "sleep-before-negative-assertion": {
     "apps/backend/src/core/agent-accounts-login.test.ts": 1,
-    "apps/backend/src/core/agent-mail-service.test.ts": 2,
+    "apps/backend/src/core/agent-mail-service.test.ts": 1,
     "apps/backend/src/core/backend-runtime.test.ts": 2,
     "apps/backend/src/core/build-pipeline-key-information.test.ts": 2,
     "apps/backend/src/core/change-tracking/object-store-write-path.test.ts": 2,
-    "apps/backend/src/core/change-tracking/review-regressions.test.ts": 2,
+    "apps/backend/src/core/change-tracking/review-regressions.test.ts": 1,
     "apps/backend/src/core/commands-agent-tools.test.ts": 3,
     "apps/backend/src/core/commands-environment-cleanup.test.ts": 1,
     "apps/backend/src/core/commands-merge-cleanup-recovery.test.ts": 4,
@@ -191,7 +191,6 @@
     "apps/backend/tests/container-bridge-credential.test.ts": 2,
     "apps/backend/tests/container-live-replacement.test.ts": 1,
     "apps/backend/tests/opencode-mcp-reload-live.test.ts": 2,
-    "apps/backend/tests/project-git-mirror.integration.test.ts": 1,
     "apps/desktop/scripts/dev/agent-tools-port.test.ts": 1,
     "apps/desktop/scripts/dev/profile-io.test.ts": 1,
     "apps/desktop/tests/backend-process.test.ts": 1,

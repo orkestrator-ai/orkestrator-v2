@@ -1,3 +1,4 @@
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "@orkestrator/protocol/agent-account-shared-usage";
 import { nodeSummaryChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import type { BackendEmit } from "../backend-emit.js";
 import {
@@ -88,6 +89,7 @@ export interface ReadModelPersistence {
 
 /** Event prefixes the read model needs from each node. */
 export const NODE_SUMMARY_EVENT_PREFIXES = [
+  AGENT_USAGE_READINGS_CHANGED_EVENT,
   RESOURCE_CHANGED_EVENT,
   BACKEND_PROFILE_CHANGED_EVENT,
   "node-",

@@ -1,9 +1,11 @@
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
 import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
 import { useEffect, useState, useRef } from "react";
+import { Loader2 } from "lucide-react";
 import type { AutoPipelineDraft, AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -84,6 +86,7 @@ export function AutoPipelineLaunch({
     if (busy || !selected || selected.disabledReason) return;
     const request = ++generation.current;
     draftingTab.current = tabId;
+    setDraft(null);
     setBusy(true);
     setOpen(true);
     setError(null);
@@ -135,28 +138,35 @@ export function AutoPipelineLaunch({
   }
   if (!sources?.available || !sources.sources.length) return null;
   return (
-    <section className="mx-5 my-4 rounded-lg border border-divider p-4">
-      <h3 className="font-semibold">Auto-pipeline</h3>
-      <p className="mb-3 text-xs text-muted-foreground">
+    <section className="mx-5 mt-5 rounded-lg border border-divider p-4 sm:mx-6">
+      <h3 className="text-sm font-semibold">Auto-pipeline</h3>
+      <p className="mb-3 text-xs text-zinc-500">
         Turn finished work into a ticket and continue from Review through verification and delivery.
         Review the draft before anything is created.
       </p>
-      <label className="block text-sm">
-        Build transcript
-        <select
+      <div className="flex min-w-0 items-center gap-2">
+        <label
+          htmlFor={`auto-pipeline-source-${environmentId}`}
+          className="shrink-0 text-xs font-medium text-zinc-400"
+        >
+          Build transcript
+        </label>
+        <NativeSelect
+          id={`auto-pipeline-source-${environmentId}`}
           aria-label="Build transcript"
+          size="sm"
+          wrapperClassName="flex-1"
           value={tabId}
           disabled={busy}
           onChange={(event) => setTabId(event.target.value)}
-          className="mx-2 rounded border bg-background p-2"
         >
           {sources.sources.map((source) => (
             <option key={source.tabId} value={source.tabId}>
               {source.label}
             </option>
           ))}
-        </select>
-      </label>
+        </NativeSelect>
+      </div>
       {selected?.disabledReason && (
         <p role="status" className="my-2 text-xs text-muted-foreground">
           {selected.disabledReason}
@@ -177,6 +187,7 @@ export function AutoPipelineLaunch({
         }}
       >
         <DialogContent
+          aria-busy={busy}
           className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]"
           onEscapeKeyDown={(event) => {
             const editor = descriptionEditor.current;
@@ -194,8 +205,13 @@ export function AutoPipelineLaunch({
             </DialogDescription>
           </DialogHeader>
           {busy && (
-            <p role="status">
-              {draft ? "Promoting environment…" : "Drafting ticket and Build notes…"}
+            <p role="status" className="flex items-center gap-2 text-sm">
+              <Loader2
+                aria-hidden="true"
+                data-testid="auto-pipeline-spinner"
+                className="size-4 shrink-0 animate-spin text-primary"
+              />
+              <span>{draft ? "Promoting environment…" : "Drafting ticket and Build notes…"}</span>
             </p>
           )}
           {error && <p role="alert">{error}</p>}
@@ -326,7 +342,6 @@ export function AutoPipelineLaunch({
                   variant="outline"
                   disabled={busy}
                   onClick={() => {
-                    setDraft(null);
                     void generate();
                   }}
                 >

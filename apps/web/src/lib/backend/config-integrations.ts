@@ -447,12 +447,13 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   /** Read one platform's plan/quota windows from the backend. */
   async function getPlanUsage(
     platform: AgentPlatform,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; cacheOnly?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
     return accountsOn_(machine).get_plan_usage({
       platform,
       ...(options.force ? { force: true } : {}),
+      ...(options.cacheOnly ? { cacheOnly: true } : {}),
     });
   }
 

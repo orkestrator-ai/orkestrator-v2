@@ -58,8 +58,10 @@ import {
   tryOpenNodeDelegation,
   tryOpenCoordinatorDelegation,
   coordinatorNodeRefused,
+  coordinatorScopeTurnOrigin,
   type ControlMcpToolContext,
 } from "./control-mcp-tools-shared.js";
+import { createCoordinatorMailOriginPrompt } from "@orkestrator/protocol/review-evidence-frames";
 
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
 const TERMINAL_TAB_TYPES = new Set([
@@ -625,12 +627,17 @@ export function registerPromptTool(
       const layout = await inv<unknown>("get_pane_layout", { environmentId });
       const native = nativeTab(layout, tabId);
       if (!native) throw new Error(`Native agent tab not found: ${tabId}`);
+      // From a turn the user did not start, the worker is told so, as mail is.
+      const framed =
+        coordinatorScope && (await coordinatorScopeTurnOrigin(invoke, coordinatorScope)) === "mail"
+          ? createCoordinatorMailOriginPrompt(prompt).source
+          : prompt;
       const intent = {
         environmentId,
         agent: native.agent,
         logicalSessionKey: `env-${environmentId}:${tabId}`,
         requestId,
-        prompt,
+        prompt: framed,
         ...(conversationMode ? { mode: conversationMode } : {}),
       };
       const outcome = target

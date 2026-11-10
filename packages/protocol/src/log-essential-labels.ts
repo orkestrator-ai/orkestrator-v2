@@ -113,6 +113,15 @@ const SIGNALS = new Set([
   "SIGXFSZ",
 ]);
 const PROVIDERS = new Set(["claude", "codex", "opencode", "cursor", "grok", "acp", "pi"]);
+/** `container-bridge-listener.ts`'s refusal reasons. */
+const BRIDGE_LISTENER_REASONS = new Set([
+  "different-socket",
+  "several-sockets",
+  "pending",
+  "scan-incomplete",
+  "no-listener",
+  "launch-exited",
+]);
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const SOURCE = new RegExp(`^(?:claude|codex|opencode|cursor|grok|acp|pi):${UUID}$`, "i");
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -208,6 +217,13 @@ export function isEssentialLabel(
   }
   if (area === "docker" && event === "bridge.launched" && field === "provider")
     return PROVIDERS.has(value);
+  if (
+    area === "docker" &&
+    (event === "bridge.listener-refused" || event === "bridge.listener-unrecorded")
+  ) {
+    if (field === "provider") return PROVIDERS.has(value);
+    if (field === "reason") return BRIDGE_LISTENER_REASONS.has(value);
+  }
   if (area === "logging" && field === "owner") return value === "desktop" || value === "backend";
   if (area === "logging" && event === "entries.dropped" && field === "reason")
     return ["queue-full", "write-failed", "rate-limited"].includes(value);

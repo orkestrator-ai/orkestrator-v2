@@ -60,6 +60,7 @@ import {
 } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { openDesignWindow, runDesignCanvasJourney } from "./design-canvas-electron-journey";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -133,14 +134,13 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
         path.join(packageRoot, "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...(headless ? withoutDisplay(process.env) : process.env),
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
         // Never contend for the fixed control-MCP port an installed app may own.
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;

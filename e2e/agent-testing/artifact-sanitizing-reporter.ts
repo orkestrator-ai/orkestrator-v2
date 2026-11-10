@@ -1,5 +1,5 @@
 import type { FullConfig, Reporter } from "@playwright/test/reporter";
-import { sanitizeRunArtifacts } from "./global-teardown";
+import { sanitizeRunArtifacts, type ArtifactSuite } from "./global-teardown";
 import { networkChurnReport } from "./network-churn-report";
 
 /**
@@ -11,9 +11,9 @@ import { networkChurnReport } from "./network-churn-report";
  * `onExit` runs after every reporter's `onEnd`. List this reporter last.
  */
 export default class ArtifactSanitizingReporter implements Reporter {
-  private readonly suite: "browser" | "coordinator" | "goals";
+  private readonly suite: ArtifactSuite;
 
-  constructor(options: { suite?: "browser" | "coordinator" | "goals" } = {}) {
+  constructor(options: { suite?: ArtifactSuite } = {}) {
     this.suite = options.suite ?? "browser";
   }
 

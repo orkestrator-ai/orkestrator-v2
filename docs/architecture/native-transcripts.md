@@ -214,6 +214,57 @@ each part; anything that does not line up (a missing message, an index out of
 range, a part digest or length that differs) rejects the whole delta and the
 client falls back to a snapshot. Other clients keep whole-message deltas.
 
+### Response encoding
+
+Four transcript reads mark their result (`markSpliceableResult`), and the
+gateway writes those with `spliceEncodedJson`, copying each row's memoised
+JSON instead of serialising it again: `get_native_agent_transcript_update`,
+`get_native_agent_live_update`, `get_native_agent_projection_update` and
+`get_native_agent_message_page`. The output is byte-identical to
+`JSON.stringify`; anything that is not a plain object or array is serialised
+whole.
+
+The legacy `get_native_agent_projection` is deliberately not marked. Measured
+on 2026-11-10 with the changed-read benchmark (`legacy-spliced` against
+`legacy`), splicing its whole-session projection cost more CPU per
+read than `JSON.stringify` on every row shape the benchmark has: about
+600 µs against 450 to 500 µs on the 100-row, 430 KB window. The row copy is a
+small win, but the walk over the projection's many other fields runs in
+JavaScript, and the gateway sizes the joined body, which copies it again.
+`commands-registry-native-splice.test.ts` pins which commands are marked;
+re-measure before marking another. The same probe found the marked commands'
+snapshot responses slower than `JSON.stringify` for rows of a few KiB; that is
+[to-do 7553](../todo/transcripts-and-observation/7553-transcript-splice-slower-on-large-rows.md).
+
+### Incomplete previews and exact recovery
+
+A provider window marked `complete: false` is either a genuine remainder
+(the provider bounded it by count or bytes) or a hydration hole (a two-row
+preview of a longer session). When the preview has fewer rows than the live
+window (100), no omitted parts, and is neither a summary nor a view that
+adopted the provider's page cursor, the backend asks whether its raw rows
+already reach the window's 512 KiB target. If they do not, it schedules one
+exact `messages` read in the background, at most once a second per view.
+
+Answering that serialises the provider's raw rows, inline tool output
+included, which are fresh objects on every read. It cost about 110 µs of a
+370 to 440 µs changed read on a 60-row, 500 KB window (benchmark
+`short-incomplete`). The answer is remembered per view under the provider's
+token (`native-agent-preview-fill.ts`), so a view polled while nothing changes
+measures its window once per revision: an interactive-snapshot provider polled
+at one revision went from about 320 to about 200 µs of CPU per read
+(`short-incomplete-idle`). Only a token that changes whenever the rows do is
+trusted, the bridge's `sourceToken` or a derived token carrying the provider's
+revision; a token made only of the row count and edge ids stays the same
+while a streaming tail grows, so that preview is measured on every read. With
+a derived revision token, only true answers are reused: a false answer is
+remeasured because a short tail can grow past the byte target before the
+revision advances. Explicit source tokens still cache both answers. A
+recovery already scheduled for the same token is checked first and skips the
+measurement altogether. Measuring row by row with an early stop was tried and
+was about 15 µs slower under the target, the only side a byte-cutting bridge
+produces, so the window is measured whole.
+
 ### Deferred display bodies
 
 The projection moves every tool output, error and diff body behind a
@@ -276,8 +327,8 @@ flight. A part that throws answers `unavailable`, as its own command would.
 Discovery is not in the round (`NativeDiscoveryReadSchedule`,
 `native-session-read-policy.ts`). A section refreshes only when a read finds it
 expired, 30 s after its last refresh, and the backend announces a refresh that
-changed anything (`discovery-renewal`, `discovery-deadline`, `command-catalog`
-and the model catalogue causes). So a view reads discovery on those causes, on a
+changed anything (`discovery-renewal`, `discovery-deadline`, `command-catalog`,
+`mcp-action` and the model catalogue causes). So a view reads discovery on those causes, on a
 change with a cause it cannot place, on mount, a session change, a resync, a
 resume or reconnect, a phase change, an explicit read, and while a section is
 still `loading` or `stale` (2 s) or `unavailable` (5 s). A 30 s backstop with the
@@ -290,6 +341,26 @@ Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
 (`native-agent-progressive-metrics.ts`). They hold durations only, never
 payloads or session identifiers.
+
+### After an MCP server action
+
+An MCP server action from the Agent Info panel (reconnect, enable, disable,
+sign-in; `performProjectionMcpAction`) invalidates the session's projection,
+which also drops its cached discovery sections. That alone tells no open
+view: the panel kept the row it had (a reconnected server still `failed`)
+until its 30 s backstop, and that read found the MCP section dropped
+(`loading`, no value) and kept the old row for another round (todo 7221).
+
+So the action then re-reads the session's MCP list once
+(`refreshMcpAfterAction` in `native-agent-transcript-projection.ts`), stores
+it as a `ready` section, and announces `mcp-action`, a cause that names
+discovery. The open view reads discovery on that announcement and gets the
+acted-on row straight away. Claude's bridge stores the probe's or the live
+control's status before it answers the action (`performSessionMcpAction`), so
+that read is the list the user acted on, and it spawns nothing: it asks the
+running CLI or returns the bridge's retained inventory. A failed read still announces, so the view reads again and schedules the
+ordinary discovery job; an identity change while the read is in flight
+(a newer epoch) discards it, as it does every discovery job.
 
 ## Restart previews (display tails)
 
@@ -400,3 +471,8 @@ fixtures and reports exact operation counts: unchanged reads, bridge windows,
 projection, history paging, deltas, progress probes, pipeline checkpoints and
 display-tail checkpoint age. See
 [efficiency-harness.md](../development/efficiency-harness.md).
+
+`scripts/benchmark-transcript-changed-read.ts` times one changed progressive
+read in process against a provider fake (CPU, wall time, and the characters
+serialised and hashed), plus the legacy `getProjection` read encoded both
+ways. Its scenarios and how to compare two commits are in the script's header.

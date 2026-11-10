@@ -253,6 +253,47 @@ describe("discovery leaves the 500 ms round", () => {
     await waitFor(() => expect(discoveryReads()).toBe(mounted + 2));
   });
 
+  test("an MCP action's change reads it and shows the re-read row (todo 7221)", async () => {
+    // A reconnect from the Agent Info panel brought a failed server up, and
+    // the open view kept the row failed until its 30 s backstop.
+    const mcpDiscovery = (status: "failed" | "connected"): NativeAgentDiscoveryUpdate => ({
+      viewVersion: 1,
+      status: "snapshot",
+      token: `discovery-mcp-${status}`,
+      value: {
+        identity,
+        sections: {
+          mcp: {
+            availability: "ready",
+            value: [{ id: "late", name: "late", status, actions: ["reconnect"] }],
+            revision: 1,
+          },
+        },
+      },
+    });
+    let mcpStatus: "failed" | "connected" = "failed";
+    getNativeAgentDiscoveryUpdateMock.mockImplementation(async () => mcpDiscovery(mcpStatus));
+    try {
+      installFakeReadCoordinator();
+      const view = await settledSession();
+      await waitFor(() =>
+        expect(view.result.current.projection?.runtime?.mcp?.[0]?.status).toBe("failed"),
+      );
+      const mounted = discoveryReads();
+
+      mcpStatus = "connected";
+      dispatchResourceChange(changeFor(1, "mcp-action"));
+      await waitFor(() => expect(discoveryReads()).toBe(mounted + 1));
+      await waitFor(() =>
+        expect(view.result.current.projection?.runtime?.mcp?.[0]?.status).toBe("connected"),
+      );
+    } finally {
+      getNativeAgentDiscoveryUpdateMock.mockImplementation(
+        async () => discoveryReady() as NativeAgentDiscoveryUpdate,
+      );
+    }
+  });
+
   test("an environment-wide catalogue change reaches every view of it", async () => {
     installFakeReadCoordinator();
     await settledSession();

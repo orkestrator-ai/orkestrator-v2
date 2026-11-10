@@ -10,7 +10,8 @@ namespace), their per-file lock files and five-deep backup ladders.
 | File | Purpose |
 | --- | --- |
 | `apps/backend/src/core/storage-database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
-| `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing |
+| `apps/backend/src/core/storage-database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
+| `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-retired-features.ts` | The migration that removes data of retired features (Looped Review) |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
@@ -68,11 +69,12 @@ the change journal.
 | `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
 | `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
 | `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
-| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention |
+| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage-agent-mail-deletion.ts`) |
 | `AgentMailboxDirectory` | `storage-agent-mail-directory.ts` | Mailbox synchronisation from pane layouts and coordinators, descriptors and snapshots, mailbox policy |
 | `AgentMailInjects` | `storage-agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
 | `AgentMailBudgets` | `storage-agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
 | `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
+| `KanbanSyncRepository` | `storage-kanban-sync-repository.ts` | Kanban sync across machines ([tickets.md](tickets.md#sync-across-machines)), reached as `storage.ticketSync`; shares `KanbanBoardStore` (`storage-kanban-board.ts`: the Kanban lease, its reads and the commit that stamps each change for sync) with `KanbanRepository` |
 | `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
 | `NodesRepository` | `storage-nodes.ts` | Command-node stores |
 | `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
@@ -105,7 +107,13 @@ costs one revision query and a send re-parses about three rows instead of
 every mailbox. Read-modify-write paths still take a mutable copy with `load()`
 inside `enqueue`. The 32 MiB limit is checked on the serialized rows the save
 writes anyway (`maxBytes` on `saveSensitiveJson`), not by serializing the
-store a second time.
+store a second time. Deleting an environment's mail plans its change from
+`snapshot()` under the lease and commits only the rows it changes
+(`saveRows`, through `updateStoreRows`): the removed mailboxes and idempotency
+records, the rewritten mailboxes, the new counterparts, and the envelope's
+revision and inject queue. A change that shrinks the store always commits, even
+past the limit. Inside an atomic scope, or while a retired JSON copy of the
+store remains, it falls back to `load()` and `save()`.
 
 Every repository takes the one `StorageContext` (`this.context`), the
 `StorageFiles` path helpers (`this.files.kanbanFile()`) and the
@@ -202,15 +210,26 @@ revision. An array that cannot be keyed (a duplicate or missing key) is stored
 whole as a document; the row layout returns on the next keyable write.
 
 Rows carry an optional indexed `owner` (`projectId` for environments and
-Kanban, `environmentId` for sessions). `loadStoreRowsByOwner` reads one
-project's board or one environment's sessions without assembling the store,
-and `loadStoreRow` reads one row by key the same way.
+Kanban, `environmentId` for sessions and native agent sessions).
+`loadStoreRowsByOwner` reads one project's board or one environment's sessions
+without assembling the store, and `loadStoreRow` reads one row by key the same
+way. `listStoreRowKeysByOwner` lists one owner's keys without reading a value,
+plus the store's rows that have no owner, for the caller to check.
+
+Native agent sessions gained their owner after rows existed, and an older build
+sharing the directory writes rows without one. At every open
+`backfillNativeAgentSessionOwners` gives those rows their environment in one
+transaction, changing no value and no schema version. Rows with no owner have a
+partial index of their own (`store_rows_unowned_native_agent_sessions`, from
+`unownedRowIndexes`), so finding them reads only them; the backfill keeps it
+empty apart from unreadable records.
 
 `store_rows_position` indexes `(store, collection, position)`, so an insert's
 next position (`max(position) + 1` of its collection) is one index lookup
 rather than a scan of the collection. It changes no stored value, so
 `StorageDatabase` creates it on open instead of through a numbered migration:
 the schema version does not move and an older build still opens the database.
+The unowned-row partial indexes are created the same way.
 
 Each store row records its layout, so `assembleStoredValue` rebuilds the value
 without the registry. Scripts use `readStorageDatabaseStore`, which opens the
@@ -240,6 +259,13 @@ from that.
   `updateSensitiveStoreRow` is the same for a record store holding sensitive
   content: it also prunes what the row's new value drops from the retired JSON
   archive, as `saveSensitiveJson` does (see "Retired JSON archive").
+- **`updateStoreRows(file, rows, { document, maxBytes })`**: several rows of a
+  record store or of an envelope's collections, and an envelope's document, in
+  one transaction that neither parses nor reserializes the other rows. It
+  commits a change planned from an earlier read, so like a whole-value save it
+  runs inside the store's lease, and the writer guard counts it with them. It
+  answers `false` (the caller saves the whole value) inside an atomic scope,
+  while a retired JSON copy remains, or for a store held as a document.
 - **`serialize(target, description, operation, options)`**: an
   asynchronous critical section. An in-process FIFO per target plus a
   cross-process **lease** in the `leases` table (owner token and heartbeat;
@@ -261,8 +287,9 @@ from that.
   key's unreadable record; another key's bad row is neither read nor rewritten.
   The value is a fresh parse, never a frozen snapshot object. Whole-store loads
   remain for what walks the store and holds no key's lease: the owner migration,
-  the catalogue list, the environment sweep's key search and a store held as a
-  document. Order: the service's per-key work fence, then the session
+  the catalogue list and a store held as a document. The environment sweep
+  finds its keys by owner (above), and loads the store whole only when it is
+  held as a document or buffered by an atomic scope. Order: the service's per-key work fence, then the session
   lease, then leaf leases (prompt queue, display tails); never hold two
   session leases at once. Deleting an environment's sessions takes each key's
   lease in turn, and inserts check the environment's deletion tombstone inside
@@ -447,6 +474,24 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+- "Survives a crash" means an application or operating-system crash. Whether a
+  commit also survives sudden power loss depends on the platform's sync call.
+  On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
+  on macOS 27.2), and a FULL commit there calls plain `fsync`, which does not
+  flush the drive's write cache, so a power cut can lose the last commits
+  (WAL checksums stop recovery at the first torn frame, so it does not
+  corrupt the file). Apple's build also maps `PRAGMA fullfsync = ON` to
+  `F_BARRIERFSYNC` (ordering, no cache flush) on APFS and HFS+, not to
+  `F_FULLFSYNC`, so that PRAGMA cannot buy full power-loss durability there;
+  it costs about four to six times a plain commit. Evidence and numbers:
+  [to-do 5180](../todo/cross-cutting/5180-sqlite-durability-tiers.md) task 3,
+  `scripts/benchmark-sqlite-sync.ts`.
+- Every connection sets `checkpoint_fullfsync = ON`, so a checkpoint, which
+  copies WAL frames into the database file and then resets the WAL, syncs
+  with a write barrier on macOS. Apple's SQLite already defaults to that
+  (`DEFAULT_CKPTFULLFSYNC`); setting it keeps the ordering if the library or
+  its build changes. It changes nothing on Linux, which has no such call.
+  `fullfsync` (each commit) stays off.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
   their backups) returns up to 16 MiB of freed pages to the filesystem

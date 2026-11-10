@@ -58,8 +58,18 @@ All of them apply `buildPipelineInputWithDefaults`
 (`coordinator-launch-defaults.ts`), which is documented at the top of
 `build-pipeline-launch.ts`: an explicit step replaces the saved one, a step with
 no agent keeps the saved selection, and the review step is always the first
-reviewer. A launcher may still resolve the same defaults to display them
-(`@orkestrator/protocol/build-pipeline-defaults`). The ticket snapshot, source
+reviewer. A saved row pins only a model its action or saved reviewer names
+itself; a model inherited from the platform's own setting is left out, so the
+stage resolves it when it starts and gets the same unoffered-default swap a new
+session gets (a Codex default a ChatGPT login does not offer runs on the live
+list's first model, for that stage only). A launcher may still resolve the same
+defaults to display them (`@orkestrator/protocol/build-pipeline-defaults`);
+panels that resolve rows against the catalogue fill the inherited model back in
+before catalogue resolution (`buildPipelineLauncherDefaults`). The New
+Environment feature launcher submits these concrete choices even with
+Customize models off, so it relies on the renderer catalogue fallback, not
+the stage-time unoffered-default swap. The Build dialog also submits concrete
+choices. The ticket snapshot, source
 link and naming prompt come from the mappers in
 `@orkestrator/protocol/build-pipeline-tickets`.
 
@@ -904,3 +914,17 @@ Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
 Restarting Build creates an ordinary ticket-based session and retains the
 original as the first attempt. Pipeline records and ticket linkage provide the
 same sidebar, coordinator and PR ownership as any other pipeline.
+
+The created ticket has no delivery choice of its own, so it follows the default
+("Open a PR, don't merge"). Changing the ticket's **When verified** choice before
+Verify passes applies to this run, as for any ticket build. After adoption the
+run starts at package preparation: with one reviewer a Package Preparation
+Session plans validation, the backend runs it, a read-only Review Session reads
+the sealed package, and Verify decides delivery.
+
+`mise run test:agent:auto-pipeline` qualifies this whole path in a real browser
+against a disposable profile whose only agent is Pi on a loopback fake model
+([agent-testing.md](../development/agent-testing.md#auto-pipeline-flow-fake-model)):
+drafting, title and criterion edits, confirmation, the promotion commit, the
+adopted Build, commit-only delivery finishing while another environment is
+shown, and the finished graph after a reload.

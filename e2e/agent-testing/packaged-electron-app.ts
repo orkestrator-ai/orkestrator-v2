@@ -1,6 +1,7 @@
 import path from "node:path";
 import { PACKAGED_TEST_OUTPUT_DIRECTORY } from "../../electron-builder.packaged-test.config";
 import { HEADLESS_ELECTRON_SWITCHES } from "./electron-launch-switches";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /** Overrides the packaged executable the packaged Electron specs launch. */
 export const PACKAGED_APP_EXECUTABLE_ENV = "ORKESTRATOR_PACKAGED_APP_EXECUTABLE";
@@ -49,7 +50,8 @@ const INHERITED = new Set(["PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "USER", "
 /**
  * The environment for a packaged app on a disposable profile: allowlisted host
  * variables, `HOME` and the XDG base directories under `home`, the profile
- * file, and no fixed control-MCP port.
+ * file, no fixed control-MCP port, and no boot-time reachability probe
+ * (`electronSpecEnvironment`).
  */
 export function packagedLaunchEnvironment(
   env: NodeJS.ProcessEnv,
@@ -61,8 +63,7 @@ export function packagedLaunchEnvironment(
       result[name] = value;
     }
   }
-  return {
-    ...result,
+  return electronSpecEnvironment(result, {
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),
@@ -71,7 +72,7 @@ export function packagedLaunchEnvironment(
     ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
     // Never contend for the fixed control-MCP port an installed app may own.
     ORKESTRATOR_CONTROL_MCP_PORT: "0",
-  };
+  });
 }
 
 /**

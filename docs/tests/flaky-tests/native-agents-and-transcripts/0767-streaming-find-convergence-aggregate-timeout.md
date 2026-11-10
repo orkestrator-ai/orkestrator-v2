@@ -261,3 +261,30 @@ mise run test:logged -- --name isolate-streaming -- bunx playwright test --confi
 
 The isolated pass confirms intermittence; the cause remains unconfirmed. Status
 stays open. No assertion, timeout or skip changed.
+
+
+## Flake-remediation review repair validation — 2026-11-10
+
+- **Base:** `04639b12b71d4326a3b8941485367aca197f4966`; observed repair commit
+  `b7d1c28ac3`. `mise run flaky:recurrence -- 0767 --base
+  04639b12b71d4326a3b8941485367aca197f4966` reports this case open.
+- **Aggregate:** `ORKESTRATOR_E2E_PORT=52481 ORKESTRATOR_PUBLIC_E2E_PORT=52482
+  ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name
+  address-browser -- mise run test:browser`, four workers, alongside the default
+  suite. Mobile again received `unresolved` instead of `converged` at line 371
+  after the 5,000 ms polling deadline. Final aggregate results are recorded in
+  the Address Findings workflow result; this observation was made while it ran.
+- **Complete owner:** `ORKESTRATOR_E2E_PORT=52481 mise run test:logged -- --name
+  address-streaming-owner -- bunx playwright test --config e2e/playwright.config.ts
+  e2e/StreamingTranscript.spec.ts --workers=1
+  --output=output/agent-testing/address-findings-streaming` failed with the same
+  mobile assertion: 25 passed, one failed, exit 1, 77.9 seconds. This run does
+  **not** establish an isolated owner pass or prove contention as the cause.
+- **Evidence:** host temporary artifact
+  `orkestrator-test-run.AC6K90/address-streaming-owner.log.gz`; aggregate artifact
+  directory `orkestrator-test-run.irrhBn`; isolated trace and context under
+  `output/agent-testing/address-findings-streaming/StreamingTranscript-scroll-bd9d1-eaming-reapplies-highlights-mobile-chromium/`.
+- **Disposition:** remains open; cause and attribution to this branch remain
+  undetermined. The spec, fixture, scroll controller and virtualization code
+  were not edited. No assertion, deadline, skip or implementation was changed
+  to suppress the failure. No target-branch checkout or baseline run was made.

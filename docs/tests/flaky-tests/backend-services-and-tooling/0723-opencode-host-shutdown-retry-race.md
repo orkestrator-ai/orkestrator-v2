@@ -90,3 +90,7 @@ the to-do.
 - **Reproduced:** yes, deterministically with late stderr on the pre-fix decision (10 of 10), and passing 10 of 10 with the fix (2026-11-09).
 - **Stress:** focused contention runs on 2026-11-09, then the aggregate confirmation above under host load with the slow-tier owner included: the owner passed.
 - **Recurrences since the fix:** none. A later failure on a base containing `ec35a99b3` reopens the case.
+
+## Additional macOS stress evidence — 2026-11-10
+
+Main also recorded `mise run test:logged -- --name stress-opencode-host -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/opencode-host-start.test.ts --rerun-each=10` passing on macOS, with unpinned burners and host load approximately 35 to 55. This supplements the focused reproduction and loaded aggregate confirmation above.

@@ -1605,6 +1605,13 @@ a side agent, a paused coordinator and a steered message (one taken into a
 running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
+Both paths are qualified against a slow remote on a real profile by
+`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+[agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
+In that run a worker's mail to a coordinator whose turn is running waits on
+the coordinator's presence (`agent-mail delivery.waiting reason=working`)
+before it reaches this step, and reaches it once the turn has ended.
+
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout
 (`project-checkout-merge-follow.ts`, owned by the PR monitor runtime). Every
@@ -2023,12 +2030,50 @@ The mark is coarse by design, the same line as the account-switch grant: it also
 marks a delegation that merely happened during such a turn, and a later user turn
 clears it even if the content carried over. An agent's reasoning cannot be traced
 to specific input, so tracking provenance per message would only look more
-precise. Three limits: a message the user approved
-(`send_approved_project_home_message`) is not marked, since they read it; a
-scheduled `send_message` reads whichever turn came last; and a leaf without
-`node-mail-turn-origin` frames mail as it always did. Prompts sent with
-`send_prompt_to_tab` and `launch_job` are not mail and carry no such note
-([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)).
+precise. Two limits: a message the user approved
+(`send_approved_project_home_message`) is not marked, since they read it; and a
+leaf without `node-mail-turn-origin` frames mail as it always did.
+
+`coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
+rule every path reads: only a turn the user started is unmarked, and an unknown
+origin counts as mail.
+
+### Delegated prompts from a turn the user did not start
+
+The same mark reaches prompts, which are not mail
+([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
+task 5):
+
+- A launch's delegation frame (`launch_environment`, `launch_job`,
+  `fork_worker`, and a launch or fork on another node) ends with
+  `COORDINATOR_MAIL_ORIGIN_NOTE` as its last line, after the instruction
+  (`createCoordinatorDelegatedPrompt` with `turnOrigin: "mail"`). A frame from
+  the user's turn is unchanged, byte for byte.
+- `send_prompt_to_tab` from such a turn wraps the prompt in a frame holding
+  only the note (`createCoordinatorMailOriginPrompt`). The worker already has
+  its launch's frame, so the metadata and instruction are not repeated. A
+  prompt from the user's turn is sent as written. This later prompt has no
+  stored presentation, so the worker's transcript shows the frame as text.
+- A remote fork sends the note inside the instruction text
+  (`coordinatorDelegationInstruction`), which the node copies into the frame it
+  builds. A node from before the note writes the same frame without knowing
+  about it. The frame grammar is unchanged (opening line at offset zero, closing
+  line, blank line), so an older backend or renderer parses a marked frame and
+  accepts its stored presentation.
+- The Control MCP tools read the origin through `get_project_coordinator`
+  (`coordinatorScopeTurnOrigin`). The registry commands read it from the
+  coordinator store (`coordinatorCallerTurnOrigin`). A read that fails marks the
+  prompt rather than sending it as the user's.
+
+A scheduled fire is framed from the turn that set the schedule, not from
+whichever turn the conversation ran last. A coordinator schedule's owner
+records `turnOrigin` (`user` or `mail`) when it is created. An `update_schedule`
+or `resume_schedule` from a turn the user did not start sets it to `mail`, and
+nothing clears it. The executor puts it on the fire's `CoordinatorControlScope`,
+which only the backend's scheduler sets, and `send_message`,
+`send_prompt_to_tab` and the launches read it in place of the newest turn. A
+schedule created before the field has no `turnOrigin` and reads the newest turn,
+as it did before.
 
 ### Delegation round trip
 

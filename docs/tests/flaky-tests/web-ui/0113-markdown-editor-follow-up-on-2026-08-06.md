@@ -1,7 +1,7 @@
 # Markdown editor follow-up on 2026-08-06
 
 - **ID:** 0113
-- **Status:** open
+- **Status:** resolved
 ### `TiptapMarkdownEditor` rendered-edit synchronization
 
 - Test file: `apps/web/src/components/markdown/TiptapMarkdownEditor.test.tsx`
@@ -99,3 +99,21 @@ Post-fix stress verification:
   --rerun-each 10` -> 470 passed, 0 failed. The capacity case now completes in
   0.13-0.37 ms, and the following Monaco lifecycle tests retained their exact
   call-count assertions across all ten runs.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** recorded above for both parts. The Markdown cases used
+  elapsed wall time (the 300 ms store-sync debounce against a Testing Library
+  deadline) as their synchronisation signal, and the `DiffViewerTab`
+  cache-capacity case mounted 130 full diff viewers within Bun's five-second
+  budget, leaving renders alive across test boundaries when it timed out.
+- **Fix:** already in the tree; this entry only closes the case, whose header
+  had stayed `open` although both parts were marked resolved in the body.
+  `TiptapMarkdownEditor.test.tsx` uses `flushPendingChanges()` and
+  `editor.commands.setContent()` inside `act`; the `DiffViewerTab` immutable
+  base cache and its capacity test were later removed outright by
+  `d9bc8b840` (#1107), which replaced the cache with change subscriptions.
+- **Reproduced:** no — the fixes predate this resolution; the original
+  reproduction notes are in the sections above.
+- **Stress:** `mise run test:logged -- --name stress-0113 -- bun --cwd=apps/web test src/components/markdown/TiptapMarkdownEditor.test.tsx src/components/markdown/MarkdownEditorTab.test.tsx src/components/terminal/DiffViewerTab.test.tsx --parallel=2 --rerun-each=10`
+  passed (exit 0, 24.0 s, host load average about 34).

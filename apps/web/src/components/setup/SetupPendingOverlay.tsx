@@ -53,6 +53,13 @@ export function SetupPendingOverlay({
       state.environments.find((environment) => environment.id === environmentId)
         ?.setupApprovalRequired === true,
   );
+  // Why setup failed, from the environment record: a fixed message the backend
+  // chose, never the command's own output.
+  const failureReason = useEnvironmentStore(
+    (state) =>
+      state.environments.find((environment) => environment.id === environmentId)?.lifecycleError ??
+      null,
+  );
 
   const runOperation = async (kind: "retry" | "override") => {
     setError(null);
@@ -77,6 +84,7 @@ export function SetupPendingOverlay({
 
   const statusProps = {
     failed,
+    failureReason: failed ? failureReason : null,
     subtext,
     confirming,
     operation,
@@ -109,6 +117,7 @@ export function SetupPendingOverlay({
 
 type SetupStatusProps = {
   failed: boolean;
+  failureReason: string | null;
   subtext: string;
   confirming: boolean;
   operation: "retry" | "override" | null;
@@ -169,6 +178,7 @@ function SetupPendingTranscript({
 
 function SetupTranscriptStatus({
   failed,
+  failureReason,
   confirming,
   operation,
   setConfirming,
@@ -218,6 +228,11 @@ function SetupTranscriptStatus({
           ) : null}
         </div>
       </div>
+      {failureReason ? (
+        <p data-testid="setup-failure-reason" className="pb-2 text-xs text-muted-foreground">
+          {failureReason}
+        </p>
+      ) : null}
       {confirming ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pb-2 text-xs">
           <span>
@@ -258,6 +273,7 @@ function SetupTranscriptStatus({
 
 function SetupStatus({
   failed,
+  failureReason,
   subtext,
   confirming,
   operation,
@@ -275,6 +291,14 @@ function SetupStatus({
       <p className="text-sm">
         {failed ? "Environment setup failed." : "Waiting for setup scripts to complete..."}
       </p>
+      {failureReason ? (
+        <p
+          data-testid="setup-failure-reason"
+          className="max-w-md text-center text-xs text-foreground/80"
+        >
+          {failureReason}
+        </p>
+      ) : null}
       <p className="text-xs">{subtext}</p>
       {failed && !confirming && (
         <Button

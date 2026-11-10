@@ -166,6 +166,18 @@ export const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
 export const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 export const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 
+/**
+ * Why a setup run failed, when the setup script can say so. Each reason is a
+ * fixed OSC marker the script prints before it exits non-zero; the backend
+ * turns it into a specific message instead of "the setup script failed".
+ * `docker/workspace-setup.sh` prints these, so a new reason needs both sides.
+ */
+export const SETUP_FAILURE_REASONS = ["root-steps-need-full-network"] as const;
+export type SetupFailureReason = (typeof SETUP_FAILURE_REASONS)[number];
+export function setupFailureReasonOscSequence(reason: SetupFailureReason): string {
+  return `\u001b]9999;setup_failure_reason=${reason}\u0007`;
+}
+
 export function buildContainerSafeBase64Reader(testMutation?: "append" | "replace"): string {
   const afterInitialValidationForTest =
     testMutation === "append"

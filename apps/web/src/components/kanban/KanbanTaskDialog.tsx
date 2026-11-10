@@ -717,6 +717,7 @@ export function KanbanTaskDialog({
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
           deliveryPolicy: selection.deliveryPolicy,
+          networkAccessMode: selection.networkAccessMode,
         },
       );
       if (!pipelineId) return;
@@ -797,6 +798,7 @@ export function KanbanTaskDialog({
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
           deliveryPolicy: selection.deliveryPolicy,
+          networkAccessMode: selection.networkAccessMode,
         },
       );
       if (!pipelineId) return;

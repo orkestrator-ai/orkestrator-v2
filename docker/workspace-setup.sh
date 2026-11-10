@@ -762,6 +762,27 @@ if [ -f /workspace/orkestrator-ai.json ]; then
 
         cd /workspace
 
+        # Root steps run only with full network access (run-root-setup.sh
+        # refuses them otherwise). Say so plainly before trying, and print the
+        # reason marker the backend turns into the environment's error message
+        # (SETUP_FAILURE_REASONS in apps/backend/src/core/container-scripts.ts).
+        ROOT_NETWORK_MODE=""
+        IFS= read -r ROOT_NETWORK_MODE 2>/dev/null < /etc/orkestrator/network-mode || true
+        if [ -n "$ROOT_NETWORK_MODE" ] && [ "$ROOT_NETWORK_MODE" != "full" ]; then
+            echo -e "${RED}Root setup steps cannot run in this environment${NC}"
+            echo ""
+            echo "  orkestrator-ai.json has a \"root\" field. Root steps run as the root user,"
+            echo "  so they only run in containers with full network access, and this"
+            echo "  environment's network is ${ROOT_NETWORK_MODE}."
+            echo ""
+            echo "  To fix it, either:"
+            echo "    - create the environment again with network access set to Full, or"
+            echo "    - remove the \"root\" field from orkestrator-ai.json. The image already"
+            echo "      has git, mise, bun and node, so many root steps are not needed."
+            printf '\033]9999;setup_failure_reason=root-steps-need-full-network\007'
+            exit 1
+        fi
+
         run_root_step() {
             local step="$1"
             echo -e "Root command: ${GREEN}$step${NC}"
@@ -797,7 +818,7 @@ if [ -f /workspace/orkestrator-ai.json ]; then
             echo -e "${GREEN}Root setup completed successfully!${NC}"
         else
             echo -e "${RED}Root setup failed with code $ROOT_EXIT${NC}"
-            echo "Root steps require NETWORK_MODE=full. Recreate the environment with full network access, or remove the root field from orkestrator-ai.json."
+            echo "A root step in orkestrator-ai.json exited with an error; its output is above."
             exit "$ROOT_EXIT"
         fi
     else

@@ -7,6 +7,7 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { StorageService } from "./storage.js";
 import { collaborators } from "./native-agent-service-test-collaborators.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 /*
  * Todo 0049 task 4: an idle Codex view read 27 times a minute live against
@@ -33,6 +34,7 @@ function idleCodex() {
     commands: [{ name: "review", description: "Review the change", source: "builtin" as const }],
     runtime: "ready",
     activity: "idle" as ProviderActivityObservation["state"],
+    reorderMcpTools: false,
   };
   const transcript = () => [
     {
@@ -75,7 +77,24 @@ function idleCodex() {
     notices: [],
     authoritative: true,
   }));
-  Object.assign(stub.provider, { observeActivity, runtimeHealth });
+  // Codex app-server lists an MCP server's tools as a map, in a different
+  // order on each read (todo 7530): a flag the tests flip to reproduce it.
+  let mcpReads = 0;
+  const mcpServers = mock(async () => {
+    mcpReads += 1;
+    const tools = ["alpha", "mid", "zeta"];
+    return [
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "connected" as const,
+        toolCount: tools.length,
+        tools: state.reorderMcpTools && mcpReads % 2 === 0 ? [...tools].reverse() : tools,
+        actions: ["reconnect" as const],
+      },
+    ];
+  });
+  Object.assign(stub.provider, { observeActivity, runtimeHealth, mcpServers });
   return { state, provider: stub.provider };
 }
 
@@ -253,10 +272,37 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
     });
   }, 30_000);
 
+  test("an MCP tool list read in a new order each time announces nothing (todo 7530)", async () => {
+    await withIdleCodex(async ({ service, state, counted, advance }) => {
+      state.reorderMcpTools = true;
+      const tokens: Record<string, string | undefined> = {};
+      await warmUp(service, tokens);
+      // Live, six of these in 300 s each reset the idle view's backoff.
+      expect(await idleMinute(service, counted, advance, tokens)).toEqual({
+        idle: {},
+        scheduledReads: 4,
+        invalidatedReads: 0,
+      });
+      const discovery = await service.getDiscoveryUpdate({
+        ...IDENTITY,
+        viewVersion: 1,
+        sections: ["mcp"],
+      });
+      if (!("value" in discovery)) throw new Error("Expected a discovery value");
+      expect(discovery.value?.sections.mcp?.value).toMatchObject([
+        { id: "orkestrator", tools: ["alpha", "mid", "zeta"] },
+      ]);
+    });
+  }, 30_000);
+
   test("each source that moves an idle Codex view is counted under its own cause", async () => {
     await withIdleCodex(async ({ service, state, counted, advance }) => {
       const tokens: Record<string, string | undefined> = {};
       await warmUp(service, tokens);
+      // Todo 7530: the announcement also names its section and changed path.
+      const metricsWereEnabled = nativeSessionInvalidationMetrics.enabled;
+      nativeSessionInvalidationMetrics.setEnabled(true);
+      nativeSessionInvalidationMetrics.reset();
       const result = await idleMinute(service, counted, advance, tokens, (elapsed) => {
         // A late command change or async question on the idle thread.
         if (elapsed === 10_000) state.contentRevision = "process-1:1.5:0";
@@ -266,6 +312,11 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
       });
       expect(result.idle).toEqual({ "content-revision": 2, "discovery-renewal": 1 });
       expect(result.invalidatedReads).toBe(3);
+      expect(nativeSessionInvalidationMetrics.snapshot().discoveryRenewals).toEqual({
+        codex: { runtime: { count: 1, changed: { "summary.state": 1 } } },
+      });
+      nativeSessionInvalidationMetrics.reset();
+      nativeSessionInvalidationMetrics.setEnabled(metricsWereEnabled);
     });
   }, 30_000);
 

@@ -1191,6 +1191,7 @@ try {
   try {
     db.exec("PRAGMA busy_timeout = 1000");
     db.exec("PRAGMA synchronous = FULL");
+    db.exec("PRAGMA checkpoint_fullfsync = ON");
     db.exec("PRAGMA secure_delete = ON");
     db.exec("PRAGMA journal_size_limit = 8388608");
     const freePages = () => db.query("PRAGMA freelist_count").get().freelist_count;

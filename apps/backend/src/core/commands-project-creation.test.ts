@@ -183,6 +183,8 @@ describe("create_project_from_scratch", () => {
             "user.name=Orkestrator",
             "-c",
             "user.email=projects@orkestrator.local",
+            "-c",
+            "maintenance.auto=false",
             "commit",
             "--allow-empty",
             "--no-gpg-sign",

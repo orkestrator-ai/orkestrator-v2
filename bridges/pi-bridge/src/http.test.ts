@@ -1824,7 +1824,48 @@ describe("session routes", () => {
     expect(state.lastAccessed).toBe(0);
 
     await call(`/session/${state.id}/status`);
+    expect(state.lastAccessed).toBe(0);
+  });
+
+  test("an open idle tab's reads never keep the session attached (todo 7540)", async () => {
+    const state = seedSession();
+    state.lastAccessed = 0;
+    // Everything an open, idle tab reaches through the backend: the live
+    // update, the session-state and transcript reads, and the four discovery
+    // sections' 30 s renewals.
+    for (const path of [
+      "",
+      "/status",
+      "/config",
+      "/messages",
+      "/transcript?version=2",
+      "/approvals",
+      "/interactions",
+      "/queue",
+      "/human-prompts",
+      "/mcp",
+      "/commands",
+      "/runtime-health",
+      "/activity",
+    ]) {
+      expect((await call(`/session/${state.id}${path}`)).status).toBe(200);
+    }
+    expect(state.lastAccessed).toBe(0);
+
+    // A person's action does keep it warm.
+    await call(`/session/${state.id}/cancel`, { method: "POST", body: "{}" });
     expect(state.lastAccessed).toBeGreaterThan(0);
+
+    // Every route is counted, by label only, with whether it touched.
+    const body = await (await call(`/session/${state.id}/runtime-health`)).json();
+    expect(body.liveness.routes).toMatchObject({
+      "GET session": { requests: 1, touches: 0 },
+      "GET mcp": { requests: 1, touches: 0 },
+      "GET transcript": { requests: 1, touches: 0 },
+      "GET runtime-health": { requests: 2, touches: 0 },
+      "POST cancel": { requests: 1, touches: 1 },
+    });
+    expect(JSON.stringify(body.liveness)).not.toContain(state.id);
   });
 
   test("reports the attached generation's MCP configuration without touching liveness", async () => {
@@ -3661,12 +3702,14 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
+      // Discovered extensions are excluded under every policy, so nothing can
+      // add a command at attach and the pre-attach read is the whole inventory.
       expect(body).toMatchObject({
         catalogueVersion: 1,
-        status: "stale",
-        attachPending: true,
+        status: "ready",
         commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
       });
+      expect(body).not.toHaveProperty("attachPending");
       // Still metadata: the read that started the preview kept no session warm.
       expect(state.lastAccessed).toBe(1);
       // Pushed on the status the backend already polls, so a late read is seen.

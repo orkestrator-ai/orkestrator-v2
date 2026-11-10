@@ -1,7 +1,7 @@
 # Duplicate agent-account login leaves an extra directory in the aggregate
 
 - **ID:** 0239
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-15, macOS, Bun 1.4.3.
 - **Test:** `agent accounts > the same login cannot be added twice`.
 - **File:** `apps/backend/src/core/agent-accounts.test.ts:713`.
@@ -138,3 +138,31 @@ The owning implementation, assertions, timeouts and skips were unchanged.
 - **Complete unchanged owner:** `mise run test:logged -- --name agent-accounts-isolated -- bun test --cwd apps/backend ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` passed, exit 0 in 3.5 seconds.
 - **Evidence:** `orkestrator-test-run.7ku54G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** recurrence of the existing ordering failure; no owning implementation, assertion, deadline or skip changed.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** a product ordering race in `agent-accounts.ts`. A rejected
+  sign-in set `entry.state = "failed"` first and only then awaited
+  `discardNewAccount`, which removes the new account's directory. The test's
+  `settledLogin` returns as soon as the state leaves `pending`, so under load
+  `readdir` could run before the removal finished and still list the
+  duplicate's directory. A client polling sign-in progress saw the same
+  premature failure.
+- **Fix:** already on `main`: `60c2bf07d` (#1378, merged 2026-10-28) adds
+  `failLogin`, which awaits the cleanup (and folds a cleanup failure into the
+  message) before publishing `failed`, on every failure path. Its tests
+  `<failure> publishes failure after cleanup succeeds|rejects` hold `fs.rm`
+  open and assert that progress stays `pending` until it is released, which
+  makes the ordering deterministic. Every observation of this case
+  (2026-10-15 to 2026-10-26) predates it. No further product change.
+- **Reproduced:** no — not re-run for this sweep; the held-`fs.rm` tests
+  added by `60c2bf07d` pin the ordering the failure needed.
+- **Stress:** the owner (including this test) passed `mise run test:logged --
+  --name fixed-accounts -- bun scripts/test-under-contention.ts -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/agent-accounts.test.ts --rerun-each=5` (macOS, unpinned burners,
+  host load ~35 to 55), with the polling fixes for 0770 and 9850 in place.
+  A longer run, `mise run test:logged -- --name fixed-accounts-10 -- bun
+  scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload
+  ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts
+  --rerun-each=10`, also passed.

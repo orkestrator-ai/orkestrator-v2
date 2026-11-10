@@ -12,6 +12,8 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { parseForkWorkerLaunch } from "./coordinator-fork-worker.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { ControlMcpServer } from "./control-mcp-server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
@@ -109,6 +111,54 @@ afterEach(async () => {
 });
 
 describe("fork_coordinator_worker", () => {
+  test("fork_worker MCP preserves scheduled origin over the newest conversation turn", async () => {
+    // This fixture's source worker was created outside the coordinator.
+    await storage.patchRepositorySettings(scope.projectId, { coordinatorOtherEnvironments: true });
+    const mcp = new ControlMcpServer(
+      root,
+      async <T>(command: string, args = {}) => (await commands.get(command)!(args, context)) as T,
+      { port: 0 },
+    );
+    try {
+      for (const origin of ["mail", "user"] as const) {
+        const workspace = await storage.coordinators.mutateCoordinatorWorkspace(
+          scope.projectId,
+          (current) => ({
+            ...current!,
+            conversations: current!.conversations.map((conversation) =>
+              conversation.id === scope.conversationId
+                ? { ...conversation, lastTurnOrigin: origin === "mail" ? "user" : "mail" }
+                : conversation,
+            ),
+          }),
+        );
+        const result = await mcp.callCoordinatorTool(
+          {
+            ...scope,
+            role: "coordinator",
+            mailboxIncarnationId: workspace!.conversations[0]!.mailboxIncarnationId!,
+            capabilities: coordinatorRoleCapabilities("main"),
+            turnOrigin: origin,
+          },
+          "fork_worker",
+          { requestId: `scheduled-mcp-${origin}`, environmentId: workerId, prompt: "Try it" },
+        );
+        expect({ isError: result.isError, text: result.isError ? result.text : "ok" }).toEqual({
+          isError: false,
+          text: "ok",
+        });
+        const environment = await storage.getEnvironment(started.at(-1)!);
+        expect(environment).toBeDefined();
+        const parsed = parseCoordinatorDelegatedPrompt(environment!.initialPrompt ?? "");
+        expect(parsed?.source).toBe("Try it");
+        expect(environment!.initialPromptPresentation?.frame).toBe(parsed!.frame);
+        expect(coordinatorDelegationFromMail(parsed!.frame)).toBe(origin === "mail");
+      }
+    } finally {
+      await mcp.stop();
+    }
+  });
+
   test("a prompted fork is a delegated coordinator worker from the worker's last commit", async () => {
     const prompt = "Try the other approach.\n\nCommit and report back.";
     const result = await fork({ requestId: "alt-1", environmentId: workerId, prompt });

@@ -67,6 +67,7 @@ export function registerCoordinatorWorkerTools(
     projectId: scope.projectId,
     coordinatorId: scope.coordinatorId,
     conversationId: scope.conversationId,
+    ...(scope.turnOrigin ? { turnOrigin: scope.turnOrigin } : {}),
   };
   const call = async (command: string, args: JsonRecord) =>
     invoke<JsonRecord>(command, { scope: identity, ...args });

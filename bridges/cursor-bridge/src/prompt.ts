@@ -8,6 +8,7 @@
  */
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -1200,17 +1201,6 @@ export function errorText(error: unknown): string {
   return "The Cursor turn failed";
 }
 
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new TurnTimeoutError()), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  return boundedWaitOrThrow(work, timeoutMs, () => new TurnTimeoutError());
 }

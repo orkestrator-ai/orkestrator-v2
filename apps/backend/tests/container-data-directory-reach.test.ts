@@ -215,7 +215,10 @@ describe("a container's reach into the data directory", () => {
         { legacyCredentials },
       );
       await withDockerScript(fakeDocker(tar), async (log) => {
-        await expect(create()).rejects.toMatchObject({ code: "capability-unavailable" });
+        await expect(create()).rejects.toMatchObject({
+          code: "container-lifecycle",
+          reason: "capability-unavailable",
+        });
         const docker = await log.read();
         // Manifest inspection can create a probe; no environment may be created.
         expect(docker.split("\n").some((line) => line.startsWith("create --name"))).toBe(false);

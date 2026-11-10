@@ -1,6 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   parseContainerLifecycle,
 } from "@orkestrator/protocol/container-lifecycle";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -65,11 +65,9 @@ export async function deleteEnvironment(
       // A lifecycle record written by a newer version may reference storage
       // this version cannot recognise; deleting around it could orphan data.
       if (environment && !parseContainerLifecycle(environment.containerLifecycle).supported) {
-        throw new Error(
-          formatContainerLifecycleError(
-            "unsupported-format",
-            "This environment was changed by a newer version of Orkestrator. Update Orkestrator before deleting it.",
-          ),
+        throw new ContainerLifecycleError(
+          "unsupported-format",
+          "This environment was changed by a newer version of Orkestrator. Update Orkestrator before deleting it.",
         );
       }
       // Deleting removes the container, its volumes and its network, so it

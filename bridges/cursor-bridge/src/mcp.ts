@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { McpServerConfig, SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import {
   nativeAgentAllowsUserMcpServer,
   nativeAgentRestrictsUserMcp,
@@ -469,30 +470,19 @@ async function connectWithTimeout(
   token: string | undefined,
 ): Promise<CursorMcpConnection> {
   const controller = new AbortController();
-  const attempt = transport.connect(url, token, controller.signal);
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-      reject(new Error("Orkestrator MCP timed out"));
-    }, connectTimeoutMs);
-    timer.unref();
-  });
   try {
-    return await Promise.race([attempt, deadline]);
+    // A connection that arrives after the deadline is closed on arrival
+    // rather than left open and unowned.
+    return await boundedWaitOrThrow(
+      transport.connect(url, token, controller.signal),
+      connectTimeoutMs,
+      () => new Error("Orkestrator MCP timed out"),
+      { onLate: (late) => late.close() },
+    );
   } catch (error) {
+    // Timed out or failed: abort whatever the attempt still has in flight.
     if (!controller.signal.aborted) controller.abort();
-    if (timedOut) {
-      void attempt.then(
-        (late) => late.close().catch(() => undefined),
-        () => undefined,
-      );
-    }
     throw error;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
 

@@ -116,3 +116,19 @@ holding a transcript`, is not explained by it, so the status stays open.
   `bfdc17ffa`). No resize happens in that test. A same-value state update
   in a component that the environment write reaches is a candidate of the
   same kind as fix 1, but it is not identified.
+
+## Effect adoption validation recurrence — 2026-11-10
+
+Observing branch base: `04639b12b71d4326a3b8941485367aca197f4966`;
+reviewed head: `c6b3ce9792c064bcac5e9eb7a287675fcbe73118`.
+`mise run flaky:recurrence -- 6561` reported open (the previous fix is in history).
+`mise run test:logged -- --name address-default -- mise run test` reported
+one commit instead of zero at line 406 (640.60 ms). The web package had
+14,351 pass, 10 skip and one fail, with two web test workers.
+Evidence: `/tmp/orkestrator-test-run.pzC4lX/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed alone in 10.9 s:
+`NODE_ENV=test mise run test:logged -- --name address-native-render-focused -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures`.
+Passing counts are unavailable because the logged runner deleted passing output.
+This establishes intermittence, not cause or independence from this branch.
+No assertion, timeout or native-tab implementation changed.

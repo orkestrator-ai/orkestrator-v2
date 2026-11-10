@@ -1,4 +1,5 @@
 import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
+import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { sshConnectFailure, type SshConnectFailure } from "./git-ssh-transport.js";
@@ -162,7 +163,7 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   if (unreachable) return gitSshUnreachableMessage(unreachable);
   const imageRefusal = IMAGE_WITHOUT_STAGED_INPUTS.exec(message)?.[1];
   if (imageRefusal) return imageRefusal;
-  if (message.includes("ContainerLifecycleError:not-ready:")) {
+  if (parseContainerLifecycleError(error)?.code === "not-ready") {
     return /did not complete in time/.test(message)
       ? ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.initializationTimedOut
       : ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.initializationFailed;

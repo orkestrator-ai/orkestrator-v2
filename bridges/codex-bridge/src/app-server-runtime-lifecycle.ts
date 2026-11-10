@@ -1,3 +1,4 @@
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { promptThreadConfig } from "./prompt-thread-config.js";
 import { codexCoordinatorPolicy, isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
@@ -210,16 +211,8 @@ export class CodexRuntimeLifecycle {
   async whenSessionsRestored(timeoutMs: number): Promise<boolean> {
     if (this.ctx.sessionRestore === "failed") return false;
     if (this.ctx.sessionRestore !== "restoring") return true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-      timer.unref?.();
-    });
-    try {
-      return await Promise.race([this.ctx.sessionsRestored.promise, timedOut]);
-    } finally {
-      clearTimeout(timer);
-    }
+    const restored = await boundedWait(this.ctx.sessionsRestored.promise, timeoutMs);
+    return restored.settled && restored.value;
   }
 
   async stop(): Promise<void> {

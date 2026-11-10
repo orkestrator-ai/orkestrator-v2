@@ -1,4 +1,4 @@
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { runCommand } from "./shell.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -106,11 +106,9 @@ export function bindMountRefusedError(message: string): Error | null {
   const target = /to rootfs at "([^"]+)"/i.exec(message)?.[1];
   const mount =
     source && target ? `${source} at ${target}` : target ? `at ${target}` : "a read-only bind";
-  return new Error(
-    formatContainerLifecycleError(
-      "unsupported-topology",
-      `Docker refused to mount ${mount} read-only (operation not permitted), so nothing was started. Under rootless Docker this happens when the filesystem holding it is mounted nosuid or nodev, flags a user namespace cannot clear: keep Orkestrator's data directory on a filesystem mounted without them, or run Docker rootful.`,
-    ),
+  return new ContainerLifecycleError(
+    "unsupported-topology",
+    `Docker refused to mount ${mount} read-only (operation not permitted), so nothing was started. Under rootless Docker this happens when the filesystem holding it is mounted nosuid or nodev, flags a user namespace cannot clear: keep Orkestrator's data directory on a filesystem mounted without them, or run Docker rootful.`,
   );
 }
 

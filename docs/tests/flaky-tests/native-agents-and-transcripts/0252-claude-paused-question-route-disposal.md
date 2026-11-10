@@ -147,3 +147,22 @@ ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions
 No assertion, timeout or skip changed. Evidence:
 `orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
 temporary directory.
+
+## Effect adoption validation recurrence — 2026-11-10
+
+Observing branch base: `04639b12b71d4326a3b8941485367aca197f4966`;
+reviewed head: `c6b3ce9792c064bcac5e9eb7a287675fcbe73118`.
+`mise run flaky:recurrence -- 0252` reported open.
+`mise run test:logged -- --name browser -- mise run test:browser` repeated
+the mobile paused-question failure at line 107: the snapshot route callback
+used a disposed request context. The aggregate used eight browser workers.
+
+The complete unchanged owner passed all six cases alone in 84.1 s:
+`mise run test:logged -- --name address-claude-owner -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output=output/playwright/address-claude-owner`.
+This confirms intermittence, not that the branch is unrelated. No assertion,
+timeout or fixture implementation changed. Aggregate evidence and final counts
+are also recorded in the Address Findings result for this validation attempt.
+
+Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
+1,810 cases, with 14 reported failures; no final pass/skip totals and no
+public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.

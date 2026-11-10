@@ -573,6 +573,12 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   that arrives within 2.5 s. Otherwise, or when the server does not list the
   feature, the socket is replaced and every terminal reconciles from a
   snapshot. Hiding the page never touches the socket.
+- While the page stays visible, the same server is pinged once the socket has
+  been quiet for 10 s (`DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS`), and a socket
+  that leaves two such pings unanswered is replaced the same way, so a stall
+  is noticed 20 to 30 s after its last frame rather than when the user next
+  types. Any inbound frame counts as an answer, so a busy terminal sends no
+  pings; a hidden page and a server that does not list `ping` get none.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
   backed-off retries until a stream opens. The renderer uses it

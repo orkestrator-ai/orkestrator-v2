@@ -238,3 +238,64 @@ test("multiple sources permit explicit selection and preserve it across refresh"
   });
   expect((picker as HTMLSelectElement).value).toBe("other");
 });
+
+test("a refused confirmation shows its reason beside the buttons, outside the scrolled draft", async () => {
+  let refuse: (error: Error) => void = () => undefined;
+  const node = client().respond(
+    "confirm_auto_pipeline",
+    () =>
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+  );
+  let promoted = 0;
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => promoted++} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  const body = screen.getByRole("region", { name: "Auto-pipeline draft" });
+  const progress = await screen.findByText(/^Promoting environment/);
+  expect(body.contains(progress)).toBe(false);
+  expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+  refuse(
+    new Error("Close this environment's terminals before promotion; a shell may still write."),
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Close this environment's terminals");
+  expect(body.contains(alert)).toBe(false);
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(promoted).toBe(0);
+  expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+});
+
+test("a successful confirmation closes the review and reports the promotion", async () => {
+  const node = client();
+  let promoted = 0;
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => promoted++} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await waitFor(() => expect(promoted).toBe(1));
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(1);
+});
+
+test("an empty criteria list explains why confirmation is disabled", async () => {
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: client(),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  const tab = await screen.findByRole("tab", { name: "Acceptance criteria (2)" });
+  fireEvent.mouseDown(tab, { button: 0 });
+  fireEvent.click(tab);
+  fireEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove criterion 1" }));
+  expect(screen.getByText("Add at least one acceptance criterion before confirming.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Confirm Auto-pipeline" }).hasAttribute("disabled"),
+  ).toBe(true);
+});

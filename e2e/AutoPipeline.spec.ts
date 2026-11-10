@@ -183,3 +183,37 @@ test("Notes retains generated Build notes after later pipeline updates", async (
     fullPage: true,
   });
 });
+
+test("a refused confirmation shows its reason beside Confirm wherever the draft is scrolled", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline?long&refused");
+  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
+  await page.getByRole("tab", { name: "Acceptance criteria (8)" }).click();
+  await expect(page.getByRole("textbox", { name: "Criterion 8", exact: true })).toBeVisible();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-criteria-after-${testInfo.project.name}.png`,
+    ),
+    fullPage: true,
+  });
+  const body = dialog.getByRole("region", { name: "Auto-pipeline draft" });
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const confirm = dialog.getByRole("button", { name: "Confirm Auto-pipeline" });
+  await expect(confirm).toBeInViewport();
+  await confirm.click();
+  await expect(dialog.getByRole("status")).toBeInViewport();
+  const alert = dialog.getByRole("alert");
+  await expect(alert).toContainText("Close this environment's terminals");
+  await expect(alert).toBeInViewport();
+  await expect(confirm).toBeEnabled();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-refused-after-${testInfo.project.name}.png`,
+    ),
+    fullPage: true,
+  });
+});

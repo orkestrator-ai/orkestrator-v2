@@ -2,7 +2,8 @@ import { lazy, Suspense, useState, type Ref } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-const PANE = "h-[min(55vh,34rem)] w-full rounded-md border border-border/70";
+const PANE =
+  "h-[min(55vh,34rem)] w-full rounded-md border border-border/70 focus-hairline outline-none";
 const MessageMarkdown = lazy(() =>
   import("@/components/chat/MessageMarkdown").then((module) => ({
     default: module.MessageMarkdown,
@@ -65,7 +66,7 @@ export function AutoPipelineDescriptionField({
       }}
       className={cn(
         PANE,
-        "overflow-y-auto bg-background/40 px-4 py-3 text-left text-sm",
+        "overflow-y-auto bg-input-surface px-4 py-3 text-left text-sm shadow-xs",
         disabled ? "cursor-default opacity-70" : "cursor-text hover:border-border",
       )}
     >

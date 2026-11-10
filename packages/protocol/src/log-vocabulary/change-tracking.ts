@@ -16,6 +16,10 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
       "dispatch.record-failed": "Recording a turn's dispatch outcome failed.",
       "turn.finalize-failed": "Finalizing a turn failed.",
       "turn.settle-failed": "Settling a late interrupted turn failed.",
+      "turn.end-recovery":
+        "A background retry of a turn end capture that timed out finished: recovered, done (no longer eligible) or exhausted.",
+      "turn.end-recovery-failed":
+        "A background retry of a turn end capture threw; it counts as a failed attempt.",
       "evidence.pull-failed": "Pulling change evidence from a bridge failed; a later pull retries.",
       "measurement.failed": "Recomputing a tool's measurement failed.",
     },

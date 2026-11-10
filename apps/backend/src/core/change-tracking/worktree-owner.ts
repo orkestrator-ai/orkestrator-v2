@@ -88,6 +88,8 @@ export type CapturePurpose =
   | "tool-after"
   | "provisional"
   | "refresh"
+  /** A later retry of a turn end capture that ran out of its deadline. */
+  | "turn-recovery"
   | "restore-checkpoint"
   | "restore-result";
 
@@ -273,15 +275,30 @@ export class WorktreeChangeOwner {
   capture(options: CaptureRequestOptions): Promise<CaptureOutcome> {
     const controller = new AbortController();
     const requestedAt = (this.deps.now ?? Date.now)();
+    const callerSignal = options.signal;
     let timer: ReturnType<typeof setTimeout>;
+    let cancelled: (() => void) | null = null;
     const expired = new Promise<CaptureOutcome>((resolve) => {
       timer = setTimeout(() => {
         controller.abort();
         resolve({ kind: "unavailable", reason: "capture-timeout", boundarySeq: 0 });
       }, options.deadlineMs);
+      // A caller that withdraws its request (a background retry giving way
+      // to a new turn) stops a pass it started and is answered at once.
+      if (callerSignal) {
+        cancelled = () => {
+          controller.abort();
+          resolve({ kind: "unavailable", reason: "capture-cancelled", boundarySeq: 0 });
+        };
+        if (callerSignal.aborted) cancelled();
+        else callerSignal.addEventListener("abort", cancelled, { once: true });
+      }
     });
     const work = this.scheduleCapture({ ...options, signal: controller.signal, requestedAt });
-    return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+    return Promise.race([work, expired]).finally(() => {
+      clearTimeout(timer);
+      if (cancelled) callerSignal?.removeEventListener("abort", cancelled);
+    });
   }
 
   private scheduleCapture(options: CaptureRequestOptions): Promise<CaptureOutcome> {

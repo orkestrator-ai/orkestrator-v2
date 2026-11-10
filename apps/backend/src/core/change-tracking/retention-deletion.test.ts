@@ -727,6 +727,19 @@ describe("age-based retention", () => {
       ledger.setMeta(`turnops:${turnId}`, JSON.stringify([operationId]));
       ledger.setMeta(`pturn:${turnId}`, "provider-turn");
     });
+    ledger.transaction(() => {
+      for (const suffix of ["one", "two"]) {
+        ledger.reserveCapture({
+          boundaryKey: `turn-recover:${turnId}:${suffix}`,
+          worktreeId: ledger.turn(turnId)!.worktree_id,
+          ownerEpoch: 1,
+          requiredAfterBoundarySeq: 0,
+          purpose: "turn-recovery",
+          deadlineAt: new Date(Date.now() + PAST_WINDOW * 2).toISOString(),
+        });
+      }
+    });
+    expect(count(h, "change_capture_attempts", "purpose = 'turn-recovery'")).toBe(2);
     const key = turnResourceKeys(turnId, null).turnNet;
 
     const report = await h.service.retention.run(Date.now() + PAST_WINDOW);

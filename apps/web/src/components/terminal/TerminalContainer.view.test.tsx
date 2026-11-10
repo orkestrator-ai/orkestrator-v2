@@ -228,30 +228,10 @@ const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({
   truncated: false,
 }));
 
-const setEnvironmentPendingAgentLaunchMock = mock(
-  async (environmentId: string, pending: boolean) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    pendingAgentLaunch: pending,
-    ...(pending
-      ? {}
-      : {
-          initialAgentModel: undefined,
-          initialReasoningEffort: undefined,
-        }),
-  }),
-);
-
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
   ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
-
-const setEnvironmentInitialPromptMock = mock(
-  async (environmentId: string, initialPrompt: string) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    initialPrompt,
-  }),
-);
 
 const savePaneLayoutMock = mock(
   async (
@@ -401,9 +381,7 @@ mock.module("@/lib/backend", () => ({
   getSessionsByEnvironment: getSessionsByEnvironmentMock,
   loadSessionBuffer: loadSessionBufferMock,
   getTerminalOutputSnapshot: getTerminalOutputSnapshotMock,
-  setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
-  setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   getBuildPipelineConditional: mock(async () => null),
@@ -583,31 +561,11 @@ describe("TerminalContainer", () => {
       generation: 1,
       truncated: false,
     });
-    setEnvironmentPendingAgentLaunchMock.mockReset();
-    setEnvironmentPendingAgentLaunchMock.mockImplementation(
-      async (environmentId: string, pending: boolean) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        pendingAgentLaunch: pending,
-        ...(pending
-          ? {}
-          : {
-              initialAgentModel: undefined,
-              initialReasoningEffort: undefined,
-            }),
-      }),
-    );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
       ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
-    setEnvironmentInitialPromptMock.mockReset();
-    setEnvironmentInitialPromptMock.mockImplementation(
-      async (environmentId: string, initialPrompt: string) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        initialPrompt,
-      }),
-    );
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
@@ -895,7 +853,6 @@ describe("TerminalContainer", () => {
           .getAllTabs("env-hidden")
           .some((tab) => tab.id === "startup-agent"),
       ).toBe(true);
-      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
       expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
       expect(
         appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
@@ -949,7 +906,6 @@ describe("TerminalContainer", () => {
         expect(agentTab?.initialReasoningEffort).toBeUndefined();
       });
       expect(model).toBeTruthy();
-      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
       expect(savePaneLayoutMock).not.toHaveBeenCalled();
     },
   );
@@ -1023,7 +979,6 @@ describe("TerminalContainer", () => {
         type: "agent-native",
         nativeAgentData: { sessionId: "late-session" },
       });
-      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     },
   );
 
@@ -2531,7 +2486,6 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
     expect(setupTabIds()).toEqual(["default"]);
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
 
     await act(async () => {
       appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
@@ -3094,7 +3048,6 @@ describe("TerminalContainer", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     expect(writeContainerFileMock).not.toHaveBeenCalled();
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
@@ -3125,7 +3078,6 @@ describe("TerminalContainer", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
 
   test("does not enter renderer attachment persistence when the backend owns startup", async () => {
@@ -3146,7 +3098,6 @@ describe("TerminalContainer", () => {
         repositories: {},
       },
     }));
-    setEnvironmentInitialPromptMock.mockRejectedValueOnce(new Error("offline"));
     appCommandStore(claudeOptionsStore).setState({
       options: {
         "env-hidden": {
@@ -3181,7 +3132,6 @@ describe("TerminalContainer", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
-      expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
       expect(writeContainerFileMock).not.toHaveBeenCalled();
       expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
     } finally {
@@ -3250,7 +3200,6 @@ describe("TerminalContainer", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     expect(writeLocalFileMock).not.toHaveBeenCalled();
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
@@ -3307,7 +3256,6 @@ describe("TerminalContainer", () => {
     // clears the stored attachments, which is what left the agent with a
     // filename instead of the image.
     expect(writeLocalFileMock).not.toHaveBeenCalled();
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
@@ -3370,7 +3318,6 @@ describe("TerminalContainer", () => {
     });
 
     expect(writeLocalFileMock).not.toHaveBeenCalled();
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
     // Optimistic projection may drop the renderer copy; the backend still owns
     // the attachments. The rewrite path would empty them and also persist paths.
     expect(
@@ -3458,7 +3405,6 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
     expect(writeLocalFileMock).not.toHaveBeenCalled();
-    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
 
   test("creates a regular terminal for a ready local environment when no agent is requested", async () => {
@@ -3550,7 +3496,6 @@ describe("TerminalContainer", () => {
       });
     });
     expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
   test("activates the backend-created agent tab when local setup finishes", async () => {
@@ -4248,7 +4193,6 @@ describe("TerminalContainer", () => {
     await waitForDurableAgentTab();
 
     expect(savePaneLayoutMock).not.toHaveBeenCalled();
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
       appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
         ?.pendingAgentLaunch,
@@ -4268,7 +4212,6 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
 
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(
       appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
         ?.pendingAgentLaunch,
@@ -4288,7 +4231,6 @@ describe("TerminalContainer", () => {
       .getEnvironmentById("env-hidden");
     expect(environment?.pendingAgentLaunch).toBe(true);
     expect(environment?.setupPhase).toBe("ready");
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
   test("does not resurrect a startup tab the user closed after the launch converged", async () => {
@@ -4436,7 +4378,6 @@ describe("TerminalContainer", () => {
       });
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
     expect(savePaneLayoutMock).not.toHaveBeenCalled();
   });
 
@@ -4459,7 +4400,18 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    // No agent tab is rebuilt by the renderer, and the launch stays pending for
+    // the backend to perform once the environment runs.
+    expect(
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .getAllTabs("env-hidden")
+        .some((tab) => tab.type === "agent-native"),
+    ).toBe(false);
+    expect(
+      appCommandStore(environmentStore).getState().getEnvironmentById("env-hidden")
+        ?.pendingAgentLaunch,
+    ).toBe(true);
   });
 
   test("falls back to the global default agent when the environment has none", async () => {
@@ -4552,7 +4504,13 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+    // The nested agent tab satisfies the launch: no second agent tab appears.
+    expect(
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .getAllTabs("env-hidden")
+        .map((tab) => tab.id),
+    ).toEqual(["plain-1", "agent-1"]);
   });
 
   test("keeps the newly selected environment's panes when switching environments", async () => {

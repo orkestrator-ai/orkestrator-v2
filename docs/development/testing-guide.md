@@ -2051,11 +2051,11 @@ case resolved in the same change, with the Resolution section the registry's
 [Recording a case](../tests/flaky-tests/0000-index.md#recording-a-case) rules
 describe.
 
-Aggregate runs remove ambient bridge debug flags before spawning their groups:
-`ORKESTRATOR_BRIDGE_DEBUG`, `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`,
-`ACP_BRIDGE_DEBUG`, `PI_BRIDGE_DEBUG`, and `CURSOR_BRIDGE_DEBUG`. This prevents
-a development profile's diagnostics from changing authoritative test inputs.
-If a focused reproduction needs one of those flags, set it explicitly on that
+Aggregate runs remove an ambient `ORKESTRATOR_BRIDGE_DEBUG`, the only bridge
+debug flag still read, before spawning their groups (the per-bridge spellings
+such as `CLAUDE_BRIDGE_DEBUG` are no longer read, so they are left alone). This
+prevents a development profile's diagnostics from changing authoritative test
+inputs. If a focused reproduction needs the flag, set it explicitly on that
 focused command and record it with the result.
 
 ### Reproduce before fixing

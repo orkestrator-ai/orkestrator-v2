@@ -24,6 +24,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
+    "delete-refused-history-retained": yes,
     "cancel-idle-in-band": yes,
     "abort-idle-acknowledged": yes,
     "transcript-cursor-grammar": yes,
@@ -38,6 +39,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
+    "delete-refused-history-retained": yes,
     "cancel-idle-in-band": yes,
     "abort-idle-acknowledged": yes,
     "transcript-cursor-grammar": yes,
@@ -54,6 +56,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
+    "delete-refused-history-retained": yes,
     "cancel-idle-in-band": no(
       "no /cancel route; idle /abort answers 200 {status:'not_running'} rather than {cancelled:false}",
     ),
@@ -76,6 +79,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
+    "delete-refused-history-retained": yes,
     "cancel-idle-in-band": no(
       "no /cancel route; /abort answers 202 {status, phase} because turn/interrupt is asynchronous",
     ),
@@ -96,6 +100,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
+    "delete-refused-history-retained": yes,
     "cancel-idle-in-band": no(
       "cancel/abort are fire-and-forget session/cancel notifications answered 202 {accepted:true} in every state",
     ),

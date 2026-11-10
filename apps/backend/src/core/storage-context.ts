@@ -694,16 +694,7 @@ export class StorageContext {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("listStoreRowKeysByOwner requires a database store");
     if (this.openAtomicScope()?.writes.has(store)) return undefined;
-    const header = this.database.readStoreHeader(store);
-    if (!header) return { owned: [], unowned: [] };
-    if (header.mode !== "rows") return undefined;
-    return {
-      owned: this.database
-        .rows(store)
-        .list({ collection: "", owner, values: false })
-        .map((row) => row.key),
-      unowned: this.database.listUnownedRows(store),
-    };
+    return this.database.listStoreRowKeysByOwner(store, owner);
   }
 
   /**

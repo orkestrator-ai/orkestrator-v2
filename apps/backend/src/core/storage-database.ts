@@ -746,6 +746,30 @@ export class StorageDatabase {
   }
 
   /**
+   * Discovers owned keys and unowned candidates in one read snapshot. An
+   * owner backfill on another connection must not move a row between the two
+   * result sets. The header shares that snapshot for representation changes.
+   */
+  listStoreRowKeysByOwner(
+    store: string,
+    owner: string,
+  ): { owned: string[]; unowned: Array<{ key: string; value: string }> } | undefined {
+    return this.db
+      .transaction(() => {
+        const header = this.readStoreHeader(store);
+        if (!header) return { owned: [], unowned: [] };
+        if (header.mode !== "rows") return undefined;
+        return {
+          owned: this.rows(store)
+            .list({ collection: "", owner, values: false })
+            .map((row) => row.key),
+          unowned: this.listUnownedRows(store),
+        };
+      })
+      .deferred();
+  }
+
+  /**
    * Reads only the rows of a record/array store whose owner column matches.
    * Returns the items as an array in stored order (record keys are dropped).
    */

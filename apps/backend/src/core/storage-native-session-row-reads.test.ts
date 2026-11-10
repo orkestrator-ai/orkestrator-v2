@@ -430,6 +430,37 @@ describe("the environment sweep reads only its environment's rows (todo 6120 tas
     expect(rawRow(storage, damaged.key)).toBeTruthy();
   });
 
+  test("owner backfill between sweep queries cannot hide an unowned session", async () => {
+    const storage = await service();
+    const second = await service(storage.getDataDir());
+    const doomed = await storage.addEnvironment(createEnvironment("project-1"));
+    const kept = await storage.addEnvironment(createEnvironment("project-1"));
+    const session = await createSession(storage, doomed.id, "a");
+    const other = await createSession(storage, kept.id, "b");
+    clearOwner(storage, session.key);
+    const database = storageDatabase(storage);
+    const listUnownedRows = database.listUnownedRows.bind(database);
+    let backfilled = false;
+    const unownedRead = spyOn(database, "listUnownedRows").mockImplementation((store) => {
+      // The owned-key query has finished. A different connection commits the
+      // open-time backfill before this connection reads its unowned rows.
+      if (store === STORE && !backfilled) {
+        backfilled = true;
+        expect(backfillNativeAgentSessionOwners(storageDatabase(second))).toBe(1);
+        expect(ownerOf(second, session.key)).toBe(doomed.id);
+      }
+      return listUnownedRows(store);
+    });
+    try {
+      await storage.deleteNativeAgentSessionsByEnvironment(doomed.id);
+    } finally {
+      unownedRead.mockRestore();
+    }
+    expect(backfilled).toBe(true);
+    expect(rawRow(storage, session.key)).toBeNull();
+    expect((await storage.getNativeAgentSession(other.key))?.environmentId).toBe(kept.id);
+  });
+
   test("inside an atomic scope that buffers the store, reads the buffered value", async () => {
     const storage = await service();
     const environment = await storage.addEnvironment(createEnvironment("project-1"));

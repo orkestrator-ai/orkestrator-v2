@@ -553,6 +553,66 @@ export function discoveryAnnouncementKey(value: unknown): string {
   });
 }
 
+/** At most this many changed paths are named per announcement. */
+export const DISCOVERY_CHANGED_PATH_LIMIT = 8;
+const DISCOVERY_CHANGED_PATH_DEPTH = 4;
+const DISCOVERY_PATH_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/;
+
+/**
+ * Where two announced values of one discovery section differ, as content-free
+ * paths (todo 7530): object keys that are plain identifiers (anything else
+ * reads `other`), `[]` for an entry of an array of the same length, `[count]`
+ * when its length changed and `[order]` when only its order did. Values never
+ * appear. Both sides are compared as a view sees them
+ * ({@link discoveryAnnouncementKey}), so a change that does not announce
+ * names nothing. Bounded by {@link DISCOVERY_CHANGED_PATH_LIMIT} paths and a
+ * depth of four; a difference below that depth is named at the depth.
+ */
+export function discoveryChangedPaths(previous: unknown, next: unknown): string[] {
+  const parse = (value: unknown): unknown => {
+    const key = discoveryAnnouncementKey(value);
+    return key === undefined ? undefined : (JSON.parse(key) as unknown);
+  };
+  const paths = new Set<string>();
+  const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const visit = (left: unknown, right: unknown, path: string, depth: number): void => {
+    if (paths.size >= DISCOVERY_CHANGED_PATH_LIMIT || same(left, right)) return;
+    const label = path || "value";
+    if (Array.isArray(left) && Array.isArray(right)) {
+      if (left.length !== right.length) {
+        paths.add(`${label}[count]`);
+        return;
+      }
+      const sortedLeft = left.map((entry) => JSON.stringify(entry)).sort();
+      const sortedRight = right.map((entry) => JSON.stringify(entry)).sort();
+      if (sortedLeft.every((entry, index) => entry === sortedRight[index])) {
+        paths.add(`${label}[order]`);
+        return;
+      }
+      if (depth >= DISCOVERY_CHANGED_PATH_DEPTH) {
+        paths.add(`${label}[]`);
+        return;
+      }
+      for (let index = 0; index < left.length; index += 1) {
+        visit(left[index], right[index], `${label}[]`, depth + 1);
+      }
+      return;
+    }
+    if (isRecord(left) && isRecord(right) && depth < DISCOVERY_CHANGED_PATH_DEPTH) {
+      for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+        const name = DISCOVERY_PATH_KEY.test(key) ? key : "other";
+        visit(left[key], right[key], path ? `${path}.${name}` : name, depth + 1);
+      }
+      return;
+    }
+    paths.add(label);
+  };
+  visit(parse(previous), parse(next), "", 0);
+  return [...paths];
+}
+
 /**
  * A model catalogue as a view shows it, independent of the order the
  * discovery fan-out happened to answer in.

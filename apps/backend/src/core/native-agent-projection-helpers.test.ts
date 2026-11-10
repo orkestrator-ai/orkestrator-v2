@@ -188,4 +188,57 @@ describe("native agent projection helpers", () => {
       helpers.modelCatalogKey([second, first] as never),
     );
   });
+
+  test("discovery changed paths name where a value moved, never what it holds (todo 7530)", () => {
+    const notice = (receivedAt: string) => ({
+      message: "Codex reported something private-marker",
+      occurrences: [{ receivedAt }],
+    });
+    const runtime = (receivedAt: string, state = "ready") => ({
+      summary: { state, notices: [notice(receivedAt)] },
+      notices: [notice(receivedAt)],
+    });
+    const paths = helpers.discoveryChangedPaths(
+      runtime("2026-11-06T10:00:00Z"),
+      runtime("2026-11-06T10:00:31Z", "starting"),
+    );
+    expect(paths).toEqual([
+      "summary.state",
+      "summary.notices[].occurrences[]",
+      "notices[].occurrences[]",
+    ]);
+    expect(JSON.stringify(paths)).not.toContain("private-marker");
+    expect(JSON.stringify(paths)).not.toContain("2026");
+
+    // Arrays: a length change, an order-only change, and a changed entry.
+    expect(helpers.discoveryChangedPaths([{ id: "a" }], [{ id: "a" }, { id: "b" }])).toEqual([
+      "value[count]",
+    ]);
+    expect(
+      helpers.discoveryChangedPaths([{ id: "a" }, { id: "b" }], [{ id: "b" }, { id: "a" }]),
+    ).toEqual(["value[order]"]);
+    expect(
+      helpers.discoveryChangedPaths(
+        [{ id: "a", status: "connected" }],
+        [{ id: "a", status: "failed" }],
+      ),
+    ).toEqual(["value[].status"]);
+    // A key that is not a plain identifier is never echoed.
+    expect(helpers.discoveryChangedPaths({ "a secret key": 1 }, { "a secret key": 2 })).toEqual([
+      "other",
+    ]);
+    // What does not announce names nothing: the drift counter is not a change.
+    expect(
+      helpers.discoveryChangedPaths(
+        { summary: { drift: { unknownEvents: 1, unknownKinds: [] } } },
+        { summary: { drift: { unknownEvents: 4, unknownKinds: [] } } },
+      ),
+    ).toEqual([]);
+    // Bounded.
+    const wide = (value: number) =>
+      Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`k${index}`, value]));
+    expect(helpers.discoveryChangedPaths(wide(1), wide(2))).toHaveLength(
+      helpers.DISCOVERY_CHANGED_PATH_LIMIT,
+    );
+  });
 });

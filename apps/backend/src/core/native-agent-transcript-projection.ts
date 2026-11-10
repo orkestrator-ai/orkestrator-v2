@@ -112,6 +112,7 @@ import {
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
 import { sessionIncompleteTurnNotice } from "./models.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { NativeAgentResumeIdentityObserver } from "./native-agent-resume-identity.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
@@ -208,6 +209,7 @@ import {
   attachProgressToToolRows,
   backgroundTaskIdFromProjectedLaunch,
   discoveryAnnouncementKey,
+  discoveryChangedPaths,
   displayMessage,
   firstNamedCursor,
   firstUserMessageOf,
@@ -3824,7 +3826,7 @@ export class NativeAgentTranscriptProjection {
       expiresAt: number;
       error?: string;
     },
-  ): { changed: boolean; announce: boolean } {
+  ): { changed: boolean; announce: boolean; changedPaths: string[] } {
     const previous = this.progressiveDiscoveryCache.get(key);
     const semantic = JSON.stringify({
       value: entry.value,
@@ -3868,7 +3870,25 @@ export class NativeAgentTranscriptProjection {
       if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
       this.progressiveDiscoveryCache.delete(oldest);
     }
-    return { changed, announce };
+    // Diagnostic only, and computed only for an announcement: which part of
+    // the value moved (todo 7530). Content-free paths, never values.
+    const changedPaths = !announce
+      ? []
+      : !previous
+        ? ["initial"]
+        : !retainedValue
+          ? ["availability"]
+          : discoveryChangedPaths(previous.value, entry.value);
+    return { changed, announce, changedPaths };
+  }
+
+  /** Count an announced discovery change by section and changed path (todo 7530). */
+  private recordDiscoveryAnnouncement(
+    input: NativeAgentDiscoveryUpdateInput,
+    section: NativeAgentDiscoverySection,
+    changedPaths: readonly string[],
+  ): void {
+    nativeSessionInvalidationMetrics.recordDiscoveryRenewal(section, input.agent, changedPaths);
   }
 
   private scheduleProgressiveDiscovery(
@@ -3942,13 +3962,14 @@ export class NativeAgentTranscriptProjection {
       )
         return;
       const previous = this.progressiveDiscoveryCache.get(cacheKey);
-      const { announce } = this.storeProgressiveDiscovery(cacheKey, {
+      const { announce, changedPaths } = this.storeProgressiveDiscovery(cacheKey, {
         value: previous?.value,
         availability: previous?.value === undefined ? "unavailable" : "stale",
         expiresAt: this.host.now() + 5_000,
         error: "Discovery timed out",
       });
       if (!announce) return;
+      this.recordDiscoveryAnnouncement(input, section, changedPaths);
       this.storage.announceNativeAgentSessionProjection(input.environmentId, "discovery-deadline", {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
@@ -3959,7 +3980,7 @@ export class NativeAgentTranscriptProjection {
         settled = true;
         clearTimeout(deadline);
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        const { announce } = phases.normalize(() =>
+        const { announce, changedPaths } = phases.normalize(() =>
           this.storeProgressiveDiscovery(cacheKey, {
             value,
             availability: "ready",
@@ -3978,6 +3999,7 @@ export class NativeAgentTranscriptProjection {
         // its quiet backoff) four times per expiry for nothing: a view reads
         // only values, and they did not change.
         if (!announce) return;
+        this.recordDiscoveryAnnouncement(input, section, changedPaths);
         this.storage.announceNativeAgentSessionProjection(
           input.environmentId,
           "discovery-renewal",

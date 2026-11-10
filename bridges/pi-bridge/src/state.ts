@@ -593,8 +593,17 @@ export interface SessionState {
    * failed and Pi is retrying it. Settled by `compaction_end`. Runtime-only.
    */
   compactionRetry?: { messageId: string; sourcePartId: string };
-  /** Wall clock the session was last touched by a tab-facing route. */
+  /**
+   * Wall clock of the last person's action on the session: a write route or a
+   * resume (`liveness.ts`). Reads never refresh it, so an open idle tab still
+   * lets the session detach.
+   */
   lastAccessed: number;
+  /**
+   * Session requests by route label and whether each touched `lastAccessed`
+   * (`liveness.ts`). Runtime-only and bounded by the route vocabulary.
+   */
+  routeCounts?: Map<string, { requests: number; touches: number }>;
   /**
    * What this bridge saw and did not understand, and what Pi told it.
    *

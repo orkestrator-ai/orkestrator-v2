@@ -101,12 +101,14 @@ import {
   freshToolResults,
   freshToolStates,
   gapHistogram,
+  discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
   selectedCases,
   shellOutputContainsMarker,
   type CaseRecord,
   type IdleObservationCase,
+  type DiscoveryRenewalCounts,
   type InvalidationCounts,
 } from "./idle-observation-live-support";
 import { sidebarActivity } from "./sidebar-activity";
@@ -783,13 +785,17 @@ test.describe("live idle observation", () => {
             metrics?: {
               kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
             };
-            sessionInvalidations?: { byScope?: InvalidationCounts };
+            sessionInvalidations?: {
+              byScope?: InvalidationCounts;
+              discoveryRenewals?: DiscoveryRenewalCounts;
+            };
           } | null;
           const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
           return {
             skipped: sweep?.cacheHits ?? 0,
             read: sweep?.cacheMisses ?? 0,
             invalidations: diagnostics?.sessionInvalidations?.byScope,
+            discoveryRenewals: diagnostics?.sessionInvalidations?.discoveryRenewals,
           };
         };
 
@@ -1840,6 +1846,16 @@ test.describe("live idle observation", () => {
           );
           record.timings.idleInvalidations = invalidations.total ?? 0;
           record.notes.push(`idle invalidations by cause: ${JSON.stringify(invalidations)}`);
+          // Todo 7530: which discovery section announced, and which paths moved.
+          record.notes.push(
+            `idle discovery announcements by section: ${JSON.stringify(
+              discoveryRenewalDelta(
+                sweepsBefore.discoveryRenewals,
+                sweepsAfter.discoveryRenewals,
+                platform,
+              ),
+            )}`,
+          );
           await expect
             .poll(runtimeState, { timeout: 40_000, intervals: [500] })
             .not.toBeUndefined();

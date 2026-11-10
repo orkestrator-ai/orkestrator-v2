@@ -7,6 +7,7 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { StorageService } from "./storage.js";
 import { collaborators } from "./native-agent-service-test-collaborators.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 /*
  * Todo 0049 task 4: an idle Codex view read 27 times a minute live against
@@ -257,6 +258,10 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
     await withIdleCodex(async ({ service, state, counted, advance }) => {
       const tokens: Record<string, string | undefined> = {};
       await warmUp(service, tokens);
+      // Todo 7530: the announcement also names its section and changed path.
+      const metricsWereEnabled = nativeSessionInvalidationMetrics.enabled;
+      nativeSessionInvalidationMetrics.setEnabled(true);
+      nativeSessionInvalidationMetrics.reset();
       const result = await idleMinute(service, counted, advance, tokens, (elapsed) => {
         // A late command change or async question on the idle thread.
         if (elapsed === 10_000) state.contentRevision = "process-1:1.5:0";
@@ -266,6 +271,11 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
       });
       expect(result.idle).toEqual({ "content-revision": 2, "discovery-renewal": 1 });
       expect(result.invalidatedReads).toBe(3);
+      expect(nativeSessionInvalidationMetrics.snapshot().discoveryRenewals).toEqual({
+        codex: { runtime: { count: 1, changed: { "summary.state": 1 } } },
+      });
+      nativeSessionInvalidationMetrics.reset();
+      nativeSessionInvalidationMetrics.setEnabled(metricsWereEnabled);
     });
   }, 30_000);
 

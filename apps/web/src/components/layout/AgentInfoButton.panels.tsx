@@ -592,7 +592,19 @@ export function AgentRuntimePanel({
       ) : null}
       {runtime?.state || runtime?.version ? (
         <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-          <span>{runtime.state ?? "state unavailable"}</span>
+          <span>
+            {runtime.state ?? "state unavailable"}
+            {/* Which agent process the bridge runs: unchanged while one warm
+                process takes every turn, higher once another starts. */}
+            {runtime.runtimeGeneration !== undefined ? (
+              <span
+                data-testid="agent-runtime-generation"
+                title={`The bridge has started ${providerLabel} process ${runtime.runtimeGeneration}; the number changes only when it starts another.`}
+              >
+                {` · process ${runtime.runtimeGeneration}`}
+              </span>
+            ) : null}
+          </span>
           <span>
             {runtime.version ? `${providerLabel} ${runtime.version}` : "version unavailable"}
           </span>

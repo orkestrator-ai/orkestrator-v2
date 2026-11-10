@@ -404,6 +404,23 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     expect(snapshotNotices({ transcriptTruncated: false, runtime: health.summary })).toEqual([]);
   });
 
+  // 0005 task 8: the warm Claude CLI's generation reaches the projection as-is.
+  test("carries the runtime generation as a positive integer, and nothing else", () => {
+    expect(bridgeRuntimeSummary({ summary: { state: "attached", runtimeGeneration: 3 } })).toEqual({
+      state: "attached",
+      runtimeGeneration: 3,
+    });
+    // Large but exact: compared for equality, so never clamped.
+    expect(
+      bridgeRuntimeSummary({ summary: { state: "attached", runtimeGeneration: 2 ** 40 } }),
+    ).toEqual({ state: "attached", runtimeGeneration: 2 ** 40 });
+    for (const runtimeGeneration of [0, -1, 1.5, "3", Number.MAX_SAFE_INTEGER + 1, null]) {
+      expect(bridgeRuntimeSummary({ summary: { state: "detached", runtimeGeneration } })).toEqual({
+        state: "detached",
+      });
+    }
+  });
+
   test("drops a malformed steer summary whole", () => {
     expect(
       bridgeRuntimeSummary({ summary: { state: "attached", steer: { ...STEER, bytes: -1 } } }),

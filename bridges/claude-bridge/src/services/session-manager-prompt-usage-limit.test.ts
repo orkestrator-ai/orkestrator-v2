@@ -147,9 +147,15 @@ describe("usage-limit log level", () => {
       call.push(rejected);
       call.push({ type: "result", subtype: "success", is_error: true, result: "Request refused." });
       call.finish();
-      await expect(prompt).rejects.toThrow();
+      const rejection = await prompt.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
 
       expect(session.errorCode).toBe("usage-limit");
+      // The route reads this marker to keep its completion log a non-error:
+      // the rejection's own wording does not say it was a usage limit.
+      expect((rejection as { usageLimited?: unknown }).usageLimited).toBe(true);
       expect(logs.errorLines().filter((line) => line.includes("[bridge.claude]"))).toEqual([]);
       expect(logs.warnLines()).toContain("[bridge.claude] prompt.usage-limited errorClass=Error");
     } finally {
@@ -166,7 +172,13 @@ describe("usage-limit log level", () => {
       const call = await nextQueryCall();
       call.push({ type: "result", subtype: "success", is_error: true, errors: ["Overloaded"] });
       call.finish();
-      await expect(prompt).rejects.toThrow("Overloaded");
+      const rejection = await prompt.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toContain("Overloaded");
+      expect((rejection as { usageLimited?: unknown }).usageLimited).toBeUndefined();
 
       expect(logs.errorLines()).toContain("[bridge.claude] prompt.failed errorClass=Error");
       expect(

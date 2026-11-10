@@ -65,6 +65,34 @@ export function isUsageLimitError(error: unknown): boolean {
   }
 }
 
+/**
+ * The plain property a failed turn's rejection carries when the turn was a
+ * usage-limit refusal. The prompt route reads it to keep its own completion
+ * log consistent with the turn's: a refusal known only from the turn's
+ * rejected `rate_limit_event` has wording no text classifier recognises.
+ *
+ * A property on the turn's own error rather than the session's `errorCode`,
+ * which a later turn replaces before the route's handler runs. A plain string
+ * key rather than a symbol or class, because the route reaches the session
+ * manager through an import boundary that tests replace wholesale.
+ */
+export const USAGE_LIMITED_ERROR_PROPERTY = "usageLimited";
+
+/** Mark a failed turn's rejection as a usage-limit refusal (see above). */
+export function markUsageLimitError(error: unknown): void {
+  if ((typeof error !== "object" && typeof error !== "function") || error === null) return;
+  try {
+    Object.defineProperty(error, USAGE_LIMITED_ERROR_PROPERTY, {
+      value: true,
+      configurable: true,
+      enumerable: false,
+      writable: false,
+    });
+  } catch {
+    // A frozen or exotic rejection keeps its text classification only.
+  }
+}
+
 export function ownsActiveTurn(turn: TurnState): boolean {
   const { session, sessionId } = turn;
   return (

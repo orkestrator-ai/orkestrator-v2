@@ -15,6 +15,7 @@ import { settlePendingApiRetry } from "./session-manager-prompt-handlers/transcr
 import {
   diagnosticErrorClass,
   isUsageLimitError,
+  markUsageLimitError,
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
 } from "./session-manager-prompt-turn-lifecycle.js";
@@ -252,6 +253,9 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
   const usageLimited = !killedBy && (turn.rateLimitRejected || isUsageLimitError(error));
   if (usageLimited) {
     log.warn("prompt.usage-limited", { errorClass: diagnosticErrorClass(error) });
+    // The route logs the rejection again once it settles; tell it this one
+    // was a refusal, which its text alone may not show.
+    markUsageLimitError(error);
   } else {
     log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
   }

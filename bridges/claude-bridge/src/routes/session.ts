@@ -184,13 +184,30 @@ function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 | 503 {
 }
 
 /**
+ * Whether a turn's rejection is a usage-limit refusal. The turn marks its own
+ * rejection with a plain `usageLimited` property when it classified the
+ * refusal, including from a rejected `rate_limit_event` whose result wording no
+ * classifier recognises (`markUsageLimitError` in the turn lifecycle). A plain
+ * property for the same reason `sessionErrorStatus` reads `code`. The text
+ * classifier remains the fallback for a rejection the turn did not settle.
+ */
+function isUsageLimitedRejection(error: unknown): boolean {
+  try {
+    if ((error as { usageLimited?: unknown } | null)?.usageLimited === true) return true;
+    return classifyUsageLimitError(error instanceof Error ? error.message : error) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Log a prompt turn that failed after the route accepted it. A turn the
  * provider refused on a used-up plan allowance was already recorded by the
  * turn as `prompt.usage-limited` and is reported to the session; it is an
  * account state, not a processing fault, so it is not logged again as one.
  */
 function logPromptProcessingFailure(error: unknown): void {
-  if (classifyUsageLimitError(error instanceof Error ? error.message : error)) {
+  if (isUsageLimitedRejection(error)) {
     log.debug("prompt.processing-usage-limited");
     return;
   }

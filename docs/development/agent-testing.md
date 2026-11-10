@@ -2211,6 +2211,56 @@ proves the plumbing and the wording the model receives, not that a real model
 obeys it; that needs the billed `routing` run. The content-free summary is
 `output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
 
+### Coordinator node mail between two profiles (fake model)
+
+`mise run test:agent:coordinator:node-mail-fake` qualifies mail between a
+command node's main coordinator and a leaf's main coordinator on two real
+backends, with no login and nothing billed (to-do 2900). It starts two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profiles, the second as a companion profile of the
+isolated runner (`companionProfiles` in `isolated-browser.ts`), with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-node-mail-fake.spec.ts`, then stops and resets
+both.
+
+The spec adds a checkout of one shared repository to each profile, because
+the fixture projects' local-path origins give a command node nothing to
+match. The command node then attaches the leaf with `add_node` over the
+leaf's real gateway origin. The leaf's gateway token is read in memory from
+its auth file and handed to the product, never printed. Each profile's
+isolated Pi `models.json` names `coordinator-node-mail-fake-model.ts` (one
+loopback server, base paths `/desk/v1` and `/leaf/v1`; script in
+`coordinator-node-mail-fake-model-script.ts`). Both profiles' unattended
+budget is set to 3. Then:
+
+- **Round trip.** The command node's coordinator calls `list_mailboxes` with
+  the leaf's `nodeId` (reachable), then `send_message` with `nodeId` and
+  `toEnvironmentId: "coordinator"`. The leaf's coordinator answers with
+  `replyToMessageId`. The answer must come back through the leaf's outbox
+  from a `node` sender with role `agent`, and wake the command node's
+  coordinator with the answer framing.
+- **Loop bound.** The command node's coordinator asks a new question on every
+  answer. Three answers must wake it, the fourth must be `inject-held` with
+  `loop-budget-exhausted`, one budget notice must reach its model, the leaf
+  must be woken four times, and then nothing more.
+- **Replacing the main.** The command node's main is closed and a new one
+  opened. The held answer must arrive there still held and wake neither
+  model.
+
+The fake model counts facts about each wake (sender kind and role, trust,
+framing, question and answer numbers, the budget notice), never its text. A
+pass proves the plumbing, not a real model's choices. Both backends share one
+kernel and loopback, so a cross-machine, SSH-forwarded or dropped link is not
+exercised. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-node-mail-fake/summary.json`.
+To run the spec against two profiles you started yourself, start both with
+the same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
+It attaches the leaf, adds projects and changes both profiles' messaging and
+Pi settings, so reset both afterwards.
+
 ### Coordinator checkout sync with a slow remote (fake model)
 
 `mise run test:agent:coordinator-slow-remote` qualifies the coordinator's

@@ -537,7 +537,12 @@ repository exchange ordinary node mail
   On the leaf each new message from the command node's coordinator starts a
   fresh budget, as a new request to a worker does, so the leaf answers every
   question the command node actually sends; the hourly limit still applies
-  there.
+  there. Replacing the command node's main does not release a held answer:
+  the next main takes it over still held
+  ([agent-messaging.md](agent-messaging.md#budgets)). The exchange, the bound
+  and the replacement are qualified between two `dev:test` profiles with a
+  loopback model by `mise run test:agent:coordinator:node-mail-fake`
+  ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same

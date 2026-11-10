@@ -186,6 +186,23 @@ describe("maintenance settings (report 0910)", () => {
     writer.exec("ROLLBACK");
   });
 
+  test("checkpoints sync with checkpoint_fullfsync on both files; commits keep fullfsync off", async () => {
+    // macOS's system SQLite defaults checkpoint_fullfsync on only through a
+    // build option (DEFAULT_CKPTFULLFSYNC); Bun's own build on Linux does not.
+    // The connection sets it, so neither the library nor the platform decides.
+    const directory = await dataDir();
+    const main = openBackendDatabase(directory);
+    open.push(main);
+    const ledger = openChangeLedgerDatabase(directory);
+    open.push(ledger);
+    for (const db of [main, ledger]) {
+      expect(db.db.query("PRAGMA checkpoint_fullfsync").get()).toEqual({
+        checkpoint_fullfsync: 1,
+      });
+      expect(db.db.query("PRAGMA fullfsync").get()).toEqual({ fullfsync: 0 });
+    }
+  });
+
   test("foreign_keys stays off because no table declares a foreign key", async () => {
     const directory = await dataDir();
     const main = openBackendDatabase(directory);

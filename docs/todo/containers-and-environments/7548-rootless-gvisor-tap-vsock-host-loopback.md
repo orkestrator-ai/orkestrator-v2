@@ -88,5 +88,5 @@ gvisor-tap-vsock.
 ## Related
 
 - [6820](6820-agent-tools-peer-gate-linux-evidence.md) task 2 (the gate's rootless evidence)
-- [0109](0109-rootless-linux-runtime-gaps.md) (rootless runtime gaps)
+- [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (the rootless host-loopback decision from the retired to-do 0109)
 - [4730](4730-disposable-docker-daemon-for-live-suites.md) (the disposable daemon used to observe this)

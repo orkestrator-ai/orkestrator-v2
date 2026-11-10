@@ -8,7 +8,9 @@ import {
   type NodeActionRequest,
 } from "./node-action-requests.js";
 import { NodeOutcomeLedger, routeToNode } from "./node-routing.js";
-import { TestNodeNetwork, settle } from "./node-network-test-support.js";
+import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 import type { NodePortal } from "./node-portal.js";
 import { NodeCoordination } from "./node-coordination.js";
 

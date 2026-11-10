@@ -64,10 +64,11 @@ describe("PreviewTunnelServer", () => {
     });
     if (created.kind !== "definition") throw new Error("expected definition");
     serviceId = created.definition.serviceId;
+    // The production hello timeout: a descheduled worker that sends its hello
+    // late must not lose the tunnel. Only the missing-hello case shortens it.
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: harness.runtime.metrics,
-      helloTimeoutMs: 200,
     });
     server = createServer((_request, response) => response.end("not a tunnel"));
     server.on("upgrade", (request, socket, head) => {
@@ -120,13 +121,20 @@ describe("PreviewTunnelServer", () => {
       control,
       data,
       closed,
+      // A tunnel that closes first fails the wait with its close code
+      // instead of leaving the test to hang until its deadline.
       nextControl: (type) =>
-        new Promise((resolve) => {
+        new Promise((resolve, reject) => {
           const existing = control.find((frame) => !type || frame.type === type);
           if (existing) {
             control.splice(control.indexOf(existing), 1);
             resolve(existing);
-          } else waiters.push({ type, resolve });
+            return;
+          }
+          waiters.push({ type, resolve });
+          void closed.then(({ code, reason }) =>
+            reject(new Error(`tunnel closed (${code} ${reason}) before ${type ?? "a control"}`)),
+          );
         }),
     };
   }
@@ -209,6 +217,12 @@ describe("PreviewTunnelServer", () => {
     );
     expect((await wrong.closed).code).toBe(4401);
 
+    tunnel.close();
+    tunnel = new PreviewTunnelServer({
+      runtime: harness.runtime,
+      metrics: harness.runtime.metrics,
+      helloTimeoutMs: 200,
+    });
     const silent = await open();
     expect((await silent.closed).code).toBe(4408);
 

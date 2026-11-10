@@ -166,7 +166,7 @@ credentials, which this run excluded, so it stays with task 1. Local matrix
 10/10, container matrix 8/8 and `mise run smoke:cli` passed; no defect was
 found. The container matrix first failed 5 of 8 scenarios at environment start because
 Docker's default address pools were full (29 unattached reach-probe networks,
-to-do [7041](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)
+to-do [7041](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)
 task 2), and passed 8/8 with the test-only Docker shim on `PATH`. See
 "Evidence log" and "Assumptions and decisions".
 

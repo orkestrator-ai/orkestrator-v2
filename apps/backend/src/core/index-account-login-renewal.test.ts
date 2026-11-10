@@ -14,6 +14,10 @@ const ACCOUNT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
 for (const accountId of ["default", ACCOUNT_ID]) {
   test(`production auto-switch renewal runs Claude in the ${accountId === "default" ? "host" : "added account"} home`, async () => {
+    // The host login is whatever the backend process inherits; an agent running
+    // this suite under an added account has its own CLAUDE_CONFIG_DIR set.
+    const inheritedConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CONFIG_DIR;
     const dataDir = await mkdtemp(path.join(tmpdir(), "ork-renewal-wiring-"));
     const backend = new OrkestratorBackend({
       dataDir,
@@ -83,6 +87,8 @@ for (const accountId of ["default", ACCOUNT_ID]) {
       read.mockRestore();
       await backend.shutdown();
       await rm(dataDir, { recursive: true, force: true });
+      if (inheritedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = inheritedConfigDir;
     }
   });
 }

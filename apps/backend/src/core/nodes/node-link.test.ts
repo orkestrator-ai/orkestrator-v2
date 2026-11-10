@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { NodeRecord } from "@orkestrator/protocol/command-nodes";
 import {
   UnsupportedVersionError,
@@ -14,7 +14,10 @@ import { nodeMailClient } from "@orkestrator/protocol/contract/domains/node-mail
 import { contractEnvelopeFor, NodeLink } from "./node-link.js";
 import { linkDomainApi } from "./node-domain-clients.js";
 import { NodeOutcomeLedger, routeToNode } from "./node-routing.js";
-import { TestNodeNetwork, settle } from "./node-network-test-support.js";
+import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-test-support.js";
+
+// Stop every node a test left running; see `stopTestNodeNetworks`.
+afterEach(stopTestNodeNetworks);
 
 async function setup(
   fetchOverride?: (input: string | URL | Request, init?: RequestInit) => Promise<Response | null>,

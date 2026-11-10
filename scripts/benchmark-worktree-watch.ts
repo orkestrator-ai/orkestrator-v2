@@ -12,9 +12,14 @@
  * new directories of four files into the top-level `node_modules`.
  *
  * `--mode=before` watches the whole root, which is what every worktree did before
- * this plan. `--mode=after` is what runs now. On Linux the inotify watch count is
- * read from `/proc/self/fdinfo`. `--parent` must be on a volume that delivers
- * events (not macOS's system temporary directory).
+ * this plan. `--mode=after` is what runs now. `--mode=split` forces the Linux
+ * plan (a non-recursive root and a recursive watch per other child) on any
+ * platform, which is how macOS would avoid callbacks from `node_modules`. On
+ * Linux the inotify watch count is read from `/proc/self/fdinfo`. `--host` starts
+ * watches through `watchDirectory`, which is what the backend does: on macOS they
+ * run in the helper process (`watch-host.ts`) and callbacks are the events that
+ * cross back from it. `--parent` must
+ * be on a volume that delivers events (not macOS's system temporary directory).
  *
  *   bun scripts/benchmark-worktree-watch.ts --mode=after [--parent=output/benchmarks] [--json]
  */
@@ -32,6 +37,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { observeCommandInvocations } from "../apps/backend/src/core/shell";
+import { watchDirectory } from "../apps/backend/src/core/watch-host";
 import { worktreeWatchPlanIo } from "../apps/backend/src/core/worktree-watch-plan";
 import { startWorktreeWatcher } from "../apps/backend/src/core/worktree-watcher";
 
@@ -41,10 +47,12 @@ function arg(name: string, fallback: string): string {
 }
 
 const mode = arg("mode", "after");
-if (mode !== "before" && mode !== "after") throw new Error(`unknown --mode=${mode}`);
+if (mode !== "before" && mode !== "after" && mode !== "split")
+  throw new Error(`unknown --mode=${mode}`);
 const parent = path.resolve(arg("parent", path.join(import.meta.dir, "../output/benchmarks")));
 const deliveryDeadlineMs = Number(arg("deadline-ms", "120000"));
 const asJson = process.argv.includes("--json");
+const throughHost = process.argv.includes("--host");
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,6 +106,16 @@ try {
     gitProcesses += 1;
   });
   let callbacks = 0;
+  // Time spent in the watcher's own listener, on this thread.
+  let listenerMs = 0;
+  const timed =
+    (listener: (eventType: string, name: string | null) => void) =>
+    (eventType: string, name: string | null) => {
+      callbacks += 1;
+      const at = performance.now();
+      listener(eventType, name);
+      listenerMs += performance.now() - at;
+    };
   let watches = 0;
   let hints = 0;
   let overflows = 0;
@@ -108,15 +126,15 @@ try {
     worktreePath: worktree,
     comparisonRef: "main",
     plan: mode === "before" ? null : worktreeWatchPlanIo,
+    ...(mode === "split" ? { perDirectoryWatches: true } : {}),
     startWatch: (target, listener, options) => {
       watches += 1;
-      return watch(
-        target,
-        { recursive: options.recursive, persistent: false },
-        (eventType, name) => {
-          callbacks += 1;
-          listener(eventType, name);
-        },
+      if (throughHost) {
+        return watchDirectory(target, timed(listener), options);
+      }
+      const forward = timed(listener);
+      return watch(target, { recursive: options.recursive, persistent: false }, (eventType, name) =>
+        forward(eventType, name ?? null),
       );
     },
     onChange: (hint) => {
@@ -137,27 +155,35 @@ try {
   await until(() => watcher.qualified === true, "coverage");
   const coveredMs = performance.now() - startedAt;
 
-  // Distinct writes until one is reported: the watch is live from here on.
+  // Distinct writes until one is reported: the watch is live from here on. Each
+  // write waits up to 2 s, polled every 25 ms, so the first write's delay is a
+  // delivery time (event plus the settle) rather than a multiple of the wait.
   const writeUntilSeen = async (name: string) => {
     const deadline = Date.now() + deliveryDeadlineMs;
-    for (let attempt = 0; ; attempt += 1) {
+    const firstAt = performance.now();
+    for (let attempt = 1; ; attempt += 1) {
       const relative = `src/${name}-${attempt}.txt`;
       writeFileSync(path.join(worktree, relative), "x");
-      await sleep(500);
-      if ([...seen].some((entry) => entry.startsWith(`src/${name}-`))) return;
+      const waitUntil = Date.now() + 2_000;
+      while (Date.now() < waitUntil) {
+        if ([...seen].some((entry) => entry.startsWith(`src/${name}-`))) {
+          return { attempts: attempt, ms: Math.round(performance.now() - firstAt) };
+        }
+        await sleep(25);
+      }
       if (Date.now() > deadline) throw new Error(`no event for ${name}`);
     }
   };
-  await writeUntilSeen("live");
+  const live = await writeUntilSeen("live");
   await sleep(1_000);
   const inotifyAfterStart = inotifyWatches();
-  const quiet = { callbacks, hints, gitProcesses };
+  const quiet = { callbacks, hints, gitProcesses, listenerMs };
 
   const installAt = performance.now();
   fill(path.join(worktree, "node_modules/new-install"), 500, 4);
   const installMs = performance.now() - installAt;
   // Delivered in order, so the sentinel's arrival means the install's has too.
-  await writeUntilSeen("sentinel");
+  const sentinel = await writeUntilSeen("sentinel");
   await sleep(1_000);
 
   const closeAt = performance.now();
@@ -168,6 +194,7 @@ try {
   const result = {
     workload: "watch-nm-4k",
     mode,
+    host: throughHost,
     platform: process.platform,
     bun: Bun.version,
     watchHandles: watches,
@@ -177,9 +204,14 @@ try {
     closeMs: Math.round(closeMs),
     installMs: Math.round(installMs),
     installCallbacks: callbacks - quiet.callbacks,
+    installListenerMs: Number((listenerMs - quiet.listenerMs).toFixed(1)),
     installHints: hints - quiet.hints,
     overflows,
     planGitProcesses: quiet.gitProcesses,
+    firstWriteAttempts: live.attempts,
+    firstWriteSeenMs: live.ms,
+    sentinelAttempts: sentinel.attempts,
+    sentinelSeenMs: sentinel.ms,
   };
   if (asJson) console.log(JSON.stringify(result));
   else console.table(result);

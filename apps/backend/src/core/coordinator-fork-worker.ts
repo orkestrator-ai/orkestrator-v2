@@ -232,7 +232,7 @@ export function registerCoordinatorForkWorker(
     const launch = parseForkWorkerLaunch(input);
     const remote =
       nodeId && (await context.nodes?.status())?.nodeId !== nodeId
-        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        ? await coordinatorNodeTarget(context, caller, nodeId)
         : undefined;
     const source = remote
       ? await remote.environment(sourceEnvironmentId)

@@ -1,3 +1,4 @@
+import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
@@ -962,6 +963,8 @@ export class OrkestratorBackend {
         this.nodeCoordination.queueNotice(controllerId as BackendId, item),
     });
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
+    // Coordinators refused this node while it was down hear that it is back.
+    connectCoordinatorNodeWakes(this.nodeCoordination, this.coordinators);
     bridgeRemoteAutoSwitchNotices({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       nodeName: async (nodeId) =>
@@ -2907,9 +2910,12 @@ export class OrkestratorBackend {
     this.nodeCoordination.start();
     // Shared usage readings: once now, then a minute apart as a last resort for
     // anything an event did not trigger (a node with nothing new costs a collect).
+    // A repeated `init` must not start a second timer beside the first.
     void this.usageSync.syncAll();
-    this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
-    this.usageSyncTimer.unref?.();
+    if (!this.usageSyncTimer) {
+      this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
+      this.usageSyncTimer.unref?.();
+    }
     this.coordinators.startStatusWakes();
     this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();

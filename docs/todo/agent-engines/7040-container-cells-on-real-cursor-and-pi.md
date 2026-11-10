@@ -48,4 +48,4 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 ## Related
 
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md) task 8 (the fake-engine cells).
-- [7041-manual-docker-profiles-on-exhausted-pools.md](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md) (what blocked the first manual profile start).
+- [Exhausted-pool and probe-network evidence](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06) (what blocked the first manual profile start).

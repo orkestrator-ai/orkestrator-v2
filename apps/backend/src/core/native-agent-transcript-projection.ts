@@ -193,6 +193,7 @@ import {
   updateHashWithFingerprints,
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
+import { PreviewFillAnswers } from "./native-agent-preview-fill.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { goalPublicView, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
@@ -558,6 +559,8 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** When the last exact recovery read started, per key; spaces those reads out. */
   private readonly progressiveHydrationReadStarts = new Map<string, number>();
+  /** Whether a view's incomplete preview fills the live window, per provider token. */
+  private readonly progressivePreviewFills = new PreviewFillAnswers();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
   /** What `get_progressive_read_metrics` reports. */
   progressiveReadSamples(): readonly ProgressiveReadMetric[] {
@@ -798,6 +801,7 @@ export class NativeAgentTranscriptProjection {
       progressiveHydrations: this.progressiveHydrations.size,
       progressiveHydrationTimers: this.progressiveHydrationTimers.size,
       progressiveHydrationReadStarts: this.progressiveHydrationReadStarts.size,
+      progressivePreviewFills: this.progressivePreviewFills.size,
       progressiveDiscoveryProviders: this.progressiveDiscoveryJobsByProvider.size,
       interactiveSnapshotShares: this.interactiveSnapshotShares.size,
       projectedMessages: this.projectedMessages.size,
@@ -878,6 +882,7 @@ export class NativeAgentTranscriptProjection {
     );
     this.progressiveHydrations.clear();
     this.progressiveHydrationReadStarts.clear();
+    this.progressivePreviewFills.clear();
     this.progressiveReads.clear();
     this.progressiveTranscriptCache.clear();
     this.transcriptDeltaBases.clear();
@@ -2065,14 +2070,6 @@ export class NativeAgentTranscriptProjection {
     return snapshot;
   }
 
-  private progressivePreviewFillsWindow(
-    snapshot: ProviderTranscriptSnapshot,
-    liveWindow: { messages: number; targetBytes: number },
-  ): boolean {
-    if (snapshot.messages.length >= liveWindow.messages) return true;
-    return Buffer.byteLength(JSON.stringify(snapshot.messages)) >= liveWindow.targetBytes;
-  }
-
   private scheduleIncompleteProgressiveHydration(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
@@ -2115,13 +2112,15 @@ export class NativeAgentTranscriptProjection {
       (snapshot.omittedParts ?? 0) <= 0
     )
       return;
-    if (
-      (snapshot.omittedParts ?? 0) <= 0 &&
-      this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
-    )
-      return;
+    // A recovery already scheduled for this revision settles the question;
+    // asking first spares measuring the raw window.
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
+    if (
+      (snapshot.omittedParts ?? 0) <= 0 &&
+      this.progressivePreviewFills.fills(key, snapshot, input.liveWindow)
+    )
+      return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
     if (previousTimer) clearTimeout(previousTimer);
     const entry: ProgressiveHydrationEntry = {
@@ -5237,6 +5236,7 @@ export class NativeAgentTranscriptProjection {
         this.progressiveHydrationReadStarts.delete(candidate);
       }
     }
+    this.progressivePreviewFills.forgetPrefix(progressivePrefix);
     for (const candidate of Array.from(this.progressiveHydrations.keys())) {
       if (!candidate.startsWith(progressivePrefix)) continue;
       const timer = this.progressiveHydrationTimers.get(candidate);

@@ -1,5 +1,9 @@
 ## Task analysis
 
+# Prove the measurement row cap on a busy live profile
+
+From efficiency report (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`) R14, part 0700 of batch E2, task 4 ("Prove the size curve flattens"). The batch file was deleted when E2 was built; it is in Git history at base commit `e198fd4a7`.
+
 Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. Task 2 analysed again and done 2026-11-06 against `main` at `c1724ab74`.
 
 ### Tasks
@@ -107,3 +111,7 @@ Chosen: the old 10 s stays as a floor, the budget is 5 ms per planned path, and 
 ### Task 2: qualification completed under 7310
 
 7310 kept the quiet-host and isolated live-profile evidence open rather than treating busy-host service benchmarks as completion. It was recorded on 2026-11-10 by this file's method (results in [Change tracking: restore](../../architecture/change-tracking.md#restore)), and 7310 was retired. 7550 remains the throughput follow-up.
+
+### Task 1: Preserve document identity
+
+Restored or added one H1 title and an origin note below the opening Task analysis heading, retaining the required first section and existing task scope.

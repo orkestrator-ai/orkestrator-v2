@@ -91,6 +91,18 @@ export class TurnEndRecoveryScheduler {
     return result;
   }
 
+  /** Restore invalidates uncaptured endpoints before its first asynchronous write. */
+  cancelForRestore(worktreeId: string): void {
+    this.deps.ledger.transaction(() => this.deps.ledger.invalidateEndRecoveries(worktreeId));
+    this.deps.turns.cancelEndRecovery(worktreeId);
+    for (const [turnId, entry] of Array.from(this.pending)) {
+      if (this.deps.ledger.turn(turnId)?.worktree_id !== worktreeId) continue;
+      if (entry.timer) clearTimeout(entry.timer);
+      this.pending.delete(turnId);
+    }
+    this.settleIdle();
+  }
+
   /** Resolves once nothing is scheduled or running. */
   idle(): Promise<void> {
     if (this.pending.size === 0) return Promise.resolve();

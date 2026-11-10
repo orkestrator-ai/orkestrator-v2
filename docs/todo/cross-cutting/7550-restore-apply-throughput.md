@@ -1,5 +1,9 @@
 ## Task analysis
 
+# Speed up bulk restore apply and qualify client behaviour
+
+Follow-up from todo 7310 bulk restore qualification; measurements are recorded in [Change tracking: restore](../../architecture/change-tracking.md#restore).
+
 Analysed 2026-11-09 against `main` at `b8aa0721b`, with 7310's change applied.
 
 ### Tasks
@@ -81,3 +85,7 @@ Not run: the service benchmark's cold checkpoint (`--restore-cold`) on a quiet h
 ### Task 3: qualification ownership
 
 7310 task 2 owned the quiet-host and isolated live-profile applies and recorded them on 2026-11-10; 7310 is retired. This file keeps only what that run did not cover: the quiet-host cold-checkpoint benchmark and a live end-capture timeout that recovers.
+
+### Task 1: Preserve document identity
+
+Restored or added one H1 title and an origin note below the opening Task analysis heading, retaining the required first section and existing task scope.

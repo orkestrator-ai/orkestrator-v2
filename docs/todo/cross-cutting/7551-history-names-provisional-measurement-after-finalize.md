@@ -1,5 +1,9 @@
 ## Task analysis
 
+# Stop finalized turn history naming a provisional measurement
+
+Found during todo 7310 live bulk restore qualification on 2026-11-10; measurements are recorded in [Change tracking: restore](../../architecture/change-tracking.md#restore).
+
 Analysed 2026-11-10 against `main` at `9a64641c4`, with 7310's change applied.
 
 ### Tasks
@@ -31,3 +35,9 @@ Analysed 2026-11-10 against `main` at `9a64641c4`, with 7310's change applied.
 
 - [Change tracking: restore](../../architecture/change-tracking.md#restore): where the window was measured.
 - [7550-restore-apply-throughput.md](7550-restore-apply-throughput.md): the other follow-up from the same qualification.
+
+## Assumptions and decisions
+
+### Task 1: Preserve document identity
+
+Restored or added one H1 title and an origin note below the opening Task analysis heading, retaining the required first section and existing task scope.

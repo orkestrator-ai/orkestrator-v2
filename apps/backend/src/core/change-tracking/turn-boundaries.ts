@@ -24,6 +24,7 @@
 import { randomUUID } from "node:crypto";
 import {
   END_CAPTURE_TIMEOUT_REASON,
+  END_RECOVERY_EXHAUSTED_REASON,
   OwnerFenceError,
   TERMINAL_TURN_LIFECYCLES as TERMINAL,
   type ChangeLedger,
@@ -61,8 +62,6 @@ export type TurnStartResult =
 
 /** A timed-out end capture that a later background capture measured. */
 export const END_RECOVERED_REASON = "end-captured-later";
-/** A timed-out end capture whose background retries all ran out too. */
-export const END_RECOVERY_EXHAUSTED_REASON = "capture-timeout-unrecovered";
 
 /**
  * One background attempt to measure a turn whose end capture timed out.
@@ -550,6 +549,7 @@ export class TurnBoundaryService {
     if (!turn || turn.lifecycle !== "end-unavailable" || turn.reason !== END_CAPTURE_TIMEOUT_REASON)
       return "not-eligible";
     if (ledger.latestTurnForThread(turn.thread_id)?.turn_id !== turn.turn_id) return "superseded";
+    if (ledger.restoreRanOnWorktreeSince(turn.worktree_id, turn.started_at)) return "superseded";
     if (
       ledger.turnRanOnWorktreeSince(
         turn.worktree_id,
@@ -763,6 +763,9 @@ export class TurnBoundaryService {
         reasons: baseline ? [] : [segment.baseline_reason ?? "baseline-unavailable"],
         resourceKey: threadKey,
         ownerFence: fence,
+        selectionEligible: later
+          ? () => ledger.latestTurnForThread(turn.thread_id)?.turn_id === turnId
+          : undefined,
       });
       if (threadOutcome.revision !== null) advanced.push(threadKey);
     }

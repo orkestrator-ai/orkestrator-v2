@@ -141,6 +141,8 @@ export const TERMINAL_TURN_LIFECYCLES: ReadonlySet<string> = new Set(lifecyclesW
 
 /** The reason an `end-unavailable` turn records when its end capture ran out of time. */
 export const END_CAPTURE_TIMEOUT_REASON = "capture-timeout";
+/** Recovery stopped permanently, through exhaustion or superseding restore writes. */
+export const END_RECOVERY_EXHAUSTED_REASON = "capture-timeout-unrecovered";
 
 /** A turn the provider accepted that has not ended. */
 const EXECUTING_TURN_LIFECYCLES = [
@@ -1044,6 +1046,29 @@ export class ChangeLedger {
         "SELECT * FROM change_turn_boundaries WHERE lifecycle = 'end-unavailable' AND (reason = ? OR EXISTS (SELECT 1 FROM change_references r WHERE r.owner_kind = 'turn' AND r.owner_id = change_turn_boundaries.turn_id AND r.reason = 'turn-recovery-pending')) ORDER BY finished_at DESC LIMIT ?",
       )
       .all(END_CAPTURE_TIMEOUT_REASON, limit) as TurnBoundaryRow[];
+  }
+
+  /** Restore writes cannot be attributed to a turn's delayed endpoint. */
+  restoreRanOnWorktreeSince(worktreeId: string, afterIso: string): boolean {
+    return (
+      this.db
+        .query(
+          `SELECT 1 FROM change_restore_operations o
+       JOIN change_measurements m ON m.id = o.measurement_id
+       WHERE m.worktree_id = ? AND (o.state = 'applying' OR o.created_at >= ?)
+       LIMIT 1`,
+        )
+        .get(worktreeId, afterIso) !== null
+    );
+  }
+
+  /** Restore owns subsequent writes: uncaptured ends must never retry, even after restart. */
+  invalidateEndRecoveries(worktreeId: string): void {
+    this.db
+      .query(
+        "UPDATE change_turn_boundaries SET reason = ? WHERE worktree_id = ? AND lifecycle = 'end-unavailable' AND reason = ?",
+      )
+      .run(END_RECOVERY_EXHAUSTED_REASON, worktreeId, END_CAPTURE_TIMEOUT_REASON);
   }
 
   pendingEndRecoverySnapshot(turnId: string): string | null {

@@ -474,6 +474,24 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+- "Survives a crash" means an application or operating-system crash. Whether a
+  commit also survives sudden power loss depends on the platform's sync call.
+  On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
+  on macOS 27.2), and a FULL commit there calls plain `fsync`, which does not
+  flush the drive's write cache, so a power cut can lose the last commits
+  (WAL checksums stop recovery at the first torn frame, so it does not
+  corrupt the file). Apple's build also maps `PRAGMA fullfsync = ON` to
+  `F_BARRIERFSYNC` (ordering, no cache flush) on APFS and HFS+, not to
+  `F_FULLFSYNC`, so that PRAGMA cannot buy full power-loss durability there;
+  it costs about four to six times a plain commit. Evidence and numbers:
+  [to-do 5180](../todo/cross-cutting/5180-sqlite-durability-tiers.md) task 3,
+  `scripts/benchmark-sqlite-sync.ts`.
+- Every connection sets `checkpoint_fullfsync = ON`, so a checkpoint, which
+  copies WAL frames into the database file and then resets the WAL, syncs
+  with a write barrier on macOS. Apple's SQLite already defaults to that
+  (`DEFAULT_CKPTFULLFSYNC`); setting it keeps the ordering if the library or
+  its build changes. It changes nothing on Linux, which has no such call.
+  `fullfsync` (each commit) stays off.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
   their backups) returns up to 16 MiB of freed pages to the filesystem
@@ -531,7 +549,15 @@ and its own, daily, best-effort copies (below):
   also reads `dbstat` on the finished copy, never the live file, and the largest
   12 tables and indexes by bytes go to `backups/.top-tables.json`, one set per
   database. Bun 1.4.4 on Linux has `dbstat`; a SQLite without it reports nothing
-  and the copy still counts. A separate
+  and the copy still counts. Because nearly every store shares `store_rows`, the
+  same child also sums `octet_length(value)` per store over the copy (through
+  `length(CAST(value AS BLOB))` on a SQLite older than 3.43) and folds store
+  names to families with `leaseFamily`'s rules before anything leaves it
+  (`web-annotations/<environmentId>` counts as `web-annotations`): the largest
+  12 families, with their value bytes and row counts, are stored as `stores`
+  beside the tables. A database without `store_rows` (the ledger) has none, and a
+  file an older backend wrote has none either. Keys and index pages are not
+  counted, so the families add up to less than `store_rows`. A separate
   responsive supervisor kills and reaps the copy worker when the backend's pipe
   closes (including SIGKILL), or the independent two-hour deadline expires. The
   pre-migration snapshot stays in-process, because the open waits for it.
@@ -591,8 +617,10 @@ test runner (`new StorageService(dir, { snapshots: true })` turns them on).
 `/__orkestrator/metrics` (`database`), `get_database_stats` and Settings → Debug read
 one summary (`database-summary.ts`), refreshed at most once a minute: file, WAL and
 free bytes of both databases, backup count and bytes, the last scheduled change
-retention pass and the top tables above. Top tables are as old as the last copy, so
-they are absent until one runs, and a machine with no changes takes no copy.
+retention pass and the top tables and store families above, which the Debug page
+lists as "Inside `store_rows`, by store" under the main database's tables. Top tables
+are as old as the last copy, so they are absent until one runs, and a machine with no
+changes takes no copy.
 
 `acquireLease` records every wait in a fixed-bucket histogram per lease family
 (`storage-lease-metrics.ts`): `native-agent-session-leases/<hash>` counts as

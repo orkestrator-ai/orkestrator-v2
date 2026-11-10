@@ -2266,6 +2266,38 @@ export interface NativeAgentForkOutcome {
   draft?: string;
 }
 
+/** Bounds of {@link NativeAgentSessionBranchList}, shared by the bridge and its readers. */
+export const NATIVE_AGENT_BRANCH_LIST_LIMITS = Object.freeze({
+  branches: 50,
+  promptChars: 280,
+  entryIdChars: 512,
+});
+
+/**
+ * Another branch of one conversation (Pi's session tree), named by the entry
+ * id `switch-branch` takes. Only Pi has branches inside one conversation
+ * (`actions.branches`).
+ */
+export interface NativeAgentSessionBranch {
+  /** Provider entry id of the branch's newest entry: the switch target. */
+  entryId: string;
+  /** The prompt that starts the branch (bounded; may be empty). */
+  prompt: string;
+  /** Entries from the conversation's start to the branch's end. */
+  entries: number;
+  /** When the branch's newest entry was written (ISO 8601). */
+  updatedAt: string;
+}
+
+/** The branches of one conversation other than the active one, newest first. */
+export interface NativeAgentSessionBranchList {
+  /** The active branch's newest entry; null when it holds no entry yet. */
+  activeEntryId: string | null;
+  branches: NativeAgentSessionBranch[];
+  /** More branches exist than were listed. */
+  truncated: boolean;
+}
+
 /**
  * One command a composer can offer.
  *

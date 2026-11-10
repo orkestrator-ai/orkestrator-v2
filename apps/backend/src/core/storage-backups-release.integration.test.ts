@@ -132,6 +132,54 @@ afterEach(async () => {
 });
 
 describe("free-page release with live backend writes", () => {
+  test("pins checkpoint synchronization on the helper connection before releasing pages", async () => {
+    const { main } = await fixture();
+    const before = main.releasableFreePages();
+    const spawnChecked = (command: string, args: string[], options: SpawnOptions) => {
+      // Start the real helper with the opposite build default, including on
+      // macOS where DEFAULT_CKPTFULLFSYNC would otherwise hide a missing pin.
+      const prelude = `
+        const { Database: CheckedDatabase } = require("bun:sqlite");
+        const checkedExec = CheckedDatabase.prototype.exec;
+        const checkedQuery = CheckedDatabase.prototype.query;
+        const initialized = new WeakSet();
+        CheckedDatabase.prototype.exec = function (sql, ...rest) {
+          if (!initialized.has(this)) {
+            initialized.add(this);
+            checkedExec.call(this, "PRAGMA checkpoint_fullfsync = OFF");
+          }
+          return checkedExec.call(this, sql, ...rest);
+        };
+        CheckedDatabase.prototype.query = function (sql, ...rest) {
+          if (String(sql).includes("wal_checkpoint")) {
+            for (const [pragma, expected] of [
+              ["checkpoint_fullfsync", 1], ["synchronous", 2],
+              ["secure_delete", 1], ["journal_size_limit", 8388608],
+            ]) {
+              const row = checkedQuery.call(this, "PRAGMA " + pragma).get();
+              if (Object.values(row)[0] !== expected) throw new Error("helper setting: " + pragma);
+            }
+          }
+          return checkedQuery.call(this, sql, ...rest);
+        };
+      `;
+      const checkedArgs = args.slice();
+      // -e, supervisor, --, timeoutMs, helper, ...helperArgs
+      checkedArgs[4] = prelude + args[4];
+      return spawn(command, checkedArgs, options);
+    };
+    expect(
+      await releaseFreePagesInChildProcess(main.path, {
+        spawn: spawnChecked,
+        maxPages: 4,
+        stepPages: 4,
+        pauseMs: 0,
+        slowStepMs: 60_000,
+      }),
+    ).toEqual({ released: 4, left: before - 4, stop: "budget" });
+    checkRetainedData(main.path, "original");
+  });
+
   test("commits backend writes between successful release steps and retains live data", async () => {
     const { directory, main } = await fixture();
     const before = main.releasableFreePages();

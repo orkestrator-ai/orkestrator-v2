@@ -1,4 +1,4 @@
-import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
+import { afterEach, describe, test, expect, jest, mock, beforeEach } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { Profiler } from "react";
@@ -9,6 +9,7 @@ import {
 } from "../../mocks/sonner";
 import { mockWriteText } from "../../mocks/clipboard";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { HOVER_TOOLTIP_OPEN_DELAY_MS } from "@/components/ui/hover-tooltip";
 import { expectDomAbsent } from "../../bounded-test-diagnostics";
 
 // Mock UI components that require providers.
@@ -214,11 +215,19 @@ function findMenuItem(container: HTMLElement, label: string) {
 async function showTooltip(container: HTMLElement) {
   const trigger = container.querySelector('div[role="button"]');
   expect(trigger).not.toBeNull();
-  fireEvent.mouseEnter(trigger!);
-
-  await waitFor(() => {
-    expect(document.body.textContent).toContain("Created:");
-  });
+  // The row opens its tooltip after a 500 ms hover delay. Advance that timer
+  // explicitly: polling for it against waitFor's one-second deadline failed
+  // whenever a stall let both timers expire before React committed the open.
+  jest.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(trigger!);
+    act(() => {
+      jest.advanceTimersByTime(HOVER_TOOLTIP_OPEN_DELAY_MS);
+    });
+  } finally {
+    jest.useRealTimers();
+  }
+  expect(document.body.textContent).toContain("Created:");
 }
 
 beforeEach(() => {

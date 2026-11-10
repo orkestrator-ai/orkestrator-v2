@@ -645,6 +645,20 @@ export const ForkOutcomeSchema = openRecord({
   draft: optionalString,
 });
 
+/** `NativeAgentSessionBranchList` (native-agent.ts): a Pi conversation's other branches. */
+export const SessionBranchListSchema = openRecord({
+  activeEntryId: Schema.NullOr(Schema.String),
+  branches: mutableArray(
+    openRecord({
+      entryId: Schema.String,
+      prompt: Schema.String,
+      entries: Schema.Finite,
+      updatedAt: Schema.String,
+    }),
+  ),
+  truncated: Schema.Boolean,
+});
+
 /** `NativeAgentAuthStatus` (native-agent.ts). */
 export const AuthStatusSchema = openRecord({
   state: Schema.optional(Schema.String),

@@ -115,7 +115,7 @@ drift. The timer re-checks elapsed silence instead of restarting per frame,
 and the loop's `finally` stops it. The 2.x provider
 (`opencode2/provider.ts`) reads a different stream (`/api/event`, whose
 heartbeat is an SSE comment its parser drops) and is not covered:
-[7551](7551-opencode2-event-stream-silence.md). Tests:
+[7558](7558-opencode2-event-stream-silence.md). Tests:
 `apps/backend/src/core/opencode-provider-silence.test.ts`.
 
 ### T4. Ping only a quiet socket, every 10 s (task 4)
@@ -159,7 +159,7 @@ Tests: the two heartbeat cases in `apps/desktop/tests/preview-tunnel-session.tes
 
 ## Related
 
-- [7551](7551-opencode2-event-stream-silence.md): the OpenCode 2.x provider's event stream, found while doing task 1.
+- [7558](7558-opencode2-event-stream-silence.md): the OpenCode 2.x provider's event stream, found while doing task 1.
 
 - [0048](0048-recurring-work-qualification.md) task 20: the inventory and every reader's disposition.
 - [0049](0049-native-agent-idle-observation.md): OpenCode's live observation runs.

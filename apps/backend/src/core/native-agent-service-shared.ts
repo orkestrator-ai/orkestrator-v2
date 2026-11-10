@@ -54,6 +54,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentCommandIntent,
   NativeAgentSlashCommand,
   NativeAgentSlashCommandSource,
@@ -659,12 +660,6 @@ export interface NativeAgentServiceOptions {
    * before. Dispatch/generation fences and the mail freshness gate stay.
    */
   observationSharing?: boolean;
-  /**
-   * Keyed launch/queue scheduling (step 08). `false` is the rollback to the
-   * 2 s timer that lists every environment and queue; never both run.
-   * Defaults to `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` not naming `native-queues`.
-   */
-  keyedQueueScheduling?: boolean;
   /** Safety discovery for the keyed launch/queue driver. */
   queueDiscoveryIntervalMs?: number;
   /** Test seam: the keyed launch/queue driver's monotonic clock and timers. */
@@ -1143,6 +1138,7 @@ export type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSlashCommand,
   NativeAgentSlashCommandSource,
   NativeAgentMcpServer,

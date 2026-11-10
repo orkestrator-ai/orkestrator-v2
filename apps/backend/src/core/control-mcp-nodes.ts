@@ -114,6 +114,9 @@ export function createNodeTargets(invoke: ControlMcpInvoker, scope: NodeToolScop
     const node = summaries.nodes[0];
     if (!node) throw new Error(`No connected node has ID ${nodeId}. Call list_nodes.`);
     if (!node.available) {
+      // Nothing is queued; the backend wakes this conversation once the node
+      // reconnects (3800 task 8). Best effort: the refusal stands either way.
+      await invoke("note_coordinator_node_unavailable", { scope, nodeId }).catch(() => undefined);
       throw new Error(offlineLaunchMessage(node.view.displayName));
     }
     const hint = await ownRepository();

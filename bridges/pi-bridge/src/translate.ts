@@ -186,6 +186,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       break;
     case "compaction_end":
       state.compacting = false;
+      state.lastAccessed = Date.now();
       applyCompaction(state, event);
       break;
     case "thinking_level_changed":

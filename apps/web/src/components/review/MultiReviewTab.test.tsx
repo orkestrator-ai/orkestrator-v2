@@ -3327,6 +3327,42 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.queryByRole("status") === null).toBe(true);
     expect(screen.getByText("Consolidated report ready")).toBeTruthy();
   });
+
+  test("exposes the phase on the header, and follows it as the workflow advances", () => {
+    const reviewing = reviewingWorkflow();
+    const store = appCommandStore(multiReviewStore);
+    store.getState().replaceWorkflow(reviewing);
+    renderInAppCommandScope(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
+    const header = screen.getByTestId("multi-review-phase");
+    expect(header.getAttribute("data-phase")).toBe("reviewing");
+    expect(header.getAttribute("data-workflow-id")).toBe(reviewing.id);
+    expect(header.textContent).toBe("Independent read-only reviews are running");
+
+    // A stalled consolidation changes the copy, never the phase.
+    const ready = readyWorkflow();
+    const consolidating: MultiReviewWorkflow = {
+      ...ready,
+      id: reviewing.id,
+      phase: "consolidating",
+      fixSession: {
+        ...ready.fixSession!,
+        status: "running",
+        stalledSince: "2026-08-14T00:20:00.000Z",
+      },
+    };
+    act(() => {
+      store.getState().replaceWorkflow(consolidating);
+    });
+    const advanced = screen.getByTestId("multi-review-phase");
+    expect(advanced.getAttribute("data-phase")).toBe("consolidating");
+    expect(advanced.textContent).toBe("No activity from the review preparation model");
+  });
 });
 
 test("renders backend-owned package preparation after remount with cancel available", () => {

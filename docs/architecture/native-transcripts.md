@@ -214,6 +214,57 @@ each part; anything that does not line up (a missing message, an index out of
 range, a part digest or length that differs) rejects the whole delta and the
 client falls back to a snapshot. Other clients keep whole-message deltas.
 
+### Response encoding
+
+Four transcript reads mark their result (`markSpliceableResult`), and the
+gateway writes those with `spliceEncodedJson`, copying each row's memoised
+JSON instead of serialising it again: `get_native_agent_transcript_update`,
+`get_native_agent_live_update`, `get_native_agent_projection_update` and
+`get_native_agent_message_page`. The output is byte-identical to
+`JSON.stringify`; anything that is not a plain object or array is serialised
+whole.
+
+The legacy `get_native_agent_projection` is deliberately not marked. Measured
+on 2026-11-10 with the changed-read benchmark (`legacy-spliced` against
+`legacy`), splicing its whole-session projection cost more CPU per
+read than `JSON.stringify` on every row shape the benchmark has: about
+600 µs against 450 to 500 µs on the 100-row, 430 KB window. The row copy is a
+small win, but the walk over the projection's many other fields runs in
+JavaScript, and the gateway sizes the joined body, which copies it again.
+`commands-registry-native-splice.test.ts` pins which commands are marked;
+re-measure before marking another. The same probe found the marked commands'
+snapshot responses slower than `JSON.stringify` for rows of a few KiB; that is
+[to-do 7553](../todo/transcripts-and-observation/7553-transcript-splice-slower-on-large-rows.md).
+
+### Incomplete previews and exact recovery
+
+A provider window marked `complete: false` is either a genuine remainder
+(the provider bounded it by count or bytes) or a hydration hole (a two-row
+preview of a longer session). When the preview has fewer rows than the live
+window (100), no omitted parts, and is neither a summary nor a view that
+adopted the provider's page cursor, the backend asks whether its raw rows
+already reach the window's 512 KiB target. If they do not, it schedules one
+exact `messages` read in the background, at most once a second per view.
+
+Answering that serialises the provider's raw rows, inline tool output
+included, which are fresh objects on every read. It cost about 110 µs of a
+370 to 440 µs changed read on a 60-row, 500 KB window (benchmark
+`short-incomplete`). The answer is remembered per view under the provider's
+token (`native-agent-preview-fill.ts`), so a view polled while nothing changes
+measures its window once per revision: an interactive-snapshot provider polled
+at one revision went from about 320 to about 200 µs of CPU per read
+(`short-incomplete-idle`). Only a token that changes whenever the rows do is
+trusted, the bridge's `sourceToken` or a derived token carrying the provider's
+revision; a token made only of the row count and edge ids stays the same
+while a streaming tail grows, so that preview is measured on every read. With
+a derived revision token, only true answers are reused: a false answer is
+remeasured because a short tail can grow past the byte target before the
+revision advances. Explicit source tokens still cache both answers. A
+recovery already scheduled for the same token is checked first and skips the
+measurement altogether. Measuring row by row with an early stop was tried and
+was about 15 µs slower under the target, the only side a byte-cutting bridge
+produces, so the window is measured whole.
+
 ### Deferred display bodies
 
 The projection moves every tool output, error and diff body behind a
@@ -285,6 +336,19 @@ view's token covers a missed announcement and is what makes the backend look
 again; with no read at all nothing would ever refresh, so nothing would ever be
 announced. Coalescing a burst of session changes keeps a cause that names
 discovery (`coalesceChanges`, `resource-sync.ts`).
+
+A renewal announces only when the value changed as a view would show it
+(`storeProgressiveDiscovery`), so a stored value must not move when nothing
+did. Two normalisations keep it still: the runtime section's drift counter is
+left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
+tool names are stored in one fixed order (`orderMcpServerTools`), because
+Codex app-server reports them as a map whose order changes between reads; the
+Codex bridge also sorts them before its cut. Before that, an idle Codex view
+was told to read again about once every 50 s (six announcements in 300 s,
+13.3 reads a minute against Claude's 8; todo 7530). Each discovery
+announcement is counted by section and by the content-free value paths that
+changed (`discoveryRenewals` in `sessionInvalidations`, below), so the next
+moving field is named by an idle run rather than guessed.
 
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
@@ -420,3 +484,8 @@ fixtures and reports exact operation counts: unchanged reads, bridge windows,
 projection, history paging, deltas, progress probes, pipeline checkpoints and
 display-tail checkpoint age. See
 [efficiency-harness.md](../development/efficiency-harness.md).
+
+`scripts/benchmark-transcript-changed-read.ts` times one changed progressive
+read in process against a provider fake (CPU, wall time, and the characters
+serialised and hashed), plus the legacy `getProjection` read encoded both
+ways. Its scenarios and how to compare two commits are in the script's header.

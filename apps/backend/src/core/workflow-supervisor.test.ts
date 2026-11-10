@@ -3,7 +3,9 @@ import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
+  KEYED_SCHEDULING_DOMAINS,
   KEYED_SCHEDULING_ROLLBACK_ENV,
+  REVERTIBLE_KEYED_SCHEDULING_DOMAINS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   stableSpreadMs,
@@ -462,6 +464,20 @@ describe("KeyedWorkflowSupervisor", () => {
     expect(keyedSchedulingEnabled("multi-review", { [KEYED_SCHEDULING_ROLLBACK_ENV]: "all" })).toBe(
       false,
     );
+  });
+
+  test("native queues and backend activity are no longer revertible", () => {
+    // Their rollback drivers were removed (todo 0048 task 13): the switch
+    // cannot name them, and every remaining domain still can.
+    expect(KEYED_SCHEDULING_DOMAINS).toContain("native-queues");
+    expect(KEYED_SCHEDULING_DOMAINS).toContain("backend-activity");
+    expect<string[]>([...REVERTIBLE_KEYED_SCHEDULING_DOMAINS].sort()).toEqual(
+      ["build-pipeline", "feature-planning", "graph-run", "multi-review"].sort(),
+    );
+    const check = (env: Record<string, string>) =>
+      // @ts-expect-error -- the removed domains are not a switch argument.
+      keyedSchedulingEnabled("native-queues", env);
+    expect(typeof check).toBe("function");
   });
 
   test("status is content-free", async () => {

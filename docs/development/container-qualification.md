@@ -52,7 +52,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
-| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
+| Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `container-exited`, because the daemon refuses `docker cp` from those containers ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)) |
@@ -285,6 +285,223 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Egress name checks on rootless Docker (2026-11-10)
+
+To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
+task 2: the gateway's name checks (`egress-filter=1`) on rootless Docker,
+where the container network lives in RootlessKit's namespace. Run in
+worktree `orkestrator-v2-20261110-012508-43321f71f84f` at `main`
+`04639b12b` plus this change.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, cgroup v2). The
+  host's rootful Engine 29.9.2 was only read, for the images.
+- **Daemons:** `mise run docker:disposable -- start` twice, each a host
+  rootless Engine 29.9.2 (containerd v2.4.2, runc 1.5.2) under RootlessKit
+  3.3.0 with `--detach-netns`, the builtin port driver, host loopback
+  refused, `live-restore` off, the systemd cgroup driver and pool
+  `172.30.0.0/16` as /24s:
+  - `q6101r`: slirp4netns 1.3.3 (the default). Started with the image in
+    47 s; the older image copied in 43 s.
+  - `q6101g`: `--net gvisor-tap-vsock`, RootlessKit's built-in driver.
+- **Image:** `orkestrator-v2:dev-8bff8877f7f8`
+  (`sha256:afdb91660fa791fa89694d4588984cd222dd2df3c147fbfc72990026be328ab4`,
+  6.04 GB, `2.37.3-beta`, source `53e936b37`), already on the host and
+  copied in by id. Capabilities include `egress-gateway=1`,
+  `egress-filter=1`, `network-policy=3` and `network-refresh=1`. Its
+  `init-firewall.sh`, `update-firewall.sh`, `orkestrator-egress-gateway`,
+  `orkestrator-egress-filter`, `firewall-domains.sh`, `entrypoint.sh` and
+  `network-policy-entrypoint.sh` match the checkout byte for byte
+  (SHA-256); `docker/` differs from `04639b12b` only in
+  `orkestrator-bridge-launch.sh` and a log-writer test. Older image, read
+  only: `ghcr.io/orkestrator-ai/orkestrator-v2:2.34.4-beta`
+  (`egress-gateway=1`, no `egress-filter`), on `q6101r` only.
+
+Each suite ran through `test:logged` with the variables from
+`docker:disposable -- env`, `RUN_LIVE_DOCKER_TESTS=1`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, `--parallel=1`, a JUnit report
+kept, and `TMPDIR` on a directory on the home filesystem (btrfs), not the
+`nosuid,nodev` `/tmp` ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)).
+GitHub's anonymous allowance stayed above 40 throughout.
+
+| Daemon | Suite | Result |
+| --- | --- | --- |
+| slirp4netns | Live egress name checks (M12), with the older image | **6/6, 124 assertions**, 53.9 s, and again 55.7 s |
+| gvisor-tap-vsock | Live egress name checks (M12) | **5 pass, 1 skip** (older image not loaded there), 109 assertions, 50.3 s |
+| slirp4netns | Live egress conditions, `ORKESTRATOR_LIVE_IPV6_NETWORK=1` and the printed restart command | **3/3, 66 assertions**, 49.6 s: IPv6 4.8 s, DNS rotation 16.8 s, daemon restart 25.7 s (two rootless daemon restarts) |
+
+- **The rootless questions.** Every M12 case passed in RootlessKit's
+  namespace, so the three mechanisms the to-do asked about behave as on
+  rootful Engine: the name-check daemon set `SO_MARK` on its sockets while
+  the workload got `EPERM` as `node` and as root; the gateway's `nat` rules
+  redirected TCP to allowed addresses to its own address and DNS to its
+  resolver port, and `127.0.0.11:53` to the same port; and the relay found
+  each connection's real destination through `SO_ORIGINAL_DST`. The
+  headline cases: an allowed name answered 200, a foreign SNI on its
+  address got `access denied`, the HTTP Host check refused a request before
+  it reached the fixture, a name off the list got `REFUSED` with EDE 18
+  over UDP, over TCP and sent to `192.0.2.53`, a killed daemon failed closed
+  and came back on refresh, and a full-mode runtime was not filtered.
+- **Topology recorded by the suite** (identical on both drivers apart from
+  Docker's embedded resolver ports):
+
+  ```json
+  {"daemonRootless":true,
+   "resolvers":["nameserver 127.0.0.11","# ExtServers: [host(127.0.0.53)]"],
+   "nat":["-A OUTPUT -p tcp -m tcp ! --dport 53 -m mark ! --mark 0x6f726b -m set --match-set allowed-domains dst,dst -j DNAT --to-destination 172.30.1.3:31443",
+          "-A OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p tcp -m tcp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j REDIRECT --to-ports 31453",
+          "-A OUTPUT ! -d 127.0.0.0/8 -p udp -m udp --dport 53 -m mark ! --mark 0x6f726b -j DNAT --to-destination 172.30.1.3:31453",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p tcp -m tcp --dport 53 -j DNAT --to-destination 127.0.0.11:34675",
+          "-A DOCKER_OUTPUT -d 127.0.0.11/32 -p udp -m udp --dport 53 -j DNAT --to-destination 127.0.0.11:36307"]}
+  ```
+
+  With `--detach-netns` the rootless daemon stays in the host's network
+  namespace, so Docker names the host's stub resolver as `host(...)` and
+  contacts it itself: the name checks used Docker's embedded resolver for
+  every query, as on Docker Desktop. The addressed-upstream path (6101 task
+  3) ran on rootless only through the suite's controlled-upstream case,
+  which passed on both drivers.
+- **Suite change.** The topology line above is new: the M12 suite's first
+  case prints it and appends it to `ORKESTRATOR_QUALIFICATION_EVIDENCE` when
+  set. It asserts nothing.
+- **Cleanup.** Every suite's `afterAll` removed its labelled resources, and
+  afterwards each daemon held no container, custom network or volume.
+  `docker:disposable -- stop` took 3.9 s and 2.9 s and left no instance,
+  runtime directory or `docker-*` user scope. Other builds' disposable
+  daemons running on the host at the same time were not touched.
+- **Not covered:** pasta (not installed on beelink; 6101 task 4), VPNKit,
+  arm64, host loopback enabled, `live-restore` on, a real addressed upstream
+  on rootless (the daemon here named its upstream through `host(...)`), and
+  a rootless daemon restart on gvisor-tap-vsock
+  ([7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)).
+  No provider turns, credentials or app profile were used.
+
+## Agent-tools peer gate on nested rootful Linux Engine (2026-11-10)
+
+To-do [6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md)
+task 1: `apps/backend/scripts/agent-tools-peer-evidence.ts` on a rootful
+Linux daemon, through the launcher's [nested rootful mode](#nested-rootful-mode).
+
+- **Host:** beelink (Omarchy, kernel 7.1.8, x86_64), host Engine 29.9.2,
+  rootful, which this account may use. It was the outer daemon
+  (`outerRootless: false`), so the dind container was privileged on a rootful
+  host. The script's networks were created on the inner daemon only.
+- **Daemon:** `start --mode rootful --name s6820rf` (12.9 s with the dind
+  pull). Inner Engine 29.9.3, Alpine 3.24 (containerized), no `rootless`
+  option, `bip` `10.213.0.1/24`, pool `172.30.0.0/16`, `INPUT` policy
+  `ACCEPT`. The pinned busybox was pulled into it.
+- **Runner:** the script ran in an `oven/bun:1.4.4` container on the outer
+  daemon with `--network container:<dind container>`, so the server, the
+  inner bridges and `host-gateway` shared one namespace as on a host. It ran
+  as uid 1000 with the worktree mounted read-only, the instance's runtime
+  directory (the inner socket) mounted, the qualification shim first on
+  `PATH` and the dind image's static `docker` CLI behind it
+  (`ORKESTRATOR_QUALIFICATION_DOCKER`). The exact command is in the to-do.
+- **Result, twice, identical:** environment-network (`172.30.0.2`) and
+  default-bridge (`10.213.0.2`) containers arrived from their own addresses,
+  were admitted by subnet and got 405; the unowned network's `172.30.1.2` was
+  refused (connection reset, no response). The environment-container probe
+  and both host-check probes were `reachable`/405. The host's own addresses
+  (`172.17.0.2` and the three bridge gateways) were closed with no bytes, each
+  arriving from `172.17.0.2`. Admitted subnets `10.213.0.0/24` and
+  `172.30.0.0/24`, then `10.213.0.0/24` after the environment network was
+  removed. No leftovers; exit 0.
+- **Cleanup:** `stop` removed the dind container, its volume, the runtime
+  directory and the dind image it had pulled. The busybox and
+  `oven/bun:1.4.4` images were already on the host and were left.
+
+## Rootless budget read-back without `cpu` delegation (2026-11-10)
+
+To-do [0019](../todo/containers-and-environments/0019-container-platform-qualification.md)
+task 2: on a rootless daemon whose user is delegated `memory pids` but not
+`cpu`, does Docker's reported capacity match what the cgroup enforces, and
+does the budget read-back stay truthful?
+
+- **Why a container as the host.** The launcher's rootless daemon gets the
+  delegation of the user manager it runs under, and beelink's
+  `user@1000.service` delegates `cpu memory pids`. Changing that needs root
+  and a user-manager restart that would end this user's sessions on a shared
+  host, so a throwaway systemd host was built instead (the 0019 decision
+  records the options).
+- **The systemd host.** Built from this Dockerfile, with Docker's static
+  `docker-29.9.2.tgz` (SHA-256
+  `9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb`,
+  downloaded from `download.docker.com`) beside it in `dl/`:
+
+  ```dockerfile
+  FROM oven/bun:1.4.4
+  RUN apt-get update \
+   && apt-get install -y --no-install-recommends systemd systemd-sysv dbus dbus-user-session uidmap iproute2 iptables util-linux procps ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+  COPY dl/docker-29.9.2.tgz /tmp/docker.tgz
+  RUN tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 --no-same-owner && rm /tmp/docker.tgz
+  RUN echo 'bun:100000:65536' > /etc/subuid && echo 'bun:100000:65536' > /etc/subgid \
+   && mkdir -p /etc/systemd/system/user@.service.d \
+   && printf '[Service]\nDelegate=\nDelegate=memory pids\n' > /etc/systemd/system/user@.service.d/delegate.conf \
+   && systemctl mask getty.target console-getty.service systemd-networkd-wait-online.service \
+   && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/bun
+  STOPSIGNAL SIGRTMIN+3
+  ENTRYPOINT ["/sbin/init"]
+  ```
+
+  Run as `docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs
+  /run/lock --tmpfs /tmp:exec,mode=1777 --tmpfs
+  /home/bun/ddd:exec,uid=1000,gid=1000,size=2g -v "$PWD:$PWD:ro" -v
+  "$PWD/output/disposable-docker/tools:/home/bun/ddd/tools:ro" <image>`
+  (the tools are the launcher's verified download from a host start). The
+  lingering `bun` user (uid 1000) gets `user@1000.service`; `user.slice`,
+  `user-1000.slice` and `user@1000.service` all listed `memory pids` as
+  their controllers. Three details mattered: `Delegate=` lists merge, so
+  without the empty reset Debian's own `cpu` stayed delegated; RootlessKit's
+  tap setup runs `ip`, so `iproute2` is required; and the data root must be
+  on the tmpfs, since overlayfs refused an upper directory on the
+  container's overlay root (`failed to mount ... overlay ... invalid argument`).
+- **The daemon.** As `bun`, with `XDG_RUNTIME_DIR=/run/user/1000` and the
+  user bus: `bun scripts/disposable-docker-daemon.ts start --name s0019md
+  --root /home/bun/ddd`, then the pinned busybox pulled into it. `docker
+  info`: Engine 29.9.2, cgroup v2, systemd driver, `rootless`; warnings for
+  CPU CFS quota, period and shares, cpuset and every `io` axis.
+- **The check.** `DOCKER_HOST=<its socket> bun
+  apps/backend/scripts/rootless-budget-readback-evidence.ts`, then the same
+  script against a `docker:disposable` rootless daemon started directly on
+  beelink (`s0019rl`) as the control.
+
+  | | `memory pids` delegated | `cpu memory pids` delegated (control) |
+  | --- | --- | --- |
+  | Production capacity (`cpuQuota`, `memoryLimit`, `pidsLimit`) | false, true, true | true, true, true |
+  | Built-in default | 8192 MiB, 4096 PIDs, no CPU cap, nothing unenforced | same |
+  | Admission of 64 MiB, 32 PIDs | accepted | accepted |
+  | Admission of the same plus 0.5 CPU | refused, `unsupported-topology` (CPU) | accepted |
+  | Container `cgroup.controllers` | `memory pids` | `cpu memory pids` |
+  | `cpu.max` with no CPU limit | absent | `max 100000` |
+  | `memory.max`, `memory.swap.max`, `pids.max` | 67108864, 0, 32 | same |
+  | Inspect read-back and environment policy | `{ cpus: null, memoryMiB: 64, pids: 32 }`, `unsupported: []` | same |
+  | 100 MiB held under 64 MiB | OOM-killed (`oom_kill` 2) | OOM-killed |
+  | 40 forks under 32 PIDs | stopped, `pids.peak` 32, `max 1` | same |
+  | CPU time of a 3 s busy loop | 2.97 s (no limit) | 2.94 s, and 1.51 s under 0.5 CPU |
+  | `docker run --cpus 0.5` | refused by Docker: `NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted` | created, `cpu.max` `50000 100000`, read-back `cpus: 0.5` |
+
+  The table is the fourth run on the `memory pids` daemon. The first ran
+  before the data root moved to the tmpfs, so no container started; the next
+  two had probe defects (busybox `sleep` as PID 1 left the PID probe's
+  zombies holding the limit, and with `--init` the OOM kill stopped the
+  shared container). The script now runs the CPU and PID probes in a
+  container with `--init` and the memory probe in a separate one. Capacity,
+  admission and Docker's CPU refusal were the same in all four runs, and the
+  read-back the same in the three that created containers.
+- **What this means.** Docker's report matched the cgroup on both daemons,
+  and a CPU limit cannot reach a container where it would not be enforced,
+  so the read-back cannot misreport one. No code change. Not covered: a
+  host whose `user-<uid>.slice` exposes a controller its `user@<uid>.service`
+  does not; both matched here.
+- **Cleanup.** The inner daemon was stopped by its launcher, the systemd
+  container and image removed, `s0019rl` stopped, and the tarball and tools
+  cache deleted. The BuildKit cache of the image builds stays on the host
+  daemon: removing it would take a prune, which the rules forbid. Evidence
+  (git-ignored): `output/agent-testing/s0019/memory-pids.json` and
+  `cpu-memory-pids-control.json`.
+
 ## Nested rootful disposable daemon on beelink2 (2026-11-09)
 
 To-do [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
@@ -343,7 +560,8 @@ running at the time was left alone.
 
 ## Rootless re-run on a freshly built image (2026-11-09)
 
-To-do [0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)
+To-do 0109 (retired on 2026-11-10; its decisions are in
+[container lifecycle](../architecture/container-lifecycle.md#portable-inputs-staged-inputs))
 task 5: C20, C22 and readiness on a rootless daemon with an image built from
 current `main`, which the 2026-10-26 review run did not have. Run in worktree
 `orkestrator-v2-20261109-224622-88ac356e9705` at `main` `c6de4733c`.
@@ -505,8 +723,8 @@ RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6d
     port answered here, so the refusals are not just an unreachable host.
   - A full container reaches every service bound to the host's loopback, and
     arrives as `127.0.0.1`. That is the trade the rootless remediation
-    already describes ([0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)
-    decision 4). The gateway still needs its credential. Its Host check
+    already describes (todo 0109 decision 4, retired on 2026-11-10; now in
+    [container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)). The gateway still needs its credential. Its Host check
     refused the alias, but a client that writes its own Host header gets
     past it, as the check's own comment says.
   - Two gateway paths trust a loopback peer. The agent-test bootstrap
@@ -620,6 +838,97 @@ DOCKER_HOST=unix:///tmp/ork-q5510-dind.sock docker run --rm --network host -u ro
   Tailscale address (task 1). These stay open in
   [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
 
+## Exhausted Docker pools and historical probe-network trace (2026-11-06)
+
+Evidence migrated from retired to-do 7041 on 2026-11-10. These are historical
+observations on beelink at `c1724ab74`, not new qualification runs. Present-tense
+statements below describe the state observed during that investigation.
+
+### Manual container profiles on an exhausted pool
+
+**Problem.** On beelink on 2026-11-05 a manual `dev:test` with a container fixture failed at startup with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. The documented manual workflow for `mise run test:agent:docker` is therefore unusable on that host until networks are freed, which agents may not do.
+
+**Context.** `test:agent:docker:isolated` puts `apps/desktop/scripts/dev/docker-qualification-bin` on PATH with `ORKESTRATOR_QUALIFICATION_DOCKER` (`apps/desktop/scripts/dev/isolated-browser.ts`). That shim retries only labelled `network create` calls on unrouted /29s in 172.16.240.0/22. The manual workflow in `docs/development/agent-testing.md` did not mention it.
+
+**Investigation.** Starting the same profile with the shim on PATH (`ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" mise run dev:test …`) succeeded, and the fixture network was created on a /29.
+
+Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an exhausted Docker address pool", after the manual container fixture commands, and the manual `test:agent:docker` example points at it. The documented command was then run on beelink:
+
+- A labelled `docker network create` without a subnet failed with `all predefined address pools have been fully subnetted`, so the pools were exhausted at the time.
+- `ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" mise run dev:test --profile qa-7041-shim --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex --headless` reached `ready`.
+- The fixture container and its egress gateway were `Up`, and the environment network `ork-<owner>-<hash>-net` had subnet `172.16.240.0/29`, a range only the shim's fallback hands out.
+- `dev:stop` and `dev:reset` then removed the profile's 2 containers, 2 volumes and 1 network.
+
+The CLI container matrix failed the same way (2026-11-06, to-do [0014](../todo/cli-and-slash-commands/0014-cli-qualification.md) task 5): `mise run test:cli:scenarios -- --environment-type container` passed 3/8, with every scenario that starts an environment failing with `resource-exhausted`. With the same two variables it passed 8/8 and left nothing behind. The invocation is now documented beside that command in `docs/development/testing-guide.md`; the manual `dev:test` workflow is documented in `agent-testing.md` as recorded above.
+
+**Decisions.**
+
+- **How should a manual profile get the fallback?**
+  - **Document the shim invocation next to the manual `test:agent:docker` workflow (recommended, done).**
+    - Pros: no code change; the same scoped behaviour the isolated task already relies on.
+    - Cons: a manual step people can miss.
+  - **Have `dev:test` put the shim on PATH whenever `--fixture-environments` includes `container`.**
+    - Pros: automatic.
+    - Cons: widens a test-only shim to every container profile; needs its own tests.
+
+### Historical probe-network trace
+
+**Problem.** The host held 29 unattached reach-probe networks, created in clusters on 2026-10-31 (15:51–17:45 UTC), 2026-11-01 (03:40–04:33 UTC) and 2026-11-02 (04:57–05:50 UTC). 0241 task 4 recorded no new probe networks after a full run on 2026-10-31.
+
+**Context.** [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). A backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network can leak it. Failed or timed-out network creation is another unruled-out path: Docker may create the network despite the client command failing, after which `createProbeNetwork` clears `probeNetwork` and returns null when the service is not closed. The caller then has no network to remove, and later normal shutdown may leave it behind. Neither path is proven to have caused the historical clusters. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
+
+**Investigation.** Not traced to one teardown. What the evidence shows:
+
+- **The networks.** All 29 are still present, labelled `orkestrator-resource-role=host-reachability-probe`, one per owner, each on a /16 of the default pool, none attached. Within the clusters several come in runs of three, 3.9 s apart: 2026-10-31 16:18:00/04/08, 16:50:03/07/11 and 17:45:07/11/15; 2026-11-01 04:33:06/10/14; and a pair at 2026-11-02 04:57:12/16. That spacing points to one harness that starts backends one after another, each on a new data directory.
+- **Owners against data directories.** No owner matches `dockerOwnerNamespace` of any of the 176 profile directories under `~/.config/orkestrator-v2-dev/profiles/` (as `<profile>` or `<profile>/data`), of the production data directory, or of the development root. Persistent `dev:test` profiles are therefore ruled out. The owners belong to temporary data directories that no longer exist, so they cannot be named.
+- **Run history.** The production backend's service log has no timestamps between 2026-11-01 02:00 and 11:00 UTC, and the Kanban store keeps no comments from those windows. Pull requests opened in and just after the windows place them in concurrent pipeline builds:
+  - 2026-10-31: about fifteen merges, among them #1501 (native menu qualification on Linux, its Electron spec) and #1500 (the 0241 sweep).
+  - 2026-11-01: #1537 (service-preview Electron flakes, opened 04:35 UTC, right after the window), #1539 (Linux design-canvas Electron qualification) and #1542 (Electron focus checks). #1537's commit records, on beelink, that the spec's "probe network outlived each disposable profile". Until that commit (merged 11:12 UTC that day) agent-test backends dropped `ORKESTRATOR_HOST_REACHABILITY_CHECK` from their environment, so every agent-test Electron spec backend ran the boot probe even when the spec set the variable to `off`.
+  - 2026-11-02: #1594 (the design journey against the packaged Linux app), #1601 (container stop drain) and #1603 (federated sidebar). The packaged and design-canvas Electron specs still do not set the variable.
+- **Likeliest source.** Agent-test Electron spec backends: windows 1 and 2 fall in Electron spec qualification builds while the switch was being dropped, and window 3 in the packaged Electron journey's build, whose specs still run the probe.
+- **Reruns.** Each was diffed against the probe-network list from before it, with `docker events --filter type=network` recording every create and destroy:
+  - The automatic pools are exhausted, so a plain rerun cannot create a probe network at all. `design-canvas-electron.spec.ts` (headless, probe on) passed in 18.5 s and created none.
+  - With the shim on PATH, a labelled probe network goes onto a /29, so the leak could happen again. Reruns with the shim and the probe on:
+    - The same spec failed at a known flake ([4250](../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md) and [1131](../tests/flaky-tests/design-canvas-and-artifacts/1131-design-electron-graceful-quit-deadline.md)). Its probe network was created, connected, disconnected and destroyed within 6 s.
+    - `apps/desktop/tests/backend-process.test.ts`, run from `apps/desktop`, passed. It created no probe network, because each backend was stopped before its check reached the network.
+    - Run from the repository root it created one, which was destroyed.
+    - `apps/backend/tests/standalone.test.ts` created three, 1–2 s apart, and all were destroyed. Its one failure was unrelated: `cursor-bridge` was not built in this worktree.
+  - None of the reruns left a probe network behind.
+- **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) retains it as a candidate, without attributing the historical clusters to it.
+- **Not rerun.** The Electron specs other than the design journey need a display, which this host may not use (headless only, no Xvfb), so the specs of the 2026-10-31 and 2026-11-01 builds could not be repeated here. Their timing at the time (backends stopped while host load stalled Docker commands) cannot be recreated either.
+
+Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattached probe networks, created 2026-10-31 (13), 2026-11-01 (9) and 2026-11-02 (7), and none newer, so the leak has not recurred since 2026-11-02. They still fill both default pools (172.18–31/16 and 192.168.0.0/16 in /20s). The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
+
+**Decisions.**
+
+- **How to find the source?**
+  - **Match the cluster times against build and test runs on beelink in those windows, then rerun the likeliest harness and diff the probe-network list (recommended, done).**
+    - Pros: the method 0241 used; decisive when the leak reproduces.
+    - Cons: the run history of those days is thin, the pools are full, and the likeliest harnesses need a display. It did not reproduce.
+  - **Add an owner-to-data-directory log line when a probe network is created.**
+    - Pros: makes the next leak traceable at once.
+    - Cons: new logging surface; does not explain these. Carried into [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) task 2.
+
+### Trace closure and retirement (2026-11-10)
+
+The historical trace (7041 task 2) is closed as untraceable. The owners'
+temporary data directories are gone and the 29 networks predate the creator
+label shipped by [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
+(#2024, `60c065c36`, checked against `main` at `04639b12b`). The label applies
+only to newly created networks; it cannot identify these historical owners.
+The candidate causes above remain unproven. A new leak carries an
+`orkestrator-creator` label and is new work for a new to-do.
+
+[3320](../todo/containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)
+task 1 is closed as a duplicate of this trace. Its task 2, removing the 29
+networks, remains the user's call; this work left them untouched.
+
+The manual-profile workaround and its live proof were complete, so no work
+remained in 7041. Its file and index row were removed under the to-do retirement
+rule; the evidence lives here instead of in a finished task file. Keeping 7041
+would preserve old links but conflict with that rule. Repointing the links
+preserves navigation without introducing a repository-wide exception.
+
 ## Agent CLIs without telemetry hosts on rootful Linux Engine (2026-11-06)
 
 To-do 6100 (security finding M12, task 3 of S-0100): do the agent CLIs need
@@ -632,7 +941,7 @@ was deleted.
   29.9.2 rootful. The default address pools were full, so the run used the
   test-only network shim (`apps/desktop/scripts/dev/docker-qualification-bin`
   with `ORKESTRATOR_QUALIFICATION_DOCKER`, as in
-  [7041](../todo/containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)).
+  [7041](container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)).
   The daemon, the host firewall and other owners' resources were not
   touched; every container and network the run made carried its private
   owner label and was removed by it.
@@ -1801,8 +2110,8 @@ hold when the host user maps to container root?
   | Tailscale Serve, TCP connect to 443 | Rejected | **Connected** |
   | Backend's named service port, by `host.docker.internal` | Exit 7 | Exit 7 |
 
-  Host loopback is off on this daemon, which is the known gap in
-  [todo 0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md);
+  Host loopback is off on this daemon, which is the documented rootless limit
+  ([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts); todo 0109, retired on 2026-11-10);
   the named port there cannot serve as a positive control. The `full` column is
   the control: everything it reached, the restricted container could not. The
   gateway's `OUTPUT` `REJECT` counter rose from 2 to 14 over these probes.
@@ -1866,8 +2175,10 @@ The first run on a real rootless Linux daemon, not a nested
 Volume storage, migration, rebuild, restore, capacity and the fault paths all
 pass on rootless. That qualified `volume-v1` there, and
 `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
-this run found are tracked in
-[0109-rootless-linux-runtime-gaps.md](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md):
+this run found were tracked in todo 0109, retired on 2026-11-10 once all four
+were fixed and requalified (the 2026-11-09 re-run above); the rootless gaps
+left are [7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
+and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md):
 
 - **Staged inputs are unreadable (C20).** The staged revision is owned by the
   host user and is owner-only (`0700`/`0600`). Under rootless the host user

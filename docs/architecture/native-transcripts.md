@@ -256,7 +256,10 @@ at one revision went from about 320 to about 200 µs of CPU per read
 (`short-incomplete-idle`). Only a token that changes whenever the rows do is
 trusted, the bridge's `sourceToken` or a derived token carrying the provider's
 revision; a token made only of the row count and edge ids stays the same
-while a streaming tail grows, so that preview is measured on every read. A
+while a streaming tail grows, so that preview is measured on every read. With
+a derived revision token, only true answers are reused: a false answer is
+remeasured because a short tail can grow past the byte target before the
+revision advances. Explicit source tokens still cache both answers. A
 recovery already scheduled for the same token is checked first and skips the
 measurement altogether. Measuring row by row with an early stop was tried and
 was about 15 µs slower under the target, the only side a byte-cutting bridge

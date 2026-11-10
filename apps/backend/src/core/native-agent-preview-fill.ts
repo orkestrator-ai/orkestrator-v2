@@ -15,7 +15,9 @@
  * Only a token that changes whenever the rows do is trusted: the bridge's
  * `sourceToken`, or a derived token that includes the provider's revision. A
  * token derived from count and edge ids alone stays the same while a
- * streaming tail grows, so such a preview is measured on every read.
+ * streaming tail grows, so such a preview is measured on every read. Derived
+ * revision tokens reuse only true answers: a short tail can grow past the byte
+ * target before its provider revision advances, so false answers are remeasured.
  *
  * The window is measured whole. Measuring row by row with an early stop was
  * tried and cost about 15 µs more on a 500 KB window under the target, the
@@ -68,7 +70,7 @@ export class PreviewFillAnswers {
     }
     const fills = Buffer.byteLength(JSON.stringify(snapshot.messages)) >= liveWindow.targetBytes;
     this.answers.delete(key);
-    if (token === undefined) return fills;
+    if (token === undefined || (!snapshot.sourceToken && !fills)) return fills;
     this.answers.set(key, { token, fills });
     if (this.answers.size > this.limit) {
       const oldest = this.answers.keys().next();

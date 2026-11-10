@@ -94,7 +94,9 @@ describe("progressive preview fill check", () => {
         await read();
         expect(measured.count).toBe(2);
         // Filling the window by bytes means the bridge cut it; nothing to recover.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        const gauges = collaborators(service).projections.cacheGauges();
+        expect(gauges.progressiveHydrations).toBe(0);
+        expect(gauges.progressiveHydrationTimers).toBe(0);
         expect(preview.messages).not.toHaveBeenCalled();
         expect(collaborators(service).projections.cacheGauges().progressivePreviewFills).toBe(1);
       },

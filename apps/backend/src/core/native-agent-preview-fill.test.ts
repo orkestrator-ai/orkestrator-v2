@@ -69,10 +69,10 @@ describe("preview fill answers", () => {
     const counter = { count: 0 };
     const read = (fields: Partial<ProviderTranscriptSnapshot>, bytes = 100) =>
       answers.fills("view", snapshot([countedRow("a", bytes, counter)], fields), liveWindow);
-    read({ revision: 3 });
-    read({ revision: 3 });
+    read({ revision: 3 }, 5_000);
+    read({ revision: 3 }, 5_000);
     expect(counter.count).toBe(1);
-    read({ revision: 4 });
+    read({ revision: 4 }, 5_000);
     expect(counter.count).toBe(2);
     // Same count and edge ids, no revision: a streaming tail keeps that token
     // while it grows past the target, so the answer is never reused.
@@ -80,6 +80,22 @@ describe("preview fill answers", () => {
     expect(read({}, 5_000)).toBe(true);
     expect(counter.count).toBe(4);
     expect(answers.size).toBe(0);
+  });
+
+  test("remeasures a short derived-token preview that grows within the same revision", () => {
+    const answers = new PreviewFillAnswers();
+    const counter = { count: 0 };
+    const tail = countedRow("tail", 100, counter);
+    const preview = snapshot([tail], { revision: 3 });
+    const token = previewFillToken(preview, liveWindow.targetBytes);
+    expect(answers.fills("view", preview, liveWindow)).toBe(false);
+    expect(answers.size).toBe(0);
+    tail.content = "x".repeat(5_000);
+    expect(previewFillToken(preview, liveWindow.targetBytes)).toBe(token);
+    expect(answers.fills("view", preview, liveWindow)).toBe(true);
+    expect(counter.count).toBe(2);
+    expect(answers.fills("view", preview, liveWindow)).toBe(true);
+    expect(counter.count).toBe(2);
   });
 
   test("keys the answer by view and live-window target", () => {

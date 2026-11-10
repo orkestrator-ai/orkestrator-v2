@@ -14,6 +14,7 @@ import { ClaudeAttachmentError } from "./session-manager-persistence.js";
 import { settlePendingApiRetry } from "./session-manager-prompt-handlers/transcript-notice.js";
 import {
   diagnosticErrorClass,
+  isUsageLimitError,
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
 } from "./session-manager-prompt-turn-lifecycle.js";
@@ -241,12 +242,21 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     recordInterruptedStructuredOutputIfCurrent(turn);
     return;
   }
-  log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
+  // A CLI killed under the turn cut it short; the rollout holds it, so a
+  // workflow continues it like a turn a bridge restart cut short.
+  const killedBy = killedClaudeProcessSignal(error);
+  // The provider refusing the turn on a used-up plan allowance is an account
+  // state, reported to the session (and acted on by the backend), not a
+  // bridge failure: it is a warning under its own event, so `prompt.failed`
+  // errors stay a signal of something actually broken.
+  const usageLimited = !killedBy && (turn.rateLimitRejected || isUsageLimitError(error));
+  if (usageLimited) {
+    log.warn("prompt.usage-limited", { errorClass: diagnosticErrorClass(error) });
+  } else {
+    log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
+  }
 
   if (session.abortController === abortController) {
-    // A CLI killed under the turn cut it short; the rollout holds it, so a
-    // workflow continues it like a turn a bridge restart cut short.
-    const killedBy = killedClaudeProcessSignal(error);
     const failure = killedBy
       ? claudeProcessKilledMessage(killedBy)
       : error instanceof Error

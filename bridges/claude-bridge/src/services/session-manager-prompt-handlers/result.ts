@@ -346,7 +346,6 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
     debugLog("[session-manager] Query stopped by the user", { sessionId });
     finishTurnInputIfSettled(turn);
   } else {
-    log.error("query.failed", { subtype: resultMsg.subtype, sessionId, isError: resultIsError });
     const startupFailure = resultMsg.startup_failure_reason
       ? withStartupFailureDetail(
           claudeStartupFailureMessage(resultMsg.startup_failure_reason),
@@ -360,6 +359,13 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
       resultMsg.subtype === "success" && classifyUsageLimitError(resultMsg.result)
         ? (resultMsg.result as string).trim().slice(0, MAX_USAGE_LIMIT_ERROR_CHARS)
         : undefined;
+    // A used-up plan allowance is the account's state, not a failed query:
+    // the session reports it and the backend acts on it, so it is a warning.
+    if (!startupFailure && (usageLimit || turn.rateLimitRejected)) {
+      log.warn("query.usage-limited", { subtype: resultMsg.subtype, sessionId });
+    } else {
+      log.error("query.failed", { subtype: resultMsg.subtype, sessionId, isError: resultIsError });
+    }
     const resultError =
       startupFailure ||
       resultMsg.errors?.filter(Boolean).join("\n") ||

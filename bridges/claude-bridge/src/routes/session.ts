@@ -104,6 +104,7 @@ import { registerSessionCloseRoute } from "./session-close.js";
 import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 
 const log = createLogger("bridge.claude");
 
@@ -180,6 +181,20 @@ function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 | 503 {
   if (code === "invalid") return 400;
   if (code === "unavailable") return 503;
   return 500;
+}
+
+/**
+ * Log a prompt turn that failed after the route accepted it. A turn the
+ * provider refused on a used-up plan allowance was already recorded by the
+ * turn as `prompt.usage-limited` and is reported to the session; it is an
+ * account state, not a processing fault, so it is not logged again as one.
+ */
+function logPromptProcessingFailure(error: unknown): void {
+  if (classifyUsageLimitError(error instanceof Error ? error.message : error)) {
+    log.debug("prompt.processing-usage-limited");
+    return;
+  }
+  log.error("prompt.processing-failed", { error: formatLogError(error) });
 }
 
 /**
@@ -1004,7 +1019,7 @@ session.post("/:id/prompt", async (c) => {
           },
           (error) => {
             rejectStarted?.(error);
-            log.error("prompt.processing-failed", { error: formatLogError(error) });
+            logPromptProcessingFailure(error);
           },
         );
         return { started, completion };
@@ -1067,7 +1082,7 @@ session.post("/:id/prompt", async (c) => {
       ...(workflowResultTurn ? { workflowResultTurn } : {}),
       ...(providerPrompt !== undefined ? { providerPrompt } : {}),
     }).catch((error) => {
-      log.error("prompt.processing-failed", { error: formatLogError(error) });
+      logPromptProcessingFailure(error);
     });
 
     log.debug("prompt.accepted", { sessionId: id });

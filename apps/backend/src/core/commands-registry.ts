@@ -80,6 +80,7 @@ import { registerGitHubPullRequestCommands } from "./commands-registry-github-pu
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerScheduledJobCommands } from "./commands-registry-scheduled-jobs.js";
+import { registerSelfImprovementCommands } from "./commands-registry-self-improvement.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
 import { registerUsageCommands } from "./commands-registry-usage.js";
 import {
@@ -396,6 +397,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
   registerScheduledJobCommands(register);
+  registerSelfImprovementCommands(register);
   registerDiskUsageCommands(register);
   registerUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);

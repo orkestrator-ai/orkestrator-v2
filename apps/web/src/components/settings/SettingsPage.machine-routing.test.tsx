@@ -157,3 +157,25 @@ test("a command window with a leaf selected only offers scheduling on the window
     ),
   ).toBe(false);
 });
+
+test("the Self-improvement tab exists only while its experimental switch is on, off by default", async () => {
+  mount("experimental");
+  await screen.findByText(/Experimental settings belong to the machine this window runs on/);
+  fireEvent.click((await screen.findAllByRole("button", { name: /^Command/ }))[0]!);
+  const toggle = await screen.findByRole("switch", { name: "Enable self-improvement" });
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(screen.queryAllByRole("button", { name: "Self-improvement" })).toHaveLength(0);
+
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    expect(writes).toContainEqual(
+      expect.objectContaining({
+        owner: "command",
+        global: expect.objectContaining({ experimentalSelfImprovement: true }),
+      }),
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Self-improvement" }).length).toBeGreaterThan(0),
+  );
+});

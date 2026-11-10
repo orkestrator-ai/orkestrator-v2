@@ -1,7 +1,16 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+  setSystemTime,
+} from "bun:test";
 import { useEffect, useState } from "react";
-import { cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -1455,6 +1464,46 @@ describe("NativeMessage task list rendering", () => {
     const time = earlier.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     expect(screen.getByText(`${day}, ${time}`)).toBeTruthy();
   });
+
+  for (const trigger of ["midnight", "focus", "visibilitychange"] as const) {
+    test(`refreshes an unchanged mounted row on ${trigger}`, () => {
+      const before = new Date(2026, 10, 9, 23, 59, 59);
+      setSystemTime(before);
+      let midnightCallback: (() => void) | undefined;
+      const realSetTimeout = globalThis.setTimeout;
+      const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+        delay: number,
+        ...args: unknown[]
+      ) => {
+        if (delay === 1000) midnightCallback = callback;
+        return realSetTimeout(callback, delay, ...args);
+      }) as typeof setTimeout);
+      try {
+        const message = makeMessage([{ type: "text", content: "Overnight" }], {
+          createdAt: before.toISOString(),
+        });
+        renderInAppCommandScope(<NativeMessage message={message} />);
+        const time = before.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+        expect(screen.getByText(time)).toBeTruthy();
+        expect(midnightCallback).toBeDefined();
+        act(() => {
+          setSystemTime(new Date(2026, 10, 10, 8));
+          if (trigger === "midnight") midnightCallback!();
+          else if (trigger === "focus") window.dispatchEvent(new Event("focus"));
+          else document.dispatchEvent(new Event("visibilitychange"));
+        });
+        const date = before.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        expect(screen.getByText(`${date}, ${time}`)).toBeTruthy();
+        const staleLabel = screen.queryByText(time);
+        expect(staleLabel).toBeNull();
+      } finally {
+        cleanup();
+        timerSpy.mockRestore();
+        setSystemTime();
+      }
+    });
+  }
 
   test("survives a platform time formatter failure", () => {
     const original = Date.prototype.toLocaleTimeString;

@@ -12,6 +12,7 @@ import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
 import { OpenCodeAuthRecoveryAction } from "@/components/opencode/OpenCodeAuthRecoveryAction";
 import { openCodeCredentialFailureProvider } from "@/lib/opencode-auth";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { useLocalDay } from "@/lib/use-local-day";
 import { formatTranscriptTimestamp } from "@/lib/format-transcript-timestamp";
 import {
   type NativeMessage as NativeMessageType,
@@ -69,6 +70,7 @@ export const NativeMessage = memo(function NativeMessage({
   asyncQuestionResponses = [],
   respondToAsyncQuestion,
 }: NativeMessageProps) {
+  const localDay = useLocalDay();
   const message = useMemo(() => normalizeNativeMessage(rawMessage), [rawMessage]);
   const previousMessage = useMemo(
     () => (rawPreviousMessage ? normalizeNativeMessage(rawPreviousMessage) : null),
@@ -186,7 +188,7 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <MessageErrorAlert
         content={message.content}
-        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
         action={
           openCodeAuthProvider ? (
             <OpenCodeAuthRecoveryAction
@@ -206,7 +208,7 @@ export const NativeMessage = memo(function NativeMessage({
       return (
         <PullRequestUpdateNotice
           mail={mail}
-          timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+          timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
         />
       );
     }
@@ -214,7 +216,7 @@ export const NativeMessage = memo(function NativeMessage({
       <MailTile
         mail={mail}
         expansionKey={`peer-mail:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
       />
     );
   }
@@ -224,7 +226,7 @@ export const NativeMessage = memo(function NativeMessage({
       <GoalTurnTile
         turn={message.goalTurn ?? {}}
         expansionKey={`goal-turn:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
       />
     );
   }
@@ -235,7 +237,7 @@ export const NativeMessage = memo(function NativeMessage({
         status={message.goalStatus}
         text={message.content}
         expansionKey={`goal-status:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
       />
     );
   }
@@ -356,7 +358,7 @@ export const NativeMessage = memo(function NativeMessage({
                         <MessageShell
                           isUser={isUser}
                           authorLabel={isUser ? "You" : assistantAuthorLabel}
-                          timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+                          timestampLabel={formatTranscriptTimestamp(message.createdAt, localDay)}
                           durationLabel={durationLabel}
                           showHeader={!isContinuation}
                           showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}

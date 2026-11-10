@@ -55,7 +55,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
-| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `container-exited`, because the daemon refuses `docker cp` from those containers ([7548](../todo/containers-and-environments/7548-rootless-docker-cp-refusals.md)) |
+| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run. On a rootless daemon put `TMPDIR` on a filesystem mounted without `nosuid`/`nodev`: from `/tmp` the two firewall-failure boots report `container-exited`, because the daemon refuses `docker cp` from those containers ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)) |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
@@ -390,7 +390,7 @@ and the last two home-filesystem runs (HTTP 405 from the real service
 through `10.0.2.2` in 151 ms, another host port refused).
 
 Findings, all new and all in
-[7548](../todo/containers-and-environments/7548-rootless-docker-cp-refusals.md):
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md):
 
 - **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`.**
   With `TMPDIR=/tmp` the readiness fixtures put the project Git mirror on the
@@ -433,7 +433,7 @@ Findings, all new and all in
   on 2026-11-06), arm64, other RootlessKit network drivers, a host without
   `cpu` delegation (0019), the rootful daemon on this host, and whether the
   `device or resource busy` failure also happens on `overlay2` or rootful
-  daemons (7548 task 2).
+  daemons (7549 task 2).
 
 ## Host loopback, rootful reach and workload firewalls on Linux Engine (2026-11-09)
 

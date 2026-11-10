@@ -1807,6 +1807,8 @@ export const REPOSITORIES = [
   "AgentMailInjects",
   "AgentMailBudgets",
   "KanbanRepository",
+  "KanbanBoardStore",
+  "KanbanSyncRepository",
   "PreviewServicesRepository",
   "NodesRepository",
   "PublicOperationsRepository",

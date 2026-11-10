@@ -61,6 +61,8 @@ export default defineScenario({
     const { command, leaf, fixtures } = ctx;
     const from = await fixtures.coordinator(command);
     const worker = await fixtures.worker(leaf);
+    // The command node refuses mail to a node it has not yet seen hold the project.
+    await fixtures.pairedOn(command, leaf);
     const marker = `nm-${Date.now().toString(36)}`;
 
     // Down, no steer.

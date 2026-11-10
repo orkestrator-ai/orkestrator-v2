@@ -9,7 +9,11 @@
  * - **Version 0** (a pre-contract node): today's gating on the hello's
  *   `ticket-sync` capability. Without it, `syncs` is `false` (the board says
  *   "update that machine") and every call is refused with `unknown-command`,
- *   which is what such a leaf would answer.
+ *   which is what such a leaf would answer. With it, each call carries only
+ *   the keys the pre-contract handler accepted: those handlers were strict
+ *   (`assertOnlyKeys`), so `collect_ticket_sync_outbox` goes without
+ *   `features`, which came with image sync. Such a leaf queues no image
+ *   change, so it loses nothing by not hearing the command node's features.
  *
  * `status` is the command node's own board read (`get_ticket_sync_status`,
  * the Kanban sync strip, plan item 7001's audit on 2026-11-07). It is not
@@ -94,6 +98,35 @@ function api(
   };
 }
 
+/**
+ * The keys `collect_ticket_sync_outbox` accepted before the contract
+ * (2026-11-07); a pre-contract leaf refuses any other key.
+ */
+const PRE_CONTRACT_COLLECT_KEYS = ["controllerId", "after"] as const;
+
+/** `args` with only the keys a pre-contract handler accepted. */
+function onlyKeys<T extends object>(args: T, keys: readonly string[]): T {
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (keys.includes(key)) kept[key] = value;
+  }
+  return kept as T;
+}
+
+/** Version 0: today's capability gating, and calls a pre-contract handler accepts. */
+function legacyApi(call: CommandCall, context: DomainAdapterContext): TicketSyncApi {
+  const legacy = api(call, context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false, {
+    status: untyped(context, getTicketSyncStatusCommand),
+    leafStatus: untyped(context, getTicketSyncLeafStatusCommand),
+    share: untyped(context, shareTicketsWithCommandNodeCommand),
+    dismissConflicts: untyped(context, dismissTicketSyncConflictsCommand),
+  });
+  return {
+    ...legacy,
+    collectOutbox: (args) => legacy.collectOutbox(onlyKeys(args, PRE_CONTRACT_COLLECT_KEYS)),
+  };
+}
+
 /** A board call at version 0: today's untyped call, answered as sent. */
 function untyped<C extends AnyCommandDef>(context: DomainAdapterContext, def: C): Call<C> {
   return (args) =>
@@ -102,11 +135,5 @@ function untyped<C extends AnyCommandDef>(context: DomainAdapterContext, def: C)
 
 export const ticketSyncClient = domainClient(ticketSyncDomain, {
   1: (call) => api(call, true),
-  0: (call, context: DomainAdapterContext) =>
-    api(call, context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false, {
-      status: untyped(context, getTicketSyncStatusCommand),
-      leafStatus: untyped(context, getTicketSyncLeafStatusCommand),
-      share: untyped(context, shareTicketsWithCommandNodeCommand),
-      dismissConflicts: untyped(context, dismissTicketSyncConflictsCommand),
-    }),
+  0: legacyApi,
 });

@@ -147,7 +147,10 @@ servers load. On an `opencode2-launch=1` image:
   `.opencode/plugins`, `~/.config/opencode/plugins` and `~/.opencode/plugins`
   did not load, the server read a read-only configuration directory, its
   `/proc/<pid>/environ` stopped being readable after the warm request, and its
-  shells got the start environment but not the password.
+  shells got the start environment but not the password. Qualified on a real
+  container on beelink (Linux Engine 29.9.2) on 2026-11-10 by
+  `apps/backend/tests/bridge-credential-docker.test.ts`, with the root caches
+  and project copies below.
 - **Root's package cache.** OpenCode installs the npm package of a provider it
   does not bundle (and, on 1.x, an npm plugin) into `$XDG_CACHE_HOME/opencode`
   and imports it into the server. Code planted in such a package in node's

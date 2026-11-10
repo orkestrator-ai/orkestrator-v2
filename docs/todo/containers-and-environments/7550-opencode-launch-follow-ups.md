@@ -170,6 +170,18 @@ its first session; `/api/agent` loads them (probed, and the live test reads
   `opencode2-launch.live.test.ts` runs the pinned 2.2.6 binary
   (`RUN_LIVE_OPENCODE2=1`); `apps/backend/tests/bridge-credential-docker.test.ts`
   has the real-container cases (`RUN_LIVE_DOCKER_TESTS=1`).
+- Qualified on beelink (Linux Engine 29.9.2, x86_64) on 2026-11-10 with an
+  image built from this branch: all 21 cases of
+  `bridge-credential-docker.test.ts` passed, including the three new ones (the
+  2.x server ran `/opt/opencode/bin/opencode2`, no plugin planted in node's
+  directories or the checkout loaded, node's replaced `opencode2` was not run,
+  the server's environment was closed to node after the warm request, root's
+  directories were not writable by node, the project file had no plugin key,
+  the socket was recorded and reused, an imposter on port 4102 got no password
+  and was replaced; the 1.x cache and project copies were root's). The first
+  build left `opencode2-launch` out of the image label: the image probe's
+  marker pattern did not admit a digit in a name (`docker/image-manifest.ts`,
+  fixed in the same branch, with a test).
 
 ## Outstanding work
 

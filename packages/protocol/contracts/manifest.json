@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1022,
-    "defined": 1022,
+    "commands": 1024,
+    "defined": 1024,
     "untyped": 0,
     "events": 45
   },
@@ -2849,6 +2849,15 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:1d608a81bcc694402232eca06c50b3a491a3e26bad1940ab3ac73879fe4a8c37"
+    },
+    "get_auto_pipeline_state": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
+      "resultDigest": "sha256:d65eef7475253e092d2def2b2ae904fa96d67136703823ca02f668c44519212c"
     },
     "get_available_ai_cli": {
       "domain": "agent-servers",
@@ -7264,6 +7273,15 @@
       "critical": [],
       "argsDigest": "sha256:a4658fda618fa51786c10b24f9425cfaec70455f77e5a1470455c417785ffd6e",
       "resultDigest": "sha256:e9cd931e20bbe265c53568a684f91a87c62b5f334270f26f16a4e755fbf89dec"
+    },
+    "save_auto_pipeline_edits": {
+      "domain": "pipelines",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b8cb13c85157b27552854965a729918244f835f2bc5a1fc7785497522fe50750",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "save_bug_report_screenshot": {
       "domain": "system",

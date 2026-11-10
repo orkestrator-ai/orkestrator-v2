@@ -65,7 +65,11 @@ function draftContext(
     runtime: {
       environments: { fence },
       tmux: { sessions: { activityState: () => "idle" } },
-      terminals: { hasLiveSessionsForEnvironment: () => false },
+      terminals: {
+        hasLiveSessionsForEnvironment: () => false,
+        hasContainerTerminal: () => false,
+        terminateSessionsForEnvironment: async () => [],
+      },
     },
     nativeAgents: { hasActiveCheckoutWork: async () => false },
     workflowResults: new WorkflowResultService(storage.getDataDir()),
@@ -137,12 +141,20 @@ test("manual prompt draft confirms through normal Review, Verify and PR without 
           ).toMatchObject({ ok: true });
         },
       );
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
       let draft;
       try {
-        draft = await auto.draft("env-1", "original-tab");
+        const drafting = auto.draft("env-1", "original-tab");
+        // The tab reads progress without joining or restarting the operation.
+        expect(auto.state("env-1", "original-tab")).toEqual({ phase: "drafting" });
+        draft = await drafting;
       } finally {
         structured.mockRestore();
       }
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "ready", draft });
+      const edits = { title: "", description: "Half typed", acceptanceCriteria: ["", "x"] };
+      auto.saveEdits(draft.id, edits);
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "ready", draft, edits });
       expect(provider.sent).toHaveLength(1);
       expect(provider.sent[0]?.sessionId).not.toBe("original-session");
       expect(provider.sent[0]?.prompt).toContain("submit_auto_pipeline_draft");
@@ -161,10 +173,19 @@ test("manual prompt draft confirms through normal Review, Verify and PR without 
       );
       expect((await restarted.draft("env-1", "original-tab")).id).toBe(draft.id);
       expect(provider.sent).toHaveLength(1);
+      const terminate = spyOn(context.runtime.terminals, "terminateSessionsForEnvironment");
       const record = (await restarted.confirm(draft.id, {
         ...result,
         title: "Reviewed feature",
       })) as { id: string };
+      // Promotion closes the environment's shells itself rather than asking the user to.
+      expect(terminate).toHaveBeenCalledWith("env-1");
+      terminate.mockRestore();
+      expect(restarted.state("env-1", "original-tab")).toEqual({
+        phase: "promoted",
+        pipelineId: record.id,
+      });
+      expect(() => restarted.saveEdits(draft.id, edits)).toThrow("already confirmed");
       for (let pass = 0; pass < 12; pass++) await buildPipelines.advanceNow(record.id);
       const finished = await pipeline(storage, record.id);
       expect(finished.phase).toBe("complete");
@@ -195,6 +216,10 @@ test("running source is disabled and cannot draft", async () => {
       expect((await auto.sources("env-1")).sources[0]?.disabledReason).toContain("finish");
       await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("finish");
       expect(provider.sent).toHaveLength(0);
+      expect(auto.state("env-1", "original-tab")).toEqual({
+        phase: "failed",
+        error: "Wait for this tab's turn to finish",
+      });
     } finally {
       status.mockRestore();
     }
@@ -724,7 +749,7 @@ for (const boundary of ["add", "commit", "admission"] as const) {
   });
 }
 
-test("promotion refuses an in-flight submission, another active agent and a live terminal", async () => {
+test("promotion refuses an in-flight submission, another active agent and a terminal that will not close", async () => {
   await withService(
     async (buildPipelines, storage, provider) => {
       seed(storage);
@@ -761,13 +786,20 @@ test("promotion refuses an in-flight submission, another active agent and a live
       }
       const terminal = spyOn(
         context.runtime.terminals,
-        "hasLiveSessionsForEnvironment",
-      ).mockReturnValue(true);
+        "terminateSessionsForEnvironment",
+      ).mockResolvedValue(["env-1:setup"]);
       try {
-        await expect(auto.confirm(draft.id, result)).rejects.toThrow("terminals");
+        await expect(auto.confirm(draft.id, result)).rejects.toThrow("did not close");
+        expect(terminal).toHaveBeenCalledWith("env-1");
       } finally {
         terminal.mockRestore();
       }
+      // Each refusal is kept for the tab, beside the still-editable draft.
+      expect(auto.state("env-1", "original-tab")).toMatchObject({
+        phase: "ready",
+        draft: { id: draft.id },
+        confirmError: expect.stringContaining("did not close"),
+      });
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
       expect(storage.getAutoPipelineDraft(draft.id)?.reviewed).toBeUndefined();

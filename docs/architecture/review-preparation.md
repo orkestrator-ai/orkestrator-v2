@@ -905,7 +905,22 @@ Confirmation reserves the existing environment's exclusive mutation fence before
 resolving its worktree path or revalidating the draft. It holds that reservation
 through staging, commit, ticket publication and completed-Build admission. New
 agent submissions, file writes, terminal starts, checkout moves and other pipeline
-admissions are refused while it is held. Already active agents, workflows and
-live terminal shells must finish or close before promotion; an idle source tab
-alone is insufficient. Both failure and success release the reservation, and a
-retry of a completed admission may repair publication while its pipeline runs.
+admissions are refused while it is held. Already active agents and workflows
+must finish before promotion; an idle source tab alone is insufficient.
+Promotion closes the environment's terminal shells itself, inside the
+reservation and after the draft revalidates, and waits for each process tree to
+exit (`terminateSessionsForEnvironment`, as moving an environment does). That
+includes the setup terminal, which ends in an interactive shell with no tab the
+user could close. A shell that survives refuses the promotion. Both failure and
+success release the reservation, and a retry of a completed admission may
+repair publication while its pipeline runs.
+
+The draft is reviewed in an `auto-pipeline` environment tab (one per source
+tab), not a modal: Draft, Details, Acceptance criteria and Confirm are steps of
+that tab. Drafting and promotion run in the backend and are not cancelled when
+the tab unmounts; only Cancel drafting stops a draft. The tab reads
+`get_auto_pipeline_state` whenever it is shown (drafting, failed, ready with
+the user's saved edits and any confirmation refusal, promoting, promoted), and
+`save_auto_pipeline_edits` keeps unconfirmed ticket edits with the draft
+record. Drafting failures, confirmation refusals and in-progress promotions are
+process-local; after a restart the tab shows the persisted draft.

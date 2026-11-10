@@ -10,6 +10,8 @@ import {
   parseAutoPipelineTicket,
   parseAutoPipelineResult,
   type AutoPipelineDraft,
+  type AutoPipelineEdits,
+  type AutoPipelineState,
   type AutoPipelineTicket,
   type AutoPipelineSources,
 } from "@orkestrator/protocol/build-pipeline";
@@ -45,6 +47,8 @@ export interface AutoPipelineDraftRecord {
   attempt: CompletedBuildAttempt;
   draft: AutoPipelineDraft;
   fingerprint: string;
+  /** The user's unconfirmed changes to the generated ticket fields. */
+  edits?: AutoPipelineEdits;
   reviewed?: AutoPipelineTicket;
   pipelineId?: string;
 }
@@ -78,6 +82,32 @@ const draftingByStorage = new WeakMap<
   Map<string, { operation: Promise<AutoPipelineDraft>; controller: AbortController }>
 >();
 
+/**
+ * Process-local outcomes the tab's state read reports. Drafting and promotion
+ * run in this process, so a restart ends them; the persisted draft records
+ * remain and are what the tab then shows. Each map is bounded by the drafting
+ * cap or by the number of drafts, and an entry is replaced on the next attempt.
+ */
+interface AutoPipelineOutcomes {
+  /** `environmentId:tabId` → why its last drafting attempt failed. */
+  failures: Map<string, string>;
+  /** `environmentId:tabId` → confirmations in progress for it. */
+  promoting: Map<string, number>;
+  /** Draft id → why its last confirmation was refused. */
+  confirmErrors: Map<string, string>;
+}
+const outcomesByStorage = new WeakMap<CommandContext["storage"], AutoPipelineOutcomes>();
+const MAX_OUTCOMES = 256;
+function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_OUTCOMES) map.delete(map.keys().next().value as K);
+}
+function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message.trim() || "Auto-pipeline failed").slice(0, 2000);
+}
+
 /** Drafts and promotion receipts survive restarts; clients cannot replace generated notes. */
 export class AutoPipelineService {
   constructor(
@@ -86,6 +116,55 @@ export class AutoPipelineService {
     private readonly draftTimeoutMs = 120_000,
   ) {}
 
+  private outcomes(): AutoPipelineOutcomes {
+    let outcomes = outcomesByStorage.get(this.context.storage);
+    if (!outcomes) {
+      outcomes = { failures: new Map(), promoting: new Map(), confirmErrors: new Map() };
+      outcomesByStorage.set(this.context.storage, outcomes);
+    }
+    return outcomes;
+  }
+  /**
+   * Where a tab's draft stands. Reads only: it never starts, resumes or
+   * revalidates drafting, so polling it from a mounted tab is cheap and safe.
+   */
+  state(environmentId: string, tabId: string): AutoPipelineState {
+    const key = `${environmentId}:${tabId}`;
+    const outcomes = this.outcomes();
+    const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId, {
+      includeReviewed: true,
+    });
+    if (record?.pipelineId) return { phase: "promoted", pipelineId: record.pipelineId };
+    const edits = record?.edits ? { edits: record.edits } : {};
+    if (record && outcomes.promoting.has(key))
+      return { phase: "promoting", draft: record.draft, ...edits };
+    if (draftingByStorage.get(this.context.storage)?.has(key)) return { phase: "drafting" };
+    const failure = outcomes.failures.get(key);
+    if (failure) return { phase: "failed", error: failure };
+    if (!record) return { phase: "idle" };
+    const confirmError = outcomes.confirmErrors.get(record.draft.id);
+    return {
+      phase: "ready",
+      draft: record.draft,
+      ...edits,
+      ...(confirmError ? { confirmError } : {}),
+    };
+  }
+  /** Keeps unconfirmed ticket edits with the draft; refused once confirmation has begun. */
+  saveEdits(draftId: string, edits: AutoPipelineEdits): void {
+    const record = this.context.storage.getAutoPipelineDraft(draftId);
+    if (!record) throw new Error("Auto-pipeline draft expired. Draft again before editing");
+    if (record.reviewed || record.pipelineId)
+      throw new Error("This draft was already confirmed; its ticket can no longer change");
+    if (this.outcomes().promoting.has(`${record.environmentId}:${record.attempt.tabId}`))
+      throw new Error("This draft is being confirmed; its ticket can no longer change");
+    record.edits = {
+      title: edits.title,
+      description: edits.description,
+      acceptanceCriteria: [...edits.acceptanceCriteria],
+    };
+    this.context.storage.putAutoPipelineDraft(record);
+  }
   private async environment(id: string): Promise<Environment> {
     const environment = await this.context.storage.getEnvironment(id);
     if (!environment || environment.projectHome || environment.deletionRequestedAt)
@@ -196,8 +275,14 @@ export class AutoPipelineService {
     if (active.size >= 32)
       return Promise.reject(new Error("Too many drafting sessions are running"));
     const controller = new AbortController();
+    const outcomes = this.outcomes();
+    outcomes.failures.delete(key);
     const operation = this.createDraft(environmentId, tabId, controller.signal);
     active.set(key, { operation, controller });
+    operation.catch((error: unknown) => {
+      // A cancelled draft is a deliberate stop, not a failure to show.
+      if (!controller.signal.aborted) remember(outcomes.failures, key, errorText(error));
+    });
     return operation.finally(() => {
       if (active.get(key)?.operation === operation) active.delete(key);
     });
@@ -401,28 +486,48 @@ export class AutoPipelineService {
       return Promise.reject(
         new Error("Auto-pipeline draft expired. Draft again before confirming"),
       );
-    return this.context.storage.withAutoPipelinePromotion(record.environment.id, async () => {
-      const ports = this.ports();
-      try {
-        // Local bridge startup rejects moving checkouts, even for the owner.
-        // Acquire before reserving; promote revalidates all state inside the fence.
-        const admitted = (
-          await this.context.storage.listBuildPipelines(record.environment.projectId)
-        ).some((item) => item.environmentId === record.environmentId);
-        const provider = admitted
-          ? undefined
-          : await ports.provider(record.environment, record.source.agent);
-        return await withWorkspaceCodeRewindReservation({
-          fence: this.context.runtime.environments.fence,
-          storage: this.context.storage,
-          environmentId: record.environmentId,
-          assertQuiet: async () => {},
-          run: () => this.promote(id, ticket, ports, provider),
-        });
-      } finally {
-        ports.release();
-      }
-    });
+    const key = `${record.environmentId}:${record.attempt.tabId}`;
+    const outcomes = this.outcomes();
+    outcomes.promoting.set(key, (outcomes.promoting.get(key) ?? 0) + 1);
+    outcomes.confirmErrors.delete(id);
+    return this.context.storage
+      .withAutoPipelinePromotion(record.environment.id, () =>
+        this.confirmSerialized(record, ticket),
+      )
+      .catch((error: unknown) => {
+        remember(outcomes.confirmErrors, id, errorText(error));
+        throw error;
+      })
+      .finally(() => {
+        const remaining = (outcomes.promoting.get(key) ?? 1) - 1;
+        if (remaining > 0) outcomes.promoting.set(key, remaining);
+        else outcomes.promoting.delete(key);
+      });
+  }
+  private async confirmSerialized(
+    record: AutoPipelineDraftRecord,
+    ticket: AutoPipelineTicket,
+  ): Promise<unknown> {
+    const ports = this.ports();
+    try {
+      // Local bridge startup rejects moving checkouts, even for the owner.
+      // Acquire before reserving; promote revalidates all state inside the fence.
+      const admitted = (
+        await this.context.storage.listBuildPipelines(record.environment.projectId)
+      ).some((item) => item.environmentId === record.environmentId);
+      const provider = admitted
+        ? undefined
+        : await ports.provider(record.environment, record.source.agent);
+      return await withWorkspaceCodeRewindReservation({
+        fence: this.context.runtime.environments.fence,
+        storage: this.context.storage,
+        environmentId: record.environmentId,
+        assertQuiet: async () => {},
+        run: () => this.promote(record.draft.id, ticket, ports, provider),
+      });
+    } finally {
+      ports.release();
+    }
   }
 
   private async assertCheckoutQuiet(environmentId: string): Promise<void> {
@@ -436,15 +541,6 @@ export class AutoPipelineService {
       (await this.context.nativeAgents?.hasActiveCheckoutWork(environmentId))
     )
       throw new Error("An agent may still write to this checkout. Stop it before promotion.");
-    const environment = await this.context.storage.getEnvironment(environmentId);
-    if (
-      this.context.runtime.terminals.hasLiveSessionsForEnvironment(environmentId) ||
-      (environment?.containerId &&
-        this.context.runtime.terminals.hasContainerTerminal(environment.containerId))
-    )
-      throw new Error(
-        "Close this environment's terminals before promotion; a shell may still write.",
-      );
     const sessions = await this.context.storage.listNativeAgentSessions();
     if (
       sessions.some(
@@ -454,6 +550,25 @@ export class AutoPipelineService {
       )
     )
       throw new Error("An agent submission is unresolved; settle it before promotion.");
+  }
+  /**
+   * Closes every terminal shell of the environment and waits for each process
+   * tree to exit, the way moving an environment does. A shell that outlives the
+   * close could still write while the work is committed, so promotion refuses.
+   * The setup terminal counts: it ends in an interactive shell that stays open
+   * after setup and has no tab the user could close it from.
+   */
+  private async closeTerminals(environment: Environment): Promise<void> {
+    const terminals = this.context.runtime.terminals;
+    const survivors = await terminals.terminateSessionsForEnvironment(environment.id);
+    if (
+      survivors.length > 0 ||
+      terminals.hasLiveSessionsForEnvironment(environment.id) ||
+      (environment.containerId && terminals.hasContainerTerminal(environment.containerId))
+    )
+      throw new Error(
+        "A terminal in this environment did not close. Stop the command running in it and confirm again.",
+      );
   }
   private async promote(
     id: string,
@@ -526,6 +641,9 @@ export class AutoPipelineService {
       )
         throw new Error("Work changed since drafting. Draft again before confirming");
     }
+    // Inside the fence no new terminal can start, so the shells closed here
+    // stay closed; the fingerprint read below sees anything they wrote first.
+    await this.closeTerminals(environment);
     record.reviewed = ticket;
     this.context.storage.putAutoPipelineDraft(record);
     if (

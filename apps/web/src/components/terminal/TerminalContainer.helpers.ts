@@ -171,6 +171,7 @@ export const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   "design-canvas": false,
   "graph-designer": false,
   "graph-run": false,
+  "auto-pipeline": false,
   "pull-request": false,
   file: false,
   plain: false,

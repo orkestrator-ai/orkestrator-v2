@@ -250,6 +250,22 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     };
   }
 
+  if (type === "auto-pipeline") {
+    if (!isRecord(value.autoPipelineData)) return null;
+    const { sourceTabId, sourceLabel } = value.autoPipelineData;
+    if (typeof sourceTabId !== "string" || !sourceTabId || sourceTabId.length > 256) return null;
+    return {
+      id,
+      type,
+      autoPipelineData: {
+        sourceTabId,
+        ...(typeof sourceLabel === "string" && sourceLabel.trim()
+          ? { sourceLabel: sourceLabel.slice(0, 200) }
+          : {}),
+      },
+    };
+  }
+
   if (type === "pull-request") {
     if (!isRecord(value.pullRequestData) || !isGitHubPullRequestRef(value.pullRequestData.ref)) {
       return null;

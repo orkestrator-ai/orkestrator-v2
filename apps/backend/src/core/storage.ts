@@ -824,8 +824,12 @@ export class StorageService {
   deleteAutoPipelineDraftsByEnvironment(environmentId: string) {
     return this.repos.drafts.deleteAutoPipelineDraftsByEnvironment(environmentId);
   }
-  latestAutoPipelineDraft(environmentId: string, tabId: string) {
-    return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId);
+  latestAutoPipelineDraft(
+    environmentId: string,
+    tabId: string,
+    options?: { includeReviewed?: boolean },
+  ) {
+    return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId, options);
   }
   getAutoPipelineDraft(id: string) {
     return this.repos.drafts.getAutoPipelineDraft(id);

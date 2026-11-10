@@ -74,3 +74,44 @@ exemption. No scan, test, timeout or assertion was changed, and validation remai
 
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KZbVC6/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 and outer log `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.QmChPr/review-default-tests.log.gz`.
+
+## Store-writer scan repair — 2026-11-10
+
+Applied on `open-notes-tab-0bdba344d18c-r1` after `3151aff54`. This covers only the
+store-writer row; the constants and preview-relay rows stay open.
+
+Measured on this macOS host (18 cores, load average 19–30), Bun 1.4.4, with a
+throwaway timed copy of the test, deleted afterwards:
+
+| Phase of `no backend class outside the scan calls the store write primitives` | Time |
+| --- | --- |
+| `analyzeStorageService()` (cached by the file's earlier tests in a normal run) | 168 ms |
+| List 1,240 backend sources | 2 ms |
+| Read 18.4 MB and filter by text (34 files match) | 57 ms |
+| Parse and walk the matches | 20 ms |
+
+The JUnit time for the test in the complete owner was 125 ms. Three runs of the
+owner beside three concurrent `--parallel=6` backend storage runs kept every
+test in the file under 0.22 s, so the 7,810 ms aggregate figure was not
+reproduced. The test is synchronous, with nothing to await: it reads the whole
+backend tree and parses what can match. In this file it was the first of three
+tests that each read the whole tree again (`backendSourceFiles()` plus
+`readFileSync`, then `backendSources()` twice), so it took the uncached read.
+
+The branch's storage change scanned by this guard is 118 added lines in two files
+(of about 2.8 MB of `storage*.ts` source), which does not account for a
+62-fold slowdown.
+
+Repair, without changing any assertion:
+
+- `backendSources()` reads the tree once per test process and hands out copies;
+  the primitive scan now uses it, so the file reads the backend tree once instead
+  of three times, and `parse()` reuses the trees.
+- The three whole-tree tests in `storage-writer-guards.test.ts` take
+  `WHOLE_TREE_SCAN_TIMEOUT_MS` (30 s), documented beside the constant in
+  `storage-writer-guards-test-support.ts` as synchronous whole-tree work with
+  nothing to await, per AGENTS.md's budget rule.
+
+Owners after the change:
+`mise run test:logged -- --name storage-writer-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards.test.ts ./src/core/storage-writer-guards-raw.test.ts ./src/core/storage-writer-guards-analysis.test.ts --parallel=2 --only-failures`
+passed (1.4 s). The raw-writer scan (case 1309) is not changed here.

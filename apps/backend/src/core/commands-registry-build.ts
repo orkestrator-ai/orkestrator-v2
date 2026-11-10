@@ -7,6 +7,8 @@ import {
   draftAutoPipelineCommand,
   cancelAutoPipelineDraftCommand,
   confirmAutoPipelineCommand,
+  getAutoPipelineStateCommand,
+  saveAutoPipelineEditsCommand,
 } from "@orkestrator/protocol/contract/domains/pipelines";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -105,6 +107,12 @@ export function registerBuildPipelineCommands(
   );
   register(cancelAutoPipelineDraftCommand, ({ environmentId, tabId }, context) =>
     auto(context).cancelDraft(environmentId, tabId),
+  );
+  register(getAutoPipelineStateCommand, ({ environmentId, tabId }, context) =>
+    auto(context).state(environmentId, tabId),
+  );
+  register(saveAutoPipelineEditsCommand, ({ draftId, edits }, context) =>
+    auto(context).saveEdits(draftId, edits),
   );
   register(
     confirmAutoPipelineCommand,

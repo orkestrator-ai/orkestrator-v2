@@ -163,6 +163,19 @@ export interface GraphRunTabData {
   title?: string;
 }
 
+/**
+ * An Auto-pipeline tab: drafting, reviewing and confirming the ticket that
+ * promotes one finished agent tab's work into a build pipeline. Only the source
+ * tab is kept; the draft, its edits and any promotion are read back from the
+ * backend when the tab mounts.
+ */
+export interface AutoPipelineTabData {
+  /** The interactive agent tab whose finished work is being promoted. */
+  sourceTabId: string;
+  /** The source tab's name when the tab was opened, for the tab title. */
+  sourceLabel?: string;
+}
+
 // Data for in-app GitHub pull request tabs
 export interface PullRequestTabData {
   ref: GitHubPullRequestRef;
@@ -282,6 +295,8 @@ export interface TabInfo {
   graphDesignerData?: GraphDesignerTabData;
   /** Data for a graph run tab. */
   graphRunData?: GraphRunTabData;
+  /** Data for an Auto-pipeline tab. */
+  autoPipelineData?: AutoPipelineTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

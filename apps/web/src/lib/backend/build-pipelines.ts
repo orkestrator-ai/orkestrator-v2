@@ -422,6 +422,12 @@ export function createBuildPipelinesApi(client: BackendClient) {
       draftId: string,
       ticket: import("@orkestrator/protocol/build-pipeline").AutoPipelineTicket,
     ) => pipelines(client).confirm_auto_pipeline({ draftId, ticket }),
+    getAutoPipelineState: (environmentId: string, tabId: string) =>
+      pipelines(client).get_auto_pipeline_state({ environmentId, tabId }),
+    saveAutoPipelineEdits: (
+      draftId: string,
+      edits: import("@orkestrator/protocol/build-pipeline").AutoPipelineEdits,
+    ) => pipelines(client).save_auto_pipeline_edits({ draftId, edits }),
     startBuildPipeline,
     createFeatureBuild,
     pauseBuildPipeline,
@@ -463,6 +469,8 @@ export const {
   draftAutoPipeline,
   cancelAutoPipelineDraft,
   confirmAutoPipeline,
+  getAutoPipelineState,
+  saveAutoPipelineEdits,
   startBuildPipeline,
   createFeatureBuild,
   pauseBuildPipeline,

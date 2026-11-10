@@ -1076,6 +1076,8 @@ export {
   draftAutoPipeline,
   cancelAutoPipelineDraft,
   confirmAutoPipeline,
+  getAutoPipelineState,
+  saveAutoPipelineEdits,
 } from "./build-pipelines";
 export {
   getReviewValidationOutput,

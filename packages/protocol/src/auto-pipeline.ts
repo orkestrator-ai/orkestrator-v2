@@ -54,6 +54,62 @@ export const AutoPipelineDraftSchema = asModel<AutoPipelineDraft>(
     uncommittedFiles: Schema.Array(text).check(Schema.isMaxLength(1000)),
   }),
 );
+/** Unsaved-ticket edits: every field may be blank or partial while the user types. */
+export const AutoPipelineEditsSchema = Schema.Struct({
+  title: Schema.String.check(Schema.isMaxLength(240)),
+  description: Schema.String.check(Schema.isMaxLength(32000)),
+  acceptanceCriteria: Schema.Array(Schema.String.check(Schema.isMaxLength(32000))).check(
+    Schema.isMaxLength(100),
+  ),
+});
+export type AutoPipelineEdits = Schema.Schema.Type<typeof AutoPipelineEditsSchema>;
+/**
+ * Where an environment tab's Auto-pipeline draft stands, read by the
+ * `auto-pipeline` tab whenever it mounts. Drafting and promotion run in the
+ * backend, so leaving the tab neither cancels nor loses them. `edits` are the
+ * user's saved changes to the generated ticket fields. `reviewed` is the ticket
+ * a confirmation was already submitted with: once set the draft is locked, and
+ * only confirming that same ticket again (or drafting again) can proceed.
+ */
+export type AutoPipelineState =
+  | { phase: "idle" }
+  | { phase: "drafting" }
+  | { phase: "failed"; error: string }
+  | {
+      phase: "ready";
+      draft: AutoPipelineDraft;
+      edits?: AutoPipelineEdits;
+      reviewed?: AutoPipelineTicket;
+      confirmError?: string;
+    }
+  | {
+      phase: "promoting";
+      draft: AutoPipelineDraft;
+      edits?: AutoPipelineEdits;
+      reviewed?: AutoPipelineTicket;
+    }
+  | { phase: "promoted"; pipelineId: string };
+export const AutoPipelineStateSchema = asModel<AutoPipelineState>(
+  Schema.Union([
+    Schema.Struct({ phase: Schema.Literal("idle") }),
+    Schema.Struct({ phase: Schema.Literal("drafting") }),
+    Schema.Struct({ phase: Schema.Literal("failed"), error: text }),
+    Schema.Struct({
+      phase: Schema.Literal("ready"),
+      draft: AutoPipelineDraftSchema,
+      edits: Schema.optional(AutoPipelineEditsSchema),
+      reviewed: Schema.optional(AutoPipelineTicketSchema),
+      confirmError: Schema.optional(text),
+    }),
+    Schema.Struct({
+      phase: Schema.Literal("promoting"),
+      draft: AutoPipelineDraftSchema,
+      edits: Schema.optional(AutoPipelineEditsSchema),
+      reviewed: Schema.optional(AutoPipelineTicketSchema),
+    }),
+    Schema.Struct({ phase: Schema.Literal("promoted"), pipelineId: text }),
+  ]),
+);
 export const AutoPipelineSourcesSchema = asModel<AutoPipelineSources>(
   Schema.Struct({
     available: Schema.Boolean,

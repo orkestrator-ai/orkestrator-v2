@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b8cb13c85157b27552854965a729918244f835f2bc5a1fc7785497522fe50750",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "draftId": {
+          "type": "string"
+        },
+        "edits": {
+          "additionalProperties": true,
+          "properties": {
+            "acceptanceCriteria": {
+              "items": {
+                "maxLength": 32000,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "description": {
+              "maxLength": 32000,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 240,
+              "type": "string"
+            }
+          },
+          "required": ["acceptanceCriteria", "description", "title"],
+          "type": "object"
+        }
+      },
+      "required": ["draftId", "edits"],
+      "type": "object"
+    }
+  }
+}

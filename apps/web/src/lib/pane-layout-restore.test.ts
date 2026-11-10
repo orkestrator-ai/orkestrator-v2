@@ -134,6 +134,37 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(layout)).not.toContain("escape");
   });
 
+  test("Auto-pipeline tabs restore their source tab and a bounded label", () => {
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          {
+            id: "a",
+            type: "auto-pipeline",
+            autoPipelineData: { sourceTabId: "agent-1", sourceLabel: "Feature work" },
+          },
+          { id: "b", type: "auto-pipeline", autoPipelineData: { sourceTabId: "agent-2" } },
+          { id: "c", type: "auto-pipeline", autoPipelineData: { sourceTabId: "" } },
+          { id: "d", type: "auto-pipeline" },
+        ],
+      }),
+      context,
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        {
+          id: "a",
+          type: "auto-pipeline",
+          autoPipelineData: { sourceTabId: "agent-1", sourceLabel: "Feature work" },
+        },
+        { id: "b", type: "auto-pipeline", autoPipelineData: { sourceTabId: "agent-2" } },
+      ],
+    });
+  });
+
   test("key information tabs restore their pipeline in this environment only while it exists", () => {
     const layout = reconcilePersistedLayout(
       saved({

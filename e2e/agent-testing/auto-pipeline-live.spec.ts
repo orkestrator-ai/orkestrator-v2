@@ -324,21 +324,22 @@ test.describe("Auto-pipeline on a fake model", () => {
       await shot(page, "launch-narrow");
       await launch.click();
 
-      const review = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
+      // The draft opens in its own Auto-pipeline tab; the Multi Review dialog closes.
+      await expect(configure).toHaveCount(0);
+      const review = page.getByRole("region", { name: "Auto-pipeline draft" });
       const title = review.getByLabel("Title", { exact: true });
       await expect(title).toHaveValue(FAKE_DRAFT_TITLE, { timeout: TURN_TIMEOUT_MS });
-      await expect(review.getByText(`?? ${FIXTURE_FILE}`)).toBeVisible();
       expect((await calls(model.origin)).submissions.submit_auto_pipeline_draft).toBe(1);
       await shot(page, "draft-narrow");
 
       await title.fill(EDITED_TITLE);
-      await review.getByRole("tab", { name: /^Acceptance criteria/ }).click();
+      await page.getByRole("button", { name: "Next", exact: true }).click();
       await review.getByRole("button", { name: "Add criterion" }).click();
       await review.getByRole("textbox", { name: "Criterion 3", exact: true }).fill(ADDED_CRITERION);
       await shot(page, "draft-edited-narrow");
-      await review.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
-      await expect(review).toHaveCount(0, { timeout: 120_000 });
-      await expect(configure).toHaveCount(0);
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      await expect(review.getByText(`?? ${FIXTURE_FILE}`)).toBeVisible();
+      await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
 
       await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -346,7 +347,8 @@ test.describe("Auto-pipeline on a fake model", () => {
       let pipeline: BuildPipeline | undefined;
       await expect
         .poll(async () => (pipeline = await pipelineOf(invoke, projectId, source.id))?.id, {
-          timeout: 60_000,
+          // Covers the confirmation itself, which the tab no longer blocks on.
+          timeout: 180_000,
           message: "no pipeline was admitted for the environment",
         })
         .toBeTruthy();

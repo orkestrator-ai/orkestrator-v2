@@ -54,6 +54,7 @@ import { designApiFor } from "@/lib/design-client";
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
+import { openAutoPipelineTab } from "@/components/review/auto-pipeline-open-tab";
 import { openKeyInformationTab } from "@/components/build-pipeline/key-information-open-tab";
 import {
   onGraphRunViewRequested,
@@ -1336,6 +1337,20 @@ export function TerminalContainer({
           allTabs,
           maxTabs: MAX_TABS,
           run: options.graphRun,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+      }
+
+      if (type === "auto-pipeline") {
+        if (!options?.autoPipeline) return false;
+        return openAutoPipelineTab({
+          scope: paneLayoutScope,
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          target: options.autoPipeline,
           addTab,
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });

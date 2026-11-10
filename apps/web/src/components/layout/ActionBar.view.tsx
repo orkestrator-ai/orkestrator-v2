@@ -1641,6 +1641,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       />
       <MultiReviewLaunchDialog
         autoPipelineEnvironmentId={selectedEnvironment?.id}
+        onOpenAutoPipelineTab={
+          createTab
+            ? (autoPipeline) => Boolean(createTab("auto-pipeline", { autoPipeline }))
+            : undefined
+        }
         open={multiReviewDialogOpen}
         onOpenChange={(open) => {
           if (!multiReviewLaunchInFlightRef.current) setMultiReviewDialogOpen(open);

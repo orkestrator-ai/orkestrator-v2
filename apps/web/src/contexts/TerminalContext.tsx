@@ -8,6 +8,7 @@ export type TerminalTabType =
 export type CreatableTabType =
   | TerminalTabType
   | "agent-native"
+  | "auto-pipeline"
   | "browser"
   | "design-canvas"
   | "graph-designer"
@@ -20,6 +21,7 @@ export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 // All tab types including file viewer and native agent tabs
 export type TabType =
   | TerminalTabType
+  | "auto-pipeline"
   | "browser"
   | "design-canvas"
   | "graph-designer"
@@ -73,6 +75,11 @@ export interface CreateTabOptions {
   pullRequest?: import("@/types/paneLayout").PullRequestTabData;
   /** The template a Graphs designer tab opens on (one designer tab per environment). */
   graphTemplate?: import("@orkestrator/protocol/graphs/library").GraphTemplateRef;
+  /**
+   * The source agent tab an `auto-pipeline` tab drafts from (one tab per
+   * source; opening it again focuses that tab).
+   */
+  autoPipeline?: import("@/types/paneLayout").AutoPipelineTabData;
   /** The run a `graph-run` tab shows (one tab per run; opening it again focuses that tab). */
   graphRun?: import("@/types/paneLayout").GraphRunTabData;
   /**

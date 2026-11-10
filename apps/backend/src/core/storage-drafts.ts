@@ -157,9 +157,16 @@ export class DraftsRepository {
       operation,
     );
   }
+  /**
+   * The newest draft from an environment tab. A confirmed (`reviewed`) draft is
+   * skipped unless `includeReviewed`, which the tab's state read uses to show a
+   * promotion that is under way, failed part-way or finished. `promotedOnly`
+   * keeps only drafts that started a pipeline.
+   */
   latestAutoPipelineDraft(
     environmentId: string,
     tabId: string,
+    options: { includeReviewed?: boolean; promotedOnly?: boolean } = {},
   ): import("./auto-pipeline.js").AutoPipelineDraftRecord | null {
     return (
       this.context
@@ -170,7 +177,8 @@ export class DraftsRepository {
         .filter(
           (record) =>
             record.source.logicalSessionKey === nativeTabLogicalSessionKey(environmentId, tabId) &&
-            !record.reviewed,
+            (options.includeReviewed || !record.reviewed) &&
+            (!options.promotedOnly || !!record.pipelineId),
         )
         .sort((a, b) => b.attempt.completedAt.localeCompare(a.attempt.completedAt))[0] ?? null
     );

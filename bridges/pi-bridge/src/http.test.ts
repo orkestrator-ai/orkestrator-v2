@@ -3668,7 +3668,7 @@ describe("command catalogue routes", () => {
         status: "ready",
         commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
       });
-      expect(body.attachPending).toBeUndefined();
+      expect(body).not.toHaveProperty("attachPending");
       // Still metadata: the read that started the preview kept no session warm.
       expect(state.lastAccessed).toBe(1);
       // Pushed on the status the backend already polls, so a late read is seen.

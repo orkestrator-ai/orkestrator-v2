@@ -45,3 +45,24 @@ test("a startup button that is still there is clicked", async () => {
   });
   expect(clicks).toBe(1);
 });
+
+test("reachability warning closes through its own Close button", async () => {
+  const { app, handlers } = fakeApp();
+  dismissStartupDialogs(app);
+  const handler = handlers.get("Docker containers can't reach Orkestrator");
+  expect(handler).toBeDefined();
+  const actions: string[] = [];
+  await handler!({
+    getByRole: (role: string, options: { name: string; exact: boolean }) => {
+      actions.push(`${role}:${options.name}:${options.exact}`);
+      return {
+        last: () => ({
+          click: async () => {
+            actions.push("click");
+          },
+        }),
+      };
+    },
+  });
+  expect(actions).toEqual(["button:Close:true", "click"]);
+});

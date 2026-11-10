@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   cleanupEvidenceResources,
+  daemonIsRootless,
   removeTrackedResources,
   startEvidenceListener,
 } from "../scripts/agent-tools-peer-evidence-support.js";
@@ -85,5 +86,23 @@ describe("peer evidence listener", () => {
         () => 52000,
       ),
     ).rejects.toThrow("denied");
+  });
+});
+
+describe("peer evidence daemon topology", () => {
+  test("names a rootless daemon from docker info's security options", () => {
+    // Captured from a disposable rootless daemon (Docker 29.9.2) on 2026-11-09.
+    expect(
+      daemonIsRootless('["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]\n'),
+    ).toBe(true);
+    expect(daemonIsRootless('["rootless"]')).toBe(true);
+  });
+
+  test("a rootful, empty or unexpected answer is not rootless", () => {
+    expect(daemonIsRootless('["name=seccomp,profile=builtin","name=cgroupns"]')).toBe(false);
+    expect(daemonIsRootless('["name=rootlessish"]')).toBe(false);
+    expect(daemonIsRootless("null")).toBe(false);
+    expect(daemonIsRootless("")).toBe(false);
+    expect(daemonIsRootless('{"rootless":true}')).toBe(false);
   });
 });

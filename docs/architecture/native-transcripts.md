@@ -276,8 +276,8 @@ flight. A part that throws answers `unavailable`, as its own command would.
 Discovery is not in the round (`NativeDiscoveryReadSchedule`,
 `native-session-read-policy.ts`). A section refreshes only when a read finds it
 expired, 30 s after its last refresh, and the backend announces a refresh that
-changed anything (`discovery-renewal`, `discovery-deadline`, `command-catalog`
-and the model catalogue causes). So a view reads discovery on those causes, on a
+changed anything (`discovery-renewal`, `discovery-deadline`, `command-catalog`,
+`mcp-action` and the model catalogue causes). So a view reads discovery on those causes, on a
 change with a cause it cannot place, on mount, a session change, a resync, a
 resume or reconnect, a phase change, an explicit read, and while a section is
 still `loading` or `stale` (2 s) or `unavailable` (5 s). A 30 s backstop with the
@@ -290,6 +290,26 @@ Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
 (`native-agent-progressive-metrics.ts`). They hold durations only, never
 payloads or session identifiers.
+
+### After an MCP server action
+
+An MCP server action from the Agent Info panel (reconnect, enable, disable,
+sign-in; `performProjectionMcpAction`) invalidates the session's projection,
+which also drops its cached discovery sections. That alone tells no open
+view: the panel kept the row it had (a reconnected server still `failed`)
+until its 30 s backstop, and that read found the MCP section dropped
+(`loading`, no value) and kept the old row for another round (todo 7221).
+
+So the action then re-reads the session's MCP list once
+(`refreshMcpAfterAction` in `native-agent-transcript-projection.ts`), stores
+it as a `ready` section, and announces `mcp-action`, a cause that names
+discovery. The open view reads discovery on that announcement and gets the
+acted-on row straight away. Claude's bridge stores the probe's or the live
+control's status before it answers the action (`performSessionMcpAction`), so
+that read is the list the user acted on, and it spawns nothing: it asks the
+running CLI or returns the bridge's retained inventory. A failed read still announces, so the view reads again and schedules the
+ordinary discovery job; an identity change while the read is in flight
+(a newer epoch) discards it, as it does every discovery job.
 
 ## Restart previews (display tails)
 

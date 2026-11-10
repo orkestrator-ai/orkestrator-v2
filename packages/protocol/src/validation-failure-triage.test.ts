@@ -62,6 +62,23 @@ describe("validation failure triage", () => {
     expect(isValidationFailureTriage(bad)).toBe(false);
   });
 
+  test("the guard accepts an import's hop count and a distant import, and rejects a zero hop count", () => {
+    const withHops = structuredClone(triage);
+    withHops.commands[0]!.failures[0] = {
+      ...withHops.commands[0]!.failures[0]!,
+      verdict: "undetermined",
+      reasons: ["reaches-changed-file-indirectly"],
+      changedPath: "packages/protocol/src/web-annotations.ts",
+      changedPathHops: 4,
+    };
+    expect(isValidationFailureTriage(withHops)).toBe(true);
+    for (const hops of [0, 1.5, "2"]) {
+      const bad = structuredClone(withHops);
+      (bad.commands[0]!.failures[0] as { changedPathHops: unknown }).changedPathHops = hops;
+      expect(isValidationFailureTriage(bad)).toBe(false);
+    }
+  });
+
   test("the summary counts verdicts and unattributed commands", () => {
     const summary = summarizeValidationFailureTriage(triage);
     expect(isValidationFailureSummary(summary)).toBe(true);

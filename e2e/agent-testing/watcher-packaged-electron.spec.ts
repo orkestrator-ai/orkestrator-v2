@@ -191,10 +191,7 @@ test("the packaged app watches a local worktree, follows a burst and replaces a 
       executablePath,
       args: [...ELECTRON_TEST_SWITCHES, ...packagedLaunchSwitches(process.platform)],
       cwd: temporaryRoot,
-      env: {
-        ...packagedLaunchEnvironment(process.env, { home, profilePath }),
-        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
-      },
+      env: packagedLaunchEnvironment(process.env, { home, profilePath }),
     });
     recordElectronDiagnostics(app);
     const launched = app;

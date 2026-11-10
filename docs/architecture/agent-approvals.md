@@ -70,8 +70,147 @@ or `NODE_PATH`; it is opened without following a link and removed after one
 read.
 
 An image without the capability keeps the login-shell start and unsigned
-requests until it is rebuilt (`containerCredentialMode`). OpenCode has no bridge
-of ours: on a launcher image it starts as on a `bridge-credential=1` image.
+requests until it is rebuilt (`containerCredentialMode`).
+
+### OpenCode under the launcher (`opencode-launch=1`)
+
+OpenCode has no bridge of ours, so it has no verifier and no signatures: it
+compares a plain password (HTTP Basic), and its plugins run inside the server
+beside it. On an `opencode-launch=1` image (`opencode-container-launch.ts`):
+
+- **Root's binary, root's configuration.** `orkestrator-bridge-launch opencode`
+  runs the root-owned `/opt/opencode/bin/opencode` (node's
+  `~/.opencode/bin/opencode` is only a symlink to it) under `env -i`, in
+  `/workspace`, with `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
+  `XDG_CONFIG_HOME=/run/orkestrator-opencode/config` and
+  `OPENCODE_TEST_HOME=/run/orkestrator-opencode/home`, so it reads no
+  `/workspace/.opencode`, no project `opencode.json`, no `~/.config/opencode`
+  and no `~/.opencode`. Before every start a root exec rebuilds that directory:
+  the user's own configuration, copied from the read-only host input
+  `/opencode-config` (never from node's copy) without `node_modules`, symlinks
+  or special files, and Orkestrator's two plugins. Project configuration off
+  also drops the checkout's `AGENTS.md` from the instructions, so the launcher
+  names it back in (`OPENCODE_CONFIG_CONTENT`); it is text, not code.
+- **The password never passes an argument.** The launcher re-runs itself under
+  `env -i`, exports the backend's values (the password, `OPENCODE_DB`) and
+  starts the server and a log writer fed through a FIFO, so no long-lived
+  process but the server holds it. The credential plugin then removes it from
+  `process.env`, marks the server non-dumpable and applies the start script's
+  environment snapshot for the server's tools, refusing every `OPENCODE_`
+  variable (OpenCode reads its flags from `process.env` when it uses them) and
+  dropping `XDG_CONFIG_HOME`.
+- **The backend checks the socket before it sends the password.** After the
+  server answers the fresh password and has loaded its plugins, a root exec
+  records the inode of the socket listening on port 4096 in
+  `/run/orkestrator-bridge/opencode-listener` (`opencode-listener-identity.ts`).
+  Every read of the password (start, status, peek) lists the port's listening
+  sockets from `/proc/net/tcp` in the same root exec and withholds the password
+  unless that socket is the only one. A process the agent puts on the port, even
+  root's binary started with a password it caught, has a new socket; the next
+  start stops it (as `node`, see below) and mints a new password.
+
+The container's root has no `CAP_SYS_PTRACE`, so it cannot read another uid's
+`/proc/<pid>/fd` (nor a non-dumpable process's `exe`): it cannot tell which
+process holds a socket, only which socket listens. Stopping a listener is done
+as `node`, which can read its own dumpable processes' descriptors; a
+non-dumpable imposter is out of reach, and the start then fails with an error
+asking for a restart rather than sending anything. Qualified on beelink (Linux
+Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.test.ts`.
+
+An image without `opencode-launch=1` keeps the login-shell start from node's
+binary and configuration, with the password in root's file and the server's
+environment alone on a `bridge-credential=1` image.
+
+### Code a bridge loads itself
+
+The launcher keeps out what a shell would run before the bridge starts. It
+cannot keep out what the bridge loads once running. Pi's SDK runs in the Pi
+bridge's own process, and with project resources on (the container default)
+it runs the repository's extensions there: arbitrary TypeScript under
+`/workspace/.pi/`, or a package the project's settings name, evaluated while
+the session is built and before any model call. Code there sees every later
+`Authorization` header and holds the in-process approval gate, so it could
+resolve a parked call without the signature the approval routes require.
+Being non-dumpable does not isolate code already inside the process.
+
+Pi therefore loads no discovered extensions under **any** approval policy.
+Every session shares the bridge process: code loaded under auto-approve or deny
+could leave timers or process-wide hooks that survive disposal and affect a
+later ask session. Deny refuses tool calls; it does not constrain arbitrary
+extension code. Refusal must apply from process startup, including before a
+policy narrows to ask. Restart an older bridge to obtain this boundary.
+
+Configured packages in both user and project settings are excluded in memory
+before the SDK's first resource reload. Package resolution can install missing
+npm/git sources and execute lifecycle scripts before `noExtensions` filters
+extension paths. Local project skills and prompt templates still load when
+project resources are enabled; packaged resources do not. The bridge's own
+inline extensions (approvals, MCP and command-change measurement) remain.
+The reported policy keeps project resources on with a note explaining the
+restriction. Separate extension processes would preserve more features but
+require an RPC shim for Pi's in-process extension API.
+
+`project-extensions-bridge.test.ts` plants a persistent process hook, then
+attaches auto-approve, narrows to ask and attaches a separate ask session.
+It verifies that the hook never enters the process. SDK tests cover configured
+npm/git packages, both settings scopes and repeated reloads without installs.
+
+## A replaced bridge is refused
+
+The verifier and the public key are not secret (both are in the launcher
+wrapper's argv), so a process running as the agent's uid can kill its bridge and
+start one of its own on the same port, through the launcher or not. That bridge
+accepts the token the backend reads from root's file. So the token belongs to a
+socket, not to a port (`container-bridge-listener.ts`):
+
+- **Writing a new token marks the record pending.** Beside the token,
+  `/run/orkestrator-bridge/<kind>-listener` holds `pending` from the moment a
+  start writes a fresh token.
+- **Once the bridge answers, its socket is recorded.** `startContainerServer`
+  reads the port's listening sockets as root with `ss -Hltne` and writes the one
+  socket's inode and cookie to the record. The kernel never reuses a socket
+  cookie while it runs, and the agent cannot obtain the bridge's socket: the
+  bridge is non-dumpable, so `pidfd_getfd` is refused, and it opens the socket
+  close-on-exec. A port with no socket or several, or a scan that could not
+  run, refuses the start and attempts listener cleanup. Cleanup is not reported as confirmed.
+- **Initial recording verifies ownership in the launch session.** The launcher
+  prints `orkestrator-bridge-session=<id>`. A fixed root scan checks that a
+  non-stopped, non-zombie `bun` in that session holds the exact listening
+  socket in `/proc/<pid>/fd`, checking state and start time again afterwards.
+  Session liveness alone cannot establish ownership: an unrelated listener
+  must be refused even while the launched Bun remains alive.
+  This one scan uses privileged Docker exec to read non-dumpable processes'
+  descriptors. It runs only trusted system programs from `/` with the fixed
+  root PATH; it never runs bridge or workspace code. Bridge processes and
+  ordinary token reads gain no capabilities. If descriptor access is denied,
+  recording fails closed. Older launchers without a session report and
+  verifier-only images retain their compatibility behavior without this check.
+- **Every read of a running bridge's token compares the socket.**
+  `readContainerBridgeToken` scans in the same root exec that reads the token,
+  so it costs no extra exec. Start reuse, the `get_*_server_status` commands,
+  `peekContainerAgentBridge`, connection refreshes before a session or a
+  dispatch, and log-policy discovery all go through it. A different socket,
+  a second socket beside the recorded one, a pending record or an unfinished
+  scan returns no token and logs `docker` `bridge.listener-refused`; the start
+  path then replaces the bridge with a new token the agent never saw. An empty
+  port returns the token, because nothing can receive it there. A bridge an
+  older backend started has no record and is recorded as it stands
+  (`bridge.listener-adopted`): it is the process that backend already trusted.
+- **Replacing stops what listens, whatever its command line.** Besides the
+  usual `pkill` of the bridge's pattern, the start runs a scan as `node`, with a
+  fixed PATH and no login shell, that stops every process whose descriptors hold
+  the port's socket. Ordinary root exec cannot do this: it has no
+  `CAP_SYS_PTRACE`, so root cannot read another uid's `/proc/<pid>/fd`. A
+  process that made itself non-dumpable hides its descriptors from `node` too;
+  if it does not match the bridge's pattern either, it survives and the start
+  fails with "did not stop" rather than trusting it.
+
+The check is on reuse, not on every request. A process that replaces the bridge
+between a check and the next request still gets that request, until the next
+refresh or start. The agent's uid can still kill the bridge, which it could
+already do. OpenCode has its own socket check on `opencode-launch=1` images
+([above](#opencode-under-the-launcher-opencode-launch1)); its remaining windows
+are tracked in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 
 ## Where an approval is a boundary
 
@@ -88,8 +227,9 @@ uid owns, and a tool that can write them (on an `ask` environment, one the user
 approved) can widen them without answering anything:
 
 - OpenCode: the `permission` column of `session` and the `permission` table in
-  `~/.local/share/opencode/opencode.db`, and the `permission` key of
-  `opencode.json` (user or `/workspace`).
+  `~/.local/share/opencode/opencode.db`, and, on an image without
+  `opencode-launch=1`, the `permission` key of `opencode.json` (user or
+  `/workspace`).
 - Claude: `settings.json` under `~/.claude` and `.claude/settings*.json` in the
   checkout.
 - Codex: `CODEX_HOME/rules/*.rules`.
@@ -102,16 +242,19 @@ need its own uid, and then its tools would too.
 
 ## What the agent's uid can still do
 
-- **Replace the bridge.** The verifier and the public key are not secret, so a
-  persistent process can kill the bridge and start one of its own that the
-  backend keeps trusting. To-do
-  [7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md).
-- **Load code into Pi's bridge.** With project resources on, Pi runs repository
-  extensions inside the bridge process. To-do
-  [7251](../todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md).
-- **Reach OpenCode's password.** Its server loads agent-writable plugins, and
-  takes the plain password from whatever listens on its port. To-do
-  [7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).
+- **Kill the bridge, or replace it between two checks.** A replacement is
+  refused at the next start, status read or connection refresh
+  ([above](#a-replaced-bridge-is-refused)), but a request made before then
+  reaches it, and killing the bridge ends the agent's own session.
+- **Reach OpenCode's password, narrowly.** On an `opencode-launch=1` image the
+  server loads no plugin or configuration the agent writes and the password is
+  withheld from any other listener, but three windows remain: packages OpenCode
+  installs into node's `~/.cache/opencode` and imports (npm plugins the user's
+  configuration names, providers it does not bundle), the moment between the
+  socket check and the requests after it, and the server's first seconds before
+  its plugin makes it non-dumpable. The OpenCode 2.x server still starts from
+  node's login shell. To-do
+  [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 - **Stop being asked.** Through the provider rule files above.
 
 Each needs a process or a tool the user already let run. Qualified on a real
@@ -121,3 +264,11 @@ the Pi bridge's port was refused on a bridge started from the same verifier
 and key while the backend's signed calls worked, a replayed signature was
 refused, and a `BUN_OPTIONS` preload and a `bun` function planted in
 `~/.bash_profile` ran in the agent's own login shell but not in the next bridge.
+On Linux Engine (beelink, x86_64) on 2026-11-09, with an image built from the
+listener check's branch, every bridge's socket was recorded at start under the
+launcher's session check, and the backend refused the token both to a plain
+`bun` server the agent's uid started on the Pi bridge's port and to a real Pi
+bridge it started through the launcher with the same verifier and key
+(`bridge.listener-refused reason=different-socket`). The next `start_pi_server`
+replaced that bridge with a new token, which the backend then read back, and
+the caught token was refused there.

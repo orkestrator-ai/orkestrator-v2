@@ -7,6 +7,7 @@ import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
+  coordinatorCallTurnOrigin,
   coordinatorConversationIdFromRuntimeId,
   coordinatorConversationRunnable,
   coordinatorIdFromRuntimeId,
@@ -416,6 +417,7 @@ export function registerCoordinatorWorkerMailCommands(
         deliverNow,
         projectHomeReason,
         attachments,
+        turnOrigin,
       },
       context,
     ) => {
@@ -440,8 +442,11 @@ export function registerCoordinatorWorkerMailCommands(
         environmentId: coordinatorRuntimeId(coordinator, conversation),
         tabId: tab.tabId,
         // A turn the user did not start: its framing says so. The same line as
-        // the account-switch grant, which only the user's own turn can mint.
-        ...(tab.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {}),
+        // the account-switch grant, which only the user's own turn can mint. A
+        // scheduled fire carries the origin of the turn that set it.
+        ...(coordinatorCallTurnOrigin(tab.lastTurnOrigin, turnOrigin) === "mail"
+          ? { turnOrigin: "mail" as const }
+          : {}),
       };
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");

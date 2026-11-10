@@ -10,8 +10,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Agent tools on rootless (Code 2)**: probe RootlessKit's host loopback, otherwise show a clear unavailable state. Status: done.
 3. **Read-only binds from `nosuid`/`nodev` sources (Code 3)**: copy the GitHub seed in, and give a typed refusal. Status: done; the refusal itself was never captured live.
 4. **Start retry on port collision (Code 4)**: `startDockerContainer` retries once and reconnects the network. Status: done.
-5. **Rootless re-run on a freshly built image (Qualification)**: C20, C22 and readiness on a rootless daemon with an image built from current `main`. Status: partly done (passed on an existing image with older agent pins; rootful CI passed on a fresh build).
-6. **Retire the file**: decide when the file is Finished and deleted. Status: open (after 5).
+5. **Rootless re-run on a freshly built image (Qualification)**: C20, C22 and readiness on a rootless daemon with an image built from current `main`. Status: done 2026-11-09 (image built from `c6de4733c` inside a disposable host rootless daemon; C20, C22 and readiness passed; the gaps it found are in [7549](7549-rootless-docker-cp-refusals.md)).
+6. **Retire the file**: decide when the file is Finished and deleted. Status: open (task 5 is done, so it can be retired now).
 
 ### 1. Staged inputs readable by `node` on rootless
 
@@ -43,7 +43,7 @@ The same run still failed "C14 legacy migration with staged provider inputs" (`a
 
 **Context.** Decision 6: copy the GitHub seed in, and classify any other refusal as `unsupported-topology`.
 
-**Investigation.** `copyGithubRangesSeed` (`apps/backend/src/core/github-ranges-cache.ts:120`) and `bindMountRefusedError` (`container-start.ts:100-113`) exist. The classifier matches `REMOUNT_REFUSED` plus "operation not permitted". The pattern comes from the 2026-10-25 report: the review qualification could not reproduce the refusal, either on a tmpfs data root or on on-disk storage.
+**Investigation.** `copyGithubRangesSeed` (`apps/backend/src/core/github-ranges-cache.ts:120`) and `bindMountRefusedError` (`container-start.ts:100-113`) exist. The classifier matches `REMOUNT_REFUSED` plus "operation not permitted". The pattern comes from the 2026-10-25 report: the review qualification could not reproduce the refusal, either on a tmpfs data root or on on-disk storage. Task 5's run on 2026-11-09 captured the same refusal (`remount-ro …, flags: 0x1021: operation not permitted`), but from `docker cp`, not from a start; that is [7549](7549-rootless-docker-cp-refusals.md) task 1.
 
 **Decisions.**
 
@@ -71,7 +71,9 @@ The same run still failed "C14 legacy migration with staged provider inputs" (`a
 
 **Context.** The folder index names this as the only remaining work. Decision 6 says "the full live suite is still owed". 0019 owns the wider rootless matrix, for example a host without `cpu` delegation.
 
-**Investigation.** `docs/development/container-qualification.md:293-340` records the review run: C20, C22, C09 readiness, all 13 mounts and start recovery, on `orkestrator-review-rootless:d03790`. Rootful CI built a fresh qualification image and passed every suite except the C14 staged case (run 40409285999). The difference between the two images is only the agent CLI pins, which the relay, the probe and the start paths do not depend on.
+**Investigation.** The container qualification guide's "Rootless review qualification (2026-10-26)" records the review run: C20, C22, C09 readiness, all 13 mounts and start recovery, on `orkestrator-review-rootless:d03790`. Rootful CI built a fresh qualification image and passed every suite except the C14 staged case (run 40409285999). The difference between the two images is only the agent CLI pins, which the relay, the probe and the start paths do not depend on.
+
+Done on 2026-11-09 on beelink2 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)): `orkestrator-v2:q0109-rootless-c6de4733` was built with `docker/build.sh` from `main` at `c6de4733c` (`2.37.3-beta`, `staged-inputs=5`, Claude Code 2.1.319, Codex 0.167.0) inside a disposable host rootless daemon (`mise run docker:disposable`, Engine 29.9.2, RootlessKit 3.3.0, slirp4netns, host loopback enabled). The live lifecycle suite (C09, C11, C12, C20) passed 8/8, the network suite (C22, C24, C26) 4/4, start recovery with the rootless mount case 4/4 and the all-mount relay 1/1. The readiness suite passed 9/9 once `TMPDIR` was on a filesystem without `nosuid`/`nodev` and C10 restarted through the backend's start path (the last of four such runs; the others lost cases to a spent GitHub allowance and to port collisions). The run found three gaps no earlier run reached, moved to [7549](7549-rootless-docker-cp-refusals.md): `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`; `docker cp` into a container that is not running failing with `device or resource busy`, so the GitHub seed is never copied and every restricted boot spends the anonymous GitHub allowance; and an automatic port colliding twice, past task 4's single retry.
 
 **Decisions.**
 
@@ -92,7 +94,7 @@ The same run still failed "C14 legacy migration with staged provider inputs" (`a
 
 ### 6. Retire the file
 
-**Problem.** Every code item is done. The file stays open only for task 5.
+**Problem.** Every code item is done, and task 5's fresh-image rootless qualification was completed on 2026-11-09. The file stays open only for retirement (task 6).
 
 **Context.** README rule: once the last item is done, move durable behaviour into `architecture/` and delete the file.
 
@@ -206,6 +208,12 @@ qualification described below.
   bootstrap scripts matched this branch, but its older agent pins were not
   rebuilt. No user daemon configuration was changed.
 
+- C20, C22, readiness, start recovery and the all-mount relay passed again on
+  2026-11-09 with an image built from `main` at `c6de4733c` inside a
+  disposable host rootless daemon (task 5; [evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
+  The gaps it found (`docker cp` refusals, a double port collision) are in
+  [7549](7549-rootless-docker-cp-refusals.md).
+
 ## Constraints and rationale
 
 - Never widen staged-input permissions on a rootful daemon to make rootless
@@ -224,6 +232,10 @@ qualification described below.
   otherwise.
 
 ## Assumptions and decisions
+
+### Task 6: clarify the remaining work (2026-11-10 review fix)
+
+Corrected task 6's stale Problem paragraph to reflect task 5's completion on 2026-11-09. Retirement remains open and outside this task 5 qualification change; the task list and index already record that status.
 
 1. **Staged inputs on rootless (item 1).** Options: `docker cp` the
    revision in; write it as the mapped UID (`unshare --map-auto` and chown);
@@ -283,6 +295,52 @@ qualification described below.
    condition is the error itself (an automatic port collided), which a
    rootful daemon practically never reports. Pro: one start path. Con: none
    found.
+8. **Run task 5 now rather than inside 0019's next rootless session (task
+   5).** The task's recommendation was to fold it into 0019's session.
+   Chosen: run it alone on 2026-11-09, because the repository now has a
+   one-command disposable rootless daemon (4730), which removes the setup
+   cost the folding was meant to share, and the ticket asked for task 5
+   alone. Con: 0019's own rootless item (a host without `cpu` delegation)
+   is still not covered; beelink2 delegates `cpu memory pids`.
+9. **Build the image inside the rootless daemon (task 5).** The task's
+   decision named a disposable host rootless daemon with `DOCKER_HOST`
+   pointed at it (followed). The launcher's usual route copies an image in
+   from the host daemon (`--image`, `docker save`), but this user cannot
+   reach beelink2's rootful socket. Chosen: `docker/build.sh` with
+   `DOCKER_HOST` set to the disposable daemon. Pros: the image under test is
+   a fresh build of `main`, with its current agent pins, rather than the
+   lookalike the review run used, and needs no access to the host daemon.
+   Con: the 509 s build started from an empty cache; no host image was
+   reused.
+10. **Host loopback on (task 5).** Started the daemon with
+    `--host-loopback`, as the task's recommended recipe and the 2026-10-26
+    review run did, because C22's selected host-service port is reached
+    through `10.0.2.2`. The default-disabled path is covered by the
+    2026-11-06 `container-live-rootless-loopback.test.ts` run and was not
+    repeated.
+11. **C10 restarts through the backend's start path (task 5).** C10's bare
+    `docker restart` of a full-mode runtime collided on an automatic port
+    (`RootlessKit PortManager.AddPort(): … address already in use`), the
+    condition task 4 retries in production. Options: rerun until the port
+    is free; route the restart through `restartRuntime`
+    (`tests/container-live-start.ts`, stop then `startDockerContainer`).
+    Chosen: `restartRuntime`, as the network suite already does; the case
+    still restarts the container, which is what it checks (setup is not
+    rerun). The two `docker restart` calls in "a container restart during
+    launch" stay bare on purpose: they model Docker restarting a restricted
+    runtime, whose ports are on its gateway.
+12. **New findings go to a new to-do (task 5).** The two `docker cp`
+    failures and the double port collision are product gaps with design
+    choices (where creation should put files a stopped container needs; how
+    many retries), not part of a qualification run. Chosen:
+    [7549](7549-rootless-docker-cp-refusals.md) with options and
+    recommendations, leaving this file with only task 6. Con: one more open
+    file.
+13. **The duplicate key in `tests/command-fixtures.ts` (outside task 5).**
+    The backend's test typecheck failed on `main` (TS1117: two identical
+    `deleteAutoPipelineDraftsByEnvironment` entries from #2020). Chosen:
+    remove the second, identical line so this branch's validation runs;
+    no behaviour changes.
 
 ### Multi Review outcome (2026-10-26)
 
@@ -324,6 +382,9 @@ exceeded the 8 KiB boot-record bound added on `main`, which failed that test
 on `main` too.
 
 ## Related
+
+- [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
+  (the `docker cp` gaps task 5 found).
 
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
   (the rootless item these came from),

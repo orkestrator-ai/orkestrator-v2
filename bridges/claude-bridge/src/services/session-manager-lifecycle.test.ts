@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   MAX_DISPATCHED_REQUEST_IDS,
   setPreferenceLockTimeoutForTesting,
+  settleSessionPreferenceWritesForTesting,
 } from "./session-preferences.js";
 import { spawnLiveOwner, stopLiveOwners } from "./process-identity-test-harness.js";
 import {
@@ -275,9 +276,9 @@ describe("session lifecycle", () => {
       await promptPromise;
 
       expect(session.sdkSessionId).toBe(sdkSessionId);
-      // The first init is where a durable key appears, but this session has
-      // nothing to store under it. Writing `{}` would leave a file that later
-      // reads cannot tell apart from a real stored preference.
+      await settleSessionPreferenceWritesForTesting();
+      // The turn's restart marker is written and cleared asynchronously.
+      // Once those writes settle there are no durable preferences to read.
       expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
     });
   });

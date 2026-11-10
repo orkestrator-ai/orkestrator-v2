@@ -70,11 +70,17 @@ describe("StorageService store writers", () => {
       leases: ["backendProfileFile"],
       paths: 3,
     });
-    // Agent mail's four classes write through one shared store and lease.
+    // Agent mail's four classes write through one shared store and lease,
+    // including the environment delete's row diff.
     expect(stores.get("agentMailFile")).toMatchObject({
       kind: "whole",
       leases: ["agentMailFile"],
     });
+    expect(
+      analyzeStorageService().sites.find(
+        (site) => site.member === "AgentMailStore.saveRows" && site.store === "agentMailFile",
+      ),
+    ).toMatchObject({ kind: "whole" });
     expect(stores.get("linearAuthFile")).toMatchObject({
       kind: "whole",
       leases: ["linearAuthFile"],
@@ -152,6 +158,28 @@ describe("StorageService store writers", () => {
     expect(sources.some((source) => source.source.includes("return (async () => {"))).toBe(true);
     const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
     expect(result.violations.join("\n")).toContain("acknowledgeStartupAgentSession");
+  });
+
+  test("agent mail's row diff outside the mail lease is refused", () => {
+    const leased = `await this.store.enqueue(async () => {
+      // Planned on the shared read model and committed as the rows it changes:`;
+    const sources = readStorageSources().map((source) => ({
+      ...source,
+      source: source.source.replace(
+        leased,
+        `await (async () => {
+      // Planned on the shared read model and committed as the rows it changes:`,
+      ),
+    }));
+    expect(sources.some((source) => source.source.includes(leased))).toBe(false);
+    const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+    expect(
+      result.violations.some(
+        (violation) =>
+          violation.includes("updateStoreRows") &&
+          violation.includes("deleteAgentMailByEnvironment"),
+      ),
+    ).toBe(true);
   });
 
   describe("prompt queue writers", () => {
@@ -287,9 +315,12 @@ describe("StorageService store writers", () => {
       "publicOperations",
       "setupApprovals",
       "suborks",
+      "ticketSync",
       "watchedPullRequests",
     ]);
     expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");
+    // Sync across machines is its own collaborator sharing the board's lease.
+    expect(areas.get("ticketSync")).toContain("KanbanSyncRepository.applyTicketSyncOps");
     // Omitted from the area: only other repositories call it.
     expect(areas.get("publicOperations")).not.toContain(
       "PublicOperationsRepository.loadPublicOperationIndex",

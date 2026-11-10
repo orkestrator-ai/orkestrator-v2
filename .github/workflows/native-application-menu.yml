@@ -2,6 +2,7 @@ name: Native application menu
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/native-application-menu.yml
       - apps/backend/src/core/log-policy-service.ts
@@ -44,6 +45,7 @@ on:
 jobs:
   menu:
     name: Native menu (${{ matrix.os }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     permissions:
@@ -93,6 +95,7 @@ jobs:
   # menu job above, on real Electron rather than a package.
   packaged-log-controls:
     name: Packaged log controls (${{ matrix.os }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { TEST_GROUP_KEYS } from "../../scripts/test-all";
+import { GUARD_STAGE_TEST_FILES, TEST_GROUP_KEYS } from "../../scripts/test-all";
 
 const read = (relativePath: string) =>
   readFileSync(join(import.meta.dir, "..", "..", relativePath), "utf8");
@@ -32,7 +32,60 @@ const workflow = (name: string) =>
   Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as Workflow;
 
 describe("CI workflow contracts", () => {
-  for (const name of ["ci", "validate-bun-runtime", "container-live-qualification"]) {
+  test("ci supersedes older runs of the same pull request or of main", () => {
+    const { concurrency } = workflow("ci");
+    // A newer main commit cancels an older main commit's run; the Free plan's
+    // 20 concurrent jobs could not keep up with one full run per merge.
+    expect(concurrency.group).toBe(
+      "ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}",
+    );
+    expect(concurrency["cancel-in-progress"]).toBe(true as unknown as string);
+  });
+
+  test("draft pull requests run no jobs until they are marked ready", () => {
+    for (const name of [
+      "ci",
+      "validate-bun-runtime",
+      "container-live-qualification",
+      "native-application-menu",
+    ]) {
+      const parsed = Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as {
+        on: { pull_request?: { types?: string[] } };
+      } & Workflow;
+      expect(parsed.on.pull_request?.types).toContain("ready_for_review");
+      for (const [id, job] of Object.entries(parsed.jobs)) {
+        // A job that needs another is skipped with it, unless its own
+        // condition (such as `!cancelled()`) would run it anyway.
+        if (job.needs && !job.if) continue;
+        expect({ workflow: name, job: id, if: job.if }).toEqual({
+          workflow: name,
+          job: id,
+          if: expect.stringContaining("!github.event.pull_request.draft"),
+        });
+      }
+    }
+  });
+
+  test("validate-bun-runtime runs on packaging inputs and nightly, not on every source change", () => {
+    const parsed = Bun.YAML.parse(read(".github/workflows/validate-bun-runtime.yml")) as {
+      on: {
+        schedule?: { cron: string }[];
+        push: { paths: string[] };
+        pull_request: { paths: string[] };
+      };
+    };
+    expect(parsed.on.schedule?.length).toBe(1);
+    for (const paths of [parsed.on.push.paths, parsed.on.pull_request.paths]) {
+      expect(paths).toContain("mise.toml");
+      expect(paths).toContain("bun.lock");
+      expect(paths).toContain("scripts/download-bun.sh");
+      for (const broad of ["apps/backend/**", "apps/desktop/**", "packages/**", "bridges/**"]) {
+        expect(paths).not.toContain(broad);
+      }
+    }
+  });
+
+  for (const name of ["validate-bun-runtime", "container-live-qualification"]) {
     test(`${name} only coalesces pull request runs`, () => {
       const { concurrency } = workflow(name);
       // A branch-wide group loses pending main runs even with cancellation off.
@@ -45,15 +98,13 @@ describe("CI workflow contracts", () => {
     });
   }
 
-  test("the fast lint job runs the DOM absence scan and the documentation number checks", () => {
+  test("the fast lint job runs the guard stage, which replaced the separate guard steps", () => {
     const runs = workflow("ci").jobs.oxc!.steps!.flatMap((step) => step.run ?? []);
-    const guard = (file: string) => runs.find((run) => run.includes(file));
-    expect(guard("tests/unit/dom-absence-scan.test.ts")).toContain(
-      "never passes a DOM-producing query result",
-    );
-    expect(guard("tests/unit/flaky-tests-index.test.ts")).toBeDefined();
-    expect(guard("tests/unit/todo-index.test.ts")).toBeDefined();
-    expect(guard("tests/unit/number-claims.test.ts")).toBeDefined();
+    // The DOM absence scan, the source guards and the documentation register
+    // checks all run in `mise run guards` (scripts/guards.ts).
+    expect(runs).toContain("mise run guards");
+    for (const file of ["tests/unit/dom-absence-scan.test.ts", ...GUARD_STAGE_TEST_FILES])
+      expect(runs.filter((run) => run.includes(file))).toEqual([]);
   });
 
   test("CI provides every documented required status-check context", () => {
@@ -88,7 +139,10 @@ describe("CI workflow contracts", () => {
     const gate = jobs.test!;
     expect(gate.name).toBe("Unit and integration tests");
     expect(gate.needs).toBe("test-shard");
-    expect(gate.if).toBe("${{ !cancelled() }}");
+    // A draft skips it (GitHub cannot merge a draft; marking it ready starts a run).
+    expect(gate.if).toBe(
+      "${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}",
+    );
   });
 
   test("CI compares independently installed worker contexts across hosts", () => {

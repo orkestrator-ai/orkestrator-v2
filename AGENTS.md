@@ -445,7 +445,10 @@ Formatting is `bun fmt` (configured by the `[fmt]` section of `bunfig.toml`),
 linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
 version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
-`mise run typecheck`, or `mise run check` (format, lint and typecheck). Package
+`mise run typecheck`, or `mise run check` (format, lint, guards and typecheck).
+`mise run guards` runs the repository-wide guards (source guards, DOM absence
+scan, test ownership and the like) in a few seconds; `mise run test` runs it
+first and stops when it fails. Package
 `typecheck` scripts call `bun check -p <tsconfig>`; do not add a `check` script
 to a `package.json`, because `bun check` runs that script instead of the type
 checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions

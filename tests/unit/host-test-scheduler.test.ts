@@ -122,6 +122,83 @@ test("a different worktree cannot share a cohort's resource exemption", () => {
   scheduler.release(outside);
 });
 
+test("a group deadline that passes while queued releases the ticket and starts no child", async () => {
+  const { scheduler, directory } = fixture({ workers: 2, memoryMiB: 4096 });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 1 });
+  // The wall clock jumps past the deadline once the group is queued, so the
+  // next queue poll (one 100 ms poll interval) sees it expire.
+  let wall = 1_000;
+  const admission = createTestAdmission(
+    directory,
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS: "7200000" },
+    () => {},
+    { now: () => wall },
+  );
+  let started = false;
+  try {
+    const pending = admission.run(
+      {
+        name: "rerun f",
+        command: "unused",
+        args: [],
+        workers: 1,
+        timeoutMs: 300_000,
+        deadline: 5_000,
+      },
+      async () => {
+        started = true;
+        return { status: 0 };
+      },
+    );
+    wall = 6_000;
+    const result = await pending;
+    expect(started).toBe(false);
+    expect(result).toMatchObject({ status: 75, infrastructureError: true });
+    expect(result.output).toContain("deadline passed while waiting for host capacity");
+    // The queued ticket was released: with the blocker gone, a request for
+    // the whole host runs at once instead of queuing behind it.
+    scheduler.release(blocker);
+    const whole = scheduler.enqueue({ owner: "c".repeat(64), workers: 2, memoryMiB: 1 });
+    expect(scheduler.poll(whole).state).toBe("running");
+    scheduler.release(whole);
+  } finally {
+    scheduler.release(blocker);
+    admission.cancel();
+    admission.close();
+  }
+});
+
+test("an admitted group's watchdog is trimmed to what is left of its deadline", async () => {
+  const { directory } = fixture({ workers: 2, memoryMiB: 4096 });
+  let wall = 1_000;
+  const admission = createTestAdmission(
+    directory,
+    { ORKESTRATOR_TEST_SCHEDULER_DIR: directory },
+    () => {},
+    { now: () => wall },
+  );
+  const received: (number | undefined)[] = [];
+  const execute = async (group: { timeoutMs?: number }) => {
+    received.push(group.timeoutMs);
+    return { status: 0 };
+  };
+  try {
+    wall = 4_000;
+    await admission.run(
+      { name: "rerun a", command: "unused", args: [], timeoutMs: 300_000, deadline: 5_000 },
+      execute,
+    );
+    await admission.run(
+      { name: "rerun b", command: "unused", args: [], timeoutMs: 500, deadline: 5_000 },
+      execute,
+    );
+    await admission.run({ name: "plain", command: "unused", args: [], timeoutMs: 700 }, execute);
+    expect(received).toEqual([1_000, 500, 700]);
+  } finally {
+    admission.close();
+  }
+});
+
 test("parallel group clocks measure wall time and exclude startup and idle gaps", async () => {
   const { scheduler, directory } = fixture({ workers: 2, memoryMiB: 4096 });
   const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 1 });

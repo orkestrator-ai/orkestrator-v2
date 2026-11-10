@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const root = resolve(import.meta.dir, "../..");
@@ -71,3 +72,31 @@ export function writeStub(bin: string, name: string, body: string): void {
 
 /** Status report path for a fixture directory (root-only in the image). */
 export const statusFile = (dir: string) => join(dir, "run-firewall", "firewall.json");
+
+/** Runs `body` in a fresh temporary directory, removed afterwards. */
+export function withDir(body: (dir: string) => void, prefix = "ork-egress-filter-fw-"): void {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  try {
+    body(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The library's view of a gateway: trusted snapshot, policy and record. */
+export function gatewayPolicy(
+  dir: string,
+  options: { policy?: string; record?: string | null; trusted?: boolean } = {},
+): void {
+  const policy = join(dir, "policy");
+  mkdirSync(policy, { recursive: true });
+  if (options.trusted !== false) {
+    mkdirSync(join(policy, "trusted-network"), { recursive: true });
+    writeFileSync(join(policy, "trusted-network", "resolv.conf"), "nameserver 127.0.0.11\n");
+    writeFileSync(join(policy, "trusted-network", "host-addresses"), "");
+  }
+  writeFileSync(join(policy, "network-policy"), `${options.policy ?? "3"}\n`);
+  if (options.record !== null) {
+    writeFileSync(join(policy, "egress-filter"), `${options.record ?? "on"}\n`);
+  }
+}

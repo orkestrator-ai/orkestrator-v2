@@ -27,13 +27,14 @@
  *     bun packages/cli/examples/voice-qualify.ts \
  *     --environment <ready environment id> [--url http://127.0.0.1:34122/mcp] \
  *     [--agent claude] [--prompt "…"] [--read-repeats 20] [--approval-wait 60] \
- *     [--expect-approval] [--record run.jsonl]
+ *     [--expect-approval] [--record run.jsonl] [--poll-ms 500]
  *
  * --expect-approval exits 1 unless a command or file approval was raised,
  * confirmed and answered; the environment must ask for approvals (its
  * Settings → Execution policy → Approvals: Ask), and the default prompt then
  * writes a canary file, since read-only commands are not asked about.
- * --record writes this run's recording.
+ * --record writes this run's recording. --poll-ms sets how often the run is
+ * read after an answer (default 500); before one, every twice that.
  *
  *   bun packages/cli/examples/voice-qualify.ts --score <recording.jsonl> \
  *     --environment <id> [--project <id>]
@@ -171,6 +172,7 @@ async function main() {
   const repeats = Math.max(1, Number(argument("read-repeats", "20")));
   const approvalWaitMs = Math.max(0, Number(argument("approval-wait", "60"))) * 1_000;
   const expectApproval = process.argv.includes("--expect-approval");
+  const pollMs = Math.max(0, Number(argument("poll-ms", "500")));
   const steps: Array<{ step: string; outcome: string }> = [];
   const listed = await client.listTools();
 
@@ -275,14 +277,14 @@ async function main() {
             : next?.state !== undefined &&
               isTerminalPublicReceipt(next as Pick<PublicReceipt, "state">);
           if (askedAgain || terminal) break;
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, pollMs));
         }
         answered += after ? `; run then ${after}` : "";
       }
       break;
     }
     if (execution?.state && !["admitted", "running"].includes(execution.state)) break;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => setTimeout(resolve, 2 * pollMs));
   }
   steps.push({ step: "answer_question", outcome: answered });
 

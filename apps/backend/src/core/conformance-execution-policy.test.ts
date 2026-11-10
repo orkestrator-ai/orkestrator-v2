@@ -113,15 +113,37 @@ function observeOpenCode(
 
 const opencode = policyQualificationCli("opencode");
 
+async function writeOpenCodeProbe(cwd: string): Promise<void> {
+  await writeFile(
+    join(cwd, "opencode.json"),
+    JSON.stringify({ instructions: ["POLICY_PROBE.md"] }),
+  );
+}
+
+/**
+ * Whether the pinned CLI loads project resources from a directory holding the
+ * probe. Every shape writes the same probe, and the CLI's view of it does not
+ * depend on the shape, so the CLI runs once per file rather than per shape.
+ */
+let openCodeProjectResources: Promise<boolean> | undefined;
+function observeOpenCodeProjectResources(): Promise<boolean> {
+  openCodeProjectResources ??= withPolicyCliFixture(async (fixture) => {
+    await writeOpenCodeProbe(fixture.cwd);
+    expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain(
+      PINNED_TOOLCHAIN_VERSIONS.opencode,
+    );
+    const config = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture));
+    return config.instructions?.includes("POLICY_PROBE.md") === true;
+  });
+  return openCodeProjectResources;
+}
+
 runExecutionPolicyConformance(
   {
     platform: "opencode",
     async apply(shape) {
       return withPolicyCliFixture(async (fixture) => {
-        await writeFile(
-          join(fixture.cwd, "opencode.json"),
-          JSON.stringify({ instructions: ["POLICY_PROBE.md"] }),
-        );
+        await writeOpenCodeProbe(fixture.cwd);
         const created: Array<Record<string, unknown>> = [];
         const client = {
           session: {
@@ -139,11 +161,7 @@ runExecutionPolicyConformance(
         );
         const { policy } = await permissions.createSession("conformance", { policy: shape.policy });
         expect(created).toHaveLength(1);
-        expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain(
-          PINNED_TOOLCHAIN_VERSIONS.opencode,
-        );
-        const config = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture));
-        const projectResources = config.instructions?.includes("POLICY_PROBE.md") === true;
+        const projectResources = await observeOpenCodeProjectResources();
         expect(projectResources).toBe(true);
         return {
           // The provider reports this policy in its session snapshots.

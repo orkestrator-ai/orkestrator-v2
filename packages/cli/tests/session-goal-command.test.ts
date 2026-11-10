@@ -85,7 +85,8 @@ async function fixture(
   reads: PublicSessionGoal[] = [],
   overrides: Partial<Record<string, PublicActionResponse | (() => Response)>> = {},
 ) {
-  const box = await createSandbox();
+  // The reads are scripted, so `--wait` polls need no real time between them.
+  const box = await createSandbox({ virtualClock: true });
   let next = 0;
   const gateway = await startFakeGateway((request) => {
     const action = String(request.body.args.action);

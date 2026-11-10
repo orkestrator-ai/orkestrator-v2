@@ -11,3 +11,8 @@
 - **Fix:** the group uses the file's 60 s deadline. The assertions and the entrypoint are unchanged.
 - **Verification:** under a bounded synthetic load of 30 CPU-bound processes, the group with the old deadlines had 0 pass, 18 fail (91.3 s); the group with 60 s deadlines had 18 pass, 0 fail (141.4 s, load average 44–58).
 - **Not explained:** one earlier owner run with a temporary 30 s deadline had 42 pass, 8 fail, on the last eight tests of the file. Its host load was not recorded, so it cannot be attributed after the fact. No hang was seen in any later run. The same 42 pass, 8 fail on the last eight tests recurred at the 60 s deadline in [5561](5561-portable-input-stamps-spawn-latency-deadline.md), during the 04:07–04:18 run, when spawn time was not sampled either. Slow process spawning was measured during a later failing run with a different result (31 pass, 19 fail); neither 42-pass, 8-fail run has a spawn-time measurement.
+
+
+## Owner moved to the slow tier and consolidated (2026-11-10)
+
+`apps/backend/tests/portable-inputs-stamps.test.ts` now runs only in the slow tier (`scripts/test-tiers.ts`; `mise run test:slow`, and CI's `test:full` on every pull request), so the default `mise run test` no longer runs it. The file was also consolidated: one fixture build per file restored per test, the per-provider `logins` tests merged into two scenarios covering all five providers, and the `import ownership failures` matrix reduced from 15 tests to 5. Entrypoint boots went from 129 to 59 and the file alone from about 115 s to about 55 s. Some test names cited above no longer exist; search the file for the scenario rather than the old name.

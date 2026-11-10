@@ -1,9 +1,10 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createStore } from "zustand/vanilla";
 import * as realBackend from "@/lib/backend";
 import { mockToastError as toastError } from "../../../../tests/mocks/sonner";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
 
 const realBackendSnapshot = { ...realBackend };
 const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
@@ -32,7 +33,7 @@ mock.module("@/lib/backend", () => ({
 const compose = await import("./compose-draft-persistence");
 const files = await import("./file-draft-persistence");
 const { useDurableComposeDraft } = await import("../hooks/useDurableComposeDraft");
-const { useNativeComposeDraftPersistence } =
+const { NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS, useNativeComposeDraftPersistence } =
   await import("../hooks/useNativeComposeDraftPersistence");
 
 function deferred<T>() {
@@ -44,6 +45,32 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+let saveDebounce: ReturnType<typeof installControlledTimeout> | undefined;
+
+/**
+ * Captures one save debounce so a test fires it instead of sleeping past it.
+ * Install before rendering; `afterEach` restores the real clock.
+ */
+function controlSaveDebounce(delayMs = NATIVE_COMPOSE_DRAFT_SAVE_DEBOUNCE_MS) {
+  saveDebounce = installControlledTimeout(delayMs, { label: "draft save debounce" });
+  return saveDebounce;
+}
+
+/** Fires the armed save debounce and settles the writes it queues for `draftKey`. */
+async function fireSaveDebounce(draftKey: string): Promise<void> {
+  const clock = saveDebounce!;
+  await waitFor(() => expect(clock.pendingCount()).toBe(1));
+  await act(async () => {
+    clock.advance();
+    await compose.awaitComposeDraftWrites(draftKey);
+  });
+}
+
+afterEach(() => {
+  saveDebounce?.restore();
+  saveDebounce = undefined;
+});
 
 beforeEach(() => {
   cleanup();
@@ -680,6 +707,7 @@ describe("useDurableComposeDraft", () => {
 
   test("keeps discarding after a discard until the next edit re-arms persistence", async () => {
     getComposeDraft.mockResolvedValueOnce(null);
+    controlSaveDebounce(200);
     const { result, unmount } = renderHook(() =>
       useDurableComposeDraft({
         ownerType: "project",
@@ -699,12 +727,14 @@ describe("useDurableComposeDraft", () => {
 
     // The debounce scheduled by that edit is still pending. It has to discard
     // too: saving there would resurrect the record the submit just removed.
+    await fireSaveDebounce("test:project-hook-sticky:value");
     await waitFor(() => expect(deleteComposeDraft).toHaveBeenCalledTimes(2));
     expect(saveComposeDraft).not.toHaveBeenCalled();
     expect(result.current[0]).toBe("submitted text");
 
     act(() => result.current[1]("typed after the submit"));
 
+    await fireSaveDebounce("test:project-hook-sticky:value");
     await waitFor(() =>
       expect(saveComposeDraft).toHaveBeenCalledWith(
         "test:project-hook-sticky:value",
@@ -1050,6 +1080,7 @@ describe("useNativeComposeDraftPersistence", () => {
     ];
     getComposeDraft.mockResolvedValueOnce(null);
     const store = createNativeStore();
+    controlSaveDebounce();
     const hook = renderHook(() =>
       useNativeComposeDraftPersistence("codex", "env-native", sessionKey, store),
     );
@@ -1057,6 +1088,7 @@ describe("useNativeComposeDraftPersistence", () => {
 
     act(() => store.getState().setAnnotations(sessionKey, annotations));
 
+    await fireSaveDebounce(key);
     await waitFor(() =>
       expect(saveComposeDraft).toHaveBeenCalledWith(
         key,
@@ -1088,12 +1120,14 @@ describe("useNativeComposeDraftPersistence", () => {
       .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
       .mockResolvedValueOnce({ ...stored, value: { ...stored.value, annotations }, revision: 3 });
     const store = createNativeStore();
+    controlSaveDebounce();
     const hook = renderHook(() =>
       useNativeComposeDraftPersistence("codex", "env-native", sessionKey, store),
     );
     await waitFor(() => expect(getComposeDraft).toHaveBeenCalledTimes(1));
 
     act(() => store.getState().setAnnotations(sessionKey, annotations));
+    await fireSaveDebounce(key);
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(store.getState().annotations.get(sessionKey)).toEqual(annotations);
     const options = toastError.mock.calls.at(-1)?.[1] as {
@@ -1271,6 +1305,7 @@ describe("useNativeComposeDraftPersistence", () => {
         revision: 3,
       });
       const store = createNativeStore();
+      const clock = controlSaveDebounce();
       const hook = renderHook(() =>
         useNativeComposeDraftPersistence(namespace, `env-${namespace}`, sessionKey, store),
       );
@@ -1278,7 +1313,8 @@ describe("useNativeComposeDraftPersistence", () => {
       await waitFor(() => expect(store.getState().attachments.get(sessionKey)).toEqual([image]));
       // Past the save debounce: hydration may write the record back, but only
       // as it read it, never without the image and never as a delete.
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await fireSaveDebounce(compose.composeDraftKey(namespace, `env-${namespace}`, sessionKey));
+      expect(clock.pendingCount()).toBe(0);
       expect(deleteComposeDraft).not.toHaveBeenCalled();
       for (const call of saveComposeDraft.mock.calls) {
         expect(call[3]).toEqual({ text: "", mentions: [], attachments: [image] });
@@ -1431,6 +1467,8 @@ describe("useNativeComposeDraftPersistence", () => {
     getComposeDraft.mockResolvedValueOnce(null);
     const store = createNativeStore();
     const sessionKey = "env-debounce:tab";
+    const key = compose.composeDraftKey("claude", "env-debounce", sessionKey);
+    const clock = controlSaveDebounce();
     const hook = renderHook(() =>
       useNativeComposeDraftPersistence("claude", "env-debounce", sessionKey, store),
     );
@@ -1441,17 +1479,17 @@ describe("useNativeComposeDraftPersistence", () => {
       store.getState().setDraftText(sessionKey, "latest");
     });
 
-    await waitFor(
-      () =>
-        expect(saveComposeDraft).toHaveBeenCalledWith(
-          compose.composeDraftKey("claude", "env-debounce", sessionKey),
-          "environment",
-          "env-debounce",
-          { text: "latest", mentions: [], attachments: [] },
-          0,
-        ),
-      { timeout: 1_500 },
+    // Both edits share one armed timer: nothing is written until it fires.
+    expect(saveComposeDraft).not.toHaveBeenCalled();
+    await fireSaveDebounce(key);
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      key,
+      "environment",
+      "env-debounce",
+      { text: "latest", mentions: [], attachments: [] },
+      0,
     );
+    expect(clock.pendingCount()).toBe(0);
     expect(saveComposeDraft).toHaveBeenCalledTimes(1);
     act(() => store.getState().setDraftText(sessionKey, ""));
     hook.unmount();

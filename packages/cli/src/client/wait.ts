@@ -1,6 +1,7 @@
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { nextPublicWaitDelay } from "@orkestrator/protocol/public-api-wait";
 import { CliError } from "./errors.js";
+import type { ClientIo } from "./io.js";
 
 /**
  * Bounded snapshot polling. Checks immediately, then backs off from 250ms to
@@ -41,6 +42,15 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
     signal?.addEventListener("abort", done, { once: true });
   });
+}
+
+/**
+ * The clock a command's observation runs on. The executable's IO has no
+ * `sleep`, so it gets the real timer and `Date.now`; a test IO that supplies
+ * `sleep` has its own `now` read too, so a virtual clock stays consistent.
+ */
+export function observationClock(io: ClientIo): Pick<ObserveOptions, "sleep" | "now"> {
+  return io.sleep ? { sleep: io.sleep.bind(io), now: () => io.now() } : {};
 }
 
 export function signalName(signal: AbortSignal | undefined): "SIGINT" | "SIGTERM" {

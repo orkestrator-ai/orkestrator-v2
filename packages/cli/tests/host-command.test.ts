@@ -52,7 +52,8 @@ function host(version: string): HostMaintenanceSnapshot {
 async function fixture(
   final: PublicReceipt,
 ): Promise<{ box: ClientSandbox; gateway: FakeGateway }> {
-  const box = await createSandbox();
+  // The backend's answers are scripted, so `--wait` polls need no real time.
+  const box = await createSandbox({ virtualClock: true });
   let reads = 0;
   const gateway = await startFakeGateway((request) => {
     const action = String(request.body.args.action);
@@ -150,6 +151,8 @@ describe("orkestrator host update apply", () => {
     const output = JSON.parse(result.out) as { result: { host: HostMaintenanceSnapshot } };
     expect(output.result.host.version).toBe("2.22.0");
     expect(actions(gateway).filter((action) => action === "run.get")).toHaveLength(3);
+    // Two reads while the backend was away, each after the next backoff step.
+    expect(box.sleeps).toEqual([250, 500]);
   });
 
   test("a postponed update exits non-zero with the reason", async () => {

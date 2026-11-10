@@ -11,6 +11,7 @@ import {
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
@@ -284,6 +285,10 @@ let workerPromptsForTest: HumanPromptEntry[] = [];
 const listHumanPrompts = mock(async (_ids: readonly string[]) => ({
   prompts: workerPromptsForTest,
 }));
+// The conversation's session as the fake backend holds it.
+const sessionBackend = createNativeAgentSessionBackend({
+  readProjection: () => getAgentProjection(),
+});
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -306,14 +311,13 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
   listHumanPrompts,
   assignCoordinatorConversationAgent: assignAgent,
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
     input: Parameters<typeof realBackend.ensureNativeAgentSession>[0],
   ) => ({
     ...input,
     providerSessionId: "claude-session",
   }),
-  getNativeAgentProjection: getAgentProjection,
+  ...sessionBackend.api,
   dismissNativeAgentSuggestedPrompt: async () => ({
     ...(await getAgentProjection()),
     suggestedPrompt: undefined,

@@ -41,6 +41,8 @@ import { useOptionalNodeScope } from "@/lib/node-scope/providers";
 import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { appCommandStore } from "@/test/app-command-store";
+import { SIDEBAR_SETTLE_MS } from "./useSidebarPanelMotion";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -626,15 +628,22 @@ describe("AppShell", () => {
   test("search during closing reopens the sidebar and survives settling", async () => {
     isMobile = false;
     mountSearch = true;
-    renderInAppCommandScope(<AppShell>Workspace</AppShell>);
-    act(() => useUIChromeStore.setState({ sidebarOpen: false }));
-    expect(screen.getByText("Sidebar")).toBeTruthy();
-    act(() => requestAppShortcut("search-projects"));
-    expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    });
-    expect(screen.getByTestId("project-search-dialog")).toBeTruthy();
+    const settle = installControlledTimeout(SIDEBAR_SETTLE_MS, { label: "sidebar settle" });
+    try {
+      renderInAppCommandScope(<AppShell>Workspace</AppShell>);
+      act(() => useUIChromeStore.setState({ sidebarOpen: false }));
+      expect(screen.getByText("Sidebar")).toBeTruthy();
+      act(() => requestAppShortcut("search-projects"));
+      expect(useUIChromeStore.getState().sidebarOpen).toBe(true);
+      // The reopening transition settles; the search it delivered stays open.
+      await act(async () => {
+        expect(settle.advance()).toBe(1);
+      });
+      expect(settle.pendingCount()).toBe(0);
+      expect(screen.getByTestId("project-search-dialog")).toBeTruthy();
+    } finally {
+      settle.restore();
+    }
   });
 
   test("compact disables the sidebar resize handle", () => {

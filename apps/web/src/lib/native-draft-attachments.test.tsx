@@ -378,6 +378,20 @@ describe("restorableDraftAttachments", () => {
 });
 
 describe("useNativeComposeDraftPersistence attachment restoration", () => {
+  beforeEach(() => {
+    saveTimers = captureDraftSaveTimers();
+  });
+
+  /**
+   * Fires hydration's debounced autosave instead of sleeping past it, and
+   * proves it was the only one: `settle` keeps firing until nothing re-arms.
+   */
+  async function fireRestoredSave(key: string): Promise<void> {
+    await waitFor(() => expect(saveTimers?.pendingCount()).toBe(1));
+    expect(await saveTimers!.settle(key)).toBe(1);
+    expect(saveTimers!.pendingCount()).toBe(0);
+  }
+
   for (const platform of ["cursor", "grok"] as const) {
     test(`an assigned ${platform} tab restores its eligible attachments and re-saves them`, async () => {
       const environmentId = `env-assigned-${platform}`;
@@ -405,7 +419,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       await waitFor(() => expect(draftAttachmentsOf(sessionKey)).toEqual(expected));
       // Hydration's autosave must publish the recovered attachments, not a
       // filtered empty list, against the hydrated revision.
-      await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+      await fireRestoredSave(key);
+      expect(saveCallsFor(key)).toHaveLength(1);
       const [call] = saveCallsFor(key);
       expect(call?.slice(0, 3)).toEqual([key, "environment", environmentId]);
       expect(call?.[3]).toMatchObject({ text: "look at this", attachments: expected });
@@ -438,7 +453,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
         ),
       );
 
-      await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+      await fireRestoredSave(key);
+      expect(saveCallsFor(key)).toHaveLength(1);
       expect(draftAttachmentsOf(sessionKey)).toEqual(expected);
       expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.platform).toBe(
         platform,
@@ -475,7 +491,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       );
 
       // The adopted content is written under the assigned tab's own key.
-      await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+      await fireRestoredSave(key);
+      expect(saveCallsFor(key)).toHaveLength(1);
       expect(draftAttachmentsOf(sessionKey)).toEqual(expected);
       expect(savedAttachments(saveCallsFor(key)[0])).toEqual(expected);
       hook.unmount();
@@ -502,7 +519,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       ),
     );
 
-    await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+    await fireRestoredSave(key);
+    expect(saveCallsFor(key)).toHaveLength(1);
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([image]);
     expect(deleteComposeDraft).not.toHaveBeenCalled();
     hook.unmount();
@@ -544,7 +562,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       }),
     );
 
-    await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+    await fireRestoredSave(key);
+    expect(saveCallsFor(key)).toHaveLength(1);
     expect(draftAttachmentsOf(sessionKey)).toEqual([secondImage]);
     expect(appCommandStore(nativeComposeStore).getState().drafts.get(sessionKey)?.text).toBe("");
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([secondImage]);
@@ -575,6 +594,7 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       ),
     );
 
+    await fireRestoredSave(key);
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     // No automatic overwrite: one rejected write, the image still in the composer.
     expect(saveComposeDraft).toHaveBeenCalledTimes(1);
@@ -613,7 +633,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       ),
     );
 
-    await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+    await fireRestoredSave(key);
+    expect(saveCallsFor(key)).toHaveLength(1);
     expect(draftAttachmentsOf(sessionKey)).toEqual([file, secondImage]);
     // The unknown platform is not adopted, so nothing claims a capability.
     expect(
@@ -643,7 +664,8 @@ describe("useNativeComposeDraftPersistence attachment restoration", () => {
       ),
     );
 
-    await waitFor(() => expect(saveCallsFor(key)).toHaveLength(1));
+    await fireRestoredSave(key);
+    expect(saveCallsFor(key)).toHaveLength(1);
     expect(savedAttachments(saveCallsFor(key)[0])).toEqual([file, image]);
     hook.unmount();
   });

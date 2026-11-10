@@ -31,6 +31,7 @@ import {
   createSession,
   deleteSession,
   eventEmitter,
+  fakeTimers,
   getPromptDispatchRecordCountForTesting,
   getPromptDispatchState,
   getSession,
@@ -557,6 +558,8 @@ describe("sendPrompt", () => {
   });
 
   test("streams partial assistant text before the final assistant message arrives", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming");
     track(session.id);
 
@@ -896,6 +899,8 @@ describe("sendPrompt", () => {
   });
 
   test("publishes model attribution when only the final assistant record supplies it", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("late model metadata");
     track(session.id);
 
@@ -979,6 +984,8 @@ describe("sendPrompt", () => {
   test.each(["", "   ", "<synthetic>"])(
     "never attributes an unusable live model id %#",
     async (model) => {
+      // The 100 ms coalescing window, on a clock `waitFor` advances.
+      using _timers = fakeTimers();
       const session = createSession("invalid live model");
       track(session.id);
       const promptPromise = sendPrompt(session.id, "Stream please");
@@ -1045,6 +1052,8 @@ describe("sendPrompt", () => {
   );
 
   test("streams partial thinking content and preserves block order", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-thinking");
     track(session.id);
 
@@ -1146,6 +1155,8 @@ describe("sendPrompt", () => {
   });
 
   test("records deterministic first-arrival timestamps for separate streamed blocks", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-block-timestamps");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "Stream two blocks");
@@ -1206,6 +1217,8 @@ describe("sendPrompt", () => {
   });
 
   test("preserves a thinking block start timestamp across deltas and final replacement", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-thinking-timestamp");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "Think carefully");
@@ -1280,6 +1293,8 @@ describe("sendPrompt", () => {
   });
 
   test("timestamps a delta that arrives without a content block start", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-delta-fallback");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "Stream without start");
@@ -1349,6 +1364,8 @@ describe("sendPrompt", () => {
   // `message.id`. Grouping by uuid therefore produced one part per delta plus a
   // duplicate copy of the finished block. These tests use that real shape.
   test("merges deltas that each arrive with a unique stream_event uuid", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-unique-uuids");
     track(session.id);
 
@@ -1427,6 +1444,8 @@ describe("sendPrompt", () => {
   });
 
   test("final per-block assistant messages replace streamed blocks instead of duplicating them", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("streaming-final-blocks");
     track(session.id);
 
@@ -1781,6 +1800,8 @@ describe("sendPrompt", () => {
   const settleQueuedMessages = () => new Promise((resolve) => setTimeout(resolve, 15));
 
   test("coalesces a burst of deltas into a single accumulated snapshot", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("coalescing");
     track(session.id);
 
@@ -1818,6 +1839,8 @@ describe("sendPrompt", () => {
   });
 
   test("publishes each message once in full, then only the parts that changed", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("patching");
     track(session.id);
 
@@ -1912,6 +1935,8 @@ describe("sendPrompt", () => {
   });
 
   test("numbers every published frame so a recipient can detect a missed one", async () => {
+    // The 100 ms coalescing window, on a clock `waitFor` advances.
+    using _timers = fakeTimers();
     const session = createSession("revisions");
     track(session.id);
 

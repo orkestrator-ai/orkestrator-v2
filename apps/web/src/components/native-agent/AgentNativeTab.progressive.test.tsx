@@ -143,7 +143,6 @@ mock.module("@/lib/backend", () => ({
     accounts: [],
     active: { claude: "default", codex: "default" },
   }),
-  getNativeAgentProjection: async () => null,
   getNativeAgentProjectionUpdate: async () => {
     throw new Error("joined projection must not run on the progressive path");
   },
@@ -366,6 +365,22 @@ afterEach(() => {
   cleanup();
   appCommandStore(nativeAgentProjectionStore).getState().reset();
 });
+
+/**
+ * Advances the read coordinator's fake clock one running-turn poll at a time
+ * until `assertion` holds.
+ */
+async function pollUntil(clock: FakeClock, assertion: () => void, polls = 10): Promise<void> {
+  for (let poll = 0; ; poll += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      if (poll >= polls) throw error;
+    }
+    await act(() => clock.advance(500));
+  }
+}
 
 function renderTab() {
   return renderInAppCommandScope(
@@ -596,130 +611,134 @@ describe("AgentNativeTab progressive controller", () => {
   test.each(["failed-read", "unavailable-state", "runtime-restart"] as const)(
     "keeps Claude agent-card position through %s until authority returns",
     async (transition) => {
-      identity.platform = "claude";
-      const launch: TestMessage = {
-        ...message("launch", ""),
-        parts: [
+      // A running turn polls every 500 ms; a fake clock drives the polls.
+      const { clock } = installFakeReadCoordinator();
+      try {
+        identity.platform = "claude";
+        const launch: TestMessage = {
+          ...message("launch", ""),
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Investigate rendering",
+              toolName: "Agent",
+              toolUseId: "launch-1",
+              toolState: "success",
+              toolArgs: { description: "Investigate rendering", run_in_background: true },
+            },
+          ],
+        };
+        const backgroundTasks = [
           {
-            type: "tool-invocation",
-            content: "Investigate rendering",
-            toolName: "Agent",
+            id: "agent-1",
             toolUseId: "launch-1",
-            toolState: "success",
-            toolArgs: { description: "Investigate rendering", run_in_background: true },
+            description: "Investigate rendering",
+            status: "running" as const,
           },
-        ],
-      };
-      const backgroundTasks = [
-        {
-          id: "agent-1",
-          toolUseId: "launch-1",
-          description: "Investigate rendering",
-          status: "running" as const,
-        },
-      ];
-      transcriptUpdates = [async () => transcriptSnapshot("transcript-1", [launch])];
-      stateUpdates = [
-        async () =>
-          stateSnapshot("state-1", {
-            backgroundTasks,
-            turn: { phase: "running" },
-          }),
-      ];
-      renderTab();
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
-        ).toBeTruthy(),
-      );
-      expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
-
-      if (transition !== "runtime-restart") {
-        transcriptUpdates = [];
+        ];
+        transcriptUpdates = [async () => transcriptSnapshot("transcript-1", [launch])];
         stateUpdates = [
           async () =>
-            transition === "failed-read"
-              ? Promise.reject(new Error("status endpoint timed out"))
-              : {
-                  viewVersion: 1,
-                  status: "unavailable",
-                  retryable: true,
-                  error: "status endpoint timed out",
-                },
+            stateSnapshot("state-1", {
+              backgroundTasks,
+              turn: { phase: "running" },
+            }),
         ];
-        // Keep the outage in force across polls. An unscripted "unchanged"
-        // response would restore authority before the recovery read is held.
-        fallbackStateRead = stateUpdates[0];
-        await waitFor(
-          () =>
+        renderTab();
+        await waitFor(() =>
+          expect(
+            screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+          ).toBeTruthy(),
+        );
+        expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
+
+        if (transition !== "runtime-restart") {
+          transcriptUpdates = [];
+          stateUpdates = [
+            async () =>
+              transition === "failed-read"
+                ? Promise.reject(new Error("status endpoint timed out"))
+                : {
+                    viewVersion: 1,
+                    status: "unavailable",
+                    retryable: true,
+                    error: "status endpoint timed out",
+                  },
+          ];
+          // Keep the outage in force across polls. An unscripted "unchanged"
+          // response would restore authority before the recovery read is held.
+          fallbackStateRead = stateUpdates[0];
+          await pollUntil(clock, () =>
             expect(
               screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null,
             ).toBe(true),
-          { timeout: 5_000 },
-        );
-        expect(
-          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
-        ).toBeTruthy();
-      }
-
-      const restarted =
-        transition === "runtime-restart"
-          ? { ...identity, sourceGeneration: "generation-2" }
-          : identity;
-      let releaseState!: () => void;
-      const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
-        releaseState = () =>
-          resolve(
-            stateSnapshot(
-              "state-2",
-              transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks },
-            ),
           );
-      });
-      transcriptUpdates = [
-        async () =>
-          transcriptSnapshot("transcript-2", [launch, message("newer", "Newer work")], {
-            identity: restarted,
-          }),
-      ];
-      stateUpdates = [() => heldState];
-      fallbackStateRead = () => heldState;
-      try {
-        await waitFor(() => expect(screen.getByText("Newer work")).toBeTruthy(), {
-          timeout: 5_000,
+          expect(
+            screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+          ).toBeTruthy();
+        }
+
+        const restarted =
+          transition === "runtime-restart"
+            ? { ...identity, sourceGeneration: "generation-2" }
+            : identity;
+        let releaseState!: () => void;
+        const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+          releaseState = () =>
+            resolve(
+              stateSnapshot(
+                "state-2",
+                transition === "runtime-restart" ? { identity: restarted } : { backgroundTasks },
+              ),
+            );
         });
-        expect(screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null).toBe(
-          true,
-        );
-        expect(backgroundTaskStops).toEqual([]);
-        const running = screen.queryByRole("button", {
-          name: /Agent Investigate rendering Running/,
-        });
+        transcriptUpdates = [
+          async () =>
+            transcriptSnapshot("transcript-2", [launch, message("newer", "Newer work")], {
+              identity: restarted,
+            }),
+        ];
+        stateUpdates = [() => heldState];
+        fallbackStateRead = () => heldState;
+        try {
+          await pollUntil(clock, () => expect(screen.getByText("Newer work")).toBeTruthy());
+          expect(
+            screen.queryByRole("button", { name: "Stop Investigate rendering" }) === null,
+          ).toBe(true);
+          expect(backgroundTaskStops).toEqual([]);
+          const running = screen.queryByRole("button", {
+            name: /Agent Investigate rendering Running/,
+          });
+          if (transition === "runtime-restart") {
+            // A new runtime must not inherit the previous generation's pin.
+            expect(running === null).toBe(true);
+          } else {
+            expect(running).toBeTruthy();
+            expect(screen.getByText("Newer work").compareDocumentPosition(running!) & 4).toBe(4);
+          }
+        } finally {
+          await act(async () => {
+            releaseState();
+            await heldState;
+            fallbackStateRead = undefined;
+          });
+        }
         if (transition === "runtime-restart") {
-          // A new runtime must not inherit the previous generation's pin.
-          expect(running === null).toBe(true);
+          await waitFor(() =>
+            expect(
+              screen.queryByRole("button", { name: /Agent Investigate rendering Running/ }) ===
+                null,
+            ).toBe(true),
+          );
         } else {
-          expect(running).toBeTruthy();
-          expect(screen.getByText("Newer work").compareDocumentPosition(running!) & 4).toBe(4);
+          expect(
+            screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
+          ).toBeTruthy();
+          expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
         }
       } finally {
-        await act(async () => {
-          releaseState();
-          await heldState;
-          fallbackStateRead = undefined;
-        });
-      }
-      if (transition === "runtime-restart") {
-        await waitFor(() =>
-          expect(
-            screen.queryByRole("button", { name: /Agent Investigate rendering Running/ }) === null,
-          ).toBe(true),
-        );
-      } else {
-        expect(
-          screen.getByRole("button", { name: /Agent Investigate rendering Running/ }),
-        ).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Stop Investigate rendering" })).toBeTruthy();
+        cleanup();
+        resetReadCoordinatorForTests();
       }
     },
   );
@@ -1242,6 +1261,17 @@ describe("AgentNativeTab progressive controller", () => {
     ];
     stateUpdates = [async () => stateSnapshot("state-1", { interactions: pendingApproval })];
 
+    // The read coordinator schedules the idle poll; a fake clock drives it.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      await keepsApprovalAcrossRefresh(clock);
+    } finally {
+      cleanup();
+      resetReadCoordinatorForTests();
+    }
+  });
+
+  async function keepsApprovalAcrossRefresh(clock: { advance(ms: number): Promise<void> }) {
     renderTab();
     await waitFor(() => expect(screen.getByText("Approve command")).toBeTruthy());
 
@@ -1262,13 +1292,14 @@ describe("AgentNativeTab progressive controller", () => {
     stateUpdates = [() => heldState];
 
     // The idle poll drives the second refresh; no test-only refresh hook exists
-    // on the rendered tab, and using the real cadence is the point.
-    await waitFor(() => expect(screen.getByText("Newer")).toBeTruthy(), { timeout: 5_000 });
+    // on the rendered tab, and the coordinator's own cadence is the point.
+    await act(() => clock.advance(1_500));
+    await waitFor(() => expect(screen.getByText("Newer")).toBeTruthy());
     expect(screen.getByText("Approve command")).toBeTruthy();
 
     releaseState();
     await waitFor(() => expect(screen.getByText("Approve command")).toBeTruthy());
-  });
+  }
 
   test("keeps the transcript header and scroll position stable while a non-pageable preview hydrates", async () => {
     transcriptUpdates = [
@@ -1290,18 +1321,24 @@ describe("AgentNativeTab progressive controller", () => {
     ];
     stateUpdates = [async () => stateSnapshot("state-1"), async () => stateSnapshot("state-2")];
 
-    renderTab();
-    const list = await screen.findByTestId("progressive-transcript-list");
-    await waitFor(() => expect(screen.getByText("Preview answer")).toBeTruthy());
-    expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
-    list.scrollTop = 137;
+    // The hydrated snapshot arrives with the next idle poll, on a fake clock.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      renderTab();
+      const list = await screen.findByTestId("progressive-transcript-list");
+      await waitFor(() => expect(screen.getByText("Preview answer")).toBeTruthy());
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      list.scrollTop = 137;
 
-    await waitFor(() => expect(screen.getByText("Hydrated prompt")).toBeTruthy(), {
-      timeout: 5_000,
-    });
+      await act(() => clock.advance(1_500));
+      await waitFor(() => expect(screen.getByText("Hydrated prompt")).toBeTruthy());
 
-    expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
-    expect(screen.getByTestId("progressive-transcript-list").scrollTop).toBe(137);
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+      expect(screen.getByTestId("progressive-transcript-list").scrollTop).toBe(137);
+    } finally {
+      cleanup();
+      resetReadCoordinatorForTests();
+    }
   });
 
   test("does not shimmer while session state connects over an authoritative empty transcript", async () => {

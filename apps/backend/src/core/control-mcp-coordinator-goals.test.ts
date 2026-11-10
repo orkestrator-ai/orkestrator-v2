@@ -5,6 +5,7 @@
  * `plans/goals/403`'s open box.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import path from "node:path";
 import {
   NATIVE_AGENT_GOAL_LIMITS,
   sessionGoal,
@@ -16,6 +17,7 @@ import { rpc } from "./control-mcp-test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp-server.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { copyCommittedCheckout } from "./git-checkout-template-test-support.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { cleanupSessionHarnesses, setup } from "./public-api/test-provider.js";
 import { createEnvironment, createProject } from "./storage.js";
@@ -30,7 +32,8 @@ afterEach(async () => {
 
 async function fixture() {
   const { harness, service, stub } = await setup();
-  const { projectPath } = await harness.createRepository("goals");
+  // Only the checkout's path is used: no origin, so a copy of a committed one.
+  const projectPath = await copyCommittedCheckout(path.join(harness.root, "goals"));
   const project = await harness.storage.addProject(
     createProject("https://example.invalid/goals.git", projectPath),
   );

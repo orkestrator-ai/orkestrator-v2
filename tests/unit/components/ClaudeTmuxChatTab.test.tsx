@@ -1169,37 +1169,64 @@ describe("ClaudeTmuxChatTab", () => {
     const busyStartedAt = 1_000_000;
     let now = busyStartedAt + 65_000;
     dateNowSpy = spyOn(Date, "now").mockImplementation(() => now);
-    appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true, busyStartedAt);
-    appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-
-    renderInAppCommandScope(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-    expect((await screen.findByRole("status")).textContent).toBe("Claude is thinking...");
-    expect(screen.getByText("1m 5s")).toBeTruthy();
-    // Let mount-time hydration and subscriptions settle before counting.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-
-    // Real one-second ticks over a controlled clock: the tick re-reads
-    // `Date.now`, so each shown value is exact.
-    const before = virtuosoRendered.mock.calls.length;
-    for (const expected of ["1m 6s", "1m 7s"]) {
-      now += 1000;
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1050));
+    // The elapsed clock's one-second interval is captured so each tick runs on
+    // demand; intervals at any other period stay real.
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const secondTicks = new Map<object, () => void>();
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((
+      callback: () => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (delay !== 1000) return realSetInterval(callback, delay, ...args);
+      const handle = {};
+      secondTicks.set(handle, callback);
+      return handle;
+    }) as typeof setInterval);
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(((
+      handle?: ReturnType<typeof setInterval>,
+    ) => {
+      if (!secondTicks.delete(handle as unknown as object)) realClearInterval(handle);
+    }) as typeof clearInterval);
+    try {
+      appCommandStore(claudeTmuxStore).getState().setBusy(stateKey, true, busyStartedAt);
+      appCommandStore(claudeTmuxStore).getState().setRunning(stateKey, true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
       });
-      expect(screen.getByText(expected)).toBeTruthy();
+
+      renderInAppCommandScope(
+        <ClaudeTmuxChatTab
+          tabId="tab-1"
+          data={{ environmentId: "env-1", containerId: "container-1" }}
+          isActive
+        />,
+      );
+      expect((await screen.findByRole("status")).textContent).toBe("Claude is thinking...");
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+      // Let mount-time hydration and subscriptions settle before counting.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      // Exactly one one-second interval, the elapsed clock, is armed.
+      expect(secondTicks.size).toBe(1);
+
+      // One-second ticks over a controlled clock: the tick re-reads `Date.now`,
+      // so each shown value is exact.
+      const before = virtuosoRendered.mock.calls.length;
+      for (const expected of ["1m 6s", "1m 7s"]) {
+        now += 1000;
+        await act(async () => {
+          for (const tick of secondTicks.values()) tick();
+        });
+        expect(screen.getByText(expected)).toBeTruthy();
+      }
+      expect(virtuosoRendered.mock.calls.length - before).toBe(0);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
     }
-    expect(virtuosoRendered.mock.calls.length - before).toBe(0);
   });
 
   test("hides the thinking status when the backend reports the session stopped", async () => {

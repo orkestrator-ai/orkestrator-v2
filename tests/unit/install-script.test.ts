@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, jest, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -284,6 +284,52 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
   };
 }
 
+// The archive Bun's own installer would choose, per host.
+const TARGETS: Array<[string, InstallerScenario, string]> = [
+  ["Apple Silicon", { platform: "Darwin", machine: "arm64" }, "darwin-aarch64"],
+  [
+    "Intel Mac with AVX2",
+    {
+      platform: "Darwin",
+      machine: "x86_64",
+      sysctl: { "machdep.cpu.leaf7_features": "BMI1 AVX2 BMI2" },
+    },
+    "darwin-x64",
+  ],
+  [
+    "Intel Mac without AVX2",
+    {
+      platform: "Darwin",
+      machine: "x86_64",
+      sysctl: { "machdep.cpu.features": "FPU SSE4.2 AVX1.0" },
+    },
+    "darwin-x64-baseline",
+  ],
+  [
+    "a shell under Rosetta 2",
+    { platform: "Darwin", machine: "x86_64", sysctl: { "sysctl.proc_translated": "1" } },
+    "darwin-aarch64",
+  ],
+  ["Linux arm64", { platform: "Linux", machine: "aarch64" }, "linux-aarch64"],
+  [
+    "Linux arm64 musl",
+    { platform: "Linux", machine: "aarch64", alpine: true },
+    "linux-aarch64-musl",
+  ],
+  ...[false, true].flatMap((alpine): Array<[string, InstallerScenario, string]> =>
+    [false, true].map((avx2) => [
+      `Linux x64 ${alpine ? "musl" : "glibc"} ${avx2 ? "AVX2" : "baseline"}`,
+      {
+        platform: "Linux",
+        machine: "x86_64",
+        alpine,
+        cpuinfo: avx2 ? "flags : avx2" : "flags : sse2",
+      },
+      `linux-x64${alpine ? "-musl" : ""}${avx2 ? "" : "-baseline"}`,
+    ]),
+  ),
+];
+
 const PUBLISHED_ARGS = [
   "--tailscale-serve",
   "--allowed-origins",
@@ -338,23 +384,6 @@ describe("web-public install.sh", () => {
     expect(result.stderr).toContain("must be an npm tag or a version");
     expect(result.installs).toEqual([]);
   });
-
-  test("refuses to run on an unsupported platform", async () => {
-    const result = await runInstaller({ platform: "MINGW64_NT-10.0", bunOnPath: true });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("macOS and Linux only");
-    // Nothing runs before the platform gate has passed.
-    expect(result.stdout).toBe("");
-    expect(result.installs).toEqual([]);
-  });
-
-  for (const platform of ["Darwin", "Linux"]) {
-    test(`runs on supported platform ${platform}`, async () => {
-      const result = await runInstaller({ platform, machine: "aarch64", bunOnPath: true });
-      expect({ platform, exitCode: result.exitCode }).toEqual({ platform, exitCode: 0 });
-    });
-  }
 
   test("fetches the package with scripts off in its own cache, then launches it", async () => {
     const result = await runInstaller({ bunOnPath: true, args: PUBLISHED_ARGS });
@@ -463,14 +492,6 @@ describe("web-public install.sh", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("refuses an architecture Bun publishes no build for", async () => {
-    const result = await runInstaller({ platform: "Linux", machine: "riscv64" });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Bun publishes no build for Linux riscv64");
-    expect(result.downloads).toEqual([]);
-  });
-
   test.skipIf(!Bun.which("shasum", { PATH: "/usr/bin:/bin:/usr/bin/core_perl" }))(
     "checks the download with shasum where sha256sum is missing",
     async () => {
@@ -541,58 +562,250 @@ describe("web-public install.sh", () => {
     }
   });
 
-  // The archive Bun's own installer would choose. Each case stamps the hash only
-  // for the expected archive, so choosing another one fails the hash check too.
-  const targets: Array<[string, InstallerScenario, string]> = [
-    ["Apple Silicon", { platform: "Darwin", machine: "arm64" }, "darwin-aarch64"],
-    [
-      "Intel Mac with AVX2",
-      {
-        platform: "Darwin",
-        machine: "x86_64",
-        sysctl: { "machdep.cpu.leaf7_features": "BMI1 AVX2 BMI2" },
-      },
-      "darwin-x64",
-    ],
-    [
-      "Intel Mac without AVX2",
-      {
-        platform: "Darwin",
-        machine: "x86_64",
-        sysctl: { "machdep.cpu.features": "FPU SSE4.2 AVX1.0" },
-      },
-      "darwin-x64-baseline",
-    ],
-    [
-      "a shell under Rosetta 2",
-      { platform: "Darwin", machine: "x86_64", sysctl: { "sysctl.proc_translated": "1" } },
-      "darwin-aarch64",
-    ],
-    ["Linux arm64", { platform: "Linux", machine: "aarch64" }, "linux-aarch64"],
-    [
-      "Linux arm64 musl",
-      { platform: "Linux", machine: "aarch64", alpine: true },
-      "linux-aarch64-musl",
-    ],
-    ...[false, true].flatMap((alpine): Array<[string, InstallerScenario, string]> =>
-      [false, true].map((avx2) => [
-        `Linux x64 ${alpine ? "musl" : "glibc"} ${avx2 ? "AVX2" : "baseline"}`,
-        {
-          platform: "Linux",
-          machine: "x86_64",
-          alpine,
-          cpuinfo: avx2 ? "flags : avx2" : "flags : sse2",
-        },
-        `linux-x64${alpine ? "-musl" : ""}${avx2 ? "" : "-baseline"}`,
-      ]),
-    ),
-  ];
-  for (const [label, scenario, target] of targets) {
-    test(`downloads bun-${target} on ${label}`, async () => {
+  // Two hosts through the whole script, each stamping the hash only for the
+  // expected archive, so choosing another one fails the hash check too. One
+  // reads macOS sysctl, the other the Alpine marker and /proc/cpuinfo; the rest
+  // of the matrix runs in one shell below.
+  for (const label of ["Intel Mac without AVX2", "Linux x64 musl baseline"]) {
+    const [, scenario, target] = TARGETS.find(([name]) => name === label)!;
+    test(`downloads, checks and launches bun-${target} on ${label}`, async () => {
       const result = await runInstaller({ ...scenario, download: { target, stampHash: true } });
 
       expect(result.downloads).toEqual([`${BUN_RELEASES}/bun-${target}.zip`]);
       expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(`downloaded-bun x ${PACKAGE}`);
+    });
+  }
+});
+
+type SelectionResult = {
+  /** What `bun_target` printed, or undefined when it refused the host. */
+  target?: string;
+  /** The SHA-256 `bun_sha256` states for that archive. */
+  sha256?: string;
+  /** `install_bun`'s exit status, with curl logging its URL and then failing. */
+  installExit: number;
+  installStderr: string;
+  downloads: string[];
+};
+
+type GateResult = { exitCode: number; stdout: string; stderr: string; installs: string[] };
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/** The sysctl stub `runInstaller` writes, as a shell function. */
+function sysctlFunction(values: Record<string, string>): string {
+  return [
+    "sysctl() {",
+    "  shift",
+    "  local status=1 key",
+    '  for key in "$@"; do',
+    '    case "$key" in',
+    ...Object.entries(values).map(
+      ([key, value]) => `      ${key}) printf '%s\\n' ${shellQuote(value)}; status=0 ;;`,
+    ),
+    "    esac",
+    "  done",
+    "  return $status",
+    "}",
+  ].join("\n");
+}
+
+/**
+ * Evaluates every host case in one bash process. It sources install.sh's own
+ * definitions (everything above the final `main "$@"`), and each case runs in
+ * its own subshell with `uname`, `sysctl`, `curl` and `unzip` as shell
+ * functions answering for that host, and its own Alpine marker and cpuinfo.
+ */
+async function runHostCasesInOneShell(
+  selections: ReadonlyArray<readonly [string, InstallerScenario]>,
+  gates: ReadonlyArray<readonly [string, InstallerScenario]>,
+): Promise<{ selections: Map<string, SelectionResult>; gates: Map<string, GateResult> }> {
+  const sandbox = await mkdtemp(path.join(os.tmpdir(), "orkestrator-install-sh-hosts-"));
+  temporaryDirectories.push(sandbox);
+  const lines = SCRIPT.trimEnd().split("\n");
+  expect(lines.at(-1)).toBe('main "$@"');
+  const definitions = path.join(sandbox, "install-definitions.sh");
+  await writeFile(
+    definitions,
+    lines
+      .slice(0, -1)
+      .join("\n")
+      .replaceAll("/etc/alpine-release", '"${CASE_DIR}/alpine-release"')
+      .replaceAll("/proc/cpuinfo", '"${CASE_DIR}/cpuinfo"'),
+  );
+  const home = path.join(sandbox, "home");
+  const tmp = path.join(sandbox, "tmp");
+  await mkdir(home, { recursive: true });
+  await mkdir(tmp, { recursive: true });
+
+  const harness = [
+    `source ${shellQuote(definitions)}`,
+    // Each case's subshell turns errexit back on, as the script runs.
+    "set +e",
+    `uname() { case "$1" in -m) printf '%s\\n' "$CASE_MACHINE" ;; *) printf '%s\\n' "$CASE_PLATFORM" ;; esac; }`,
+    'curl() { local arg url=""; for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done; printf \'%s\\n\' "$url" >> "$CASE_DIR/downloads"; return 22; }',
+    "unzip() { :; }",
+  ];
+  const selectionDirectories = new Map<string, string>();
+  const gateDirectories = new Map<string, string>();
+  const caseSetup = async (
+    index: string,
+    scenario: InstallerScenario,
+  ): Promise<{ directory: string; prelude: string }> => {
+    const directory = path.join(sandbox, index);
+    await mkdir(directory, { recursive: true });
+    if (scenario.alpine) await writeFile(path.join(directory, "alpine-release"), "3.22.0\n");
+    await writeFile(path.join(directory, "cpuinfo"), scenario.cpuinfo ?? "flags : avx2");
+    return {
+      directory,
+      prelude: [
+        `CASE_DIR=${shellQuote(directory)}`,
+        `CASE_PLATFORM=${shellQuote(scenario.platform ?? "Darwin")}`,
+        `CASE_MACHINE=${shellQuote(scenario.machine ?? "arm64")}`,
+        sysctlFunction(scenario.sysctl ?? {}),
+      ].join("\n"),
+    };
+  };
+  for (const [index, [label, scenario]] of selections.entries()) {
+    const { directory, prelude } = await caseSetup(`selection-${index}`, scenario);
+    selectionDirectories.set(label, directory);
+    harness.push(
+      prelude,
+      'if target="$(bun_target)"; then printf \'%s\' "$target" > "$CASE_DIR/target"; bun_sha256 "$target" > "$CASE_DIR/sha256"; fi',
+      '( set -e; WORK="$CASE_DIR/work"; install_bun "$CASE_DIR/bun/bin" ) 2> "$CASE_DIR/install.stderr"',
+      'printf \'%s\' "$?" > "$CASE_DIR/install.exit"',
+    );
+  }
+  for (const [index, [label, scenario]] of gates.entries()) {
+    const { directory, prelude } = await caseSetup(`gate-${index}`, scenario);
+    gateDirectories.set(label, directory);
+    const pathDirectory = path.join(directory, "path");
+    await writeStub(
+      path.join(pathDirectory, "bun"),
+      bunStub("path-bun", PINNED_BUN, path.join(directory, "installs.log")),
+    );
+    harness.push(
+      prelude,
+      `( set -e; PATH=${shellQuote(`${pathDirectory}:${HOST_TOOL_PATH}`)}; main ) > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"`,
+      'printf \'%s\' "$?" > "$CASE_DIR/exit"',
+    );
+  }
+
+  const child = Bun.spawn(["/bin/bash", "-c", harness.join("\n")], {
+    cwd: sandbox,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { PATH: HOST_TOOL_PATH, HOME: home, TMPDIR: tmp, BUN_INSTALL: path.join(sandbox, "bun") },
+  });
+  const [, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+
+  const text = (file: string) => (existsSync(file) ? readFileSync(file, "utf8") : undefined);
+  const lineList = (file: string) => (text(file) ?? "").split("\n").filter(Boolean);
+  return {
+    selections: new Map(
+      Array.from(selectionDirectories, ([label, directory]) => [
+        label,
+        {
+          target: text(path.join(directory, "target")),
+          sha256: text(path.join(directory, "sha256"))?.trim(),
+          installExit: Number(text(path.join(directory, "install.exit"))),
+          installStderr: text(path.join(directory, "install.stderr")) ?? "",
+          downloads: lineList(path.join(directory, "downloads")),
+        },
+      ]),
+    ),
+    gates: new Map(
+      Array.from(gateDirectories, ([label, directory]) => [
+        label,
+        {
+          exitCode: Number(text(path.join(directory, "exit"))),
+          stdout: (text(path.join(directory, "stdout")) ?? "").trim(),
+          stderr: (text(path.join(directory, "stderr")) ?? "").trim(),
+          installs: lineList(path.join(directory, "installs.log")),
+        },
+      ]),
+    ),
+  };
+}
+
+describe("web-public install.sh host selection, in one shell", () => {
+  const unsupportedArchitecture: [string, InstallerScenario] = [
+    "Linux riscv64",
+    { platform: "Linux", machine: "riscv64" },
+  ];
+  const gates: Array<[string, InstallerScenario]> = [
+    ["MINGW64_NT-10.0", { platform: "MINGW64_NT-10.0" }],
+    ...["Darwin", "Linux"].map((platform): [string, InstallerScenario] => [
+      platform,
+      { platform, machine: "aarch64" },
+    ]),
+  ];
+  let results: Awaited<ReturnType<typeof runHostCasesInOneShell>>;
+
+  beforeAll(async () => {
+    results = await runHostCasesInOneShell(
+      [...TARGETS.map(([label, scenario]) => [label, scenario] as const), unsupportedArchitecture],
+      gates,
+    );
+  });
+
+  test("refuses to run on an unsupported platform", () => {
+    const result = results.gates.get("MINGW64_NT-10.0")!;
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("macOS and Linux only");
+    // Nothing runs before the platform gate has passed.
+    expect(result.stdout).toBe("");
+    expect(result.installs).toEqual([]);
+  });
+
+  for (const platform of ["Darwin", "Linux"]) {
+    test(`runs on supported platform ${platform}`, () => {
+      const result = results.gates.get(platform)!;
+      expect({ platform, exitCode: result.exitCode, stdout: result.stdout }).toEqual({
+        platform,
+        exitCode: 0,
+        stdout: `path-bun x ${PACKAGE}`,
+      });
+      expect(result.installs).toHaveLength(1);
+    });
+  }
+
+  test("refuses an architecture Bun publishes no build for", () => {
+    const result = results.selections.get(unsupportedArchitecture[0])!;
+
+    expect(result.target).toBeUndefined();
+    expect(result.installExit).toBe(1);
+    expect(result.installStderr).toContain("Bun publishes no build for Linux riscv64");
+    expect(result.downloads).toEqual([]);
+  });
+
+  // The archive Bun's own installer would choose, the URL install_bun asks for,
+  // and the hash it checks the download against, which is that archive's own:
+  // any other choice would fail the hash check.
+  for (const [label, , target] of TARGETS) {
+    test(`downloads bun-${target} on ${label}`, () => {
+      const result = results.selections.get(label)!;
+      const variable = `BUN_SHA256_${target.toUpperCase().replaceAll("-", "_")}`;
+
+      expect(result.target).toBe(target);
+      expect(result.sha256).toBe(
+        new RegExp(`^${variable}="([0-9a-f]{64})"$`, "m").exec(SCRIPT)![1],
+      );
+      expect(result.downloads).toEqual([`${BUN_RELEASES}/bun-${target}.zip`]);
+      // curl fails here by design, after the URL was chosen.
+      expect(result.installExit).toBe(1);
+      expect(result.installStderr).toContain(
+        `Could not download ${BUN_RELEASES}/bun-${target}.zip`,
+      );
     });
   }
 });

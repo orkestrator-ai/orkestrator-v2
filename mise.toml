@@ -448,9 +448,14 @@ run = "bunx oxlint ."
 description = "Fix auto-fixable lint findings"
 run = "bunx oxlint --fix ."
 
+[tasks.guards]
+description = "Run the repository-wide guards (source guards, DOM absence, inheritance, test ownership, raw console, doc registers) in one fast process"
+raw_args = true
+run = "bun scripts/guards.ts"
+
 [tasks.check]
-description = "Check formatting, lint, and types"
-run = ["mise run format:check", "mise run lint", "mise run typecheck"]
+description = "Check formatting, lint, guards, and types"
+run = ["mise run format:check", "mise run lint", "mise run guards", "mise run typecheck"]
 
 [tasks."verify:opencode:live"]
 description = "Run live OpenCode compatibility checks"

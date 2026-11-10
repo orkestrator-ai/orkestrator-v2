@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { BASELINE_PATH, parseBaseline } from "../source-guards/baseline";
-import { scanRepository, scanSource } from "../source-guards/scan";
+import { scanSource } from "../source-guards/scan";
 import {
   WINDOW_ORKESTRATOR_PORTAL_ROOTS,
   windowOrkestratorPortal,
 } from "../source-guards/window-orkestrator-portal";
 
-const ROOT = path.resolve(import.meta.dir, "../..");
 const guard = windowOrkestratorPortal;
 const file = "apps/web/src/components/Thing.tsx";
 
@@ -53,10 +51,10 @@ describe("window-orkestrator-portal (plan item 5004)", () => {
     expect(applies("apps/desktop/electron/preload-api.ts")).toBe(false);
   });
 
-  test("no renderer file reads the portal global, and none is tolerated", () => {
-    const findings = scanRepository(ROOT, [guard]);
-    expect(findings["window-orkestrator-portal"]).toEqual({});
+  // The guard stage (`mise run guards`) holds the repository to this
+  // baseline, so an empty baseline means no renderer file reads the global.
+  test("no renderer file is tolerated reading the portal global", () => {
     const baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"));
     expect(baseline["window-orkestrator-portal"]).toEqual({});
-  }, 30_000);
+  });
 });

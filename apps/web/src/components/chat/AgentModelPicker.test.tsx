@@ -2,7 +2,8 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import * as sortable from "@dnd-kit/sortable";
-import { AgentModelPicker } from "./AgentModelPicker";
+import { AgentModelPicker, FAVORITE_LONG_PRESS_MS } from "./AgentModelPicker";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 
 function setMobileViewport(mobile: boolean) {
@@ -2050,14 +2051,26 @@ describe("AgentModelPicker", () => {
     const over = document.querySelector('[data-favorite-sortable="codex:model-2"]')!;
     setSortableRect(active, 0);
     setSortableRect(over, 100);
-    fireEvent.pointerDown(active, {
-      button: 0,
-      clientX: 16,
-      clientY: 16,
-      isPrimary: true,
-      pointerId: 2,
+    const longPress = installControlledTimeout(FAVORITE_LONG_PRESS_MS, {
+      label: "favorite long-press activation",
     });
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    try {
+      fireEvent.pointerDown(active, {
+        button: 0,
+        clientX: 16,
+        clientY: 16,
+        isPrimary: true,
+        pointerId: 2,
+      });
+      // Hold past the long-press delay: fire the sensor's own activation timer.
+      expect(longPress.pendingCount()).toBe(1);
+      await act(async () => {
+        longPress.advance();
+        await Promise.resolve();
+      });
+    } finally {
+      longPress.restore();
+    }
     fireEvent.pointerMove(over, {
       clientX: 16,
       clientY: 40,

@@ -9,6 +9,7 @@ import {
   ContextMenuTrigger,
 } from "./context-menu";
 import { HoverTooltipContent, useHoverTooltip } from "./hover-tooltip";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 type TooltipSide = "bottom" | "right";
 type TooltipAlign = "center" | "start";
@@ -168,16 +169,22 @@ describe("HoverTooltipContent", () => {
     expect(screen.getByText("Focus tooltip")).toBeTruthy();
   });
 
-  test("cancels a pending tooltip when the cursor leaves before the delay", async () => {
-    render(<ContextMenuButtonWithHoverTooltip openDelay={150} />);
+  test("cancels a pending tooltip when the cursor leaves before the delay", () => {
+    const openTimer = installControlledTimeout(150, { label: "hover tooltip open delay" });
+    try {
+      render(<ContextMenuButtonWithHoverTooltip openDelay={150} />);
 
-    const button = screen.getByRole("button", { name: "Run" });
-    fireEvent.mouseEnter(button);
-    fireEvent.mouseLeave(button);
+      const button = screen.getByRole("button", { name: "Run" });
+      fireEvent.mouseEnter(button);
+      expect(openTimer.pendingCount()).toBe(1);
+      fireEvent.mouseLeave(button);
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    expect(screen.queryByText("Run command") === null).toBe(true);
+      // Leaving cleared the open delay, so its deadline can no longer arrive.
+      expect(openTimer.pendingCount()).toBe(0);
+      expect(screen.queryByText("Run command") === null).toBe(true);
+    } finally {
+      openTimer.restore();
+    }
   });
 
   test("keeps tooltip visible for the close delay before hiding", async () => {

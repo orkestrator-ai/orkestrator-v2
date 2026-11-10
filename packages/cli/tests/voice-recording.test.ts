@@ -654,6 +654,9 @@ describe("voice-qualify script modes", () => {
           "--expect-approval",
           "--record",
           record,
+          // The fake run moves on every read, so polls need no real wait.
+          "--poll-ms",
+          "0",
         ],
         { stdout: "pipe", stderr: "pipe", env: { ...process.env, ORKESTRATOR_MCP_TOKEN: "t" } },
       );

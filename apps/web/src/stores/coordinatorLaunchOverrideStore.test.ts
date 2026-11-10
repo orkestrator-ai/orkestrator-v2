@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
@@ -14,9 +14,20 @@ import { appCommandStore } from "@/test/app-command-store";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
-/** Longer than the resource-change coalescing window plus this store's own. */
-const settled = () =>
-  new Promise((resolve) => setTimeout(resolve, COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS + 150));
+/**
+ * Lets more than the resource-change coalescing window plus this store's own
+ * pass on Bun's fake clock, in 10 ms steps with a real immediate between steps
+ * so the reads each timer starts settle before the next step, as they would in
+ * real time. Every timer due within the window has run when this resolves.
+ */
+const settled = async () => {
+  const windowMs = COORDINATOR_LAUNCH_OVERRIDES_COALESCE_MS + 150;
+  for (let elapsed = 0; elapsed < windowMs; elapsed += 10) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    jest.advanceTimersByTime(10);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+};
 const key = (environmentId: string, tabId: string) => `${environmentId}\u0000${tabId}`;
 
 let answer: Array<Record<string, string>>;
@@ -24,6 +35,7 @@ let reads: number;
 let failWith: Error | null;
 
 beforeEach(() => {
+  jest.useFakeTimers();
   appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
   answer = [];
   reads = 0;
@@ -40,6 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   appCommandStore(coordinatorLaunchOverrideStore).getState().reset();
   invokeMock.mockReset();
+  jest.useRealTimers();
 });
 
 describe("coordinator launch override store", () => {

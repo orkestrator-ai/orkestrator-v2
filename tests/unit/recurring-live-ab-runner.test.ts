@@ -697,6 +697,9 @@ import { EventEmitter } from "node:events";
         invoke: async () => null,
       }),
       processSamples: () => ({}),
+      // Cleanup polls for the launcher's exit without a signal, once a second;
+      // poll every 10 ms here. Sampling sleeps carry the run's signal and stay real.
+      sleep: (ms, signal) => __testing.armRuntime.sleep(signal ? ms : Math.min(ms, 10), signal),
       mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
     };
     process.exitCode = await withTerminationSignals(async (signal) => {
@@ -779,6 +782,11 @@ import { EventEmitter } from "node:events";
           invoke: async () => null,
         }),
         processSamples: () => ({}),
+        // As above, cleanup polls every 10 ms. The stuck CLI's SIGKILL
+        // escalation still runs, after 300 ms rather than a second: long
+        // enough for its SIGTERM handler to record that it ran.
+        sleep: (ms, signal) => __testing.armRuntime.sleep(signal ? ms : Math.min(ms, 10), signal),
+        asyncCliRunner: (profile, configDir, checkout) => __testing.armRuntime.asyncCliRunner(profile, configDir, checkout, 300),
         measureSoak: (gateway, cli, options, rss, signal) => measureSoak(gateway, cli, options, rss, signal, { ...__testing.soakRuntime, sleep: async () => {} }),
         mise: (args) => { record(args[0]); if (args[0] === "dev:stop") setTimeout(() => { record("launcher-exited"); child.emit("exit", 0); }, 30); return { status: 0 }; },
       };

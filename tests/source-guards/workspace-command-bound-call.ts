@@ -164,6 +164,8 @@ export interface WorkspaceCommandBoundCallOptions {
   roots?: readonly string[];
   exempt?: Readonly<Record<string, string>>;
   windowLevelExports?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** The workspace graph, when the caller has already computed it from the same modules. */
+  graph?: ReadonlySet<string>;
 }
 
 export function createWorkspaceCommandBoundCallGuard(
@@ -173,7 +175,7 @@ export function createWorkspaceCommandBoundCallGuard(
     options.readModule ?? repositoryModules(path.resolve(import.meta.dir, "../.."));
   const roots = options.roots ?? WORKSPACE_ROOT_MODULES;
   const exempt = options.exempt ?? WORKSPACE_EXEMPT_MODULES;
-  let graph: Set<string> | null = null;
+  let graph: ReadonlySet<string> | null = options.graph ?? null;
   const inGraph = (file: Pick<ScannedFile, "path">) =>
     (graph ??= workspaceGraph(readModule, roots, exempt)).has(moduleIdOfFile(file.path));
   const resolver = new LibBackendShimResolver(readModule, commandBoundSubject);

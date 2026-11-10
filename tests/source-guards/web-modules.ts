@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { isTypeOnlyImport, unwrap, type AnyNode } from "./ast";
+import type { SourceIndex } from "./repository-index";
 
 /**
  * Renderer module resolution for the production-source guards: which
@@ -37,6 +38,20 @@ export function repositoryModules(root: string): ReadModule {
       const file = `${moduleId}${suffix}`;
       const absolute = path.join(root, file);
       if (existsSync(absolute)) return { file, source: readFileSync(absolute, "utf8") };
+    }
+    return null;
+  };
+}
+
+/** Reads renderer modules through a shared repository index (one read per file). */
+export function indexedModules(index: SourceIndex): ReadModule {
+  const listed = new Set(index.files);
+  return (moduleId) => {
+    if (!moduleId.startsWith(`${WEB_SOURCE_ROOT}/`)) return null;
+    for (const suffix of MODULE_FILE_SUFFIXES) {
+      const file = `${moduleId}${suffix}`;
+      const source = listed.has(file) ? index.read(file) : null;
+      if (source !== null) return { file, source };
     }
     return null;
   };

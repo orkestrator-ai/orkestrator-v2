@@ -12,6 +12,12 @@ export interface ClientIo {
   env: Record<string, string | undefined>;
   cwd: string;
   now(): number;
+  /**
+   * Waits between observation polls (`--wait`). Absent in the executable, which
+   * uses a real timer. A test supplies it together with a matching `now`, so
+   * waits run on a virtual clock (see `observationClock`).
+   */
+  sleep?(ms: number, signal?: AbortSignal): Promise<void>;
   /** Whether stdin is an interactive terminal (prompt input then needs a file). */
   stdinIsTty: boolean;
   /** Credentials may be displayed only when stdout is an interactive terminal. */

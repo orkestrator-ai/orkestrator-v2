@@ -9,8 +9,8 @@ import type { CommandContext } from "@/../../backend/src/core/commands-context";
  * `PrMonitorRuntime` observes a merged PR; `commands-servers` owns the cleanup
  * that follows. The backend passes that scheduler to `BackendRuntime` as
  * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`)
- * rather than the monitor importing it, so the two modules stay acyclic (see
- * `module-import-cycles.test.ts`) and each backend calls its own.
+ * rather than the monitor importing it, so the two modules stay acyclic (lint's
+ * `import/no-cycle`) and each backend calls its own.
  */
 const MERGED = { url: "https://github.com/acme/repo/pull/7", state: "merged" } as const;
 

@@ -168,7 +168,9 @@ describe("Electron backend command registry", () => {
         .replaceAll("/usr/local/bin/orkestrator-git-credential", helper);
     }
 
-    test("answers Git from the token file and keeps the token out of the config", async () => {
+    // One home walks a token through its life: installed, rotated, refused to
+    // other hosts and to a withheld session, then removed.
+    test("answers Git from the token file, only for GitHub over HTTPS, until an empty token removes it", async () => {
       const { env, home, credentialFile } = await helperEnvironment();
       sync(env, credentialFile, "first-token");
 
@@ -184,17 +186,14 @@ describe("Electron backend command registry", () => {
         { env, encoding: "utf8" },
       );
       expect(rewrite.stdout.trim()).toBe("git@github.com:");
-    });
 
-    test("never hands the token to another host or over plain HTTP", async () => {
-      const { env, credentialFile } = await helperEnvironment();
-      sync(env, credentialFile, "secret-token");
+      // Never to another host or over plain HTTP.
       for (const url of [
         "https://example.com/owner/repo.git",
         "https://github.com.example.com/owner/repo.git",
         "http://github.com/owner/repo.git",
       ]) {
-        expect(fill(env, url)).not.toContain("secret-token");
+        expect(fill(env, url)).not.toContain("second-token");
       }
       // Not through the helper directly either, whatever the config scoping.
       const direct = spawnSync(helper, ["get"], {
@@ -209,13 +208,15 @@ describe("Electron backend command registry", () => {
         encoding: "utf8",
       });
       expect(store.stdout).toBe("");
-    });
 
-    test("an empty token removes the helper and the SSH rewrite", async () => {
-      const { env, home, credentialFile } = await helperEnvironment();
-      sync(env, credentialFile, "secret-token");
+      // A session whose GitHub credential is withheld gets nothing from it.
+      const withheld = withheldGitHubCredentialEnvironment(env, { ghConfigDir: "/nonexistent" });
+      expect(
+        fill(withheld as NodeJS.ProcessEnv, "https://github.com/owner/repo.git"),
+      ).not.toContain("second-token");
+
+      // An empty token removes the helper and the SSH rewrite.
       sync(env, credentialFile, "");
-
       const config = await fs.readFile(path.join(home, ".gitconfig"), "utf8");
       expect(config).not.toContain(helper);
       expect(config).not.toContain("git@github.com:");
@@ -266,7 +267,8 @@ describe("Electron backend command registry", () => {
       }
     });
 
-    test("removes a token-bearing rewrite an older image or backend left behind", async () => {
+    // A home carrying both kinds of leftover at once: each must be replaced.
+    test("replaces a token-bearing rewrite an older image left and a GitHub helper copied from a host config", async () => {
       const { env, home, credentialFile } = await helperEnvironment();
       const legacy = spawnSync(
         "bash",
@@ -275,9 +277,19 @@ describe("Electron backend command registry", () => {
       );
       expect(legacy.status).toBe(0);
       expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).toContain("old-token");
-
+      // What `gh auth setup-git` writes on a Mac; the path does not exist here.
+      await fs.appendFile(
+        path.join(home, ".gitconfig"),
+        '[credential "https://github.com"]\n\thelper =\n\thelper = !/opt/homebrew/bin/gh auth git-credential\n',
+      );
       sync(env, credentialFile, "new-token");
-      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("old-token");
+
+      const config = await fs.readFile(path.join(home, ".gitconfig"), "utf8");
+      expect(config).not.toContain("old-token");
+      expect(config).not.toContain("homebrew");
+      const filled = fillResult(env, "https://github.com/owner/repo.git");
+      expect(filled.stdout).toContain("password=new-token");
+      expect(filled.stderr).not.toContain("homebrew");
     });
 
     test("keeps working after setup clears credential.helper, on either order", async () => {
@@ -300,30 +312,6 @@ describe("Electron backend command registry", () => {
 
       sync(env, credentialFile, "secret-token");
       expect(fill(env, "https://github.com/owner/repo.git")).toContain("password=secret-token");
-    });
-
-    test("replaces a GitHub helper copied from a host config", async () => {
-      const { env, home, credentialFile } = await helperEnvironment();
-      // What `gh auth setup-git` writes on a Mac; the path does not exist here.
-      await fs.writeFile(
-        path.join(home, ".gitconfig"),
-        '[credential "https://github.com"]\n\thelper =\n\thelper = !/opt/homebrew/bin/gh auth git-credential\n',
-      );
-      sync(env, credentialFile, "secret-token");
-
-      const filled = fillResult(env, "https://github.com/owner/repo.git");
-      expect(filled.stdout).toContain("password=secret-token");
-      expect(filled.stderr).not.toContain("homebrew");
-      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("homebrew");
-    });
-
-    test("a session whose GitHub credential is withheld gets nothing from it", async () => {
-      const { env, credentialFile } = await helperEnvironment();
-      sync(env, credentialFile, "secret-token");
-      const withheld = withheldGitHubCredentialEnvironment(env, { ghConfigDir: "/nonexistent" });
-      expect(
-        fill(withheld as NodeJS.ProcessEnv, "https://github.com/owner/repo.git"),
-      ).not.toContain("secret-token");
     });
 
     test("takes a token out of an origin left by an earlier clone", async () => {

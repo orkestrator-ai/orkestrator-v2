@@ -33,6 +33,13 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+/** Whether the default tier's ignore patterns leave `file` out of the package's run. */
+function ignoredByDefault(root: string, packageDirectory: string, file: string): boolean {
+  return tierArguments("default", root, packageDirectory, ["."])!
+    .filter((argument) => argument.startsWith("--path-ignore-patterns="))
+    .some((argument) => new Bun.Glob(argument.slice("--path-ignore-patterns=".length)).match(file));
+}
+
 describe("test tier selection", () => {
   test("defaults only an absent or empty tier and rejects invalid values", () => {
     expect(testTier({})).toBe("default");
@@ -51,10 +58,48 @@ describe("test tier selection", () => {
       ["packages/protocol", "src/node/command-capture-reap.integration.test.ts"],
     ]) {
       expect(tierArguments("slow", repositoryRoot, pkg!, ["."])).toContain(`./${file}`);
-      expect(tierArguments("default", repositoryRoot, pkg!, ["."])).toContain(
-        `--path-ignore-patterns=${file}`,
-      );
+      expect(ignoredByDefault(repositoryRoot, pkg!, file!)).toBe(true);
     }
+  });
+
+  test("live and integration names are slow in the root group and the protocol package", () => {
+    const { root } = fixture({
+      "tests/unit/a.integration.test.ts": "",
+      "tests/unit/b-live.test.ts": "",
+      "tests/unit/c.live.test.ts": "",
+      // A unit test of a `scripts/*-live.ts` benchmark is not itself live.
+      "tests/unit/d-live-script.test.ts": "",
+      "tests/unit/kept.test.ts": "",
+      "e2e/agent-testing/listed.integration.test.ts": "",
+      "e2e/agent-testing/unlisted.integration.test.ts": "",
+      "packages/protocol/src/node/e.integration.test.ts": "",
+      "packages/protocol/src/node/kept.test.ts": "",
+    });
+    const rootPaths = ["./tests", "./e2e/agent-testing/listed.integration.test.ts"];
+    // Slow selection keeps only files under the root group's discovery roots,
+    // though the scan finds live names across the repository.
+    expect(tierArguments("slow", root, ".", rootPaths)).toEqual([
+      "./e2e/agent-testing/listed.integration.test.ts",
+      "./tests/unit/a.integration.test.ts",
+      "./tests/unit/b-live.test.ts",
+      "./tests/unit/c.live.test.ts",
+    ]);
+    for (const file of [
+      "tests/unit/a.integration.test.ts",
+      "tests/unit/b-live.test.ts",
+      "tests/unit/c.live.test.ts",
+      "e2e/agent-testing/listed.integration.test.ts",
+    ])
+      expect(ignoredByDefault(root, ".", file)).toBe(true);
+    for (const file of ["tests/unit/d-live-script.test.ts", "tests/unit/kept.test.ts"])
+      expect(ignoredByDefault(root, ".", file)).toBe(false);
+    expect(tierArguments("slow", root, "packages/protocol", ["src"])).toEqual([
+      "./src/node/e.integration.test.ts",
+    ]);
+    expect(ignoredByDefault(root, "packages/protocol", "src/node/e.integration.test.ts")).toBe(
+      true,
+    );
+    expect(ignoredByDefault(root, "packages/protocol", "src/node/kept.test.ts")).toBe(false);
   });
 
   test("the DOM scan runs by default while diagnostic subprocess canaries stay slow", () => {

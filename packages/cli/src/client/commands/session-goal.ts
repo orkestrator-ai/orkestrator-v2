@@ -20,7 +20,7 @@ import type {
   OptionSpec,
   ParsedCommand,
 } from "../spec.js";
-import { observe, ObservationStopped, signalName } from "../wait.js";
+import { observe, ObservationStopped, signalName, observationClock } from "../wait.js";
 import {
   DEFAULT_WAIT_MS,
   receiptFailure,
@@ -199,7 +199,7 @@ async function waitForGoal(
           details: goalDetails(sessionId, verdict.goal),
         });
       },
-      { timeoutMs, signal: context.signal },
+      { timeoutMs, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     if (!(error instanceof ObservationStopped)) throw error;

@@ -425,8 +425,16 @@ function cliRunner(profile: string, configDir: string, checkout?: string) {
 type CliResult = { status: number | null; stdout: string };
 type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
 
-/** Wait for the CLI to exit before profile cleanup, escalating a stuck cancellation. */
-function asyncCliRunner(profile: string, configDir: string, checkout?: string): AsyncCli {
+/**
+ * Wait for the CLI to exit before profile cleanup, escalating a stuck
+ * cancellation to SIGKILL after `killGraceMs` (shortened only by tests).
+ */
+function asyncCliRunner(
+  profile: string,
+  configDir: string,
+  checkout?: string,
+  killGraceMs = 1_000,
+): AsyncCli {
   return (args, signal) => {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
@@ -445,7 +453,7 @@ function asyncCliRunner(profile: string, configDir: string, checkout?: string): 
       const stop = (error: Error) => {
         failure ??= error;
         child.kill("SIGTERM");
-        killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1_000);
+        killTimer ??= setTimeout(() => child.kill("SIGKILL"), killGraceMs);
       };
       const abort = () => stop(new Error("Soak CLI interrupted", { cause: signal?.reason }));
       const timeout = setTimeout(() => stop(new Error("Soak CLI timed out")), 10 * 60_000);

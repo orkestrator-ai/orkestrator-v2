@@ -136,9 +136,9 @@ function stopNotices(
     ...(options.now ? { now: options.now } : {}),
   });
   target.coordinator.noticeRouter.setUsageLimitStops(notices);
+  // Waits for the coalescing timers (1 ms) and the flushes they start, not a fixed sleep.
   const settle = async () => {
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    await notices.settled();
+    await notices.settled(15);
     await target.deliver();
   };
   return { notices, moves, settle };

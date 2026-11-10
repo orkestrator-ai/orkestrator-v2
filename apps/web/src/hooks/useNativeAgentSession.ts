@@ -30,7 +30,6 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import {
-  applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
   DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
   isNativeAgentSessionProjection,
@@ -44,11 +43,10 @@ import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-erro
 import {
   disableNativeLiveUpdate,
   invalidateNativeAgentSyncCapability,
-  nativeAgentProgressiveSupported,
-  nativeAgentSyncSupported,
   nativeLiveUpdateSupported,
   nativeObservationEventsSupported,
   nativeTranscriptPatchesSupported,
+  requireNativeAgentProgressiveSync,
 } from "@/lib/native-agent-sync-capabilities";
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
@@ -85,8 +83,6 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { readCoordinatorFor } from "@/lib/read-coordinator";
 import type { StoreApi } from "zustand/vanilla";
 
-/** Mirrors the backend's default window; only used to size the first expansion. */
-const DEFAULT_MESSAGE_WINDOW = 512;
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
 import { preferCompleteLiveHead } from "./native-agent-live-head";
@@ -170,7 +166,8 @@ function withRevisedMessages<TMessage>(
  *
  * `revision` is one ordering within a generation, but the surfaces that mint it
  * do not share a counter: the progressive transport increments locally on every
- * applied view, while the joined and legacy projections carry the backend's own
+ * applied view, while joined projections and the full projections mutations
+ * answer with carry the backend's own
  * counter, which only moves when content changes. A tab that has polled for a
  * minute has therefore outrun the server's number, and `applyProjection` would
  * drop the next authoritative projection as stale.
@@ -188,7 +185,8 @@ function orderedRevision<TMessage>(
 }
 
 /**
- * Whether a click can still widen this window on the legacy projection path.
+ * Whether a click can still widen the window of a full projection (the one a
+ * mutation answers with).
  *
  * Predating backends omit `canLoadEarlier`. A count (or reasonless) window
  * still responds to a larger `limit`; whole-message byte drops and part
@@ -732,7 +730,6 @@ export function useNativeAgentSession<TMessage = unknown>({
    * default; `loadEarlierMessages` raises it, and the raised value is resent on
    * every subsequent read so the window cannot silently collapse.
    */
-  const [messageLimit, setMessageLimit] = useState<number | undefined>(undefined);
   /** Moves whenever held history is owed a re-read; see `reconcileHeldHistory`. */
   const [heldHistoryReconcileSignal, setHeldHistoryReconcileSignal] = useState(0);
   // Seed the imperative view from the shared renderer cache. Environment
@@ -1288,12 +1285,29 @@ export function useNativeAgentSession<TMessage = unknown>({
     [sessionKey, projectionStore],
   );
 
+  /**
+   * The provider session `connect` created because the tab's own was gone
+   * (adoption answered "missing"). Its views belong to this tab although the
+   * tab still names the missing session; installing the first one moves the
+   * tab onto it (`applyProjection`), after which the tab names it itself.
+   */
+  const replacedProviderSessionRef = useRef<{ requested: string; replacement: string } | null>(
+    null,
+  );
   const identityBelongsToView = useCallback(
-    (candidate: NativeAgentViewIdentity): boolean =>
-      candidate.environmentId === environmentId &&
-      candidate.platform === platform &&
-      candidate.logicalSessionKey === sessionKey &&
-      (!initialProviderSessionId || candidate.providerSessionId === initialProviderSessionId),
+    (candidate: NativeAgentViewIdentity): boolean => {
+      const replaced = replacedProviderSessionRef.current;
+      const expected =
+        replaced && replaced.requested === initialProviderSessionId
+          ? replaced.replacement
+          : initialProviderSessionId;
+      return (
+        candidate.environmentId === environmentId &&
+        candidate.platform === platform &&
+        candidate.logicalSessionKey === sessionKey &&
+        (!expected || candidate.providerSessionId === expected)
+      );
+    },
     [environmentId, initialProviderSessionId, platform, sessionKey],
   );
 
@@ -1606,7 +1620,10 @@ export function useNativeAgentSession<TMessage = unknown>({
       const live: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
-        sessionId: value.identity.providerSessionId,
+        // An empty provider id is a session the first prompt has not created yet.
+        ...(value.identity.providerSessionId
+          ? { sessionId: value.identity.providerSessionId }
+          : {}),
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         connection: hasAuthoritativeState ? current.connection : "connecting",
         turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
@@ -1784,7 +1801,10 @@ export function useNativeAgentSession<TMessage = unknown>({
       const next: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
-        sessionId: value.identity.providerSessionId,
+        // An empty provider id is a session the first prompt has not created yet.
+        ...(value.identity.providerSessionId
+          ? { sessionId: value.identity.providerSessionId }
+          : {}),
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         ...(value.shareUrl === undefined ? {} : { shareUrl: value.shareUrl }),
         connection: value.connection,
@@ -2054,256 +2074,244 @@ export function useNativeAgentSession<TMessage = unknown>({
         setTranscriptRefreshing(true);
       }
       try {
-        if (await nativeAgentProgressiveSupported(scope)) {
-          setTranscriptError(null);
-          const retainedStateAvailability = beginSessionStateRefresh({ quiet });
-          setSessionStateError(null);
-          updateProgressiveCache({
-            ...(background ? {} : { transcriptRefreshing: true }),
-            transcriptError: undefined,
-            stateAvailability: retainedStateAvailability,
-            stateError: undefined,
-          });
+        // The only read path: a backend without it is reported, never read
+        // through a full projection (`NativeAgentSyncUnsupportedError`).
+        await requireNativeAgentProgressiveSync(scope);
+        setTranscriptError(null);
+        const retainedStateAvailability = beginSessionStateRefresh({ quiet });
+        setSessionStateError(null);
+        updateProgressiveCache({
+          ...(background ? {} : { transcriptRefreshing: true }),
+          transcriptError: undefined,
+          stateAvailability: retainedStateAvailability,
+          stateError: undefined,
+        });
 
-          const stillCurrent = () =>
-            sequence === refreshSequenceRef.current &&
-            operationEpoch === projectionOperationEpochRef.current;
-          let transcriptMissing = false;
-          let stateMissing = false;
-          const requestTranscript = (forceSnapshot: boolean) => {
-            const input = {
-              ...identity,
-              viewVersion: 1 as const,
-              liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-              ...(nativeTranscriptPatchesSupported(scope)
-                ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+        const stillCurrent = () =>
+          sequence === refreshSequenceRef.current &&
+          operationEpoch === projectionOperationEpochRef.current;
+        let transcriptMissing = false;
+        let stateMissing = false;
+        const requestTranscript = (forceSnapshot: boolean) => {
+          const input = {
+            ...identity,
+            viewVersion: 1 as const,
+            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+            ...(nativeTranscriptPatchesSupported(scope)
+              ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+              : {}),
+            ...(forceSnapshot
+              ? { forceSnapshot: true }
+              : progressiveTranscriptTokenRef.current
+                ? { knownToken: progressiveTranscriptTokenRef.current }
                 : {}),
-              ...(forceSnapshot
-                ? { forceSnapshot: true }
-                : progressiveTranscriptTokenRef.current
-                  ? { knownToken: progressiveTranscriptTokenRef.current }
-                  : {}),
-              ...(options?.manual === true ? { forceSnapshot: true } : {}),
-            };
-            return send("transcript", input, () =>
-              backendForScope(scope).getNativeAgentTranscriptUpdate<TMessage>(input),
-            );
+            ...(options?.manual === true ? { forceSnapshot: true } : {}),
           };
-          /*
-           * A background round over tokens this view already holds asks for both
-           * in one request. Everything else (a first read, a manual read, a
-           * recovery after a part was lost) reads them apart, so a cold transcript
-           * never holds session state back. A part the backend could not answer
-           * in time comes back `pending` and is read on its own below, as is
-           * everything if this backend turns out not to have the command.
-           */
-          const liveTranscriptToken = progressiveTranscriptTokenRef.current;
-          const liveStateToken = progressiveStateTokenRef.current;
-          const liveUpdate =
-            background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported(scope)
-              ? readLiveUpdate<TMessage>(scope, send, {
-                  ...identity,
-                  viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
-                  liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-                  transcriptToken: liveTranscriptToken,
-                  stateToken: liveStateToken,
-                  ...(nativeTranscriptPatchesSupported(scope)
-                    ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
-                    : {}),
-                })
-              : null;
-          const applyTranscriptUpdate = (
-            update: NativeAgentTranscriptUpdate<TMessage>,
-            requestedWithToken: boolean,
-          ): "applied" | "retry-snapshot" | "missing" | "failed" => {
-            if (update.status === "snapshot") {
-              applyProgressiveTranscript(
-                update.value as NativeAgentTranscriptView<TMessage>,
-                update.token,
-              );
-              return "applied";
-            }
-            if (update.status === "delta") {
-              const current = lastTranscriptViewRef.current;
-              if (
-                current &&
-                progressiveTranscriptTokenRef.current === update.baseToken &&
-                sameProgressiveIdentity(current.identity, update.identity)
-              ) {
-                const merged = applyNativeAgentTranscriptDelta(current, update.delta);
-                if (merged) {
-                  applyProgressiveTranscript(merged, update.token, {
-                    deletedMessageIds: update.delta.deletedMessageIds,
-                    deliveredIds: new Set(
-                      [
-                        ...update.delta.messageUpserts.map(
-                          (message) => (message as { id?: unknown })?.id,
-                        ),
-                        ...(update.delta.messagePatches ?? []).map((patch) => patch.id),
-                      ].filter((id): id is string => typeof id === "string"),
-                    ),
-                  });
-                  return "applied";
-                }
-              }
-              progressiveTranscriptTokenRef.current = undefined;
-              lastTranscriptViewRef.current = null;
-              markTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
-              return "retry-snapshot";
-            }
-            if (update.status === "unchanged") {
-              const previousAvailability = transcriptAvailabilityRef.current;
-              const hasLocalView = lastTranscriptViewRef.current != null;
-              const hasBody = hasUsableTranscriptBody(projectionRef.current, previousAvailability);
-              if (!hasLocalView && !hasBody) {
-                progressiveTranscriptTokenRef.current = undefined;
-                lastTranscriptViewRef.current = null;
-                // A tokened `unchanged` cannot rehydrate a body we no longer
-                // hold. Ask once for a snapshot. An untokened `unchanged` is
-                // just "nothing new" and must not start a retry loop.
-                if (requestedWithToken) return "retry-snapshot";
-                const availability = previousAvailability === "empty" ? "empty" : "unavailable";
-                markTranscriptAvailability(availability);
-                setTranscriptRefreshing(false);
-                setTranscriptError(null);
-                updateProgressiveCache({
-                  transcriptToken: undefined,
-                  transcriptAvailability: availability,
-                  transcriptRefreshing: false,
-                  transcriptError: undefined,
+          return send("transcript", input, () =>
+            backendForScope(scope).getNativeAgentTranscriptUpdate<TMessage>(input),
+          );
+        };
+        /*
+         * A background round over tokens this view already holds asks for both
+         * in one request. Everything else (a first read, a manual read, a
+         * recovery after a part was lost) reads them apart, so a cold transcript
+         * never holds session state back. A part the backend could not answer
+         * in time comes back `pending` and is read on its own below, as is
+         * everything if this backend turns out not to have the command.
+         */
+        const liveTranscriptToken = progressiveTranscriptTokenRef.current;
+        const liveStateToken = progressiveStateTokenRef.current;
+        const liveUpdate =
+          background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported(scope)
+            ? readLiveUpdate<TMessage>(scope, send, {
+                ...identity,
+                viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+                liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+                transcriptToken: liveTranscriptToken,
+                stateToken: liveStateToken,
+                ...(nativeTranscriptPatchesSupported(scope)
+                  ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+                  : {}),
+              })
+            : null;
+        const applyTranscriptUpdate = (
+          update: NativeAgentTranscriptUpdate<TMessage>,
+          requestedWithToken: boolean,
+        ): "applied" | "retry-snapshot" | "missing" | "failed" => {
+          if (update.status === "snapshot") {
+            applyProgressiveTranscript(
+              update.value as NativeAgentTranscriptView<TMessage>,
+              update.token,
+            );
+            return "applied";
+          }
+          if (update.status === "delta") {
+            const current = lastTranscriptViewRef.current;
+            if (
+              current &&
+              progressiveTranscriptTokenRef.current === update.baseToken &&
+              sameProgressiveIdentity(current.identity, update.identity)
+            ) {
+              const merged = applyNativeAgentTranscriptDelta(current, update.delta);
+              if (merged) {
+                applyProgressiveTranscript(merged, update.token, {
+                  deletedMessageIds: update.delta.deletedMessageIds,
+                  deliveredIds: new Set(
+                    [
+                      ...update.delta.messageUpserts.map(
+                        (message) => (message as { id?: unknown })?.id,
+                      ),
+                      ...(update.delta.messagePatches ?? []).map((patch) => patch.id),
+                    ].filter((id): id is string => typeof id === "string"),
+                  ),
                 });
                 return "applied";
               }
-              progressiveTranscriptTokenRef.current = update.token;
-              const availability = previousAvailability === "empty" ? "empty" : "current";
+            }
+            progressiveTranscriptTokenRef.current = undefined;
+            lastTranscriptViewRef.current = null;
+            markTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+            return "retry-snapshot";
+          }
+          if (update.status === "unchanged") {
+            const previousAvailability = transcriptAvailabilityRef.current;
+            const hasLocalView = lastTranscriptViewRef.current != null;
+            const hasBody = hasUsableTranscriptBody(projectionRef.current, previousAvailability);
+            if (!hasLocalView && !hasBody) {
+              progressiveTranscriptTokenRef.current = undefined;
+              lastTranscriptViewRef.current = null;
+              // A tokened `unchanged` cannot rehydrate a body we no longer
+              // hold. Ask once for a snapshot. An untokened `unchanged` is
+              // just "nothing new" and must not start a retry loop.
+              if (requestedWithToken) return "retry-snapshot";
+              const availability = previousAvailability === "empty" ? "empty" : "unavailable";
               markTranscriptAvailability(availability);
               setTranscriptRefreshing(false);
               setTranscriptError(null);
               updateProgressiveCache({
-                identity: update.identity,
-                transcriptToken: update.token,
+                transcriptToken: undefined,
                 transcriptAvailability: availability,
                 transcriptRefreshing: false,
                 transcriptError: undefined,
               });
               return "applied";
             }
-            if (update.status === "missing") {
-              transcriptMissing = true;
-              setTranscriptRefreshing(false);
-              return "missing";
+            progressiveTranscriptTokenRef.current = update.token;
+            const availability = previousAvailability === "empty" ? "empty" : "current";
+            markTranscriptAvailability(availability);
+            setTranscriptRefreshing(false);
+            setTranscriptError(null);
+            updateProgressiveCache({
+              identity: update.identity,
+              transcriptToken: update.token,
+              transcriptAvailability: availability,
+              transcriptRefreshing: false,
+              transcriptError: undefined,
+            });
+            return "applied";
+          }
+          if (update.status === "missing") {
+            transcriptMissing = true;
+            setTranscriptRefreshing(false);
+            return "missing";
+          }
+          const message = update.error ?? "Transcript is temporarily unavailable";
+          setTranscriptRefreshing(false);
+          setTranscriptError(message);
+          updateProgressiveCache({
+            transcriptRefreshing: false,
+            transcriptError: message,
+          });
+          return "failed";
+        };
+        const firstTranscript = liveUpdate
+          ? liveUpdate.then(({ transcript }) =>
+              transcript.status === "pending" ? requestTranscript(false) : transcript,
+            )
+          : requestTranscript(false);
+        const transcriptRead = firstTranscript
+          .then(async (update) => {
+            if (!stillCurrent()) return;
+            let result = applyTranscriptUpdate(
+              update,
+              progressiveTranscriptTokenRef.current !== undefined && update.status !== "snapshot",
+            );
+            if (result === "retry-snapshot") {
+              // A delta that no longer applies (a trimmed long turn, a moved
+              // base) is routine mid-turn. The held messages stay on screen
+              // until the snapshot replaces them, so a background read must
+              // not flash the skeleton under them on every fallback.
+              if (!background) {
+                setTranscriptRefreshing(true);
+                updateProgressiveCache({ transcriptRefreshing: true });
+              }
+              const snapshot = await requestTranscript(true);
+              if (!stillCurrent()) return;
+              result = applyTranscriptUpdate(snapshot, false);
+              if (result === "retry-snapshot") {
+                setTranscriptRefreshing(false);
+                const availability = projectionRef.current ? "cached" : "unavailable";
+                markTranscriptAvailability(availability);
+                updateProgressiveCache({
+                  transcriptToken: undefined,
+                  transcriptAvailability: availability,
+                  transcriptRefreshing: false,
+                });
+              }
             }
-            const message = update.error ?? "Transcript is temporarily unavailable";
+          })
+          .catch((error) => {
+            if (!stillCurrent()) return;
+            const message = error instanceof Error ? error.message : String(error);
             setTranscriptRefreshing(false);
             setTranscriptError(message);
-            updateProgressiveCache({
-              transcriptRefreshing: false,
-              transcriptError: message,
-            });
-            return "failed";
-          };
-          const firstTranscript = liveUpdate
-            ? liveUpdate.then(({ transcript }) =>
-                transcript.status === "pending" ? requestTranscript(false) : transcript,
-              )
-            : requestTranscript(false);
-          const transcriptRead = firstTranscript
-            .then(async (update) => {
-              if (!stillCurrent()) return;
-              let result = applyTranscriptUpdate(
-                update,
-                progressiveTranscriptTokenRef.current !== undefined && update.status !== "snapshot",
-              );
-              if (result === "retry-snapshot") {
-                // A delta that no longer applies (a trimmed long turn, a moved
-                // base) is routine mid-turn. The held messages stay on screen
-                // until the snapshot replaces them, so a background read must
-                // not flash the skeleton under them on every fallback.
-                if (!background) {
-                  setTranscriptRefreshing(true);
-                  updateProgressiveCache({ transcriptRefreshing: true });
-                }
-                const snapshot = await requestTranscript(true);
-                if (!stillCurrent()) return;
-                result = applyTranscriptUpdate(snapshot, false);
-                if (result === "retry-snapshot") {
-                  setTranscriptRefreshing(false);
-                  const availability = projectionRef.current ? "cached" : "unavailable";
-                  markTranscriptAvailability(availability);
-                  updateProgressiveCache({
-                    transcriptToken: undefined,
-                    transcriptAvailability: availability,
-                    transcriptRefreshing: false,
-                  });
-                }
-              }
-            })
-            .catch((error) => {
-              if (!stillCurrent()) return;
-              const message = error instanceof Error ? error.message : String(error);
-              setTranscriptRefreshing(false);
-              setTranscriptError(message);
-              updateProgressiveCache({ transcriptRefreshing: false, transcriptError: message });
-            });
+            updateProgressiveCache({ transcriptRefreshing: false, transcriptError: message });
+          });
 
-          const stateInput = {
-            ...identity,
-            viewVersion: 1 as const,
-            ...(progressiveStateTokenRef.current
-              ? { knownToken: progressiveStateTokenRef.current }
-              : {}),
-            ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          };
-          const requestState = () =>
-            send("session-state", stateInput, () =>
-              backendForScope(scope).getNativeAgentSessionStateUpdate(stateInput),
-            );
-          const firstState = liveUpdate
-            ? liveUpdate.then(({ state }) => (state.status === "pending" ? requestState() : state))
-            : requestState();
-          const stateRead = firstState
-            .then((update) => {
-              if (!stillCurrent()) return;
-              if (update.status === "snapshot") {
-                applyProgressiveState(update.value, update.token);
-              } else if (update.status === "unchanged") {
-                progressiveStateTokenRef.current = update.token;
-                markSessionStateAvailability("current");
-                setSessionStateError(null);
-                updateProgressiveCache({
-                  identity: update.identity,
-                  stateToken: update.token,
-                  stateAvailability: "current",
-                  stateError: undefined,
-                });
-              } else if (update.status === "missing") {
-                stateMissing = true;
-                // A quiet read no longer holds authority. Keep the connection
-                // pending until the independent transcript read also settles.
-                if (quiet) setIsRefreshing(true);
-                progressiveStateTokenRef.current = undefined;
-                markSessionStateAvailability("unavailable");
-                updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });
-              } else {
-                const message = update.error ?? "Session state is temporarily unavailable";
-                if (quiet) setIsRefreshing(true);
-                // Transcript reads may discard action-critical fields while
-                // state is unavailable. Recovery must reinstall those fields,
-                // not accept an `unchanged` reply against the old token.
-                progressiveStateTokenRef.current = undefined;
-                markSessionStateAvailability("unavailable");
-                setSessionStateError(message);
-                updateProgressiveCache({
-                  stateToken: undefined,
-                  stateAvailability: "unavailable",
-                  stateError: message,
-                });
-              }
-            })
-            .catch((error) => {
-              if (!stillCurrent()) return;
-              const message = error instanceof Error ? error.message : String(error);
+        const stateInput = {
+          ...identity,
+          viewVersion: 1 as const,
+          ...(progressiveStateTokenRef.current
+            ? { knownToken: progressiveStateTokenRef.current }
+            : {}),
+          ...(options?.manual === true ? { forceSnapshot: true } : {}),
+        };
+        const requestState = () =>
+          send("session-state", stateInput, () =>
+            backendForScope(scope).getNativeAgentSessionStateUpdate(stateInput),
+          );
+        const firstState = liveUpdate
+          ? liveUpdate.then(({ state }) => (state.status === "pending" ? requestState() : state))
+          : requestState();
+        const stateRead = firstState
+          .then((update) => {
+            if (!stillCurrent()) return;
+            if (update.status === "snapshot") {
+              applyProgressiveState(update.value, update.token);
+            } else if (update.status === "unchanged") {
+              progressiveStateTokenRef.current = update.token;
+              markSessionStateAvailability("current");
+              setSessionStateError(null);
+              updateProgressiveCache({
+                identity: update.identity,
+                stateToken: update.token,
+                stateAvailability: "current",
+                stateError: undefined,
+              });
+            } else if (update.status === "missing") {
+              stateMissing = true;
+              // A quiet read no longer holds authority. Keep the connection
+              // pending until the independent transcript read also settles.
               if (quiet) setIsRefreshing(true);
+              progressiveStateTokenRef.current = undefined;
+              markSessionStateAvailability("unavailable");
+              updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });
+            } else {
+              const message = update.error ?? "Session state is temporarily unavailable";
+              if (quiet) setIsRefreshing(true);
+              // Transcript reads may discard action-critical fields while
+              // state is unavailable. Recovery must reinstall those fields,
+              // not accept an `unchanged` reply against the old token.
               progressiveStateTokenRef.current = undefined;
               markSessionStateAvailability("unavailable");
               setSessionStateError(message);
@@ -2312,190 +2320,89 @@ export function useNativeAgentSession<TMessage = unknown>({
                 stateAvailability: "unavailable",
                 stateError: message,
               });
-            });
-
-          const turnPhase = projectionRef.current?.turn.phase;
-          let readDiscovery = true;
-          if (background) readDiscovery = discoverySchedule.claim(Date.now(), turnPhase);
-          else discoverySchedule.claimExplicit(Date.now(), turnPhase);
-          if (readDiscovery) {
-            const discoveryInput = {
-              ...identity,
-              viewVersion: 1 as const,
-              sections: [
-                "models",
-                "commands",
-                "mcp",
-                "runtime",
-              ] satisfies NativeAgentDiscoverySection[],
-              ...(progressiveDiscoveryTokenRef.current
-                ? { knownToken: progressiveDiscoveryTokenRef.current }
-                : {}),
-              ...(options?.manual === true ? { forceSnapshot: true } : {}),
-            };
-            void send("discovery", discoveryInput, () =>
-              backendForScope(scope).getNativeAgentDiscoveryUpdate(discoveryInput),
-            )
-              .then((update) => {
-                // Nothing else re-reads a discarded or failed answer soon.
-                if (!stillCurrent()) {
-                  discoverySchedule.markDue();
-                  return;
-                }
-                if (update.status === "snapshot") {
-                  applyProgressiveDiscovery(update.value, update.token);
-                  if (progressiveDiscoveryRef.current !== update.value) {
-                    discoverySchedule.markDue();
-                  }
-                } else if (update.status === "unchanged") {
-                  progressiveDiscoveryTokenRef.current = update.token;
-                } else {
-                  discoverySchedule.markDue();
-                }
-                discoverySchedule.observe(progressiveDiscoveryRef.current);
-              })
-              .catch(() => discoverySchedule.markDue());
-          }
-
-          await Promise.allSettled([transcriptRead, stateRead]);
-          // A superseding refresh owns the flag from here on; clearing it would
-          // report that tab as settled while its newer read is still running.
-          if (stillCurrent()) setSessionStateRefreshing(false);
-          if (
-            stillCurrent() &&
-            transcriptMissing &&
-            stateMissing &&
-            establishingSessionRef.current === 0
-          ) {
-            applyProjection(null);
-            markTranscriptAvailability("unavailable");
-            setTranscriptRefreshing(false);
+            }
+          })
+          .catch((error) => {
+            if (!stillCurrent()) return;
+            const message = error instanceof Error ? error.message : String(error);
+            if (quiet) setIsRefreshing(true);
+            progressiveStateTokenRef.current = undefined;
+            markSessionStateAvailability("unavailable");
+            setSessionStateError(message);
             updateProgressiveCache({
-              transcriptAvailability: "unavailable",
-              transcriptRefreshing: false,
+              stateToken: undefined,
               stateAvailability: "unavailable",
+              stateError: message,
             });
-          }
-          if (stillCurrent()) {
-            if (projectionRef.current) establishmentFailureRef.current = false;
-            if (projectionRef.current || !establishmentFailureRef.current) setRuntimeError(null);
-          }
-          return projectionRef.current;
-        }
+          });
 
-        let next: NativeAgentSessionProjection<TMessage> | null;
-        /*
-         * Every sync side effect is deferred behind the fence below.
-         *
-         * A poll can outlive the stop, resume, control update or session
-         * replacement that started after it, and the guard further down
-         * recognises exactly that case. Materializing on the way to the answer
-         * defeated it: the refs, the renderer cache and the shared store had
-         * already been rewritten from the stale read by the time the sequence
-         * comparison rejected it.
-         */
-        let commit: (() => void) | null = null;
-        if (await nativeAgentSyncSupported(scope)) {
-          const projectionInput = {
+        const turnPhase = projectionRef.current?.turn.phase;
+        let readDiscovery = true;
+        if (background) readDiscovery = discoverySchedule.claim(Date.now(), turnPhase);
+        else discoverySchedule.claimExplicit(Date.now(), turnPhase);
+        if (readDiscovery) {
+          const discoveryInput = {
             ...identity,
-            syncVersion: 1 as const,
-            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-            ...(syncTokenRef.current ? { knownToken: syncTokenRef.current } : {}),
+            viewVersion: 1 as const,
+            sections: [
+              "models",
+              "commands",
+              "mcp",
+              "runtime",
+            ] satisfies NativeAgentDiscoverySection[],
+            ...(progressiveDiscoveryTokenRef.current
+              ? { knownToken: progressiveDiscoveryTokenRef.current }
+              : {}),
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
           };
-          let update = await send("projection", projectionInput, () =>
-            backendForScope(scope).getNativeAgentProjectionUpdate<TMessage>(projectionInput),
-          );
-          if (update.status === "unchanged") {
-            next = projectionRef.current;
-          } else if (update.status === "missing") {
-            next = null;
-            commit = resetSyncState;
-          } else {
-            let live: NativeAgentSessionProjection<TMessage> | null = null;
-            if (update.status === "snapshot") {
-              live = update.projection;
-            } else if (syncTokenRef.current === update.baseToken && syncLiveProjectionRef.current) {
-              live = applyNativeAgentProjectionDelta(syncLiveProjectionRef.current, update.delta);
-            }
-            if (
-              live &&
-              (!isNativeAgentSessionProjection(live) ||
-                live.platform !== platform ||
-                live.environmentId !== environmentId)
-            ) {
-              live = null;
-            }
-            const deletedMessageIds =
-              update.status === "delta" ? update.delta.deletedMessageIds : [];
-            if (!live) {
-              update = await backendForScope(scope).getNativeAgentProjectionUpdate<TMessage>({
-                ...identity,
-                syncVersion: 1,
-                liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-                forceSnapshot: true,
-              });
-              live = update.status === "snapshot" ? update.projection : null;
-              if (
-                live &&
-                (!isNativeAgentSessionProjection(live) ||
-                  live.platform !== platform ||
-                  live.environmentId !== environmentId)
-              ) {
-                live = null;
+          void send("discovery", discoveryInput, () =>
+            backendForScope(scope).getNativeAgentDiscoveryUpdate(discoveryInput),
+          )
+            .then((update) => {
+              // Nothing else re-reads a discarded or failed answer soon.
+              if (!stillCurrent()) {
+                discoverySchedule.markDue();
+                return;
               }
-            }
-            if (live && (update.status === "snapshot" || update.status === "delta")) {
-              const plan = planSyncMaterialization({
-                live,
-                token: update.token,
-                historyEpoch: update.historyEpoch,
-                historyComplete: update.historyComplete,
-                boundary: { cursor: update.historyCursor },
-                deletedMessageIds,
-              });
-              next = plan.materialized;
-              commit = () => commitSyncMaterialization(plan);
-            } else {
-              next = null;
-            }
-          }
-        } else {
-          next = await backendForScope(scope).getNativeAgentProjection<TMessage>({
-            ...identity,
-            ...(messageLimit === undefined ? {} : { messageLimit }),
+              if (update.status === "snapshot") {
+                applyProgressiveDiscovery(update.value, update.token);
+                if (progressiveDiscoveryRef.current !== update.value) {
+                  discoverySchedule.markDue();
+                }
+              } else if (update.status === "unchanged") {
+                progressiveDiscoveryTokenRef.current = update.token;
+              } else {
+                discoverySchedule.markDue();
+              }
+              discoverySchedule.observe(progressiveDiscoveryRef.current);
+            })
+            .catch(() => discoverySchedule.markDue());
+        }
+
+        await Promise.allSettled([transcriptRead, stateRead]);
+        // A superseding refresh owns the flag from here on; clearing it would
+        // report that tab as settled while its newer read is still running.
+        if (stillCurrent()) setSessionStateRefreshing(false);
+        if (
+          stillCurrent() &&
+          transcriptMissing &&
+          stateMissing &&
+          establishingSessionRef.current === 0
+        ) {
+          applyProjection(null);
+          markTranscriptAvailability("unavailable");
+          setTranscriptRefreshing(false);
+          updateProgressiveCache({
+            transcriptAvailability: "unavailable",
+            transcriptRefreshing: false,
+            stateAvailability: "unavailable",
           });
         }
-        if (
-          sequence === refreshSequenceRef.current &&
-          operationEpoch === projectionOperationEpochRef.current &&
-          // An empty read that raced this tab's own session creation says
-          // nothing about the session; installing it would discard a cached
-          // projection in favour of a state the backend never asserted.
-          !(next === null && establishingSessionRef.current > 0)
-        ) {
-          commit?.();
-          if (!syncLiveProjectionRef.current || !next) applyProjection(next);
-          markSessionStateAvailability(next ? "current" : "unavailable");
-          setSessionStateRefreshing(false);
-          markTranscriptAvailability(
-            next ? (next.messages.length === 0 ? "empty" : "current") : "unavailable",
-          );
-          setTranscriptRefreshing(false);
-          setTranscriptError(null);
-          setSessionStateError(null);
-          // A session that exists supersedes any earlier creation failure. One
-          // that still does not exist is exactly what that failure described, so
-          // its message survives instead of decaying into a generic failure.
-          if (next) establishmentFailureRef.current = false;
-          if (next || !establishmentFailureRef.current) setRuntimeError(null);
-        } else if (
-          sequence === refreshSequenceRef.current &&
-          operationEpoch === projectionOperationEpochRef.current
-        ) {
-          setTranscriptRefreshing(false);
+        if (stillCurrent()) {
+          if (projectionRef.current) establishmentFailureRef.current = false;
+          if (projectionRef.current || !establishmentFailureRef.current) setRuntimeError(null);
         }
-        return next;
+        return projectionRef.current;
       } catch (error) {
         if (
           sequence === refreshSequenceRef.current &&
@@ -2530,18 +2437,12 @@ export function useNativeAgentSession<TMessage = unknown>({
       applyProgressiveState,
       applyProgressiveTranscript,
       beginSessionStateRefresh,
-      commitSyncMaterialization,
       discoverySchedule,
       enabled,
-      environmentId,
       flushPendingReconcile,
       identity,
-      messageLimit,
       markSessionStateAvailability,
       markTranscriptAvailability,
-      planSyncMaterialization,
-      platform,
-      resetSyncState,
       setIsRefreshing,
       setSessionStateRefreshing,
       updateProgressiveCache,
@@ -2630,6 +2531,10 @@ export function useNativeAgentSession<TMessage = unknown>({
             parameterValues: defaultParameterValues,
           });
           if (replacement.modelSubstitution) onModelSubstituted?.(replacement.modelSubstitution);
+          replacedProviderSessionRef.current = {
+            requested: initialProviderSessionId,
+            replacement: replacement.providerSessionId,
+          };
           await onResumeSessionReplaced?.({
             requestedProviderSessionId: initialProviderSessionId,
             replacementProviderSessionId: replacement.providerSessionId,
@@ -3353,8 +3258,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     }): Promise<NativeAgentSessionProjection<TMessage> | null> {
       if (options?.automatic && !canLoadEarlierAutomatically()) return null;
       const requestedOperationEpoch = projectionOperationEpochRef.current;
-      const progressive = await nativeAgentProgressiveSupported(scope);
-      if (progressive && !historyCursorRef.current) {
+      await requireNativeAgentProgressiveSync(scope);
+      if (!historyCursorRef.current) {
         if (historyUnpageableRef.current) return projectionRef.current;
         /*
          * No direct cursor to page from. With 0232 a pageable provider names one
@@ -3403,10 +3308,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
         if (!historyCursorRef.current) {
           /*
-           * The joined snapshot could not mint a cursor. Falling through to a
-           * wider legacy `messageLimit` would replace the progressive window
-           * with a full-projection read that cannot restore the omitted
-           * content either, so retire the control on this transcript instead.
+           * The joined snapshot could not mint a cursor, and no other read can
+           * restore the omitted content, so retire the control on this
+           * transcript instead of leaving a repeatable no-op on screen.
            */
           return retireLoadEarlierControl({ sticky: true });
         }
@@ -3414,203 +3318,173 @@ export function useNativeAgentSession<TMessage = unknown>({
       if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
         return projectionRef.current;
       }
-      if (await nativeAgentSyncSupported(scope)) {
-        const before = historyCursorRef.current;
-        if (before) {
-          /*
-           * Free room from inactive identities first, then ask for a page that
-           * fits what is left. Bounding the request is what keeps acceptance
-           * all-or-nothing: a page trimmed on arrival would strand its older half
-           * behind a cursor only the server can mint.
-           */
-          evictNativeAgentHistoryCaches(
-            sessionKey,
-            retainedHistoryBytes(historyMessagesRef.current),
-            nativeAgentHistoryBudgetBytes(scope),
-            scope,
-          );
-          const budget = historyRequestBudget();
-          if (budget.messages <= 0 || budget.bytes <= 0) {
-            return retireLoadEarlierControl();
-          }
-          const sequence = ++refreshSequenceRef.current;
-          const page = await backendForScope(scope).getNativeAgentMessagePage<TMessage>({
-            ...identity,
-            syncVersion: 1,
-            before,
-            limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
-            targetBytes: budget.bytes,
-          });
-          // A mutation that landed while the page was in flight owns the transcript
-          // now. Installing this page would merge history into a live tail it no
-          // longer describes.
-          if (
-            sequence !== refreshSequenceRef.current ||
-            requestedOperationEpoch !== projectionOperationEpochRef.current
-          ) {
-            return projectionRef.current;
-          }
-          const syncLive = syncLiveProjectionRef.current;
-          const token = syncTokenRef.current;
-          /*
-           * `historyEpochRef` and `page.historyEpoch` are both the backend's paging
-           * epoch, so a mismatch means the history this cursor described has been
-           * rewritten. The token is deliberately not required: a progressive tail
-           * pages without ever holding a joined-projection token.
-           */
-          if (page.historyEpoch !== historyEpochRef.current || !syncLive) {
-            resetSyncState();
-            await refresh({ manual: true });
-            return projectionRef.current;
-          }
-          const current = projectionRef.current;
-          const live =
-            current &&
-            current.platform === syncLive.platform &&
-            current.environmentId === syncLive.environmentId &&
-            current.sessionId === syncLive.sessionId &&
-            current.generation === syncLive.generation
-              ? {
-                  ...current,
-                  messages: syncLive.messages,
-                  ...(syncLive.messageWindow
-                    ? { messageWindow: syncLive.messageWindow }
-                    : { messageWindow: undefined }),
-                }
-              : syncLive;
-          const pageMessageId = (message: TMessage): unknown => (message as { id?: unknown }).id;
-          const liveIds = new Set(live.messages.map(pageMessageId));
-          const held = new Map(
-            historyMessagesRef.current.map((message) => [pageMessageId(message), message]),
-          );
-          /*
-           * Holding a row's id is not holding the row. A retained copy is
-           * whatever this tab last saw before the row left the live tail: a
-           * part-trimmed head, or a launch row whose tasks have since settled.
-           * Dropping the page's copy as a duplicate froze that copy for good,
-           * so lay it over the held one exactly as a live head is laid over
-           * its local copy — whichever carries more of the row wins. The live
-           * tail itself stays authoritative for the rows it covers.
-           */
-          const refreshed = new Map<unknown, TMessage>();
-          const newMessages: TMessage[] = [];
-          for (const message of page.messages) {
-            const id = pageMessageId(message);
-            if (liveIds.has(id)) continue;
-            const heldCopy = held.get(id);
-            if (heldCopy === undefined) {
-              newMessages.push(message);
-              continue;
+      const before = historyCursorRef.current;
+      // A read that landed while the joined snapshot was in flight may have
+      // settled the cursor; there is nothing left to page from.
+      if (!before) return projectionRef.current;
+      /*
+       * Free room from inactive identities first, then ask for a page that
+       * fits what is left. Bounding the request is what keeps acceptance
+       * all-or-nothing: a page trimmed on arrival would strand its older half
+       * behind a cursor only the server can mint.
+       */
+      evictNativeAgentHistoryCaches(
+        sessionKey,
+        retainedHistoryBytes(historyMessagesRef.current),
+        nativeAgentHistoryBudgetBytes(scope),
+        scope,
+      );
+      const budget = historyRequestBudget();
+      if (budget.messages <= 0 || budget.bytes <= 0) {
+        return retireLoadEarlierControl();
+      }
+      const sequence = ++refreshSequenceRef.current;
+      const page = await backendForScope(scope).getNativeAgentMessagePage<TMessage>({
+        ...identity,
+        syncVersion: 1,
+        before,
+        limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
+        targetBytes: budget.bytes,
+      });
+      // A mutation that landed while the page was in flight owns the transcript
+      // now. Installing this page would merge history into a live tail it no
+      // longer describes.
+      if (
+        sequence !== refreshSequenceRef.current ||
+        requestedOperationEpoch !== projectionOperationEpochRef.current
+      ) {
+        return projectionRef.current;
+      }
+      const syncLive = syncLiveProjectionRef.current;
+      const token = syncTokenRef.current;
+      /*
+       * `historyEpochRef` and `page.historyEpoch` are both the backend's paging
+       * epoch, so a mismatch means the history this cursor described has been
+       * rewritten. The token is deliberately not required: a progressive tail
+       * pages without ever holding a joined-projection token.
+       */
+      if (page.historyEpoch !== historyEpochRef.current || !syncLive) {
+        resetSyncState();
+        await refresh({ manual: true });
+        return projectionRef.current;
+      }
+      const current = projectionRef.current;
+      const live =
+        current &&
+        current.platform === syncLive.platform &&
+        current.environmentId === syncLive.environmentId &&
+        current.sessionId === syncLive.sessionId &&
+        current.generation === syncLive.generation
+          ? {
+              ...current,
+              messages: syncLive.messages,
+              ...(syncLive.messageWindow
+                ? { messageWindow: syncLive.messageWindow }
+                : { messageWindow: undefined }),
             }
-            const merged = preferCompleteLiveHead([heldCopy], [message]).messages[0]!;
-            if (merged !== heldCopy && JSON.stringify(merged) !== JSON.stringify(heldCopy)) {
-              refreshed.set(id, merged);
-            }
-          }
-          /*
-           * A direct cursor adopted after messages aged out of the live tail
-           * points at the tail's head, so its first pages can hold only rows
-           * this client kept on screen. Step past them instead of spending a
-           * click on a page that shows nothing; bounded by what the client can
-           * retain, so it cannot loop.
-           */
-          if (
-            newMessages.length === 0 &&
-            refreshed.size === 0 &&
-            page.messages.length > 0 &&
-            page.nextCursor &&
-            page.nextCursor !== before &&
-            duplicatePageSkipsRef.current < MAX_DUPLICATE_PAGE_SKIPS
-          ) {
-            duplicatePageSkipsRef.current += 1;
-            historyCursorRef.current = page.nextCursor;
-            return loadEarlierMessagesPage();
-          }
-          duplicatePageSkipsRef.current = 0;
-          const retained = historyMessagesRef.current.map(
-            (message) => refreshed.get(pageMessageId(message)) ?? message,
-          );
-          const accepted: TMessage[] = [];
-          const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
-          let acceptedBytes = 0;
-          for (let index = newMessages.length - 1; index >= 0; index -= 1) {
-            if (accepted.length + retained.length >= messageBudget) break;
-            const message = newMessages[index]!;
-            // Element size plus its separating comma. Measured once: planning
-            // and the store reuse the cached size of every accepted message.
-            const bytes = encodedValueBytes(message) + 1;
-            if (acceptedBytes + bytes > budget.bytes) break;
-            accepted.unshift(message);
-            acceptedBytes += bytes;
-          }
-          // One message larger than the whole remaining byte budget would otherwise
-          // make the control permanently inert. Take it anyway: the plan below
-          // still enforces the retained-history ceiling, and a click must always
-          // either show more or stop offering to.
-          if (accepted.length === 0 && newMessages.length > 0 && retained.length < messageBudget) {
-            accepted.push(newMessages[newMessages.length - 1]!);
-          }
-          const acceptedWholePage = accepted.length === newMessages.length;
-          /*
-           * A partially accepted page keeps the cursor it was fetched with.
-           * Advancing to `nextCursor` would acknowledge messages that were never
-           * retained, and clearing the cursor entirely — the previous behaviour —
-           * made them unreachable until the history epoch rotated.
-           */
-          const plan = planSyncMaterialization({
-            live,
-            ...(token ? { token } : {}),
-            historyEpoch: page.historyEpoch,
-            historyComplete: page.complete,
-            retained: {
-              messages: [...accepted, ...retained],
-              ...(acceptedWholePage
-                ? page.nextCursor
-                  ? { cursor: page.nextCursor }
-                  : {}
-                : { cursor: before }),
-              complete: page.complete,
-            },
-          });
-          return commitSyncMaterialization(plan);
+          : syncLive;
+      const pageMessageId = (message: TMessage): unknown => (message as { id?: unknown }).id;
+      const liveIds = new Set(live.messages.map(pageMessageId));
+      const held = new Map(
+        historyMessagesRef.current.map((message) => [pageMessageId(message), message]),
+      );
+      /*
+       * Holding a row's id is not holding the row. A retained copy is
+       * whatever this tab last saw before the row left the live tail: a
+       * part-trimmed head, or a launch row whose tasks have since settled.
+       * Dropping the page's copy as a duplicate froze that copy for good,
+       * so lay it over the held one exactly as a live head is laid over
+       * its local copy — whichever carries more of the row wins. The live
+       * tail itself stays authoritative for the rows it covers.
+       */
+      const refreshed = new Map<unknown, TMessage>();
+      const newMessages: TMessage[] = [];
+      for (const message of page.messages) {
+        const id = pageMessageId(message);
+        if (liveIds.has(id)) continue;
+        const heldCopy = held.get(id);
+        if (heldCopy === undefined) {
+          newMessages.push(message);
+          continue;
+        }
+        const merged = preferCompleteLiveHead([heldCopy], [message]).messages[0]!;
+        if (merged !== heldCopy && JSON.stringify(merged) !== JSON.stringify(heldCopy)) {
+          refreshed.set(id, merged);
         }
       }
-      const current =
-        projectionRef.current?.messageWindow?.limit ?? messageLimit ?? DEFAULT_MESSAGE_WINDOW;
-      const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
-      if (next <= current) return retireLoadEarlierControl({ sticky: true });
-      setMessageLimit(next);
-      const sequence = ++refreshSequenceRef.current;
-      const previousIds = new Set(
-        (projectionRef.current?.messages ?? [])
-          .map((message) => (message as { id?: unknown }).id)
-          .filter((id): id is string => typeof id === "string"),
-      );
-      const projection = await backendForScope(scope).getNativeAgentProjection<TMessage>({
-        ...identity,
-        messageLimit: next,
-      });
+      /*
+       * A direct cursor adopted after messages aged out of the live tail
+       * points at the tail's head, so its first pages can hold only rows
+       * this client kept on screen. Step past them instead of spending a
+       * click on a page that shows nothing; bounded by what the client can
+       * retain, so it cannot loop.
+       */
       if (
-        sequence === refreshSequenceRef.current &&
-        requestedOperationEpoch === projectionOperationEpochRef.current
+        newMessages.length === 0 &&
+        refreshed.size === 0 &&
+        page.messages.length > 0 &&
+        page.nextCursor &&
+        page.nextCursor !== before &&
+        duplicatePageSkipsRef.current < MAX_DUPLICATE_PAGE_SKIPS
       ) {
-        applyProjection(projection);
-        const added = (projection?.messages ?? []).some((message) => {
-          const id = (message as { id?: unknown }).id;
-          return typeof id === "string" && !previousIds.has(id);
-        });
-        if (!added) return retireLoadEarlierControl({ sticky: true });
+        duplicatePageSkipsRef.current += 1;
+        historyCursorRef.current = page.nextCursor;
+        return loadEarlierMessagesPage();
       }
-      return projection;
+      duplicatePageSkipsRef.current = 0;
+      const retained = historyMessagesRef.current.map(
+        (message) => refreshed.get(pageMessageId(message)) ?? message,
+      );
+      const accepted: TMessage[] = [];
+      const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
+      let acceptedBytes = 0;
+      for (let index = newMessages.length - 1; index >= 0; index -= 1) {
+        if (accepted.length + retained.length >= messageBudget) break;
+        const message = newMessages[index]!;
+        // Element size plus its separating comma. Measured once: planning
+        // and the store reuse the cached size of every accepted message.
+        const bytes = encodedValueBytes(message) + 1;
+        if (acceptedBytes + bytes > budget.bytes) break;
+        accepted.unshift(message);
+        acceptedBytes += bytes;
+      }
+      // One message larger than the whole remaining byte budget would otherwise
+      // make the control permanently inert. Take it anyway: the plan below
+      // still enforces the retained-history ceiling, and a click must always
+      // either show more or stop offering to.
+      if (accepted.length === 0 && newMessages.length > 0 && retained.length < messageBudget) {
+        accepted.push(newMessages[newMessages.length - 1]!);
+      }
+      const acceptedWholePage = accepted.length === newMessages.length;
+      /*
+       * A partially accepted page keeps the cursor it was fetched with.
+       * Advancing to `nextCursor` would acknowledge messages that were never
+       * retained, and clearing the cursor entirely — the previous behaviour —
+       * made them unreachable until the history epoch rotated.
+       */
+      const plan = planSyncMaterialization({
+        live,
+        ...(token ? { token } : {}),
+        historyEpoch: page.historyEpoch,
+        historyComplete: page.complete,
+        retained: {
+          messages: [...accepted, ...retained],
+          ...(acceptedWholePage
+            ? page.nextCursor
+              ? { cursor: page.nextCursor }
+              : {}
+            : { cursor: before }),
+          complete: page.complete,
+        },
+      });
+      return commitSyncMaterialization(plan);
     },
     [
       scope,
-      applyProjection,
       canLoadEarlierAutomatically,
       commitSyncMaterialization,
       historyRequestBudget,
       identity,
-      messageLimit,
       planSyncMaterialization,
       environmentId,
       platform,

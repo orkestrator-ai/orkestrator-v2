@@ -6,6 +6,8 @@ import {
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import * as realBackend from "@/lib/backend";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+import { mockToastError as toastError } from "../../../../../tests/mocks/sonner";
 
 const getAgentMessagingSettings = mock(async (): Promise<AgentMessagingSettings> => ({
   ...DEFAULT_AGENT_MESSAGING_SETTINGS,
@@ -22,7 +24,26 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const { FullscreenSettingsLayout } = await import("./FullscreenSettingsLayout");
-const { MessagingSettings } = await import("./MessagingSettings");
+const { MESSAGING_AUTO_SAVE_DEBOUNCE_MS, MessagingSettings } = await import("./MessagingSettings");
+
+let autoSaveClock: ReturnType<typeof installControlledTimeout> | undefined;
+
+/** Captures the auto-save debounce so a test fires it instead of sleeping past it. */
+function controlAutoSave() {
+  autoSaveClock = installControlledTimeout(MESSAGING_AUTO_SAVE_DEBOUNCE_MS, {
+    label: "messaging auto-save debounce",
+  });
+  return autoSaveClock;
+}
+
+async function fireAutoSave() {
+  const clock = autoSaveClock!;
+  await waitFor(() => expect(clock.pendingCount()).toBe(1));
+  await act(async () => {
+    clock.advance();
+    await Promise.resolve();
+  });
+}
 
 const menuItems = [
   { id: "messaging", label: "Messaging", icon: <MessagesSquare /> },
@@ -49,7 +70,11 @@ beforeEach(() => {
   updateAgentMessagingSettings.mockImplementation(async (settings) => settings);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  autoSaveClock?.restore();
+  autoSaveClock = undefined;
+});
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackend);
@@ -114,11 +139,13 @@ describe("MessagingSettings", () => {
   });
 
   test("auto-saves an edit after a change", async () => {
+    controlAutoSave();
     renderMessagingLayout();
 
     const switches = await screen.findAllByRole("switch");
     fireEvent.click(switches[0]!);
 
+    await fireAutoSave();
     await waitFor(() => expect(updateAgentMessagingSettings).toHaveBeenCalledTimes(1));
     expect(updateAgentMessagingSettings).toHaveBeenCalledWith({
       ...DEFAULT_AGENT_MESSAGING_SETTINGS,
@@ -128,16 +155,25 @@ describe("MessagingSettings", () => {
 
   test("does not retry a rejected value until it changes again", async () => {
     updateAgentMessagingSettings.mockRejectedValueOnce(new Error("nope"));
+    toastError.mockClear();
+    const clock = controlAutoSave();
     renderMessagingLayout();
 
     const retention = (await screen.findByLabelText("Retention days")) as HTMLInputElement;
     fireEvent.change(retention, { target: { value: "30" } });
 
+    await fireAutoSave();
     await waitFor(() => expect(updateAgentMessagingSettings).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // Once the rejection has settled, no further save is armed for that value.
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(clock.pendingCount()).toBe(0);
     expect(updateAgentMessagingSettings).toHaveBeenCalledTimes(1);
 
     fireEvent.change(retention, { target: { value: "31" } });
+    await fireAutoSave();
     await waitFor(() => expect(updateAgentMessagingSettings).toHaveBeenCalledTimes(2));
   });
 });

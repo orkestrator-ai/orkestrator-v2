@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 import { promises as fs } from "node:fs";
 import type { BridgeMessage } from "./acp-context.js";
 import { forkPromptIndex, type ForkPromptPoint } from "./acp-fork.js";
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  nativeFetch,
+  sharedBridge,
+  spawnBridge,
+  temporaryDirectory,
+  waitFor,
+  type SpawnedBridge,
+} from "./acp-test-harness.js";
 
 function row(id: string, role: "user" | "assistant", content = id): BridgeMessage {
   return { id, role, content, parts: [], createdAt: "2026-10-31T00:00:00.000Z" } as BridgeMessage;
@@ -110,25 +117,41 @@ describe("POST /session/:id/fork", () => {
     { prompt_index: 1, prompt_preview: "DIRECT:two" },
   ]);
 
-  async function grokBridge(env: NodeJS.ProcessEnv = {}, createBody: Record<string, unknown> = {}) {
+  const GROK_ENV = {
+    ACP_PROVIDER: "grok",
+    XAI_API_KEY: "test-key",
+    FAKE_ACP_AUTH_METHOD: "cached_token",
+    FAKE_ACP_REWIND_POINTS: POINTS,
+  };
+  // Every test but the session-limit one runs against one Grok bridge, each in
+  // its own session; the fake agent's switches are per test.
+  const shared = sharedBridge(GROK_ENV);
+
+  async function grokBridge(
+    agentEnv: Record<string, string> = {},
+    createBody: Record<string, unknown> = {},
+    bridgeEnv?: NodeJS.ProcessEnv,
+  ) {
     const workspace = await temporaryDirectory();
     const requests = resolve(workspace, "fork-requests.log");
-    const bridge = await spawnBridge({
-      env: {
-        CWD: workspace,
-        ACP_PROVIDER: "grok",
-        XAI_API_KEY: "test-key",
-        FAKE_ACP_AUTH_METHOD: "cached_token",
-        FAKE_ACP_FORK_REQUEST_FILE: requests,
-        FAKE_ACP_REWIND_POINTS: POINTS,
-        ...env,
-      },
-    });
+    const fakeEnv = { FAKE_ACP_FORK_REQUEST_FILE: requests, ...agentEnv };
+    let bridge: SpawnedBridge;
+    let track: (sessionId: string) => void = () => {};
+    if (bridgeEnv) {
+      bridge = await spawnBridge({
+        env: { CWD: workspace, ...GROK_ENV, ...fakeEnv, ...bridgeEnv },
+      });
+    } else {
+      await shared.agentEnv(fakeEnv);
+      bridge = shared;
+      track = (sessionId) => shared.track(sessionId);
+    }
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,
       body: JSON.stringify(createBody),
     }).then((response) => response.json())) as { id: string };
+    track(created.id);
     const url = `${bridge.base}/session/${created.id}`;
     const send = async (prompt: string) => {
       const sent = await nativeFetch(`${url}/prompt`, {
@@ -150,19 +173,31 @@ describe("POST /session/:id/fork", () => {
         status: string;
         messages: BridgeMessage[];
       }>;
-    const fork = (body: unknown = {}) =>
-      nativeFetch(`${url}/fork`, {
+    const fork = async (body: unknown = {}) => {
+      const response = await nativeFetch(`${url}/fork`, {
         method: "POST",
         headers: bridge.headers,
         body: JSON.stringify(body),
       });
+      if (response.ok) track(((await response.clone().json()) as { sessionId: string }).sessionId);
+      return response;
+    };
     const forkRequests = async () =>
       (await fs.readFile(requests, "utf8").catch(() => ""))
         .trim()
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as Record<string, unknown>);
-    return { ...bridge, id: created.id, workspace, send, session, fork, forkRequests };
+    return {
+      base: bridge.base,
+      headers: bridge.headers,
+      id: created.id,
+      workspace,
+      send,
+      session,
+      fork,
+      forkRequests,
+    };
   }
 
   test("a whole-session fork adopts the new conversation as its own session", async () => {
@@ -270,7 +305,7 @@ describe("POST /session/:id/fork", () => {
   });
 
   test("refuses at the session limit before creating a vendor fork", async () => {
-    const bridge = await grokBridge({ ACP_MAX_SESSIONS: "1" });
+    const bridge = await grokBridge({}, {}, { ACP_MAX_SESSIONS: "1" });
     await bridge.send("DIRECT:one");
     expect((await bridge.fork()).status).toBe(429);
     expect(await bridge.forkRequests()).toEqual([]);

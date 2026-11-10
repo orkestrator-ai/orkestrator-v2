@@ -26,12 +26,133 @@ export function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+/** Wall time, unaffected by `installDesignClock`, so a deadline stays real. */
+const realNow = Date.now.bind(Date);
+
 export async function until(predicate: () => boolean, timeoutMs = 2000) {
-  const started = Date.now();
+  const started = realNow();
   while (!predicate()) {
-    if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for condition");
+    if (realNow() - started > timeoutMs) throw new Error("Timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+export interface DesignClock {
+  /** Delays of the captured timers still pending, earliest due first. */
+  pendingDelays(): number[];
+  /** Moves virtual time forward, running each captured timer that falls due, in due order. */
+  advanceBy(ms: number): Promise<void>;
+  /**
+   * Like `until`, but when the condition is unmet and the controller is idle
+   * it moves virtual time to the next captured timer, one at a time.
+   */
+  until(predicate: () => boolean, timeoutMs?: number): Promise<void>;
+  restore(): void;
+}
+
+let activeClock: DesignClock | undefined;
+
+/**
+ * Virtual time for the controller's own delays (retry backoff, status polls,
+ * draft saves): timers at or above `minDelayMs` are captured and `Date.now`
+ * follows the virtual clock, so a backoff compares against the time it was
+ * armed with. Shorter timers (Testing Library, `until`'s poll, eviction) stay
+ * real. Restore with `restoreDesignClock()` in `afterEach`.
+ */
+export function installDesignClock(minDelayMs = 100): DesignClock {
+  restoreDesignClock();
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const originalDateNow = Date.now;
+  const timers = new Map<
+    object,
+    {
+      dueAt: number;
+      delay: number;
+      order: number;
+      callback: (...args: unknown[]) => void;
+      args: unknown[];
+    }
+  >();
+  let offset = 0;
+  let order = 0;
+  const now = () => realNow() + offset;
+  const realTick = () => new Promise((resolve) => originalSetTimeout(resolve, 5));
+  const earliest = () =>
+    Array.from(timers.entries()).sort(([, a], [, b]) => a.dueAt - b.dueAt || a.order - b.order)[0];
+  const runNext = () => {
+    const next = earliest();
+    if (!next) return false;
+    const [handle, timer] = next;
+    timers.delete(handle);
+    offset = Math.max(offset, timer.dueAt - realNow());
+    timer.callback(...timer.args);
+    return true;
+  };
+
+  globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (typeof callback === "function" && typeof delay === "number" && delay >= minDelayMs) {
+      const handle = { unref: () => handle };
+      timers.set(handle, {
+        dueAt: now() + delay,
+        delay,
+        order: order++,
+        callback: callback as (...callbackArgs: unknown[]) => void,
+        args,
+      });
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  }) as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = ((handle?: ReturnType<typeof setTimeout>) => {
+    if (handle && timers.delete(handle as unknown as object)) return;
+    originalClearTimeout(handle);
+  }) as typeof globalThis.clearTimeout;
+  Date.now = now;
+
+  const clock: DesignClock = {
+    pendingDelays: () =>
+      Array.from(timers.values())
+        .sort((a, b) => a.dueAt - b.dueAt || a.order - b.order)
+        .map((timer) => timer.delay),
+    async advanceBy(ms) {
+      const target = now() + ms;
+      await realTick();
+      for (;;) {
+        const next = earliest();
+        if (!next || next[1].dueAt > target) break;
+        runNext();
+        await realTick();
+      }
+      offset = Math.max(offset, target - realNow());
+      await realTick();
+    },
+    async until(predicate, timeoutMs = 4000) {
+      const started = realNow();
+      let idlePolls = 0;
+      while (!predicate()) {
+        if (realNow() - started > timeoutMs) throw new Error("Timed out waiting for condition");
+        await realTick();
+        // Two quiet polls let the in-memory backend's promise chains finish
+        // before time moves, so timers run in the order real time would.
+        if (++idlePolls >= 2 && !predicate() && runNext()) idlePolls = 0;
+      }
+    },
+    restore() {
+      if (activeClock !== clock) return;
+      activeClock = undefined;
+      timers.clear();
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+      Date.now = originalDateNow;
+    },
+  };
+  activeClock = clock;
+  return clock;
+}
+
+export function restoreDesignClock() {
+  activeClock?.restore();
 }
 
 export interface FakeFrame {

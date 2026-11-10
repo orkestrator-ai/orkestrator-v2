@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { createRef, useCallback, useLayoutEffect, useState } from "react";
 import { Virtuoso, VirtuosoMockContext, type VirtuosoHandle } from "react-virtuoso";
 import { useVirtuosoScrollState } from "@/hooks/useVirtuosoScrollState";
+import { elapseFakeTime } from "@/test/fake-clock-frames";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 /**
@@ -11,7 +12,10 @@ import { installControlledTimeout } from "../../../../../tests/helpers/controlle
  * retry window, cleanup timer and queued follow work are retired.
  */
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  jest.useRealTimers();
+});
 
 const VIEWPORT = 300;
 const ITEM = 30;
@@ -80,6 +84,32 @@ function Harness({
 
 const wait = (ms: number) => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
 
+/** Extra windows `elapsePastEveryDeadline` may grant before the clock must be quiet. */
+const SETTLE_ROUNDS = 3;
+
+/**
+ * Lets `ms` pass on the fake clock (installed before rendering), then proves
+ * no library deadline is left to arrive: the refresh windows, throttles and
+ * the 1200 ms navigation cleanup have all run, so a later write cannot follow
+ * the assertions that come after.
+ *
+ * Happy DOM delivers animation frames on real immediates, outside the fake
+ * clock, so on a loaded host the final frame can arm one more fake timer
+ * after the window has elapsed. That timer is still due inside the same
+ * window measured from when it was armed, so the clock is advanced again, a
+ * bounded number of times, until nothing is pending. A timer that keeps
+ * re-arming itself past those rounds is a real leak and still fails here, and
+ * every caller's write-count assertion still sees any write a late timer
+ * makes.
+ */
+async function elapsePastEveryDeadline(ms: number) {
+  await elapseFakeTime(ms);
+  for (let round = 0; round < SETTLE_ROUNDS && jest.getTimerCount() > 0; round += 1) {
+    await elapseFakeTime(ms);
+  }
+  expect(jest.getTimerCount()).toBe(0);
+}
+
 describe("patched Virtuoso navigation cancellation", () => {
   test("the handle exposes cancelPendingNavigation", () => {
     const handle = createRef<VirtuosoHandle>();
@@ -98,15 +128,16 @@ describe("patched Virtuoso navigation cancellation", () => {
     const handle = createRef<VirtuosoHandle>();
     const writes: Writes = { tops: [] };
     const setCount = { current: (_count: number) => {} };
+    jest.useFakeTimers();
     render(<Harness handle={handle} writes={writes} initialCount={200} setCountRef={setCount} />);
-    await wait(20);
+    await elapseFakeTime(20);
     act(() => handle.current!.scrollToIndex({ index: 120, align: "start" }));
     const afterJump = writes.tops.length;
     if (cancel) act(() => handle.current!.cancelPendingNavigation());
     // Inside the 150 ms refresh window the list changes, which makes the
     // library retry the old index target unless the navigation was retired.
     act(() => setCount.current(260));
-    await wait(1300);
+    await elapsePastEveryDeadline(1300);
     return { writes, afterJump };
   }
 
@@ -126,6 +157,7 @@ describe("patched Virtuoso navigation cancellation", () => {
     const handle = createRef<VirtuosoHandle>();
     const writes: Writes = { tops: [] };
     const setCount = { current: (_count: number) => {} };
+    jest.useFakeTimers();
     render(
       <Harness
         handle={handle}
@@ -135,14 +167,14 @@ describe("patched Virtuoso navigation cancellation", () => {
         followOutput={() => "auto"}
       />,
     );
-    await wait(20);
+    await elapseFakeTime(20);
     const before = writes.tops.length;
     // Appending while following queues a LAST navigation until the next
     // list refresh; ownership moves to the reader before it is delivered.
     act(() => setCount.current(41));
     const committed = writes.tops.length;
     if (cancel) act(() => handle.current!.cancelPendingNavigation());
-    await wait(400);
+    await elapsePastEveryDeadline(400);
     // The follow was still queued (waiting for the refresh) when cancelled.
     expect(committed).toBe(before);
     return { writes, before };
@@ -162,6 +194,7 @@ describe("patched Virtuoso navigation cancellation", () => {
     const handle = createRef<VirtuosoHandle>();
     const writes: Writes = { tops: [] };
     const setCount = { current: (_count: number) => {} };
+    jest.useFakeTimers();
     render(
       <Harness
         handle={handle}
@@ -171,10 +204,10 @@ describe("patched Virtuoso navigation cancellation", () => {
         followOutput={false}
       />,
     );
-    await wait(20);
+    await elapseFakeTime(20);
     const before = writes.tops.length;
     act(() => setCount.current(50));
-    await wait(300);
+    await elapsePastEveryDeadline(300);
     expect(writes.tops.length).toBe(before);
   });
 
@@ -197,16 +230,17 @@ describe("patched Virtuoso navigation cancellation", () => {
         </VirtuosoMockContext.Provider>
       );
     }
+    jest.useFakeTimers();
     const view = render(<Shrinking height={viewport} />);
-    await wait(20);
+    await elapseFakeTime(20);
     // A detached reader: well above the end.
     act(() => handle.current!.scrollTo({ top: 300 }));
-    await wait(20);
+    await elapseFakeTime(20);
     const before = writes.tops.length;
     // The composer grows: the transcript viewport shrinks.
     viewport = VIEWPORT - 90;
     view.rerender(<Shrinking height={viewport} />);
-    await wait(300);
+    await elapsePastEveryDeadline(300);
     return { writes, before };
   }
 
@@ -283,6 +317,7 @@ describe("patched Virtuoso navigation cancellation", () => {
   test.each([false, true])(
     "restored snapshot transitions from hidden to visible (cancel=%s)",
     async (cancel) => {
+      jest.useFakeTimers();
       const refresh = installControlledTimeout(150, { label: "Virtuoso index refresh window" });
       const fixture = restoreFixture();
       const view = render(<fixture.RestoredVirtuoso />);
@@ -305,7 +340,7 @@ describe("patched Virtuoso navigation cancellation", () => {
           act(() => {
             expect(refresh.advance()).toBe(1);
           });
-        await wait(1300);
+        await elapsePastEveryDeadline(1300);
         expect(restoredList(view.container).style.visibility).toBe("");
         expect(fixture.writes.tops.length).toBe(afterCompletion);
         refresh.assertDrained();
@@ -345,6 +380,7 @@ describe("patched Virtuoso navigation cancellation", () => {
   test.each(["activation", "deactivation"] as const)(
     "controller %s reveals a snapshot whose initial navigation is still pending",
     async (transition) => {
+      jest.useFakeTimers();
       const refresh = installControlledTimeout(150, {
         label: "Virtuoso index refresh window",
         // Activation starts a new index navigation while the cancelled
@@ -399,7 +435,7 @@ describe("patched Virtuoso navigation cancellation", () => {
         act(() => {
           expect(refresh.advance()).toBe(transition === "activation" ? 2 : 1);
         });
-        await wait(1300);
+        await elapsePastEveryDeadline(1300);
         expect(restoredList(view.container).style.visibility).toBe("");
         expect(fixture.writes.tops.length).toBe(afterTransition);
         refresh.assertDrained();

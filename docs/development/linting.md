@@ -32,7 +32,8 @@ mise run format         # rewrite files in place
 mise run format:check   # verify only; what CI runs
 mise run lint           # report; fails on errors, not warnings
 mise run lint:fix       # apply the auto-fixable subset
-mise run check          # format:check && lint && typecheck
+mise run guards         # repository-wide guards, a few seconds
+mise run check          # format:check && lint && guards && typecheck
 ```
 
 The `CI` workflow (`.github/workflows/ci.yml`) runs `format:check` and `lint`
@@ -40,33 +41,34 @@ on every pull request, alongside the typecheck and test jobs. The lint step
 uses `if: ${{ !cancelled() }}` so a formatting failure does not hide lint
 output — one push reports both.
 
-The same job also runs repository-wide test guards that need no build: the
-DOM absence scan (`never passes a DOM-producing query result directly to
-toBeNull` in `tests/unit/dom-absence-scan.test.ts`), the flaky-test
-index check (`tests/unit/flaky-tests-index.test.ts`), and the to-do index and
-number-claim checks (`tests/unit/todo-index.test.ts`,
-`tests/unit/number-claims.test.ts`), so a PR that breaks one fails within
-minutes. All of them also run in `mise run test`, the default tier that
-review preparation runs, so a branch hears about them before it reaches CI.
+The repository-wide guards that need no build run in one fast stage,
+`mise run guards` (`scripts/guards.ts`; testing guide, "Guards"): the source
+guards below, the DOM absence scan, inheritance chains, test suite ownership,
+the raw-console directive scan, and the flaky-test index, to-do index and
+number-claim checks (`tests/unit/flaky-tests-index.test.ts`,
+`tests/unit/todo-index.test.ts`, `tests/unit/number-claims.test.ts`). `mise run
+test` runs that stage first, so review preparation hears about a broken guard
+within seconds rather than after the long groups.
 The DOM scan used to be in the slow tier, which no review runs, and seven
 offenders merged on 2026-11-05 (todo
 [7142](../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md)). A scan
 failure is fixed with `bun scripts/rewrite-bounded-dom-assertions.ts`.
 
-The default-tier scan is separate from the subprocess diagnostic canaries,
-which remain in the slow tier. Its synchronous source walk skips `node_modules`,
-`dist` and `.git` directories and does not follow directory symlinks. This reduces
-installed-tree I/O and avoids per-file asynchronous scheduling. The original
+The DOM scan is separate from the subprocess diagnostic canaries, which remain
+in the slow tier. It reads the guard stage's listing, skips `node_modules`,
+`dist` and `.git` directories and symbolic links, and parses only files that
+contain `toBeNull` (about a third), since only those can offend. The original
 aggregate timeout history remains open in flake case
 [0043](../tests/flaky-tests/aggregate-validation-runs/0043-root-suite-5000-ms-timeout-cluster.md);
 focused passes do not establish that the loaded-host flake is resolved.
 
 ## Source guards
 
-`tests/unit/source-guards.test.ts`, in the default tier beside the DOM scan,
-refuses new instances of the causes behind most of the flakes fixed on
-2026-11-06. It walks the test sources under `tests/`, `apps/`, `bridges/`,
-`packages/`, `scripts/` and `e2e/` once (test and spec files plus test-support
+The source guards (`tests/source-guards/`, checked by the guard stage; their
+fixtures are `tests/unit/source-guards.test.ts`) refuse new instances of the
+causes behind most of the flakes fixed on 2026-11-06. The scan reads the test
+sources under `tests/`, `apps/`, `bridges/`, `packages/`, `scripts/` and `e2e/`
+that `git ls-files -co --exclude-standard` lists, once (test and spec files plus test-support
 modules: files under `tests/` or `testing/` directories and names containing
 `test-harness`, `test-support` or `fixture`), with the DOM scan's exclusions. A
 cheap text prefilter decides which files oxc-parser parses, and each parsed file
@@ -116,7 +118,7 @@ holds an Electron main rule:
   The baseline is zero.
 
 Existing offenders are tolerated by a ratchet, not fixed in bulk:
-`tests/source-guards/baseline.json` holds a count per guard and file. The test
+`tests/source-guards/baseline.json` holds a count per guard and file. The guard stage
 fails on a file absent from the baseline that has findings and on a file whose
 count rises, printing each finding's `file:line` and the guard's advice. It also
 fails when an entry is above the file's real count (or names a file that no
@@ -207,9 +209,11 @@ fatal rejection guard (serialized into workers, so it imports nothing), the
 backend's `bounded-console.ts`, the renderer's bug-report recorder, which wraps
 `console.error`, and `desktop-startup-marker.ts`, which writes the startup markers
 the desktop matches exactly. `tests/unit/raw-console.test.ts` pins that list and
-the lint ignore patterns. It scans other sources for the six common console
-methods and rejects directives disabling `no-restricted-globals`, including
-blanket disables, so lint continues to catch other methods and console aliases.
+the lint ignore patterns, and checks that lint refuses console in each
+application tree. Lint itself catches every console call; the guard stage adds
+only what lint cannot see, a directive disabling `no-restricted-globals`
+(including blanket disables), and checks that the rule still reaches every
+application tree.
 Adding to the list needs the same case as these.
 
 ## Module boundaries

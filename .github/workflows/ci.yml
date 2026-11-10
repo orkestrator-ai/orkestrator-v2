@@ -4,17 +4,23 @@ on:
   push:
     branches:
       - main
+  # A draft pull request runs nothing until it is marked ready for review.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
-# A newer push supersedes a pull request's run, but every main commit keeps
-# its own result so a regression can be traced to the commit that caused it.
+# A newer push supersedes a pull request's run, and a newer main commit
+# supersedes an older main commit's run. Every merge used to keep its own full
+# run, which held the Free plan's 20 concurrent jobs and queued every pull
+# request behind it for an hour; a regression now shows on the next completed
+# main run and is bisected from there.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   worker-context:
     name: Stage preview worker context (Linux x64)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -69,6 +75,7 @@ jobs:
 
   mobile-shell-browser:
     name: Mobile shell (${{ matrix.browser }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # The tests take about 2.5 minutes; the rest is headroom for the browser
     # install, which is bounded separately below.
@@ -128,6 +135,7 @@ jobs:
 
   oxc:
     name: bun fmt and oxlint
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -159,19 +167,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: mise run lint
 
-      # Repository-wide guards that need no build, so a PR hears within minutes
-      # rather than after the test shards.
-      - name: Scan DOM absence assertions
+      # Repository-wide guards that need no build (source-guard ratchet, DOM
+      # absence scan, inheritance chains, suite ownership, raw-console
+      # directives, flaky/to-do registers and number claims), in one pass over
+      # the tree, so a PR hears within minutes rather than after the test shards.
+      - name: Repository guards
         if: ${{ !cancelled() }}
-        run: mise run test:logged -- --name dom-absence-scan -- bun test tests/unit/dom-absence-scan.test.ts --test-name-pattern "never passes a DOM-producing query result" --parallel=1 --only-failures
-
-      - name: Check the flaky-test index
-        if: ${{ !cancelled() }}
-        run: mise run test:logged -- --name flaky-test-index -- bun test tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures
-
-      - name: Check to-do and flake numbers
-        if: ${{ !cancelled() }}
-        run: mise run test:logged -- --name doc-numbers -- bun test tests/unit/todo-index.test.ts tests/unit/number-claims.test.ts --parallel=1 --only-failures
+        run: mise run guards
 
       # Every registered command has a contract domain, the committed
       # manifest matches the registry (plan item 1006), and the untyped
@@ -196,6 +198,7 @@ jobs:
 
   typecheck:
     name: Typecheck
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -219,6 +222,7 @@ jobs:
 
   claude-hook-only-windows:
     name: Claude hook-only qualification (Windows)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -246,6 +250,7 @@ jobs:
   # cover every group (tests/unit/ci-workflows.test.ts).
   test-shard:
     name: Tests (${{ matrix.shard }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -354,6 +359,8 @@ jobs:
           # A known place for the failing groups' full logs, uploaded below.
           ORKESTRATOR_TEST_LOG_DIR: ${{ runner.temp }}/orkestrator-test-logs
           ORKESTRATOR_TEST_GROUPS: ${{ matrix.groups }}
+          # The lint job already ran `mise run guards`.
+          ORKESTRATOR_TEST_SKIP_GUARDS: "1"
         run: mise run test:full
 
       # The console keeps only each failing group's tail and its failure
@@ -372,7 +379,7 @@ jobs:
   test:
     name: Unit and integration tests
     needs: test-shard
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

@@ -4,7 +4,7 @@ import * as fsPromises from "node:fs/promises";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { BRIDGE_SESSION_REGISTRY_VERSION, BridgeSessionStore, hashCwd } from "./persistence.js";
+import { BridgeSessionStore, hashCwd } from "./persistence.js";
 
 /**
  * `loadRecord` (BR-2): one session's record, read without the listing,
@@ -130,12 +130,6 @@ describe("BridgeSessionStore.loadRecord", () => {
     await write("bad-config", validRecord("bad-config", { config: { mode: "neither" } }));
     await write("corrupt", "{not json");
     await write("someone-else", validRecord("not-someone-else"));
-    // Only in the former aggregate file, which load() migrates.
-    const legacy = validRecord("legacy-only");
-    await writeJson(join(stateDir, `bridge-sessions-${hashCwd("/workspace")}.json`), {
-      version: BRIDGE_SESSION_REGISTRY_VERSION,
-      sessions: [legacy, validRecord("valid", { threadId: "thread-from-legacy" })],
-    });
 
     const ids = [
       "valid",
@@ -146,7 +140,6 @@ describe("BridgeSessionStore.loadRecord", () => {
       "bad-config",
       "corrupt",
       "someone-else",
-      "legacy-only",
       "never-written",
     ];
     const store = storeFor(codexHome);
@@ -170,7 +163,6 @@ describe("BridgeSessionStore.loadRecord", () => {
       "bad-config": null,
       corrupt: null,
       "someone-else": null,
-      "legacy-only": "thread-legacy-only",
       "never-written": null,
     });
   });

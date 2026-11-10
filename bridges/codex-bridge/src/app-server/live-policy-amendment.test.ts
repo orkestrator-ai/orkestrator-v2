@@ -1,6 +1,6 @@
 /**
  * Approving a Codex command never saves a rule, against the **real** pinned
- * `codex app-server` binary (todo 0160).
+ * `codex app-server` binary (#1325).
  *
  * Codex proposes an exec-policy amendment on a command approval, and
  * accepting it writes a rule into `CODEX_HOME/rules/` that every later Codex
@@ -202,7 +202,7 @@ async function savedRules(codexHome: string): Promise<string[]> {
  * bridge, as the card's Approve and Approve for session do. The `raw-*` answers
  * write app-server's own amendment straight to its stdin, which is what the
  * bridge sent for "Approve with command policy" and "Approve with network
- * policy" before todo 0160. `orkestrator-rule` is the run in the file comment.
+ * policy" before #1325. `orkestrator-rule` is the run in the file comment.
  */
 type ProbeAnswer =
   | "bridge"

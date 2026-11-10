@@ -84,7 +84,7 @@ import { requestsUltracode } from "./ultracode.js";
 
 /**
  * `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
- * backend, and two must never stack on one session (`plans/goals.md`, D2).
+ * backend, and two must never stack on one session (`docs/architecture/goals.md`).
  */
 export function withNativeGoalClosed(disallowed: readonly string[] | undefined): string[] {
   return [...(disallowed ?? []), "ProposeGoal"];

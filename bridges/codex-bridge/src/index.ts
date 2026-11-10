@@ -226,7 +226,6 @@ export function boundCodexTranscriptResponse(
   return { messages: bounded, messageWindow };
 }
 const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
-const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
 // The credential authenticates callers of this bridge; nothing this process
 // spawns needs it. Captured once and removed so the app-server child, and every
 // shell the agent runs through it, cannot inherit it (H4).
@@ -405,16 +404,14 @@ function bearerToken(header: string | undefined): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
+/**
+ * Only the backend calls this bridge, and it sends no `Origin`. A request that
+ * carries one came from a browser page; refuse it unless the page is on this
+ * machine's loopback, before authentication. No browser client remains, so the
+ * bridge answers no CORS preflight and echoes no origin.
+ */
 function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
-  // Electron's packaged file renderer can be represented as a null origin.
-  // Authentication is still mandatory, so allowing it does not grant access.
-  if (origin === "null" || origin === "file://") return true;
-  const configured = (process.env[BRIDGE_ALLOWED_ORIGINS_ENV] ?? "")
-    .split(",")
-    .map((entry) => entry.trim().replace(/\/$/, ""))
-    .filter(Boolean);
-  if (configured.includes(origin.replace(/\/$/, ""))) return true;
   try {
     const parsed = new URL(origin);
     return (
@@ -1033,28 +1030,11 @@ app.use("*", async (c, next) => {
   if (!isTrustedBridgeOrigin(origin)) {
     return c.json({ error: "Origin is not allowed" }, 403);
   }
-  if (origin) {
-    c.header("Access-Control-Allow-Origin", origin);
-    c.header("Vary", "Origin");
-  }
-  if (c.req.method === "OPTIONS") {
-    c.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    c.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Orkestrator-Codex-Token",
-    );
-    c.header("Access-Control-Allow-Private-Network", "true");
-    return c.body(null, 204);
-  }
+  // The token is accepted only in a header: one in a URL ends up in logs.
   if (isBridgeAuthEnabled() && !isPublicHealthRequest(c.req.method, c.req.path)) {
     const dedicatedHeaderToken = c.req.raw.headers.get("x-orkestrator-codex-token")?.trim();
     const headerToken = bearerToken(c.req.raw.headers.get("authorization") ?? undefined);
-    const eventToken = c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
-    if (
-      !tokenMatches(dedicatedHeaderToken) &&
-      !tokenMatches(headerToken) &&
-      !tokenMatches(eventToken)
-    ) {
+    if (!tokenMatches(dedicatedHeaderToken) && !tokenMatches(headerToken)) {
       return c.json({ error: "Unauthorized" }, 401);
     }
     // What changes an agent's authority also needs the backend's signature,
@@ -1214,14 +1194,6 @@ app.post("/global/auth/logout", async (c) => {
 
 app.get("/global/models", async (c) => {
   return c.json(await appServerRuntime.listModels());
-});
-
-/** Account plan limits for the global settings pane; no session required. */
-app.get("/global/usage", async (c) => {
-  const account = await appServerRuntime.readPlanUsage();
-  // `null` means the read produced no authoritative snapshot; the backend maps
-  // it to unavailable instead of "no metered limits".
-  return c.json({ account: account ?? null });
 });
 
 /**
@@ -1869,7 +1841,7 @@ app.get("/session/:id/mcp", async (c) => {
     // app-server's `tools` is a map whose key order changes from one read to
     // the next. Sorted before the cut, so an unchanged server reads the same
     // every time and the backend's 30 s discovery renewal of an idle view
-    // does not announce a reordering as a change (todo 7530).
+    // does not announce a reordering as a change (#2062).
     const tools =
       server.tools && typeof server.tools === "object"
         ? Object.keys(server.tools).sort().slice(0, 256)
@@ -1938,13 +1910,6 @@ app.post("/session/:id/abort", async (c) => {
   // 202: turn/interrupt is asynchronous, so the turn is not over yet. Reporting
   // "aborted" here would let a new prompt overlap a turn still executing.
   return c.json({ status: outcome.status, phase: outcome.phase }, 202);
-});
-
-app.delete("/session/:id", async (c) => {
-  // Closes the bridge session and, on the last reference, unsubscribes the
-  // thread. Never thread/delete: that would destroy the user's rollout.
-  const deleted = await appServerRuntime.deleteSession(c.req.param("id"));
-  return deleted ? c.json({ status: "deleted" }) : c.json({ error: "Session not found" }, 404);
 });
 
 app.get("/event/subscribe", (c) => {

@@ -14,18 +14,20 @@ import { captureLogs } from "../testing/log-capture.js";
 import { bridgeDiagnosticPayloads } from "../testing/bridge-diagnostic-lines.js";
 
 describe("shared bridge diagnostics", () => {
-  test("one app setting controls every bridge and overrides inherited flags", () => {
+  test("one app setting controls every bridge; per-bridge flags are not read", () => {
     for (const bridge of ["claude", "codex", "cursor", "pi", "acp"] as const) {
-      const legacy = `${bridge.toUpperCase()}_BRIDGE_DEBUG`;
+      const retired = `${bridge.toUpperCase()}_BRIDGE_DEBUG`;
       expect(bridgeDebugEnabled(bridge, {})).toBe(false);
-      expect(bridgeDebugEnabled(bridge, { [legacy]: "1" })).toBe(true);
-      expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: "0", [legacy]: "1" })).toBe(
+      expect(bridgeDebugEnabled(bridge, { [retired]: "1" })).toBe(false);
+      expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: "1" })).toBe(true);
+      expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: "0", [retired]: "1" })).toBe(
         false,
       );
-      expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: "1", [legacy]: "0" })).toBe(
-        true,
-      );
       expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: "true" })).toBe(false);
+      expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: " 1 " })).toBe(true);
+      for (const off of ["0", "false", "off", "no", " Off "]) {
+        expect(bridgeDebugEnabled(bridge, { ORKESTRATOR_BRIDGE_DEBUG: off })).toBe(false);
+      }
     }
   });
 

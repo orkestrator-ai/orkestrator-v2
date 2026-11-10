@@ -91,7 +91,8 @@ The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route
 means the bridge predates it, which only an unpublished source build can do.
 The close stays pending with a "restart the environment" error on every
-platform and never falls back to `DELETE /session/:id`: Claude's calls the SDK's
+platform and never falls back to `DELETE /session/:id`, which no current bridge
+serves and which an older Claude bridge answered by calling the SDK's
 `deleteSession`.
 
 Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
@@ -180,8 +181,9 @@ until the user resumes it.
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
 | Native agent reconcile on an authoritative `missing` | Drop a mapping whose provider session is gone | Mapping only |
 
-Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
-operation and nothing in the backend or renderer calls it.
+No bridge serves `DELETE /session/:id` any more (removed 2026-11-10). Claude's
+deleted the rollout through the SDK's `deleteSession`; nothing in the backend
+or renderer had called it since the close route.
 
 ### Removing a conversation from the resume list
 
@@ -1428,7 +1430,7 @@ contents. Vendor wire formats stay inside the adapter — `session-config.ts`
 converts them to the shared `NativeAgentComposerState` that HTTP clients see.
 
 Tab close (`POST /session/:id/close`, `acp-session-close.ts`) runs one
-operation per session id; a second close or DELETE joins it. It fences the
+operation per session id; a second close joins it. It fences the
 session first (`closing`: prompt, attach, config, resume, create-by-key and
 approval/interaction answers get 409 `Session is closing`; reads, cancel and
 close still work), denies every parked permission, question and plan approval

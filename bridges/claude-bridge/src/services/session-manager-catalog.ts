@@ -1,24 +1,18 @@
 import { createHash } from "node:crypto";
 import { controlOnlyQuery } from "./control-only-query.js";
-import { readFromLiveClaude } from "./live-claude-control.js";
 import type { McpServerStatus, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
   NativeAgentSteerRejectedOutcome,
 } from "@orkestrator/protocol/native-agent";
-import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { mcpScope, type McpServerLayers } from "./mcp-runtime-status.js";
 import {
   claudeExecutableOptions,
   generateMessageId,
-  getStructuredUsageWithTimeout,
-  PLAN_USAGE_PROBE_TIMEOUT_MS,
   persistSessionMetadata,
-  rateLimitsFromStructuredUsage,
   sdkSessionIdFromBridgeId,
   sessionOperationError,
   sessions,
@@ -31,12 +25,7 @@ import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
 import { idleSteerUserMessageId, recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { ultracodeFlagSetting } from "./ultracode.js";
-import type {
-  ClaudeSteerJournalEntry,
-  ClaudeQueryControl,
-  PermissionMode,
-  SessionState,
-} from "../types/index.js";
+import type { ClaudeSteerJournalEntry, PermissionMode, SessionState } from "../types/index.js";
 
 export { readClaudeAuthStatus } from "./claude-sign-in.js";
 
@@ -396,74 +385,6 @@ export async function performSessionMcpAction(
       else session.mcpInventory = liveMcpInventory(session, statuses);
     }
     return {};
-  } finally {
-    await Promise.resolve(probe?.close()).catch(() => undefined);
-  }
-}
-
-/** The id the backend's OAuth read gives the same window, so the two merge. */
-function claudeWindowId(label: string): string {
-  const known = claudePlanWindowFromLabel(label);
-  if (known) return known.id;
-  const slug = label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "window";
-}
-
-/** Plan windows from one control's `/usage` answer, or undefined when it has none. */
-async function planUsageFrom(
-  control: ClaudeQueryControl,
-): Promise<ReturnType<typeof rateLimitsFromStructuredUsage>> {
-  const getStructuredUsage = control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-  if (!getStructuredUsage) {
-    // A missing experimental accessor is not evidence that the account is
-    // unmetered. Throw so the backend reports unavailable rather than an
-    // authoritative empty plan.
-    throw new Error("Claude's plan usage API is unavailable in this CLI version");
-  }
-  const structuredUsage = await getStructuredUsageWithTimeout(
-    getStructuredUsage,
-    control,
-    PLAN_USAGE_PROBE_TIMEOUT_MS,
-  );
-  return rateLimitsFromStructuredUsage(structuredUsage);
-}
-
-/**
- * Read Claude's plan-allocation windows without a session.
- *
- * The settings pane is global, so there is no session to read them from. A
- * CLI already running on this bridge answers when there is one; otherwise
- * `createProbe()` spawns a whole Claude CLI, exactly as the auth and
- * slash-command reads do. `refreshStructuredRateLimits`' parser turns the
- * experimental `/usage` payload into the same windows a session would report.
- */
-export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWindow[]> {
-  let rateLimits = await readFromLiveClaude(
-    (control) =>
-      control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-        ? planUsageFrom(control)
-        : undefined,
-    PLAN_USAGE_PROBE_TIMEOUT_MS,
-  );
-  let probe: Query | undefined;
-  try {
-    if (rateLimits === undefined) {
-      probe = createProbe();
-      rateLimits = await planUsageFrom(probe as unknown as ClaudeQueryControl);
-    }
-    if (rateLimits === undefined) {
-      throw new Error("Claude did not report plan usage");
-    }
-    return rateLimits.map((window) => ({
-      window: claudeWindowId(window.label),
-      label: window.label,
-      ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
-      ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
-    }));
   } finally {
     await Promise.resolve(probe?.close()).catch(() => undefined);
   }

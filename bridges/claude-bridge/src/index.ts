@@ -21,11 +21,7 @@ import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
 import { createRequestLogger } from "./services/logger.js";
-import {
-  readClaudeAuthStatus,
-  readClaudePlanUsage,
-  refreshClaudeCatalogs,
-} from "./services/session-manager.js";
+import { readClaudeAuthStatus, refreshClaudeCatalogs } from "./services/session-manager.js";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -67,7 +63,6 @@ app.onError((error, c) => {
 });
 
 const BRIDGE_TOKEN_ENV = "CLAUDE_BRIDGE_TOKEN";
-const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
 // A missing or blank credential falls back to a token nobody holds, so the bridge
 // stays fail-closed, and it is removed from process.env here, before any later
 // subprocess can inherit it. Same policy as codex-bridge.
@@ -103,16 +98,14 @@ function bearerToken(header: string | undefined): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
+/**
+ * Only the backend calls this bridge, and it sends no `Origin`. A request that
+ * carries one came from a browser page; refuse it unless the page is on this
+ * machine's loopback, before authentication. No browser client remains, so the
+ * bridge answers no CORS preflight and echoes no origin.
+ */
 function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
-  // Electron's packaged file renderer can be represented as a null origin.
-  // Authentication is still mandatory, so allowing it does not grant access.
-  if (origin === "null" || origin === "file://") return true;
-  const configured = (process.env[BRIDGE_ALLOWED_ORIGINS_ENV] ?? "")
-    .split(",")
-    .map((entry) => entry.trim().replace(/\/$/, ""))
-    .filter(Boolean);
-  if (configured.includes(origin.replace(/\/$/, ""))) return true;
   try {
     const parsed = new URL(origin);
     return (
@@ -132,34 +125,17 @@ function isPublicHealthRequest(method: string, path: string): boolean {
 }
 
 // Middleware: origin policy + per-process token authentication. Only the
-// minimal process health probe is public; every data route needs the token.
+// minimal process health probe is public; every data route needs the token,
+// and only in a header: a token in a URL ends up in logs and history.
 app.use("*", async (c, next) => {
   const origin = c.req.raw.headers.get("origin") ?? undefined;
   if (!isTrustedBridgeOrigin(origin)) {
     return c.json({ error: "Origin is not allowed" }, 403);
   }
-  if (origin) {
-    c.header("Access-Control-Allow-Origin", origin);
-    c.header("Vary", "Origin");
-  }
-  if (c.req.method === "OPTIONS") {
-    c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    c.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Orkestrator-Claude-Token",
-    );
-    c.header("Access-Control-Allow-Private-Network", "true");
-    return c.body(null, 204);
-  }
   if (isBridgeAuthEnabled() && !isPublicHealthRequest(c.req.method, c.req.path)) {
     const dedicatedHeaderToken = c.req.raw.headers.get("x-orkestrator-claude-token")?.trim();
     const headerToken = bearerToken(c.req.raw.headers.get("authorization") ?? undefined);
-    const eventToken = c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
-    if (
-      !tokenMatches(dedicatedHeaderToken) &&
-      !tokenMatches(headerToken) &&
-      !tokenMatches(eventToken)
-    ) {
+    if (!tokenMatches(dedicatedHeaderToken) && !tokenMatches(headerToken)) {
       return c.json({ error: "Unauthorized" }, 401);
     }
     // What changes an agent's authority also needs the backend's signature,
@@ -194,8 +170,6 @@ compressTranscriptReads(app);
  */
 app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
 app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
-/** Plan-allocation windows for the global settings pane; no session required. */
-app.get("/global/usage", async (c) => c.json({ account: await readClaudePlanUsage() }));
 app.post("/global/auth/login", (c) =>
   c.json(
     { error: "Claude signs in from the sign-in card in its tab or from Settings → Claude." },

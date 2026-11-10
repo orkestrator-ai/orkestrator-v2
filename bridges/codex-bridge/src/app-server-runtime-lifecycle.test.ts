@@ -15,11 +15,7 @@ import {
   setHydrateMessagesFromPersistedSessionGateForTesting,
 } from "./history/rollout.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
-import {
-  BRIDGE_SESSION_REGISTRY_VERSION,
-  BridgeSessionStore,
-  hashCwd,
-} from "./sessions/persistence.js";
+import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -2138,20 +2134,7 @@ describe("session lifecycle", () => {
       "orkestrator-bridge",
       `bridge-sessions-${hashCwd("/tmp/ws")}`,
     );
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/tmp/ws")}.json`,
-    );
-    const durableBeforeFailure = await store.load();
-    writeFileSync(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: durableBeforeFailure,
-      }),
-      "utf8",
-    );
+    expect((await store.load())[0]?.config.mode).toBe("build");
     rmSync(recordsDir, { recursive: true, force: true });
     writeFileSync(recordsDir, "blocks the per-session registry directory", "utf8");
 
@@ -2159,7 +2142,8 @@ describe("session lifecycle", () => {
     // be a lie: after a restart the stale plan/build mode is re-hydrated into
     // thread/resume, silently restoring the old sandbox.
     expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("memory-only");
-    expect((await store.load())[0]?.config.mode).toBe("build");
+    rmSync(recordsDir, { force: true });
+    expect((await store.load()).some((record) => record.config.mode === "plan")).toBe(false);
     // Memory still matches the engine, which did accept the change.
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
   });

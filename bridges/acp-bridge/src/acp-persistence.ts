@@ -288,7 +288,7 @@ export async function loadPersistedState(): Promise<void> {
   }
   if (
     !isObject(parsed) ||
-    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
+    parsed.version !== 3 ||
     parsed.provider !== provider ||
     !Array.isArray(parsed.sessions)
   ) {

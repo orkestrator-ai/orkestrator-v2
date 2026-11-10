@@ -142,8 +142,8 @@ let lastTemporarySweep: number | undefined;
  * Remove temporary files a killed bridge left beside the state file.
  *
  * Bounded and best-effort: at most once per interval, at most
- * {@link MAX_TEMPORARY_SWEEP} deletions, and only names this module writes
- * (plus the fixed `state.json.tmp` of earlier versions). It runs inside the
+ * {@link MAX_TEMPORARY_SWEEP} deletions, and only names this module writes.
+ * It runs inside the
  * write queue, between this process's writes, so none of its own temporaries
  * is in flight; another process's is left alone until it is clearly stale. A
  * failure here never fails a publication.
@@ -163,7 +163,7 @@ async function sweepTemporaries(stateFile: string): Promise<void> {
     if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
     const middle = name.slice(prefix.length, -".tmp".length);
     const match = TEMPORARY_NAME.exec(middle);
-    if (middle !== "" && !match) continue;
+    if (!match) continue;
     const path = join(directory, name);
     // This process's own name while none of its writes is in flight: a
     // leftover of a failed cleanup, or of an earlier process that had the

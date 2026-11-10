@@ -17,10 +17,9 @@ const closesInFlight = new WeakMap<SessionState, Promise<RetainingCloseOutcome>>
 /**
  * Ordinary tab close for one Pi bridge session (`POST /session/:id/close`).
  *
- * Shares DELETE's release path — deny parked approvals, cancel the turn,
- * permanently close the SDK session, drop the registry entry — and, like it,
- * never removes Pi's own JSONL session file, which is where the conversation
- * lives. What close adds is an honest answer:
+ * Denies parked approvals, cancels the turn, permanently closes the SDK
+ * session and drops the registry entry, but never removes Pi's own JSONL
+ * session file, which is where the conversation lives. It answers honestly:
  *
  * - The session is marked closed before the first await, so no prompt is
  *   admitted from then on (409) and one still preparing settles as cancelled.

@@ -297,15 +297,6 @@ async function routeGlobal(
     json(response, 200, { models: await listModels() });
     return true;
   }
-  if (url.pathname === "/global/usage" && request.method === "GET") {
-    // Plan-quota read only needs the stored credential, not a session. A `null`
-    // account means no credential, a failed token exchange or an unreachable
-    // dashboard; the backend reports that as unavailable rather than as a plan
-    // with no metered limits.
-    const account = await refreshPlanAccountWindows();
-    json(response, 200, { account: account ?? null });
-    return true;
-  }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
     refreshModels();
     json(response, 200, { ok: true });
@@ -489,15 +480,8 @@ async function routeSession(
     // A close recorded by a previous process and not yet published. Answered
     // as closing until a close request finishes it, never as a live session.
     const tombstoned = hasRestoredTombstone(match[1]!);
-    if (
-      tombstoned &&
-      ((!action && request.method === "DELETE") || isCloseRequest(action, request))
-    ) {
-      return await answerCloseOperation(
-        response,
-        closeRestoredTombstone(match[1]!),
-        action === "close" ? "close" : "delete",
-      );
+    if (tombstoned && isCloseRequest(action, request)) {
+      return await answerCloseOperation(response, closeRestoredTombstone(match[1]!));
     }
     // Answered in band: this route exists on this bridge, so a 404 from it
     // can only mean an older bridge — which is how the backend tells the two
@@ -737,11 +721,8 @@ async function routeSession(
   if (action === "prompt" && request.method === "POST") {
     return await handlePrompt(request, response, state, clientSignal);
   }
-  if (!action && request.method === "DELETE") {
-    return await answerCloseOperation(response, closeSessionPermanently(state), "delete");
-  }
   if (isCloseRequest(action, request) && !subject) {
-    return await answerCloseOperation(response, closeSessionPermanently(state), "close");
+    return await answerCloseOperation(response, closeSessionPermanently(state));
   }
   // The path named a session this bridge has; only the method was wrong. A 404
   // here would read as "session gone" and let a real gap — a route the backend
@@ -882,38 +863,25 @@ function isCloseRequest(action: string | undefined, request: IncomingMessage): b
 }
 
 /**
- * Answer a permanent close.
- *
- * `DELETE /session/:id` and `POST /session/:id/close` are the same operation
- * here — Cursor's close never deletes the user's Cursor-side conversation, so
- * there is no destructive variant to keep apart. Both exist because the
- * backend's tab teardown speaks the explicit close route to every bridge,
- * and treats its 404 as "this bridge predates the route" rather than falling
- * back to a DELETE that other bridges use for permanent deletion.
+ * Answer `POST /session/:id/close`, the permanent close. Cursor's close never
+ * deletes the user's Cursor-side conversation; the bridge serves no DELETE.
  *
  * A close whose work has not stopped yet answers 503 `pending`, never success:
  * the backend keeps its durable teardown intent and retries, and the retry
- * joins the same operation.
- */
-/**
- * Answer a close operation, including one whose removal failed to publish.
- *
- * A failed publication leaves the session registered and fenced, and the next
- * request republishes it — which is exactly `pending`. The close route shares
- * its contract with every managed bridge (`{ closed: false, pending: true }`,
- * see `tests/conformance/bridge-contract`), so it says so in that shape while
- * keeping the persistence kind and code the DELETE route has always carried.
+ * joins the same operation. A failed publication leaves the session registered
+ * and fenced, and the next request republishes it — which is exactly
+ * `pending`, in the shape every managed bridge shares (see
+ * `tests/conformance/bridge-contract`), with the persistence kind and code.
  */
 async function answerCloseOperation(
   response: ServerResponse,
   operation: Promise<"closed" | "pending">,
-  route: "delete" | "close",
 ): Promise<void> {
   let outcome: "closed" | "pending";
   try {
     outcome = await operation;
   } catch (error) {
-    if (route !== "close" || !(error instanceof PersistenceError)) throw error;
+    if (!(error instanceof PersistenceError)) throw error;
     return json(response, 503, {
       closed: false,
       pending: true,
@@ -922,14 +890,10 @@ async function answerCloseOperation(
       code: error.code,
     });
   }
-  return answerClose(response, outcome, route);
+  return answerClose(response, outcome);
 }
 
-function answerClose(
-  response: ServerResponse,
-  outcome: "closed" | "pending",
-  route: "delete" | "close",
-): void {
+function answerClose(response: ServerResponse, outcome: "closed" | "pending"): void {
   if (outcome === "pending") {
     return json(response, 503, {
       closed: false,
@@ -937,11 +901,7 @@ function answerClose(
       error: "Cursor session close is still in progress",
     });
   }
-  return json(
-    response,
-    200,
-    route === "delete" ? { deleted: true } : { closed: true, retained: true },
-  );
+  return json(response, 200, { closed: true, retained: true });
 }
 
 async function handleConfig(

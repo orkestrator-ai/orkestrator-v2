@@ -40,8 +40,6 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.codex");
 
-export const BRIDGE_SESSION_REGISTRY_VERSION = 2;
-
 export interface PersistedBridgeSession {
   bridgeSessionId: string;
   threadId: string;
@@ -61,11 +59,6 @@ export interface PersistedBridgeSession {
   /** Bounded content-free async-question attention index. */
   asyncQuestionItemIds?: string[];
   lastAccessed: string;
-}
-
-interface RegistryFile {
-  version: number;
-  sessions: PersistedBridgeSession[];
 }
 
 interface PersistedSessionTombstone {
@@ -275,10 +268,6 @@ export class BridgeSessionStore {
     return codexBridgeStateDir(this.codexHome);
   }
 
-  private path(): string {
-    return join(this.dir(), `bridge-sessions-${this.cwdHash}.json`);
-  }
-
   private recordsDir(): string {
     return join(this.dir(), `bridge-sessions-${this.cwdHash}`);
   }
@@ -317,16 +306,9 @@ export class BridgeSessionStore {
    */
   async load(): Promise<PersistedBridgeSession[]> {
     const cutoff = this.now() - this.retentionMs;
-    const legacy = await this.loadLegacy(cutoff);
-    // A failed migration is a cache miss, not a fatal error: this store holds no
+    // A failed adoption is a cache miss, not a fatal error: this store holds no
     // user data, and letting it throw here leaves the engine unstarted for the
     // whole process lifetime because nothing retries load().
-    let migrationFailed = false;
-    await this.migrateLegacy(legacy).catch((error) => {
-      migrationFailed = true;
-      this.warnPersistenceFailure(error);
-    });
-
     await this.adoptLoginRecords().catch((error) => this.warnPersistenceFailure(error));
 
     let names: string[];
@@ -334,7 +316,7 @@ export class BridgeSessionStore {
       await this.ensurePrivateStorage();
       names = await readdir(this.recordsDir());
     } catch {
-      return legacy;
+      return [];
     }
 
     const records = await Promise.all(
@@ -350,10 +332,10 @@ export class BridgeSessionStore {
           await chmod(path, PRIVATE_FILE_MODE);
           const value = JSON.parse(await readFile(path, "utf8")) as unknown;
           if (isPersistedSessionTombstone(value)) {
-            // A tombstone only exists to stop legacy migration re-publishing a
-            // record that was deleted. Past retention the legacy entry it shields
-            // against is itself expired, so keeping it would mean every session
-            // ever created leaves a permanent file behind.
+            // A tombstone only exists to stop login-record adoption
+            // re-publishing a record that was deleted. Past retention the
+            // record it shields against is itself expired, so keeping it would
+            // mean every session ever created leaves a permanent file behind.
             if (Date.parse(value.deletedAt) < cutoff) {
               await rm(path, { force: true }).catch(() => undefined);
             }
@@ -365,34 +347,26 @@ export class BridgeSessionStore {
         }
       }),
     );
-    const loaded = records.filter((record): record is PersistedBridgeSession => record !== null);
-    return migrationFailed && loaded.length === 0 ? legacy : loaded;
+    return records.filter((record): record is PersistedBridgeSession => record !== null);
   }
 
   /**
    * The durable record for one session, as `load()` would report it, or null.
    *
-   * Reads only that session's record file: no legacy migration, login-record
-   * adoption, directory listing, chmod or sweep. Those all belong to `load()`,
+   * Reads only that session's record file: no login-record adoption, directory listing, chmod or sweep. Those all belong to `load()`,
    * which runs at startup; this is for hot paths that ask about one session
    * (every Codex config read). A tombstone, an invalid or expired record, or a
    * record naming another session is null, exactly as `load()` would drop it.
    *
-   * Only when no record file exists does it look further, at the copies
-   * `load()` would have published there first: the former aggregate file, then
-   * this login's own records directory. Both are read, never written, and both
-   * are normally absent once `load()` has run.
+   * Only when no record file exists does it look further, at the copy `load()`
+   * would have published there first: this login's own records directory. It
+   * is read, never written, and normally absent once `load()` has run.
    */
   async loadRecord(bridgeSessionId: string): Promise<PersistedBridgeSession | null> {
     const cutoff = this.now() - this.retentionMs;
     const key = `${this.recordKey(bridgeSessionId)}.json`;
     const record = await this.readRecordFile(join(this.recordsDir(), key), bridgeSessionId, cutoff);
     if (record !== RECORD_FILE_MISSING) return record;
-
-    const legacy = (await this.readLegacy(cutoff)).find(
-      (session) => session.bridgeSessionId === bridgeSessionId,
-    );
-    if (legacy) return legacy;
 
     const loginRecords = this.loginRecordsDir();
     if (!loginRecords) return null;
@@ -443,11 +417,10 @@ export class BridgeSessionStore {
   }
 
   /**
-   * Publishes a tombstone rather than unlinking, so a legacy migration that has
-   * already read the aggregate file into memory cannot re-publish the record.
-   * The tombstone is written unconditionally — "the aggregate file is gone" is
-   * not proof no process is still holding its contents — and is collected by
-   * `load()` once it passes retention.
+   * Publishes a tombstone rather than unlinking, so a login-record adoption
+   * that still finds the record in this login's own directory cannot
+   * re-publish it. The tombstone is collected by `load()` once it passes
+   * retention.
    */
   async remove(bridgeSessionId: string): Promise<void> {
     await this.publishRemoval(bridgeSessionId).catch((error) => this.warnPersistenceFailure(error));
@@ -474,57 +447,6 @@ export class BridgeSessionStore {
     });
     this.writeChain = attempt.catch(() => undefined);
     await attempt;
-  }
-
-  private async loadLegacy(cutoff: number): Promise<PersistedBridgeSession[]> {
-    try {
-      await chmod(this.dir(), PRIVATE_DIRECTORY_MODE);
-      await chmod(this.path(), PRIVATE_FILE_MODE);
-    } catch {
-      return [];
-    }
-    return this.readLegacy(cutoff);
-  }
-
-  /** The former aggregate file's valid entries, read without touching modes. */
-  private async readLegacy(cutoff: number): Promise<PersistedBridgeSession[]> {
-    try {
-      const parsed = JSON.parse(await readFile(this.path(), "utf8")) as RegistryFile;
-      if (parsed.version !== BRIDGE_SESSION_REGISTRY_VERSION) return [];
-      if (!Array.isArray(parsed.sessions)) return [];
-      return parsed.sessions.filter((session) =>
-        isPersistedBridgeSession(session, this.cwdHash, cutoff),
-      );
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * One-way compatibility with the former aggregate v2 file. `link` publishes
-   * each migrated temp file only when that record does not already exist, so a
-   * concurrent newer per-session write always wins.
-   */
-  private async migrateLegacy(sessions: PersistedBridgeSession[]): Promise<void> {
-    if (sessions.length === 0) return;
-    await this.ensurePrivateStorage();
-    await Promise.all(
-      sessions.map(async (session) => {
-        const target = this.recordPath(session.bridgeSessionId);
-        const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-        await writeFile(temporary, `${JSON.stringify(session, null, 2)}\n`, {
-          encoding: "utf8",
-          mode: PRIVATE_FILE_MODE,
-        });
-        await chmod(temporary, PRIVATE_FILE_MODE);
-        await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "EEXIST") throw error;
-        });
-        await chmod(target, PRIVATE_FILE_MODE);
-        await rm(temporary, { force: true }).catch(() => undefined);
-      }),
-    );
-    await rm(this.path(), { force: true }).catch(() => undefined);
   }
 
   /**

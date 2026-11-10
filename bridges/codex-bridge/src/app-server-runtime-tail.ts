@@ -1,9 +1,7 @@
-import { accountUsageFromLimits } from "./app-server-runtime-base.js";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import type { CodexRuntimeSessions } from "./app-server-runtime-sessions.js";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
-import type { EngineAccountUsageWindow } from "./engine/types.js";
 import type { SessionPhase } from "./sessions/thread-registry.js";
 import type { TurnAccumulator } from "./sessions/turn-accumulator.js";
 import { join, relative, isAbsolute } from "node:path";
@@ -146,7 +144,7 @@ export class CodexRuntimeTail {
   /**
    * Ordinary tab close: retire this bridge session without touching the rollout.
    *
-   * Never calls `thread/delete`. What close adds over DELETE is proof:
+   * Never calls `thread/delete`. What close adds over `deleteSession` is proof:
    *
    * 1. Admission is fenced first (`closingSessionIds`): a prompt, steer,
    *    compaction or review arriving from here on is refused with
@@ -241,21 +239,6 @@ export class CodexRuntimeTail {
       log.warn("models.list-failed", { error: formatLogError(error, { stack: false }) });
     }
     return this.ctx.options.loadCachedModels();
-  }
-
-  /**
-   * Account plan limits, read fresh from app-server without a thread.
-   *
-   * Distinct from `getUsage`, which is session-scoped. The settings page has no
-   * session, and the app-server answers `account/rateLimits/read` globally.
-   */
-  async readPlanUsage(): Promise<EngineAccountUsageWindow[] | undefined> {
-    const limits = await this.ctx.options.engine.readRateLimitWindows();
-    const windows = accountUsageFromLimits(limits);
-    // An empty list is a soft-empty read: app-server returned no usable windows
-    // (or the payload was malformed). Signal unavailable rather than letting
-    // the settings card state the account has no metered limits.
-    return windows.length > 0 ? windows : undefined;
   }
 
   // ----------------------------------------------------------------- history

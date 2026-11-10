@@ -453,11 +453,11 @@ describe("measured shell command changes through the bridge", () => {
 
     // Reload: release the tab, then adopt the vendor session again. The
     // transcript comes back from the agent's replay, the badge from the journal.
-    const deleted = await nativeFetch(`${second.base}/session/${created.id}`, {
-      method: "DELETE",
+    const closed = await nativeFetch(`${second.base}/session/${created.id}/close`, {
+      method: "POST",
       headers: second.headers,
     });
-    expect(deleted.status).toBe(200);
+    expect(closed.status).toBe(200);
     const listed = (await nativeFetch(`${second.base}/session/list`, {
       headers: second.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };

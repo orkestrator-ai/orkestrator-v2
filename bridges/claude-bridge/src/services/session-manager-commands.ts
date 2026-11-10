@@ -595,11 +595,6 @@ export async function readClaudeCommandCatalogue(
   return catalogueResponse(session);
 }
 
-/** Legacy list shape, kept for in-process callers that only need rows. */
-export async function readSessionCommands(sessionId: string): Promise<NativeAgentSlashCommand[]> {
-  return (await readClaudeCommandCatalogue(sessionId)).commands;
-}
-
 /**
  * A failed refresh. `retained` marks the list as one the bridge could not
  * re-read; a list that *was* re-read after a partial reload failure is still

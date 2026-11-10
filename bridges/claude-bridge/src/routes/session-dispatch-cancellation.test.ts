@@ -14,7 +14,7 @@ import sessionRoutes from "./session.js";
 
 const app = new Hono().route("/session", sessionRoutes);
 
-for (const action of ["stop", "delete"] as const) {
+for (const action of ["stop", "close"] as const) {
   test(`structured durable claim settles when ${action} interrupts preparation`, async () => {
     await withTemporaryClaudeHome("claude-structured-cancel-", async () => {
       const session = createSession("structured cancellation");
@@ -34,7 +34,7 @@ for (const action of ["stop", "delete"] as const) {
       );
       const queries = mockQuery.mock.calls.length;
       let prompt: Promise<Response> | undefined;
-      let deletion: Promise<Response> | undefined;
+      let closing: Promise<Response> | undefined;
       try {
         prompt = app.request(`/session/${session.id}/prompt`, {
           method: "POST",
@@ -51,7 +51,7 @@ for (const action of ["stop", "delete"] as const) {
           });
           expect(stopped.status).toBe(200);
         } else {
-          deletion = app.request(`/session/${session.id}`, { method: "DELETE" });
+          closing = app.request(`/session/${session.id}/close`, { method: "POST" });
           await waitFor(() => session.deleting === true);
         }
         release.resolve();
@@ -60,8 +60,8 @@ for (const action of ["stop", "delete"] as const) {
         expect(
           (await readSessionPreferences(sdkSessionId))?.dispatchedRequestIds ?? [],
         ).not.toContain(requestId);
-        if (deletion) {
-          expect((await deletion).status).toBe(200);
+        if (closing) {
+          expect((await closing).status).toBe(200);
           expect(getSession(session.id)).toBeUndefined();
         } else {
           expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
@@ -69,7 +69,7 @@ for (const action of ["stop", "delete"] as const) {
       } finally {
         release.resolve();
         await prompt;
-        await deletion;
+        await closing;
         prepare.mockRestore();
       }
     });

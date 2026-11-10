@@ -550,7 +550,11 @@ launcher prints when this mode is on and why.
 - **Linux** starts Electron on Chromium's headless Ozone platform, with the GPU
   off, `--password-store=basic` (so `safeStorage` never reaches the signed-in
   user's keyring, and the desktop's remote connection tokens last only for the
-  session) and neither display variable.
+  session) and neither display variable. There is no display for a native
+  dialog: Electron's GTK message box fails a `CHECK` there and kills the
+  process with SIGTRAP, so the main process answers every dialog as
+  cancelled instead (`desktop.dialog` `no-display-cancelled`, source and
+  response only) unless a test has replaced `dialog.showMessageBox`.
 - **macOS** has no Ozone, so Electron runs normally with
   `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`: the app takes the `accessory`
   activation policy (no Dock icon, no menu bar, never the active app), every
@@ -585,6 +589,33 @@ accepted and change nothing; when anything above would have made Linux headless
 (the flag, a variable, or no terminal), the launcher says that Electron opens a
 window and which input it ignored, so an agent's run there does open a window
 on the desktop.
+
+##### Stopping a profile, and core dumps
+
+The launcher's stop, and `dev:stop` when the launcher is already gone, send
+SIGTERM to Electron's top process only and let Chromium shut down its own
+children; only the SIGKILL sent to whatever outlives the grace period (3 s in
+the launcher) takes Electron's whole process group. A SIGTERM to the whole
+group killed Chromium's GPU process and its zygote under a running browser,
+whose relaunch of the GPU process then failed; with `--disable-gpu` there is
+no GPU mode left to fall back to, so the browser died on
+`FATAL ... gpu_data_manager_impl_private.cc:389] GPU process isn't usable.
+Goodbye.` with SIGTRAP and a 1 GB core dump (to-dos 7552 and 7554, retired
+2026-11-10; the symbolised stack is in
+[process-crashes-and-kills.md](../debugging/process-crashes-and-kills.md#5-headless-dev-profile-electron-sigtrap)).
+A stopped headless profile now logs `[backend] shutdown.finished code=0`.
+
+On Linux an agent-test profile's Electron, and everything it starts, also runs
+with a core file size limit of 0, set by the launcher for that process tree
+only. A host whose `kernel.core_pattern` is a relative name such as `core`
+writes a crashing process's dump into its working directory, which for a
+profile is the checkout: untracked, one `git add -A` from a commit. A crash
+still shows in `electron.log` (Chromium's `FATAL` line, and
+`.../electron exited with signal SIGTRAP`), and systemd-coredump still records
+it in the journal. To keep the dumps for a diagnosis, start the profile with
+`ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1`; they then land in the checkout root as
+`core.<pid>`, so move them out before any `git add`. `headless-profile.spec.ts`
+checks the limit on each run. `mise run dev` and macOS keep their usual limit.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
 `capturePage` hangs in this mode on Linux, and on macOS the menu bar and the

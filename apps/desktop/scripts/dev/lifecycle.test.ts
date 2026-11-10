@@ -1,9 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import {
   HEADLESS_ELECTRON_SWITCHES,
@@ -17,8 +19,14 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  AGENT_TEST_CORE_DUMPS_ENV,
+  electronCommand,
   electronHeadlessNotice,
   electronLaunch,
+  ELECTRON_STOP_GRACE_MS,
+  signalsProcessGroup,
+  stopLauncherChildren,
+  type OwnedChildSignal,
   launcherIsInteractive,
   electronReadinessTimeoutMs,
   outputTail,
@@ -198,6 +206,7 @@ describe("Electron readiness", () => {
       });
       Object.assign(process.env, launchEnv);
       const notice = spyOn(console, "log").mockImplementation(() => {});
+      let electronCommandName: string | undefined;
       let electronArgs: readonly string[] | undefined;
       let electronOptions: SpawnOptions | undefined;
       try {
@@ -211,6 +220,7 @@ describe("Electron readiness", () => {
             ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
           spawn: ((command: string, args: readonly string[], options: SpawnOptions) => {
             if (command === "bun") return vite;
+            electronCommandName = command;
             electronArgs = args;
             electronOptions = options;
             return electron;
@@ -258,10 +268,25 @@ describe("Electron readiness", () => {
                 `Electron opens a window: headless mode exists only on Linux and macOS, so ${windowNoticeCause} changes nothing on ${platform}.`,
               ],
         );
-        expect(electronArgs).toEqual([
+        const electronMainArgs = [
           ...(mode === "ozone" ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",
-        ]);
+        ];
+        // An agent-test profile on Linux starts Electron with no core dumps (7554).
+        const noCoreDumps = flavor === "agent-test" && platform === "linux";
+        expect(electronCommandName).toEqual(
+          noCoreDumps ? "/bin/sh" : expect.stringMatching(/node_modules\/\.bin\/electron$/),
+        );
+        expect(electronArgs).toEqual(
+          noCoreDumps
+            ? [
+                "-c",
+                expect.stringContaining("ulimit -c 0"),
+                expect.any(String),
+                ...electronMainArgs,
+              ]
+            : electronMainArgs,
+        );
         expect(electronOptions?.env).not.toBe(process.env);
         expect(electronOptions?.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
         expect(electronOptions?.env?.DISPLAY).toBe(
@@ -501,6 +526,158 @@ describe("Electron launch", () => {
   test("headless changes nothing on Windows", () => {
     expect(electronLaunch(true, "win32", env)).toEqual(electronLaunch(false, "win32", env));
     expect(electronLaunch(true, "win32", env).env.DISPLAY).toBe(":0");
+  });
+});
+
+describe("Electron core dumps", () => {
+  const executable = "/repo/apps/desktop/node_modules/.bin/electron";
+  const args = ["--ozone-platform=headless", "apps/desktop/dist/electron/main.js"];
+
+  test("an agent-test profile on Linux starts Electron with a core limit of 0", () => {
+    const command = electronCommand(executable, args, {
+      flavor: "agent-test",
+      platform: "linux",
+      env: {},
+    });
+    expect(command.command).toBe("/bin/sh");
+    expect(command.args).toEqual(["-c", 'ulimit -c 0 && exec "$0" "$@"', executable, ...args]);
+  });
+
+  test("the variable keeps core dumps for a diagnosis; only 1 counts", () => {
+    expect(
+      electronCommand(executable, args, {
+        flavor: "agent-test",
+        platform: "linux",
+        env: { [AGENT_TEST_CORE_DUMPS_ENV]: "1" },
+      }),
+    ).toEqual({ command: executable, args });
+    for (const value of ["0", "true", ""]) {
+      expect(
+        electronCommand(executable, args, {
+          flavor: "agent-test",
+          platform: "linux",
+          env: { [AGENT_TEST_CORE_DUMPS_ENV]: value },
+        }).command,
+      ).toBe("/bin/sh");
+    }
+  });
+
+  test("mise run dev and other platforms start Electron directly", () => {
+    expect(
+      electronCommand(executable, args, { flavor: "development", platform: "linux", env: {} }),
+    ).toEqual({ command: executable, args });
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(
+        electronCommand(executable, args, { flavor: "agent-test", platform, env: {} }),
+      ).toEqual({ command: executable, args });
+    }
+  });
+
+  test.skipIf(process.platform !== "linux")(
+    "the wrapper really sets the limit and keeps the PID it was spawned with",
+    async () => {
+      // `sh -c` as the "Electron" prints its own PID and core limit, so this
+      // proves the exec (the launcher tracks the spawned PID) and the limit.
+      const command = electronCommand("/bin/sh", ["-c", 'echo "$$ $(ulimit -c)"'], {
+        flavor: "agent-test",
+        platform: "linux",
+        env: {},
+      });
+      const child = spawn(command.command, command.args, { stdio: ["ignore", "pipe", "ignore"] });
+      let output = "";
+      child.stdout!.on("data", (chunk: Buffer) => (output += chunk.toString()));
+      const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
+      expect(code).toBe(0);
+      expect(output.trim()).toBe(`${child.pid} 0`);
+    },
+  );
+});
+
+describe("stopping the launcher's children", () => {
+  type FakeChild = ChildProcess & { exitNow: (signal: NodeJS.Signals | null) => void };
+  let nextPid = 0;
+  const fakeChild = (): FakeChild => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: fakePid(++nextPid),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+    });
+    return Object.assign(child, {
+      exitNow(signal: NodeJS.Signals | null) {
+        if (signal) child.signalCode = signal;
+        else child.exitCode = 0;
+        child.emit("exit", child.exitCode, child.signalCode);
+      },
+    }) as unknown as FakeChild;
+  };
+  const recorder = () => {
+    const sent: Array<{ child: string; signal: NodeJS.Signals; processGroup: boolean }> = [];
+    return { sent, names: new Map<ChildProcess, string>() };
+  };
+
+  test("SIGTERM goes to Electron's top process alone; only SIGKILL takes its group", () => {
+    // A group SIGTERM kills Chromium's GPU process and zygote under a running
+    // browser, which then dies on "GPU process isn't usable" with a core dump.
+    expect(signalsProcessGroup("electron", "SIGTERM")).toBe(false);
+    expect(signalsProcessGroup("electron", "SIGINT")).toBe(false);
+    expect(signalsProcessGroup("electron", "SIGKILL")).toBe(true);
+    expect(signalsProcessGroup("vite", "SIGTERM")).toBe(true);
+    expect(signalsProcessGroup("vite", "SIGKILL")).toBe(true);
+    expect(signalsProcessGroup("launcher", "SIGTERM")).toBe(false);
+    expect(signalsProcessGroup("backend", "SIGKILL")).toBe(false);
+  });
+
+  test("an Electron that quits within the grace period is never killed", async () => {
+    const { sent, names } = recorder();
+    const electron = fakeChild();
+    const vite = fakeChild();
+    names.set(electron, "electron").set(vite, "vite");
+    const send: OwnedChildSignal = (child, signal, processGroup) => {
+      sent.push({ child: names.get(child)!, signal, processGroup });
+      // Electron quits on its own a moment later; Vite dies of the signal.
+      if (child === electron) setTimeout(() => electron.exitNow(null), 5);
+      else vite.exitNow(signal);
+    };
+    const started = Date.now();
+    await stopLauncherChildren({ electron, vite }, { send, graceMs: 10_000 });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(sent).toEqual([
+      { child: "electron", signal: "SIGTERM", processGroup: false },
+      { child: "vite", signal: "SIGTERM", processGroup: true },
+    ]);
+  });
+
+  test("an Electron still running after the grace period has its group killed", async () => {
+    const { sent, names } = recorder();
+    const electron = fakeChild();
+    const vite = fakeChild();
+    names.set(electron, "electron").set(vite, "vite");
+    const send: OwnedChildSignal = (child, signal, processGroup) => {
+      sent.push({ child: names.get(child)!, signal, processGroup });
+      if (child === vite || signal === "SIGKILL") child.emit("exit", null, signal);
+    };
+    await stopLauncherChildren({ electron, vite }, { send, graceMs: 20 });
+    expect(sent).toEqual([
+      { child: "electron", signal: "SIGTERM", processGroup: false },
+      { child: "vite", signal: "SIGTERM", processGroup: true },
+      { child: "electron", signal: "SIGKILL", processGroup: true },
+      { child: "vite", signal: "SIGKILL", processGroup: true },
+    ]);
+  });
+
+  test("children that already exited, or never started, get no signal", async () => {
+    const { sent } = recorder();
+    const electron = fakeChild();
+    electron.exitNow("SIGTRAP");
+    await stopLauncherChildren(
+      { electron, vite: null },
+      { send: (_child, signal, processGroup) => sent.push({ child: "?", signal, processGroup }) },
+    );
+    expect(sent).toEqual([]);
+  });
+
+  test("the grace period fits inside dev:stop's 5 s wait for the launcher", () => {
+    expect(ELECTRON_STOP_GRACE_MS).toBeLessThan(5_000);
   });
 });
 

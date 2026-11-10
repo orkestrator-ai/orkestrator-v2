@@ -205,6 +205,16 @@ archived in Cursor's own UI. Both vendors refuse to continue an archived
 conversation, so choosing one restores it first; a refused restore does not
 resume.
 
+OpenCode offers it for 2.x conversations only. Its platform table reports
+`actions.archive`, and the backend's OpenCode router sends an `opencode2:` id to
+the session's 2.x server, which sets `archived` with `PATCH /api/session/:id`
+and lists archived rows on request (`opencode2/sessions.ts`). The same picker
+also lists 1.x conversations, which the 1.x wire cannot archive: the 1.x
+provider marks each of its rows `archivable: false`, the dialog offers no
+remove on those rows, and the router refuses a 1.x id. As on Codex and Cursor,
+a 2.x conversation the server still holds for a tab or a run is refused
+("This conversation is open in a tab"); restoring is always allowed.
+
 ### Rewinding a conversation and Pi branches
 
 Codex, Pi and Cursor report `actions.rewindMessages`. The native tab offers
@@ -428,6 +438,20 @@ which is a deliberate choice: an Orkestrator agent tab is an interactive session
 in an isolated environment. `plan` mode is the read-only alternative, and the
 SDK's `canUseTool` callback is what routes a tool request back through the
 bridge's approval flow when one is raised.
+
+A session's CLI stays warm between turns (`session-manager-runtime.ts`), so a
+follow-up, a model or mode change and a parked approval all go to the same
+process; a launch-only change (bypass mode, plugins, policy and the rest of
+`claudeLaunchProfile`) replaces an idle CLI instead. Each CLI the bridge
+launches takes the next number from a bridge-wide counter, which
+`/session/:id/runtime-health` serves as `summary.runtimeGeneration` beside
+`attached`/`detached` and Agent Info shows as "process N". The number is how a
+test or a user tells "the same CLI" from "a new one" without reading a PID; it
+restarts at 1 with the bridge. The backend caches that read for 30 seconds
+(`INTERACTIVE_RUNTIME_METADATA_TTL_MS`) and refreshes it in the background, so
+the projection can show the previous number for up to that long after a
+relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
+against a loopback model and asserts the number holds (todo 0005 task 8).
 
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
@@ -965,7 +989,25 @@ sandbox (a `provider` sandbox, or a coordinator qualified on it) when
 bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
 Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
 probe's reason instead of every Bash call failing; see
-[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux). Inside a
+container environment the probe answers `missing-programs` (the image ships
+neither `bwrap` nor `socat`, and Docker's default seccomp profile and masked
+`/proc` would refuse bubblewrap anyway), so a container session overridden to
+`provider` is refused the same way; the container is its sandbox.
+
+Where Claude's provider sandbox runs, it holds the same two options on macOS
+(Seatbelt) and Linux (bubblewrap): under auto-approval a command cannot write
+outside its writable paths or escape with `dangerouslyDisableSandbox`
+(`allowUnsandboxedCommands: false`), and a restricted network refuses an
+unlisted host at the sandbox proxy without a card (`strictAllowlist`). One
+difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
+and on Linux each command gets its own network namespace whose only way out
+is the proxy, which `NO_PROXY` skips for loopback. So with full network a
+sandboxed command on Linux cannot reach a service on the machine's loopback
+directly (a dev server, a local database); on macOS it can. Agent Info does
+not say so yet ([7563](../todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md)).
+`mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
+either system (to-do 0001 task 9).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the

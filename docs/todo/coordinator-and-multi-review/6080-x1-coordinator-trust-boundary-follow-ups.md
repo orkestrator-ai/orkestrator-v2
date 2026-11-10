@@ -6,7 +6,7 @@ Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at 
 
 1. **Run the live read-only step**: run the home-mail steps of the `read-only` scenario on a real provider. Status: open.
 2. **Prove the read boundary under bubblewrap**: the deny rule is proven on Seatbelt only. Status: done (2026-11-06, bubblewrap 0.13.1).
-3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in [7400](7400-cursor-coordinator-data-dir-reads.md), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in [7402](7402-opencode-coordinator-user-config-dir.md).
+3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in [7400](7400-cursor-coordinator-data-dir-reads.md), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in 7402 (done 2026-11-10 and retired; see `docs/architecture/coordinator.md`).
 4. **Decide what a read-only review turn may read**: a worker bridge's read-only turns have no read boundary. Status: done (decided: leave as is).
 5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. Status: open. The note is on every path and tested (2026-11-09); left: a live run showing a real worker reads it, which needs a billed provider turn (see the task's Remaining).
 6. **Measure the default**: how often coordinators need environments they did not create. Status: open (depends on usage).
@@ -187,7 +187,7 @@ Took the recommended option where the provider has a gate that sees the path:
 - Pi: the approval gate (`interactions.ts`) refuses `read`, `grep`, `find` and `ls` that would reach the data directory, whatever the approval policy (`bridges/pi-bridge/src/read-boundary.ts`). The checkout and the coordinator attachment root stay readable. Pi's path spellings (`@`, unicode spaces, `file://`, `~`) are normalised as its `resolveToCwd` does; a search rooted above the directory is refused, a listing of an ancestor is not (it shows names only).
 - OpenCode: the defect is fixed with a server plugin, `orkestrator-coordinator-read-boundary.js` (`opencode-read-boundary-plugin.ts`), installed beside the credential plugin. It resolves `read`, `grep`, `glob` and `list` paths and throws in `tool.execute.before`. It reads the protected directory from its own process environment, so it is inert in every server but a coordinator's. A permission rule could not fix this, because OpenCode matches rules against the path as written. Qualified on the pinned binary in `opencode-coordinator-read-boundary-live.test.ts` (slow tier; set `ORKESTRATOR_POLICY_OPENCODE_PATH` to a worktree binary from `mise run download:opencode`).
 - Tier notes were left unchanged: the reasons the picker shows do not mention the data directory today, so the tool-level nature of the Pi and OpenCode checks is recorded in `docs/architecture/coordinator.md` instead. Both stay `provider-configured`.
-- Cursor and Grok are recorded in 7400 and 7401 with what blocks them; the OpenCode plugin's absence under a user `OPENCODE_CONFIG_DIR` is 7402.
+- Cursor and Grok are recorded in 7400 and 7401 with what blocks them; the OpenCode plugin's absence under a user `OPENCODE_CONFIG_DIR` is 7402. (2026-11-10: 7400 task 1 built, Cursor's reading tools now check paths, with a live Cursor run left; 7402 done and retired, the plugin now loads beside a user directory, qualified on the pinned binary.)
 
 ### Task 4: read-only review turns keep no read boundary
 
@@ -224,7 +224,7 @@ work can still reach the accepted-risk decision.
 
 ## Related
 
-- [7400](7400-cursor-coordinator-data-dir-reads.md), [7401](7401-grok-coordinator-data-dir-reads.md), [7402](7402-opencode-coordinator-user-config-dir.md): follow-ups from task 3
+- [7400](7400-cursor-coordinator-data-dir-reads.md), [7401](7401-grok-coordinator-data-dir-reads.md), and 7402 (retired 2026-11-10): follow-ups from task 3
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#which-environments-a-coordinator-may-act-on)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)

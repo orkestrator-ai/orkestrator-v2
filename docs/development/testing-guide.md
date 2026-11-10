@@ -1028,7 +1028,10 @@ credential, login or provider: every turn goes to the fake model.
   N rounds of: `--busy-burst-files` (default 200) files written into every
   environment at once and removed; a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
-  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  --enqueue`), with `--busy-turn-files` (default 0) files written into
+  `busy-1` while that turn is held and removed when the round ends, so the
+  turn and thread-segment owners get file lists past the 2,000-row
+  measurement cap (todo 4960); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
   which Pi parks as an approval, and agent mail to that tab; with two
   clients the second one's link cut (the outage link of
   `client-outage-support.ts`), with one its document hidden; the approval
@@ -1038,8 +1041,13 @@ credential, login or provider: every turn goes to the fake model.
   then submits fixed finding-free results) followed to `ready`, watched by
   every client whose link is up from a review view of its own (a second
   signed-in context opened on `busy-2` before the launch, selecting the
-  review's tab and recording each phase its header shows); and the cut or
-  hidden client restored.
+  review's tab and recording each phase its header shows), the previous
+  round's review cancelled and its tabs closed first (an environment holds at
+  most nine tabs, so without that every launch after the ninth round is
+  refused); and the cut or hidden client restored. A burst's badge is waited
+  for only up to the 2,000 untracked files the environment scan counts lines
+  for. The driver runs every step through this checkout's CLI, so run
+  `mise run build:cli` first.
 - Measures: each row of the latency budgets the round reaches, from the
   moment its cause is known (the fake model's arrival times, or the command's
   return) to what each connected client's page showed, plus backend rows

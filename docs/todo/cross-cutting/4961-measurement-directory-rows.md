@@ -4,11 +4,11 @@ From efficiency report (`git show 413bd6219:docs/reports/2026-10-29-logging-and-
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
+Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. Task 1's dependency re-checked 2026-11-10 against `main` at `c98b20e6f`: the 4960 soak it waited on is done.
 
 ### Tasks
 
-1. **Re-check directory rows after the soak**: E2 took the report's recommendation not to add them now. Status: open (depends on [4960](4960-measurement-rows-live-soak.md) task 1).
+1. **Re-check directory rows after the soak**: E2 took the report's recommendation not to add them now. Status: open (the 4960 soak is done, 2026-11-10; what it measured is under Investigation, and the decision is left to make).
 
 ### 1. Re-check directory rows after the soak
 
@@ -17,6 +17,8 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 **Context.** The cap alone bounds the table, so this decides only how a capped list reads. Rows with text changes are kept first, then the rest by path, which helps but does not stop a bulk add of text files filling the list.
 
 **Investigation.** A row's `path_id` identifies one file: `resolveLiveDetail` in `diff-bodies.ts` matches it, `restore.ts` filters by it, and `ChangeFileRow.rowId` encodes its ordinal. No row type represents a directory. In a 2,300-file real list on 2026-11-04 the source files sorted first and the bulk followed, as designed.
+
+The 4960 busy soak on 2026-11-10 ([Change tracking: busy live soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)), whose workload writes one bulk directory per environment and per held turn, answers the "common" half: past the cap lists were common (237 of 1,129 measurements at the end, 272 of 928 at the peak), and capped turn lists made up most of the ledger, since a finished turn keeps its list for the 30-day window (about 2,000 rows, 0.5 MiB, per bulk turn). One directory row per bulk directory would cut those to a handful of rows. It does not answer whether a capped list reads poorly; that is a judgement on the Changes view, and the soak drove no reader of a capped list. So the decision below is now a trade between that storage and a new row kind, rather than waiting on a measurement.
 
 **Decisions.**
 
@@ -30,5 +32,5 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 
 ## Related
 
-- [4960](4960-measurement-rows-live-soak.md)
+- 4960 (retired 2026-11-10): the soak, now in [Change tracking: busy live soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)
 - [Change tracking](../../architecture/change-tracking.md#retention-and-backup)

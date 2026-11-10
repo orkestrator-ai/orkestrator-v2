@@ -637,6 +637,7 @@ export const ResumeEntrySchema = openRecord({
   parentId: optionalString,
   branchLabel: optionalString,
   archived: optionalBoolean,
+  archivable: optionalBoolean,
 });
 
 /** `NativeAgentForkOutcome` (native-agent.ts). */

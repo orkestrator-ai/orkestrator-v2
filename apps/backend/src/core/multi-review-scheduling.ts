@@ -82,6 +82,39 @@ export function supervisionDemand(
 }
 
 /**
+ * Tool-mode result slots of turns the workflow has sent and is still
+ * observing: the active step's request and every running reviewer's.
+ *
+ * A model submits its result through a tool call, inside its turn, so the
+ * acceptance (and the `result-accepted` wake it raises) always lands before
+ * the turn can end. The pass that wake starts usually still finds the turn
+ * running, and nothing announces the turn's end afterwards: these sessions
+ * are not native agent sessions, so the activity sweep that raises
+ * `provider-transition` never sees them. The caller polls an accepted slot on
+ * a short settle cadence instead of the observation interval (todo 7557).
+ */
+export function resultKeysAwaitingTurnEnd(workflow: MultiReviewWorkflow): string[] {
+  const keys: string[] = [];
+  const request = workflow.activeRequest;
+  if (request?.resultTransport === "tool-v1" && request.state === "sent") {
+    keys.push(request.requestId);
+  }
+  if (workflow.phase === "reviewing") {
+    for (const reviewer of workflow.reviewers) {
+      if (
+        reviewer.status === "running" &&
+        reviewer.dispatchState === "sent" &&
+        reviewer.resultTransport === "tool-v1" &&
+        reviewer.requestId
+      ) {
+        keys.push(reviewer.requestId);
+      }
+    }
+  }
+  return keys;
+}
+
+/**
  * A graph-engine review whose run has not settled yet (item 301): the
  * service projects the run onto it and runs none of its own steps. Once the
  * run settles the record is an ordinary settled review.

@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import {
-  ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
+  ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES,
   initialContainerHostReachability,
   type ContainerHostProbe,
   type ContainerHostProbeOutcome,
@@ -406,7 +406,7 @@ export function buildRootlessHostRemediation(port: number): ContainerHostRemedia
       `Docker runs rootless, so containers reach this computer only through RootlessKit, which by default refuses connections to its loopback addresses, where Orkestrator's agent tools server answers on port ${port}. A host firewall rule cannot help: this traffic never reaches it. Container agents use that server to submit review results, send mail and update tickets.`,
       "Allow host loopback for your Docker user service with the commands below, which restart it. Restarting Docker stops every running container, Orkestrator's included; start the environments again afterwards. If you start dockerd-rootless.sh yourself, set DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false in its environment instead.",
       `This lets every container on this Docker daemon connect to services that listen on this computer's loopback addresses. Orkestrator's restricted containers still reach only port ${port} through their firewall; full-access containers and containers Orkestrator does not manage can reach all of them.`,
-      `Then press “Check again”. New containers reach Orkestrator through RootlessKit's host address (${ROOTLESSKIT_HOST_LOOPBACK_ADDRESS}); rebuild existing environments so their network policy includes it.`,
+      "Then press “Check again”. New containers reach Orkestrator through RootlessKit's host loopback address, which the check finds and shows once it answers; rebuild existing environments so their network policy includes it.",
     ],
     commands: [
       [
@@ -953,7 +953,7 @@ export class ContainerHostReachabilityService {
 
       const hostGateway = topology.kind !== "desktop" ? "host-gateway" : null;
       // The scope closes, removing the network, before the verdict is published.
-      const { probes, loopbackProbes } = yield* Effect.scoped(
+      const { probes, loopbackProbes, loopbackAddress } = yield* Effect.scoped(
         this.probeHost(image, port, hostGateway, rootless, subnets, cleanup),
       );
       return this.finishProbes(startedAt, base, {
@@ -964,6 +964,7 @@ export class ContainerHostReachabilityService {
         rootless,
         probes,
         loopbackProbes,
+        loopbackAddress,
       });
     });
   }
@@ -1014,14 +1015,23 @@ export class ContainerHostReachabilityService {
           { concurrency: "unbounded" },
         );
       const probes = yield* probeBoth(hostGateway);
-      let loopbackProbes: ContainerHostProbe[] = [];
+      const loopbackProbes: ContainerHostProbe[] = [];
+      let loopbackAddress: string | null = null;
       // Rootless: host-gateway is inside RootlessKit's namespace; try its
-      // host loopback address before calling the path blocked.
+      // host loopback addresses (slirp4netns's, then gvisor-tap-vsock's)
+      // before calling the path blocked, and keep the first that answers.
       if (rootless && !probes.every((probe) => probe.outcome === "reachable")) {
-        yield* this.stopIfClosing;
-        loopbackProbes = yield* probeBoth(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS);
+        for (const address of ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES) {
+          yield* this.stopIfClosing;
+          const attempt = yield* probeBoth(address);
+          loopbackProbes.push(...attempt);
+          if (attempt.length > 0 && attempt.every((probe) => probe.outcome === "reachable")) {
+            loopbackAddress = address;
+            break;
+          }
+        }
       }
-      return { probes, loopbackProbes };
+      return { probes, loopbackProbes, loopbackAddress };
     });
   }
 
@@ -1037,9 +1047,12 @@ export class ContainerHostReachabilityService {
       rootless: boolean;
       probes: ContainerHostProbe[];
       loopbackProbes: ContainerHostProbe[];
+      /** The RootlessKit host loopback address every loopback probe reached through. */
+      loopbackAddress: string | null;
     },
   ): ContainerHostReachability {
-    const { firewall, subnets, image, port, rootless, probes, loopbackProbes } = scan;
+    const { firewall, subnets, image, port, rootless, probes, loopbackProbes, loopbackAddress } =
+      scan;
     const allSubnets = [
       ...new Set([...subnets, ...probes.map((probe) => probe.subnet).filter(isString)]),
     ];
@@ -1053,6 +1066,7 @@ export class ContainerHostReachabilityService {
         dockerRootless: true,
         port,
         loopbackProbes,
+        loopbackAddress,
       });
     }
 
@@ -1106,20 +1120,21 @@ export class ContainerHostReachabilityService {
   /** The verdict on a rootless daemon whose `host-gateway` probes did not all answer. */
   private finishRootless(
     startedAt: number,
-    input: ContainerHostReachability & { port: number; loopbackProbes: ContainerHostProbe[] },
+    input: ContainerHostReachability & {
+      port: number;
+      loopbackProbes: ContainerHostProbe[];
+      loopbackAddress: string | null;
+    },
   ): ContainerHostReachability {
-    const { loopbackProbes, ...common } = input;
+    const { loopbackProbes, loopbackAddress, ...common } = input;
     const { port } = input;
-    if (
-      loopbackProbes.length > 0 &&
-      loopbackProbes.every((probe) => probe.outcome === "reachable")
-    ) {
+    if (loopbackAddress) {
       return this.finish(startedAt, {
         ...common,
         status: "reachable",
         reason: null,
-        hostAddress: ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
-        summary: `Docker containers can reach Orkestrator's agent tools server on port ${port} through RootlessKit's host loopback (${ROOTLESSKIT_HOST_LOOPBACK_ADDRESS}).`,
+        hostAddress: loopbackAddress,
+        summary: `Docker containers can reach Orkestrator's agent tools server on port ${port} through RootlessKit's host loopback (${loopbackAddress}).`,
       });
     }
     if (!loopbackProbes.some((probe) => isBlockingOutcome(probe.outcome))) {

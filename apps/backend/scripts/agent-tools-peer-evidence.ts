@@ -5,7 +5,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
 import { type AgentToolsPeerGate, dockerPeerFilter } from "../src/core/agent-tools-peer-filter.js";
-import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES } from "@orkestrator/protocol/container-host-reachability";
 import {
   CONTAINER_HOST_PROBE_IMAGE,
   ContainerHostReachabilityService,
@@ -48,8 +48,9 @@ import {
  * login. `--platform-linux` runs the host check's Linux path on any host.
  *
  * On a rootless daemon (Docker info lists the `rootless` security option) the
- * three sources run a second time with `host.docker.internal` naming
- * RootlessKit's host loopback address instead of `host-gateway`, as the
+ * three sources run again for each of RootlessKit's host loopback addresses
+ * (slirp4netns's and gvisor-tap-vsock's), with `host.docker.internal` naming
+ * it instead of `host-gateway`, as the
  * backend does once its check finds that address answering
  * (`rootlessHostLoopbackSources`). Point `DOCKER_HOST` at a disposable
  * rootless daemon (`mise run docker:disposable`) to observe it.
@@ -210,8 +211,17 @@ try {
   };
   const gatewayPass = await probeSources("host-gateway");
   result.containerSources = gatewayPass.sources;
-  const loopbackPass = rootless ? await probeSources(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS) : null;
-  if (loopbackPass) result.rootlessHostLoopbackSources = loopbackPass.sources;
+  // Every RootlessKit driver's host loopback address (slirp4netns's 10.0.2.2,
+  // gvisor-tap-vsock's 10.0.2.1), keyed by address.
+  const loopbackPasses: Array<[string, Awaited<ReturnType<typeof probeSources>>]> = [];
+  if (rootless) {
+    for (const address of ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES) {
+      loopbackPasses.push([address, await probeSources(address)]);
+    }
+    result.rootlessHostLoopbackSources = Object.fromEntries(
+      loopbackPasses.map(([address, pass]) => [address, pass.sources]),
+    );
+  }
 
   // The reachability probe from inside the environment container, as a
   // bridge start and the workflow preflight run it.
@@ -228,10 +238,12 @@ try {
   result.environmentContainerProbe = await probeEnvironmentContainer(
     gatewayPass.environmentContainer,
   );
-  if (loopbackPass) {
-    result.rootlessHostLoopbackEnvironmentContainerProbe = await probeEnvironmentContainer(
-      loopbackPass.environmentContainer,
-    );
+  if (loopbackPasses.length > 0) {
+    const probes: Record<string, unknown> = {};
+    for (const [address, pass] of loopbackPasses) {
+      probes[address] = await probeEnvironmentContainer(pass.environmentContainer);
+    }
+    result.rootlessHostLoopbackEnvironmentContainerProbe = probes;
   }
   // The throwaway-container host check (Linux at startup; see --platform-linux).
   const hostCheck = await reachability.check("manual");

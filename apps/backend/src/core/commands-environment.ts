@@ -2,7 +2,7 @@ import {
   environmentSetupCompleteEvent,
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
-import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { isRootlessKitHostLoopbackAddress } from "@orkestrator/protocol/container-host-reachability";
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -2518,7 +2518,7 @@ export async function ensureContainerAgentToolsHost(
   // An absent discovery result is not evidence that RootlessKit's working
   // alias is stale. Boot probes run in the background and later checks can
   // fail transiently; preserve this concrete alias until a target is known.
-  if (!hostAddress && parseIpTokens(existing).includes(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS)) {
+  if (!hostAddress && parseIpTokens(existing).some(isRootlessKitHostLoopbackAddress)) {
     const topology = await detectDockerTopology();
     if (topology.rootless || topology.kind === "unavailable") return;
   }

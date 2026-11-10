@@ -9,13 +9,38 @@
  */
 
 /**
- * RootlessKit's address for the host's loopback interface (slirp4netns and
- * vpnkit). Rootless Docker refuses connections to it unless the daemon runs
- * with `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`; the
+ * RootlessKit's address for the host's loopback interface under slirp4netns
+ * (and vpnkit). Rootless Docker refuses connections to it unless the daemon
+ * runs with `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`; the
  * backend uses it for `host.docker.internal` only once a probe through it
  * succeeded.
  */
 export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESS = "10.0.2.2";
+
+/**
+ * RootlessKit's host loopback address under its gvisor-tap-vsock network
+ * driver, which `dockerd-rootless.sh` falls back to on a host without
+ * slirp4netns, pasta or vpnkit (observed with RootlessKit 3.3.0: the
+ * listener sees the peer `127.0.0.1`).
+ */
+export const ROOTLESSKIT_GVISOR_HOST_LOOPBACK_ADDRESS = "10.0.2.1";
+
+/**
+ * Every host loopback address RootlessKit's network drivers use, in the
+ * order the reachability check probes them: slirp4netns first, as
+ * `dockerd-rootless.sh` prefers it, then gvisor-tap-vsock. The check never
+ * reads the driver, so a backend run as another user or against a remote
+ * daemon finds the address the same way.
+ */
+export const ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES: readonly string[] = [
+  ROOTLESSKIT_HOST_LOOPBACK_ADDRESS,
+  ROOTLESSKIT_GVISOR_HOST_LOOPBACK_ADDRESS,
+];
+
+/** Whether `address` is one of RootlessKit's host loopback addresses. */
+export function isRootlessKitHostLoopbackAddress(address: string): boolean {
+  return ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES.includes(address);
+}
 
 /** Emitted with a {@link ContainerHostReachability} whenever the snapshot changes. */
 export const CONTAINER_HOST_REACHABILITY_CHANGED_EVENT = "container-host-reachability-changed";

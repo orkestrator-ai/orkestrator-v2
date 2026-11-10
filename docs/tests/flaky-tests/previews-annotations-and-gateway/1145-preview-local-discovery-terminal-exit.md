@@ -51,3 +51,15 @@ formatting, lint and typechecking. The run does not establish that every
 aggregate failure is pre-existing. Browser, Electron, Docker and iOS scenario
 suites were outside this backend-only follow-up's scope; production-scale
 maintenance timing and packaged/cross-platform copy behavior remain unmeasured.
+
+## Investigation — 2026-11-10
+
+Still open; not reproduced. The fixture's `; true` turns any exit of the
+server script into `terminal exited 0`, so the recorded symptom only says the
+Bun script exited (the 2026-10-28 stderr showed an EADDRINUSE throw).
+Its `once("error")` handler retries EADDRINUSE on the next port, so the
+throw needs a second error emission or a synchronous throw from `listen`.
+Running the script 240 times, four processes at once, against a held
+`127.0.0.1` port (host load about 58) never exited early: every run reported
+the next port. Next step: on a recurrence, keep the script's stderr
+in the failure message.

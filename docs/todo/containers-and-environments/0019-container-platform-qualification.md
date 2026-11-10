@@ -1377,9 +1377,10 @@ were removed.
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) and
   [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md) belong in the same platform
   run.
-- [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
-  dialog blocked by the projects drawer, found during the container settings
-  real-stack run.
+- To-do 0035 (retired 2026-11-10; see
+  [narrow-layout.md](../../architecture/narrow-layout.md#settings-from-the-projects-drawer)):
+  the environment settings dialog blocked by the projects drawer, found during
+  the container settings real-stack run.
 - [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
   and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
   (what the rootless runs left, after the retired to-do 0109),

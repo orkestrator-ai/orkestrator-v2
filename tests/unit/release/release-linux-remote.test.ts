@@ -111,12 +111,61 @@ describe("runRemoteRelease", () => {
     const { runtime, lines } = fakeRuntime("ssh: connect to host omarchy-hp: timed out\n", 255);
     expect(await runRemoteRelease(["check"], {}, runtime)).toBe(255);
     expect(lines.join("\n")).toContain("ORKESTRATOR_RELEASE_LINUX_HOST");
+    expect(lines.join("\n")).not.toContain("attach");
   });
 
-  test("points at attach when a build fails", async () => {
-    const { runtime, lines } = fakeRuntime("", 1);
+  test("points at attach when a started build fails", async () => {
+    const { runtime, lines } = fakeRuntime(
+      "[builder] started the Linux release build (pid 42)\n[builder] release-desktop build exited with 1\n",
+      1,
+    );
     expect(await runRemoteRelease(["build"], {}, runtime)).toBe(1);
     expect(lines.join("\n")).toContain("release:linux -- attach");
+  });
+
+  test("a build the builder refused to start does not point at attach", async () => {
+    const { runtime, lines } = fakeRuntime("[builder] /home/x/ork has uncommitted changes\n", 1);
+    expect(await runRemoteRelease(["build"], {}, runtime)).toBe(1);
+    const text = lines.join("\n");
+    expect(text).toContain("did not start the build");
+    expect(text).not.toContain("release:linux -- attach");
+  });
+
+  test("a connection that drops mid-build points at attach, not at the host", async () => {
+    const { runtime, lines } = fakeRuntime(
+      "[builder] checked out 01234567\n[builder] started the Linux release build (pid 42)\n",
+      255,
+    );
+    expect(await runRemoteRelease(["build"], {}, runtime)).toBe(255);
+    const text = lines.join("\n");
+    expect(text).toContain("dropped (exit 255)");
+    expect(text).toContain("release:linux -- attach");
+    expect(text).not.toContain("could not reach");
+  });
+
+  test("the start marker is found when it straddles two output chunks", async () => {
+    const { runtime, lines } = fakeRuntime("", 255);
+    runtime.run = async (_command, _script, onOutput) => {
+      onOutput("[builder] started the Linux rel");
+      onOutput("ease build (pid 42)\n");
+      return 255;
+    };
+    await runRemoteRelease(["build"], {}, runtime);
+    expect(lines.join("\n")).toContain("dropped (exit 255)");
+  });
+
+  test("an attach whose connection drops says to attach again", async () => {
+    const { runtime, lines } = fakeRuntime("[builder] following x.log\n", 255);
+    expect(await runRemoteRelease(["attach"], {}, runtime)).toBe(255);
+    expect(lines.join("\n")).toContain("release:linux -- attach");
+  });
+
+  test("a build that never connected still mentions attach in case it started", async () => {
+    const { runtime, lines } = fakeRuntime("ssh: connect to host omarchy-hp: timed out\n", 255);
+    expect(await runRemoteRelease(["build"], {}, runtime)).toBe(255);
+    const text = lines.join("\n");
+    expect(text).toContain("could not reach omarchy-hp, or lost the connection");
+    expect(text).toContain("release:linux -- attach");
   });
 
   test("refuses a version no channel ships", async () => {

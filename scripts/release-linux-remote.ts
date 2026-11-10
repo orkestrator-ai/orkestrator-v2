@@ -169,17 +169,58 @@ export async function runRemoteRelease(
   runtime.log(`$ ${command.slice(0, -1).join(" ")} 'bash -s -- …'`);
   const watcher = new ApprovalWatcher(runtime.onApproval);
   const script = readFileSync(REMOTE_SCRIPT_PATH, "utf8");
-  const exitCode = await runtime.run(command, script, (text) => watcher.push(text));
-  if (exitCode === 255) {
-    runtime.log(
-      `\nssh could not reach ${options.host} (exit 255). Check \`ssh ${options.host} true\`, Tailscale, and ORKESTRATOR_RELEASE_LINUX_HOST.`,
-    );
-  } else if (exitCode !== 0 && options.mode !== "check") {
-    runtime.log(
-      `\nIf the connection dropped, the build carries on; follow it again with \`mise run release:linux -- attach\`.`,
-    );
-  }
+  // The tail is enough to spot the start marker even when it straddles chunks.
+  let tail = "";
+  let started = false;
+  const exitCode = await runtime.run(command, script, (text) => {
+    watcher.push(text);
+    tail = (tail + text).slice(-MARKER_CARRY_BYTES);
+    if (tail.includes(BUILD_STARTED_MARKER)) started = true;
+  });
+  for (const line of remoteReleaseAdvice(options, exitCode, started)) runtime.log(line);
   return exitCode;
+}
+
+/** What the builder prints once the detached build is running. */
+export const BUILD_STARTED_MARKER = "started the Linux release build";
+const MARKER_CARRY_BYTES = 4096;
+const ATTACH = "`mise run release:linux -- attach`";
+
+/**
+ * What to tell the operator after the remote command ended. ssh exits 255
+ * both when it cannot connect and when an established session dies, so 255
+ * alone does not say whether a build is running; the start marker does.
+ */
+export function remoteReleaseAdvice(
+  options: Pick<RemoteReleaseOptions, "mode" | "host">,
+  exitCode: number,
+  started: boolean,
+): string[] {
+  if (exitCode === 0) return [];
+  const following = started || options.mode === "attach";
+  if (exitCode === 255) {
+    if (following) {
+      return [
+        `\nThe ssh connection to ${options.host} dropped (exit 255). The build carries on there; follow it again with ${ATTACH}.`,
+      ];
+    }
+    const lines = [
+      `\nssh could not reach ${options.host}, or lost the connection (exit 255). Check \`ssh ${options.host} true\`, Tailscale, and ORKESTRATOR_RELEASE_LINUX_HOST.`,
+    ];
+    if (options.mode === "build") {
+      lines.push(`If the build had already started it carries on; ${ATTACH} shows it.`);
+    }
+    return lines;
+  }
+  if (options.mode === "build" && !started) {
+    return [
+      `\nThe builder did not start the build (exit ${exitCode}); see its message above. Nothing is running there.`,
+    ];
+  }
+  if (following) {
+    return [`\n${ATTACH} replays the build's log and result.`];
+  }
+  return [];
 }
 
 if (import.meta.main) {

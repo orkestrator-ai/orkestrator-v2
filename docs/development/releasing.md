@@ -214,8 +214,11 @@ The script passes it to `bun publish` as `NPM_CONFIG_TOKEN` and prints only the
 file's path. It refuses a file that other users can read. An exported
 `NPM_CONFIG_TOKEN` (or `BUN_CONFIG_TOKEN`) takes precedence, and
 `ORKESTRATOR_NPM_TOKEN_FILE` moves the file. npm caps a write token's lifetime,
-so renew it when it expires; an expired or under-scoped token falls back to the
-browser approval below. A stored token is a long-lived publish credential on a
+so renew it when it expires. When npm rejects the stored token (a 401, or a 403
+naming the token, two-factor authentication or a missing permission), the
+script says so and publishes once more without it, through the browser approval
+below; any other failure, such as republishing an existing version, is not
+retried. An exported token npm rejects is only reported. A stored token is a long-lived publish credential on a
 workstation, the risk to-do
 [5021](../todo/cross-cutting/5021-publish-npm-from-ci-with-provenance.md)
 proposes removing by publishing from CI; keep it scoped to this one package.
@@ -430,24 +433,41 @@ mise run release:linux -- attach             # follow a running build again
 `scripts/release-linux-remote.sh` to the builder) refuses a dirty builder
 checkout, fetches, checks out this Mac's `HEAD` detached, and starts
 `release-desktop.ts build` there under `nohup`. The build's output goes to
-`~/.cache/orkestrator-release/release-desktop-<version>.log` on the builder and
-streams back over SSH; if the connection drops the build carries on, and
-`attach` picks the log up again. The command exits with the build's exit
-status. The checkout is left detached at the release commit.
+`~/.cache/orkestrator-release/<checkout>/release-desktop-<version>.log` on the
+builder (`<checkout>` is the checkout's resolved path with every `/` turned
+into `_`) and streams back over SSH; if the connection drops the build carries
+on, and `attach` picks the log up again. The command exits with the build's
+exit status. The checkout is left detached at the release commit. A linked Git
+worktree is a valid `--checkout`.
+
+One build at a time per checkout: `build` takes a lock (a `lock` symlink in
+that state directory naming its holder) before it touches the checkout, and
+the detached build holds it until its result is written. A second `build`,
+for any version, is refused without changing the checkout or the running
+build's log; follow the first with `attach`. A lock whose holder has died is
+taken over. A start the builder refuses (dirty checkout, unknown commit, a
+fetch failure) first clears that version's earlier log and result, so `attach`
+then reports no build rather than replaying an older one, and the Mac side
+says nothing is running instead of suggesting `attach`.
 
 How it reaches things, so no one has to work them out again:
 
 - **SSH.** Tailscale SSH may ask for a browser check (a
   `https://login.tailscale.com/a/...` link) the first time in a while. The
   script raises the same desktop notification as npm's sign-in and keeps
-  waiting; approve it and the build continues. Exit status 255 means ssh could
-  not connect at all.
+  waiting; approve it and the build continues. ssh exits 255 both when it
+  cannot connect and when an established session dies (Tailscale dropping,
+  or three minutes without a keep-alive answer). Once the builder has printed
+  `started the Linux release build`, a 255 means the connection dropped and
+  the build carries on: run `attach`. Before that, check the host.
 - **Git.** An SSH session from the Mac carries no GitHub SSH key, so the
   builder's `origin` (`git@github.com:...`) cannot be fetched as is. The
   script rewrites GitHub to HTTPS and authenticates through the builder's
   signed-in `gh` (`gh auth git-credential`), using `GIT_CONFIG_*` environment
   variables for that one process tree only; the builder's Git config is never
-  changed. `release-desktop.ts` pushes the tag the same way when Linux runs
+  changed. `check` proves both without the network: it expands a
+  `git@github.com:` URL (`git ls-remote --get-url`) and asks Git's credential
+  helper for a GitHub credential, printing neither. `release-desktop.ts` pushes the tag the same way when Linux runs
   first.
 - **Another builder.** Set `ORKESTRATOR_RELEASE_LINUX_HOST` (an SSH host,
   `user@host` allowed) and `ORKESTRATOR_RELEASE_LINUX_CHECKOUT`, or pass

@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   cliPublishCommand,
+  createPublishRunner,
   npmAuthAttempts,
+  npmTokenRejected,
   npmTokenFile,
   npmWebAuthExpired,
   publishCli,
@@ -188,6 +190,24 @@ test("recognises npm's expired web sign-in", () => {
 });
 
 test.each([
+  ["error: 401 Unauthorized - PUT https://registry.npmjs.org/orkestrator", true],
+  ["npm error code E401", true],
+  [
+    "error: 403 Forbidden - PUT https://registry.npmjs.org/orkestrator - Two-factor authentication or granular access token with bypass 2fa enabled is required",
+    true,
+  ],
+  ["error: 403 Forbidden - You may not perform that action with these credentials.", true],
+  [
+    "error: 403 Forbidden - You cannot publish over the previously published versions: 1.0.0.",
+    false,
+  ],
+  ["error: 500 Internal Server Error - PUT https://registry.npmjs.org/orkestrator", false],
+  ["error: ENOENT: prepack failed", false],
+])("npmTokenRejected(%j) is %p", (output, rejected) => {
+  expect(npmTokenRejected(output)).toBe(rejected);
+});
+
+test.each([
   [undefined, 3],
   ["1", 1],
   ["5", 5],
@@ -266,6 +286,136 @@ describe("publishCli", () => {
     });
     expect(code).toBe(1);
     expect(calls).toHaveLength(2);
+  });
+
+  test("an expired stored token falls back to a notified browser approval", async () => {
+    const { run, calls } = scripted([
+      {
+        text: "error: 401 Unauthorized - PUT https://registry.npmjs.org/orkestrator\n",
+        exitCode: 1,
+      },
+      { text: `Authenticate your account at:\n${NPM_LINK}\n+ orkestrator@1.0.0\n`, exitCode: 0 },
+    ]);
+    const approvals: ApprovalLink[] = [];
+    const lines: string[] = [];
+    const code = await publishCli({
+      repositoryRoot: root,
+      env: { PATH: process.env.PATH, ORKESTRATOR_NPM_TOKEN_FILE: "/secure/npm-token" },
+      tokenFs: tokenFs(0o100600, "npm_secret"),
+      run,
+      log: (line) => lines.push(line),
+      onApproval: (link) => approvals.push(link),
+    });
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.NPM_CONFIG_TOKEN).toBe("npm_secret");
+    expect(calls[1]?.NPM_CONFIG_TOKEN).toBeUndefined();
+    expect(approvals).toEqual([{ kind: "npm", url: NPM_LINK }]);
+    const text = lines.join("\n");
+    expect(text).toContain("npm rejected the token in /secure/npm-token");
+    expect(text).not.toContain("npm_secret");
+  });
+
+  test("a token without two-factor bypass falls back once, then expired sign-ins count as usual", async () => {
+    const expiredAttempt = { text: `${NPM_LINK}\n${EXPIRED}`, exitCode: 1 };
+    const { run, calls } = scripted([
+      {
+        text: "error: 403 Forbidden - Two-factor authentication or granular access token with bypass 2fa enabled is required\n",
+        exitCode: 1,
+      },
+      expiredAttempt,
+      expiredAttempt,
+    ]);
+    const code = await publishCli({
+      repositoryRoot: root,
+      env: {
+        PATH: process.env.PATH,
+        ORKESTRATOR_NPM_TOKEN_FILE: "/secure/npm-token",
+        ORKESTRATOR_NPM_AUTH_ATTEMPTS: "2",
+      },
+      tokenFs: tokenFs(0o100600, "npm_secret"),
+      run,
+      log: () => undefined,
+      onApproval: () => undefined,
+    });
+    expect(code).toBe(1);
+    // One token attempt, then the two browser attempts the setting allows.
+    expect(calls).toHaveLength(3);
+  });
+
+  test("a stored token's publish that fails for another reason is not retried", async () => {
+    const { run, calls } = scripted([
+      {
+        text: "error: 403 Forbidden - You cannot publish over the previously published versions: 1.0.0.\n",
+        exitCode: 1,
+      },
+    ]);
+    const code = await publishCli({
+      repositoryRoot: root,
+      env: { PATH: process.env.PATH, ORKESTRATOR_NPM_TOKEN_FILE: "/secure/npm-token" },
+      tokenFs: tokenFs(0o100600, "npm_secret"),
+      run,
+      log: () => undefined,
+      onApproval: () => undefined,
+    });
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an exported token npm rejects is reported, not replaced by a browser sign-in", async () => {
+    const { run, calls } = scripted([
+      {
+        text: "error: 401 Unauthorized - PUT https://registry.npmjs.org/orkestrator\n",
+        exitCode: 1,
+      },
+    ]);
+    const code = await publishCli({
+      repositoryRoot: root,
+      env: { PATH: process.env.PATH, NPM_CONFIG_TOKEN: "exported" },
+      tokenFs: noTokenFs,
+      run,
+      log: () => undefined,
+      onApproval: () => undefined,
+    });
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("the real runner tees a child's output to the terminal and the approval watcher", async () => {
+    const written = { stdout: [] as Uint8Array[], stderr: [] as Uint8Array[] };
+    const runner = createPublishRunner({
+      stdout: { write: (chunk) => written.stdout.push(chunk) },
+      stderr: { write: (chunk) => written.stderr.push(chunk) },
+    });
+    // A stand-in for bun publish: the sign-in link on stdout, split across
+    // two writes, and npm's expiry on stderr.
+    const child = [
+      "const half = Math.floor(process.argv[1].length / 2);",
+      "process.stdout.write('Authenticate your account at:\\n' + process.argv[1].slice(0, half));",
+      "await Bun.sleep(30);",
+      "process.stdout.write(process.argv[1].slice(half) + '\\n');",
+      "process.stderr.write(process.argv[2]);",
+      "process.exit(1);",
+    ].join("\n");
+    const approvals: ApprovalLink[] = [];
+    const lines: string[] = [];
+    const code = await publishCli({
+      repositoryRoot: root,
+      env: { PATH: process.env.PATH, ORKESTRATOR_NPM_AUTH_ATTEMPTS: "1" },
+      tokenFs: noTokenFs,
+      run: (_command, options) =>
+        runner([process.execPath, "-e", child, NPM_LINK, EXPIRED], options),
+      log: (line) => lines.push(line),
+      onApproval: (link) => approvals.push(link),
+    });
+    const decode = (chunks: Uint8Array[]) =>
+      chunks.map((chunk) => new TextDecoder().decode(chunk)).join("");
+    expect(code).toBe(1);
+    expect(decode(written.stdout)).toBe(`Authenticate your account at:\n${NPM_LINK}\n`);
+    expect(decode(written.stderr)).toBe(EXPIRED);
+    expect(approvals).toEqual([{ kind: "npm", url: NPM_LINK }]);
+    // The expiry reached the retry check through the piped stderr.
+    expect(lines.join("\n")).toContain("npm sign-in expired unapproved 1 times");
   });
 
   test("does not retry a failure that is not an expired sign-in", async () => {

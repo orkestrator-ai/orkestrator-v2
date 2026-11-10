@@ -436,6 +436,9 @@ test("reduced motion shows and hides without a transition in both modes", async 
   await expect(waitingIcon(page)).toHaveAttribute("aria-expanded", "false");
   expect(await transition()).toBe("none");
   await page.setViewportSize({ width: 390, height: 844 });
+  // The folded icon exists in both modes. Wait for the shared notice layer's
+  // narrow layout before focusing it, since viewport resize precedes its observer.
+  await expect(page.getByRole("button", { name: "Agent mail: One message waiting" })).toBeVisible();
   await page.getByRole("button", { name: "Transcript control" }).focus();
   await waitingIcon(page).focus();
   await expect(waitingIcon(page)).toHaveAttribute("aria-expanded", "true");

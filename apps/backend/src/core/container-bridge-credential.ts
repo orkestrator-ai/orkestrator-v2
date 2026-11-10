@@ -9,7 +9,6 @@ import {
   bridgeTokenVerifierEnv,
   mintBridgeToken,
 } from "@orkestrator/protocol/node/bridge-credential";
-import { createLogger } from "@orkestrator/protocol/logger";
 import { forgetBridgeAuthorityKey, rememberBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -33,10 +32,19 @@ import {
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
+  OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { BRIDGE_TOKEN_PATTERN, type LocalServerKind } from "./local-server-runtime.js";
+import {
+  judgeOpenCodeListener,
+  listOpenCodeListenersScript,
+  OPENCODE_LISTENER_RECORD,
+  parseOpenCodeListeners,
+  type OpenCodeListenerJudgement,
+} from "./opencode-listener-identity.js";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
 
 /**
@@ -140,9 +148,12 @@ export interface ContainerBridgeLaunch {
   start(entry: string, logFile: string): string;
 }
 
-/** A bridge {@link launchContainerScript} starts through `orkestrator-bridge-launch`. */
+/**
+ * A bridge, or on an `opencode-launch=1` image the OpenCode server, that
+ * {@link launchContainerScript} starts through `orkestrator-bridge-launch`.
+ */
 export interface ContainerBridgeLauncherStart {
-  kind: ContainerBridgeKind;
+  kind: ContainerBridgeKind | "opencode";
   /** Where the start script records its environment; the bridge removes it. */
   snapshot: string;
   /** The backend's own values, passed to the launcher on stdin. */
@@ -297,10 +308,53 @@ export async function removeContainerBridgeCredential(
       "-f",
       containerCredentialFile(kind),
       containerAuthorityKeyFile(kind),
+      // The listener record says which process the password belongs to.
+      ...(kind === "opencode" ? [OPENCODE_LISTENER_RECORD] : []),
       ...(isContainerBridgeKind(kind) ? [containerListenerRecordFile(kind)] : []),
     ],
     { timeoutMs: 30_000 },
   );
+}
+
+/** OpenCode's password in root's file, and whether the port's listener is the server it was given to. */
+export interface ContainerOpenCodeCredential {
+  requiresRecordedListener: boolean;
+  token: string | null;
+  listener: OpenCodeListenerJudgement;
+}
+
+/**
+ * Root's OpenCode password and, in the same root exec, a judgement of the
+ * sockets listening on OpenCode's port against the one the backend recorded
+ * when it launched the server (`opencode-listener-identity.ts`). Only a server
+ * started on an `opencode-launch=1` image has a record; for anything else the
+ * listener is `unrecorded` and the listing is skipped.
+ */
+export async function readContainerOpenCodeCredential(
+  containerId: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<ContainerOpenCodeCredential> {
+  const script = [
+    `cat ${containerCredentialFile("opencode")} 2>/dev/null || true; echo`,
+    `cat ${containerAuthorityKeyFile("opencode")} 2>/dev/null || true; echo`,
+    `if [ -s ${OPENCODE_LISTENER_RECORD} ]; then`,
+    `printf 'record %s\n' "$(cat ${OPENCODE_LISTENER_RECORD})"`,
+    listOpenCodeListenersScript(OPENCODE_SERVER_PORT),
+    "fi",
+    `if grep -q '^# ORKESTRATOR_CAPABILITY opencode-launch=1$' ${CONTAINER_BRIDGE_LAUNCHER} 2>/dev/null; then echo launch-required; fi`,
+  ].join("\n");
+  const { stdout } = await runCommand(
+    "docker",
+    ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "sh", "-c", script],
+    { timeoutMs: options.timeoutMs ?? 120_000, signal: options.signal },
+  );
+  const [token = "", , ...rest] = stdout.split("\n");
+  const listener = judgeOpenCodeListener(parseOpenCodeListeners(rest.join("\n")));
+  return {
+    token: BRIDGE_TOKEN_PATTERN.test(token.trim()) ? token.trim() : null,
+    listener,
+    requiresRecordedListener: rest.includes("launch-required"),
+  };
 }
 
 /**
@@ -417,7 +471,25 @@ export async function readContainerBridgeToken(
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
-  const root = await readRootCredential(containerId, kind, timeoutMs, options.signal);
+  if (kind === "opencode") {
+    const opencode = await readContainerOpenCodeCredential(containerId, options);
+    // The root-owned launcher is image-local evidence even when image metadata is unavailable.
+    // Incomplete launches must never expose either root or node credentials.
+    if (opencode.requiresRecordedListener && opencode.listener !== "ours") return null;
+    if (opencode.token) {
+      // The password would go to whatever answers the port now.
+      if (opencode.listener === "replaced") {
+        log.warn("opencode.listener-replaced", {});
+        return null;
+      }
+      return opencode.token;
+    }
+    if (opencode.requiresRecordedListener) return null;
+  }
+  const root =
+    kind === "opencode"
+      ? { token: "", authorityKey: "" }
+      : await readRootCredential(containerId, kind, timeoutMs, options.signal);
   if (BRIDGE_TOKEN_PATTERN.test(root.token)) {
     // The token belongs to the bridge the backend started, not to whatever
     // listens on its port now.
@@ -581,7 +653,12 @@ async function startContainerBridgeWithLauncher(
       launcher.kind,
       launcher.snapshot,
     ],
-    { stdin: containerBridgeLauncherInput(launcher.env), timeoutMs: 30_000 },
+    {
+      stdin: containerBridgeLauncherInput(launcher.env),
+      timeoutMs: 30_000,
+      // OpenCode's launch carries its password.
+      redactValues: Object.values(launcher.env),
+    },
   );
   return { session: parseContainerBridgeLauncherSession(stdout) };
 }

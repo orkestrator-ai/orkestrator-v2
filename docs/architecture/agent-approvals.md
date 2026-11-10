@@ -70,8 +70,56 @@ or `NODE_PATH`; it is opened without following a link and removed after one
 read.
 
 An image without the capability keeps the login-shell start and unsigned
-requests until it is rebuilt (`containerCredentialMode`). OpenCode has no bridge
-of ours: on a launcher image it starts as on a `bridge-credential=1` image.
+requests until it is rebuilt (`containerCredentialMode`).
+
+### OpenCode under the launcher (`opencode-launch=1`)
+
+OpenCode has no bridge of ours, so it has no verifier and no signatures: it
+compares a plain password (HTTP Basic), and its plugins run inside the server
+beside it. On an `opencode-launch=1` image (`opencode-container-launch.ts`):
+
+- **Root's binary, root's configuration.** `orkestrator-bridge-launch opencode`
+  runs the root-owned `/opt/opencode/bin/opencode` (node's
+  `~/.opencode/bin/opencode` is only a symlink to it) under `env -i`, in
+  `/workspace`, with `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
+  `XDG_CONFIG_HOME=/run/orkestrator-opencode/config` and
+  `OPENCODE_TEST_HOME=/run/orkestrator-opencode/home`, so it reads no
+  `/workspace/.opencode`, no project `opencode.json`, no `~/.config/opencode`
+  and no `~/.opencode`. Before every start a root exec rebuilds that directory:
+  the user's own configuration, copied from the read-only host input
+  `/opencode-config` (never from node's copy) without `node_modules`, symlinks
+  or special files, and Orkestrator's two plugins. Project configuration off
+  also drops the checkout's `AGENTS.md` from the instructions, so the launcher
+  names it back in (`OPENCODE_CONFIG_CONTENT`); it is text, not code.
+- **The password never passes an argument.** The launcher re-runs itself under
+  `env -i`, exports the backend's values (the password, `OPENCODE_DB`) and
+  starts the server and a log writer fed through a FIFO, so no long-lived
+  process but the server holds it. The credential plugin then removes it from
+  `process.env`, marks the server non-dumpable and applies the start script's
+  environment snapshot for the server's tools, refusing every `OPENCODE_`
+  variable (OpenCode reads its flags from `process.env` when it uses them) and
+  dropping `XDG_CONFIG_HOME`.
+- **The backend checks the socket before it sends the password.** After the
+  server answers the fresh password and has loaded its plugins, a root exec
+  records the inode of the socket listening on port 4096 in
+  `/run/orkestrator-bridge/opencode-listener` (`opencode-listener-identity.ts`).
+  Every read of the password (start, status, peek) lists the port's listening
+  sockets from `/proc/net/tcp` in the same root exec and withholds the password
+  unless that socket is the only one. A process the agent puts on the port, even
+  root's binary started with a password it caught, has a new socket; the next
+  start stops it (as `node`, see below) and mints a new password.
+
+The container's root has no `CAP_SYS_PTRACE`, so it cannot read another uid's
+`/proc/<pid>/fd` (nor a non-dumpable process's `exe`): it cannot tell which
+process holds a socket, only which socket listens. Stopping a listener is done
+as `node`, which can read its own dumpable processes' descriptors; a
+non-dumpable imposter is out of reach, and the start then fails with an error
+asking for a restart rather than sending anything. Qualified on beelink (Linux
+Engine 29.9.2) on 2026-11-09 by `apps/backend/tests/bridge-credential-docker.test.ts`.
+
+An image without `opencode-launch=1` keeps the login-shell start from node's
+binary and configuration, with the password in root's file and the server's
+environment alone on a `bridge-credential=1` image.
 
 ### Code a bridge loads itself
 
@@ -160,8 +208,9 @@ socket, not to a port (`container-bridge-listener.ts`):
 The check is on reuse, not on every request. A process that replaces the bridge
 between a check and the next request still gets that request, until the next
 refresh or start. The agent's uid can still kill the bridge, which it could
-already do. OpenCode has no bridge of ours and is not covered: to-do
-[7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).
+already do. OpenCode has its own socket check on `opencode-launch=1` images
+([above](#opencode-under-the-launcher-opencode-launch1)); its remaining windows
+are tracked in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 
 ## Where an approval is a boundary
 
@@ -178,8 +227,9 @@ uid owns, and a tool that can write them (on an `ask` environment, one the user
 approved) can widen them without answering anything:
 
 - OpenCode: the `permission` column of `session` and the `permission` table in
-  `~/.local/share/opencode/opencode.db`, and the `permission` key of
-  `opencode.json` (user or `/workspace`).
+  `~/.local/share/opencode/opencode.db`, and, on an image without
+  `opencode-launch=1`, the `permission` key of `opencode.json` (user or
+  `/workspace`).
 - Claude: `settings.json` under `~/.claude` and `.claude/settings*.json` in the
   checkout.
 - Codex: `CODEX_HOME/rules/*.rules`.
@@ -196,9 +246,15 @@ need its own uid, and then its tools would too.
   refused at the next start, status read or connection refresh
   ([above](#a-replaced-bridge-is-refused)), but a request made before then
   reaches it, and killing the bridge ends the agent's own session.
-- **Reach OpenCode's password.** Its server loads agent-writable plugins, and
-  takes the plain password from whatever listens on its port. To-do
-  [7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md).
+- **Reach OpenCode's password, narrowly.** On an `opencode-launch=1` image the
+  server loads no plugin or configuration the agent writes and the password is
+  withheld from any other listener, but three windows remain: packages OpenCode
+  installs into node's `~/.cache/opencode` and imports (npm plugins the user's
+  configuration names, providers it does not bundle), the moment between the
+  socket check and the requests after it, and the server's first seconds before
+  its plugin makes it non-dumpable. The OpenCode 2.x server still starts from
+  node's login shell. To-do
+  [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 - **Stop being asked.** Through the provider rule files above.
 
 Each needs a process or a tool the user already let run. Qualified on a real

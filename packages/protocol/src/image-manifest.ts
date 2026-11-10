@@ -126,6 +126,15 @@ export const IMAGE_CAPABILITIES = {
    * login-shell start and unsigned requests.
    */
   "bridge-launch": 1,
+  /**
+   * `orkestrator-bridge-launch opencode` starts the container's OpenCode 1.x
+   * server from the root-owned `/opt/opencode` binary under `env -i`, with
+   * project configuration off and its global configuration and home in
+   * root-owned `/run/orkestrator-opencode`, so no plugin or configuration the
+   * agent's uid can write loads inside it. An older image keeps the login-shell
+   * start from node's own binary and configuration.
+   */
+  "opencode-launch": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

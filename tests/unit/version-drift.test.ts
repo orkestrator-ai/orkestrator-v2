@@ -1093,6 +1093,14 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");
     expect(dockerfile).toContain("ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode");
     expect(dockerfile).toContain("/home/node/.opencode/bin");
+    // The 1.x binary itself is root's, so the server the launcher starts from it
+    // runs code the agent's uid cannot replace; node's path is a symlink to it.
+    expect(dockerfile).toContain(
+      "tar -xzf /tmp/opencode.tar.gz --no-same-owner -C /opt/opencode/bin opencode",
+    );
+    expect(dockerfile).toContain(
+      "ln -s /opt/opencode/bin/opencode /home/node/.opencode/bin/opencode",
+    );
     expect(dockerfile).toContain('RUN "$CLAUDE_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$CODEX_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');

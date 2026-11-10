@@ -67,12 +67,20 @@ import {
   launchContainerScript,
   isContainerBridgeKind,
   readContainerBridgeToken,
+  readContainerOpenCodeCredential,
   recordLaunchedContainerBridge,
   removeContainerBridgeCredential,
   stopContainerBridgeProcess,
   type ContainerCredentialMode,
   type ContainerScriptLaunch,
 } from "./container-bridge-credential.js";
+import type { OpenCodeContainerMode } from "./container-credential-mode.js";
+import {
+  OPENCODE_LAUNCH_FINGERPRINT,
+  recordOpenCodeListener,
+  startOpenCodeWithLauncher,
+  stopOpenCodeListeners,
+} from "./opencode-container-launch.js";
 import { resolveAnthropicApiKey } from "./commands-validation.js";
 import { imageWithoutStagedInputsMessage, imageUnreadableMessage } from "./commands-error-text.js";
 import { quoteShell } from "./commands-agent-support.js";
@@ -795,10 +803,15 @@ export function containerServerLogFile(processName: LocalServerKind): string {
  * its credential plugin takes it back from the agent's reach before a tool can
  * run. A healthy passwordless process from an older build is replaced before its
  * port is handed to the renderer.
+ *
+ * On an `opencode-launch=1` image (`opencode-launcher`) the root-owned launcher
+ * starts it from root's binary and configuration, and the password is handed
+ * back only while the port's listening socket is the one recorded at launch
+ * (`opencode-container-launch.ts`, `opencode-listener-identity.ts`).
  */
 export async function startContainerOpenCodeServer(
   containerId: string,
-  credentialMode: ContainerCredentialMode | (() => Promise<ContainerCredentialMode>) = "token-file",
+  credentialMode: OpenCodeContainerMode | (() => Promise<OpenCodeContainerMode>) = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -807,47 +820,99 @@ export async function startContainerOpenCodeServer(
   const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
   if (!hostPort) throw new Error(`Container port ${OPENCODE_SERVER_PORT} is not mapped`);
 
-  const readPersistedPassword = () => readContainerBridgeToken(containerId, "opencode");
-  const hasCurrentGitHubEnvironmentPlugin = async (): Promise<boolean> => {
-    const fingerprint = (
+  let resolvedMode: OpenCodeContainerMode | undefined;
+  const mode = async (): Promise<OpenCodeContainerMode> =>
+    (resolvedMode ??=
+      typeof credentialMode === "function" ? await credentialMode() : credentialMode);
+  const startedFingerprint = async (): Promise<string> =>
+    (
       await dockerExec(
         containerId,
         `cat ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE} 2>/dev/null || true`,
       )
     ).trim();
-    return fingerprint === OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
-  };
-  const replaceRunningServer = async (): Promise<void> => {
+  const replaceRunningServer = async (stopListeners: boolean): Promise<void> => {
+    // A listener that is not the server the backend launched may run under
+    // any name, so it is found by the socket it holds.
+    if (stopListeners) await stopOpenCodeListeners(containerId);
     await dockerExec(
       containerId,
       `pkill -f '[o]pencode serve' || true; rm -f ${CONTAINER_TOKEN_FILES.opencode} ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}`,
     );
     await removeContainerBridgeCredential(containerId, "opencode").catch(() => undefined);
-    await waitForHttpServerExit(hostPort);
+    await waitForHttpServerExit(hostPort).catch((error: unknown) => {
+      if (!stopListeners) throw error;
+      throw new Error(
+        "Something other than OpenCode's server holds its port in this container and could not be stopped; restart the environment",
+        { cause: error },
+      );
+    });
   };
 
-  const persistedPassword = await readPersistedPassword();
-  if (
-    persistedPassword &&
-    (await checkHttpHealth(hostPort, "/global/health", openCodeHealthHeaders(persistedPassword))) &&
-    (await hasCurrentGitHubEnvironmentPlugin())
-  ) {
+  const persisted = await readContainerOpenCodeCredential(containerId);
+  const persistedPassword =
+    persisted.token ?? (await readContainerBridgeToken(containerId, "opencode"));
+  // A server is reused only while it answers its password and was started the
+  // way this image starts one, with the current plugins: by the launcher, and
+  // still the recorded listener, on an `opencode-launch=1` image; from node's
+  // login shell on an older one.
+  const reusable = async (password: string): Promise<boolean> => {
+    if (
+      persisted.listener === "replaced" ||
+      (persisted.requiresRecordedListener && persisted.listener !== "ours")
+    )
+      return false;
+    const fingerprint = await startedFingerprint();
+    if (persisted.listener === "ours") {
+      if (fingerprint !== OPENCODE_LAUNCH_FINGERPRINT) return false;
+    } else if (
+      fingerprint !== OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT ||
+      // A healthy server is reused when the image cannot be read, as before;
+      // a fresh start still refuses then.
+      (await mode().then(
+        (current) => current === "opencode-launcher",
+        () => false,
+      ))
+    ) {
+      return false;
+    }
+    return checkHttpHealth(hostPort, "/global/health", openCodeHealthHeaders(password));
+  };
+  if (persistedPassword && (await reusable(persistedPassword))) {
     return { hostPort, wasRunning: true, authToken: persistedPassword };
   }
 
   // A reachable server without our persisted credential predates authentication.
   // A persisted credential that no longer authenticates belongs to a stale
-  // process. Replace either one before binding the new server.
-  if (persistedPassword || (await isHttpServerReachable(hostPort))) {
-    await replaceRunningServer();
+  // process, and a listener that is not the recorded one is an imposter.
+  // Replace any of them before binding the new server.
+  const stopListeners = persisted.listener !== "unrecorded";
+  if (persistedPassword || stopListeners || (await isHttpServerReachable(hostPort))) {
+    await replaceRunningServer(stopListeners || (await mode()) === "opencode-launcher");
   }
 
   await ensureCurrentBootReady(containerId);
+  if ((await mode()) === "opencode-launcher") {
+    const password = await startOpenCodeWithLauncher(containerId);
+    dockerLog.info("bridge.launched", {
+      provider: "opencode",
+      containerPort: OPENCODE_SERVER_PORT,
+    });
+    try {
+      await waitForOpenCodeHealth(containerId, hostPort, password);
+      // Warmed first: loading the plugins makes the server non-dumpable.
+      await warmContainerOpenCode(containerId, hostPort, password);
+      await recordOpenCodeListener(containerId);
+    } catch (error) {
+      await removeContainerBridgeCredential(containerId, "opencode");
+      throw error;
+    }
+    return { hostPort, wasRunning: false, authToken: password };
+  }
   const authToken = mintBridgeToken();
-  const mode = typeof credentialMode === "function" ? await credentialMode() : credentialMode;
-  // OpenCode has no bridge of ours to launch, so a launcher image's server is
-  // started as a verifier image's is: the plugin keeps the password from tools.
-  const keepPasswordFromAgent = mode !== "token-file";
+  // An image without `opencode-launch=1` starts it from node's login shell; on
+  // a `bridge-credential=1` image the plugin keeps the password from tools.
+  const keepPasswordFromAgent = (await mode()) !== "token-file";
   const serve = `opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`;
   await launchContainerScript(
     containerId,
@@ -887,26 +952,45 @@ export async function startContainerOpenCodeServer(
     },
   );
   dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
-  await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
+  await waitForOpenCodeHealth(containerId, hostPort, authToken);
+  await warmContainerOpenCode(containerId, hostPort, authToken);
+  return { hostPort, wasRunning: false, authToken };
+}
+
+async function waitForOpenCodeHealth(
+  containerId: string,
+  hostPort: number,
+  password: string,
+): Promise<void> {
+  await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(password)).catch(
     async (error) => {
       const log = await dockerExec(
         containerId,
         boundedTailCommand("/tmp/opencode-serve.log"),
         undefined,
-        [authToken],
+        [password],
       ).then(boundDiagnosticTail, () => "");
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
       );
     },
   );
-  // A fresh container layer installs OpenCode's plugin dependencies again on
-  // the first request naming /workspace; absorb that here, not in a prompt's
-  // status read.
-  if (!(await warmOpenCodeInstance(hostPort, "/workspace", openCodeHealthHeaders(authToken)))) {
+}
+
+/**
+ * A fresh container layer installs OpenCode's plugin dependencies again on
+ * the first request naming /workspace; absorb that here, not in a prompt's
+ * status read. It is also what loads the plugins, so the credential plugin's
+ * hardening is in place before an agent's first tool call.
+ */
+async function warmContainerOpenCode(
+  containerId: string,
+  hostPort: number,
+  password: string,
+): Promise<void> {
+  if (!(await warmOpenCodeInstance(hostPort, "/workspace", openCodeHealthHeaders(password)))) {
     dockerLog.warn("opencode.warm-incomplete", { containerId });
   }
-  return { hostPort, wasRunning: false, authToken };
 }
 
 /**

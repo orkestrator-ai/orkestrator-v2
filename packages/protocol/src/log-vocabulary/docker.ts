@@ -33,6 +33,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "project-seed.refused":
         "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
+      "opencode.listener-replaced":
+        "The process on a container's OpenCode port is not the server the backend launched and recorded, so its password was withheld and the next start replaces it.",
       "log-driver.unbounded":
         "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":

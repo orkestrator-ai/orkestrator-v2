@@ -412,8 +412,9 @@ coordinator".
   changes and interaction answers act on it under `sessions.control` and
   `interactions`, like any session. Its run settles the same way, and as
   `interrupted` if the conversation is closed.
-- Refused: `session.fork` and `session.resume` (`unsupported`: one conversation
-  has one provider session), any `mode` (`unsupported`: the app offers none, its
+- Refused: `session.fork`, `session.resume`, `session.rewind` and
+  `session.branch` (`unsupported`: one conversation has one provider session,
+  and its history is not rewritten), any `mode` (`unsupported`: the app offers none, its
   read-only policy is fixed), file attachments (`capability-unavailable`: images
   are stored under application data, and nothing is written to the checkout) and
   `session.start` and environment actions (`not-found`, naming it a Coordinator).

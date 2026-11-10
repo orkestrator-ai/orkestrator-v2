@@ -1,3 +1,4 @@
+import { SessionHistoryControlsFixture } from "./SessionHistoryControlsFixture";
 import {
   QueuedAttachmentTranscript,
   readQueuedAttachmentTranscript,
@@ -2161,6 +2162,8 @@ function fixtureForPath() {
     installPathTruncationFixture();
     return <PathTruncationFixture />;
   }
+  if (window.location.pathname === "/session-history-controls")
+    return <SessionHistoryControlsFixture />;
   if (window.location.pathname === "/pi-launch-defaults") return <PiLaunchDefaultsFixture />;
   if (window.location.pathname === "/auto-pipeline") {
     installAutoPipelineFixture();

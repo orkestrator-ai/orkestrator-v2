@@ -42,8 +42,9 @@
  * provider home should not appear; one that does is skipped with that reason.
  * Codex project trust is granted only in an isolated `CODEX_HOME`.
  *
- * Fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`, Claude, Codex and
- * Pi only, local environments only) points the profile's own provider
+ * Fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`, Claude, Codex,
+ * Pi and OpenCode, local environments only; OpenCode through a custom
+ * provider, `opencode-fake-provider.ts`) points the profile's own provider
  * configuration at the scripted loopback model in `mcp-fake-model.ts` before
  * the environment starts: the real CLI, app-server or SDK, bridge, backend
  * and MCP servers run, and only the model is fake. It calls a probed tool
@@ -400,7 +401,10 @@ test.describe("live MCP apply", () => {
           if (CONTAINER) skip("fake-model mode runs local environments only");
           if (!isFakeModelPlatform(platform)) skip(`no fake model for ${label}`);
           // Before the environment exists, so its bridge's first process reads it.
-          fake = await startMcpFakeModel(platform as "claude" | "codex" | "pi", dataDir);
+          fake = await startMcpFakeModel(
+            platform as "claude" | "codex" | "pi" | "opencode",
+            dataDir,
+          );
           summary.fakeModel = {
             origin: fake.origin,
             files: fake.files,

@@ -62,7 +62,11 @@
  * would: each case, sub-agents and approvals included, gets the tool call it
  * asks for. Pi runs the same way against `idle-observation-fake-pi.ts`, added
  * to the profile's own Pi `models.json` (todo 0049 task 7); Pi needs no
- * credential source.
+ * credential source. OpenCode reaches the same endpoint through a custom
+ * provider merged into the profile's own global `opencode.json`
+ * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
+ * so no turn or title request can reach a hosted model; it needs no
+ * credential source either.
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -484,8 +488,12 @@ test.describe("live idle observation", () => {
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
 
       test.skip(
-        FAKE_MODELS && platform !== "claude" && platform !== "codex" && platform !== "pi",
-        "the loopback models stand in for Claude, Codex and Pi only",
+        FAKE_MODELS &&
+          platform !== "claude" &&
+          platform !== "codex" &&
+          platform !== "pi" &&
+          platform !== "opencode",
+        "the loopback models stand in for Claude, Codex, Pi and OpenCode only",
       );
       test.skip(
         IN_CONTAINER && platform !== "claude",
@@ -541,7 +549,7 @@ test.describe("live idle observation", () => {
         if (FAKE_MODELS && !IN_CONTAINER) {
           expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
           const fake = await startLocalFakeModel(
-            platform as "claude" | "codex" | "pi",
+            platform as "claude" | "codex" | "pi" | "opencode",
             status.dataDir!,
           );
           fakeModels.push(fake);

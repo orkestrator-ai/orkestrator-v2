@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { installFakeClaudeApiFixture } from "../e2e/agent-testing/container-fake-claude-install";
 import type { KindCounters } from "./recurring-live-ab-summary";
 import { checkoutEnv, withTerminationSignals } from "./recurring-live-ab";
-import { gatewayFor } from "./tmux-mail-inject-live";
+import { gatewayFor, gatewayMetrics } from "./tmux-mail-inject-live";
 
 /**
  * Recurring work with a claude-tmux tab open in a container, on a loopback
@@ -259,6 +259,46 @@ export async function collectWindow<T>(
   return { ...measurement, counted };
 }
 
+/** One container change signal's content-free health: states held, rings, demotions. */
+export type SignalHealth = {
+  containers: number;
+  states: Record<string, number>;
+  fallback: number;
+  rings: number;
+  demotions: Record<string, number>;
+};
+
+/**
+ * The `recurringWork.signals` block of the gateway metrics (the doorbell's
+ * `tmux-hook-signal` among them), keeping only non-zero states. `null` when
+ * the backend publishes none, as older commits do not.
+ */
+export function signalHealth(metrics: unknown): Record<string, SignalHealth> | null {
+  const raw = (metrics as { recurringWork?: { signals?: unknown } } | null)?.recurringWork?.signals;
+  if (!Array.isArray(raw)) return null;
+  const count = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const nonZero = (record: unknown) => {
+    const result: Record<string, number> = {};
+    if (record && typeof record === "object")
+      for (const [key, value] of Object.entries(record))
+        if (count(value) > 0) result[key] = count(value);
+    return result;
+  };
+  const health: Record<string, SignalHealth> = {};
+  for (const entry of raw as Array<{ name?: unknown; status?: Record<string, unknown> }>) {
+    if (typeof entry?.name !== "string" || !entry.status) continue;
+    health[entry.name] = {
+      containers: count(entry.status.containers),
+      states: nonZero(entry.status.states),
+      fallback: count(entry.status.fallback),
+      rings: count(entry.status.rings),
+      demotions: nonZero(entry.status.demotions),
+    };
+  }
+  return health;
+}
+
 /** Every `docker exec` a window's kinds made, per minute. */
 export function dockerExecPerMinute(rates: Record<string, KindRate>): number {
   let total = 0;
@@ -400,6 +440,11 @@ type WindowResult = {
   /** The `docker-exec` work units the backend's own counters recorded. */
   dockerExecPerMinute: number;
   kinds: Record<string, KindRate>;
+  /** Change-signal health read either side of the window (the doorbell's state and rings). */
+  signals: {
+    before: Record<string, SignalHealth> | null;
+    after: Record<string, SignalHealth> | null;
+  };
   note?: string;
 };
 
@@ -445,7 +490,12 @@ export async function runContainerTabBenchmark(
   };
   const sleep = (ms: number) => delay(ms, undefined, { signal });
   /** Runs `body` inside a window: counters and Docker's exec count on either side. */
+  const signals = () =>
+    gatewayMetrics(status, signal)
+      .then(signalHealth)
+      .catch(() => null);
   const inWindow = async <T>(name: string, body: () => Promise<T>, note?: string): Promise<T> => {
+    const signalsBefore = await signals();
     const { value, before, after, elapsedMs, counted } = await collectWindow(
       () => execCounter(containerId),
       () => gateway.kinds(),
@@ -461,6 +511,7 @@ export async function runContainerTabBenchmark(
       },
       dockerExecPerMinute: dockerExecPerMinute(kinds),
       kinds,
+      signals: { before: signalsBefore, after: await signals() },
       ...(note ? { note } : {}),
     });
     return value;

@@ -233,10 +233,63 @@ function checkManualTest(todo: string) {
   for (const item of items) {
     expect(item, "a checklist item names its source to-do in bold").toMatch(CHECKLIST_ITEM);
   }
-  const broken = [...checklist.matchAll(/\]\(((?:\.\.\/)+[^)#\s]+\.md)(?:#[^)]*)?\)/g)]
+  const checklistPath = path.join(directory, files[0]!);
+  const broken = [...checklist.matchAll(/\]\(([^)\s]+)\)/g)]
     .map((match) => match[1]!)
-    .filter((link) => !existsSync(path.resolve(directory, link)));
+    .filter((link) => !/^[a-z][a-z0-9+.-]*:/i.test(link))
+    .map((link) => ({ link, problem: relativeLinkProblem(checklistPath, link) }))
+    .filter((entry) => entry.problem !== undefined)
+    .map((entry) => `${entry.link}: ${entry.problem}`);
   expect(broken, "checklist links that do not resolve").toEqual([]);
+}
+
+// The anchors a Markdown file's headings produce, the way GitHub renders them:
+// the heading text lower-cased, punctuation dropped, each space a hyphen, and
+// `-1`, `-2`, ... appended to repeats. Headings inside code fences are skipped.
+function headingAnchors(markdown: string): { anchors: Set<string>; repeated: Set<string> } {
+  const anchors = new Set<string>();
+  const seen = new Map<string, number>();
+  let fence: string | undefined;
+  for (const line of markdown.split("\n")) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      if (fence === undefined) fence = marker[0]!.repeat(marker.length);
+      else if (marker.startsWith(fence)) fence = undefined;
+      continue;
+    }
+    if (fence !== undefined) continue;
+    const heading = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    if (!heading) continue;
+    const base = heading[1]!
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/<[^>]+>/g, "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+      .replace(/ /g, "-");
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    anchors.add(count === 0 ? base : `${base}-${count}`);
+  }
+  const repeated = new Set([...seen].filter(([, count]) => count > 1).map(([base]) => base));
+  return { anchors, repeated };
+}
+
+// Why a relative link from `from` does not land where it says, or undefined
+// when it does. The target must exist; an anchor into a Markdown file must name
+// one of its headings, and must not be the bare form of a heading text the file
+// repeats, because that silently lands on the first of them.
+function relativeLinkProblem(from: string, link: string): string | undefined {
+  const hash = link.indexOf("#");
+  const file = hash === -1 ? link : link.slice(0, hash);
+  const anchor = hash === -1 ? undefined : decodeURIComponent(link.slice(hash + 1));
+  const target = file === "" ? from : path.resolve(path.dirname(from), file);
+  if (!existsSync(target)) return "the target does not exist";
+  if (anchor === undefined || !target.endsWith(".md")) return undefined;
+  const { anchors, repeated } = headingAnchors(readFileSync(target, "utf8"));
+  if (!anchors.has(anchor)) return "no heading has this anchor";
+  if (repeated.has(anchor)) return "several headings share this anchor's text";
+  return undefined;
 }
 
 describe("todo folders", () => {
@@ -293,6 +346,13 @@ function fixture() {
   }
   writeFixtureFile(
     directory,
+    "area/0001-first.md",
+    ["# First", "## Set-up `env`", "### Machines", "```", "## Fenced", "```", "## Machines"].join(
+      "\n",
+    ),
+  );
+  writeFixtureFile(
+    directory,
     `area/${INDEX}`,
     [
       "| 1 | [0001-first.md](0001-first.md) | High | backlog | — | Example | Notes |",
@@ -307,6 +367,7 @@ function fixture() {
       "## Manual tests",
       "- [ ] **[0001](../area/0001-first.md) task 1: run it.** Record the result.",
       "- [ ] **0009 (retired) task 2: decide.** Record the decision.",
+      "  (Background: [set-up](../area/0001-first.md#set-up-env), [second](../area/0001-first.md#machines-1), [index](0000-index.md), [top](#manual-tests), [web](https://example.com/a#b).)",
     ].join("\n"),
   );
   writeFixtureFile(
@@ -455,6 +516,26 @@ describe("todo guard negative fixtures", () => {
     [
       "an item with an unresolved link",
       "- [ ] **[0002](../area/0002-gone.md) task 1: run.** Record.",
+    ],
+    [
+      "an unresolved same-folder link",
+      "- [ ] **0009 (retired) task 3: run.** See [notes](0006-gone.md).",
+    ],
+    [
+      "an anchor no heading has",
+      "- [ ] **[0001](../area/0001-first.md#missing) task 2: run.** Record.",
+    ],
+    [
+      "an anchor that only a fenced line would produce",
+      "- [ ] **[0001](../area/0001-first.md#fenced) task 2: run.** Record.",
+    ],
+    [
+      "the bare anchor of a repeated heading",
+      "- [ ] **[0001](../area/0001-first.md#machines) task 2: run.** Record.",
+    ],
+    [
+      "a same-file anchor no heading has",
+      "- [ ] **0009 (retired) task 4: run.** See [x](#nowhere).",
     ],
   ] as const)("rejects a checklist with %s", (_name, line) => {
     const directory = fixture();

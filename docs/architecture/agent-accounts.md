@@ -1265,7 +1265,7 @@ active account got in first. The state is on `AgentAccountsSnapshot.autoSwitch` 
 `off`, `automatic` or `pinned`, with `lastSwitch`, and shows in the account settings,
 the Machines overview and the agent panel.
 
-### Machines
+### Ticks across machines
 
 The main tick and the per-account ticks are the inherited setting
 `agentAccountAutoSwitch` ([command-nodes.md](command-nodes.md#settings)): emails and

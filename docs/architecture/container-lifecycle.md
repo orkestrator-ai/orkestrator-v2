@@ -1825,7 +1825,7 @@ need it once cloned.
 
 | Path | Holds |
 | --- | --- |
-| `<data>/git-mirrors/<project id>/mount-<kind>/` | A bind source per access kind (`anonymous`, `github-pat`, `github-host-cli`), mounted read-only at `/orkestrator-git-mirror` with `-v` into the containers given that access |
+| `<data>/git-mirrors/<project id>/mount-<kind>/` | A bind source per access kind (authenticated readers add a random UUID suffix) (`anonymous`, `github-pat`, `github-host-cli`), mounted read-only at `/orkestrator-git-mirror` with `-v` into the containers given that access |
 | `.../mount-<kind>/mirror.git` | That kind's mirror. Appears only by rename, once complete. `ORKESTRATOR_GIT_MIRROR` names it. At most one kind holds one |
 | `.../mount/` | The single bind source from before access kinds. Kept, empty, because stopped containers still name it; its mirror is retired by the first refresh |
 | `.../state.json` | Last attempt, consecutive failures, remote hash, the access kind and GitHub login the live mirror was fetched with, oversized and suspect marks. Outside the mounts, so a container cannot read it |
@@ -1922,7 +1922,7 @@ need it once cloned.
   remote, as the container's clone converts it, is GitHub over HTTPS and
   `resolveContainerGitHubToken` returns a token; otherwise `anonymous`, which
   is also every agent-test profile's, since those never sync a credential in.
-  The container is bound to that kind's `mount-<kind>/` only, and the refresh
+  Anonymous containers use `mount-anonymous/`; authenticated containers use a fresh generation of their kind, and the refresh
   it starts is handed the same access, token in memory.
   - **The fetch is the container's.** The URL converted as
     `convert_ssh_to_https` converts it, `GIT_ALLOW_PROTOCOL` limited to its
@@ -1952,11 +1952,22 @@ need it once cloned.
     login that cannot be read (no `gh`, no network, a refused token) withdraws
     the mirror too, without bypassing the interval, and records `null`, so the
     next refresh builds it anew with the current token.
-  - **What is not immediate.** The refresh runs only when a container is created. Containers
-    already running keep reading the mirror of their kind until the next
-    creation's refresh retires it; and a new container bound to its kind's
-    existing mirror can clone from it before that refresh notices a changed
-    account, which costs one GitHub request per container creation to find.
+  - **Reader generations.** Every authenticated container gets a fresh random
+    bind directory, `mount-<kind>-<uuid>`, initially empty. Only the refresh
+    carrying that container's token can publish there. No account lookup is
+    needed before binding an empty directory; unknown identity never publishes.
+    This also separates tokens with different repository permissions for the
+    same account. The next refresh retires earlier generations but keeps their
+    bind directories. Old containers never see a replacement reader's mirror.
+    Authenticated readers therefore cannot reuse an existing cache at creation;
+    anonymous readers retain the shared cache.
+  - **Access transitions during refresh.** A different access request aborts
+    the active writer and queues the latest request. The writer settles before
+    the queued reconciliation runs; shutdown also drains it without restarting.
+  - **Refused seeds.** Before copying checkout objects, the isolated remote
+    access is probed with `ls-remote`. A refusal ends the attempt without a
+    seed copy or fallback fetch; normal failed-attempt backoff applies.
+
 - **Credentials at rest.** The URL and any credential are passed per transfer,
   and no `remote` section exists, so the config holds neither;
   `--no-write-fetch-head` keeps the URL out of `FETCH_HEAD`. A container

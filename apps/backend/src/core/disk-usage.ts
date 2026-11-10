@@ -443,7 +443,7 @@ export async function listProjectGitMirrorUsage(
 }
 
 async function holdsGitMirror(directory: string): Promise<boolean> {
-  for (const mount of gitMirrorMountNames()) {
+  for (const mount of gitMirrorMountNames(await readdir(directory).catch(() => []))) {
     if (await pathExists(path.join(directory, mount, GIT_MIRROR_NAME))) return true;
   }
   const names = await readdir(directory).catch(() => [] as string[]);

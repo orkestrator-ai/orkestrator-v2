@@ -137,7 +137,7 @@ test("a container is bound to the mirror of the GitHub credential it is given", 
     ...github,
     global: { containerGitHubCredential: "pat", githubToken: "container-pat" },
   });
-  expect(pat.create).toContain(mount(pat.dataDir, "github-pat"));
+  expect(pat.create).toMatch(/mount-github-pat-[a-f0-9-]{36}:/);
   // The token reaches the refresh in memory, never the create command.
   expect(pat.create).not.toContain("container-pat");
 

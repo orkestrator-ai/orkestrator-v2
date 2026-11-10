@@ -26,6 +26,7 @@ import {
   refreshProjectGitMirror,
   removeProjectGitMirror,
   sweepOrphanedProjectGitMirrors,
+  stopProjectGitMirrorRefreshes,
   type GitMirrorRefreshOptions,
 } from "../src/core/project-git-mirror";
 import type { GitMirrorAccess } from "../src/core/project-git-mirror-access";
@@ -858,6 +859,29 @@ describe("credentials", () => {
     }
   });
 
+  test("a refused remote with a checkout is probed before seeding and backed off", async () => {
+    const server = startGitHttpRemote(root, {
+      credentials: { username: "user", password: "password" },
+    });
+    try {
+      let copies = 0;
+      let probes = 0;
+      const run: typeof runCommand = (command, args, options) => {
+        if (args?.includes("ls-remote")) probes++;
+        if (args?.includes("+refs/remotes/*:refs/seed/*")) copies++;
+        return runCommand(command, args, options);
+      };
+      const target = { ...project(), gitUrl: server.origin + "/remote.git", localPath: work };
+      const options = { run, force: false, now: () => 1_000_000 };
+      expect(await refresh(options, target, { kind: "anonymous" })).toBe("failed");
+      expect(await refresh(options, target, { kind: "anonymous" })).toBe("skipped-recent");
+      expect(probes).toBe(1);
+      expect(copies).toBe(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("a public remote over HTTP builds with no credential", async () => {
     const server = startGitHttpRemote(root);
     try {
@@ -963,7 +987,7 @@ describe("access kinds", () => {
     expect(existsSync(mirrorPath("github-pat"))).toBe(false);
 
     clock += GIT_MIRROR_REFRESH_INTERVAL_MS;
-    expect(await refresh(unreadable, project(), PAT)).toBe("built");
+    expect(await refresh(unreadable, project(), PAT)).toBe("failed");
     expect(await readState()).toMatchObject({ account: null });
     // Known again: whatever the unreadable one was, this is fetched anew.
     expect(await refresh({ force: false, now: () => clock }, project(), PAT)).toBe("built");
@@ -1119,6 +1143,114 @@ clone_repository "$2" "$3"
       child.on("close", (code) => resolve({ code, stdout }));
     });
   }
+
+  test.each(["anonymous", "github-pat"] as const)(
+    "changed access to %s cancels a blocked writer and reconciles the latest reader",
+    async (kind) => {
+      let release!: () => void;
+      let started!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const run: typeof runCommand = async (command, args, options) => {
+        if (args?.includes("fetch")) {
+          started();
+          await blocked;
+        }
+        return runCommand(command, args, options);
+      };
+      const first = refresh({ run }, project(), {
+        kind: "github-pat",
+        token: "old-token",
+        localRemote: true,
+      });
+      await entered;
+      const second = refresh({}, project(), {
+        kind,
+        token: kind === "anonymous" ? undefined : "new-token",
+        localRemote: true,
+      });
+      release();
+      expect(await first).toBe("built");
+      expect(await second).toBe("built");
+      expect(existsSync(mirrorPath(kind))).toBe(true);
+      if (kind === "anonymous") expect(existsSync(mirrorPath("github-pat"))).toBe(false);
+      expect(await readState()).toMatchObject({ access: kind });
+    },
+  );
+
+  test("fresh authenticated binds never expose either reader's predecessor", async () => {
+    const alice = {
+      kind: "github-pat",
+      token: "alice",
+      localRemote: true,
+      generation: "11111111-1111-1111-1111-111111111111",
+    } as const;
+    const bob = { ...alice, token: "bob", generation: "22222222-2222-2222-2222-222222222222" };
+    const oldMirror = mirrorPath("github-pat-" + alice.generation);
+    const newMirror = mirrorPath("github-pat-" + bob.generation);
+    await gitMirrorContainerArguments(dataDir, project(), alice.kind, alice.generation);
+    expect(await refresh({}, project(), alice)).toBe("built");
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    await gitMirrorContainerArguments(dataDir, project(), bob.kind, bob.generation);
+    const next = refresh(
+      {
+        accountLogin: async () => {
+          started();
+          await blocked;
+          return "bob";
+        },
+      },
+      project(),
+      bob,
+    );
+    await entered;
+    expect(existsSync(newMirror)).toBe(false);
+    release();
+    expect(await next).toBe("built");
+    expect(existsSync(oldMirror)).toBe(false);
+    expect(existsSync(newMirror)).toBe(true);
+  });
+
+  test("shutdown during account lookup withdraws the old mirror without publication", async () => {
+    const access = { kind: "github-pat", token: "token", localRemote: true } as const;
+    expect(await refresh({}, project(), access)).toBe("built");
+    let release!: () => void;
+    let started!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const next = refresh(
+      {
+        accountLogin: async () => {
+          started();
+          await blocked;
+          return undefined;
+        },
+      },
+      project(),
+      access,
+    );
+    await entered;
+    const stopped = stopProjectGitMirrorRefreshes(dataDir);
+    release();
+    expect(await next).toBe("cancelled");
+    await stopped;
+    expect(existsSync(mirrorPath("github-pat"))).toBe(false);
+  });
 
   test("launches arriving during a refresh join it", async () => {
     let fetches = 0;

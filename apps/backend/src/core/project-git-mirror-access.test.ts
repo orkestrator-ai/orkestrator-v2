@@ -90,7 +90,19 @@ describe("which access a new container is given", () => {
         global: global({ containerGitHubCredential: "pat", githubToken: " pat-token " }),
         gitHubCli: undefined,
       }),
-    ).toEqual({ kind: "github-pat", token: "pat-token" });
+    ).toEqual({ kind: "github-pat", token: "pat-token", generation: expect.any(String) });
+  });
+
+  test("even identical tokens get separate reader generations", async () => {
+    const input = {
+      gitUrl: github,
+      global: global({ containerGitHubCredential: "pat", githubToken: "pat-token" }),
+      gitHubCli: undefined,
+    };
+    const first = await resolveGitMirrorAccess(input);
+    const second = await resolveGitMirrorAccess(input);
+    expect(first.generation).toMatch(/^[a-f0-9-]{36}$/);
+    expect(first.generation).not.toBe(second.generation);
   });
 
   test("the host login for containers is its own kind, carrying the host token", async () => {
@@ -101,7 +113,7 @@ describe("which access a new container is given", () => {
         global: global({ containerGitHubCredential: "host-cli" }),
         gitHubCli: gh.selection,
       }),
-    ).toEqual({ kind: "github-host-cli", token: "host-cli-token" });
+    ).toEqual({ kind: "github-host-cli", token: "host-cli-token", generation: expect.any(String) });
   });
 
   test("a selected source with no token is anonymous, as the container's clone is", async () => {

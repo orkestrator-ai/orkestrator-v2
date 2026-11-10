@@ -10,6 +10,7 @@
  * configuration, credential helper, `.netrc` or SSH key. A container is bound
  * only to its own kind's mirror.
  */
+import { randomUUID } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +35,8 @@ export type GitMirrorAccess = {
    * Held in memory for the one refresh; never written anywhere.
    */
   token?: string;
+  /** Fresh, credential-independent bind identity for one authenticated reader. */
+  generation?: string;
   /**
    * The agent-test fixture: a host path the container reaches through its own
    * bind (`ORKESTRATOR_AGENT_TEST_GIT_REMOTE`), so `file` is what it uses.
@@ -105,7 +108,11 @@ export async function resolveGitMirrorAccess(
   if (source === "none") return { kind: "anonymous" };
   const token = await resolveContainerGitHubToken(input.global, input.gitHubCli);
   if (!token) return { kind: "anonymous" };
-  return { kind: source === "pat" ? "github-pat" : "github-host-cli", token };
+  return {
+    kind: source === "pat" ? "github-pat" : "github-host-cli",
+    token,
+    generation: randomUUID(),
+  };
 }
 
 /** The account the access's token acts as; undefined for no token or an unreadable one. */

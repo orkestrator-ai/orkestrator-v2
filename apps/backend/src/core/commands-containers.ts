@@ -369,7 +369,12 @@ export async function createDockerContainer(
         })
       : null;
   const gitMirrorArguments = gitMirrorAccess
-    ? await gitMirrorContainerArguments(context.storage.getDataDir(), project, gitMirrorAccess.kind)
+    ? await gitMirrorContainerArguments(
+        context.storage.getDataDir(),
+        project,
+        gitMirrorAccess.kind,
+        gitMirrorAccess.generation,
+      )
     : [];
   // Where the firewall runs: in an egress gateway that owns the namespace
   // (the workload gets no capability), in the workload itself (NET_ADMIN), or

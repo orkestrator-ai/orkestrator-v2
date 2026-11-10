@@ -7,8 +7,9 @@
  * self-contained, so a mirror can be stale, rebuilt or removed at any moment.
  *
  * Layout, under `<data>/git-mirrors/<project id>/` (owner-only):
- * - `mount-<access kind>/` is a bind source, one per kind of access a container
- *   can hold (`project-git-mirror-access.ts`). Each is world-readable because
+ * - `mount-<access kind>[-<generation>]/` is a bind source; authenticated readers
+ *   always get a fresh random generation, while anonymous readers share
+ *   (`project-git-mirror-access.ts`). Each is world-readable because
  *   the container's user is not the backend's user under rootless Docker, and
  *   exists for as long as the project once a container has been bound to it.
  * - `mount-<kind>/mirror.git` appears only by rename, once complete, fetched
@@ -114,6 +115,7 @@ type MirrorState = {
    * null when it could not be read. A different login rebuilds.
    */
   account?: string | null;
+  generation?: string;
   lastAttemptAt?: number;
   failures?: number;
   oversizedUntil?: number;
@@ -152,11 +154,23 @@ type GitMirrorContext = Pick<CommandContext, "storage"> &
 
 type MirrorProject = Pick<Project, "id" | "gitUrl"> & Partial<Pick<Project, "localPath">>;
 
-type MirrorWriter = { controller: AbortController; done: Promise<GitMirrorRefreshOutcome> };
+type RefreshRequest = {
+  project: MirrorProject;
+  access: GitMirrorAccess;
+  options: GitMirrorRefreshOptions;
+};
+type MirrorWriter = {
+  controller: AbortController;
+  done: Promise<GitMirrorRefreshOutcome>;
+  request: RefreshRequest;
+  pending?: RefreshRequest;
+  stopped: boolean;
+};
 
 /**
  * One writer per mirror in this backend. A launch that arrives during a refresh
- * joins it. Another backend on the same data directory holds no writer lease,
+ * joins it only for identical access; a changed request cancels it and queues
+ * the latest access. Another backend on the same data directory holds no writer lease,
  * so it creates no containers and starts no refresh.
  */
 const writers = new Map<string, MirrorWriter>();
@@ -169,12 +183,19 @@ function projectDirectory(dataDir: string, projectId: string): string {
 /** Before access kinds, every container of a project was bound here. */
 const LEGACY_MOUNT = "mount";
 
-function mountName(kind: GitMirrorAccessKind): string {
-  return `mount-${kind}`;
+function mountName(kind: GitMirrorAccessKind, generation?: string): string {
+  if (generation && !/^[a-f0-9-]{36}$/.test(generation))
+    throw new Error("Invalid mirror generation");
+  return `mount-${kind}${generation ? "-" + generation : ""}`;
 }
 
-function mountDirectory(dataDir: string, projectId: string, kind: GitMirrorAccessKind): string {
-  return path.join(projectDirectory(dataDir, projectId), mountName(kind));
+function mountDirectory(
+  dataDir: string,
+  projectId: string,
+  kind: GitMirrorAccessKind,
+  generation?: string,
+): string {
+  return path.join(projectDirectory(dataDir, projectId), mountName(kind, generation));
 }
 
 function remoteFingerprint(gitUrl: string): string {
@@ -234,11 +255,12 @@ async function ensureProjectDirectories(
   dataDir: string,
   projectId: string,
   kind: GitMirrorAccessKind,
+  generation?: string,
 ): Promise<void> {
   const root = path.join(dataDir, GIT_MIRRORS_DIR);
   await mkdir(root, { recursive: true, mode: 0o700 });
   await mkdir(projectDirectory(dataDir, projectId), { recursive: true, mode: 0o700 });
-  const mount = mountDirectory(dataDir, projectId, kind);
+  const mount = mountDirectory(dataDir, projectId, kind, generation);
   await mkdir(mount, { recursive: true, mode: 0o755 });
   // Whatever the umask: the workload user must be able to read what is inside.
   await chmod(mount, 0o755).catch(async () => {
@@ -264,10 +286,11 @@ export async function gitMirrorContainerArguments(
   dataDir: string,
   project: Pick<Project, "id">,
   kind: GitMirrorAccessKind,
+  generation?: string,
 ): Promise<string[]> {
   try {
-    await ensureProjectDirectories(dataDir, project.id, kind);
-    const mount = mountDirectory(dataDir, project.id, kind);
+    await ensureProjectDirectories(dataDir, project.id, kind, generation);
+    const mount = mountDirectory(dataDir, project.id, kind, generation);
     // `-v` splits on colons, so such a path could fail the whole container create.
     if (mount.includes(":")) throw new Error("The data directory path contains a colon");
     return [
@@ -347,7 +370,10 @@ export function scheduleProjectGitMirrorRefresh(
 export async function stopProjectGitMirrorRefreshes(dataDir: string): Promise<void> {
   const prefix = path.join(dataDir, GIT_MIRRORS_DIR) + path.sep;
   const active = Array.from(writers.entries()).filter(([key]) => key.startsWith(prefix));
-  for (const [, writer] of active) writer.controller.abort();
+  for (const [, writer] of active) {
+    writer.stopped = true;
+    writer.controller.abort();
+  }
   await Promise.all(active.map(([, writer]) => writer.done));
 }
 
@@ -364,20 +390,53 @@ export function refreshProjectGitMirror(
   if (context.environmentLifecycleTasks?.isAccepting() === false)
     return Promise.resolve("skipped-shutdown");
   const key = path.join(context.storage.getDataDir(), GIT_MIRRORS_DIR, project.id);
+  const request = { project, access, options };
   const running = writers.get(key);
-  if (running) return running.done;
-  const controller = new AbortController();
-  const done = runRefresh(context, project, access, options, controller)
-    .catch((error: unknown) => {
-      log.warn("git-mirror.refresh-failed", {
-        remediation: permissionRemediation(error),
-        projectId: project.id,
-        error: formatLogError(error, { message: false }),
+  if (running) {
+    const previous = running.pending ?? running.request;
+    if (
+      previous.access.kind !== access.kind ||
+      previous.access.token !== access.token ||
+      previous.access.generation !== access.generation ||
+      previous.project.gitUrl !== project.gitUrl
+    ) {
+      running.pending = request;
+      running.controller.abort();
+    }
+    return running.done;
+  }
+  const writer: MirrorWriter = {
+    controller: new AbortController(),
+    request,
+    stopped: false,
+    done: Promise.resolve("cancelled"),
+  };
+  const done = (async () => {
+    let outcome: GitMirrorRefreshOutcome = "cancelled";
+    do {
+      const current = writer.request;
+      outcome = await runRefresh(
+        context,
+        current.project,
+        current.access,
+        current.options,
+        writer.controller,
+      ).catch((error: unknown) => {
+        log.warn("git-mirror.refresh-failed", {
+          projectId: project.id,
+          error: formatLogError(error, { message: false }),
+        });
+        return writer.controller.signal.aborted ? ("cancelled" as const) : ("failed" as const);
       });
-      return "failed" as const;
-    })
-    .finally(() => writers.delete(key));
-  writers.set(key, { controller, done });
+      if (writer.stopped || !writer.pending) break;
+      writer.request = writer.pending;
+      writer.pending = undefined;
+      writer.controller = new AbortController();
+    } while (!writer.stopped);
+    return outcome;
+  })().finally(() => writers.delete(key));
+  writer.done = done;
+  writers.set(key, writer);
   return done;
 }
 
@@ -408,12 +467,15 @@ async function runRefresh(
       readGitMirrorAccount({ ...access, token }, context.runtime?.gitHubCli, run)
     ).catch(() => undefined);
   const directory = projectDirectory(dataDir, project.id);
-  await ensureProjectDirectories(dataDir, project.id, access.kind);
-  const mirror = path.join(mountDirectory(dataDir, project.id, access.kind), GIT_MIRROR_NAME);
+  await ensureProjectDirectories(dataDir, project.id, access.kind, access.generation);
+  const mirror = path.join(
+    mountDirectory(dataDir, project.id, access.kind, access.generation),
+    GIT_MIRROR_NAME,
+  );
   const state = await readState(directory);
   // First, so no reader of another kind's mount, or of the legacy one, keeps a
   // mirror fetched with access containers are no longer given.
-  const retiredKinds = await retireOtherAccessMirrors(directory, access.kind);
+  const retiredKinds = await retireOtherAccessMirrors(directory, access.kind, access.generation);
   // A token can change account under the same setting (another `gh auth
   // login`, a new PAT), so the login is read on every refresh. A different one
   // rebuilds now. One that cannot be read proves nothing either way: the mirror
@@ -421,7 +483,9 @@ async function runRefresh(
   const account = access.token ? ((await readAccount(access.token)) ?? null) : undefined;
   const accountUnknown = account === null;
   const accessChanged =
-    state.access !== access.kind || (typeof account === "string" && state.account !== account);
+    state.generation !== access.generation ||
+    state.access !== access.kind ||
+    (typeof account === "string" && state.account !== account);
   const withdrawn = (accessChanged || accountUnknown) && (await retireMirror(directory, mirror));
   if (retiredKinds.length > 0 || withdrawn) {
     log.info("git-mirror.access-changed", {
@@ -439,11 +503,20 @@ async function runRefresh(
     }
   }
   const remote = remoteFingerprint(project.gitUrl);
-  const next: MirrorState = { ...state, remote, access: access.kind, lastAttemptAt: now() };
+  const next: MirrorState = {
+    ...state,
+    remote,
+    access: access.kind,
+    generation: access.generation,
+    lastAttemptAt: now(),
+  };
   if (account === undefined) delete next.account;
   else next.account = account;
   delete next.oversizedUntil;
   await writeState(directory, next);
+
+  if (controller.signal.aborted) return "cancelled";
+  if (accountUnknown) return "failed";
 
   const exists = await isDirectory(path.join(mirror, "objects"));
   const verified = !exists || !state.suspect || (await hasValidConnectivity(mirror, run));
@@ -571,7 +644,9 @@ async function buildMirror(
     transfer.oversized = true;
     throw new Error("The mirror is past its limit");
   }
+  transfer.controller.signal.throwIfAborted();
   await retireMirror(directory, mirror);
+  transfer.controller.signal.throwIfAborted();
   await rename(staged, mirror);
   return "published";
 }
@@ -594,6 +669,19 @@ async function seedMirror(transfer: Transfer, building: string, staged: string):
   const { project, controller } = transfer;
   const checkout = transfer.canSeed ? await seedableCheckout(project) : null;
   if (!checkout) return false;
+  const home = await makeFetchHome(transfer.directory);
+  try {
+    const plan = gitMirrorFetchPlan(project.gitUrl, transfer.access, home);
+    if (!plan) throw new Error("A container could not clone this remote");
+    await transfer.run("git", [...plan.gitOptions, "ls-remote", "--heads", "--", plan.url], {
+      env: plan.env,
+      signal: controller.signal,
+      timeoutMs: GIT_MIRROR_FETCH_TIMEOUT_MS,
+      redactValues: [project.gitUrl, plan.url],
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
   const quarantine = path.join(building, "seed.git");
   try {
     await initBareRepository(transfer, quarantine);
@@ -811,14 +899,15 @@ async function retireMirror(directory: string, mirror: string): Promise<boolean>
 async function retireOtherAccessMirrors(
   directory: string,
   kind: GitMirrorAccessKind,
+  generation?: string,
 ): Promise<string[]> {
   const retired: string[] = [];
   if (await retireMirror(directory, path.join(directory, LEGACY_MOUNT, GIT_MIRROR_NAME))) {
     retired.push("legacy");
   }
-  for (const other of GIT_MIRROR_ACCESS_KINDS) {
-    if (other === kind) continue;
-    if (await retireMirror(directory, path.join(directory, mountName(other), GIT_MIRROR_NAME))) {
+  for (const other of gitMirrorMountNames(await readdir(directory))) {
+    if (other === mountName(kind, generation) || other === LEGACY_MOUNT) continue;
+    if (await retireMirror(directory, path.join(directory, other, GIT_MIRROR_NAME))) {
       retired.push(other);
     }
   }
@@ -826,8 +915,12 @@ async function retireOtherAccessMirrors(
 }
 
 /** Every directory a container of the project can have been bound to. */
-export function gitMirrorMountNames(): string[] {
-  return [LEGACY_MOUNT, ...GIT_MIRROR_ACCESS_KINDS.map(mountName)];
+export function gitMirrorMountNames(names: string[] = []): string[] {
+  return [
+    LEGACY_MOUNT,
+    ...GIT_MIRROR_ACCESS_KINDS.map((kind) => mountName(kind)),
+    ...names.filter((name) => /^mount-github-(pat|host-cli)-[a-f0-9-]{36}$/.test(name)),
+  ];
 }
 
 /** What an earlier, interrupted refresh left, and what this one finished with. */
@@ -916,7 +1009,10 @@ export async function removeProjectGitMirror(
   try {
     const key = projectDirectory(dataDir, projectId);
     const writer = writers.get(key);
-    writer?.controller.abort();
+    if (writer) {
+      writer.stopped = true;
+      writer.controller.abort();
+    }
     await writer?.done;
     if (!(await isDirectory(key))) return;
     await removeConfinedDirectory(dataDir, `${GIT_MIRRORS_DIR}/${projectId}`);

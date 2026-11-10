@@ -19,10 +19,17 @@ import {
   type DispatchHoldPoint,
   type DispatchHoldRecord,
 } from "./agent-test-dispatch-hold.js";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
 import { httpProvider, piConnection } from "./agent-provider-test-support.js";
 
 const ISOLATED = { ORKESTRATOR_AGENT_TEST_ISOLATED: "1" } as NodeJS.ProcessEnv;
 const directories: string[] = [];
+function pollClock() {
+  const clock = installControlledTimeout(10);
+  cleanups.push(() => clock.restore());
+  return clock;
+}
+
 const cleanups: Array<() => void> = [];
 
 afterEach(async () => {
@@ -120,6 +127,7 @@ describe("agent-test dispatch hold", () => {
   });
 
   test("parks until the marker is removed and records ids only", async () => {
+    const clock = pollClock();
     const root = await dataDir();
     const marker = await arm(root, "before-send");
     let released = false;
@@ -138,9 +146,11 @@ describe("agent-test dispatch hold", () => {
       pid: process.pid,
     });
     expect(record.releasedAt).toBeUndefined();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clock.advance()).toBe(1);
+    await Promise.resolve();
     expect(released).toBe(false);
     await fs.rm(marker);
+    expect(clock.advance()).toBe(1);
     await held;
     expect(released).toBe(true);
     const after = (await readRecord(root, "before-send"))!;
@@ -170,6 +180,7 @@ describe("agent-test dispatch hold", () => {
   });
 
   test("dispose stops polling and leaves a held send unsettled", async () => {
+    const clock = pollClock();
     const root = await dataDir();
     const marker = await arm(root, "before-send");
     const created = hold(root);
@@ -180,7 +191,9 @@ describe("agent-test dispatch hold", () => {
     await until(async () => (await readRecord(root, "before-send")) !== undefined);
     created.dispose();
     await fs.rm(marker);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(clock.pendingCount()).toBe(0);
+    expect(clock.advance()).toBe(0);
+    await Promise.resolve();
     expect(settled).toBe(false);
     expect((await readRecord(root, "before-send"))?.releasedAt).toBeUndefined();
   });
@@ -204,6 +217,7 @@ describe("agent-test dispatch hold", () => {
 
 describe("bridge client dispatch hold", () => {
   test("holds a send before the prompt request leaves the backend", async () => {
+    const clock = pollClock();
     const root = await dataDir();
     const marker = await arm(root, "before-send");
     cleanups.push(installAgentTestDispatchHold(hold(root)));
@@ -215,16 +229,19 @@ describe("bridge client dispatch hold", () => {
         sent = true;
       });
     await until(async () => (await readRecord(root, "before-send")) !== undefined);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clock.advance()).toBe(1);
+    await Promise.resolve();
     expect(requests.filter((request) => request.url.endsWith("/prompt"))).toHaveLength(0);
     expect(sent).toBe(false);
     await fs.rm(marker);
+    expect(clock.advance()).toBe(1);
     await send;
     expect(requests.filter((request) => request.url.endsWith("/prompt"))).toHaveLength(1);
     expect((await readRecord(root, "before-send"))?.requestId).toBe("request-1");
   });
 
   test("holds an accepted send before it returns to the caller", async () => {
+    const clock = pollClock();
     const root = await dataDir();
     const marker = await arm(root, "after-response");
     cleanups.push(installAgentTestDispatchHold(hold(root)));
@@ -237,9 +254,11 @@ describe("bridge client dispatch hold", () => {
       });
     await until(async () => (await readRecord(root, "after-response")) !== undefined);
     expect(requests.filter((request) => request.url.endsWith("/prompt"))).toHaveLength(1);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clock.advance()).toBe(1);
+    await Promise.resolve();
     expect(sent).toBe(false);
     await fs.rm(marker);
+    expect(clock.advance()).toBe(1);
     await send;
     expect(sent).toBe(true);
   });
@@ -267,4 +286,46 @@ describe("bridge client dispatch hold", () => {
       promptDispatchHold("before-send", { agent: "pi", sessionId: "s", requestId: "r" }),
     ).toBeUndefined();
   });
+});
+
+describe("production bundle capability", () => {
+  for (const enabled of [false, true]) {
+    test(`bundled capability ${enabled} overrides runtime test switches`, async () => {
+      const root = await dataDir();
+      const bundled = await Bun.build({
+        entrypoints: [path.join(import.meta.dir, "agent-test-dispatch-hold.ts")],
+        target: "bun",
+        outdir: root,
+        define: { __ORKESTRATOR_DISPATCH_HOLD__: String(enabled) },
+      });
+      expect(bundled.success).toBe(true);
+      const module = await import(bundled.outputs[0]!.path);
+      const created = module.agentTestDispatchHold({
+        dataDir: root,
+        runtimeFlavor: "agent-test",
+        env: ISOLATED,
+      }) as AgentTestDispatchHold | undefined;
+      if (created) cleanups.push(() => created.dispose());
+      expect(created !== undefined).toBe(enabled);
+      for (const point of ["before-send", "after-response"] as const) {
+        const marker = await arm(root, point);
+        if (created) {
+          const held = created.hold(point, { agent: "pi", sessionId: "s", requestId: "r" });
+          expect(await readRecord(root, point)).toBeDefined();
+          await fs.rm(marker);
+          await held;
+        } else {
+          expect(await readRecord(root, point)).toBeUndefined();
+        }
+      }
+      // Pin both shipping entrypoints to the capability tested above.
+      for (const script of ["apps/backend/scripts/build.ts", "packages/cli/scripts/build.ts"]) {
+        const source = await fs.readFile(
+          path.resolve(import.meta.dir, "../../../..", script),
+          "utf8",
+        );
+        expect(source).toContain('__ORKESTRATOR_DISPATCH_HOLD__: "false"');
+      }
+    });
+  }
 });

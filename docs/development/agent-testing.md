@@ -1554,8 +1554,9 @@ mise run dev:reset --profile qa-dispatch-hold
 
 The window is made deterministic by a test-only hold in the backend's bridge
 client (`apps/backend/src/core/agent-test-dispatch-hold.ts`). It exists only
-in an agent-test backend (flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`
-and a non-default data directory) and is armed by marker files in
+in a source-run agent-test backend (flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`
+and a non-default data directory). Shipping backend and CLI bundles hard-disable
+the hold at build time, regardless of runtime switches. It is armed by marker files in
 `<data dir>/agent-test-fixtures/dispatch-hold/`:
 
 - `hold-before-send` parks every prompt send after its caller journaled it

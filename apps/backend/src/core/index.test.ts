@@ -2392,3 +2392,47 @@ test("the backend constructor gives only its default data directory the fixed Co
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+describe("backend dispatch hold lifecycle", () => {
+  for (const config of [
+    { flavor: "agent-test", isolated: "1", installed: true },
+    { flavor: "production", isolated: "1", installed: false },
+    { flavor: "development", isolated: "1", installed: false },
+    { flavor: "agent-test", isolated: "0", installed: false },
+  ] as const) {
+    test(`${config.flavor}, isolation ${config.isolated}: installs and detaches as configured`, async () => {
+      const { promptDispatchHold, DISPATCH_HOLD_FIXTURE_DIR } =
+        await import("./agent-test-dispatch-hold.js");
+      const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-hold-lifecycle-"));
+      const previous = process.env.ORKESTRATOR_AGENT_TEST_ISOLATED;
+      process.env.ORKESTRATOR_AGENT_TEST_ISOLATED = config.isolated;
+      const backend = new OrkestratorBackend({
+        dataDir,
+        runtimeFlavor: config.flavor,
+        toolchainBinDir: "",
+        appRoot: "",
+        resourceRoot: "",
+        emit: () => undefined,
+        agentTools: fakeAgentTools(),
+      });
+      try {
+        const directory = path.join(dataDir, DISPATCH_HOLD_FIXTURE_DIR);
+        await fs.mkdir(directory, { recursive: true });
+        await fs.writeFile(path.join(directory, "hold-before-send"), "");
+        const held = promptDispatchHold("before-send", { agent: "pi", sessionId: "s" });
+        expect(held !== undefined).toBe(config.installed);
+        expect(await fs.readdir(directory)).toContain("hold-before-send");
+        if (config.installed) {
+          expect(await fs.readdir(directory)).toContain("held-before-send.json");
+        }
+        await backend.shutdown();
+        expect(promptDispatchHold("before-send", { agent: "pi", sessionId: "s" })).toBeUndefined();
+      } finally {
+        await backend.shutdown().catch(() => undefined);
+        if (previous === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_ISOLATED;
+        else process.env.ORKESTRATOR_AGENT_TEST_ISOLATED = previous;
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    });
+  }
+});

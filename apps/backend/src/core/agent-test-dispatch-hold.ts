@@ -24,10 +24,16 @@ import { isDefaultDataDir } from "../data-dir.js";
  * It is reachable only in an isolated agent-test backend: the runtime flavor
  * must be `agent-test`, the desktop's `ORKESTRATOR_AGENT_TEST_ISOLATED=1` must
  * be set, and the data directory must not be the default one. A production
- * build runs with flavor `production`, so {@link agentTestDispatchHold}
+ * build hard-disables the capability, so {@link agentTestDispatchHold}
  * answers `undefined`, nothing is installed, and the bridge client never
  * touches the file system on a send.
  */
+// Production bundlers replace this capability with false. Source-run dev:test
+// backends retain it; runtime switches cannot override a bundled false.
+declare const __ORKESTRATOR_DISPATCH_HOLD__: boolean;
+const dispatchHoldBuildEnabled =
+  typeof __ORKESTRATOR_DISPATCH_HOLD__ === "undefined" || __ORKESTRATOR_DISPATCH_HOLD__;
+
 export const DISPATCH_HOLD_FIXTURE_DIR = path.join("agent-test-fixtures", "dispatch-hold");
 
 export type DispatchHoldPoint = "before-send" | "after-response";
@@ -89,6 +95,7 @@ function boundedId(value: string | undefined): string | undefined {
 export function agentTestDispatchHold(
   options: AgentTestDispatchHoldOptions,
 ): AgentTestDispatchHold | undefined {
+  if (!dispatchHoldBuildEnabled) return undefined;
   const env = options.env ?? process.env;
   if (options.runtimeFlavor !== "agent-test") return undefined;
   if (env.ORKESTRATOR_AGENT_TEST_ISOLATED !== "1") return undefined;

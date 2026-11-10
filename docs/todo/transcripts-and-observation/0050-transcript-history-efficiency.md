@@ -1426,15 +1426,16 @@ measurement.
       plus `ORKESTRATOR_AGENT_TEST_ISOLATED=1` plus a non-default data
       directory, armed by a marker file in that directory (the pattern of
       `agentTestTerminalSurvival`); a build-time flag.
-    - Chosen: the flavor, isolation switch and data-directory gate, armed by a
-      marker file.
-    - Why: a production build runs with flavor `production` and the default
-      data directory, so the hold is never installed and `send` never touches
-      the file system; the marker lets a spec arm and release a point across
-      backend restarts without restarting with new flags.
-    - Pros: the same gate the existing agent-test fixtures use; unit-tested.
-    - Cons: a packaged app started with an agent-test runtime profile could
-      install it, which is what agent-test profiles are for.
+    - Chosen: an immutable build capability disabled in both shipping backend
+      bundles, plus the flavor, isolation switch and data-directory gate.
+    - Why: runtime flags alone cannot enforce the production-build exclusion.
+      Source-run dev:test backends retain the hold; packaged backends cannot
+      enable it even with all test runtime switches.
+    - Pros: preserves marker control across source-run backend restarts and
+      prevents shipping artifacts from honoring markers; bundled regression
+      tests exercise both capability values and both hold points.
+    - Cons: packaged backends cannot run this fault-injection qualification;
+      use the source-run dev:test profile instead.
 24. **Task 3: provider and pass criteria.**
     - Options: Codex on a loopback model (task 5's method); Pi on the
       Auto-pipeline loopback model; a real provider.

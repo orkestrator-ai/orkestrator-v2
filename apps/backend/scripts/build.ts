@@ -13,7 +13,7 @@ const result = await Bun.build({
   outdir: output,
   target: "bun",
   sourcemap: "external",
-  define: buildCommitDefine(),
+  define: { ...buildCommitDefine(), __ORKESTRATOR_DISPATCH_HOLD__: "false" },
   // Sharp resolves its platform-native @img package at runtime. Keeping the
   // package external preserves its own module location, so it resolves the
   // matching vendored binary instead of whichever version happens to be in

@@ -72,6 +72,26 @@ describe("session preferences", () => {
     expect(await readSessionPreferences("../outside")).toBeUndefined();
   });
 
+  test("clearing the last transient marker removes the empty preference file", async () => {
+    await updateSessionPreferences(SESSION_ID, {
+      turnInFlight: { bridgeInstanceId: "fixture", pid: process.pid, startedAt: 1 },
+    });
+    expect((await readSessionPreferences(SESSION_ID))?.turnInFlight).toBeDefined();
+    await updateSessionPreferences(SESSION_ID, { turnInFlight: undefined });
+    expect(await readSessionPreferences(SESSION_ID)).toBeUndefined();
+    expect(await readdir(claudeSessionPreferencesDir())).not.toContain(`${SESSION_ID}.json`);
+  });
+
+  test("clearing a transient marker preserves a concurrent real preference, including false", async () => {
+    await Promise.all([
+      updateSessionPreferences(SESSION_ID, { turnInFlight: undefined }),
+      updateSessionPreferences(SESSION_ID, { planMode: false }),
+    ]);
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({ planMode: false });
+    await updateSessionPreferences(SESSION_ID, { turnInFlight: undefined });
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({ planMode: false });
+  });
+
   test("returns undefined only for missing files and fails closed for malformed files", async () => {
     expect(await readSessionPreferences(SESSION_ID)).toBeUndefined();
 

@@ -37,17 +37,22 @@ test("a new draft after Cancel stays cancellable and ignores its late response",
   await expect(dialog).toHaveCount(0);
   await launch.click();
   await expect(dialog.getByRole("status")).toHaveText("Drafting ticket and Build notes…");
+  await expect(dialog).toHaveAttribute("aria-busy", "true");
+  await expect(dialog.getByTestId("auto-pipeline-spinner")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Confirm Auto-pipeline" })).toHaveCount(0);
   await expect(dialog.getByLabel("Title", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeVisible();
   const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
   await expect(cancel).toBeEnabled();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
   await page.screenshot({
     path: path.resolve(
       `output/visual-previews/auto-pipeline-redraft-fixed-${testInfo.project.name}.png`,
     ),
     fullPage: true,
   });
-  await cancel.click();
+  await cancel.press("Enter");
   await expect(dialog).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => (window as ProbeWindow).autoPipelineProbe!.cancels))

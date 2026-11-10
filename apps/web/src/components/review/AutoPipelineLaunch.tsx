@@ -200,6 +200,7 @@ export function AutoPipelineLaunch({
         }}
       >
         <DialogContent
+          aria-busy={busy}
           showCloseButton={!promoting}
           className="flex max-h-[min(56rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 [--modal-max-width:64rem] sm:p-0"
           onEscapeKeyDown={(event) => {
@@ -227,7 +228,11 @@ export function AutoPipelineLaunch({
                 role="status"
                 className="flex items-center gap-2 py-6 text-sm text-muted-foreground"
               >
-                <Loader2 className="size-4 animate-spin" />
+                <Loader2
+                  aria-hidden="true"
+                  data-testid="auto-pipeline-spinner"
+                  className="size-4 shrink-0 animate-spin text-primary"
+                />
                 Drafting ticket and Build notes…
               </p>
             )}
@@ -304,7 +309,11 @@ export function AutoPipelineLaunch({
                 </p>
               ) : (
                 <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" />
+                  <Loader2
+                    aria-hidden="true"
+                    data-testid="auto-pipeline-spinner"
+                    className="size-4 shrink-0 animate-spin text-primary"
+                  />
                   Promoting environment: committing pending files and starting the pipeline…
                 </p>
               )}
@@ -321,7 +330,6 @@ export function AutoPipelineLaunch({
                   variant="outline"
                   disabled={busy}
                   onClick={() => {
-                    setDraft(null);
                     void generate();
                   }}
                 >

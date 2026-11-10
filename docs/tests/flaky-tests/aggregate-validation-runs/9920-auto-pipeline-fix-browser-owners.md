@@ -268,3 +268,31 @@ passing complete default or browser suite.
 The next main merge retained main’s claim 9919 and moved this case to 9920,
 updating its index and incoming links. Earlier commands and number references
 in the validation history above retain the IDs used when they were run.
+
+## Spinner main merge validation — 2026-11-10
+
+Merge parents: `42e62ee3c9d85bc462b3aaa2423fae55a279d5aa` and
+`2ffeb36487da625e095ac6bb3daa287da184f3fe`. The original three conflicts
+(component, unit tests and browser spec) were retained in local Git metadata
+before staging. The resolution keeps this branch's form layout, confirmation
+validation, cancellation and late-response protection, and incorporates main's
+`aria-busy` and accessible status spinners. Overlapping redraft tests retain
+the stronger late-response checks plus main's spinner and keyboard assertions.
+
+- `mise run test:logged -- --name merge2-check -- mise run check`: passed, 4.3 s.
+- `mise run test:logged -- --name merge2-auto-pipeline -- bun test --cwd apps/web ./src/components/review/AutoPipelineLaunch.test.tsx --parallel=1 --only-failures`: passed, 5.4 s.
+- `ORKESTRATOR_E2E_PORT=15330 mise run test:logged -- --name merge2-auto-pipeline-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/AutoPipeline.spec.ts --workers=2 --output output/agent-testing/merge2-auto-pipeline-browser`: passed at both viewports, 24.5 s.
+- `mise run test:logged -- --name merge2-default -- mise run test`: passed, 1,273.2 s, including 638.9 s waiting for the host lease. All four groups passed.
+- `ORKESTRATOR_E2E_PORT=15331 ORKESTRATOR_PUBLIC_E2E_PORT=15332 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name merge2-browser -- mise run test:browser`: 1,661 passed, 152 skipped, one failed; 1,294.0 s. The sole failure was the Claude paused-question route disposal; its complete unchanged owner passed alone in 20.7 s. Exact evidence and recurrence check are in [0252](../native-agents-and-transcripts/0252-claude-paused-question-route-disposal.md#auto-pipeline-spinner-main-merge--2026-11-10).
+- `ORKESTRATOR_PUBLIC_E2E_PORT=15334 mise run test:logged -- --name merge2-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`: passed, 10.5 s.
+- `ORKESTRATOR_AGENT_TEST_PROFILE=merge-spinner-7182 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-spinner-7182 mise run test:logged -- --name merge2-gateway-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'real browser gateway exercises an authoritative local environment'`: passed, 19.3 s.
+- `mise run test:logged -- --name merge2-auto-pipeline-stack -- mise run test:agent:auto-pipeline`: passed, 52.1 s. The real backend, renderer and Pi bridge used a loopback fake model; editing, promotion, inactive-environment completion and reload passed.
+
+Both disposable profiles (`merge-spinner-7182` and `qa-auto-pipeline-b8c9703b`)
+were stopped and reset; `dev:status --json` confirmed both missing with no live
+processes. No real provider requests were made. Screenshots are under
+`output/visual-previews/merge2-*`; browser artifacts are under
+`output/agent-testing/merge2-*` and `output/agent-testing/merge-spinner-7182/`.
+Electron, Docker, preview and iOS scenario suites were not run because this
+resolution affects the Auto-pipeline renderer and its tests. The full component
+browser command remains failed despite the successful unchanged-owner rerun.

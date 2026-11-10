@@ -85,7 +85,39 @@ describe("DatabaseSummaryCache", () => {
     expect(summary.backups.newestAt).toBe("2026-11-05T10:00:00.000Z");
     expect(summary.retention).toEqual(retention);
     expect(summary.topTables.main?.tables).toEqual([{ name: "store_rows", bytes: 8192 }]);
+    // An older backend's file has no store families, and none are made up.
+    expect(summary.topTables.main).not.toHaveProperty("stores");
     expect(summary.topTables.ledger).toBeNull();
+  });
+
+  test("store families the backup child left are read beside the tables", async () => {
+    const directory = await dataDir();
+    await fs.mkdir(path.join(directory, BACKUP_DIRECTORY), { recursive: true });
+    const stores = [
+      { family: "change-tracking", bytes: 9_000, rows: 30 },
+      { family: "web-annotations", bytes: 400, rows: 2 },
+    ];
+    await fs.writeFile(
+      path.join(directory, BACKUP_DIRECTORY, ".top-tables.json"),
+      JSON.stringify({
+        main: {
+          takenAt: "2026-11-05T10:00:00.000Z",
+          tables: [{ name: "store_rows", bytes: 8192 }],
+          stores,
+        },
+      }),
+    );
+    const summary = new DatabaseSummaryCache({
+      dataDir: directory,
+      main: () => null,
+      ledger: () => null,
+      retention: () => null,
+    }).read();
+    expect(summary.topTables.main).toEqual({
+      takenAt: "2026-11-05T10:00:00.000Z",
+      tables: [{ name: "store_rows", bytes: 8192 }],
+      stores,
+    });
   });
 
   test("a ledger that does not exist yet is null and is never opened", async () => {

@@ -2,13 +2,9 @@
  * A latency series against its p95 budget in docs/architecture/recurring-work.md
  * ("Latency budgets").
  *
- * `scanAllowance` marks a row whose budget is "≤ budgetMs, or one scan longer
- * when a scan is already running" (to-do 7201): an explicit refresh that lands
- * while a scan runs waits for that scan and then a fresh one, because the
- * running scan may predate the click. One scan is estimated by the series' own
- * median: most refreshes do not land behind a running scan, so a typical
- * refresh costs one scan plus rendering, which is never less than the scan
- * alone. The allowance is set per series by the spec, never by label here.
+ * `scanAllowance` identifies a conditional scan-wait budget that remains
+ * unverified until the caller measures scan overlap and duration independently.
+ * Refresh latency itself must never increase its own acceptance threshold.
  */
 export type LatencySeries = {
   label: string;
@@ -25,9 +21,8 @@ function percentile(values: readonly number[], fraction: number): number {
 export function latencySummary(series: LatencySeries) {
   const p50Ms = percentile(series.samples, 0.5);
   const p95Ms = percentile(series.samples, 0.95);
-  const scanAllowanceMs = series.budgetMs !== undefined && series.scanAllowance ? p50Ms : null;
-  const effectiveBudgetMs =
-    series.budgetMs === undefined ? null : series.budgetMs + (scanAllowanceMs ?? 0);
+  const scanAllowanceMs = null;
+  const effectiveBudgetMs = series.budgetMs ?? null;
   return {
     label: series.label,
     count: series.samples.length,
@@ -37,7 +32,9 @@ export function latencySummary(series: LatencySeries) {
     budgetMs: series.budgetMs ?? null,
     scanAllowanceMs,
     effectiveBudgetMs,
-    withinBudget: effectiveBudgetMs === null ? null : p95Ms <= effectiveBudgetMs,
+    qualificationVerified: !series.scanAllowance,
+    withinBudget:
+      series.scanAllowance || effectiveBudgetMs === null ? null : p95Ms <= effectiveBudgetMs,
     samplesMs: series.samples,
   };
 }
@@ -52,11 +49,15 @@ export function assertLatencyBudgets(series: readonly LatencySeries[]): void {
       continue;
     }
     const result = latencySummary(entry);
-    if (!result.withinBudget) {
-      const allowance =
-        result.scanAllowanceMs === null ? "" : ` (${entry.budgetMs} ms plus one scan)`;
+    if (!result.qualificationVerified) {
       failures.push(
-        `${entry.label}: p95 ${result.p95Ms} ms exceeds ${result.effectiveBudgetMs} ms${allowance}`,
+        `${entry.label}: scan-wait qualification unverified; independent scan overlap and duration required`,
+      );
+      continue;
+    }
+    if (!result.withinBudget) {
+      failures.push(
+        `${entry.label}: p95 ${result.p95Ms} ms exceeds ${result.effectiveBudgetMs} ms`,
       );
     }
   }

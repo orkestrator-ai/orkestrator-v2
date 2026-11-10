@@ -326,8 +326,8 @@ test("container: badge, Changes row, All files entry and explicit refresh", asyn
             ? "container Changes after Refresh"
             : "container All files after Refresh",
           BUDGET.explicitActionMs,
-          // The Changes refresh follows a scan already running (to-do 7201):
-          // its accepted budget is one scan longer. All files reads directly.
+          // Changes may wait behind a scan (7201), but this harness does not
+          // measure overlap/duration. Mark it unverified, never self-allow it.
           tab === "changes",
         ).samples.push(
           await msUntil(at, () => shown(page, file), `refresh ${tab} ${probe}`, 90_000),

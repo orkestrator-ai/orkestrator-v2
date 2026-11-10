@@ -138,8 +138,8 @@ type Heartbeat = {
   timer: ReturnType<typeof setTimeout>;
   /** Pings sent since the socket was last heard from. */
   unanswered: number;
-  /** Whether any frame arrived since the previous tick. */
-  heard: boolean;
+  /** Monotonic deadline for the next quiet-interval probe. */
+  nextProbeAt: number;
 };
 
 export class TerminalWebSocketClient {
@@ -450,7 +450,7 @@ export class TerminalWebSocketClient {
       socket: socket!,
       timer: setTimeout(() => this.heartbeatTick(), interval),
       unanswered: 0,
-      heard: false,
+      nextProbeAt: performance.now() + interval,
     };
   }
 
@@ -474,10 +474,13 @@ export class TerminalWebSocketClient {
       this.stopHeartbeat();
       return;
     }
-    if (heartbeat.heard) {
-      heartbeat.heard = false;
-      heartbeat.unanswered = 0;
-    } else if (heartbeat.unanswered >= TERMINAL_HEARTBEAT_MISSED_PINGS) {
+    const interval = this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS;
+    const remaining = heartbeat.nextProbeAt - performance.now();
+    if (remaining > 0) {
+      heartbeat.timer = setTimeout(() => this.heartbeatTick(), remaining);
+      return;
+    }
+    if (heartbeat.unanswered >= TERMINAL_HEARTBEAT_MISSED_PINGS) {
       this.replaceSocketForForeground();
       return;
     } else {
@@ -489,10 +492,8 @@ export class TerminalWebSocketClient {
         return;
       }
     }
-    heartbeat.timer = setTimeout(
-      () => this.heartbeatTick(),
-      this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS,
-    );
+    heartbeat.nextProbeAt = performance.now() + interval;
+    heartbeat.timer = setTimeout(() => this.heartbeatTick(), interval);
   }
 
   private stopHeartbeat(): void {
@@ -602,7 +603,12 @@ export class TerminalWebSocketClient {
 
   private onMessage(socket: WebSocket, message: MessageEvent): void {
     if (socket !== this.socket) return;
-    if (this.heartbeat?.socket === socket) this.heartbeat.heard = true;
+    if (this.heartbeat?.socket === socket) {
+      this.heartbeat.unanswered = 0;
+      this.heartbeat.nextProbeAt =
+        performance.now() +
+        (this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS);
+    }
     if (typeof message.data === "string") {
       let frame;
       try {

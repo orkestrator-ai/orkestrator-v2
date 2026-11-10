@@ -2329,7 +2329,7 @@ not collide with other tasks' decisions.
   defect fixed here: [7201](7201-explicit-refresh-behind-running-scan.md)
   holds the options, recommending a budget amendment. Accepted 2026-11-10:
   the budget row reads "≤ 1 s, or one scan longer when a scan is already
-  running", and the spec's check allows one scan (the series' median) on
+  running", and the spec marks scan-wait qualification unverified on
   that row only.
 - **M7 Task 1 not attempted.** Extending task 10's fake-model soak driver
   to the busy profile needs a fake-model turn and approval phase, a

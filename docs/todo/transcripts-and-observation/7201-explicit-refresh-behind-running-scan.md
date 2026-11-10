@@ -9,7 +9,7 @@ Task 1 done 2026-11-10 against `main` at `04639b12b`.
 
 ### Tasks
 
-1. **Decide the explicit-refresh tail on containers**: about one Changes-tab Refresh in fifteen on a container exceeds the ≤ 1 s budget, because it follows a scan already running. Accept it in the budget table or change how a refresh joins a running scan. Status: done (2026-11-10: accepted as "≤ 1 s, or one scan longer when a scan is already running", recorded in the budget table and enforced by the qualification check).
+1. **Decide the explicit-refresh tail on containers**: about one Changes-tab Refresh in fifteen on a container exceeds the ≤ 1 s budget, because it follows a scan already running. Accept it in the budget table or change how a refresh joins a running scan. Status: done (2026-11-10: accepted as "≤ 1 s, or one scan longer when a scan is already running", recorded in the budget table; conditional qualification remains unverified).
 
 ### 1. Decide the explicit-refresh tail on containers
 
@@ -47,31 +47,23 @@ a refresh never settles on a scan that may predate the click.
 
 ### R2. How the qualification check encodes "one scan longer" (task 1)
 
-`e2e/agent-testing/latency-budget.ts` used to exempt the Changes refresh by
-label, as an open exception. It now has a per-series `scanAllowance`: the row's
-effective p95 budget is its budget plus one scan, and the spec sets the
-allowance only on the container Changes refresh
-(`change-to-visible-latency.spec.ts`); All files and every other row keep
-their plain budget. The spec cannot see scan durations, so one scan is
-estimated by the series' own median: most refreshes do not land behind a
-running scan, so a typical refresh costs one scan plus rendering, never less
-than the scan alone. A series that misses that bound still fails
-qualification. Alternatives: a fixed allowance (no evidence for a value that
-holds across hosts, and a slow host would fail a compliant run) or reading
-scan durations from backend diagnostics (no per-scan duration is exposed for
-`git-docker-scan`; a new metric only for this check). Tests:
-`tests/unit/change-to-visible-latency.test.ts`.
+The review found that estimating scan duration from the same refresh series'
+median lets uniformly slow refreshes pass. That estimate has been removed.
+The container Changes row is explicitly unverified and cannot pass qualification
+until independent evidence identifies scan overlap and duration for each refresh.
+Other rows retain their base p95 budgets. Tests reject uniformly slow refreshes
+and refuse to qualify the conditional row even when all its samples are fast.
+
+Decision: defer scan instrumentation (recommended) rather than infer an allowance
+from refresh latency. This avoids a false pass but leaves live qualification open.
+Independent backend scan timing would allow exact qualification but requires
+additional instrumentation beyond the existing harness.
 
 ## Needs verification
 
-- Under R2's bound the second macOS run passes (p95 1,304 ms against
-  1,000 + 425 ms), but the first run's p95 of 2.23 s is over 1,000 + 543 ms.
-  That run kept only its summary, so whether its slowest refresh followed an
-  unusually slow scan (which the amended budget allows) or something else is
-  unknown. The next container run of `change-to-visible-latency.spec.ts`
-  ([0048](0048-recurring-work-qualification.md) task 2, which still owns
-  client-side latency) applies the new check; if it fails, trace that sample's
-  scan before widening anything.
+- Neither macOS run proves the conditional budget: their summaries do not
+  establish scan overlap or duration. Container qualification in 0048 task 2
+  also remains open. Measure both independently before applying any allowance.
 
 ## Related
 

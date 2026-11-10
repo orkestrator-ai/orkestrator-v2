@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   encodeTerminalBinaryFrame,
   TERMINAL_BINARY_FRAME_TYPE,
@@ -40,9 +40,11 @@ class MockWebSocket {
 
 const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
 const clients: TerminalWebSocketClient[] = [];
+const restorers: Array<() => void> = [];
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.dispose();
+  for (const restore of restorers.splice(0).reverse()) restore();
   if (originalVisibility) Object.defineProperty(document, "visibilityState", originalVisibility);
   else Reflect.deleteProperty(document, "visibilityState");
 });
@@ -296,6 +298,40 @@ describe("terminal WebSocket on returning to the page (WEB-11)", () => {
   });
 });
 
+/** Drive real client timers against a monotonic test clock. */
+function heartbeatClock() {
+  let now = 0;
+  let id = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  const time = spyOn(performance, "now").mockImplementation(() => now);
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((
+    run: () => void,
+    delay = 0,
+  ) => {
+    timers.set(++id, { at: now + delay, run });
+    return id;
+  }) as typeof setTimeout);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((key: number) => {
+    timers.delete(key);
+  }) as typeof clearTimeout);
+  restorers.push(() => {
+    time.mockRestore();
+    timeout.mockRestore();
+    clear.mockRestore();
+  });
+  return (ms: number) => {
+    const end = now + ms;
+    for (;;) {
+      const next = Array.from(timers).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next || next[1].at > end) break;
+      now = next[1].at;
+      timers.delete(next[0]);
+      next[1].run();
+    }
+    now = end;
+  };
+}
+
 describe("terminal WebSocket heartbeat while the page stays visible (to-do 7200 task 4)", () => {
   const INTERVAL_MS = 25;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -309,6 +345,56 @@ describe("terminal WebSocket heartbeat while the page stays visible (to-do 7200 
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     return subscribedHarness(features, INTERVAL_MS);
   };
+
+  for (const frameAt of [0, 24]) {
+    test(`last frame at ${frameAt}ms pings at 10s quiet and replaces at 30s quiet`, () => {
+      const advance = heartbeatClock();
+      const { socket, sockets } = visibleHarness(["ping"]);
+      advance(frameAt);
+      socket.receive(JSON.stringify({ type: "pong", nonce: 0 }));
+      advance(INTERVAL_MS - 1);
+      expect(pings(socket)).toHaveLength(0);
+      advance(1);
+      expect(pings(socket)).toHaveLength(1);
+      advance(INTERVAL_MS);
+      expect(pings(socket)).toHaveLength(2);
+      expect(sockets).toHaveLength(1);
+      advance(INTERVAL_MS);
+      expect(sockets).toHaveLength(2);
+    });
+  }
+
+  test("a heartbeat send failure replaces and reconciles immediately", () => {
+    const advance = heartbeatClock();
+    const { socket, sockets, payloads } = visibleHarness(["ping"]);
+    spyOn(socket, "send").mockImplementation(() => {
+      throw new Error("closed transport");
+    });
+    advance(INTERVAL_MS);
+    expect(sockets).toHaveLength(2);
+    expect(payloads.at(-1)).toMatchObject({ desynced: true });
+  });
+
+  test("starting hidden then hiding an unanswered probe preserves background work", () => {
+    const advance = heartbeatClock();
+    setVisibility("hidden");
+    const { socket, sockets } = subscribedHarness(["ping"], INTERVAL_MS);
+    advance(INTERVAL_MS * 4);
+    expect(pings(socket)).toHaveLength(0);
+    setVisibility("visible");
+    expect(pings(socket)).toHaveLength(1);
+    setVisibility("hidden");
+    advance(INTERVAL_MS * 4);
+    expect(sockets).toHaveLength(1);
+    setVisibility("visible");
+    const nonce = pings(socket).at(-1);
+    socket.receive(JSON.stringify({ type: "pong", nonce }));
+    advance(INTERVAL_MS);
+    expect(sockets).toHaveLength(1);
+    expect(pings(socket)).toHaveLength(3);
+    advance(INTERVAL_MS * 2);
+    expect(sockets).toHaveLength(2);
+  });
 
   test("a quiet socket that leaves two pings unanswered is replaced", async () => {
     const { sockets, socket, payloads, unavailable } = visibleHarness(["ping"]);

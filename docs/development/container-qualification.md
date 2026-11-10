@@ -823,7 +823,10 @@ neither refused prompt reached the model.
 - **Found:** no defect in the lock rule. A refusal like case E reaches the
   CLI as `operation-failed`, exit 1, with no `retryable` flag, and the same
   request key replays that failure; a script cannot tell it from a permanent
-  refusal ([7260](../todo/cli-and-slash-commands/7260-cli-transient-prompt-refusal-not-retryable.md)).
+  refusal (to-do 7260). Fixed on 2026-11-10: such a refusal now carries
+  `retryable: true`, still `operation-failed` and exit 1, so a script may
+  send it again under a new key
+  ([public-cli.md](../architecture/public-cli.md#output-and-exit-codes)).
 - **Not run:** the container restart was staged by stopping and starting the
   environment and placing a process on the dead bridge's pid. A bridge killed
   inside its real lock hold was not attempted (timing-dependent, and the

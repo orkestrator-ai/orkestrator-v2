@@ -2,14 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `ee2cc8423`, from the busy-profile run of
+Analysed 2026-11-10 against `main` at `04639b12b` (first analysed 2026-11-06 at
+`ee2cc8423`), from the busy-profile run of
 [0048](0048-recurring-work-qualification.md) task 1 (see its
 [busy profile evidence](0048-recurring-work-qualification.md#busy-profile-2026-11-06-linux)).
 
 ### Tasks
 
-1. **Approve a command from the CLI**: `orkestrator session interactions resolve` cannot approve an approval that has no questions. Status: open.
-2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews. Status: open (needs reproduction).
+1. **Approve a command from the CLI**: `orkestrator session interactions resolve` cannot approve an approval that has no questions. Status: done (2026-11-10).
+2. **One Multi Review stalled 3.5 minutes after its plan was accepted**: seen once in the smoke run, not in 33 later reviews nor in 18 more on 2026-11-10. Status: open (needs reproduction).
 
 ### 1. Approve a command from the CLI
 
@@ -33,9 +34,12 @@ access has no way to let a parked command run.
 **Investigation.** Found while writing the busy phase; reproduced on a
 disposable profile on 2026-11-06: the CLI refused `--action answer` for a
 Pi command approval, and the same interaction was approved through
-`public_action` (`result: "applied"`) and its turn finished. Not checked: how
-the backend answers `answer` with no answers for an interaction that does
-have questions (whether it refuses, or submits an empty answer).
+`public_action` (`result: "applied"`) and its turn finished. Checked on 2026-11-10: the backend validates every resolution against the
+interaction (`isAgentInteractionResolution` in
+`packages/protocol/src/agent-interactions.ts`), and an `answer` that leaves a
+required question unanswered is refused as `invalid-input` (exit 2) before it
+reaches the provider. An interaction whose questions are all optional
+accepts it, as the renderer does when the user skips them.
 
 **Decisions.**
 
@@ -76,6 +80,41 @@ wake recovered by a slower path would look the same from outside. The driver
 now records each validation run's queue, command and whole-run times
 (`validationRuns` in the busy result), so a recurrence can be told apart.
 
+Rerun on 2026-11-10 (Linux, beelink2, 16 cores, a host shared with other
+builds: load average 8 to 20 during the runs, 57 just after), on this
+branch's base `04639b12b`, with headless `dev:test` profiles of one local
+fixture environment, only the Pi toolchain, no agent credentials, the
+reachability check off and every model call on the driver's loopback fake
+model:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 30000 --window-ms 30000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local --agent-platforms pi --busy-rounds 6 \
+  --busy-clients 0 --busy-environments 10 --keep-profiles --profile-prefix q7202f007
+# then the original smoke shape: both arms, a fresh profile's first rounds, clients
+#   --arms candidate,rollback --busy-rounds 2 --busy-clients 0,1,2 --profile-prefix q7202g007
+```
+
+| Run | Reviews to `ready` | Launch to `ready` | Validation plan to `reviewing` | Validation run: queued / command / whole (ms) |
+| --- | --- | --- | --- | --- |
+| Keyed, 6 rounds, no clients | 6 of 6 | 5.1 to 8.9 s | 2.2 to 6.1 s | 9 to 19 / 13 to 33 / 1104 to 1184 |
+| Keyed, 0 to 2 clients | 6 of 6 | 5.0 to 8.7 s | 2.2 to 5.7 s | 7 to 22 / 12 to 18 / 1096 to 1247 |
+| Rollback, 0 to 2 clients | 6 of 6 | 14.4 to 19.1 s | 5.3 to 8.6 s | 8 to 22 / 23 to 36 / 1124 to 1179 |
+
+The stall did not recur. Every round kept its obligations (held turn,
+queued prompt, approval, mail, review; no duplicated dispatch). Each run
+still exited 1, because the driver's `workflow-sample` check failed in every
+round on "missing or ambiguous submit_review_preparation -> reviewing" while
+every review reached `ready`; that is a sampling mismatch in the driver,
+filed as [7551](7551-busy-driver-review-preparation-sample.md). The first
+attempt refused to start the busy phase ("needs the fixture's ready local
+environment") only because the worktree had no CLI build
+(`packages/cli/dist`); `mise run build:cli` fixed it. All four kept profiles
+were reset with `dev:reset` afterwards (no profile process left), and nothing
+was inspected in them because nothing stalled.
+
 **Decisions.**
 
 - **How to find the cause?**
@@ -86,6 +125,37 @@ now records each validation run's queue, command and whole-run times
     - Pros: no more runs.
     - Cons: unproved; a missed wake would be a real driver bug.
 
+## Assumptions and decisions
+
+### Task 1: the backend owns the empty-answer check
+
+Chose the recommended option: `session interactions resolve` no longer
+refuses `--action answer` without `--choose` or `--text`
+(`packages/cli/src/client/commands/session.ts`). The backend check was
+confirmed first and is pinned by
+`apps/backend/src/core/public-api/public-api-interaction-empty-answer.test.ts`:
+an empty answer approves a command approval (`questions: []`) and is refused
+as `invalid-input` (exit 2) for an interaction with a required question,
+before the provider sees it. `packages/cli/tests/interaction-resolve-command.test.ts`
+covers the CLI side. `--choose`/`--text` with any other action is still
+refused client-side. The CLI help and
+[cli-testing.md](../../development/cli-testing.md#questions-and-approvals)
+say how to approve.
+
+### Task 2: rerun, no recurrence, left open
+
+Followed the recommended option (rerun with `--keep-profiles`). 18 more
+reviews, both arms, 0 to 2 clients, the first rounds of fresh profiles
+included, on a busy host: no stall, every validation run queued under 25 ms.
+The task stays open because the cause is still unproved, and closing it as
+the host queue is the option the file rejects. What remains: keep rerunning
+the busy phase on a loaded host (other worktrees' suites running) until a
+review's plan-to-`reviewing` step exceeds about 30 s, then read that
+review's `validationRuns` entry and the kept profile's backend log before
+resetting it. A large `queuedMs` means the host test queue; a small one
+means a missed wake.
+
 ## Related
 
 - [0048](0048-recurring-work-qualification.md) task 1: the busy profile run.
+- [7551](7551-busy-driver-review-preparation-sample.md): the driver's review-preparation sample, found by the task 2 reruns.

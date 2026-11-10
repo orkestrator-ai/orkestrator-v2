@@ -301,14 +301,17 @@ The remaining window is a run OpenCode starts by itself between step 2 and step 
 
 The guard is therefore buildable as described, with two changes: settle from the live `seq` order plus the message snapshot, not from the log route; and detect a conflicting reuse by comparing the returned payload.
 
-This is the deferred checkpoint for moving from the OpenCode 1.x line to
-OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
-2.x. A 2.x server has no legacy HTTP API, so the move is a rewrite of the
-backend OpenCode provider rather than a version bump. Upstream evidence was
-last refreshed on 2026-10-30 against OpenCode `v2.2.2` (previously 2026-09-27
-against `v2.0.18`). The 1.x line was rechecked at `1.19.0` on 2026-10-11/13
-(#964) and moved to `1.19.4` on 2026-10-23; `1.19.5` shipped on 2026-10-28 and
-is not pinned yet.
+This file began as the deferred checkpoint for moving from the OpenCode 1.x
+line to OpenCode 2.x. Since #2009 (2026-11-09) 2.x runs as an opt-in preview:
+a separate `opencode2` provider beside the 1.x one, which stays the default
+and keeps its own binary and SDK pins (task 5; qualification and the default
+switch are task 7). A 2.x server has no legacy HTTP API, so the move is a
+rewrite of the backend OpenCode provider rather than a version bump. Upstream
+evidence was last refreshed on 2026-11-08 against OpenCode `v2.2.6` (see
+"Upstream recheck at 2.2.6"; before that 2026-10-30 against `v2.2.2` and
+2026-09-27 against `v2.0.18`). The 1.x line was rechecked at `1.19.0` on
+2026-10-11/13 (#964), moved to `1.19.4` on 2026-10-23 and is pinned at
+`1.19.5` (see Current state).
 
 Three different things are called "v2" around OpenCode. The file name is kept
 for existing links, but the text says "2.x" and never a bare "v2":
@@ -340,8 +343,9 @@ for existing links, but the text says "2.x" and never a bare "v2":
   builds), installed as `opencode2` beside the 1.x `opencode`. It belongs to
   the `opencode` platform (`agentPlatformForToolchain`), so enabling OpenCode
   installs both, on host toolchains and in the image
-  (`/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`). Nothing
-  launches it yet, and `opencode2` is not an agent platform. The bump procedure
+  (`/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`). Since #2009
+  (2026-11-09) the opt-in preview launches it for opted-in sessions (task 5);
+  `opencode2` is not an agent platform. The bump procedure
   is in `docs/development/upgrade-agents.md` ("OpenCode 2.x").
 - No `@opencode/*` dependency. `session.next.*` events are listed in
   `KNOWN_OPENCODE_EVENTS` (`apps/backend/src/core/opencode-events.ts`) as
@@ -2395,6 +2399,15 @@ misstate the preview's implementation. This closes no live qualification:
 the remaining task 5 follow-ups, task 7 qualification and default decision,
 and task 8 Session V2 work stay open.
 
+### Stale checkpoint wording outside the task list (2026-11-10 housekeeping)
+
+The paragraph that closes the Task analysis still said "do not bump ... to
+2.x", gave 2.2.2 as the last upstream check and called `1.19.5` unpinned, and
+Current state said nothing launches `opencode2`. All four predate #2009 and
+the 2.2.6 recheck, and contradicted the task list and the index row. Chosen:
+rewrite those sentences to the merged state (opt-in preview, 1.x default,
+`1.19.5` pinned, 2.2.6 recheck) and leave the dated notes below them as
+history. Leaving them would keep the file saying two things at once.
 
 ## Related
 

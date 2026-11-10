@@ -1024,9 +1024,17 @@ checkout pointing into the data directory was read; the coordinator's server
 therefore loads `orkestrator-coordinator-read-boundary.js`
 (`opencode-read-boundary-plugin.ts`) from the host configuration directory,
 which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server, and absent when the
-user sets their own `OPENCODE_CONFIG_DIR`
-([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
+`tool.execute.before`. It is inert in every other server. When the user sets
+their own `OPENCODE_CONFIG_DIR`, OpenCode honours only that one directory, so
+the launcher keeps it and adds the plugins as `file://` entries of
+`OPENCODE_CONFIG_CONTENT`'s `plugin` list, which 1.19.5 appends to every other
+source's plugins (`installHostOpenCodePlugins`); a coordinator's server is
+refused when the user's own `OPENCODE_CONFIG_CONTENT` cannot be extended
+(unparseable, not an object, or a `plugin` value that is not a list of
+strings); any other server then starts without the plugins, as before. The
+credential plugin rides along, since it too is self-contained. Qualified on the
+pinned binary beside a user directory, with a control showing that directory
+alone reads through the link.
 Both layers are qualified on the pinned binary with a loopback model
 (`opencode-coordinator-read-boundary-live.test.ts`).
 

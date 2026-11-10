@@ -6,27 +6,8 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, plus the paged reopen from ef
 
 ### Tasks
 
-1. **Reopen rates and sizes on tmux tabs**: measure how often tabs reopen and how large tmux transcripts are. From report 0690, "Needs verification". Status: open.
 2. **A reopen in a real container**: prove the bounded read through a real `docker exec`. From report 0690, task 1 ("Bound the reopen read"). Status: open.
-3. **The poll tail's first pass**: decide whether the one whole-file pass per session needs a cheaper form. Found while doing report 0690, task 1. Status: open (depends on 1).
-
-### 1. Reopen rates and sizes on tmux tabs
-
-**Problem.** Report 0690 rated this finding Medium confidence because nothing was measured: neither how large real transcripts are nor how often a tab reopens.
-
-**Context.** Report 0690 ("Needs verification") asked for real transcript sizes and reopen rates. The page bound (512 KiB, 500 records) and the snapshot bound (4,096 calls, 16 MiB) were chosen from sizes alone.
-
-**Investigation.** Sizes were measured on one host on 2026-11-04, by file size only: 3,976 Claude transcripts, median 171 KB, 90th percentile 2.1 MB, 99th percentile 6.4 MB, longest 37 MB. That population mixes native and tmux sessions on one machine. Reopen rates were not measured: no counter records a tab reopen, and `claude_tmux_transcript` has only the `tmux-transcript.whole-read` counter for older renderers.
-
-**Decisions.**
-
-- **How to get the rate?**
-  - **Read it off the gateway's metrics on a machine that uses tmux tabs for a few days (recommended).**
-    - Pros: no code; a real workload.
-    - Cons: needs someone who uses tmux tabs, and only gives one user's rate.
-  - **Add a content-free counter for page reads.**
-    - Pros: exact and lasting.
-    - Cons: a new metric for a read that is now cheap whatever its rate.
+3. **The poll tail's first pass**: decide whether the one whole-file pass per session needs a cheaper form. Found while doing report 0690, task 1. Status: blocked (waits on 7568: 5120 task 1).
 
 ### 2. A reopen in a real container
 
@@ -52,12 +33,12 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, plus the paged reopen from ef
 
 **Context.** This is not a per-reopen cost, and report 0690 did not name it. It is what keeps the task list and the snapshot history correct, and a page read that gets there first pays it instead of the tail, never as well as it (`readPage`). The workload's "first pass owed" column shows the cost: 37,378,196 bytes.
 
-**Investigation.** `TranscriptTail` starts at offset 0 and `drainTail` hands each line to the session's `publishTranscriptLine`. A mounted tab receives those lines as live events. Nothing else needs them, because a tab's own read is the tail page. How often it matters depends on how often sessions are resumed, which task 1 should show.
+**Investigation.** `TranscriptTail` starts at offset 0 and `drainTail` hands each line to the session's `publishTranscriptLine`. A mounted tab receives those lines as live events. Nothing else needs them, because a tab's own read is the tail page. How often it matters depends on how often sessions are resumed, which the reopen-rate reading on the manual-test checklist (7568: 5120 task 1) should show.
 
 **Decisions.**
 
 - **What to do about it?**
-  - **Leave it until task 1 shows it matters (recommended).**
+  - **Leave it until the reopen rate (7568: 5120 task 1) shows it matters (recommended).**
     - Pros: no new state; a backend restart is rare.
     - Cons: a resumed long session keeps its one expensive pass.
   - **Scan for task lines only on the first pass and stop emitting history.**
@@ -69,10 +50,11 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, plus the paged reopen from ef
 
 ## Current state
 
-A tab reopen reads one bounded page; earlier history pages in; the task list and per-call snapshots stay correct. Unit, command and renderer tests cover this, plus a live local browser pass. See [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 8.
+Transcript sizes were measured on one host on 2026-11-04, by file size only: 3,976 Claude transcripts (native and tmux mixed), median 171 KB, 90th percentile 2.1 MB, 99th percentile 6.4 MB, longest 37 MB. A tab reopen reads one bounded page; earlier history pages in; the task list and per-call snapshots stay correct. Unit, command and renderer tests cover this, plus a live local browser pass. See to-do 1202 task 8 (retired 2026-11-10).
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 8
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, reopen rates and sizes from a machine that uses tmux tabs) moved there on 2026-11-10.
+- to-do 1202 efficiency follow-ups, task 8 (retired 2026-11-10)
 - Efficiency report, F (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), BG-14
 - [Version compatibility register](../../architecture/version-compatibility.md#register)

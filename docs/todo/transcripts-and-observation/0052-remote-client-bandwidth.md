@@ -12,12 +12,12 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
 ### Tasks
 
 1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: done (route decided; the live run on 2026-11-01 found no buffering or re-encoding, see "Live probe" under Measurements).
-2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions).
+2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` on one host: `body`, `on` and the opt-in terminal WebSocket against a real gateway on a `dev:test` profile with a loopback fake model, at normal and client-throttled bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions; the same matrix through Tailscale Serve from a second machine moved to 7568 on 2026-11-10).
 3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: done (proved directly, through test proxies, in real browsers and through real Serve; two proxied-stream bugs fixed).
 4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as 3900).
 5. **One default change**: compression mode or terminal transport. Status: done for compression (`on` since 2026-11-01, D14); terminal transport unchanged.
-6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
-7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
+6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement (Playwright on one host, mode off and on, approval and completion p50/p95) is owed with task 2.
+7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2, and on live recovery over a real link, 7568: 0048 task 16).
 8. **WebSocket `permessage-deflate`**: prototype only if task 2 shows large terminal WebSocket payloads and task 5 makes the WebSocket the terminal transport. Status: deferred (waits on tasks 2 and 5; re-checked 2026-11-05, the WebSocket is still opt-in, and the Bun check D6 asked for is done).
 9. **`remote-gateway.md` drift**: the doc omits `off`, the streaming gzip ceiling, the always-`off` control listener and the opt-in terminal WebSocket. Status: done.
 
@@ -80,6 +80,16 @@ The live half stays open because it needs a Serve handler on a tailnet node, and
   - **Use a real metered link (an iOS device on cellular).**
     - Pros: realistic.
     - Cons: not repeatable; conditions vary between runs.
+
+**Scope (2026-11-10).** This task is the single-host part of the matrix: a
+real gateway on a `dev:test` profile, a loopback fake model, Playwright
+clients with network throttling, and `remote-bandwidth-baseline.ts` for the
+synthetic cells, recording encoded transcript-patch bytes, several clients on
+one session and task 6's data-saving bytes. The 2026-11-01 probe showed Serve
+neither holds nor re-encodes gzip SSE, so these cells stand for the route's
+bytes. The same matrix through Tailscale Serve from a second tailnet machine,
+with a browser through Serve, needs two real machines and moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### 3. `on`-mode streaming check
 
@@ -583,11 +593,9 @@ question to answer.
 
 ### Qualification
 
-- Run the matrix above through the supported remote route at normal and
-  constrained bandwidth: the harness's in-process gateway cannot sit behind
-  Tailscale. Either point the same client side at a real gateway on another
-  machine (an isolated profile with synthetic terminals), or put a
-  disposable gateway behind `tailscale serve`. Record the Phase 2 fields.
+- Run the matrix on one host against a real gateway (task 2) at normal and
+  constrained bandwidth, and record the Phase 2 fields. The run through
+  Tailscale Serve from a second machine is in 7568.
 - Measure encoded bytes of negotiated transcript part patches and of several
   remote clients on one session (only decoded bytes were measured). The
   harness's agent-event workload is synthetic, not real part patches.
@@ -909,19 +917,13 @@ checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 
 ## Needs verification
 
-- A browser through a real proxy. The browser check ran over loopback HTTP/1.1,
-  and the HTTP/2 hop was checked with the probe's client. Task 2's matrix should
-  include a browser through Serve.
-- Phase 1 exit criteria: every criterion is now mapped to its owning tests
-  (task 4), including timers and queued bytes after credential rotation and
-  gateway stop. What is still owed is live: terminal output matching the exact
-  snapshot after backpressure and reconnect on a real remote link (0051).
 - Data saving in a real browser: bytes per minute with the mode off and on,
   approval and completion p50/p95, and two clients with different
   preferences.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: the matrix and a browser through Tailscale Serve from a second machine, with exact terminal recovery over that link) moved there on 2026-11-10.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md):
   qualifying Claude and Codex for quiet backoff.
 - `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06):

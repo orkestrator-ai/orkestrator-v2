@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 6 (BR-16) applied. Re-checked 2026-11-05 against `3baeaacf6` by batch E20, which removed the replay's orphans; see [Assumptions and decisions](#assumptions-and-decisions).
+Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from to-do 1202 task 6 (retired 2026-11-10) (BR-16) applied. Re-checked 2026-11-05 against `3baeaacf6` by batch E20, which removed the replay's orphans; see [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
 
-1. **Decide what happens to the `cursor/*` handlers**: remove them, or keep them as a generic ACP extension. Status: open.
-2. **Rename what is generic but carries Cursor's name**: `cursorTodos` and friends also serve Grok and standard ACP plans. Status: open (depends on 1).
+1. **Decide what happens to the `cursor/*` handlers**: remove them (recommended) once a real Grok run confirms Grok never sends a `cursor/` method, or keep them as a generic ACP extension. Status: blocked (waits on 7568: 4540 task 1).
+2. **Rename what is generic but carries Cursor's name**: `cursorTodos` and friends also serve Grok and standard ACP plans. Status: blocked (depends on 1, which waits on 7568: 4540 task 1).
 
 ### 1. Decide what happens to the `cursor/*` handlers
 
@@ -15,7 +15,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [
 
 **Context.** BR-16 removed only the tool metadata replay, because that was the part gated on `provider === "cursor"` and spawning a process per pass. Cursor runs on `bridges/cursor-bridge`; `apps/backend/src/core/commands-servers.ts` and `host-model-catalog-refresh.ts` send only Grok here, and the container entrypoint exports `ACP_PROVIDER=grok`.
 
-**Investigation.** These are gated by method name, not provider, so a provider-id argument does not prove them unreachable: `isCursorTaskMethod` and `isCursorUpdateTodosMethod` dispatch at `bridges/acp-bridge/src/acp-session.ts:2305` and `:2309`. Grok's launcher record lists no acknowledged extension methods, and nothing here shows Grok sending a `cursor/` method, but no run against the real binary was made to confirm it. What goes with them: `applyCursorTask`, the `cursorTask` field on tool sources, and most of `testing/fake-agent-prompt-cursor.ts` and the `cursor/task` cases in `acp-transcript.test.ts` and `acp-context.test.ts`. The fixtures still send these methods under the neutral `acp-fixture` provider.
+**Investigation.** These are gated by method name, not provider, so a provider-id argument does not prove them unreachable: `isCursorTaskMethod` and `isCursorUpdateTodosMethod` dispatch at `bridges/acp-bridge/src/acp-session.ts:2305` and `:2309`. Grok's launcher record lists no acknowledged extension methods, and nothing here shows Grok sending a `cursor/` method, but no run against the real binary was made to confirm it; that run is in the manual-test checklist (7568, 4540 task 1). What goes with them: `applyCursorTask`, the `cursorTask` field on tool sources, and most of `testing/fake-agent-prompt-cursor.ts` and the `cursor/task` cases in `acp-transcript.test.ts` and `acp-context.test.ts`. The fixtures still send these methods under the neutral `acp-fixture` provider.
 
 **Decisions.**
 
@@ -56,11 +56,8 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from [
 
 E20 removed the discovery counter (`bumpCursorDiscoveryRevision`), `settledCursorAgentIds`, `cursorTaskPromptReported`, `recordCursorTaskPrompt`, `toolPartAgentId`, the descriptor's `agentId`, `agentIdDiscovered`, `agentIdSettlementSafe` and `reportedPrompt`, and the replay's constants, `CURSOR_JSONL_SOURCE_PREFIX` among them. Nothing read them once the replay had gone, so this holds whichever way task 1 is decided. The `cursor/*` handlers themselves were left, because task 1 is still waiting on a run against the real Grok binary, which E20 could not make.
 
-## Needs verification
-
-- That Grok sends no `cursor/` method. Not run against the real binary.
-
 ## Related
 
-- [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md), BR-16
+- to-do 1202 task 6 (retired 2026-11-10), BR-16
 - [5900](5900-acp-state-write-cost-at-the-cap.md), the rest of batch E20
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real Grok run in task 1) moved there on 2026-11-10.

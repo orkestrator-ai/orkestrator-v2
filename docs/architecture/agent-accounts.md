@@ -31,8 +31,8 @@ settings tiers are unchanged by accounts.
 
 Every machine (node) keeps its own accounts and its own active account per
 platform; see [Machines](#machines). Outstanding work and known gaps are in
-[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md)
-and [0722-per-machine-agent-accounts.md](../todo/agent-engines/0722-per-machine-agent-accounts.md).
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md);
+to-do 0722 (per-machine accounts) was retired on 2026-11-10.
 
 ## Account directories
 
@@ -944,8 +944,8 @@ coordinator. It never writes a credential: a switch only records which existing
 login is active. `mise run verify:accounts:resend-live` runs the resend on real
 bridges and the pinned CLIs against scripted provider servers
 ([below](#proving-the-resend-without-a-billed-turn)). The live checks still owed
-are in
-[1250-automatic-account-switching-live-checks.md](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
+(real accounts at their limits, two machines) were in to-do 1250 (retired
+2026-11-10) and are now in the manual-test checklist, to-do 7568.
 
 ### Which limits count
 
@@ -1037,8 +1037,9 @@ Four things can move it:
   or the active account's own tick is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over
-  even when the provider is cached. A busy bridge stays on its running account (see
-  [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-workflows-next-turn-after-a-between-turns-move)).
+  even when the provider is cached. A busy bridge stays on its running account: a shared registry of provider
+  observations and sends keeps another workflow owner's running turn on it
+  (`workflow-account-handoff.test.ts`).
 - **A 5-hour limit resetting.** Each check arms one timer per provider for the
   soonest reset of another included account only the 5-hour limit keeps out
   (`nextFiveHourRefresh`), 15 seconds after it, so the machine is back on the soonest
@@ -1175,8 +1176,11 @@ its own polls last saw running on the provider its reviewers share
 (`trackRunningTurns`). A bridge reports a failed turn by throwing, so that poll is
 what ends a turn's count; otherwise a stopped turn held back its own resend for two
 minutes. Workflow providers on one bridge read each other's counts. A native tab
-beside a Multi Review still cannot see the review's turns (see
-[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-bridge-shared-by-owners-that-cannot-see-each-other)).
+beside a Multi Review still cannot see the review's turns, so its resend can
+replace the bridge a reviewer's turn is on. That turn continues through its
+restart path, spending its one restart continuation; making activity observation
+see workflow turns would change what every bridge replacement waits for, so it is
+left until it shows up in use.
 
 - **Native tabs** (`native-agent-usage-limit-resend.ts`) work from the activity
   sweep's turn-end edges. The request id is derived from the stopped request
@@ -1243,8 +1247,9 @@ both. It says nothing about what a provider really sends or when: the refusal is
 fixture HTTP, though the words are the CLI's own. The pinned Claude CLI, given a 429
 with `anthropic-ratelimit-unified-status: rejected`, ends the turn with "You've hit
 your weekly limit · resets …" or "You've hit your 5-hour limit · resets …", and
-without the `representative-claim` header it retries instead. Real refusals remain in
-[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
+without the `representative-claim` header it retries instead. Real refusals were
+in to-do 1250 (retired 2026-11-10) and are now in the manual-test checklist,
+to-do 7568.
 
 ### Manual switches pin
 
@@ -1374,7 +1379,11 @@ itself. Where each surface acts:
     preferred** where the machine has that login and **No preferred login**
     where it does not. The preferred login switches nothing by itself: a leaf
     adding or removing a login, or a machine coming back online, never changes
-    which account it uses. [Automatic switching](#automatic-switching) is a separate,
+    which account it uses. A switch changes which subscription pays for the
+    machine's next prompt, so it is the user's act, made with someone present
+    (one click on **Use on N more machines**); a leaf that switched itself on
+    attach, on a new login or on a late or out-of-order sync would do it
+    unseen. [Automatic switching](#automatic-switching) is a separate,
     explicit opt-in, and it follows limits and reset times rather than this preference. A preference change made in another client shows on the next full
     read (opening the page or the refresh button), not live. A machine's own
     settings dialog does not flag its row. Older command nodes reject the

@@ -4,7 +4,7 @@
 
 Analysed 2026-11-04 against `main` at `96ee1eb3`.
 
-What the input stamps ([1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 15, DK-14) left. See [Input stamps](../../architecture/container-lifecycle.md#input-stamps-staged-inputs5).
+What the input stamps (to-do 1202 task 15 (retired 2026-11-10), DK-14) left. See [Input stamps](../../architecture/container-lifecycle.md#input-stamps-staged-inputs5).
 
 ### Tasks
 
@@ -53,7 +53,7 @@ What the input stamps ([1202](../cross-cutting/1202-efficiency-review-follow-ups
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+- to-do 1202 efficiency follow-ups, task 15 (retired 2026-11-10).
 - Closing check of E25 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which replaced the 0490 Container start report.
 - [6740 input staging follow-ups](6740-input-staging-follow-ups.md).
 - [0018 container network and credential isolation](0018-container-network-and-credential-isolation.md).

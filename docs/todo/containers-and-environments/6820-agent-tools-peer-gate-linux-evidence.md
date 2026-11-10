@@ -8,8 +8,7 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; 
 
 1. **Run the evidence script on Linux Engine**: the topology where the subnets matter. Status: done 2026-11-10 (in the network namespace of `docker:disposable`'s nested rootful daemon on beelink's rootful Engine; every peer was decided as expected, no code change).
 2. **Run it on rootless Docker with host loopback**: the peer is expected to be loopback. Status: done 2026-11-09 (the peer is `127.0.0.1`; no new code needed).
-3. **Run the C22 live qualification case on Linux CI**: its filter now follows the scene's owner. Status: open.
-4. **Check Docker Desktop on Linux and Windows**: expected to match macOS. Status: open.
+3. **Run the C22 live qualification case on Linux CI**: its filter now follows the scene's owner. Status: blocked (waits on a Container live qualification CI run that covers C22).
 5. **Decide whether the host firewall question still matters**: the report's second verification item. Status: done 2026-11-09 (closed: the gate answers it without a firewall).
 
 ### 1. Run the evidence script on Linux Engine
@@ -25,7 +24,7 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; 
 - **Where to run it?**
   - **On a Linux Engine host such as beelink or omarchy-hp, once, recording the JSON here (recommended).**
     - Pros: the one topology where the gate decides on subnets; a single command.
-    - Cons: needs a free Docker address pool on that host (see [0241](0241-leaked-reach-probe-networks.md) and [3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)).
+    - Cons: needs a free Docker address pool on that host (see to-dos 0241 and 3320, retired 2026-11-10, and [disk usage](../../development/disk-usage.md#what-you-clean-yourself)).
   - **Add it to the "Container live qualification" workflow.**
     - Pros: repeats on every relevant PR on both architectures.
     - Cons: a new live case in a workflow that is already not a required check; task 3 already covers the path the backend uses.
@@ -193,24 +192,6 @@ probed `10.0.2.1`: to-do 7548, done 2026-11-10 (the check now probes it after
   - **Run the case by hand on a Linux host.**
     - Pros: independent of CI.
     - Cons: needs a qualification image built on that host.
-
-### 4. Check Docker Desktop on Linux and Windows
-
-**Problem.** Only Docker Desktop for macOS was observed. Docker Desktop on Linux and on Windows (WSL 2) forward `host.docker.internal` through their own VM networking, and the peer the host process sees has not been recorded there.
-
-**Context.** On macOS it is `127.0.0.1`. Windows is not a supported backend host today; Docker Desktop on Linux is.
-
-**Investigation.** Not run.
-
-**Decisions.**
-
-- **Is a run needed?**
-  - **Run the script once on Docker Desktop for Linux when a host has it; skip Windows until it is a supported host (recommended).**
-    - Pros: covers the supported case.
-    - Cons: another manual run.
-  - **Assume it matches macOS.**
-    - Pros: none needed.
-    - Cons: a wrong assumption breaks agent tools for every container there.
 
 ### 5. Decide whether the host firewall question still matters
 
@@ -389,7 +370,7 @@ the report gave. The doc now states the accepted residual exposure.
 
 ## Current state
 
-Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS, on 2026-11-09 on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`), and on 2026-11-10 on rootful Linux Engine (`docker:disposable`'s nested rootful daemon on beelink's rootful Engine), where containers arrive from their own addresses and are admitted by their network's subnet. What is left is the C22 case on Linux CI (task 3) and Docker Desktop for Linux (task 4).
+Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS, on 2026-11-09 on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`), and on 2026-11-10 on rootful Linux Engine (`docker:disposable`'s nested rootful daemon on beelink's rootful Engine), where containers arrive from their own addresses and are admitted by their network's subnet. What is left is the C22 case on Linux CI (task 3); the Docker Desktop for Linux run (task 4) moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 The 2026-11-06 review fixes measure freshness and failure backoff from read
 completion. Null reads warn and clear permissions. Inspect failures other than
@@ -403,3 +384,4 @@ outstanding live topology evidence.
 - Security index, L15 (`git show 413bd6219:docs/reports/security/0000-index.md`)
 - [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (decided in the retired to-do 0109)
 - [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) (rootless gvisor-tap-vsock host loopback)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, the evidence script on Docker Desktop for Linux) moved there on 2026-11-10.

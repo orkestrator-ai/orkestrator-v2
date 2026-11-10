@@ -6,7 +6,7 @@ Analysed 2026-11-05 against `main` at `cd7e963ec`, with coordinator batch C3 (Sw
 
 ### Tasks
 
-1. **Prune finished workflow records below the limit**: decide on a measurement from a real large store. Status: open.
+1. **Prune finished workflow records below the limit**: decide on a measurement at a real large store's size. Counting a real store's coordinators and records on the user's machines moved to the manual-test checklist; then run the bench at those figures and decide. Status: blocked (waits on 7568: 6660 task 1 real-store count).
 2. **A sweep's wake pass repeats the main's repair per wake**: measure, then decide whether a wake for an open, assigned main needs it. Status: open.
 
 ### 1. Prune finished workflow records below the limit
@@ -27,7 +27,7 @@ So 1,400 finished records cost 5 to 8 ms on a sweep that runs every 60 s and abo
 **Decisions.**
 
 - **Prune on a schedule?**
-  - **Leave retention as it is unless a real store shows the walk matters (recommended).** Run the bench's measurement against a copy of a real large data directory (or an isolated `dev:test` profile seeded to the same size), and prune from the sweep with the existing selection only if the read or view cost is noticeable.
+  - **Leave retention as it is unless a real store shows the walk matters (recommended).** Run the bench's measurement against a copy of a real large data directory (or an isolated `dev:test` profile seeded to the same size), and prune from the sweep with the existing selection only if the read or view cost is noticeable. The bench builds only a synthetic store (its `--projects`, `--open` and `--finished` options), so the user's count of a real store (on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)) sets those figures.
     - Pros: no behaviour change without evidence; the history the docs promise stays.
     - Cons: the walk stays, at about 2 ms per read on the synthetic store.
   - **Run the cleanup selection from the sweep now.**
@@ -58,12 +58,13 @@ C3 made the sweep's mailbox sync and owed-delegation reads run once per pass, ma
 
 ## Needs verification
 
-- Both tasks rest on a synthetic store. Neither has been measured on a real store with many coordinators and records.
+- Both tasks rest on a synthetic store. Neither has been measured at a real store's size (task 1 waits on the user's count; task 2's bench owes no wakes yet).
 
 ## Related
 
 - Coordinator batches outcome (`git show 413bd6219:docs/reports/2026-11-06-coordinator-batches-outcome.md`), finding B1 ("list walked long before the cap")
 - [6360-c2-workflow-records-live-checks.md](6360-c2-workflow-records-live-checks.md): the store-full banner on a live stack, which needs the same kind of seeded store
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: counting a real coordinator store's records) moved there on 2026-11-10.
 
 ## Assumptions and decisions
 

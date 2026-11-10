@@ -30,8 +30,9 @@ under `output/` held 14,000 to 30,000 directories per worktree on beelink2.
 [git-scan-caches.md](../../architecture/git-scan-caches.md#what-the-worktree-watch-leaves-out):
 the Files tree shows other ignored directories, and under a qualified watcher
 the tree is cached with no age bound, so an unwatched shown directory would go
-stale until the 120 s safety scan. 5060 task 2 asks the related question for
-scan rate (`dist`, `.turbo`, `target`).
+stale until the 120 s safety scan. To-do 5060 task 2 (retired 2026-11-10)
+answered the related question for scan rate (`dist`, `.turbo`, `target`): the
+2 s gap bounds it, so they stay watched.
 
 **Investigation.** On beelink2 at load 46 on 16 cores, the backend's watch count
 climbed about 1,000 watches a second while its main thread ran at about 88% of a
@@ -126,7 +127,7 @@ count in `/proc/<pid>/fdinfo`.
 
 ## Related
 
-- [5060](5060-worktree-watch-leftovers.md) task 2: other ignored directories and
-  scan rate.
+- to-do 5060 (retired 2026-11-10) task 2: other ignored directories and
+  scan rate, now in [git-scan-caches.md](../../architecture/git-scan-caches.md#minimum-gap-between-local-scans).
 - [4730](../containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md):
   the disposable daemon.

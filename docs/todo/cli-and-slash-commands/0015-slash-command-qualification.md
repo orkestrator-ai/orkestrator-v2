@@ -21,10 +21,10 @@ open.
 
 ### Tasks
 
-1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones. Status: open (unblocked).
+1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones, credential-free. Status: open (unblocked). The Claude and Codex pairings that spend live model turns moved to the manual-test checklist.
 2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
 3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in 2170, deleted 2026-11-06; its live check is task 4).
-4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and Grok and Cursor list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: open.
+4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and the login-free catalogue reads list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: open. The logged-in Grok and Cursor picker check moved to the manual-test checklist.
 
 ### 1. Mixed versions against real v2.21.0 builds
 
@@ -47,9 +47,9 @@ open.
     - Pros: reuses `qualify-design-mixed-versions.ts`'s install path directly.
     - Cons: 2.22.3 is not the floor; it has no renderer, and only two of the five bridges.
 - **Which pairings count as a pass?**
-  - **Three pairings: current backend with v2.21.0 bridges (all that sign in without credentials, plus Claude and Codex with test credentials), v2.21.0 backend with current bridges, and the v2.21.0 renderer against a current backend (recommended).** Pass means catalogue reads give the documented outcome for each pairing, a selected command runs or is refused with a reason (never as prompt text), and no projection update error is logged.
+  - **Three pairings: current backend with v2.21.0 bridges (all that sign in without credentials), v2.21.0 backend with current bridges, and the v2.21.0 renderer against a current backend (recommended).** Pass means catalogue reads give the documented outcome for each pairing, a selected command runs or is refused with a reason (never as prompt text), and no projection update error is logged. The Claude and Codex bridge pairings with test credentials spend live model turns and are on the manual-test checklist (7568: 0015 task 1); the script should accept them as an opt-in.
     - Pros: covers the three unproved surfaces the item names; the outcomes are already written as expectations in the fake matrix.
-    - Cons: the Claude and Codex pairings spend live model turns; the 2.16.3 ACP bridge already failed to create a session against today's Grok CLI ("Invalid params"), so a v2.21.0 Grok pairing may only be readable without a held session.
+    - Cons: the 2.16.3 ACP bridge already failed to create a session against today's Grok CLI ("Invalid params"), so a v2.21.0 Grok pairing may only be readable without a held session.
   - **Bridges only, both directions.**
     - Pros: no browser and no old renderer build.
     - Cons: leaves the renderer and sync-v1 polling, two of the three named gaps, unproved.
@@ -154,20 +154,13 @@ Unit tests prove it; no live container has shown them in a catalogue.
    `~/.agents/skills/<x>` and a linked skill under `~/.claude/skills`.
 2. Check that `~/.agents/skills/<x>` and the linked skill arrive inside the
    container as real directories.
-3. Check that the pinned Grok and Cursor list `~/.agents/skills` from the
-   container HOME; so far this comes only from reading `agent-skills.ts`.
+3. Check the login-free catalogue reads from the container HOME: the pinned
+   Grok's `grok inspect` and Claude SDK `supportedCommands()` with no login,
+   as task 3's regression does. The logged-in Grok and Cursor picker check is
+   on the manual-test checklist (7568: 0015 task 4); so far Cursor's read
+   comes only from reading `agent-skills.ts`.
 4. Check that a link pointing outside an allowed root is still skipped and
    counted as `symlink`.
-
-**Decisions.**
-
-- **Which providers to look at?**
-  - **Claude, Grok and Cursor in one container (recommended).**
-    - Pros: the three catalogues that read these directories, in one boot.
-    - Cons: needs Grok and Cursor logins in the profile.
-  - **Claude only.**
-    - Pros: one credential.
-    - Cons: leaves the never-probed Grok and Cursor reads unproved.
 
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
@@ -885,7 +878,8 @@ file passed in containers at low load earlier the same day.
    reverse, run the scenario, and serve the v2.21.0 renderer against a current
    backend while watching for "Invalid native agent projection update
    response". Move the target to the floor if it has moved by the time this
-   runs.
+   runs. The credentialed Claude and Codex pairings are on the manual-test
+   checklist.
 
    - Partial evidence (2026-10-24, 0016): the real ACP and Cursor bridges
      built from `ff4026b4e^` (2.16.3) were run beside the current ones and
@@ -1086,6 +1080,7 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md),
   [`agent-testing.md`](../../development/agent-testing.md),
   [`testing-guide.md`](../../development/testing-guide.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Claude and Codex live pairings of task 1, the logged-in Grok and Cursor picker check of task 4) moved there on 2026-11-10.
 
 ## Replaces
 

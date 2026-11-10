@@ -2,8 +2,9 @@
 
 Checked against `main` at `2459b05c` (2026-10-15). Every item worked through
 on 2026-10-24 against `main` at `8454d18b`, on node mbp3 (macOS, arm64). What
-is left needs a Windows host, a Linux host and live model runs; see
-[Remaining work](#remaining-work).
+is left for an agent is a research scenario in the live suite, moving the
+pin-bump checks, and the close-out; the live Windows, Linux and research runs
+are on the manual-test checklist (see [Remaining work](#remaining-work)).
 
 ## Task analysis
 
@@ -11,79 +12,21 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Claude coordinator on Windows, live**: the read-only scenario on a Windows host, expecting `provider-configured` and hook-only refusals. Status: blocked (no Windows host; Windows builds are not in the release process).
-2. **Claude coordinator on Linux, live**: the read-only scenario with a real model on Linux, with `bwrap`/`socat` present (`enforced`) and with either missing (`provider-configured`). Status: open (no longer blocked: this node is a Linux host with both installed).
-3. **Live research-server call on Pi, Cursor and OpenCode**: one coordinator turn per platform that resolves React's Context7 library ID with the default research setting. Status: open.
+3. **Research scenario in the live suite**: add a `research` scenario to `mise run test:agent:coordinator` that resolves React's Context7 library ID with the default research setting and asserts the call is attributed to the research server, tested over a scripted transport. Status: open. (The billed runs of it on Pi, Cursor and OpenCode moved to the manual-test checklist on 2026-11-10.)
 4. **Re-check the tier decisions on pin bumps**: the conditions D4, D6, D8, D9 and the Windows-flag assumption say to revisit. Status: deferred (until the next Cursor, Grok, Codex or Claude bump).
-5. **Close out the file**: what happens to the file once tasks 1 to 3 have evidence. Status: open.
+5. **Close out the file**: move D1 to D12 and the refused-cell constraints into `coordinator.md` and the Codex bridge docs, then delete the file, once the live runs have evidence. Status: blocked (waits on 7568: 0026 tasks 1 and 2, and the user part of task 3).
 
-### 1. Claude coordinator on Windows, live
-
-**Problem.** A Windows Claude coordinator has never run with a real model. On Windows the hook allowlist is the whole read-only boundary, so a hole in it would be a real write to the user's checkout with no OS layer behind it (D1's con).
-
-**Context.** Item 1 is code-complete. The tier comes from `defaultCoordinatorHostCapabilities`, which treats Windows as having no sandbox. `releasing.md` says Windows releases are not yet covered, so there is no shipped Windows build for users to hit this today.
-
-**Investigation.** `apps/backend/src/core/coordinator-providers.ts:68` returns `{ claudeSandbox: false }` for any platform other than `darwin` and `linux`. `judge` (`:128`) then gives Claude `provider-configured` with the generic "needs macOS, or Linux…" reason. The launcher sets `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX` from the same probe (`apps/backend/src/core/commands-servers.ts:876`) and clears an inherited one for workers (`:849`). The remaining-work text is slightly out of date. Since 0145, `unavailable` does more than set `failIfUnavailable: false`: it also turns the sandbox off entirely (`enabled: options.commandSandbox !== "unavailable"`, `bridges/claude-bridge/src/services/read-only-policy.ts:521`, and `:526` for `failIfUnavailable`). A Windows run therefore checks the hook alone, not "the sandbox requested without being required". `claudeSandboxRefusal` (`bridges/claude-bridge/src/services/claude-execution-sandbox.ts:74`) returns early on any platform but Linux, so it cannot refuse a Windows turn. Since this file was last updated, #1308 (`2c3147f6`) added inline skill plugins to Claude coordinators. It also added `managedSettings { allowManagedHooksOnly, disableSkillShellExecution }` (`bridges/claude-bridge/src/services/claude-query-config.ts:187`) to close skill-shell and plugin-hook paths the PreToolUse hook never saw. Those paths matter most on Windows, where nothing sits behind the hook, so a Windows run should include a project skill.
-
-**Decisions.**
-
-- **Keep this task open, or retire it until Windows ships?**
-  - **Keep it blocked here until a Windows build exists (recommended).** Leave the item as is and run it when Windows enters the release process.
-    - Pros: the evidence lands on the build users will actually run; avoids a one-off unpackaged Windows setup.
-    - Cons: the hook-only boundary stays unproved live on Windows for as long as that takes.
-  - **Run it now from a source checkout on a borrowed Windows host.**
-    - Pros: evidence sooner, and it would surface any Windows bug in the hook or launcher early.
-    - Cons: `mise run dev:test` and the live suite have never been qualified on Windows, so a failure may be in the harness rather than the boundary.
-  - **Hide Claude as a coordinator on Windows until it is run.**
-    - Pros: no unproved boundary is ever offered.
-    - Cons: reverses D1 with no new evidence against it; Windows is not shipped anyway.
-- **What counts as a pass?**
-  - **The read-only scenario plus a project skill with inline shell and `allowed-tools` (recommended).** The standard scenario, plus a checkout skill that tries to write.
-    - Pros: covers the bypass #1308 found, which has the most impact where the hook is the only layer.
-    - Cons: the live suite has no such step yet, so it needs a manual step or a new test step.
-  - **The read-only scenario only.**
-    - Pros: no harness change; matches how macOS was qualified.
-    - Cons: misses the skill path, which the 2026-10-24 macOS run also predates.
-
-### 2. Claude coordinator on Linux, live
-
-**Problem.** On Linux, Claude is `enforced` only when the bubblewrap probe passes, and no real-model coordinator run has confirmed either branch. A wrong `enforced` would tell the user the OS blocks writes when it does not.
-
-**Context.** The offline `conformance-coordinator-sandbox-live.test.ts` passes on an Arch host (0145, 2026-10-26). CI removes Ubuntu's AppArmor profile, so CI says nothing about stock Ubuntu; that case is owned by [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md). The remaining-work item says it was "not run because this node has no Linux host". That was true of node mbp3.
-
-**Investigation.** The current node is Linux (`7.2.8-9-omarchy`) with `/usr/bin/bwrap` and `/usr/bin/socat`: the same Arch/Omarchy host as 0145's offline evidence. So the `enforced` half is no longer blocked on hardware. The probe is `claudeLinuxSandboxStatus` (`packages/protocol/src/node/claude-linux-sandbox.ts:213`). The bridge re-runs it and refuses a turn that needs a sandbox it cannot start (`claude-execution-sandbox.ts:74`). The checkout write is denied through `filesystem.denyWrite` (`read-only-policy.ts:537`). The live task exists: `mise run test:agent:coordinator` (`mise.toml:271`) takes `--credential-source` and `--scenario` (`apps/desktop/scripts/test-agent-coordinator-live.ts:8`). Claude is on `COORDINATOR_LIVE_PLATFORMS` at `provider-configured` (`apps/desktop/scripts/dev/coordinator-live.ts:39`), so the suite does not itself assert that Claude came up `enforced`. The run has to read the tier from the picker or the summary. The "without" half needs `bwrap` or `socat` missing from the backend's `PATH`. The suite has no switch for that, so it means launching the profile with a reduced `PATH`.
-
-**Decisions.**
-
-- **Where to run it?**
-  - **On this Linux node now, for both halves (recommended).** Run `mise run test:agent:coordinator --credential-source claude --scenario read-only` once normally and once with a backend `PATH` that hides `socat`.
-    - Pros: unblocked today; the host already has offline evidence to compare against; it is cheap.
-    - Cons: one distribution without AppArmor; stock Ubuntu stays with 0145.
-  - **Wait and run it alongside 0145's Ubuntu, Debian and Fedora matrix.**
-    - Pros: one batch covers every Linux variant.
-    - Cons: delays a run that could happen now, and 0145's matrix needs hosts this node does not have.
-- **How to produce the "without `bwrap`/`socat`" case?**
-  - **Hide one program through the backend's `PATH` at profile start (recommended).**
-    - Pros: exercises the real probe and launcher; nothing is uninstalled.
-    - Cons: a manual step outside the suite, so it has to be written up carefully.
-  - **Add a test-only override for the host capability.**
-    - Pros: repeatable in the suite.
-    - Cons: a new process-authority input on a security boundary, which the file's constraints argue against; it would also skip the real probe.
-- **What counts as a pass for the `enforced` half?**
-  - **Scenario passes, the picker shows `enforced`, and a probe write such as `uniq in out` is refused by the sandbox as well as the hook (recommended).**
-    - Pros: shows both layers hold, which is what `enforced` claims.
-    - Cons: the hook refuses `uniq in out` first since D3, so showing the sandbox layer needs the existing `claude-sandbox-write-probe.mjs`, not the scenario alone.
-  - **Scenario passes.**
-    - Pros: the same bar as macOS.
-    - Cons: it cannot tell whether the sandbox or the hook did the refusing.
-
-### 3. Live research-server call on Pi, Cursor and OpenCode
+### 3. Research scenario in the live suite
 
 **Problem.** Research servers on these three platforms are covered only by unit tests (plus, for OpenCode, an offline run on the pinned binary). No real model has been seen choosing the tool. If the exact-id allowlists are wrong, the coordinator silently has no Context7.
 
 **Context.** Item 10 (D10, D11, D12). Codex and Claude were shown live on 2026-10-16. The file says this belongs with 0024's per-platform runs.
 
 **Investigation.** The adapters are still present: OpenCode `apps/backend/src/core/opencode-coordinator-research.ts` (with `-live`, `-registration` and unit tests); Cursor `hostResearchCustomTools` (`bridges/cursor-bridge/src/agent-session.ts:447`); Pi's `research` scope (`bridges/pi-bridge/src/mcp.ts:499`). The live suite cannot produce this evidence yet. `COORDINATOR_LIVE_SCENARIOS` is `read-only`, `async`, `family`, `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56`), and none of them asks for a research call. The read-only case switches research off on purpose (`settings: { coordinatorWebResearch: "off" }`, `e2e/agent-testing/coordinator-live.spec.ts:945`). Pins are unchanged since the work: Cursor SDK 1.0.40, OpenCode 1.19.4, Pi 1.4.0 (`docker/Dockerfile:195`, `:197`). #1308 also changed the Pi, Cursor and OpenCode coordinator boundaries (skill loading, plus an `orkestrator-skills__load` custom tool on Cursor), after the last read-only evidence.
+
+The live runs themselves (a billed turn per platform, and the read-only
+re-run below) are on the manual-test checklist; this task is the scenario they
+run.
 
 **Decisions.**
 
@@ -426,47 +369,28 @@ still needs hardware or live runs this node cannot provide is under
 
 ### Remaining work
 
-What is left of items 1 and 10. These need hardware, an OS or live model
-runs that node mbp3 could not provide. Everything that could be done here (code, tests, probes and the
-decisions) is done.
+What is left of items 1 and 10. The live runs (Claude on Windows, Claude on
+Linux with and without `bwrap`/`socat`, and a research-server call on Pi,
+Cursor and OpenCode) need billed turns or a Windows host, and moved to the
+manual-test checklist on 2026-11-10. Everything else that could be done here
+(code, tests, probes and the decisions) is done, except:
 
-- [ ] **Claude coordinator on Windows, live (rest of item 1).** Run the live read-only scenario
-  (`mise run test:agent:coordinator --credential-source claude`, see
-  [`agent-testing.md`](../../development/agent-testing.md)) on a Windows host.
-  Expect the picker to show Claude as `provider-configured` with the
-  "command sandbox is unavailable" reason, the bridge to start turns
-  (`failIfUnavailable: false` from `ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX=unavailable`)
-  rather than fail them, and every mutation to be refused by the hook.
-  Not run because this node is macOS only. Windows Orkestrator builds are
-  also not covered by the release process yet
-  ([`releasing.md`](../../development/releasing.md)).
-- [ ] **Claude coordinator on Linux, live, with and without `bwrap`/`socat` (rest of item 1).**
-  The same scenario on a Linux host with both installed (expect `enforced`,
-  and the checkout write refused with `denyWrite` under bubblewrap) and with
-  either removed from `PATH` (expect `provider-configured` and turns that
-  run). The offline `conformance-coordinator-sandbox-live.test.ts` covers the
-  first case on any Linux CI host with bubblewrap. Not run because this node
-  has no Linux host.
-  CI evidence (2026-10-25, todo 0030): on GitHub's Ubuntu 26.04 runner the
-  test's positive cases failed on every run, because Ubuntu's
-  `bwrap-userns-restrict` AppArmor profile stops the CLI's nested user
-  namespace, so every sandboxed command fails while the host still reports
-  `enforced`. CI now removes that profile; a stock Ubuntu host is still
-  affected, which is tracked in
-  [0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md).
-  Offline evidence (2026-10-26, 0145): on an Arch/Omarchy host (kernel 7.2.8,
-  bubblewrap 0.13.1, no AppArmor) the probe reports the sandbox available in
-  about 5 ms, Claude qualifies as `enforced`, and all 9 cases of
-  `conformance-coordinator-sandbox-live.test.ts` pass with the pinned CLI
-  2.1.309, including the new `unavailable-hook-reads`. A live coordinator run
-  with a real model on Linux is still owed.
-- [ ] **A research server call on Pi, Cursor and OpenCode, live (rest of item 10).** One
-  coordinator turn per platform with the default research setting that
-  resolves React's Context7 library ID, as was done for Codex and Claude on
-  2026-10-16. The adapters are covered by unit tests and, for OpenCode, an
-  offline run on the pinned binary; none has been seen with a real model
-  choosing the tool. Belongs with the per-platform runs in
-  [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md).
+- [ ] **A `research` scenario in the live suite (task 3).** So the research
+  runs are repeatable on every pin bump.
+
+Evidence the Linux run builds on:
+CI evidence (2026-10-25, todo 0030): on GitHub's Ubuntu 26.04 runner the
+`conformance-coordinator-sandbox-live.test.ts` positive cases failed on every
+run, because Ubuntu's `bwrap-userns-restrict` AppArmor profile stops the CLI's
+nested user namespace, so every sandboxed command fails while the host still
+reports `enforced`. CI now removes that profile; a stock Ubuntu host is still
+affected, which is tracked in
+[0145](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md).
+Offline evidence (2026-10-26, 0145): on an Arch/Omarchy host (kernel 7.2.8,
+bubblewrap 0.13.1, no AppArmor) the probe reports the sandbox available in
+about 5 ms, Claude qualifies as `enforced`, and all 9 cases of
+`conformance-coordinator-sandbox-live.test.ts` pass with the pinned CLI
+2.1.309, including the new `unavailable-hook-reads`.
 
 ## Constraints and rationale
 
@@ -726,6 +650,7 @@ is the final tier for OpenCode and Cursor).
 
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md): the live
   suite that produces the evidence these decisions need.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, task 2, the user part of task 3: the billed research runs) moved there on 2026-11-10.
 - [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md):
   steer, the one parity gap still open when todo 0028 (the smaller parity
   gaps) was retired on 2026-10-29.

@@ -273,8 +273,12 @@ model of pi-ai's ChatGPT-backend catalogue, the `openai-codex` provider's
 built-in list, that the login's provider offers (`openai/gpt-6.1-sol` on Pi
 1.4.0). That list is Pi's own data and moves with each Pi release. An API key
 on `openai`, and every other provider, keeps the first model. A saved default
-or an explicit pick still wins, even one the login refuses. See
-[0062](../todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
+or an explicit pick still wins, even one the login refuses, and the bridge
+never writes the user's `~/.pi` settings to choose a model for them; the fix
+for a refused saved default is `/model`. The live check on
+an `openai` ChatGPT login is the
+[opt-in Pi ChatGPT default-model check](testing-guide.md#opt-in-pi-chatgpt-default-model-check)
+(to-do 0062, retired 2026-11-10).
 
 The bridge's catalogue marks the model a tab with no model would start on
 (`sessionDefault: true`, from the global settings and the fallback only), and

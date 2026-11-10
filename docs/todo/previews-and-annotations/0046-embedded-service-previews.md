@@ -16,16 +16,18 @@ Analysed 2026-10-27 against `main` at `863b5782`; rechecked 2026-10-30 against
    ([0042](0042-service-preview-rollout.md) task 3, still blocked). If built:
    per-platform, web first. See "Assumptions and decisions".
 2. **Web iframe surface**: code item 1 plus the CHIPS investigation (item 2).
-   Status: deferred (not started; on 0042 task 3 per task 1, and then on the
-   framed-entry decision below).
+   Status: blocked (waits on 7568: 0042 task 3, per task 1's deferral; not
+   started; the framed-entry decision below has a recommendation).
 3. **iOS in-app preview view**: code item 3, a dedicated `WKWebView`. Status:
-   deferred (not started; on 0042 task 3 per task 1, and second after task
-   2).
+   blocked (waits on 7568: 0042 task 3, per task 1's deferral; not started;
+   second after task 2).
 4. **Per-surface capabilities and advertisement**: code items 4 and 5, report
    capabilities per surface and lift the refusal per passing platform. Status:
    blocked (on tasks 2, 3 and 5).
-5. **Embedded privacy qualification**: the real-browser and real-device matrix.
-   Status: blocked (on tasks 2 and 3; needs Safari, Firefox, iPhone and iPad).
+5. **Embedded privacy qualification**: the automated part of the matrix,
+   Chromium and Firefox in the preview browser suite. Status: blocked (on
+   tasks 2 and 3). The shipping Safari and real iPhone and iPad runs moved to
+   the manual-test checklist (7568).
 
 ### 1. Go or no-go on embedding
 
@@ -234,9 +236,11 @@ refusal to lift is `preview-access.ts:183`; the flag to set is
 **Problem.** No embedded surface may be advertised without real-browser
 privacy evidence.
 
-**Context.** The Qualification list: Chromium, Firefox, Safari, real iPhone and
-iPad, hosted and backend-served origins, private browsing, blocked cookies,
-malicious `postMessage`, lifecycle. Results go in 0042's evidence log.
+**Context.** The Qualification list: Chromium and Firefox, hosted and
+backend-served origins, private browsing, blocked cookies, malicious
+`postMessage`, lifecycle. Results go in 0042's evidence log. The same matrix
+in shipping Safari and on real iPhone and iPad devices needs a person and
+hardware, so it is in the manual-test checklist (7568: 0046 task 5).
 
 **Investigation.** Nothing to run until tasks 2 and 3 exist. The browser
 preview suites (`mise run test:preview:browser`) cover top-level origins and
@@ -248,7 +252,7 @@ are the natural place for the Chromium and Firefox cases.
   - **Extend the preview browser suite with an embedded project (recommended).**
     - Pros: reuses fixtures and origins; runs on Linux CI for Chromium and
       Firefox.
-    - Cons: Safari and iOS still need manual runs batched in 0031.
+    - Cons: Safari and iOS still need manual runs (7568: 0046 task 5).
   - **A separate embedded-only suite.**
     - Pros: isolates a flaky new surface.
     - Cons: duplicates origin and fixture setup.
@@ -342,8 +346,9 @@ browser privacy tests.
 
 ### Qualification
 
-- Real Chromium, Firefox and Safari, plus `WKWebView` on real iPhone and iPad
-  devices. WebKit on Linux and desktop emulation are not iOS evidence.
+- Real Chromium and Firefox (task 5). Shipping Safari and `WKWebView` on real
+  iPhone and iPad devices are in the manual-test checklist (7568: 0046 task
+  5). WebKit on Linux and desktop emulation are not iOS evidence.
 - Both hosted and backend-served client origins.
 - Normal and private browsing, third-party cookies blocked, popups denied, a
   framed-CSP denial, and OAuth redirect flows.
@@ -446,6 +451,7 @@ and the revisit trigger is already tracked as 0042 task 3.
   (Safari and iOS batching).
 - [browser-previews.md](../../architecture/browser-previews.md) §"Private HTTPS
   origins" and §"Known limitations".
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the shipping Safari and real iPhone and iPad part of task 5) moved there on 2026-11-10.
 
 ## Replaces
 

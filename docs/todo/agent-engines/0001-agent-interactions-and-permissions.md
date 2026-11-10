@@ -18,12 +18,9 @@ repeated as tasks; their live checks are. The open questions and the
 
 ### Tasks
 
-1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12). Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67).
+1. **Grok project resources off**: Grok loads a trusted checkout's resources whatever the policy says (item 12); re-probe on every Grok bump and honour the switch once xAI adds one. Status: blocked (on xAI: no "never trust" switch in Grok 1.0.67). Filing the upstream request moved to 7568 on 2026-11-10.
 2. **Codex project-resources residual risks**: the three risks left open under item 6. Status: done (the hook canary is added, the slash-catalogue risk was already closed, and a skill written during a running turn is kept as residual risk).
-3. **Live Grok pause and approval kinds**: Grok permission and question paused past ten minutes, command/file approval kinds, a pause past the 30-minute turn deadline. Status: open (needs a valid Grok login).
-4. **Live Codex question**: the `codex-question` case of the paused-interactions spec on a real model (item 13). Status: open.
-5. **Live Claude tmux pause**: a paused PermissionRequest outliving Claude Code's 600 s hook limit (item 9). Status: open.
-6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
+3. **Live Grok pause and approval kinds**: make the `grok-approval` case of the paused-interactions spec assert `command-approval` rather than the generic approval set, so the live run proves item 2's mapping. Status: open. The live Grok runs themselves (they need a valid Grok login) moved to 7568 on 2026-11-10.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
 9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented and its Agent Info note is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md)).
@@ -45,7 +42,7 @@ repeated as tasks; their live checks are. The open questions and the
   - **Qualify a throwaway `GROK_HOME` with `GROK_AUTH_PATH` pointing at the real login, resume included, and ship it for policy-off sessions.**
     - Pros: closes the leak now.
     - Cons: loses user-level config and skills; resume depends on a session store in the throwaway home; the very qualification decision 14 found too costly.
-- **Ask xAI?**
+- **Ask xAI?** Filing is an outward action, moved to 7568 (0001 task 1) on 2026-11-10.
   - **File an upstream request for a per-process "never trust" switch (recommended).**
     - Pros: the only clean fix; small for xAI.
     - Cons: no control over timing.
@@ -86,7 +83,7 @@ Running the file first showed it was stale on main: its three pinned cases faile
 
 ### 3. Live Grok pause and approval kinds
 
-**Problem.** Grok is the only interaction-raising provider whose pause was never qualified, and its command/file approval mapping (item 2) and turn-clock fix (item 10) have no live evidence.
+**Problem.** Grok is the only interaction-raising provider whose pause was never qualified, and its command/file approval mapping (item 2) and turn-clock fix (item 10) have no live evidence. The live runs need a Grok login and are in 7568; what is left here is making the spec able to prove the approval kind.
 
 **Context.** Two attempts failed because the host Grok login had expired; a profile may not refresh a single-use refresh token.
 
@@ -101,68 +98,6 @@ Running the file first showed it was stale on main: its three pinned cases faile
   - **Check the card kind by eye during the run.**
     - Pros: no code.
     - Cons: not repeatable.
-- **One run or two?**
-  - **Two: the default 10.5-minute run for both cases, then one approval with the wait set past 30 minutes (recommended).**
-    - Pros: a failure in the long run does not hide the basic result.
-    - Cons: about 45 minutes of a live login.
-  - **One run with the wait past 30 minutes.**
-    - Pros: one session.
-    - Cons: any early failure costs the whole half-hour.
-
-### 4. Live Codex question
-
-**Problem.** Codex questions now park as cards, but no real model turn has raised one through the app.
-
-**Context.** Proven against the pinned binary with a loopback endpoint (`bridges/codex-bridge/src/app-server/live-request-user-input.test.ts`). The feature flag `default_mode_request_user_input` is marked under development upstream; `isBlocking: false` was settled in 0161 (deleted 2026-11-06; the outcome is in [agent-engines.md](../../architecture/agent-engines.md#interaction-deadlines-and-pausing)).
-
-**Investigation.** The spec case exists (`paused-interactions-live.spec.ts:76`) and the task `test:agent:paused-interactions` is defined (`mise.toml:267`). Codex is pinned at `0.164.0`, the version the loopback test used.
-
-**Decisions.**
-
-- **Run it alone or with task 3?**
-  - **With the other live provider runs, in one profile authorising Codex and Grok (recommended).**
-    - Pros: one setup; both are the same spec.
-    - Cons: blocked on the Grok login if run together; run Codex alone if Grok is still unavailable.
-  - **Alone, now.**
-    - Pros: unblocked today.
-    - Cons: a second profile run later.
-
-### 5. Live Claude tmux pause
-
-**Problem.** It is unproven that a real Claude CLI honours the 172,800 s hook `timeout` and keeps a paused PermissionRequest alive past 600 s.
-
-**Context.** If the CLI clamps the timeout, the hook is killed and the tool call fails, which is fail-closed but defeats the pause.
-
-**Investigation.** The protocol marker is `HOOK_HOLD_PROTOCOL = "hold-v1"` (`apps/backend/src/core/tmux-shared.ts:81`); the generated script is tested in `apps/backend/tests/tmux-hook-hold.test.ts`. No real-stack spec drives Claude tmux mode; Claude Code is now pinned at `2.1.309`.
-
-**Decisions.**
-
-- **Manual or scripted?**
-  - **Manual run as the file describes, recording the CLI version and outcome here (recommended).**
-    - Pros: tmux mode has no browser harness; one run answers the clamp question.
-    - Cons: not repeated on Claude bumps, where a clamp could appear.
-  - **Add a bridge-free script that runs the real CLI with a hook and a 700 s wait.**
-    - Pros: repeatable on each bump, like Codex's live tests.
-    - Cons: needs a Claude login and 12 minutes per run.
-
-### 6. Live Claude question preview
-
-**Problem.** It is not known whether Claude emits option previews for a plain question, so the feature may never show.
-
-**Context.** Previews are requested with `previewFormat: "markdown"` (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:474`) and shown verbatim.
-
-**Investigation.** Code and unit tests are present; no live evidence.
-
-**Decisions.**
-
-- **What counts as a pass?**
-  - **A prompted "use AskUserQuestion with a preview for each option" shows previews verbatim in monospace (recommended).**
-    - Pros: matches the item; proves the wire path.
-    - Cons: does not show whether Claude uses previews unprompted.
-  - **Also record whether an unprompted question carries previews.**
-    - Pros: tells whether the feature matters in normal use.
-    - Cons: model behaviour varies; one sample is weak.
-
 ### 7. Browser interaction checks
 
 **Problem.** MCP elicitation rehydration, Claude's `ask` and `deny` policy overrides and a delegating coordinator turn have no real-browser evidence.
@@ -568,7 +503,7 @@ or a person.
    passes the policy's `sandbox`, `AgentNativeTab.helpers.tsx`). Tests:
    `native-agent.test.ts`, `AgentNativeTab.test.tsx`.
 
-9. **Pause in Claude tmux mode.** Code done 2026-10-25; live check open.
+9. **Pause in Claude tmux mode.** Code done 2026-10-25; live check in 7568.
    - The three blocking hooks (PreToolUse, PermissionRequest, Elicitation)
      run as `bash hook.sh <Kind> hold-v1` with `timeout: 172800` (two hold
      ceilings), so Claude Code no longer kills them at 600 s.
@@ -593,9 +528,9 @@ or a person.
    - Still owed: a real Claude CLI honouring a 172,800 s hook `timeout`
      without clamping it, and a paused PermissionRequest surviving past 600 s
      (no documented maximum was found; a clamped hook is killed, which stops
-     the tool call, so it still fails closed). See Qualification.
+     the tool call, so it still fails closed). Moved to 7568 (0001 task 5).
 10. **Pause Grok past its own limits.** Done 2026-10-25 in code and against
-    the pinned binary; the live pause through the app is owed (Qualification).
+    the pinned binary; the live pause through the app is owed (7568, 0001 task 3).
     - The `session/prompt` timeout is now a clock that stops while any parked
       request is held and restarts with the time it had left when the last
       hold ends or the held request settles (`acp-prompt-clock.ts`,
@@ -674,7 +609,7 @@ or a person.
       with resume checked. Then honour `false` and drop the note, as item 6
       did for Codex.
 13. **Codex questions never reach the card.** Done 2026-10-25 in code and
-    against the pinned binary; a real-model run is owed (Qualification).
+    against the pinned binary; a real-model run is owed (7568, 0001 task 4).
     Every `thread/start`, `thread/resume` and `thread/fork` of a session with
     a policy other than `pipeline` sets
     `features.default_mode_request_user_input = true`
@@ -699,17 +634,10 @@ or a person.
 
 ### Qualification
 
-- Live pause on Grok: a Grok permission and a Grok `ask_user_question`, paused
-  past ten minutes and then answered, with
-  `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=grok` (see the live pause record).
-  The 2026-10-21 run skipped Grok because the host Grok login had expired, and
-  a profile may never refresh it. Claude, Codex, OpenCode and Pi passed. The
-  same run should confirm that a Grok command and edit now reach the card as a
-  command and a file approval (item 2), and, since item 10, that a paused
-  Grok request outlives the 30-minute turn deadline (pause it, wait past
-  30 minutes, answer, and check the turn finishes). Needs a valid Grok login
-  on the host.
-
+- The live runs (Grok pause and approval kinds, a Codex question, a Claude
+  tmux pause past 600 s, Claude question previews) need real logins and moved
+  to 7568 on 2026-11-10 (tasks 3 to 6). What stays is task 3's spec
+  assertion.
 - ~~Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
   a Claude environment overridden to `approvals: "ask"`, confirm a Bash or Edit
@@ -720,28 +648,9 @@ or a person.
   (task 7): `e2e/ClaudeInteractions.spec.ts` and
   `e2e/InteractionPolicyChecks.spec.ts`. A coordinator turn on a real model
   is left to 0024.
-- `mise run test:agent:docker` for the container cells on Cursor and Pi
-  (needs a `dev:test` profile started with `--fixture-environments
-  container`, and Cursor and Pi logins). Not run on 2026-10-25.
-- Live Codex question (item 13): in a disposable profile with Codex signed in,
-  `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
-  ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1
-  ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=codex mise run test:logged -- --name
-  paused-codex-question -- mise run test:agent:paused-interactions`. The
-  `codex-question` case must raise a card, stay pending past ten minutes
-  while paused, and finish with the chosen codeword after a reload. Codex
-  0.164.0 has no timeout of its own on a held question (0161, from source and
-  an 11-minute run against the real app-server; 0.166.0 rechecked with a
-  10.5-minute hold on 2026-11-06).
-- Live Claude tmux pause (item 9): in a Claude tmux tab of a disposable
-  profile, raise a PermissionRequest (a Bash `touch`), pause it from the card,
-  wait past ten minutes (Claude Code's default 600 s hook limit), then
-  approve. Pass: the hook is still alive, the marker file appears only after
-  approval. A Claude CLI that clamps the 172,800 s hook `timeout` would show
-  as the tool call failing at the clamp instead.
-- Live Claude question preview (item 3): ask a Claude session to "use
-  AskUserQuestion with a preview for each option" and confirm the previews
-  appear verbatim in monospace on the card.
+- ~~`mise run test:agent:docker` for the container cells on Cursor and Pi.~~
+  Done 2026-11-06 with fake engines (task 8); the live-provider runs are
+  [7040](7040-container-cells-on-real-cursor-and-pi.md).
 - ~~On a real Claude CLI, confirm that a provider-sandboxed auto-approve session
   can neither leave the sandbox (`allowUnsandboxedCommands: false`) nor reach a
   domain off its allowlist when the network is restricted (`strictAllowlist`).
@@ -1203,6 +1112,7 @@ server as loaded; the address is never contacted.
 - [7563-claude-linux-sandbox-loopback-under-full-network.md](7563-claude-linux-sandbox-loopback-under-full-network.md)
   (task 9's Linux finding: a full-network provider sandbox does not reach
   loopback directly).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (filing the xAI request from task 1, the live Grok runs from task 3, tasks 4, 5 and 6) moved there on 2026-11-10.
 
 ## Replaces
 

@@ -12,7 +12,6 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 3 rechecked and done
 1. **Built-in default budget (Code 1)**: choose and apply a default. Status: done.
 2. **Linux Engine arm64 benchmark numbers**: compare the CI report with the targets and record it. Status: done 2026-10-28 by [0729](0729-container-benchmark-target-misses.md) (recorded in `container-qualification.md`; the misses are attributed and either fixed or recorded there).
 3. **UI response under multi-environment load**: a real-stack latency measurement with several busy container environments. Status: done 2026-11-01. The probe is `e2e/perf/multi-environment-ui-perf.ts`, and its first run is recorded in `container-qualification.md`. That run was on a busy shared host, so it is a sample, not a reference figure. A run on a quiet reference host is still open (decision below).
-4. **Authenticated provider turns under the default**: one real turn through each bridge with the default applied. Status: open.
 5. **In-process tar hasher (deferred)**: replace the per-member `sha256sum` on the source side. Status: deferred (the condition is not met).
 6. **Aggregate diagnostic byte accounting (deferred)**: live per-environment log sizes. Status: deferred.
 
@@ -115,31 +114,6 @@ The backend slowed: the `get_environments` round trip went from 12–13 ms to 18
     - Pros: those held with margin even on a saturated host.
     - Cons: the probe needs Docker and a profile, so it cannot run in the normal suites; a gate there would rarely run.
 
-### 4. Authenticated provider turns under the default
-
-**Problem.** Bridge and provider footprints under the budget are unmeasured. Only the Claude CLI was measured, against a mock API.
-
-**Context.** Decision 9. The file says the machine had no provider logins. Agent-test profiles now authorise host credentials for Claude, Codex, Cursor, Grok and OpenCode by default (AGENTS.md), and Pi's login may be copied into disposable profiles.
-
-**Investigation.** The workload harness (`apps/backend/scripts/container-workload-budget.ts`) runs workloads in fresh containers, not through bridges.
-
-**Decisions.**
-
-- **How to run it?**
-  - **One trivial turn per platform in container environments of an isolated `dev:test` profile with host credentials, sampling `memory.peak` and PIDs through the existing usage sampler (recommended).**
-    - Pros: exercises the real bridges under the real default; credential use is already authorised for these profiles.
-    - Cons: Grok has no current host login (see 0061 task 4); real provider calls cost money and must use trivial prompts.
-  - **Extend the mock-API harness to the other CLIs.**
-    - Pros: no credentials, repeatable.
-    - Cons: bridges are not in the loop, and only Claude has a Messages-compatible mock.
-- **Batch it with other live runs?**
-  - **Yes, with 0031's live-provider session (recommended).**
-    - Pros: one setup.
-    - Cons: waits for that session.
-  - **Run it on its own.**
-    - Pros: done sooner.
-    - Cons: duplicates the setup.
-
 ### 5. In-process tar hasher
 
 **Problem.** The source side of a copy hashes each tar member with its own `sha256sum`.
@@ -183,8 +157,9 @@ Desktop (arm64) and Linux Engine (amd64), with and without the experiment
 budget. The benchmark harness now runs under the default, and the deferred
 optimisations were measured against their stated conditions. Linux arm64
 benchmarks are recorded (0729). UI response under multi-environment load has a
-probe and a first run on a busy host (2026-11-01). Authenticated provider
-turns remain.
+probe and a first run on a busy host (2026-11-01); a quiet reference-host
+run is still open (task 3). Authenticated provider turns under the default
+moved to the manual-test checklist (7568) on 2026-11-10.
 
 ## Current state
 
@@ -257,12 +232,12 @@ turns remain.
   ([evidence](#evidence-2026-11-01)). That run was on a busy shared host.
   Whether to repeat it on a quiet reference host is an open decision under
   task 3.
-- **Open:** real provider and bridge authentication paths under a budget: an
-  authenticated turn through each bridge (Claude, Codex, OpenCode, Cursor,
-  Grok, Pi) with the default applied. They need provider logins, which this
-  machine did not have. The mock-API turns bound the Claude CLI's own
-  footprint (about 360 MiB anonymous memory for three concurrent CLIs), not
-  a bridge's or another provider's.
+- Real provider and bridge authentication paths under a budget (an
+  authenticated turn through each bridge with the default applied) need
+  billed provider logins and moved to the manual-test checklist (7568) on
+  2026-11-10. The mock-API turns bound the Claude CLI's own footprint (about
+  360 MiB anonymous memory for three concurrent CLIs), not a bridge's or
+  another provider's.
 
 ### Deferred until measured
 
@@ -615,6 +590,7 @@ probe now sends one every 100 ms.
   budgets and usage", "Built-in default" and "Bounded logs".
 - [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md): the CI benchmark misses (Docker calls, x64 warm start and fresh-to-ready) and the arm64 figures
 - [2150-container-environment-stop-takes-ten-seconds.md](2150-container-environment-stop-takes-ten-seconds.md): the 10 s stops the UI probe measured
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4) moved there on 2026-11-10.
 
 ## Replaces
 

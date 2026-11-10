@@ -14,7 +14,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 6. **Adopt-later and not-relevant calls**: every other change in the changelogs. Status: done (adopt-later items moved to 0007's Candidates).
 7. **Capacity and overload findings**: recorded for the retry-with-backoff work. Status: done (record only; no retry built here).
 8. **OpenCode 2.x gate**: whether anything in 2.x changed 0008's gate. Status: done (unchanged).
-9. **Live evidence at the new pins**: the signed-in checks the fixture and fake-model suites cannot make. Status: partly done; release qualification remains open (see review evidence below).
+9. **Live evidence at the new pins**: the checks the fixture and fake-model suites did not make that need no login: the Linux Claude sandbox probe, `claude-host-login-refresh.ts` in a container with a fake login, and `scripts/qualify-opencode-seeded-data.sh` with the OpenCode UI and build-pipeline smoke tests against a built image. Status: open (the signed-in checks moved to 7568 on 2026-11-10).
 
 ### 1. Upgrade decision for each provider
 
@@ -205,7 +205,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 
 ### 9. Live evidence at the new pins
 
-**Problem.** The suites below ran without logins. Several behaviours need a signed-in run, or a host this worker did not have.
+**Problem.** The suites below ran without logins. Several behaviours need a signed-in run, or a host this worker did not have. Since 2026-11-10 this task keeps only the checks that need no login; the signed-in ones are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 **Context.** The initial upgrade used no billed turns. The review implementation request authorized signed-in qualification in an isolated profile; its evidence is recorded below. 0031 owns cross-platform qualification runs.
 
@@ -383,11 +383,15 @@ and `dev:reset` commands after qualification. Sanitized evidence under
 
 ### Release qualification still open
 
-The successful checks above do not close task 9. Grok's expired credential,
-Cursor's independently reproduced UI resume failure, the Claude background
-output check, remaining provider slash-command cases, Linux sandbox/container
-sessions, host-login refresh, rollout scanning and the OpenCode seeded-data
-and build-pipeline matrix still require evidence. Failure/fallback compaction
+The successful checks above do not close task 9. Linux sandbox and container
+sessions, host-login refresh and the OpenCode seeded-data and build-pipeline
+matrix still require evidence (task 9). The Claude background output check
+passed at the 2026-11-06 pins
+([1031](1031-provider-upgrade-2026-11-06.md) task 9). The signed-in Grok
+cases, Cursor's independently reproduced UI resume failure, the remaining
+provider slash-command cases and the scan of real rollouts moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+2026-11-10. Failure/fallback compaction
 event orders are synthetic coverage; only the successful live ordering was
 observed. The deterministic fixes are ready for review, but these live limits
 must be resolved before claiming release qualification.
@@ -398,3 +402,4 @@ must be resolved before claiming release qualification.
 - [0008-opencode-v2.md](0008-opencode-v2.md)
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
 - [upgrade-agents.md](../../development/upgrade-agents.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in part of task 9) moved there on 2026-11-10.

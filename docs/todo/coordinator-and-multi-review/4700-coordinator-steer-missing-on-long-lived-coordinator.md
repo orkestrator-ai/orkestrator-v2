@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`. Re-checked 2026-11-05 against
 ### Tasks
 
 1. **Capture the failing state**: record the Coordinator's projection when a typed message queues with no Steer. Status: done (2026-11-05): the logging is in. It records the state from the next occurrence on a release that has it; see [Current state](#current-state).
-2. **Fix the cause once it is known**: make the queued row offer Steer, or say why it cannot. Status: open (depends on 1).
+2. **Fix the cause once it is known**: make the queued row offer Steer, or say why it cannot. Reporting the next occurrence from the user's own saved log moved to the manual-test checklist. Status: blocked (waits on 7568: 4700 task 2 occurrence report).
 
 ### 1. Capture the failing state
 
@@ -40,7 +40,7 @@ Re-checked 2026-11-05 against `41f9eb638`, reading the code rather than a live r
 
 **Context.** Since this change, a row that cannot be steered while the turn runs says why under its text: the provider cannot steer, an earlier message is still being confirmed, attachments, a command, or the steer refusal itself (`queuedSteerNote` in `auto-steer.ts`). These notes expose only the listed blockers. If the renderer does not see the turn as running, an unparked row has no note and no Steer; a bare row therefore does not identify the cause. Qualification logging from task 1 now covers the provider blocker; the renderer's own view is carried to [6640](6640-queued-row-turn-not-running-evidence.md).
 
-**Investigation.** Not started; it waits for an occurrence read with [Current state](#current-state).
+**Investigation.** Not started; it waits for the user's report of an occurrence (the row, the time and the matching log lines; on the manual-test checklist), read with [Current state](#current-state).
 
 **Decisions.**
 
@@ -130,10 +130,10 @@ Current provider and item blockers now take priority over historical refusals, a
 ## Needs verification
 
 - Whether the user's 2026-11-04 state was `actions.steer: false`, a parked dispatch, or a turn that the renderer did not see as `running`. The new lines cannot answer this for that date, only for the next occurrence.
-- That the warning appears on a real failure in production. It has only been exercised against fake bridges.
 
 ## Related
 
 - [6640-queued-row-turn-not-running-evidence.md](6640-queued-row-turn-not-running-evidence.md) (the renderer's own view of the turn).
 - Ticket cdc7a75f-3633-4353-8d86-112fd74654f1 (Coordinator chat auto-steer and Steer button).
-- [0740-coordinator-deliver-now-live-qualification.md](0740-coordinator-deliver-now-live-qualification.md) (mail steered into running turns).
+- to-do 0740 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#course-corrections-with-delivernow)) (mail steered into running turns).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: reporting the next occurrence with its saved-log lines) moved there on 2026-11-10.

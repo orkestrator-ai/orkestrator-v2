@@ -19,7 +19,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Mixed real-provider scale run**: an 8 to 32 reviewer panel across more platforms than Claude and Codex, recording caps, tail latency and peak RSS. Status: open (blocked on Cursor, Grok, OpenCode and Pi credentials in a test profile, and on the harness only knowing Claude and Codex).
+1. **Mixed real-provider scale run: the harness**: make the scale case run an 8 to 32 reviewer panel across more platforms than Claude and Codex, and record the per-provider cap, tail latency and process-tree peak RSS. The signed-in run itself moved to the manual-test checklist (7568). Status: open.
 2. **Live step reminder and step continuation**: preparation, consolidation and Fix follow-ups are covered only by deterministic tests. Status: deferred (cannot be forced on a real provider).
 3. **Content-addressed evidence store**: a backend-owned, read-only evidence store. Status: deferred (until measured).
 4. **Provider batch status observation**: one bridge call for many reviewers' settlement and usage. Status: deferred (no bridge exposes it).
@@ -32,7 +32,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** The fan-out caps, reviewer tail latency and backend memory have one real measurement: 8 reviewers, Claude and Codex only (2026-10-25). Panels can be up to 32 reviewers on any of the six platforms, so a user running a large mixed panel is on behaviour nobody has measured under real rate limits.
 
-**Context.** The only item left in this file. The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`), and the run is batched with the "Several providers at once (mixed panels)" row of [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) alongside [0025](0025-multi-review-panel-value.md). The folder index rates the file Low because the remaining work is a measurement blocked on credentials.
+**Context.** The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`). The signed-in mixed-panel run is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (0027 task 1), batched with the "Several providers at once (mixed panels)" row of [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) alongside [0025](0025-multi-review-panel-value.md). What is left here is the harness work below, so that run is worth its cost.
 
 **Investigation.**
 - The scale case is `e2e/agent-testing/multi-review-live.spec.ts:921` onward. It is Claude and Codex only by type, not just by data: `pick` takes `"claude" | "codex"` (`:935`), reviewers alternate `claude`/`codex` (`:966`), and the per-platform sampling loop names only those two (`:987`). Only `CLAUDE_MODEL` and `CODEX_MODEL` overrides exist (`:73`-`:74`). Extending it is more than "adding their model picks", as the file says: the type, the alternation and the sampling loop all need to change.
@@ -70,13 +70,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Backend only, as today.**
     - Pros: simple and already recorded.
     - Cons: misses most of the memory a large panel uses.
-- **Where and when to run it?**
-  - **With the 0031 mixed-panel batch, after the harness changes above (recommended).**
-    - Pros: one credential set-up serves 0025 and 0027; the harness is fixed first, so the run is worth its cost.
-    - Cons: waits on 0031's scheduling.
-  - **Now, on whichever host has the most credentials.**
-    - Pros: earlier evidence.
-    - Cons: without the cap fix it repeats the current gap; it may cover only three platforms.
 
 ### 2. Live step reminder and step continuation
 
@@ -154,7 +147,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** None today. The flow graph shows queue position only.
 
-**Context.** Deferred until queue time becomes user-visible. `admissionState` and `queuePosition` shipped for [0029](0029-multi-review-flow-graph.md).
+**Context.** Deferred until queue time becomes user-visible. `admissionState` and `queuePosition` shipped for to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)).
 
 **Investigation.** Both fields exist (`packages/protocol/src/review-fanout.ts:112`, `:117`), and `queuedAt` does not.
 
@@ -372,17 +365,13 @@ All done on 2026-10-25; evidence in
   change (see below).
 - ~~**A killed Claude Code process, live.**~~ Done on 2026-10-25: "continues
   a reviewer whose Claude Code process was killed under a live bridge".
-- **Scale.** Run a mixed real-provider panel at 8 to 32 reviewers. Record that
-  the caps hold under real rate limits, plus tail latency and peak RSS. The
-  harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>` in
-  `multi-review-live.spec.ts`, which writes `scale.json`), and an
+- **Scale.** The harness exists (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n>`
+  in `multi-review-live.spec.ts`, which writes `scale.json`), and an
   8-reviewer Claude and Codex panel passed on 2026-10-25 (see below), but the
-  panel it runs is Claude and Codex only. A mixed panel needs Cursor, Grok, OpenCode
-  and Pi credentials that this host's test profiles do not carry; batch it
-  with the runs in
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-  Extending the case to those platforms means adding their model picks to
-  its reviewer list.
+  panel it runs is Claude and Codex only. Extending the case to the other
+  platforms changes its reviewer type, alternation and sampling loop (task 1).
+  The signed-in mixed run at 8 to 32 reviewers is on the
+  [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### Deferred until measured
 
@@ -399,7 +388,7 @@ All done on 2026-10-25; evidence in
   invented IDs.
 - **A `queuedAt` reviewer field**, only if queue time becomes user-visible.
   `admissionState` and `queuePosition` shipped for the flow graph's queue
-  position ([0029-multi-review-flow-graph.md](0029-multi-review-flow-graph.md)); the
+  position (to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph))); the
   graph shows the position only, so nothing would read a queue timestamp yet.
 - **Skip identical renderer refetches.** `store-resource-sync.ts` refetches the
   whole workflow on every `multi-review` announcement. `resource-sync.ts`
@@ -1124,6 +1113,7 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
   preparation, sealing, the fan-out budgets and dispatch recovery (the two
   bugs the interleaving tests found). No living doc covers fan-out
   supervision or consolidation; the rationale above is its only home.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in mixed-panel run of task 1) moved there on 2026-11-10.
 
 ## Replaces
 

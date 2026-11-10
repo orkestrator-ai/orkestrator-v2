@@ -13,8 +13,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 3. **Report profiles in `disk:report`**: show their count, size and age. Status: done (2026-10-28).
 4. **Qualification run**: `mise run test` plus design and preview use, a backend SIGKILL and a restart, then `/tmp` holds nothing stale. Status: partly done (2026-10-28): `mise run test` ran on macOS, and the SIGKILL-and-restart path of the design renderer is an automated real-Chromium test; the `dev:test` session on omarchy-hp is still open.
 5. **Where the sweep lives (open question)**: a shared helper, or a private `TMPDIR` for the backend's launches. Status: settled (2026-10-28): one owner-scoped path per owner, no helper shared across `tests/` and `apps/`.
-6. **Origin of the `ork-artifact-preview-*` directories (Needs verification)**: real previews or tests. Status: instrumented (2026-10-28); needs a day of production logs.
-7. **Private `TMPDIR` in the real-stack Playwright suites**: the design, preview, restart, coordinator and Electron suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: open.
+7. **Private `TMPDIR` in the real-stack Playwright suites**: the credential-free design and preview suites leave no Playwright profile or artifact directory behind, on Linux and macOS. Moved from to-do 0830 (deleted 2026-11-06). Status: open. The restart, coordinator and Electron runs that need live provider credentials moved to the manual-test checklist.
 
 ### 1. Find the 2026-10-25 burst
 
@@ -115,26 +114,6 @@ Bare profiles cost little: 2.8 MB for 273. Preview scratch directories cost far 
     - Pros: one implementation.
     - Cons: still has to decide liveness for a PID-less prefix in the shared `/tmp`, which is the hard part.
 
-### 6. Origin of the `ork-artifact-preview-*` directories
-
-**Problem.** If real previews leave these directories behind, production leaks about 9 MB per preview.
-
-**Context.** This question is shared with 0247 task 2.
-
-**Investigation.** The count has grown from the file's 146 to 206 today, with the newest at 2026-10-26 21:57. They come in batches of 6 (or multiples of 6), one second apart, and hold `.config/google-chrome-for-testing`. So the 6 jobs ran in sequence, not as a concurrent test fan-out.
-
-I ran 17 preview-reaching backend test files under a private `TMPDIR`: nine of them alone, then all 17 in two `--parallel=2` batches. None left a scratch directory. So the batches do not come from those files under focused runs. Production removes scratch only after a verified kill (`preview-supervisor.ts:338`, `:348`), and nothing sweeps it at startup. Another possible source is a real backend started outside `bun test`: `transcriptArtifactRuntime` defaults to on when `NODE_ENV` is not `test` (`apps/backend/src/core/index.ts:948`). That covers the CLI scenario harness, the packaged-backend test and the production app.
-
-**Decisions.**
-
-- **How to settle the origin?**
-  - **Log a content-free counter of scratch directories left behind after an unverified kill, and check the production backend's logs after a day (recommended).**
-    - Pros: decisive for production; no prompts or contents logged.
-    - Cons: needs a code change and a day of real use.
-  - **Fix both paths without settling it (the startup sweep in task 2).**
-    - Pros: removes the leak whatever its source.
-    - Cons: a test or harness bug that makes six previews per run stays unexplained.
-
 ### 7. Private `TMPDIR` in the real-stack Playwright suites
 
 **Problem.** Playwright's own `playwright_chromiumdev_profile-*` and
@@ -158,23 +137,18 @@ in [`testing-guide.md`](../../development/testing-guide.md).
    agent-tools port, run `mise run test:agent:design:isolated` to green, and
    check that no `playwright_chromiumdev_profile-*` or `playwright-artifacts-*`
    is left in the run's `TMPDIR`.
-2. Run the specs that restart `dev:test` with their opt-ins
-   (`cold-restart-live`, `graph-run-view` with
-   `ORKESTRATOR_AGENT_TEST_GRAPH_RESTART=1`, `multi-review-live`,
-   `permission-rules`, `web-annotations-approval-live`). Check that the
-   restarted launcher still has a working, non-private `TMPDIR` after
-   Playwright exits, then stop and reset the profile.
-3. Run the coordinator scenarios beyond the Codex `read-only` one, and the rest
-   of `mise run test:agent:electron`.
-4. Repeat at least the design and preview runs on macOS, where the private
+2. Repeat at least the design and preview runs on macOS, where the private
    directory sits under `/private/tmp`.
+
+The restart specs and the remaining coordinator and Electron runs need live
+provider credentials; they are in the manual-test checklist (see Related).
 
 **Decisions.**
 
 - **Run it with task 4?**
-  - **Yes: task 4's `dev:test` session on omarchy-hp covers steps 1 and 2 (recommended).**
+  - **Yes: task 4's `dev:test` session on omarchy-hp covers step 1 (recommended).**
     - Pros: one Linux session closes both tasks.
-    - Cons: steps 2 and 3 need live provider credentials.
+    - Cons: none left here; the credentialed runs moved to the checklist.
   - **Keep it separate.**
     - Pros: task 4 can close on its own.
     - Cons: two sessions on the same host for overlapping evidence.
@@ -268,12 +242,8 @@ automatically today; this file is the work to make that happen.
 
 ## Needs verification
 
-- Whether the 85 `ork-artifact-preview-*` directories from 2026-10-26 came from
-  real previews in the running app or from preview tests. This is the open
-  question in 0247's Needs
-  verification, and it decides whether production leaks preview scratch
-  directories. Their profiles go when their scratch directory goes, so they
-  need no separate sweep.
+- None left here; where the `ork-artifact-preview-*` directories come from is
+  answered by production logs, a manual-test checklist item.
 
 ## Evidence from the macOS host (2026-10-28)
 
@@ -498,6 +468,7 @@ file's tasks closable.
 - [Process crashes and kills](../../debugging/process-crashes-and-kills.md)
   (a Playwright browser core dump is identified by this profile path).
 - [Disk usage](../../development/disk-usage.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 6, the user part of task 7: the credentialed restart, coordinator and Electron runs) moved there on 2026-11-10.
 
 ## Replaces
 

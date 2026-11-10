@@ -17,8 +17,7 @@ on beelink, for the failed whole-suite `test:browser` run of task 2.
 ### Tasks
 
 1. **An environment move failed with `claude-tmux cleanup incomplete`**: `local environment move survives inactive navigation and reload` failed once because the move command answered 500. Status: done (2026-11-09): cause reproduced on the real stack and fixed.
-2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); a host with another kernel or hardening, and macOS, remain; and a whole-suite `test:browser` pass on beelink has not been observed since: the 2026-11-10 run failed 131 cases at a load average above 100 and was stopped with 1,542 unrun.
-3. **`agent-accounts.spec.ts:229` (390px) with credentials**: the one failure recorded on 2026-11-05 has not been rerun on a profile with Claude credentials. Status: open.
+2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); macOS remains (a Linux host with another kernel or hardening moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10); and a whole-suite `test:browser` pass on beelink has not been observed since: the 2026-11-10 run failed 131 cases at a load average above 100 and was stopped with 1,542 unrun.
 
 ### 1. An environment move failed with `claude-tmux cleanup incomplete`
 
@@ -190,32 +189,6 @@ the namespace on beelink, which component runs B and C nearly were
     - Pros: fewer load misses.
     - Cons: changes every run, idle hosts included, to cover a busy one; the scheduler already passes `ORKESTRATOR_VALIDATION_GRANTED_WORKERS` for this.
 
-### 3. `agent-accounts.spec.ts:229` (390px) with credentials
-
-**Problem.** The review preparation for the 2026-11-05 change recorded this case
-failing once on a credentialed profile with the Settings dialog still over the
-drawer toggle and its modules loaded.
-
-**Context.** This build was not allowed to use real logins, so every run here
-was credential-free.
-
-**Investigation.** All four `agent-accounts.spec.ts` cases, the 390px one
-included, passed in each of the seven isolated runs here (credential-free). The
-companion failure that 4222 recorded, `cli-ui.spec.ts` "a CLI-initialized
-project…", recurred in runs 1 and 2 as a race with the sidebar's automatic
-collapse of empty projects and was fixed (flake
-[0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md)).
-
-**Decisions.**
-
-- **Rerun with credentials, or close on these runs?**
-  - **Rerun the case alone with `--repeat-each=3` on a profile with Claude credentials (recommended).**
-    - Pros: tests the condition the failure was seen in.
-    - Cons: needs a host where using the Claude login is allowed.
-  - **Close it on seven credential-free passes.**
-    - Pros: no further run.
-    - Cons: the credentialed startup path (no sign-in modal) was the one that failed.
-
 ## Assumptions and decisions
 
 ### Task 1: fix the census rather than only log it
@@ -257,11 +230,11 @@ not stand in for a whole-suite pass, so the task stays open for one.
 
 ## Outstanding work
 
-- Task 2: read the `[loopback-network]` line in the first `test:browser` review
-  validation on a Linux host other than beelink (ideally Ubuntu 24.04 with its
-  default AppArmor restriction) and on macOS, where no line is printed, and
-  confirm the result matches an `ORKESTRATOR_E2E_HOST_NETWORK=1` run. This
-  needs those hosts; beelink's kernel cannot show another kernel's behaviour.
+- Task 2: run `test:browser` on a macOS node, where no `[loopback-network]`
+  line is printed, and confirm the result matches an
+  `ORKESTRATOR_E2E_HOST_NETWORK=1` run. The same check on a Linux host other
+  than beelink (ideally Ubuntu 24.04 with its default AppArmor restriction)
+  moved to [7568](../manual-test/7568-manual-test-checklist.md).
 - Task 2: a whole-suite `mise run test:browser` pass inside the namespace on
   beelink is not established on this branch. The only whole run (2026-11-10,
   `10d5c9b31`) failed 131 cases (62 navigation timeouts, none a network-change
@@ -276,10 +249,10 @@ not stand in for a whole-suite pass, so the task stays open for one.
   only inside the namespace is a defect of the wrapper. Not done here because
   the host stayed oversubscribed by other builds for the whole of this work,
   and the build may not stop them.
-- Task 3: unchanged; needs a host where using the Claude login is allowed.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the other-kernel Linux host of task 2) moved there on 2026-11-10.
 - Flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md), the cause and the run record.
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found the original failures.
 - [2921](2921-component-browser-failures-on-main.md), other `test:browser` failures.

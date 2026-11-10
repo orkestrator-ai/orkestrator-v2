@@ -8,144 +8,14 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Grok on every scenario**: run `read-only`, `async`, `family`, `status` and `peer` (tiles included) on Grok and decide its tier. Status: blocked (no Grok login on the qualifying hosts).
-2. **Claude on Linux**: the first live run of the suite on a Linux host. Status: open.
-3. **Pi `status` review part**: rerun now that 0172's code fix has landed. Status: open (unblocked).
-4. **`family` and `peer` tile confirmation**: on Codex, OpenCode, Cursor and Pi. Status: open.
-5. **Grok mail approvals**: the Grok `status` approval part, plus a note of which tool-name form the pinned Grok uses. Status: blocked (Grok login).
-6. **Cursor and Grok mailbox identity**: `self` in `list_mailboxes`, `idle` injection starting a turn, Cursor resume with a new `agentMcp`, Grok token rotation. Status: partly done (Cursor launch-and-wake passed; the rest has unit coverage only).
-7. **Stale pin references**: the file's pin notes predate the 2026-10-23 agent bump. Status: open (doc hygiene).
+6. **Cursor and Grok mailbox identity**: `self` in `list_mailboxes`, `idle` injection starting a turn, Cursor resume with a new `agentMcp`, Grok token rotation. Agent part: add the recommended `identity` scenario to the live suite (two tabs, one `idle`-policy injection, one resume with a rotated `agentMcp`) and the recommended Grok bridge unit test that two sessions keep separate children and credentials across a rotation. Running the scenario on Cursor and Grok moved to 7568. Status: partly done (Cursor launch-and-wake passed; the scenario and the unit test are open).
+7. **Stale pin references**: the file's pin notes predate the 2026-10-23 agent bump. Status: open (doc hygiene; the live runs it was to ride with moved to 7568, so correct the pin lines on their own).
 8. **Completed items still listed**: Code items 1 to 5 and all three Verify entries. Status: done.
 
-### 1. Grok on every scenario
-
-**Problem.** Grok is the only offered coordinator platform with no passing live run on any scenario, and its tier stays `advisory` until its read-only run passes. Grok coordinator users get no live evidence for read-only, delegation, status wakes or mail tiles.
-
-**Context.** The 2026-10-17 read-only probe left the checkout unchanged, but failed because Grok labelled removed tools `denied` without attempting them, and its ticket title did not match (Code item 4). Every later run skipped with `needs-auth`. The Acceptance section requires this run before Grok can move to the unified level.
-
-**Investigation.** Grok is still `advisory` (`apps/backend/src/core/coordinator-providers.ts:165`), and it is on `COORDINATOR_LIVE_PLATFORMS` (`apps/desktop/scripts/dev/coordinator-live.ts:38`). The read-only prompt is the same for every platform. Since the Grok probe it has gained the Cursor lines saying that a step with no tool is `unavailable`, never `denied` (`coordinator-live.ts:207`, network line at `:219`). Those lines may already fix Grok's 2026-10-17 mislabels, but no run has tested that. The pinned Grok is now `1.0.67` (`packages/toolchain/src/manifest.ts:9`, bumped in `28590e68` on 2026-10-23), so the 1.0.52 evidence no longer matches the pin. On this Linux host `grok` is on PATH but `~/.grok` holds no `auth.json`, so a run would skip again. The peer skip fix (`createPeerWatch`) has never run against a real Grok session.
-
-**Decisions.**
-
-- **Where to run Grok?**
-  - **Any host whose user signs Grok in, Linux included (recommended).** Sign in once, then `mise run test:agent:coordinator --credential-source grok`.
-    - Pros: unblocks five scenarios and task 5 in one run; nothing in the suite is macOS-specific for Grok.
-    - Cons: needs a person to sign in; a Grok seat is billed.
-  - **Wait for the macOS node that ran the other platforms.**
-    - Pros: same host as every earlier result.
-    - Cons: that host has been signed out for over a week; the work stays blocked indefinitely.
-- **If read-only passes, what tier should Grok get?**
-  - **Keep `advisory` and record the pass (recommended).**
-    - Pros: matches the qualification rule in `AGENTS.md`: unasked tools (xAI's hosted X search) are not an enforced boundary, so `enforced` would claim one the bridge does not hold.
-    - Cons: Grok users still see the weakest tier label.
-  - **Raise to `provider-configured`.**
-    - Pros: rewards a passing run.
-    - Cons: the reason text says unasked tools stay advisory; raising the tier needs a translation of `capabilityPolicy` that covers them, which does not exist.
-- **If Grok still labels removed tools `denied` with no call?**
-  - **Keep failing it, and add a Grok-specific prompt line only if a rerun repeats it (recommended).**
-    - Pros: the same rule that settled Cursor; the verdict does not depend on luck.
-    - Cons: possibly one more rerun.
-  - **Accept `denied` for tools the profile removed.**
-    - Pros: fewer reruns.
-    - Cons: it reports an attempt nobody made, which is exactly what the suite exists to catch.
-
-### 2. Claude on Linux
-
-**Problem.** The suite has never run on Linux, so Claude's `enforced` tier on Linux (bubblewrap sandbox, `filesystem.denyWrite`, hook allowlist) is unproven on the real stack.
-
-**Context.** Since 0145 (`31accac9`, 2026-10-26) a Linux host whose bubblewrap cannot nest a user namespace qualifies as `provider-configured`, and only one that can is `enforced`. 0026 owes the same Linux run, with and without `bwrap`/`socat`.
-
-**Investigation.** This analysis ran on a Linux host (Omarchy, Arch-based) that has `/usr/bin/bwrap` and `/usr/bin/socat`, so the `enforced` path can be exercised here today. Stock Arch ships no `bwrap-userns-restrict` AppArmor profile, so the probe should pass; the run's summary records the tier it actually got. 0026 tracks the Linux run of Claude's read-only scenario separately, and both files would cite the same run.
-
-**Decisions.**
-
-- **How to run it?**
-  - **One run on this Linux host covering all five scenarios, cited from both 0024 and 0026 (recommended).** `mise run test:agent:coordinator --credential-source claude`, on a quiet host, one profile at a time.
-    - Pros: one billed run closes both files' `enforced` Linux case; this host is available now.
-    - Cons: the host's Claude account is shared with other environments, so it can hit the 429 rate limit seen on 2026-10-18; the without-`bwrap` half (0026) still needs a second host or a PATH without those tools.
-  - **Run read-only only.**
-    - Pros: the cheapest run, and it covers the security claim.
-    - Cons: async, family, status and peer then still have no Linux run.
-- **What counts as a pass on Linux?**
-  - **All scenarios pass and the summary's tier is the one the probe predicts (recommended).**
-    - Pros: proves the probe and the boundary agree.
-    - Cons: a `provider-configured` result needs a separate explanation (AppArmor or a missing tool) before it can be counted.
-  - **Scenarios pass, whatever the tier.**
-    - Pros: simpler.
-    - Cons: an `enforced` claim the sandbox does not hold would go unnoticed, which is the 0145 bug.
-
-### 3. Pi `status` review part
-
-**Problem.** Pi's Multi Review failed in its preparation turn on 2026-10-25, because the saved-default rows resolved to `openai/gpt-4`, which a ChatGPT-backed Pi login refuses. Pi is the only platform whose `ready`/`fix-done` wakes have not passed live.
-
-**Context.** The bug is filed as 0172. Its code fix (`685c892a`, 2026-10-26) marks Pi's `sessionDefault` in the catalogue and prefers it for rows. 0172's only remaining item is this same live run.
-
-**Investigation.** The spec now carries opt-in assertions for this case. `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1` (`e2e/agent-testing/coordinator-live.spec.ts:786`) checks that the first catalogue row is the refused `gpt-4` and that every review row uses the live `sessionDefault`. It also checks that Orkestrator's Pi model setting stays unset, and adds the `pi-saved-default-rows` and `pi-saved-default-completed` checks (`:825`, `:832`). The Pi pin is now `1.4.0` (`manifest.ts:11`), whereas 0172 records the failure on 1.2.0. This host has a Pi `auth.json`.
-
-**Decisions.**
-
-- **How to settle it?**
-  - **One run that closes both 0024 and 0172 (recommended).** `ORKESTRATOR_AGENT_TEST_PI_SAVED_DEFAULT=1 mise run test:agent:coordinator --credential-source pi --scenario status` on a ChatGPT-backed Pi login.
-    - Pros: one billed run, the 0172 assertions included, and both files are updated in the same change.
-    - Cons: it needs a host whose first catalogue model is the refused one; on another login the opt-in assertions fail by design.
-  - **Run without the opt-in variable.**
-    - Pros: works on any Pi login.
-    - Cons: a pass could be luck (an accepted first model) and would not prove 0172's fix.
-- **Run it under `test:logged`?**
-  - **Yes, with `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS` raised for a Multi Review (recommended).**
-    - Pros: follows `AGENTS.md`; the evidence is bounded, and a failure keeps compressed artifacts.
-    - Cons: one more variable to remember; the default 30-minute deadline cut off Codex `status` on 2026-10-25.
-  - **Run the suite directly, as this file suggests.**
-    - Pros: no deadline.
-    - Cons: conflicts with the "always use `test:logged`" rule; output is unbounded and unretained.
-
-### 4. `family` and `peer` tile confirmation
-
-**Problem.** Mail-tile checks have run in `family` and `peer` on Claude only. Codex, OpenCode, Cursor and Pi have tile evidence only from `async` and `status`.
-
-**Context.** The file already calls this confirmation rather than new coverage: every bridge uses the same echo path for all scenarios. It is to be batched with each platform's next full run.
-
-**Investigation.** `evaluateMailTiles` is still at `e2e/agent-testing/coordinator-mail-tiles.ts` and runs over the `family` and `peer` transcripts. The Codex pin moved from 0.162.1 to 0.164.0, and the OpenCode pin to 1.19.4, after the 2026-10-22 `family`/`peer` passes on those platforms. The 2026-10-25 runs were on the new pins but covered only `async` and `status`. Flake 0920 (`queued-before-mail` on a loaded host) is still `open` in the flake registry, so a Codex `async` run may need a rerun.
-
-**Decisions.**
-
-- **When to run it?**
-  - **Batch it with each platform's next full run, as planned (recommended).** `mise run test:agent:coordinator --credential-source <platform>` per platform, one at a time.
-    - Pros: no dedicated spend; it also re-proves `family`/`peer` on the current pins.
-    - Cons: no deadline, so it can drift indefinitely.
-  - **Run `--scenario family --scenario peer` now on all four.**
-    - Pros: closes the item this week.
-    - Cons: four billed runs for coverage the file judges to be confirmation only.
-  - **Retire the item and accept `async`/`status` tile evidence.**
-    - Pros: no cost.
-    - Cons: `peer` tiles, the one scenario with two echoing sides, are then proven on Claude alone.
-
-### 5. Grok mail approvals
-
-**Problem.** The rule that Grok mail tools under `approvals: "ask"` are allowed without a prompt has unit coverage only. If Grok renamed its tools, a Grok worker would sit on a mail permission prompt and its report would never arrive.
-
-**Context.** The `status` approval part is the live check: a mail tool that prompted would be held and the worker's report would never come. The name forms and the bare-`send_message` case stay in unit tests.
-
-**Investigation.** The matcher is `orkestratorToolPermissionOption` (`bridges/acp-bridge/src/acp-session.ts:696`). Its comments cite Grok 1.0.52's `use_tool` wrapper (`:690`) and 1.0.46's `server__tool` naming (`:712`). The pin is now 1.0.67, and no one has checked its naming. The unit tests named in the file still exist (`bridges/acp-bridge/src/acp-mail-permission.test.ts:12`, `:48`, `:119`). OpenCode's exemption was not exercised either, because its worker ended without mailing.
-
-**Decisions.**
-
-- **How to prove it?**
-  - **Fold it into task 1's Grok run, then record the name form from the worker's transcript and update the matcher comment if it changed (recommended).**
-    - Pros: no separate run; it catches a 1.0.52 to 1.0.67 naming change.
-    - Cons: blocked on the same sign-in.
-  - **Capture a direct ACP probe of 1.0.67's permission request shape now (no login needed for the shape).**
-    - Pros: can update the unit fixture before the live run.
-    - Cons: a permission request needs a running turn, which needs a login; likely not possible signed out.
-- **OpenCode's exemption?**
-  - **Leave it to its unit tests, and note it as unexercised (recommended).**
-    - Pros: no prompt engineering to force a mail call.
-    - Cons: one asking platform's mail exemption stays unproven live.
-  - **Change the approval-part prompt to require a mail report.**
-    - Pros: exercises the exemption on every asking platform.
-    - Cons: changes a passing scenario's prompt, so earlier passes need rerunning.
-
 ### 6. Cursor and Grok mailbox identity
+
+**Split 2026-11-10.** The scenario code and the Grok unit test stay here; the
+live runs on Cursor and Grok are in 7568 (0024 task 6).
 
 **Problem.** Four identity behaviours are unproven live on Cursor and Grok: each tab of one environment sees itself as `self`; `idle` injection starts a turn; a Cursor resume with a new `agentMcp` keeps the same SDK agent; and a rotated Grok tab token reloads only that session's child.
 
@@ -224,10 +94,11 @@ Multi Review's `ready` and `fix-done` wakes, and a delegated worker held on an
 approval) and judges every echoed mail carrier through the renderer's tile
 parser. Both passed live on 2026-10-25 on Claude, Codex, OpenCode and Cursor,
 and on Pi except its Multi Review, which a Pi model-selection gap breaks
-([0172](0172-multi-review-defaults-ignore-pi-saved-model.md)). What is still
-unproven live is Grok on every scenario (signed out on this host), Claude on
-Linux, Pi's review part, Grok mail approvals and the remaining Cursor/Grok
-identity checks below.
+(to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults))). The live runs
+still owed (Grok on every scenario, Claude on Linux, Pi's review part, the
+`family` and `peer` tiles on the other platforms, Grok mail approvals and the
+Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
+2026-11-10; the identity scenario's code stays here (task 6).
 
 ## Current state
 
@@ -540,7 +411,7 @@ for prerequisites and how to batch them with other provider runs.
   | Claude (macOS) | Passed | Passed | Passed | Passed in `async` (batched), `family`, `status` and `peer` |
   | OpenCode | Passed | Passed | Passed | Passed in `async` (batched) and `status` |
   | Cursor | Passed | Passed | Not applicable (never asks) | Passed in `async` (batched) and `status` |
-  | Pi | Passed | Failed: the review's rows resolved to a refused model ([0172](0172-multi-review-defaults-ignore-pi-saved-model.md)) | Passed | Passed in `async` (batched) and `status` |
+  | Pi | Passed | Failed: the review's rows resolved to a refused model (to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults))) | Passed | Passed in `async` (batched) and `status` |
   | Codex | Passed on rerun (first try missed `queued-before-mail`, flake [0920](../../tests/flaky-tests/coordinator-and-multi-review/0920-live-coordinator-async-queued-overlap.md)) | Passed | Passed | Passed in `async` (batched, both runs) and `status` |
   | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Skipped (same) |
 
@@ -583,7 +454,7 @@ for prerequisites and how to batch them with other provider runs.
     first catalogue model, `openai/gpt-4`, which this host's ChatGPT-backed
     Pi login refuses (OpenAI 400), while Pi tabs start on the host's saved
     `openai/gpt-6.1-sol`. Filed as
-    [0172](0172-multi-review-defaults-ignore-pi-saved-model.md); the suite
+    to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults)); the suite
     was not changed to dodge it. All three `async` runs passed every check,
     tiles included (3 messages, 2 carrier rows, one batched). Grok was
     signed out on this host and skipped correctly.
@@ -603,15 +474,7 @@ for prerequisites and how to batch them with other provider runs.
     `command-approval`; the `waiting` notice came 21 s after the approval
     was seen, and the worker reported after the denial.
 - **Worker-mail family scenario**: covered by the `family` columns above.
-- **Re-runs still owed** (medium): ~~Pi~~ (done 2026-10-23: all four
-  passed, above);
-  Grok, every scenario, once the host Grok is signed in; Claude on Linux,
-  which has never run; ~~Cursor read-only until its `network` label is
-  steady~~ (done 2026-10-25, four of four, see Verify); Pi `status` after
-  0172; and, on Codex, OpenCode,
-  Cursor and Pi, `family` and `peer` with the 2026-10-25 tile checks
-  (confirmation; see "Mail tiles per platform"). One command each:
-  `mise run test:agent:coordinator --credential-source <platform>`.
+- **Re-runs still owed**: in 7568 (0024 tasks 1 to 5).
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
   column above), and on Pi on 2026-10-23. Grok is in the re-runs owed.
@@ -634,10 +497,7 @@ for prerequisites and how to batch them with other provider runs.
     their mail tools did not prompt; OpenCode's worker ended its turn without
     mailing (its finished notice stood in), so OpenCode's mail-tool
     exemption was not exercised by that run.
-  - Still owed: the Grok `status` run once the host Grok is signed in
-    (`mise run test:agent:coordinator --credential-source grok --scenario
-    status`), and a note of which name form Grok 1.0.52 used, read from the
-    worker's transcript.
+  - Still owed: the Grok `status` run, in 7568 (0024 task 5).
 - **Status wakes**, once per qualified platform with default settings: a
   coordinator-launched Multi Review reaching `ready`, then (after
   `address_multi_review`) its fix finishing, then `completed`, wakes the
@@ -670,11 +530,8 @@ for prerequisites and how to batch them with other provider runs.
   - Live (2026-10-25, "2026-10-25 runs" above): passed on Claude, Codex and
     OpenCode (both parts) and Cursor (review part; the approval part does
     not apply). Pi passed the approval part; its review part failed on
-    [0172](0172-multi-review-defaults-ignore-pi-saved-model.md).
-  - Still owed: Pi's review part once 0172 is fixed, or on a host whose
-    first Pi catalogue model the login accepts (`mise run
-    test:agent:coordinator --credential-source pi --scenario status`); Grok,
-    both parts, once the host Grok is signed in.
+    to-do 0172 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#launch-defaults)).
+  - Still owed: Pi's review part and Grok, in 7568 (0024 tasks 3 and 1).
 - **Mail tiles per platform**: each platform echoes the injected carrier as its
   user row, single and batched, and the coordinator transcript shows one
   collapsed tile per message with no raw carrier text.
@@ -699,11 +556,9 @@ for prerequisites and how to batch them with other provider runs.
     `family`, `status`, both `peer` sides), and on Codex, OpenCode, Cursor
     and Pi in `async` (batched) and `status` (single). No platform echoed a
     carrier the renderer would show raw.
-  - Still owed: Grok on every scenario once signed in. `family` and `peer`
-    tiles have run on Claude only; they use the same echo path as `async`
-    and `status` on each bridge, so a full rerun of the other platforms is
-    confirmation rather than new coverage, and is batched with their next
-    full runs.
+  - Still owed: Grok on every scenario and the `family`/`peer` tile
+    confirmation on Codex, OpenCode, Cursor and Pi, in 7568 (0024 tasks 1
+    and 4).
 - **Cursor and Grok mailbox identity:**
   - two tabs in one environment each see themselves as `self` in
     `list_mailboxes`;
@@ -1062,6 +917,7 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
   "Tests that exist today"), [`agent-messaging.md`](../../architecture/agent-messaging.md)
   ("Routes", "Budgets", "Mail tools and approval settings", "Provider notes"),
   [`agent-testing.md`](../../development/agent-testing.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1 to 5, the Cursor and Grok runs of task 6) moved there on 2026-11-10.
 
 ## Replaces
 

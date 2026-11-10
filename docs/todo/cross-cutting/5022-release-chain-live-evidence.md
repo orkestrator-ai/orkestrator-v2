@@ -9,7 +9,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 ### Tasks
 
 1. **Prove the pinned installer on the live site**: the site serves a pin and the pin moves after a Stable release. Status: open (needs the deploy and the next Stable release; nothing here can show either).
-2. **Prove a published release installs from its lockfile**: a real update on a standalone host, on Linux and macOS. Status: open (needs two published releases that carry `resources/release-runtime/`).
+2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033). Status: blocked (needs two published releases that carry `resources/release-runtime/`). The macOS half, which needs a spare Mac account, moved to the manual-test checklist (7568: 5022 task 2).
 3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: done (2026-11-05): the script downloads Bun's release archive and checks it against stated SHA-256s.
 4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (task 1).
 
@@ -49,7 +49,7 @@ Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/stand
 **Decisions.**
 
 - **How to qualify it?**
-  - **Add it to the standalone service run in [0033](0033-remote-host-upgrades.md): update between two real releases on Linux and macOS, and check the release's `bun.lock` matches and `sharp` loads (recommended).**
+  - **Add it to the standalone service run in [0033](0033-remote-host-upgrades.md): update between two real releases on Linux (here) and macOS (7568: 5022 task 2), and check the release's `bun.lock` matches and `sharp` loads (recommended).**
     - Pros: one run covers rollback and the lockfile together; it runs on real hosts.
     - Cons: needs two releases that carry the change.
   - **Rely on `mise run smoke:cli`, which installs the lockfile before each publish.**
@@ -156,3 +156,4 @@ Releases older than the lockfile still install with a plain `bun install`. The p
 - [Releasing the desktop app](../../development/releasing.md)
 - [Host updates](../../architecture/host-updates.md)
 - Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the macOS half of task 2) moved there on 2026-11-10.

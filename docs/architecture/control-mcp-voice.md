@@ -178,8 +178,13 @@ scripted-provider measurement found 1,352 bytes for three pending approvals and
 IDs. `public-api-attention.test.ts` pins 32/80 KiB budgets for default/maximum
 pages of that fixture, compared with a transcript page's 1 MiB cap. These are
 fixture budgets: JSON-escaped names and longer provider IDs can exceed them.
-A real follower's typical size has not been measured; see
-[5560](../todo/cli-and-slash-commands/5560-attention-follow-page-size.md).
+A real follower's typical size has not been measured (the sampling run is on
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)).
+Add a conditional read only if a real follower's typical non-empty page is
+above about 10 KiB (a full default page of ASCII titles): an optional
+`knownToken` on `attention.list`, advertised as a feature as
+`session transcript` does, which the CLI checks in the capabilities first and
+sends through the same `--node` routing as the read.
 
 ## Hosted voice platforms: a local relay
 

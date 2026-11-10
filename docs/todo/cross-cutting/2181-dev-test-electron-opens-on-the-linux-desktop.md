@@ -8,7 +8,7 @@ macOS half, tasks 2 and 3, on the Mac `arktech-mini`).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron and Windows qualification remain open).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; macOS qualified 2026-11-06; real-display Electron qualification remains open; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: open (implementation done 2026-11-06 on Linux with unit tests; the live check on a Mac remains).
@@ -433,8 +433,6 @@ not a terminal snapshot, so it is outside this audit. The backend scripts under
   canvas spec's headless opt-in ran here. That spec is intermittent on this host
   (flake [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers two of them under Xvfb.
-- Windows. The no-op there is covered by unit tests with an injected platform and
-  has not run on Windows. macOS ran on 2026-11-06 (see Current state).
 - Task 4 on a Mac. Implemented and unit-tested on Linux only. Start a profile
   from an agent shell with no flag, then with `--no-headless`, and check that
   the first shows no window, Dock icon or DevTools and keeps focus where it was,
@@ -444,6 +442,7 @@ not a terminal snapshot, so it is outside this audit. The backend scripts under
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows check of task 1) moved there on 2026-11-10.
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - [7340](7340-shared-terminal-visible-text-helper.md), found in task 3's audit.
 - 4741 and 4221 (both deleted 2026-11-06) and 4222 (done; deleted 2026-11-06), found while qualifying this. To-do 4223, also found here, is done.

@@ -9,8 +9,7 @@ Analysed 2026-11-06 against main at `c1724ab74`. Found while closing
 ### Tasks
 
 1. **Rootless restart with `live-restore` on**: what happens to running gateway runtimes when a rootless daemon restarts with `live-restore` enabled. Status: open.
-2. **Rootless restart on the other RootlessKit network drivers**: VPNKit, pasta and gvisor-tap-vsock. Status: open.
-3. **Rootless restart on arm64**: the same case on an aarch64 host. Status: open.
+2. **Rootless restart on the other RootlessKit network drivers**: gvisor-tap-vsock now (built into the launcher's RootlessKit), then pasta and VPNKit once a host has their binaries. Status: open (pasta and VPNKit wait on 7568: 7390 task 2).
 
 ### 1. Rootless restart with `live-restore` on
 
@@ -54,7 +53,7 @@ address (`10.0.2.2`) did not answer on VPNKit on 2026-11-04.
 **Context.** The launcher takes `--net vpnkit`, `--net pasta` and
 `--net gvisor-tap-vsock`. Its pinned tools include RootlessKit (which has
 gvisor-tap-vsock built in) and slirp4netns; neither `vpnkit` nor `pasta`
-binaries are pinned, so those runs need them on `PATH`.
+binaries are pinned, so those runs need them on `PATH`. Installing them on a host is a host change for the user and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (7390 task 2); the gvisor-tap-vsock run needs nothing installed.
 
 **Investigation.** Not run. The default `dockerd-rootless.sh` picks
 slirp4netns, then pasta, then VPNKit, then gvisor-tap-vsock, so a user
@@ -71,32 +70,12 @@ qualified.
     - Pros: comparable with that day's firewall results.
     - Cons: VPNKit's host-service path is already known to be blocked, and Docker's rootless extras no longer ship it.
 
-### 3. Rootless restart on arm64
-
-**Problem.** The rootless results are all x86_64. The gateway's firewall
-depends on kernel modules (`ip_set`, `xt_set`, `nf_tables`) that an arm64
-kernel may build differently.
-
-**Context.** The launcher pins aarch64 digests for the rootless extras and
-slirp4netns, but has run only on x86_64.
-
-**Investigation.** Not run; no arm64 rootless host was available.
-
-**Decisions.**
-
-- **Where to run it?**
-  - **A self-managed arm64 Linux host with the launcher, when one is available (recommended).**
-    - Pros: the same command and suite as x86_64.
-    - Cons: needs such a host.
-  - **A rootless job on `ubuntu-24.04-arm` CI.**
-    - Pros: repeatable.
-    - Cons: 0018 task 2 decided against a rootless CI job for now; restarting the daemon there would also stop the runner's other containers.
-
 ## Related
 
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: the rootless restart result these settings extend.
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md): the launcher.
 - [Container qualification](../../development/container-qualification.md#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06): the 2026-11-06 run.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the arm64 host run; the user part of task 2: installing `passt` and `vpnkit` on a host) moved there on 2026-11-10.
 
 ## Replaces
 

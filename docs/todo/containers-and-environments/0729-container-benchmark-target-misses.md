@@ -25,7 +25,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 2. **Explain the start-time rise with 0109**: find what added 300 to 600 ms to warm start and fresh boot. Status: done 2026-10-28 on Docker Desktop: readiness-poll quantisation, not the relay copy. Confirmation on the reference host is task 5.
 3. **Fix or record each miss**: apply the merge-gate rule to the three misses, re-baselining only with a stated reason. Status: done 2026-10-28. Calls were cut by 1 + k per fresh start and the target re-baselined to ≤ 27 with the gateway's share stated. The start-time misses are recorded with their reason, and their fix is [0870](0870-container-start-poll-quantisation.md). The first CI run of this change still has to confirm the calls figure.
 4. **Record the CI numbers, arm64 included**: copy them into `container-qualification.md` before the artefacts expire. Status: done 2026-10-28 (runs 40409285999 and 40746551838, both architectures).
-5. **Reference-host run at HEAD**: run the harness on the host the targets were set on. Status: open (depends on freeing omarchy-hp's address pools). Attempted 2026-10-30 on omarchy-hp at `cd7bbe3e`: the first fresh start failed with `resource-exhausted`, because 29 leaked probe networks ([0241](0241-leaked-reach-probe-networks.md)) hold every default range.
+5. **Reference-host run at HEAD**: run the harness on the host the targets were set on. Status: blocked (waits on 7568: 0241 task 1, the probe-network sweep that frees omarchy-hp's address pools). Attempted 2026-10-30 on omarchy-hp at `cd7bbe3e`: the first fresh start failed with `resource-exhausted`, because 29 leaked probe networks (to-do 0241, retired 2026-11-10; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)) hold every default range.
 
 ### 1. Attribute the extra Docker calls
 
@@ -269,8 +269,8 @@ None here. The poll-quantisation fix is
   see how many readiness polls CI's boot takes.
 - Task 5: the harness on omarchy-hp at HEAD and with an image at
   `1aabf049`'s parent, results in `container-qualification.md`. It first
-  needs the 29 leaked probe networks removed
-  ([0241](0241-leaked-reach-probe-networks.md) task 1); with 0870 merged,
+  needs the 29 leaked probe networks removed ([manual-test checklist](../manual-test/7568-manual-test-checklist.md),
+  item for 0241 task 1); with 0870 merged,
   run it once at the commit before 0870 and once after.
 
 ## Assumptions and decisions

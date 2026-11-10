@@ -6,7 +6,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`. Found while building 5100.
 
 ### Tasks
 
-1. **Stop the scans decoding whole queues**: decide from a real store's numbers whether the scans need to change, and change them if so. Status: open.
+1. **Stop the scans decoding whole queues**: decide from a real store's numbers whether the scans need to change, and change them if so. Status: blocked (waits on 7568: 5101 task 1).
 
 ### 1. Stop the scans decoding whole queues
 
@@ -14,7 +14,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`. Found while building 5100.
 
 **Context.** The callers are the native queue discovery (`discoverNativeQueues`, through `listQueues` in `native-agent-prompt-queue-dispatcher.ts`, by default every 30 s while idle), that dispatcher's `drainPromptQueues`, the tmux `PromptQueueDrainer.runSweep` (`prompt-queue-drainer.ts`), the job tab reuse's receipt search (`native-agent-job-tab-reuse.ts`) and the `list_prompt_queues` command (`commands-registry-prompts.ts`), which does need whole queues for the renderer. Environment deletion also uses `readStoredPromptQueues` to find owned rows, including damaged records; it remains a full-store scan.
 
-**Investigation.** The record layout has no `owner` extractor (`storage-stores.ts`), so an environment's queues cannot be read through `loadStoreRowsByOwner` today, and existing rows carry a null owner. The scans filter on the key's agent, `messages.length`, `inFlight`, `dispatchError`, `outstandingClaim` and, in places, a receipt. Claim recovery changes those fields, so a summary must apply it too. In 5100's fixtures one full load was about 3.7 MiB for 2000 small queues and 30 MiB with one large queue. How often real stores hold a large queue is not known; [5101](5101-store-size-and-write-rate-live.md) collects live store sizes.
+**Investigation.** The record layout has no `owner` extractor (`storage-stores.ts`), so an environment's queues cannot be read through `loadStoreRowsByOwner` today, and existing rows carry a null owner. The scans filter on the key's agent, `messages.length`, `inFlight`, `dispatchError`, `outstandingClaim` and, in places, a receipt. Claim recovery changes those fields, so a summary must apply it too. In 5100's fixtures one full load was about 3.7 MiB for 2000 small queues and 30 MiB with one large queue. How often real stores hold a large queue is not known; the live store sizes of to-do 5101 (retired 2026-11-10) are in the manual-test checklist (7568: 5101 task 1).
 
 **Decisions.**
 
@@ -33,7 +33,7 @@ A scan must apply the same claim recovery and validation as `loadPromptQueues`, 
 ## Related
 
 - `5100-prompt-queue-row-writes.md` (deleted 2026-11-06)
-- [5101](5101-store-size-and-write-rate-live.md)
+- to-do 5101 (retired 2026-11-10): live store sizes, now in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 
 ## Assumptions and decisions
 

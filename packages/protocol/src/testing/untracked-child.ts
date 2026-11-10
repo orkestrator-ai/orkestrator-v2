@@ -5,7 +5,7 @@ import { dlopen, FFIType, ptr } from "bun:ffi";
  * Children of the test process that Bun knows nothing about, started with
  * libSystem's `posix_spawnp`. Bun never reaps them, so one that exits stays a
  * zombie until something calls `waitpid`: the state a child is left in when Bun
- * loses its exit (docs/todo/cross-cutting/4260-bun-loses-child-process-events.md).
+ * loses its exit (docs/architecture/backend-runtime.md, "One-shot commands").
  * macOS only.
  */
 

@@ -81,7 +81,7 @@ this case's 30-second scan timeouts. The review repair extracts the scan to
 build and Git metadata directories, avoids symlinks, and reads synchronously
 instead of awaiting every directory and file. Fixture coverage checks exclusions,
 nested repository tests and malformed-source rejection. CI's lint guard follows
-the new file. See [todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md).
+the new file. See to-do 7142 (retired 2026-11-10); the scan's place in the guards stage is in [linting.md](../../../development/linting.md).
 
 Status remains open: targeted validation is not repeated loaded-host aggregate
 qualification, and this case includes other historical timeout owners.

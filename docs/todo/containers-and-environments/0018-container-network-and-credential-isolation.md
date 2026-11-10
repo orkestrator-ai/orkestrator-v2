@@ -20,10 +20,8 @@ against `main` at `931e5541` (2026-10-31); task 1 against `main` at
 2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: done 2026-11-06 (tamper, gateway restart and default-loopback checks passed 2026-11-04; the rootless daemon restart passed 2026-11-06 on a disposable daemon from [4730](4730-disposable-docker-daemon-for-live-suites.md); `live-restore` on and other RootlessKit drivers are [7390](7390-rootless-restart-remaining-settings.md)).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
-5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: partly done (the credential-free fake-login probe passed on Claude Code 2.1.314 on 2026-11-06, see the result under task 5; the live run stays open because it needs a spare Claude account).
-6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
-7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
-8. **OpenCode and Pi past expiry and sign-out**: live OAuth checks for OpenCode and Pi, including item 7's sign-out removal. Status: blocked (on a fresh host OpenCode or Pi OAuth login).
+5. **Claude host refresh trigger re-check**: re-check the `refreshHostClaudeLogin` trigger against the current Claude Code pin with a fake login. Status: done 2026-11-06 (the credential-free fake-login probe passed on Claude Code 2.1.314, see the result under task 5). The live run with a spare Claude account moved to the manual-test checklist (7568).
+8. **OpenCode and Pi rotation analysis against the current pins**: diff the OAuth plugin and `pi-ai` provider lists between the analysed versions (OpenCode 1.19.0, Pi 1.2.0) and the pinned ones, and update the rotation analysis. Status: open. The live OAuth checks moved to the manual-test checklist (7568).
 9. **Stale statements in this file**: a renamed function, a rootless claim that is now out of date, and the CI run that is not recorded. Status: done 2026-10-31.
 
 ### 1. Gateway on rootful Linux Engine
@@ -63,7 +61,7 @@ self-managed Linux host" option, run together with
 Linux, kernel 7.1.8, x86_64) with an image built from `main` at
 `e6c3da899` (`egress-gateway=1`, `egress-filter=1`, `network-policy=3`). The
 host daemon (Engine 29.9.2) has no free address pool (the leaked probe
-networks of [0241](0241-leaked-reach-probe-networks.md)), so the suites ran on
+networks of to-do 0241, retired 2026-11-10; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)), so the suites ran on
 a disposable rootful `docker:29-dind` (Engine 29.9.3) on the same kernel:
 - egress name checks: 5/5;
 - egress conditions (IPv6, DNS rotation, two daemon restarts): 3/3;
@@ -294,7 +292,7 @@ cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
   before boot because its default address pools were exhausted; no shared
   networks were deleted to obtain this pass.
 
-### 5. Claude host refresh and mid-session pickup
+### 5. Claude host refresh trigger re-check
 
 **Problem.** The keeper refreshes the host Claude login through `refreshHostClaudeLogin`, on by default. Nobody has run it against a real login, so a wrong trigger would sign out every container's Claude after about eight hours, or bill a model request.
 
@@ -365,19 +363,13 @@ What this shows on 2.1.314:
 
 Not shown by a fake login: that a real, unexpired token is refreshed and
 saved (a new `expiresAt`), that the renewal reaches a running container, and
-that the user's own `claude` stays signed in. That is the live half, still
-open: it needs a spare Claude account, because the only alternative spends
-the user's own refresh token.
+that the user's own `claude` stays signed in. That live half needs a spare
+Claude account (an agent-test profile refuses this path,
+`claude-host-login-refresh.ts:40`), so it moved to the manual-test checklist
+(7568) on 2026-11-10.
 
 **Decisions.**
 
-- **Where to run it?**
-  - **A disposable Claude account on a real (non-agent-test) instance, with a container bridge running, timed into the last five minutes (recommended).**
-    - Pros: spends no one's real refresh token, and an agent-test profile refuses this path (`claude-host-login-refresh.ts:40`).
-    - Cons: needs a spare Claude subscription.
-  - **The user's own host login.**
-    - Pros: no extra account.
-    - Cons: a failure signs the user out of every Claude client on the host.
 - **Re-check the trigger against the current pin (2.1.314) first?** Done 2026-11-06 (the result above).
   - **Yes, repeat the fake-login container probe on the current pin before the live run (recommended).**
     - Pros: cheap, no credentials, and the upgrade guide already demands it.
@@ -386,80 +378,23 @@ the user's own refresh token.
     - Pros: one run.
     - Cons: a failed live run would not say whether the trigger or the CLI changed.
 
-### 6. Container-made Claude MCP login survival
+### 8. OpenCode and Pi rotation analysis against the current pins
 
-**Problem.** Item 3 keeps an MCP OAuth login made inside a container through keeper pushes. That has been tested only against real files with synthetic tokens, never with a real `claude /mcp` sign-in.
+**Problem.** The rotation analysis behind the access-only OpenCode and Pi copies was made against OpenCode 1.19.0 and Pi 1.2.0 sources, and the pins have moved since, so the file's "checked against" claims are stale. The live OAuth checks (a turn with the access-only copy, sign-out past `expires`, sign-back-in after a host refresh, item 7's sign-out removal) need a fresh host OpenCode or Pi OAuth login and moved to the manual-test checklist (7568) on 2026-11-10.
 
-**Context.** The "Container-made MCP login and renewal pickup, live (medium)" entry. Digests are held in memory only, so a backend restart forgets which refresh tokens came from the host.
-
-**Investigation.** `buildMergeContainerClaudeCredentialCommand` (`apps/backend/src/core/agent-accounts-containers.ts:780`) and its tests in `apps/backend/tests/agent-accounts-containers.test.ts` are present. Nothing live has run.
-
-**Decisions.**
-
-- **Include a backend restart in the run?**
-  - **Yes: sign in, wait for a keeper push, restart the container, restart the backend, push again, then check with `jq 'keys'` (recommended).**
-    - Pros: covers the in-memory digest limitation the decision record admits.
-    - Cons: a longer run on a real MCP server account.
-  - **Only a keeper push and a container restart, as written.**
-    - Pros: the stated procedure.
-    - Cons: misses the case most likely to fail.
-- **Which MCP server?**
-  - **Any OAuth MCP server with a free tier and a disposable account (recommended).**
-    - Pros: no production credentials at risk.
-    - Cons: the token lifetime may be too long to observe a renewal.
-  - **A server the user already uses.**
-    - Pros: realistic.
-    - Cons: risks the user's own login.
-
-### 7. Grok renewal pickup and past-expiry sign-out
-
-**Problem.** Two Grok properties are unproved live. First, whether a pushed host renewal reaches a running session (item 5). Second, that a container signs out on its own past expiry and a bridge restart after a host `grok` run signs it back in. The Codex half passed on 2026-10-21.
-
-**Context.** The "Grok past expiry with a live login (medium)" entry and the Grok half of the MCP/renewal entry. Both have waited since 2026-10-21 because the host Grok login has been expired. [0061](0061-container-qualification-follow-ups.md) also owes the opt-in `e2e/agent-testing/grok-container-login.spec.ts` run.
-
-**Investigation.** The push this file calls `syncContainerGrokLogin` no longer exists by that name. Grok goes through the shared `syncContainerLogin` (`agent-accounts-containers.ts:636`), with its own entry in the provider table (`:516`) and the sign-out drop at `:669`-`:682`. `ContainerLoginFileWatcher` polls every 60 s (`apps/backend/src/core/container-login-file-watcher.ts:43`). The Grok pin is now 1.0.70 (`GROK_BUILD_VERSION`, `docker/Dockerfile:196`, as of 2026-10-31); the 2026-10-21 container ran 1.0.52.
-
-**Decisions.**
-
-- **Fold this into 0061's `grok-container-login.spec.ts` run?**
-  - **Yes, one session with a fresh host Grok login covers both files, recorded in each (recommended).**
-    - Pros: the precondition is the same and rare, and one login refresh serves both.
-    - Cons: the spec may not cover mid-session pickup, which needs a manual step.
-  - **Run them separately.**
-    - Pros: each file's evidence stands alone.
-    - Cons: needs two fresh logins, or two windows inside one.
-- **What counts as a pass for mid-session pickup?**
-  - **A turn after the push succeeds without a bridge restart. If it fails, record "requires bridge restart" as the documented behaviour (recommended).**
-    - Pros: either result closes the unknown, and the backend already restarts bridges on the next start.
-    - Cons: a negative result may call for new work in a new todo.
-  - **Require pickup without a restart.**
-    - Pros: a stronger guarantee.
-    - Cons: Grok's binary behaviour is outside Orkestrator's control.
-
-### 8. OpenCode and Pi past expiry and sign-out
-
-**Problem.** The access-only OpenCode and Pi copies, the merge push and item 7's sign-out removal have not been run with a real OAuth login. The host has had API keys or an expired Pi login only.
-
-**Context.** The "OpenCode and Pi past expiry with live OAuth logins (medium)" entry. The rotation analysis was made against OpenCode 1.19.0 and Pi 1.2.0 sources.
+**Context.** The rotation analysis under Current state ("Rotating OpenCode and Pi OAuth refresh tokens").
 
 **Investigation.** The pins have moved to `OPENCODE_CLI_VERSION=1.19.5` and `PI_CLI_VERSION=1.4.0` (as of 2026-10-31) (`docker/Dockerfile:195`, `:197`). The restriction fails safe: only providers named in `NON_ROTATING_OAUTH_PROVIDERS` (`packages/protocol/src/login-snapshots.ts:226`) keep their refresh token. Any other OAuth provider, including one added upstream since, is staged access-only (`login-snapshots.ts:311`-`:324`). A new provider can therefore cost a sign-out, but cannot leak a rotating token. The merge command is `buildMergeContainerProviderAuthCommand` (`agent-accounts-containers.ts:567`).
 
 **Decisions.**
 
-- **Re-check the rotation analysis against the new pins first?**
-  - **Yes, diff the OAuth plugin and `pi-ai` provider lists between the analysed and pinned versions before the live run (recommended).**
+- **Re-check the rotation analysis against the new pins?**
+  - **Yes, diff the OAuth plugin and `pi-ai` provider lists between the analysed and pinned versions (recommended).**
     - Pros: a static check, and it catches a provider that now reuses its refresh token and could be kept whole.
     - Cons: the fail-safe default means it changes only usability, not safety.
   - **Skip it.**
     - Pros: less work.
     - Cons: the file's "checked against" claims go stale.
-- **Use an edited `expires` or wait for real expiry?**
-  - **Edit `expires` in the container's copy for the sign-out check, and wait for a real host refresh for the hash check (recommended).**
-    - Pros: minutes instead of hours, and the host-hash property still needs a real host refresh.
-    - Cons: an edited `expires` does not prove the provider rejects the real expired token.
-  - **Wait for real expiry.**
-    - Pros: fully real.
-    - Cons: six to ten hours per provider.
 
 ### 9. Stale statements in this file
 
@@ -510,9 +445,10 @@ firewall. Since 2026-10-25 a restricted runtime from a current image is
 enforced from outside: an egress gateway owns its network namespace and the
 runtime holds no `NET_ADMIN`. Containers receive access-only copies of the
 host's rotating OAuth logins, and renewals now reach running containers. What
-remains is live qualification: the gateway on rootless (Linux Engine CI
-passes and the IPv6, daemon-restart and DNS-rotation conditions are recorded),
-and renewal delivery with real, fresh provider logins.
+remains here is recording arm64 Linux Engine qualification of the gateway
+(task 1) and re-checking the OpenCode and Pi rotation analysis against the
+current pins (task 8). Renewal delivery with real, fresh provider logins
+moved to the manual-test checklist (7568).
 
 ## Current state
 
@@ -754,7 +690,8 @@ and renewal delivery with real, fresh provider logins.
    the host's access-only entry. The restart path already left an existing
    file alone. Evidence: `agent-accounts-containers.test.ts` (payload has no
    tokens; the merge script against real files; digest memory across a
-   rotation). A live MCP sign-in inside a container is owed (Qualification).
+   rotation). A live MCP sign-in inside a container is in the manual-test
+   checklist (7568).
 4. [x] Read the host Claude login once per keeper pass (2026-10-25). The pass
    hands its read (`handover`) to every container sync pinned to the same
    account and login generation. A pass that refreshed reads once more,
@@ -769,8 +706,8 @@ and renewal delivery with real, fresh provider logins.
    `fs.watch`: the CLIs replace the file by rename. Whether Grok re-reads
    `auth.json` mid-session is unknown from code and docs; the push keeps the
    file current for the bridge's readiness check and the next Grok process.
-   Evidence: `container-login-file-watcher.test.ts`. Live pickup is owed
-   (Qualification).
+   Evidence: `container-login-file-watcher.test.ts`. Live pickup is in the
+   manual-test checklist (7568).
 6. [x] Lapsed Codex and Grok guidance (2026-10-25). For a containerized
    environment whose credentials for that provider come from the host,
    `containerSignInGuidance` replaces the sign-in message on the provider's
@@ -874,27 +811,13 @@ and renewal delivery with real, fresh provider logins.
     by construction; nothing was measured under load.
   - Not covered: Linux Engine, rootless, IPv6 (the Desktop network had none),
     sibling isolation, DNS rotation, Docker daemon restarts.
-- Container-made MCP login and renewal pickup, live (medium; items 3 and 5).
-  In a container terminal, sign in to an MCP server with `claude /mcp`. Then
-  confirm with `jq 'keys'` on `~/.claude/.credentials.json` (never printing
-  tokens) that the login survives a keeper push and a container restart. For
-  Grok, check whether a running session picks up a host renewal without a
-  bridge restart. This needs a fresh host Grok login; the host's expired on
-  2026-10-23. OpenCode and Pi pickup of a pushed renewal, and the sign-out
-  removal of item 7, fold into the OpenCode and Pi item below.
-- Claude host refresh and mid-session pickup, live (high; on by default).
-  Nothing has yet run `refreshHostClaudeLogin` against a real login, because
-  doing so spends the host's refresh token. On a host or disposable account
-  whose access token is inside its last five minutes (the keeper's
-  `TOKEN_REPLACEMENT_LEAD_MS`), with a Claude bridge
-  running in a container: confirm the keeper's `-p` run renews the host login
-  (new `expiresAt`, no model request billed, the user's `claude` still signed
-  in afterwards), that the renewal reaches the container, and that the
-  running container CLI uses it without a restart. Also confirm a run with
-  more than five minutes left changes nothing. Re-check the trigger after
-  each Claude Code upgrade. The trigger was last re-checked with a fake
-  login on Claude Code 2.1.314 on 2026-11-06 (task 5's result); the live run
-  is still open and needs a spare Claude account.
+- Container-made MCP login and renewal pickup, live (items 3 and 5): moved
+  to the manual-test checklist (7568) on 2026-11-10.
+- Claude host refresh and mid-session pickup, live: moved to the
+  manual-test checklist (7568) on 2026-11-10; it needs a spare Claude
+  account. Re-check the trigger after each Claude Code upgrade; it was last
+  re-checked with a fake login on Claude Code 2.1.314 on 2026-11-06 (task
+  5's result).
 - Claude access-only run on 2026-10-21. Host Claude Code 2.1.304 (Keychain
   login); container image `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0`
   (Claude Code 2.1.296) on Docker Desktop 29.8.2 (aarch64), with this
@@ -918,16 +841,12 @@ and renewal delivery with real, fresh provider logins.
     the other 25 keys of `~/.claude.json`, and `claude auth status` then named
     the new (fake) email.
   - Skipped: the host refresh and a mid-session token pickup (see above).
-- OpenCode and Pi past expiry with live OAuth logins (medium). The
-  2026-10-21 run below had none: the host's OpenCode holds API keys only, and
-  Pi's only OAuth login (OpenAI) had expired, so staging rightly withheld it.
-  Still so on 2026-10-25: OpenCode holds two API keys, and Pi's OpenAI OAuth
-  login is expired.
-  With a fresh host Pi or OpenCode OAuth login (Anthropic or OpenAI), check in
-  a container that a turn works with the access-only copy, that it signs out
-  alone past `expires` (or with `expires` edited in the container's copy),
-  that a bridge restart after a host `pi`/`opencode` run signs it back in, and
-  that the host file's hash changes only when the host itself refreshes.
+- OpenCode and Pi past expiry with live OAuth logins. The 2026-10-21 run
+  below had none: the host's OpenCode holds API keys only, and Pi's only
+  OAuth login (OpenAI) had expired, so staging rightly withheld it. Still so
+  on 2026-10-25: OpenCode holds two API keys, and Pi's OpenAI OAuth login is
+  expired. The live run moved to the manual-test checklist (7568) on
+  2026-11-10.
 - Run on 2026-10-21 (rotating OpenCode and Pi tokens). Container image
   `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0` (OpenCode 1.19.0, Pi 1.2.0,
   matching the pins) on Docker Desktop 29.8.2 (aarch64), full network mode,
@@ -956,19 +875,15 @@ and renewal delivery with real, fresh provider logins.
     copy of an OpenAI Codex login had its refresh token blanked, a login the
     container made itself (Kimi) and an API key were kept, and no lock or
     temporary file was left.
-- Grok past expiry with a live login (medium). The 2026-10-21 run below could
-  not use a real Grok login: the host's access token had expired about eight
-  hours earlier, so staging rightly withheld it. Repeat on a host whose Grok
-  token is fresh. Run a Grok tab in a container past the access token's
-  expiry (about six hours, or edit `expires_at` in the container's copy).
-  Confirm that the container signs out on its own, that a bridge restart
-  after a host `grok` run signs it back in, and that the host's `auth.json`
-  hash changes only when the host itself refreshes. Tried again on
-  2026-10-21 at 07:38Z and 07:58Z: still skipped, because the host Grok access
-  token expired at 2026-10-20T16:24:55Z and refreshing it would have spent the
+- Grok past expiry with a live login. The 2026-10-21 run below could not
+  use a real Grok login: the host's access token had expired about eight
+  hours earlier, so staging rightly withheld it. Tried again on 2026-10-21
+  at 07:38Z and 07:58Z: still skipped, because the host Grok access token
+  expired at 2026-10-20T16:24:55Z and refreshing it would have spent the
   host's own refresh token. The profile launcher withheld the login and the
   opt-in live spec (`grok-container-login.spec.ts`) skipped explicitly. The
-  Codex half of the same property passed live that day (next item).
+  Codex half of the same property passed live that day (next item). The
+  live Grok run moved to the manual-test checklist (7568) on 2026-11-10.
 - Codex past expiry, run on 2026-10-21 (details in
   [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
   "Results, 2026-10-21"). With the container's own access token past its
@@ -1343,6 +1258,7 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   the rootless restart settings task 2 did not run.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Environment
   networks", "Agent tools reachability" and "Portable inputs".
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the live half of task 5, tasks 6 and 7, the live OAuth part of task 8) moved there on 2026-11-10.
 
 ## Replaces
 

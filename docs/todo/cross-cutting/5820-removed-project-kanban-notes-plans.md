@@ -1,6 +1,6 @@
 # Decide what happens to a removed project's Kanban, notes and plans
 
-From efficiency batch E3 (Retention and deletion), part `0840`, tasks 1 and 2. **Waiting on the maintainer's decision:** task 1 deletes user content that survives today, so the choice is the maintainer's, and task 2 depends on it. Nothing here has been built, and project removal behaves as it did.
+From efficiency batch E3 (Retention and deletion), part `0840`, tasks 1 and 2. **Waiting on the maintainer's decision:** task 1 deletes user content that survives today, so the choice is the maintainer's; that decision is in [7568](../manual-test/7568-manual-test-checklist.md) (moved 2026-11-10), and both tasks here wait on it. Nothing here has been built, and project removal behaves as it did.
 
 The batch file was deleted when E3 was built. It is in Git history at the commit named in [Related](#related).
 
@@ -10,8 +10,8 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 ### Tasks
 
-1. **Project removal**: Kanban tasks and images, project notes and feature plans either go with the project or are knowingly kept. Status: open (waiting on the maintainer's decision).
-2. **Completion comment records**: give them a delete path. Status: open (depends on 1).
+1. **Project removal**: implement the maintainer's choice, so Kanban tasks and images, project notes and feature plans either go with the project or are knowingly kept. Status: blocked (waits on 7568: 5820 task 1 decision).
+2. **Completion comment records**: give them a delete path. Status: blocked (depends on 1).
 
 ### 1. Project removal
 
@@ -23,7 +23,7 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 
 **Decisions.**
 
-- **Delete with the project?** The maintainer decides.
+- **Delete with the project?** The maintainer decides, through [7568](../manual-test/7568-manual-test-checklist.md); implement the option chosen there.
   - **Yes, in `removeProject`, matching its other stores, with the confirmation text saying so (recommended).**
     - Pros: consistent; the data is unreachable anyway once the project goes; removes user content the user asked to remove.
     - Cons: not recoverable beyond hourly snapshots, and a user re-adding the same repository may have expected their board back.
@@ -57,16 +57,13 @@ Analysed 2026-11-05 against `main` at `0e8958f57`.
 - A delete of user content must scrub: `updateStore` writes never touch the archive, so a delete made that way scrubs explicitly ([storage](../../architecture/storage.md#durability-and-deletion)).
 - These stores are small on the sampled machine (the app's stores held 130 rows and about 0.6 MB), so the case is correctness and privacy, not size.
 
-## Open questions
-
-- Task 1's choice is the maintainer's, because it deletes user content that survives today.
-
 ## Needs verification
 
 - Whether a re-added project gets a new id decides whether old rows can ever be seen again. Traced on 2026-11-05: `createProject` mints a `randomUUID()` (`storage-shared-core.ts:409-411`) for every `add_project`, so as the code stands a re-added project does not see them, and the "reattach" option would need a new identity. What the Linear and GitHub sync does on a re-add was not traced.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: the maintainer's decision) moved there on 2026-11-10.
 - Batch file E3, part 0840 (deleted): its outcome is the closing check of E3 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), which names the commit that holds the file's last version.
 - Logging and database report, D4 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
 - [Change tracking](../../architecture/change-tracking.md#deleting-an-environment), which covers the ledger half of D4

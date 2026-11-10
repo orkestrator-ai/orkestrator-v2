@@ -7,7 +7,8 @@ Analysed 2026-11-09 against main at `64a5b4cfb`; tasks 1–5 retain their
 
 Checked against `main` at `7e3ceb7ce` (2026-10-28); tasks 3 to 5 updated
 against `79f3bc97e` (2026-10-29), task 6 against `b0ad3f747` (2026-11-06). This is task 3 of
-[0734](../coordinator-and-multi-review/0734-codex-orkestrator-mcp-handshake-under-load.md)
+to-do 0734 (retired 2026-11-10; the Codex handshake budget is in
+[agent-engines.md](../../architecture/agent-engines.md#workflow-results-through-tool-calls))
 ("Find what makes the backend's `/mcp` handshake slow"), filed separately
 because it reaches beyond the handshake.
 
@@ -24,10 +25,9 @@ for one environment, and from 09:13Z Codex turns failed because the agent MCP
 1. **Keep the backend serving when its stdout reader stalls**: Bun's console blocks the whole backend once the desktop stops reading its output. Status: done (2026-10-28).
 2. **Record event-loop stalls**: nothing in the logs measured the backend's own event loop. Status: done (2026-10-28).
 3. **Cut per-request work on the agent MCP endpoint**: every request rebuilt the tool server and parsed the whole mail store. Status: done (2026-10-29). No request parses the mail store any more; building the tool server per request stays, by decision, until task 6 shows it matters.
-4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check is task 7.
+4. **Find what held the desktop main thread from 02:22:55Z to 09:08:17Z**: Status: done as an investigation (2026-10-29). It was most likely a modal alert opened behind other windows; which dialog is not recorded anywhere. The fixes were made under 0880 (deleted 2026-11-06); its live check moved to 7568 (0741 task 7).
 5. **Stop parsing the whole mail store per mail call**: Status: done (2026-10-29). Reads use a shared read model that re-parses only changed rows; task 8 extends it to writes.
-6. **Qualify under load with the new stall log**: Status: open. Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. The 2026-11-06 FULL-mode run stalled for 10 to 15 s under disk contention. Ledger-only `synchronous = NORMAL` and 30-day retention were agreed and implemented on 2026-11-09 ([5821 task 3](5821-ledger-retention-live-evidence.md#task-3-ledger-durability-and-archive-window)); the earlier measurements and decision options below are historical. Part B, the live heavy run on the production install, is still needed.
-7. **Modal-dialog routing on a production install**: real update, restart, toolchain and startup-failure dialogs open as sheets or on a host window, ask for attention, and do not hold the main thread. Moved from to-do 0880 (deleted 2026-11-06). Status: open (needs a production install).
+6. **Qualify under load with the new stall log**: Part A, the ledger at production scale, ran 2026-11-06. Four statements that read whole tables for about 1 to 24 s with a cold cache are fixed, and on a quiet disk a run at mini's size had no stall over 1 s. The 2026-11-06 FULL-mode run stalled for 10 to 15 s under disk contention. Ledger-only `synchronous = NORMAL` and 30-day retention were agreed and implemented on 2026-11-09 ([5821 task 3](5821-ledger-retention-live-evidence.md#task-3-ledger-durability-and-archive-window)); the earlier measurements and decision options below are historical. Part B, the live heavy run on the production install, moved to the manual-test checklist; what is left here is reading its evidence (steps 5 and 6 below) and choosing whether the design note or a `tools/list` cache is needed. Status: blocked (waits on 7568: 0741 task 6).
 8. **Reuse revision-validated mail rows in writes**: send, acknowledge, seen and deletion no longer parse unchanged store rows. Status: done (2026-11-09); before/after measurements below.
 
 Evidence is labelled **measured** (read from logs, the power log, the unified
@@ -286,7 +286,7 @@ are user-initiated.
   with no log line is the other possibility. Nothing logs dialogs, so the
   logs cannot name it.
 
-**Next step.** 0880 (deleted 2026-11-06; its live check is task 7):
+**Next step.** 0880 (deleted 2026-11-06; its live check is 7568, 0741 task 7):
 log every dialog, never open a modal without a visible parent, disable or
 reroute preview pages' dialogs, add a main-thread stall log to the desktop,
 and reproduce in a disposable profile.
@@ -511,50 +511,12 @@ average 3 to 14 during the runs.
   exactly the five statements above. It also covers the owner walk and the
   provider-turn walk.
 
-**Investigation, part B: the production heavy run (open).** Run it on the
-production install on a normal working day, not from an agent worktree: the
-run *is* the real workload.
+**Investigation, part B: the production heavy run.** The run itself (install,
+heavy load, collecting stall lines, metrics, CPU and host evidence, and the
+optional stack sample) is human-only and moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) (0741
+task 6) on 2026-11-10. When its evidence arrives:
 
-1. Install a build that contains tasks 1, 2, 3 and 5 and part A, and note the
-   backend's start time.
-2. Start the heavy run: ten or more Multi Reviews at once, plus several
-   Coordinator workers, so the load average passes the logical CPU count (18
-   on arktech-mini). Record start and end times in UTC, with `uptime` every
-   minute (`while :; do date -u; uptime; sleep 60; done > load.txt`).
-3. During and after the run, collect:
-   - timestamped backend process CPU samples or a CPU profile, host
-     scheduling evidence, and host sleep and wake records. Load averages
-     alone cannot tell backend CPU work from CPU starvation or suspension;
-   - stall lines:
-     `grep -h "\[Backend\] Event loop stalled" "$HOME/Library/Application Support/orkestrator-v2/logs/orkestrator-ai-$(date -u +%F).log"`;
-   - dropped-console markers: `grep -h "\[Backend\] Dropped" <same file>`;
-   - the metrics snapshot, from the signed-in desktop or through the gateway
-     with the user's own session: `GET /__orkestrator/metrics`, the
-     `eventLoop` (tick count, max lag, late-tick buckets, last 20 stalls) and
-     `consoleOutput` objects. Never paste the gateway token into logs or
-     tickets;
-   - the retention pass's report in the diagnostics bundle's `database.json`,
-     and the ledger's size;
-   - Codex handshake failures: `grep -h "timed out handshaking"` over the same
-     log, and each failing session's Codex log;
-   - mail tool timeouts as workers report them (`send_message`,
-     `check_inbox`).
-4. **Only with the user's approval**, take a stack sample of the live backend
-   during a stall. It reads the process and does not signal it, but it is the
-   user's production backend.
-   1. Find the backend's pid and confirm it before use:
-      `ps -o pid,lstart,command -p <pid>`. The command line must be the
-      bundled backend, and the start time must match the one noted in step 1.
-   2. Start a watcher that samples only when the loop is late. Example, with
-      the gateway's own health route and the user's port:
-      `while :; do s=$(date +%s); curl -s -m 3 -o /dev/null http://127.0.0.1:<port>/health || sample <pid> 5 -file "stall-$(date -u +%H%M%S).txt"; sleep 5; done`.
-   3. In each sample, look for `sqlite3_step` / `sqlite3VdbeExec` under the JS
-      frames (ledger or main-store work), `JSON.parse` / `JSON.stringify`,
-      zlib, or nothing on the main thread (starvation or suspension). Match
-      the time against the stall line that covers it. The sample shows no SQL
-      text, so line it up with the pass report's times.
-   4. Stop the watcher and delete the samples after recording what they show:
-      they contain symbols and paths, not content, but stay on the host.
 5. Line the times up. For each handshake or mail timeout, look for a
    `stalled for N ms, ending T` line whose window covers it.
    - A covering stall establishes delayed event-loop execution, not its
@@ -662,45 +624,6 @@ run *is* the real workload.
     - Pros: no stall at all.
     - Cons: a second writer on the ledger file during startup, for a one-time
       cost.
-
-### 7. Modal-dialog routing on a production install
-
-**Problem.** Task 4 traced the 02:22–09:08 stall to a modal box opened behind
-other windows. Every native message box now gets a parent: on macOS a window,
-or a temporary host window, or it is refused as cancelled. The app also raises
-a notification and a dock bounce when it is not focused, and previews cannot
-open dialogs. Agent-test profiles skip the real update and restart prompts, so
-none of this has been seen on a production install.
-
-**Context.** Moved from to-do 0880 (deleted 2026-11-06). The routing is in
-`apps/desktop/electron/native-dialogs.ts` and `dialog-attention.ts`. Previews set
-`disableDialogs` and always allow unload
-(`browser-preview-manager.ts`), so `confirm()` returns false there. The main
-process logs stalls through `startEventLoopStallMonitor` (`desktop/main-thread.stalled`,
-[`logging.md`](../../architecture/logging.md)).
-
-**Investigation.** Steps:
-
-1. On a production macOS install with the app not focused, trigger a real
-   update-ready prompt and a remote restart. Check that each opens as a sheet,
-   and that the system notification and dock bounce fire.
-2. Trigger the toolchain prompt and a startup failure with no window open.
-   Check that a host window parents the box and closes afterwards
-   (`[Dialog] … (parent: host)`), and that the main thread is not held.
-3. Repeat steps 1 and 2 on Linux and Windows, and record whether a windowless
-   message box holds the thread there.
-4. Search the production logs for `main-thread.stalled`, `desktop.dialog` and
-   `uncaught-exception` lines, and record the source if a stall recurs.
-
-**Decisions.**
-
-- **Run it with task 6?**
-  - **Yes: task 6's production-install run already reads the stall log (recommended).**
-    - Pros: one install, one log read.
-    - Cons: step 1 needs a real update to be pending.
-  - **Alone.**
-    - Pros: no heavy-load run needed.
-    - Cons: two passes over the same logs.
 
 ### 8. Reuse revision-validated mail rows in writes
 
@@ -918,3 +841,7 @@ interleaved benchmark above measures the resulting end-to-end calls.
 - **Why:** both benches need the same 600-mailbox store. The before and after
   figures above come from interleaved runs on one host, with the original
   sources swapped back in for the "before" runs.
+
+## Related
+
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the part B production heavy run of task 6, and task 7) moved there on 2026-11-10.

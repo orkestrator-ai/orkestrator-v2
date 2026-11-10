@@ -9,7 +9,7 @@ tasks 2 and 3 were done on 2026-11-06 (see Assumptions and decisions).
 
 ### Tasks
 
-1. **Linux Engine real-stack signal run**: run `container-claude-terminal-signal.spec.ts` and `container-signal-profile-sample.ts` (with and without `--demote`) on a Linux Engine host where the profile's containers can reach its agent tools port. Status: open (task 2 is done; waits for the user to add the firewall rule in task 1's Context).
+1. **Linux Engine real-stack signal run**: run `container-claude-terminal-signal.spec.ts` and `container-signal-profile-sample.ts` (with and without `--demote`) on a Linux Engine host where the profile's containers can reach its agent tools port. Status: blocked (waits on 7568: 7080 task 1).
 2. **A firewall-friendly agent tools port for agent-test profiles**: let a Linux host with a default-deny input firewall admit every isolated profile with one rule. Status: done (`dev:test --agent-tools-port`, range 31500–31509).
 3. **Show an unreachable doorbell in signal diagnostics**: tell "armed, route blocked" apart from "armed, waiting for a first ring". Status: done (`unconfirmed` signal state).
 
@@ -26,13 +26,7 @@ tasks 2 and 3 were done on 2026-11-06 (see Assumptions and decisions).
 - 2026-11-06, [0049](../transcripts-and-observation/0049-native-agent-idle-observation.md) task 9: the same route also carries the Orkestrator agent MCP a native Claude session in a container requires. On beelink the first turn of a container's native Claude tab ran, and every later turn was refused by the bridge with 409 "Claude required MCP server is not connected; retry the prompt" (a join checks the required server; a first launch does not). So a blocked agent-tools port also stops native Claude in containers after one turn, not only the signal rings.
 - [container-qualification.md](../../development/container-qualification.md) records that ufw on this host once also admitted TCP 35723 from `172.16.0.0/12`. It no longer does: a listener on `0.0.0.0:35723` was not reachable from a container on the default bridge, and `/etc/ufw/user.rules` admits only 45507 and DNS from Docker's ranges.
 
-Since task 2, the host change this run needs is one ufw rule for the documented agent-test range, which only the user may add:
-
-```bash
-sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Orkestrator agent-test agent tools'
-```
-
-It admits TCP from Docker's `172.16.0.0/12` pools (the default bridge, the default address pools and the qualification `/29` shim, whose host alias was `172.16.240.1` here) to 31500–31509. It is undone with `sudo ufw delete allow proto tcp from 172.16.0.0/12 to any port 31500:31509`. With it in place, start the profile with `--agent-tools-port 31500` (any free port in the range), confirm `get_recurring_work_diagnostics` reports both signals `confirmed` rather than `unconfirmed`, and run the spec and the sample.
+Since task 2, the host change this run needs is one ufw rule admitting TCP from Docker's `172.16.0.0/12` pools to the documented agent-test range 31500–31509 (the command and its undo are in [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port)). Adding it on beelink, or naming a Linux Engine host with no blocking input firewall, is the user's step and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) (7080 task 1). With it in place, start the profile with `--agent-tools-port 31500` (any free port in the range), confirm `get_recurring_work_diagnostics` reports both signals `confirmed` rather than `unconfirmed`, and run the spec and the sample.
 
 A real run needs, on a Linux Engine host: this checkout and its dev image (`mise run docker:build:dev`); a profile started with `--fixture --fixture-environments local,container` and either `--no-agent-credentials --agent-platforms claude` (fake API) or `--credential-source claude --agent-platforms claude` (a real login, billed turns); and a host firewall that admits TCP from Docker's ranges to the profile's agent tools port. On a host with exhausted Docker address pools, put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the isolated runner does.
 
@@ -123,7 +117,7 @@ lands on one. The range is advisory: the flag accepts any unreserved port from
 
 ### Task 2: no firewall change
 
-The ufw rule above is written down for the user and was not run. beelink's
+The ufw rule (in agent-testing.md and the manual-test checklist) is written down for the user and was not run. beelink's
 `/etc/ufw/user.rules` still admits only DNS and TCP 45507 from Docker's
 ranges.
 
@@ -159,6 +153,7 @@ unchanged; it still cannot say why a ring was lost.
 ## Related
 
 - [0020-container-state-observation.md](0020-container-state-observation.md) (the signals and the run this file continues).
-- [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md) (why this host's Docker address pools were exhausted).
+- To-do 0241 (retired 2026-11-10): why this host's Docker address pools were exhausted; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself).
 - [7500-agent-tools-port-auto-choice.md](7500-agent-tools-port-auto-choice.md) (choosing a free port in the range automatically, for concurrent profiles).
 - [agent-testing.md](../../development/agent-testing.md#containers-behind-a-host-firewall---agent-tools-port) (the flag, the range and the rule).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: adding the ufw rule on beelink or naming an unfirewalled Linux Engine host) moved there on 2026-11-10.

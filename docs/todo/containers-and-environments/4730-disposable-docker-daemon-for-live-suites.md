@@ -243,7 +243,7 @@ there, and no root-owned leftover was checked, so the task stays open.
   gateway with "could not apply its network policy". Check
   `curl -s https://api.github.com/rate_limit` (which does not count against
   the limit) before reading such a failure as a regression.
-- On 2026-11-04 beelink's shared daemon held 32 networks, 29 of them unattached host-reachability probe networks from 2026-10-31 to 2026-11-02. That is why its pools are full. [3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md) tracks them, and `mise run disk:report -- --fix probe-networks` clears them. A disposable daemon works around that for live suites and does not replace it: new environments on the shared daemon stay blocked until it runs.
+- On 2026-11-04 beelink's shared daemon held 32 networks, 29 of them unattached host-reachability probe networks from 2026-10-31 to 2026-11-02. That is why its pools are full. To-do 3320 (retired 2026-11-10) tracked them, and `mise run disk:report -- --fix probe-networks` clears them. A disposable daemon works around that for live suites and does not replace it: new environments on the shared daemon stay blocked until it runs.
 
 ## Outstanding work
 
@@ -337,7 +337,7 @@ command runs inside suites whose `DOCKER_HOST` selects the inner daemon.
 
 Chosen: `--network bridge` on the outer daemon. A network of its own would
 need an address pool, and the shared daemon's pools are full on beelink
-([3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)).
+(to-do 3320, retired 2026-11-10).
 The inner `bip` is `10.213.0.1/24` so it never overlaps the outer default
 bridge's `172.17.0.0/16`.
 
@@ -412,7 +412,7 @@ task 4's real rootful-host evidence.
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: owns the rootless qualification and task 3's result.
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md): its daemon-wide restart could use the same launcher.
 - Todo 0109 (retired on 2026-11-10): an earlier disposable rootless daemon recipe, recorded in [container qualification](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
-- [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md): the pool exhaustion on the shared daemon.
+- To-do 3320 (retired 2026-11-10): the pool exhaustion on the shared daemon; the sweep that clears it is in [disk usage](../../development/disk-usage.md#what-you-clean-yourself).
 - [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md): the rootless restart settings task 3 did not run.
 - [6820-agent-tools-peer-gate-linux-evidence.md](6820-agent-tools-peer-gate-linux-evidence.md): Linux Engine evidence that may use either mode.
 

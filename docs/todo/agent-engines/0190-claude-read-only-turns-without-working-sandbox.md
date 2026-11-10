@@ -13,7 +13,7 @@ run 2026-11-10 against `main` at `c98b20e6f`.
 
 1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
 2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux run, the Linux-only case included, passed 2026-11-10 (A15).
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17); the run found and fixed two defects. Open: stock Ubuntu with AppArmor and Windows, each needing a host this work did not have (see "Needs verification").
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17); the run found and fixed two defects. Open: a read-only turn under AppArmor's `bwrap-userns-restrict`, on an Ubuntu CI runner (the AppArmor-restricted phase 0145 task 2 runs, or the `ubuntu-24.04` job 0145 task 3 adds), and Agent Info's "No sandbox" during a reviewer turn on the real stack (see "Needs verification"). The Windows check moved to 7568 on 2026-11-10.
 
 ### 1. Choose and implement the behaviour
 
@@ -71,6 +71,15 @@ run 2026-11-10 against `main` at `c98b20e6f`.
 **Problem.** Neither the container case nor the stock Ubuntu case has been run with a real Multi Review.
 
 **Context.** Batched in 0031 (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:202`) with 0145.
+
+**Left (2026-11-10).** No stock Ubuntu desktop is needed for the AppArmor
+half: CI's Ubuntu runners ship the profile, and 0145 task 2 already runs a
+restricted phase there. Run the live suite's read-only cases in that phase
+(expect `nested-user-namespace`, Bash commands that run with no
+`apply-seccomp` failure, and the reported policy `none` with the reason).
+Separately, catch Agent Info's "No sandbox" while a reviewer turn runs, with
+a fake whose reviewer turns last long enough to read it. The Windows check
+needs a Windows host and is in 7568.
 
 **Investigation (2026-11-10).** Run on beelink (Arch Linux, kernel 7.1.8)
 with this branch's dev image (`claude` 2.1.319, no `bwrap` or `socat`) on a
@@ -238,10 +247,9 @@ Updated 2026-11-10 (task 3); the rest 2026-10-28 on branch
   (`container-multi-review-read-only.spec.ts`, A12). The "before" half is
   the `read-only-required-refused` live case, run on Linux the same day
   (A15).
-- [ ] The same on a stock Ubuntu host with AppArmor's
-  `bwrap-userns-restrict`, and a read-only turn on Windows. Batched in
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md);
-  see "Needs verification" for what each needs.
+- [ ] A read-only turn on an Ubuntu host with AppArmor's
+  `bwrap-userns-restrict`, on a CI runner (see task 3). The read-only turn on
+  Windows moved to 7568 on 2026-11-10.
 
 ## Constraints and rationale
 
@@ -397,11 +405,10 @@ Made 2026-10-28 while implementing.
 
 - A stock Ubuntu 24.04 or 26.04 host with AppArmor's `bwrap-userns-restrict`:
   the probe answers `nested-user-namespace`, the read-only turn runs Bash
-  commands (no `apply-seccomp` failure) and shows the note. Needs such a host
-  (beelink is Arch without that profile); `container-multi-review-read-only.spec.ts`'s
-  fake and a local environment could drive it.
-- Windows (A5): that a read-only turn there runs on the hook alone. Needs a
-  Windows host.
+  commands (no `apply-seccomp` failure) and shows the note. Beelink is Arch
+  without that profile; CI's Ubuntu runners have it (task 3), and
+  `container-multi-review-read-only.spec.ts`'s fake and a local environment
+  could drive it.
 - Agent Info saying "No sandbox" while a reviewer turn runs, on the real
   stack: the fake's turns finish in a few seconds, so it was not caught; the
   reported policy is pinned by `claude-query-config.reported-policy.test.ts`.
@@ -418,6 +425,7 @@ Made 2026-10-28 while implementing.
   found by task 3; read-only turns load no settings files.
 - [7080-linux-host-firewall-blocks-profile-signals.md](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
   why the container run used a disposable rootless daemon.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Windows read-only turn from task 3) moved there on 2026-11-10.
 
 ## Replaces
 

@@ -413,9 +413,8 @@ What the ticket's leads came to:
   before the fix three of six concurrent deletes took 72.1 s against 32.0 s;
   after it all six took 15.9 s.
 
-The remaining store cost is
-[6120](../todo/containers-and-environments/6120-environment-delete-follow-ups.md)
-task 6.
+The store cost was to-do 6120 task 6 (done 2026-11-09, retired 2026-11-10);
+its bounded cleanup is described above.
 
 ## Cleanup ledger
 

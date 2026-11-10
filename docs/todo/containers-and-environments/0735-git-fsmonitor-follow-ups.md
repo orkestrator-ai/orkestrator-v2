@@ -28,7 +28,6 @@ against `main` at `c1724ab74` on arktech-mini, which runs v2.36.5-beta: tasks
 3. **Fallback for other git calls**: which further worktree reads, if any, retry without the daemon after a timeout. Status: done (every remaining working-tree `status` read, including the new graph ones, plus checkout confirmation fingerprint reads).
 4. **Qualification: Windows process cleanup**: the fingerprint probe's bounded `taskkill /t /f` branch. Status: open (needs a Windows host or CI iteration; see the 2026-10-30 note under task 4).
 5. **Qualification: arktech-mini after upgrade**: old worktrees lose the setting, their daemons exit, git calls are fast again. Status: done (2026-11-06 on v2.36.5-beta: no `core.fsmonitor=true` in any of 16 environment worktrees, no daemon running, `git status` 19 ms).
-6. **Qualification: per-call latency on other hosts**: internal APFS, Linux and Windows, with and without fsmonitor. Status: open (Linux and internal APFS measured: no cookie penalty, and no win over 100 ms per call; Windows left).
 7. **Qualification: recovery from a real hung daemon**: capture timings if one recurs. Status: done (closed with task 5, as its decision says: no hang recurred).
 
 ### 1. Daemons already orphaned
@@ -158,46 +157,6 @@ Either way, a daemon is an orphan when its `GIT_DIR` (or socket directory) no lo
     - Pros: any Mac will do.
     - Cons: does not cover worktrees that older versions really wrote, or the external volume.
 
-### 6. Qualification: per-call latency on other hosts
-
-**Problem.** The 1.1 s penalty was measured on one host only (arktech-mini, external APFS and `/private/tmp`). Whether fsmonitor ever wins is unknown.
-
-**Context.** If a large repository shows a real win, an opt-in setting could be revisited (see "Constraints and rationale").
-
-**Investigation.** Linux, this host (git 2.56.0, btrfs, this repository's worktree, 6,903 tracked files, `core.untrackedCache=true`), 20 `git status --porcelain` calls each: 10–12 ms per call with `-c core.fsmonitor=false`, 8 ms with a running daemon. There is no cookie penalty on Linux, and no meaningful win at this size.
-
-Internal APFS, 2026-11-06 on arktech-mini (Apple M5 Pro, macOS 27.2, Git
-2.56.0, load average 25–29 from other work): throwaway repositories under
-`$TMPDIR` with `core.untrackedCache=true` and `core.fsmonitor=true`, 20 calls
-per form after three warm-up calls, two rounds, p50:
-
-| Repository | `-c core.fsmonitor=false` | Running daemon |
-| --- | --- | --- |
-| Clone of this repository, 9,394 files | 16–17 ms | 11–12 ms |
-| Linked worktree of that clone, fsmonitor in `config.worktree` | 16–17 ms | 12–13 ms |
-| Synthetic, 100,000 files | 72–74 ms | 20–27 ms |
-
-`GIT_TRACE2_PERF` put the daemon query, cookie included, at 2–9 ms. A third
-round with 103 daemons running at once gave the same figures. So on the
-internal disk there is no cookie penalty, and the win, about 50 ms per call at
-100,000 files, is under the 100 ms threshold. The first attempt alternated the
-two forms call by call and showed the daemon no faster, even at 100,000
-files: a status with
-fsmonitor off rewrites the index without the daemon's token, so the next
-daemon call rescans. The table is from separate blocks. The external USB
-volume and `/private/tmp`, where the 1.1 s was seen, were not retested (only
-`$TMPDIR` and this worktree were in scope). Windows is not measured.
-
-**Decisions.**
-
-- **What counts as done?**
-  - **One measurement each on internal APFS and Windows, same method, recorded in git-scan-caches.md; revisit opt-in only if a host shows a win of over 100 ms per call (recommended).**
-    - Pros: cheap; the threshold makes the revisit decision mechanical.
-    - Cons: one repository size; a very large monorepo might still differ.
-  - **Also measure a very large repository (over 100,000 files).**
-    - Pros: tests the case fsmonitor exists for.
-    - Cons: no such project is in use here; effort for a feature that is off.
-
 ### 7. Qualification: recovery from a real hung daemon
 
 **Problem.** The timeout fallback has only been exercised with injected timeouts and a blocking hook, not a real hung daemon.
@@ -316,10 +275,6 @@ no daemon was left afterwards.
   regressions currently run on POSIX hosts.
 - [x] **arktech-mini after upgrade** (task 5). Done 2026-11-06 on
   v2.36.5-beta: no `core.fsmonitor=true` left, no daemons, `git status` 19 ms.
-- [ ] **Other hosts** (task 6). Measure per-call git latency with and without
-  fsmonitor on Windows. Linux done on 2026-10-28 (8 ms with the daemon,
-  10–12 ms without); internal APFS done on 2026-11-06 (11–13 ms with, 16–17 ms
-  without at 9,394 files; 20–27 ms with, 72–74 ms without at 100,000).
 - [x] **A real hung daemon** (task 7). Closed with task 5: no hang recurred.
   If one does, record the read, the first timeout and the fallback duration in
   git-scan-caches.md.
@@ -338,7 +293,7 @@ no daemon was left afterwards.
   and in `/private/tmp`, with about 700 daemons running. Linux and the same
   host's internal disk (`$TMPDIR`, 103 daemons) show none. Whether the external
   volume or `/private/tmp` still does is not known; retest it there with the
-  task 6 method only if fsmonitor is reconsidered.
+  method in git-scan-caches.md only if fsmonitor is reconsidered.
 
 ## Assumptions and decisions
 
@@ -491,6 +446,7 @@ exact path.
 - `0247-test-temp-dir-leaks-from-full-sweep.md` (deleted 2026-11-06)
   (the orphan in task 1 sits in a leaked `/tmp/ork-cli-setup-failure-*`
   directory)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 6, the Windows latency measurement) moved there on 2026-11-10.
 
 ## Replaces
 

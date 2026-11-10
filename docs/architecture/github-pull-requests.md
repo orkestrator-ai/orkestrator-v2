@@ -227,6 +227,13 @@ clears it whenever `prUrl` changes. Node summaries relay `prState`,
 `prHasMergeConflicts` and `prMergeability`, never the PR URL, so a command node
 can display a leaf's last persisted PR state.
 
+An unknown `--json` field makes the whole `gh` lookup fail, so every `gh` the
+monitor runs must accept `mergeStateStatus` and `isDraft`, including the one
+inside the container image (Debian's apt `gh`, unpinned; 2.46.0 lists both).
+The `mergeStateStatus` mapping (`mergeabilityFromMergeStateStatus`) is pinned
+by fixture tests. Live GitHub has confirmed `DIRTY` and `UNSTABLE` (with a
+non-required failing check); merged PRs return `UNKNOWN`, which is not ready.
+
 ### When GitHub rate-limits the monitor
 
 Every `gh` call the monitor makes draws on the GitHub user's budget (5,000

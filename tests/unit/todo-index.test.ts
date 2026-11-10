@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,13 +17,23 @@ const INDEX = "0000-index.md";
 
 const TODO_FILE = /^\d{4}-.+\.md$/;
 const CRITICALITY = new Set(["Very high", "High", "Medium", "Low"]);
-// The four statuses and the order they are chosen in (docs/README.md,
-// "Choosing a status"). The top-level index counts them in this order.
+// The four status columns of the top-level index, in order (docs/README.md,
+// "Choosing a status"). Area folders use only `backlog` and `blocked`: every
+// task that needs the user lives in the manual-test checklist, whose folder
+// uses only `requires user input`. `done` is never valid: a finished file is
+// retired in the same change.
 const STATUSES = ["backlog", "blocked", "requires user input", "done"] as const;
 type Status = (typeof STATUSES)[number];
 const STATUS_SET = new Set<string>(STATUSES);
+const AREA_STATUSES = new Set<string>(["backlog", "blocked"]);
+const MANUAL_TEST = "manual-test";
+const MANUAL_TEST_STATUSES = new Set<string>(["requires user input"]);
 const NONE = "—";
 const WAITS_ON = "Waits on:";
+// A checklist item names its source to-do and task in bold, e.g.
+// `- [ ] **[0040](../mcp/0040-mcp-environment-delivery.md) task 1: ...**`.
+const CHECKBOX = /^\s*- \[[ xX]\] /;
+const CHECKLIST_ITEM = /^- \[[ xX]\] \*\*(\[\d{4}\]\([^)]+\)|\d{4} \(retired\)) /;
 
 // Numbers already shared by more than one todo file when the uniqueness check
 // was added (todo 0732). They keep their numbers, because a todo number is a
@@ -25,7 +43,6 @@ const ALLOWED_DUPLICATES: Record<string, string[]> = {
   "0054": [
     "cross-cutting/0054-agent-test-pi-default-model.md",
     "design-canvas/0054-design-canvas-accessibility-findings.md",
-    "previews-and-annotations/0054-preview-cross-service-reads.md",
   ],
   "0723": [
     "agent-engines/0723-orkestrator-permission-rules.md",
@@ -173,21 +190,53 @@ function checkTodoNumbers(todo: string) {
 function checkAreaIndex(directory: string) {
   const rows = todoRows(readFileSync(path.join(directory, INDEX), "utf8"));
   const files = todoFiles(directory);
+  const manualTest = path.basename(directory) === MANUAL_TEST;
+  const allowed = manualTest ? MANUAL_TEST_STATUSES : AREA_STATUSES;
 
   expect(rows.map((row) => row.file).sort()).toEqual(files);
   expect(rows.map((row) => row.rank)).toEqual(rows.map((_, i) => String(i + 1)));
   for (const row of rows) {
     expect(CRITICALITY.has(row.criticality), `${row.file} is rated ${row.criticality}`).toBe(true);
-    expect(STATUS_SET.has(row.status), `${row.file} has Status ${row.status}`).toBe(true);
+    expect(
+      allowed.has(row.status),
+      manualTest
+        ? `${row.file}: the manual-test folder holds only "requires user input" rows`
+        : `${row.file} has Status ${row.status}; an area to-do is backlog or blocked, and work ` +
+            "that needs the user belongs in the manual-test checklist",
+    ).toBe(true);
     expect(row.needsYou, `${row.file} has an empty Needs you cell`).not.toBe("");
     if (row.status === "requires user input") {
       expect(row.needsYou, `${row.file} must say what the user must provide`).not.toBe(NONE);
+    }
+    if (row.status === "backlog") {
+      expect(
+        row.needsYou,
+        `${row.file}: a backlog row's Needs you is "${NONE}"; move the user's part to the manual-test checklist`,
+      ).toBe(NONE);
     }
     expect(
       row.needsYou.startsWith(WAITS_ON),
       `${row.file}: every blocked row, and only a blocked row, starts Needs you with "${WAITS_ON}"`,
     ).toBe(row.status === "blocked");
   }
+}
+
+// The manual-test folder exists, and every checkbox in its checklist names its
+// source to-do and task, and every relative link in it resolves.
+function checkManualTest(todo: string) {
+  const directory = path.join(todo, MANUAL_TEST);
+  const files = todoFiles(directory);
+  expect(files.length, "the manual-test folder holds one checklist file").toBe(1);
+  const checklist = readFileSync(path.join(directory, files[0]!), "utf8");
+  const items = checklist.split("\n").filter((line) => CHECKBOX.test(line));
+  expect(items.length, "the checklist has checkbox items").toBeGreaterThan(0);
+  for (const item of items) {
+    expect(item, "a checklist item names its source to-do in bold").toMatch(CHECKLIST_ITEM);
+  }
+  const broken = [...checklist.matchAll(/\]\(((?:\.\.\/)+[^)#\s]+\.md)(?:#[^)]*)?\)/g)]
+    .map((match) => match[1]!)
+    .filter((link) => !existsSync(path.resolve(directory, link)));
+  expect(broken, "checklist links that do not resolve").toEqual([]);
 }
 
 describe("todo folders", () => {
@@ -201,6 +250,10 @@ describe("todo folders", () => {
 
   test("todo numbers are unique across folders, except the allowlisted duplicates", () => {
     checkTodoNumbers(todo);
+  });
+
+  test("the manual-test checklist names a source for every item and its links resolve", () => {
+    checkManualTest(todo);
   });
 
   for (const folder of areaFolders(todo)) {
@@ -230,8 +283,9 @@ function fixture() {
     [
       "| Folder | backlog | blocked | requires user input | done | Total | Covers |",
       "| --- | --- | --- | --- | --- | --- | --- |",
-      "| [Area](area/0000-index.md) | 1 | 1 | 1 | 0 | 3 | Example |",
-      "| **Total** | 1 | 1 | 1 | 0 | 3 | |",
+      "| [Area](area/0000-index.md) | 2 | 1 | 0 | 0 | 3 | Example |",
+      "| [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | Checklist |",
+      "| **Total** | 2 | 1 | 1 | 0 | 4 | |",
     ].join("\n"),
   );
   for (const file of ["0001-first.md", "0002-middle.md", "0003-last.md"]) {
@@ -243,8 +297,22 @@ function fixture() {
     [
       "| 1 | [0001-first.md](0001-first.md) | High | backlog | — | Example | Notes |",
       "| 2 | [0002-middle.md](0002-middle.md) | High | blocked | Waits on: 0001 | Example | Notes |",
-      "| 3 | [0003-last.md](0003-last.md) | Low | requires user input | Decide the scope | Example | Notes |",
+      "| 3 | [0003-last.md](0003-last.md) | Low | backlog | — | Example | Notes |",
     ].join("\n"),
+  );
+  writeFixtureFile(
+    directory,
+    `${MANUAL_TEST}/0004-checklist.md`,
+    [
+      "## Manual tests",
+      "- [ ] **[0001](../area/0001-first.md) task 1: run it.** Record the result.",
+      "- [ ] **0009 (retired) task 2: decide.** Record the decision.",
+    ].join("\n"),
+  );
+  writeFixtureFile(
+    directory,
+    `${MANUAL_TEST}/${INDEX}`,
+    "| 1 | [0004-checklist.md](0004-checklist.md) | High | requires user input | Work through it | Example | Notes |",
   );
   // Every negative case starts with a valid filesystem and exercises the same
   // checks as the live documentation above, without modifying the repository.
@@ -252,6 +320,8 @@ function fixture() {
   checkStatusCounts(directory);
   checkTodoNumbers(directory);
   checkAreaIndex(path.join(directory, "area"));
+  checkAreaIndex(path.join(directory, MANUAL_TEST));
+  checkManualTest(directory);
   return directory;
 }
 
@@ -290,9 +360,14 @@ describe("todo guard negative fixtures", () => {
     ["old Finished column", (index: string) => index.replace("| backlog | — |", "| No |")],
     ["empty Needs you", (index: string) => index.replace("| backlog | — |", "| backlog |  |")],
     [
-      "user row without Needs you",
+      "requires user input in an area folder",
       (index: string) =>
-        index.replace("| requires user input | Decide the scope |", "| requires user input | — |"),
+        index.replace("| Low | backlog | — |", "| Low | requires user input | Decide the scope |"),
+    ],
+    ["done row", (index: string) => index.replace("| Low | backlog | — |", "| Low | done | — |")],
+    [
+      "backlog row naming a user part",
+      (index: string) => index.replace("| Low | backlog | — |", "| Low | backlog | Your login |"),
     ],
     [
       "blocked row without Waits on",
@@ -327,18 +402,18 @@ describe("todo guard negative fixtures", () => {
     [
       "stale folder count",
       (index: string) =>
-        index.replace("| 1 | 1 | 1 | 0 | 3 | Example |", "| 2 | 0 | 1 | 0 | 3 | Example |"),
+        index.replace("| 2 | 1 | 0 | 0 | 3 | Example |", "| 3 | 0 | 0 | 0 | 3 | Example |"),
     ],
     [
       "missing folder counts",
-      (index: string) => index.replace("| 1 | 1 | 1 | 0 | 3 | Example |", "| Example |"),
+      (index: string) => index.replace("| 2 | 1 | 0 | 0 | 3 | Example |", "| Example |"),
     ],
     [
       "stale total",
       (index: string) =>
-        index.replace("| **Total** | 1 | 1 | 1 | 0 | 3 |", "| **Total** | 1 | 1 | 1 | 0 | 4 |"),
+        index.replace("| **Total** | 2 | 1 | 1 | 0 | 4 |", "| **Total** | 2 | 1 | 1 | 0 | 5 |"),
     ],
-    ["missing total row", (index: string) => index.split("\n").slice(0, 3).join("\n")],
+    ["missing total row", (index: string) => index.split("\n").slice(0, 4).join("\n")],
   ] as const)("rejects a top-level index with a %s", (_name, mutate) => {
     const directory = fixture();
     const index = path.join(directory, INDEX);
@@ -355,6 +430,47 @@ describe("todo guard negative fixtures", () => {
     );
     checkAreaIndex(path.dirname(index));
     expect(() => checkStatusCounts(directory)).toThrow();
+  });
+
+  test.each([
+    [
+      "a backlog row",
+      (index: string) =>
+        index.replace("| requires user input | Work through it |", "| backlog | — |"),
+    ],
+    [
+      "a user row without Needs you",
+      (index: string) =>
+        index.replace("| requires user input | Work through it |", "| requires user input | — |"),
+    ],
+  ] as const)("rejects a manual-test index with %s", (_name, mutate) => {
+    const directory = fixture();
+    const index = path.join(directory, MANUAL_TEST, INDEX);
+    writeFileSync(index, mutate(readFileSync(index, "utf8")));
+    expect(() => checkAreaIndex(path.dirname(index))).toThrow();
+  });
+
+  test.each([
+    ["an item without a source", "- [ ] Run the live check and record it."],
+    [
+      "an item with an unresolved link",
+      "- [ ] **[0002](../area/0002-gone.md) task 1: run.** Record.",
+    ],
+  ] as const)("rejects a checklist with %s", (_name, line) => {
+    const directory = fixture();
+    const checklist = path.join(directory, MANUAL_TEST, "0004-checklist.md");
+    writeFileSync(checklist, `${readFileSync(checklist, "utf8")}\n${line}`);
+    expect(() => checkManualTest(directory)).toThrow();
+  });
+
+  test("rejects a second checklist file", () => {
+    const directory = fixture();
+    writeFixtureFile(
+      directory,
+      `${MANUAL_TEST}/0005-another.md`,
+      "- [ ] **0001 (retired) task 1: x.**",
+    );
+    expect(() => checkManualTest(directory)).toThrow();
   });
 
   test("rejects an unlinked area folder", () => {

@@ -58,7 +58,7 @@ stops are grouped by account and window in
 - **How to make the account reach its limit?**
   - **A scripted provider server answering with a usage-limit refusal, as `mise run verify:accounts:resend-live` already does for one machine (recommended).**
     - Pros: no billed turns or exhausted subscription; repeatable; uses the real bridges and pinned CLIs.
-    - Cons: proves the routing and grouping, not a real provider's refusal text; that half is [1250](../agent-engines/1250-automatic-account-switching-live-checks.md) tasks 1 and 2.
+    - Cons: proves the routing and grouping, not a real provider's refusal text; that half is to-do 1250 (retired 2026-11-10; now in the manual-test checklist) tasks 1 and 2.
   - **A real account at its weekly limit.**
     - Pros: end to end, including the provider's own refusal.
     - Cons: needs an exhausted subscription at the moment of the run, as 1250 does.
@@ -89,7 +89,7 @@ that nothing is pinned afterwards.
   - **The same two profiles as task 1, straight after it (recommended).**
     - Pros: the setup is already in place; one run covers both.
     - Cons: needs a second login with headroom on the command node.
-  - **Join [0722](../agent-engines/0722-per-machine-agent-accounts.md)'s two-machine batch.**
+  - **Join to-do 0722's two-machine batch (0722 retired 2026-11-10; its runs are in the manual-test checklist, 7568).**
     - Pros: shares the cost with the other cross-machine account checks.
     - Cons: waits on that batch.
 
@@ -128,6 +128,6 @@ Confirm the command node's coordinator gets the notice exactly once.
 
 ## Related
 
-- [1250](../agent-engines/1250-automatic-account-switching-live-checks.md), task 7: a leaf's automatic switch notice reaching the command node.
-- [2900](2900-coordinator-node-mail-live-qualification.md): the same two-node setup for coordinator mail.
+- To-do 1250 (retired 2026-11-10; now in the manual-test checklist), task 7: a leaf's automatic switch notice reaching the command node; how it works is in [Automatic switching: Coordinators](../../architecture/agent-accounts.md#coordinators).
+- to-do 2900 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#coordinators-on-two-nodes)): the same two-node setup for coordinator mail.
 - [4860](4860-c1-wake-reliability-follow-ups.md): other coordinator wake checks that need two nodes.

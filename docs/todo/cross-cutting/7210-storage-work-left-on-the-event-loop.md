@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-06 against `main` at `c1724ab74`. Found while doing
-[1202](1202-efficiency-review-follow-ups.md) task 7 (ST-13), which moved the
+to-do 1202 task 7 (retired 2026-11-10) (ST-13), which moved the
 snapshot check's free-page release into a child process. Three pieces of
 storage maintenance still run synchronously on the backend's connection.
 They were measured with `apps/backend/scripts/storage-maintenance-stall.ts`
@@ -225,5 +225,5 @@ on an idle disk was only checked here.
 
 ## Related
 
-- [1202](1202-efficiency-review-follow-ups.md) task 7 (ST-13).
+- to-do 1202 task 7 (retired 2026-11-10) (ST-13).
 - [5180](5180-sqlite-durability-tiers.md): `synchronous` and `secure_delete` tiering, which would change what each step costs.

@@ -64,11 +64,11 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [tab-launches.md](architecture/tab-launches.md) | When a tab takes focus: a user's launch at once with shimmer outlines, nothing else, and the setup terminal's handoff to the job tab. |
 | [keyboard-shortcuts.md](architecture/keyboard-shortcuts.md) | App-level shortcuts (⌘K search, ⌘⇧/ / Ctrl+Shift+/ dialog, ⌘, settings, ⌘T new agent tab, ⌘⇧D sidebar group-by rotation) that work wherever focus is: the one routing path (renderer key router, workspace-owned shortcuts for the shown node, design frames, Electron main), what terminals and text fields keep, decisions, the View › Keyboard Shortcuts… and Settings… items and their IPC, the Windows/Linux menu layout and key caps, browser-client limits. |
 | [browser-previews.md](architecture/browser-previews.md) | Service previews: registry, local-environment discovery and listener ownership, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. Rollout: [0042-service-preview-rollout.md](todo/previews-and-annotations/0042-service-preview-rollout.md). |
-| [build-pipeline-view.md](architecture/build-pipeline-view.md) | The terms build pipeline, pipeline environment and prompt environment; the build pipeline tab's flow graph and inspector, and the flow-graph components it shares with Multi Review: the projection of the record (passes unrolled to the right, faded definite steps, the reviewer fan-out, Ticket and PR nodes), node actions including retrying one reviewer, restarts that rewind to a step's round with the superseded run kept as a previous attempt (Address rerunning on its round's kept report, a package-only restart), the confirmed "Rewind code to here" reset, the header toolbar and key information panel with its agent tools, and the read and view-state constraints. Follow-ups: [0315-build-pipeline-flow-graph.md](todo/coordinator-and-multi-review/0315-build-pipeline-flow-graph.md), [0405-build-pipeline-rewind-follow-ups.md](todo/coordinator-and-multi-review/0405-build-pipeline-rewind-follow-ups.md). |
+| [build-pipeline-view.md](architecture/build-pipeline-view.md) | The terms build pipeline, pipeline environment and prompt environment; the build pipeline tab's flow graph and inspector, and the flow-graph components it shares with Multi Review: the projection of the record (passes unrolled to the right, faded definite steps, the reviewer fan-out, Ticket and PR nodes), node actions including retrying one reviewer, restarts that rewind to a step's round with the superseded run kept as a previous attempt (Address rerunning on its round's kept report, a package-only restart), the confirmed "Rewind code to here" reset, the header toolbar and key information panel with its agent tools, and the read and view-state constraints. |
 | [goals.md](architecture/goals.md) | The `/goal` loop as built: statuses, delivery, limits, `report_goal`, attention, and how to write a goal. |
 | [graphs.md](architecture/graphs.md) | Composable graphs as built (Phases 0–2, Phase 4 items 401–405): the template model, types and schema subset, predicates, prompt templates and the locked system contract, capability profiles and enforcement tiers, the compiler and plan digest, storage, trust and sharing, the runtime (supervisor, scheduling, executors, result slots, human and system nodes, guards, isolated worktrees, restart and rewind, mock runs), launch surfaces, the designer and the run view, a table of every bound, the invariants and known gaps. Plan and work items: [composable-graphs.md](../plans/composable-graphs.md), [plans/graphs/](../plans/graphs/000-index.md). |
 | [graphs-user-guide.md](architecture/graphs-user-guide.md) | User guide to Graphs: designing in the library and canvas (duplicating a built-in, prompts, types, capabilities, sub-graphs), testing with mock runs and pins, launching (dialog, Kanban, CLI, coordinator, schedules), watching runs and answering human nodes, restarting and rewinding, sharing and trusting project templates. |
-| [tickets.md](architecture/tickets.md) | Kanban tickets: kinds (feature ticket, work brief), typed optional sections stored as JSON, the markdown form and its round-trip rules, criteria ids and Verify results, text mirrors and on-read migration, the tool inputs, the Verify contract, how a merged pull request moves its ticket to done, and the tiled views. Design record: [0742-structured-tickets.md](todo/coordinator-and-multi-review/0742-structured-tickets.md). |
+| [tickets.md](architecture/tickets.md) | Kanban tickets: kinds (feature ticket, work brief), typed optional sections stored as JSON, the markdown form and its round-trip rules, criteria ids and Verify results, text mirrors and on-read migration, the tool inputs, the Verify contract, how a merged pull request moves its ticket to done, and the tiled views. |
 | [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Auto-fix and auto-PR ordering and recovery. Fan-out budgets and the efficiency benchmark. |
 | [user-commands.md](architecture/user-commands.md) | Composer `!` commands run as the user (worktree, container, coordinator checkout) with live output, input and cancel, given to the agent on its next turn; detection of shell prompts that need the user (sign-in links, device codes, ENTER, passwords, host keys) and where they surface, including the coordinator. |
 | [suborks.md](architecture/suborks.md) | `/subork` and `ask_agents`: asking other agents from a native tab, the results delivery choice, read-only tiers, limits and lifecycle. |
@@ -144,16 +144,24 @@ references, outstanding code and qualification work, constraints and
 rationale, open questions, items that need verification, and the old docs it
 replaced. The individual items live only in these files.
 
-Files are grouped into ten folders by area. [`todo/0000-index.md`](todo/0000-index.md)
-points to the folders and counts each folder's files by status, and each
-folder's `0000-index.md` lists its files in a table ranked by criticality,
-most critical first. Its columns are **Rank**, **File**, **Criticality**,
-**Status**, **Needs you**, **Covers** and **Why this rating**. Criticality
-rates a file as a whole, never its individual items; Status says who can act
-on it (see [Choosing a status](#choosing-a-status)). An agent picks work from
-the top of a folder index among the `backlog` rows; `blocked` rows wait on
-another to-do, a release or a recurrence, and `requires user input` rows wait
-on the user, whose part each row's **Needs you** cell names.
+Files are grouped into area folders, plus one `manual-test/` folder.
+[`todo/0000-index.md`](todo/0000-index.md) points to the folders and counts
+each folder's files by status, and each folder's `0000-index.md` lists its
+files in a table ranked by criticality, most critical first. Its columns are
+**Rank**, **File**, **Criticality**, **Status**, **Needs you**, **Covers** and
+**Why this rating**. Criticality rates a file as a whole, never its individual
+items; Status says who can act on it (see
+[Choosing a status](#choosing-a-status)). An area to-do holds only work an
+agent can build, or work that is blocked: an agent picks work from the top of
+a folder index among the `backlog` rows, and `blocked` rows wait on another
+to-do, a release, a CI run or a recurrence.
+
+Everything that needs the user lives in one place instead: the
+[manual-test checklist](todo/manual-test/7568-manual-test-checklist.md). Each
+of its `- [ ]` items says what to do and what result to record, and names its
+source to-do and task; manual tests and live checks come first, decisions,
+approvals and outward actions last (see
+[Human-only work](#human-only-work)).
 
 Every file is named `NNNN-kebab-case-name.md`. The four-digit number is the
 file's permanent ID, unique across all folders: it is an identifier, not a
@@ -198,52 +206,71 @@ Rules of thumb:
 - Within a rating, rank files by how many users or runs their remaining work
   reaches, then by how much of it there is.
 
+### Human-only work
+
+A task, or part of a task, is human-only when an agent cannot start and finish
+it on its own in an isolated worktree on a headless Linux node (rootless
+Docker available) or a macOS node, with loopback fake models, throwaway
+profiles, the iOS simulator or two dev profiles on one host. Typical reasons:
+
+- manual testing or checking by the user (a person looking, speaking or
+  judging);
+- a real or billed provider login, or paid model turns;
+- the user's real install, data directory, store or logs;
+- hardware or accounts the fleet lacks (a physical iOS device, a signed build,
+  Windows, arm64, a rootful Docker node, real DNS or certificates), two real
+  machines or a tailnet;
+- a decision the file reserves to the user or maintainer ("user's decision",
+  "product call", "scope call", "needs approval", "maintainer action");
+- an outward action (GitHub settings or rulesets, publishing, filing an
+  upstream report, firewall or network changes or destructive cleanup on
+  nodes).
+
+Human-only work never goes into an area to-do. It is a `- [ ]` item in the
+[manual-test checklist](todo/manual-test/7568-manual-test-checklist.md),
+under its area, in the "Manual tests and live checks" section or, for
+decisions, approvals and outward actions, the last section. Each item starts
+with its source in bold (`**[NNNN](../<area>/NNNN-name.md) task N: ...**`, or
+`**NNNN (retired) task N: ...**` once the source is gone), says exactly what
+to do, and ends with `Record:` and the result to write down. A mixed task is
+split: the agent part stays in its to-do, the user part becomes a checklist
+item, and the to-do's **Related** section points to the checklist.
+
+When the user records a result, the agent that picks it up acts on it in the
+source to-do (unblocking its waiting task, or recording the evidence or
+decision) and removes the item from the checklist in the same change. Agent
+work that cannot start until an item is done is `blocked` with
+`Waits on: 7568 (<source> task N)`.
+
 ### Choosing a status
 
-Every row's **Status** is exactly one of four values, judged on the file's
-still-open tasks (finished tasks do not count). Use the first that applies, in
-this order:
+An area to-do's **Status** is `backlog` or `blocked`, judged on the file's
+still-open tasks (finished tasks do not count):
 
-1. **`done`**: every task in the file is done. A `done` row is normally
-   transient, because the same change retires the file (see
-   [Maintaining the folders](#maintaining-the-folders)). It stays only where
-   the file is deliberately kept, for example because flake cases or other
-   files link to its evidence, and its **Why this rating** cell says so.
-2. **`backlog`**: at least one open task an agent can start and complete on
-   its own now, in an isolated worktree on a headless Linux node (rootless
-   Docker available) or a macOS node, with loopback fake models, throwaway
-   profiles, the iOS simulator or two dev profiles on one host. A task whose
-   decision has a (recommended) option counts, because the recommendation
-   exists so that a later worker can act without asking, unless the file
-   reserves that decision to the user.
-3. **`blocked`**: no open task can start now, and at least one is waiting only
-   on something other than the user: another to-do (name its number), an
-   upstream release, a release or CI run, a flake or failure recurring, or a
-   time window. Once that clears, an agent could do it.
-4. **`requires user input`**: every remaining open task needs the user.
-   Typical reasons: a decision the file reserves to the user or maintainer
-   ("user's decision", "product call", "scope call", "needs approval",
-   "maintainer action"); a real or billed provider login, or paid model turns;
-   the user's real install, data directory, store or logs; hardware or
-   accounts the fleet lacks (a physical iOS device, a signed build, Windows,
-   arm64, a rootful Docker node, real DNS or certificates); two real machines
-   or a tailnet; or an outward action (GitHub settings or rulesets,
-   publishing, filing an upstream report, firewall or network changes on
-   nodes).
+1. **`backlog`**: at least one open task an agent can start and complete on
+   its own now (see [Human-only work](#human-only-work) for what that rules
+   out). A task whose decision has a (recommended) option counts, because the
+   recommendation exists so that a later worker can act without asking,
+   unless the file reserves that decision to the user; a reserved decision is
+   a checklist item.
+2. **`blocked`**: no open task can start now, and each waits on another to-do
+   (name its number; a checklist item is `7568`), an upstream release, a
+   release or CI run, a flake or failure recurring, or a time window. Once
+   that clears, an agent could do it.
 
-A file with an agent task and a user-only task is therefore `backlog`, and a
-file whose only other open tasks need the user is `blocked` while it waits.
-A task that waits on another to-do whose remaining work itself needs the user
-is waiting on the user.
+The manual-test checklist's own row is the only one rated
+**`requires user input`**. There is no `done` row: a file whose last task is
+finished, or whose remaining tasks all moved to the checklist, is retired in
+the same change (see [Maintaining the folders](#maintaining-the-folders)).
+The top-level index keeps a `requires user input` and a `done` column so the
+counts stay comparable; `done` is always 0.
 
 **Needs you** is one short line:
 
-- for a `requires user input` row, exactly what the user must provide or
-  decide;
 - for a `blocked` row, `Waits on: <to-do number, release, CI run, recurrence
-  or date>`, followed by any user-only part;
-- for a `backlog` row that also has a user-only task, that part;
-- otherwise `—`.
+  or date>`;
+- for a `backlog` row, `—`;
+- for the checklist's row, what the user must work through.
 
 Update a file's Status and Needs you in the same change that alters its tasks
 (finishes, adds, narrows or unblocks one, or records evidence that changes who
@@ -256,7 +283,9 @@ can act), just as its rating is, and keep the counts in
   new numbered file, even when an existing file covers the same area; link
   the two from each other's related sections if that helps. Editing an
   existing item is still fine: tick or remove it, correct it, record evidence
-  or a decision against it, or narrow it.
+  or a decision against it, or narrow it. The one exception is the
+  manual-test checklist: every new human-only item is added there, never to
+  an area to-do or a new file.
 - Update or remove an item in its file in the same change that finishes it.
   If the file's most serious remaining work changed, re-rate it and move its
   row in the folder index.
@@ -264,28 +293,36 @@ can act), just as its rating is, and keep the counts in
   alters the file's tasks ([choosing a status](#choosing-a-status)), and keep
   the counts in [`todo/0000-index.md`](todo/0000-index.md) matching the folder
   indexes.
-- When the last item in a file is done, its status is `done`. In the same
-  change, move any durable behaviour into `architecture/` or `development/`,
-  delete the file and remove its row from the folder index, unless the file is
-  deliberately kept (its row then stays `done` and says why). Renumber the
-  remaining ranks to `1..n` in row order and update the counts. Its todo
-  number is not reused.
+- When the last open task in a file is done, or every remaining one moved to
+  the manual-test checklist, retire the file in the same change: move any
+  durable behaviour into `architecture/` or `development/`, delete the file,
+  remove its row from the folder index, point links that named it at the
+  durable doc, renumber the remaining ranks to `1..n` in row order and update
+  the counts. Checklist items whose source is retired cite it as
+  `NNNN (retired)`. Its todo number is not reused.
 - To add work, create a new file with the next number and the same headings
   in the folder that fits, and add a rated row with its Status and Needs you to
   that folder's index, then update the counts. A new folder also needs its own
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
+  The layout example the repository instructions name, to-do 0241, was
+  retired on 2026-11-10; read it with
+  `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`.
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
 - `tests/unit/todo-index.test.ts` fails when two files share a number or a
-  folder index is missing a rated row for a file, has a Criticality or Status
-  value outside the allowed set, an empty Needs you cell, a `requires user
-  input` row whose Needs you is `—`, a `blocked` row whose Needs you does not
-  start with `Waits on:`, a `Waits on:` note on a row that is not `blocked`,
-  or ranks other than `1..n` in row order. It also requires every area folder
-  to be linked from the top-level index, with status counts that match the
-  folder index and a total row that matches their sum. Two numbers were
+  folder index is missing a rated row for a file, has a Criticality value
+  outside the allowed set, a Status other than `backlog` or `blocked` in an
+  area folder (or other than `requires user input` in `manual-test/`), an
+  empty Needs you cell, a `backlog` row whose Needs you is not `—`, a
+  `requires user input` row whose Needs you is `—`, a `blocked` row whose
+  Needs you does not start with `Waits on:`, a `Waits on:` note on a row that
+  is not `blocked`, or ranks other than `1..n` in row order. It requires
+  `manual-test/` to hold exactly one checklist, every checkbox in it to name
+  its source to-do in bold, and every relative link in it to resolve. It also
+  requires every folder to be linked from the top-level index, with status
+  counts that match the folder index and a total row that matches their sum. Two numbers were
   already shared when it was added and stay allowlisted: 0054 (three files) and
   0723 (two). Neither may gain another file.
 - Two open pull requests can each pick the same next number and each pass CI.
@@ -296,6 +333,7 @@ can act), just as its rating is, and keep the counts in
   one moves to the next free number with its claim, every link to it is
   updated, and its "Replaces" section records the old number.
 
-Live-provider and platform runs (macOS, Docker Desktop, Electron, Safari and
-iOS, two machines) are the most common open gate. They are batched in
-[0031-live-provider-and-platform-qualification.md](todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
+Live-provider and platform runs that need a login, real hardware or two
+machines are the most common open gate. They are batched, with every other
+human-only item, in the
+[manual-test checklist](todo/manual-test/7568-manual-test-checklist.md).

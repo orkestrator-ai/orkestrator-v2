@@ -16,7 +16,6 @@ is `apply` and auto-start. The task numbers below are this section's own.
 2. **Worker-scoped CLI credentials**: let the CLI authenticate with a scoped Control MCP credential (Remaining 7). Status: deferred.
 3. **Declarative `apply` and backend auto-start** (Remaining 8). Status: deferred (no demand; auto-start needs process ownership first).
 4. **`project-cascade` in the container matrix**: run the cascade scenario with container environments. Status: done (2026-10-25, recorded in 0014 but still listed here as left).
-5. **New `live-session` steps on other providers**: `--literal`, `--attach`, `--enqueue` and the refusals on Codex, OpenCode, Pi, Cursor and Grok. Status: partly done (OpenCode done 2026-10-26; Codex open; Pi, Cursor and Grok blocked on credentials with 0014).
 6. **Selected-command step beyond Claude, and browser checks for enqueue and selected commands**. Status: open (decision only: extend or retire).
 
 ### 1. Event-stream transcript following
@@ -81,7 +80,7 @@ is `apply` and auto-start. The task numbers below are this section's own.
 
 - **Keep or retire the item?**
   - **Retire it from this file and leave the constraint in `public-cli.md` (recommended).** Record "not planned; reopen as a new todo on demand".
-    - Pros: removes an open item nobody wants; the file can then finish once task 5 is done; the safety constraint already lives in the architecture doc and `AGENTS.md`.
+    - Pros: removes an open item nobody wants; the file can then finish once tasks 1, 2 and 6 are settled; the safety constraint already lives in the architecture doc and `AGENTS.md`.
     - Cons: the design notes (process ownership, readiness, data-directory exclusivity) live only in git history.
   - **Keep it deferred here.**
     - Pros: the prerequisites stay listed next to the CLI surface.
@@ -104,31 +103,6 @@ is `apply` and auto-start. The task numbers below are this section's own.
   - **Re-run `project-cascade` alone in a container and record it explicitly.**
     - Pros: a per-case record in this file.
     - Cons: needs a dev image build for a result already covered.
-
-### 5. New `live-session` steps on other providers
-
-**Problem.** `--literal`, `--attach`, `--enqueue` and the refusal steps were live-qualified only on Claude when the file was written.
-
-**Context.** Steps are in `packages/cli/scenarios/cases.ts:1052-1223`; Pi, Cursor and Grok are batched with 0014 item 1 (no API-key credentials on the qualifying host).
-
-**Investigation.** OpenCode is now done: 0166 and the 0014 evidence log record `live-session --provider opencode` passing every stage, local and container, on 2026-10-26 (`--attach` included). Codex has not run since the new steps landed; its last `live-session` pass is the 2026-10-22 run, before #1246. Since #1270 every host provider needs its pinned binary, which the harness now installs (`packages/cli/scenarios/harness.ts:147-168`), so Codex is unblocked.
-
-**Decisions.**
-
-- **Where to track the remaining runs?**
-  - **Run Codex now and leave Pi, Cursor and Grok to 0014 item 1 only (recommended).** Record Codex here, then drop this item.
-    - Pros: one owner per provider run; this file can finish without waiting for credentials.
-    - Cons: 0014 must remember that its Pi, Cursor and Grok runs also cover these steps (the scenario runs them anyway).
-  - **Keep all five providers listed here until each passes.**
-    - Pros: a complete per-provider record next to the feature.
-    - Cons: duplicates 0014 and keeps this file open on a credential blocker.
-- **Codex run scope?**
-  - **Local and container, with the provider default model recorded in the manifest (recommended).**
-    - Pros: matches the OpenCode evidence; container covers the restricted allowlist.
-    - Cons: the container run needs a dev image and `--network full` per the 2026-10-22 notes, costing a build and live tokens.
-  - **Local only.**
-    - Pros: cheaper.
-    - Cons: leaves attachment staging through `write_container_file` unproved live on Codex (Codex refuses non-image files, so only the refusal path runs).
 
 ### 6. Selected-command step beyond Claude, and browser checks
 
@@ -320,13 +294,14 @@ intent; the `public-cli.md` header already linked this file and 0014.
 - Done: credential-free `project-cascade` and `project-init` scenarios (local),
   live Claude `live-session` with the new steps, and the `cli-ui.spec.ts` browser
   check for init and cascade (2026-10-25, macOS).
-- Left: `project-cascade` in the container matrix (needs a worktree-owned
-  image), and the new `live-session` steps on Codex and OpenCode (and on Pi,
-  Cursor and Grok with [0014](0014-cli-qualification.md)). The selected-command
-  step is Claude-only today; other providers run only the refusal checks,
-  `--literal`, `--attach` and `--enqueue`. Enqueue and selected-command results
-  are not browser-checked (their UI is the existing queue and transcript,
-  unchanged by this work).
+- Done since: `project-cascade` in the container matrix (task 4) and the new
+  `live-session` steps on OpenCode (2026-10-26). The live Codex run (and Pi,
+  Cursor and Grok with [0014](0014-cli-qualification.md)) is on the
+  manual-test checklist.
+- Left: the selected-command step is Claude-only today; other providers run
+  only the refusal checks, `--literal`, `--attach` and `--enqueue`. Enqueue and
+  selected-command results are not browser-checked (their UI is the existing
+  queue and transcript, unchanged by this work). Extend or retire is task 6.
 
 ## Assumptions and decisions
 
@@ -479,9 +454,9 @@ intent; the `public-cli.md` header already linked this file and 0014.
 
 - [0014-cli-qualification.md](0014-cli-qualification.md) for provider and platform
   evidence.
-- [5560-attention-follow-page-size.md](5560-attention-follow-page-size.md): what
-  `attention --follow` costs per poll, measured against fixtures, for task 1's
-  trigger measurement.
+- [`control-mcp-voice.md`](../../architecture/control-mcp-voice.md#hearing-about-work-without-asking):
+  what `attention --follow` costs per poll, measured against fixtures, for task
+  1's trigger measurement (from to-do 5560, retired 2026-11-10).
 - [agent-engines.md](../../architecture/agent-engines.md#opencode): OpenCode
   attachment MIME types, from todo 0166 (`--attach` with a text file was lost
   on OpenCode; found 2026-10-25, retired on 2026-10-29).
@@ -493,6 +468,7 @@ intent; the `public-cli.md` header already linked this file and 0014.
   [`cli-testing.md`](../../development/cli-testing.md),
   [`native-agent-commands.md`](../../architecture/native-agent-commands.md),
   [`remote-gateway.md`](../../architecture/remote-gateway.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 5, the live Codex `live-session` run) moved there on 2026-11-10.
 
 ## Replaces
 

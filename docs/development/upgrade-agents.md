@@ -675,7 +675,9 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
    reopening, not that the bridge is broken.
 
-   On macOS, re-prove that the CLI enforces the provider sandbox
+   On macOS, and on a Linux host whose bubblewrap can nest the CLI's user
+   namespace (elsewhere the check skips with the probe's reason), re-prove
+   that the CLI enforces the provider sandbox
    `claudeExecutionSandbox` sets: a command cannot write outside the
    workspace or reach an unlisted host under auto-approve, even when it asks
    to run unsandboxed, and neither raises an approval card. Under `ask`, an
@@ -691,7 +693,10 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    Its controls also pin what the sandbox proxy does without
    `strictAllowlist` (an unlisted host is granted unseen, or asked about in a
    second card); if one of them starts failing, the CLI changed its network
-   model and `claude-execution-sandbox.ts` needs another look.
+   model and `claude-execution-sandbox.ts` needs another look. What differs
+   between the two systems (the shell's refusal text, and whether full
+   network reaches loopback directly: on Linux it does not) is in
+   `PLATFORM_SANDBOX_EXPECTATIONS` in `claude-provider-sandbox.live-probe.ts`.
 
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI

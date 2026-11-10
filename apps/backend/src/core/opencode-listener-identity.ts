@@ -59,7 +59,9 @@ export interface OpenCodeListenerSnapshot {
 export type OpenCodeListenerJudgement =
   /** The recorded socket is the only one listening. */
   | "ours"
-  /** Another socket listens, nothing does, or the recorded one is gone. */
+  /** No socket currently listens on the recorded port. */
+  | "stopped"
+  /** Another socket listens, or more than one shares the port. */
   | "replaced"
   /** No record: an older image, or a server an older backend started. */
   | "unrecorded";
@@ -99,6 +101,7 @@ export function judgeOpenCodeListener(
   snapshot: OpenCodeListenerSnapshot,
 ): OpenCodeListenerJudgement {
   if (!snapshot.record) return "unrecorded";
+  if (snapshot.sockets.length === 0) return "stopped";
   return snapshot.sockets.length === 1 && snapshot.sockets[0] === snapshot.record
     ? "ours"
     : "replaced";

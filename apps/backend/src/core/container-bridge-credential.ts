@@ -511,6 +511,7 @@ export async function readContainerBridgeToken(
     // The root-owned launcher is image-local evidence even when image metadata is unavailable.
     // Incomplete launches must never expose either root or node credentials.
     if (opencode.requiresRecordedListener && opencode.listener !== "ours") return null;
+    if (opencode.listener === "stopped") return null;
     if (opencode.token) {
       // The password would go to whatever answers the port now.
       if (opencode.listener === "replaced") {

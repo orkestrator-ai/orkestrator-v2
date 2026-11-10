@@ -83,7 +83,8 @@ export function openCodeListenerRecheckFetch(
     checking ??= recheck()
       .then(
         (judgement) => {
-          if (judgement === undefined) return;
+          // Absence is not replacement evidence and cannot clear a prior refusal.
+          if (judgement === undefined || judgement === "stopped") return;
           const wasReplaced = replaced;
           replaced = judgement === "replaced";
           if (replaced && !wasReplaced) {

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import type { OpenCodeListenerJudgement } from "./opencode-listener-identity.js";
+import {
+  judgeOpenCodeListener,
+  type OpenCodeListenerJudgement,
+} from "./opencode-listener-identity.js";
 import {
   OPENCODE_LISTENER_RECHECK_INTERVAL_MS,
   OPENCODE_LISTENER_REPLACED_MESSAGE,
@@ -147,4 +151,28 @@ test("a rejected recovery check remains throttled while replaced", async () => {
   expect(h.sent).toEqual(["http://x/a"]);
   h.advance(OPENCODE_LISTENER_RECHECK_INTERVAL_MS);
   expect((await h.wrapped.fetch("http://x/d")).status).toBe(200);
+});
+
+test("connection refusal with a recorded but stopped server preserves the connection error", async () => {
+  const refused = new Error("ECONNREFUSED");
+  const h = harness([refused], [judgeOpenCodeListener({ record: "4242", sockets: [] })]);
+  const logs = captureLogs();
+  try {
+    await expect(h.wrapped.fetch("http://x/a")).rejects.toBe(refused);
+    expect(h.wrapped.replaced).toBe(false);
+    expect(h.checks()).toBe(1);
+    expect(
+      logs.records().filter((record) => record.event === "opencode.listener-replaced"),
+    ).toEqual([]);
+  } finally {
+    logs.restore();
+  }
+});
+
+test("a stopped socket cannot clear a previously detected replacement", async () => {
+  const h = harness([new Response(null, { status: 401 })], ["replaced", "stopped"]);
+  await expect(h.wrapped.fetch("http://x/a")).rejects.toThrow(OPENCODE_LISTENER_REPLACED_MESSAGE);
+  h.advance(OPENCODE_LISTENER_RECHECK_INTERVAL_MS);
+  await expect(h.wrapped.fetch("http://x/b")).rejects.toThrow(OPENCODE_LISTENER_REPLACED_MESSAGE);
+  expect(h.sent).toHaveLength(1);
 });

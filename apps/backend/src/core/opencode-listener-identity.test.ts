@@ -26,8 +26,11 @@ describe("judgeOpenCodeListener", () => {
     expect(judgeOpenCodeListener({ record: null, sockets: ["4242"] })).toBe("unrecorded");
   });
 
+  test("a recorded server with no socket is stopped", () => {
+    expect(judgeOpenCodeListener({ record: "4242", sockets: [] })).toBe("stopped");
+  });
+
   test.each([
-    ["nothing listens", []],
     ["another socket listens", ["5151"]],
     ["a second socket shares the port", ["4242", "5151"]],
   ])("%s: replaced", (_name, sockets) => {
@@ -87,7 +90,7 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
 
     // The listener goes, and another takes the same port: a new socket.
     await new Promise<void>((resolve) => servers.pop()!.close(() => resolve()));
-    expect(judge()).toBe("replaced");
+    expect(judge()).toBe("stopped");
     await listen(port);
     expect(judge()).toBe("replaced");
   });

@@ -73,21 +73,15 @@ export function answering<Details, Response extends CancellableResponse>(
       log.recovered("listener.failed-closed", listener);
       answer(response);
     };
-    let decided: Response | PromiseLike<Response>;
     try {
-      decided = decide(details);
+      const decided = decide(details);
+      // Both reading a then accessor and invoking it can throw.
+      if (isPromiseLike<Response>(decided)) {
+        decided.then(succeed, fallBack);
+      } else {
+        succeed(decided);
+      }
     } catch (error) {
-      fallBack(error);
-      return;
-    }
-    if (!isPromiseLike<Response>(decided)) {
-      succeed(decided);
-      return;
-    }
-    try {
-      decided.then(succeed, fallBack);
-    } catch (error) {
-      // A thenable whose `then` throws never settles.
       fallBack(error);
     }
   };

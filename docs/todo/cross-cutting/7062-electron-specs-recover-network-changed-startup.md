@@ -199,7 +199,7 @@ unchanged: a reload still needs the failure plus both console signatures.
 
 Later windows and post-`reload()` waits reuse the launch's watcher, so the
 collector keeps lines per window (`ConsoleMessage.page()`), and lines no window
-claims count for every window. Without that, an earlier window's aborts could
+claims are consumed by the first window to drain them. Without that, an earlier window's aborts could
 license a reload of a later window that failed for another reason.
 
 ### Task 1: the watch is left to end with the app (2026-11-10)
@@ -214,6 +214,26 @@ one line per signature per window.
 
 See task 2's decision. It also caught the 1x1 viewport problem above, which a
 Chromium-only fixture could not.
+
+### Task 1: discard prior-document signals on navigation (review repair, 2026-11-10)
+
+Main-frame navigation requests clear that page's retained signatures and any
+unclaimed lines before the new document can report failures. Subframe requests
+do not clear the parent window's signals. Clearing at the next title wait would
+lose valid signals emitted while an explicit reload is awaited. The regression
+covers a successful wait, stale lazy-import signatures, explicit navigation, and
+a different startup failure that must fail without an automatic reload.
+
+### Task 2: review-stage qualification evidence (2026-11-10)
+
+The explicit integration run reached both the Chromium and headless Electron
+cases. Electron passed on the first run, but subsequent runs were inconsistent:
+Chromium recovered with two reloads instead of the asserted one, and Electron
+sometimes observed no abort or needed two reloads. The qualification remains
+open; the exact-one-reload assertions have not been weakened. Failure artifacts
+from this repair stage include `/tmp/orkestrator-test-run.JXl8Ui` and
+`/tmp/orkestrator-test-run.rZ0pKa`. Full migrated-spec and terminal-owner runs
+still require the documented display, Docker and outage setup.
 
 ## Related
 

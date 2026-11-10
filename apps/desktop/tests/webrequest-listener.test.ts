@@ -119,6 +119,24 @@ describe("answering", () => {
     expect(callback.mock.calls).toEqual([[{ cancel: true }]]);
   });
 
+  test("a throwing then accessor answers the fallback exactly once", () => {
+    const callback = mock((_response: Response) => undefined);
+    const failClosed = mock(() => ({ cancel: true }));
+    // Deliberately malformed thenable: reading then must not escape the listener.
+    // oxlint-disable-next-line unicorn/no-thenable
+    const broken = Object.defineProperty({}, "then", {
+      get() {
+        throw new Error("window is gone");
+      },
+    }) as PromiseLike<Response>;
+    expect(() =>
+      answering<Details, Response>("fixture.accessor", () => broken, failClosed)(DETAILS, callback),
+    ).not.toThrow();
+    expect(failClosed).toHaveBeenCalledTimes(1);
+    expect(callback.mock.calls).toEqual([[{ cancel: true }]]);
+    expectContentFree();
+  });
+
   test("a throwing callback is contained and never answered twice", () => {
     const callback = mock((_response: Response) => {
       throw new Error("window is gone");

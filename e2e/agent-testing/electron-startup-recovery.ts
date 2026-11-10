@@ -1,4 +1,4 @@
-import { test, type Page } from "@playwright/test";
+import { test, type Page, type Request } from "@playwright/test";
 
 /**
  * A development Electron window loads its renderer's modules from Vite over
@@ -62,6 +62,8 @@ export interface StartupConsoleMessage {
 }
 
 interface ConsoleSource {
+  on(event: "request", listener: (request: Request) => void): unknown;
+  off(event: "request", listener: (request: Request) => void): unknown;
   on(event: "console", listener: (message: StartupConsoleMessage) => void): unknown;
   off(event: "console", listener: (message: StartupConsoleMessage) => void): unknown;
 }
@@ -104,6 +106,22 @@ export function collectStartupConsole(source: ConsoleSource): StartupConsole {
       entries.push({ page, text: text.slice(0, 300) });
     }
   };
+  const navigationStarted = (request: Request) => {
+    if (!request.isNavigationRequest()) return;
+    try {
+      const frame = request.frame();
+      if (frame.parentFrame()) return;
+      const page = frame.page();
+      // Reset before the new document can log, rather than at waitForTitle:
+      // callers often await reload before starting that wait. Unclaimed lines
+      // cannot safely authorize recovery across a navigation either.
+      entries = entries.filter((entry) => entry.page !== page && entry.page !== null);
+    } catch {
+      // Initial navigation can precede frame creation; no previous document
+      // exists to clear in that case.
+    }
+  };
+  source.on("request", navigationStarted);
   source.on("console", listener);
   return {
     drain: (page?: unknown) => {
@@ -115,6 +133,7 @@ export function collectStartupConsole(source: ConsoleSource): StartupConsole {
     },
     dispose: () => {
       source.off("console", listener);
+      source.off("request", navigationStarted);
     },
   };
 }

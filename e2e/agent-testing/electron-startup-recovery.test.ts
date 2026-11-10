@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+import { EventEmitter } from "node:events";
 import { describe, expect, test } from "bun:test";
 import {
   MODULE_IMPORT_FAILED,
@@ -8,7 +10,6 @@ import {
   nextStartupStep,
   waitForRendererStart,
   watchElectronStartup,
-  type StartupConsoleMessage,
   type StartupWindow,
 } from "./electron-startup-recovery";
 
@@ -144,16 +145,8 @@ describe("waitForRendererStart", () => {
 
 describe("collectStartupConsole", () => {
   test("keeps only the lines that decide a reload, and stops on dispose", () => {
-    const listeners = new Set<(message: { text(): string }) => void>();
-    const source = {
-      on: (_event: "console", listener: (message: { text(): string }) => void) =>
-        listeners.add(listener),
-      off: (_event: "console", listener: (message: { text(): string }) => void) =>
-        listeners.delete(listener),
-    };
-    const emit = (text: string) => {
-      for (const listener of listeners) listener({ text: () => text });
-    };
+    const source = new EventEmitter();
+    const emit = (text: string) => source.emit("console", { text: () => text });
     const console = collectStartupConsole(source);
     emit("[DesktopStartup] checking");
     emit(ABORTED);
@@ -166,23 +159,21 @@ describe("collectStartupConsole", () => {
     console.dispose();
     emit(ABORTED);
     expect(console.drain()).toEqual([]);
-    expect(listeners.size).toBe(0);
+    expect(source.listenerCount("console")).toBe(0);
   });
 });
 
 /** A context whose console messages name the window that logged them. */
 function fakeContext() {
-  const listeners = new Set<(message: StartupConsoleMessage) => void>();
-  const context = {
-    on: (_event: "console", listener: (message: StartupConsoleMessage) => void) =>
-      listeners.add(listener),
-    off: (_event: "console", listener: (message: StartupConsoleMessage) => void) =>
-      listeners.delete(listener),
-  };
-  const emit = (page: unknown, text: string) => {
-    for (const listener of listeners) listener({ text: () => text, page: () => page });
-  };
-  return { app: { context: () => context }, emit, listeners };
+  const context = new EventEmitter();
+  const emit = (page: unknown, text: string) =>
+    context.emit("console", { text: () => text, page: () => page });
+  const navigate = (page: unknown, child = false) =>
+    context.emit("request", {
+      isNavigationRequest: () => true,
+      frame: () => ({ parentFrame: () => (child ? {} : null), page: () => page }),
+    });
+  return { app: { context: () => context }, emit, navigate, context };
 }
 
 /**
@@ -202,7 +193,7 @@ function fakePage(loads: boolean[], onReload: () => void = () => undefined) {
       onReload();
     },
   };
-  return { page: page as never, state };
+  return { page: page as unknown as Page, state };
 }
 
 describe("collectStartupConsole by window", () => {
@@ -223,7 +214,7 @@ describe("collectStartupConsole by window", () => {
 
 describe("watchElectronStartup", () => {
   test("reloads a window that lost its modules to a network change, once", async () => {
-    const { app, emit, listeners } = fakeContext();
+    const { app, emit, context } = fakeContext();
     const watch = watchElectronStartup(app);
     const { page, state } = fakePage([false, true]);
     emit(page, `${MODULE_IMPORT_FAILED}: http://127.0.0.1:1/src/renderer-entry.tsx`);
@@ -231,7 +222,35 @@ describe("watchElectronStartup", () => {
     await expect(watch.waitForTitle(page, TITLE, { timeoutMs: 5_000 })).resolves.toBe(1);
     expect(state.reloads).toBe(1);
     watch.dispose();
-    expect(listeners.size).toBe(0);
+    expect(context.listenerCount("console")).toBe(0);
+    expect(context.listenerCount("request")).toBe(0);
+  });
+
+  test("reusing a page discards old signals but preserves early current-load signals", async () => {
+    const { app, emit, navigate } = fakeContext();
+    const watch = watchElectronStartup(app);
+    const { page, state } = fakePage([true, false, true]);
+    try {
+      await expect(watch.waitForTitle(page, TITLE)).resolves.toBe(0);
+      emit(page, IMPORT_FAILED);
+      emit(page, ABORTED);
+      emit(null, ABORTED);
+      navigate(page);
+      await page.reload();
+      await expect(watch.waitForTitle(page, TITLE)).rejects.toThrow(
+        "not a network-change module failure",
+      );
+      expect(state.reloads).toBe(1); // Only the explicit reload.
+      // Current-load messages arrive before the wait and must still authorize
+      // recovery; a subframe navigation must not clear them.
+      emit(page, IMPORT_FAILED);
+      emit(page, ABORTED);
+      navigate(page, true);
+      await expect(watch.waitForTitle(page, TITLE)).resolves.toBe(1);
+      expect(state.reloads).toBe(2);
+    } finally {
+      watch.dispose();
+    }
   });
 
   test("a later window is judged on its own console, not on an earlier window's aborts", async () => {

@@ -12,10 +12,10 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 ag
 1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: done (2026-11-06, both providers, loopback models).
 2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: done (2026-11-06: a spec expectation; the output is in the finished task's output file, which the case now reads).
 3. **Codex live async question and background shell**: neither has been exercised live. Status: done (2026-11-06, loopback model: the async question reached a backed-off view in 13 ms and its answer settled; the backgrounded command's card stays "running..." for good, moved to [7522](7522-codex-backgrounded-command-stays-running.md)).
-4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to [7530](7530-codex-idle-discovery-renewals.md)).
+4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to 7530, closed 2026-11-10: the MCP section's tool order moved; a rerun read 0 invalidations and 8.4 reads a minute, see [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round)).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code); open: no loopback model is wired into OpenCode, and this host has no OpenCode login to use instead.
-7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: partly done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to [7540](7540-pi-idle-view-keeps-session-attached.md)); Grok blocked (needs a Grok login; no loopback model reaches it).
+7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: partly done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to 7540, closed 2026-11-10: the full 630 s wait now passes, see `bridges/pi-bridge/AGENTS.md`); Grok blocked (needs a Grok login; no loopback model reaches it).
 8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); Cursor and OpenCode open (no loopback model reaches either).
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
@@ -255,7 +255,7 @@ value changed, each resetting the view's backoff to its 3 s step. A probe of
 the four discovery sections on a fresh idle Codex session (plain, background,
 sub-agent and async-question histories, seven 31 s renewals each) saw no
 change, so which section moves is still unknown; that and the fix are
-[7530](7530-codex-idle-discovery-renewals.md). The 2026-10-23 figure (27 a
+7530 (closed 2026-11-10: the MCP section, its tools listed in a new order on each read). The 2026-10-23 figure (27 a
 minute) was taken on a real model and a busier session; this run's lower
 figure is one loopback sample.
 
@@ -365,7 +365,8 @@ D21), so no login and no host `~/.pi` was involved, and the session reported
   `attached` before and after: an open, idle Pi tab keeps its session
   attached, because the MCP discovery renewal (`GET /session/:id/mcp`) is
   among the routes that refresh the Pi bridge's idle clock
-  ([7540](7540-pi-idle-view-keeps-session-attached.md)).
+  (7540, closed 2026-11-10: reads no longer refresh the idle clock, and the
+  same 630 s wait passed on 2026-11-10).
 
 Grok stays blocked: it needs a Grok login, which this change may not use, and
 no loopback model reaches it.
@@ -716,7 +717,7 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
 - Claude and Codex: every case has now run at the new cadence with loopback
   models (2026-11-06, tasks 3 to 5). Left from them: Codex's backgrounded
   command card (7522) and the discovery renewals that wake an idle Codex
-  view (7530). These are loopback-model runs; a real model's own choices
+  view (7530, closed 2026-11-10). These are loopback-model runs; a real model's own choices
   (and a real provider's latency) are not part of them.
 - Grok: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once a Grok
   login is available; no loopback model reaches Grok. Pi ran on a loopback
@@ -863,6 +864,20 @@ multi-agent mail, re-spawned children in a loop until the turn timed out; it
 now names the namespace, reads `NEW_TASK` and `FINAL_ANSWER` agent messages,
 and caps spawns at two per connection. The spec's sub-agent case now also
 counts Codex's `subagent` cards, which carry no tool name.
+
+**Rerun after 7530 and 7540 (2026-11-10, loopback models).** beelink2, the
+same commands with profile `idle7530` (headless, no Docker container, no
+login; `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1500000` so the logged
+runner's 300 s silence watchdog does not stop the idle wait). Codex before
+the fix (run `idle7530-codex-2`) reproduced the table: 13.3 reads a minute,
+`discovery-renewal` 6, and the new per-section counter named the field,
+`mcp` with `value[].tools[order]` 6. After the fix (`idle7530-codex-fixed`):
+0 invalidations, 8.4 reads a minute, gaps 17 / 1 / 2 / 0 / 17, every other
+case as before. Pi (`idle7530-pi`, default 630 s wait): `detach` passed,
+`attached` before the wait, `detached` after it and `attached` again after the
+next prompt; 7.6 reads a minute, and the two discovery announcements were the
+detach itself (runtime `summary.state` and `summary.mcpServers`, MCP list
+`value[count]`). Single samples. The profile was stopped and reset.
 
 Evidence: `output/agent-testing/idleqa-0049-r2-*/idle-observation-live/<platform>.json`
 in the worktree that ran it. Every environment the runs and probes created
@@ -1324,8 +1339,11 @@ and options. Cons: both costs remain until then.
 - [7522-codex-backgrounded-command-stays-running.md](7522-codex-backgrounded-command-stays-running.md):
   found by task 3; a Codex command left running at the end of its turn reads
   "running..." for good.
-- [7530-codex-idle-discovery-renewals.md](7530-codex-idle-discovery-renewals.md):
-  found by task 4; the discovery renewals that wake an idle Codex view.
+- 7530 (closed and deleted 2026-11-10): found by task 4; the discovery
+  renewals that woke an idle Codex view, an MCP tool list read in a new
+  order each time.
+- 7540 (closed and deleted 2026-11-10): found by task 7; an open idle Pi tab
+  kept its session attached.
 - [5040-revision-token-spec-background-output.md](5040-revision-token-spec-background-output.md):
   another spec that expects a background command's output on its launching
   row; task 2 found that Claude puts it only in the task's output file.

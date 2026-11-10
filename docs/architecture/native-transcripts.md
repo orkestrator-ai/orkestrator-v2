@@ -286,6 +286,19 @@ again; with no read at all nothing would ever refresh, so nothing would ever be
 announced. Coalescing a burst of session changes keeps a cause that names
 discovery (`coalesceChanges`, `resource-sync.ts`).
 
+A renewal announces only when the value changed as a view would show it
+(`storeProgressiveDiscovery`), so a stored value must not move when nothing
+did. Two normalisations keep it still: the runtime section's drift counter is
+left out of the comparison (`discoveryAnnouncementKey`), and each MCP server's
+tool names are stored in one fixed order (`orderMcpServerTools`), because
+Codex app-server reports them as a map whose order changes between reads; the
+Codex bridge also sorts them before its cut. Before that, an idle Codex view
+was told to read again about once every 50 s (six announcements in 300 s,
+13.3 reads a minute against Claude's 8; todo 7530). Each discovery
+announcement is counted by section and by the content-free value paths that
+changed (`discoveryRenewals` in `sessionInvalidations`, below), so the next
+moving field is named by an idle run rather than guessed.
+
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
 (`native-agent-progressive-metrics.ts`). They hold durations only, never

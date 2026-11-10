@@ -354,6 +354,55 @@ describe("lsTool", () => {
     expect(src.childrenWereProcessed).toBe(true);
   });
 
+  test("preserves newline filenames as one listing entry", async () => {
+    const directory = join(root, "newline-listing");
+    await mkdir(directory);
+    await writeFile(join(directory, "one\ntwo.txt"), "fixture");
+    const result = await lsTool(directory, {}, { refused: nothingRefused, ripgrep });
+    expect(result.result.case).toBe("success");
+    if (result.result.case !== "success") return;
+    expect(names(result.result.value.directoryTreeRoot)).toEqual([join(directory, "one\ntwo.txt")]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "lists nested paths when rooted at the filesystem root",
+    async () => {
+      const fakeRipgrep = join(root, "fake-ripgrep");
+      await writeFile(fakeRipgrep, "#!/bin/sh\nprintf 'tmp/project/file.txt\\0'\n", {
+        mode: 0o755,
+      });
+      const result = await lsTool("/", {}, { refused: nothingRefused, ripgrep: fakeRipgrep });
+      expect(result.result).toEqual({
+        case: "success",
+        value: {
+          directoryTreeRoot: {
+            absPath: "/",
+            childrenFiles: [],
+            childrenWereProcessed: true,
+            fullSubtreeExtensionCounts: {},
+            childrenDirs: [
+              {
+                absPath: "/tmp",
+                childrenFiles: [],
+                childrenWereProcessed: true,
+                fullSubtreeExtensionCounts: {},
+                childrenDirs: [
+                  {
+                    absPath: "/tmp/project",
+                    childrenFiles: [{ name: "file.txt" }],
+                    childrenDirs: [],
+                    childrenWereProcessed: true,
+                    fullSubtreeExtensionCounts: {},
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+    },
+  );
+
   test("answers a file and a missing path as errors", async () => {
     for (const path of [join(root, "lines.txt"), join(root, "missing")]) {
       const result = await lsTool(path, {}, { refused: nothingRefused, ripgrep });

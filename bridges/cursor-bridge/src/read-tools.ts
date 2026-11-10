@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
@@ -490,12 +491,20 @@ function withoutDotSlash(path: string): string {
   return path.startsWith(`.${sep}`) ? path.slice(2) : path;
 }
 
+/** Never authorize a replacement-character spelling of a raw filesystem path. */
+function pathText(bytes: Buffer): string | undefined {
+  return isUtf8(bytes) ? bytes.toString("utf8") : undefined;
+}
+
 function splitNull(output: Buffer): string[] {
-  return output
-    .toString("utf8")
-    .split("\0")
-    .map((entry) => entry.replace(/^\r?\n/, ""))
-    .filter((entry) => entry !== "");
+  const paths: string[] = [];
+  let start = 0;
+  for (let end = output.indexOf(0); end !== -1; end = output.indexOf(0, start)) {
+    const path = pathText(output.subarray(start, end));
+    if (path) paths.push(path);
+    start = end + 1;
+  }
+  return paths;
 }
 
 interface RipgrepJsonText {
@@ -529,7 +538,12 @@ function contentLines(output: Buffer): ContentLine[] {
     }
     if (event.type !== "match" && event.type !== "context") continue;
     const data = event.data ?? {};
-    const file = jsonText(data.path as RipgrepJsonText | undefined);
+    const reportedPath = data.path as RipgrepJsonText | undefined;
+    const file =
+      reportedPath?.bytes !== undefined
+        ? pathText(Buffer.from(reportedPath.bytes, "base64"))
+        : reportedPath?.text;
+    if (!file) continue;
     const text = jsonText(data.lines as RipgrepJsonText | undefined).replace(/\r?\n$/, "");
     const lineNumber = typeof data.line_number === "number" ? data.line_number : 0;
     // A multiline match spans several lines; each is reported on its own.
@@ -626,14 +640,25 @@ export async function grepTool(
         },
       };
     } else {
-      const entries = run.stdout.toString("utf8").split("\n");
       const counts: { file: string; count: number }[] = [];
-      for (const entry of entries) {
-        const separator = entry.lastIndexOf("\0");
-        if (separator === -1) continue;
-        const file = withoutDotSlash(entry.slice(0, separator));
-        const count = Number.parseInt(entry.slice(separator + 1), 10);
-        if (Number.isFinite(count) && admitted(file)) counts.push({ file, count });
+      // rg -c -0 emits path NUL count LF. Split bytes before decoding paths,
+      // so an invalid name cannot discard or impersonate a neighbouring row.
+      let start = 0;
+      while (start < run.stdout.length) {
+        const separator = run.stdout.indexOf(0, start);
+        if (separator === -1) break;
+        const end = run.stdout.indexOf(10, separator + 1);
+        if (end === -1) break;
+        const path = pathText(run.stdout.subarray(start, separator));
+        const count = Number.parseInt(
+          run.stdout.subarray(separator + 1, end).toString("ascii"),
+          10,
+        );
+        if (path !== undefined) {
+          const file = withoutDotSlash(path);
+          if (Number.isFinite(count) && admitted(file)) counts.push({ file, count });
+        }
+        start = end + 1;
       }
       const paged = page(counts, args);
       union = {
@@ -730,7 +755,8 @@ class TreeBuilder {
   private ensureDirectory(directory: string): TreeNode | undefined {
     const existing = this.nodes.get(directory);
     if (existing) return existing;
-    if (!directory.startsWith(`${this.rootPath}${sep}`)) return undefined;
+    const inside = relative(this.rootPath, directory);
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return undefined;
     const parent = this.ensureDirectory(dirname(directory));
     const node = treeNode(directory, !this.budgetExceeded);
     this.nodes.set(directory, node);
@@ -798,7 +824,14 @@ export async function lsTool(
         result: { case: "error", value: { path, error: `Path is not a directory: ${path}` } },
       };
     }
-    const rgArgs = ["--files", "--hidden", "--no-require-git", "--no-config", "--color=never"];
+    const rgArgs = [
+      "--files",
+      "--null",
+      "--hidden",
+      "--no-require-git",
+      "--no-config",
+      "--color=never",
+    ];
     for (const ignore of args.ignore ?? []) rgArgs.push("--iglob", `!${ignore}`);
     const cursorIgnore = join(path, ".cursorignore");
     if (existsSync(cursorIgnore)) rgArgs.push("--ignore-file", cursorIgnore);
@@ -807,7 +840,7 @@ export async function lsTool(
       return { result: { case: "error", value: { path, error: ripgrepError(run) } } };
     }
     const tree = new TreeBuilder(path);
-    for (const line of run.stdout.toString("utf8").split("\n")) {
+    for (const line of splitNull(run.stdout)) {
       if (!line) continue;
       const file = resolve(path, line);
       if (options.refused(file)) continue;

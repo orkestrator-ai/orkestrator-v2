@@ -170,6 +170,32 @@ describe("grep and glob", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")(
+    "raw-byte links never expose protected search content or listings",
+    async () => {
+      const rawPath = (prefix: string, suffix = "") =>
+        Buffer.concat([Buffer.from(join(cwd, prefix)), Buffer.from([0xff]), Buffer.from(suffix)]);
+      const fileLink = rawPath("raw-file-");
+      const directoryLink = rawPath("raw-directory-");
+      await symlink(secrets.credentials!, fileLink);
+      await symlink(dataDir, directoryLink);
+      for (const outputMode of ["content", "files_with_matches", "count"]) {
+        const result = await grep({ pattern: "FIXTURE", outputMode });
+        expect(result.result.case).toBe("success");
+        const text = JSON.stringify(result);
+        expect(text).not.toContain(SECRET);
+        expect(text).not.toContain("raw-file-");
+        expect(text).not.toContain("raw-directory-");
+      }
+      const glob = await grep({ pattern: "", outputMode: "files_with_matches" });
+      expect(JSON.stringify(glob)).not.toContain("raw-file-");
+      const listing = await ls(cwd);
+      expect(listing.result.case).toBe("success");
+      expect(JSON.stringify(listing)).not.toContain("raw-file-");
+      expect(JSON.stringify(listing)).not.toContain("raw-directory-");
+    },
+  );
+
   test("a search rooted above the data directory returns everything but it", async () => {
     const result = await grep({ pattern: "FIXTURE", path: root, outputMode: "files_with_matches" });
     expect(result.result.case).toBe("success");

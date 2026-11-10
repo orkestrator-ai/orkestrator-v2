@@ -631,8 +631,16 @@ export class TurnAccumulator {
     // An item that never settled renders differently once the turn is over (a
     // held-back raw patch is shown, for one), and its row may be long past
     // the ones still tracked for rendering. Marking it moved reaches it there.
+    // So does a command app-server completed while it was still
+    // `in_progress`: once the turn has ended it reads as left running.
     for (const accumulator of this.items.values()) {
-      if (!accumulator.completed && !accumulator.interrupted) this.touch(accumulator);
+      if (
+        (!accumulator.completed && !accumulator.interrupted) ||
+        (accumulator.item?.type === "command_execution" &&
+          accumulator.item.status === "in_progress")
+      ) {
+        this.touch(accumulator);
+      }
     }
   }
 

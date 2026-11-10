@@ -65,6 +65,14 @@ export interface NormalizedPart {
    */
   toolDurationMs?: number;
   /**
+   * The command was still running when its turn ended and nothing will report
+   * its end (see `CommandExecutionItem.left_running`). Such a row carries no
+   * `toolState`: it is not running as far as anyone can tell, and it neither
+   * succeeded nor failed. The renderer reads it as "left running", with no
+   * spinner.
+   */
+  toolLeftRunning?: true;
+  /**
    * What a shell command changed in its worktree, measured around it (see
    * `sessions/command-changes.ts`). Set only on `bash` rows that changed
    * something; the renderer shows it as the row's +N −M badge.

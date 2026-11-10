@@ -42,6 +42,14 @@ export interface CommandExecutionItem {
   source?: CommandExecutionSource;
   /** How long the command ran, as app-server measured it; set once it ends. */
   duration_ms?: number;
+  /**
+   * Set by the renderer, never by app-server: the command was still
+   * `in_progress` when its turn ended. A unified-exec process the model did
+   * not wait for (a dev server, a watcher) outlives its `exec_command` call,
+   * and app-server reports nothing for it after the turn, so no end will ever
+   * settle it (to-do 7522).
+   */
+  left_running?: true;
 }
 
 export type PatchChangeKind = "add" | "delete" | "update";

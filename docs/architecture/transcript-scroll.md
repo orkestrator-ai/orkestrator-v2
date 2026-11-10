@@ -267,6 +267,16 @@ whose body never exceeds `min(28rem, 55dvh)`, expanded details included.
   its own `firstItemIndex`, and protects a selection (or else focus) with the
   shared bound.
   Entries are memoized on the member object and keyed by call id.
+- Opening is remembered in `messagePartExpansionStore`, keyed by call id
+  within the transcript scope rather than by row: a group by its members'
+  call ids, and a call's own disclosure (its output, deferred or not) by its
+  own (`toolExpansionKey` in `NativeMessage.shared.tsx`). Coalescing renames
+  the row that holds a group whenever earlier rows merge in front of it, and
+  Codex's first replay after live streaming renames every row while each call
+  keeps its id, so neither may fold what the reader opened. A call without a
+  provider id falls back to its row-scoped part key. Covered by
+  `NativeMessage.tool-expansion-rename.test.tsx` and, after a real Codex
+  bridge restart, by `transcript-paging-live.spec.ts`.
 - Anchors for members inside an inner viewport are composite: the transcript
   holds the group frame, the inner viewport puts the member back at its
   on-screen offset (absorbing a clamped transcript). A member the inner list

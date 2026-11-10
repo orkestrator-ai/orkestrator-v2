@@ -25,6 +25,7 @@ import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { onDrawerNavigation } from "@/lib/mobile-shell";
+import { pinnedScroll } from "@/lib/pinned-scroll";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -454,9 +455,11 @@ export function MobileAppShellLayout({
           {actionBar}
         </div>
       </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div className="relative min-h-0 flex-1 overflow-hidden" {...pinnedScroll}>
         <div className="flex h-full min-w-0 flex-col" style={centralPanelStyle}>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background">{children}</main>
+          <main className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background" {...pinnedScroll}>
+            {children}
+          </main>
         </div>
 
         <DialogPrimitive.Portal>

@@ -21,6 +21,7 @@ import {
 } from "@/stores/filesPanelStore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { ActionBar } from "./ActionBar";
+import { pinnedScroll } from "@/lib/pinned-scroll";
 
 /** The active tab of an environment's active pane, as the store holds it. */
 function selectActivePaneTab(environment: EnvironmentPaneState | undefined) {
@@ -141,11 +142,13 @@ export function NodeWorkspaceLayout({
   const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
   return (
     <>
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" {...pinnedScroll}>
         <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
           <div className="flex h-full flex-col" style={centralPanelThemeVars}>
             <ActionBar />
-            <main className="min-h-0 flex-1 overflow-hidden bg-background">{main}</main>
+            <main className="min-h-0 flex-1 overflow-hidden bg-background" {...pinnedScroll}>
+              {main}
+            </main>
           </div>
         </ResizablePanel>
         {filesPanelOpen && !phone && (

@@ -125,12 +125,14 @@ describe("build.launch", () => {
     });
     // Reviewer 1 is the review step, as in the launcher.
     expect(pipeline.steps?.review).toEqual(pipeline.reviewers?.[0]);
-    // Naming only instructions keeps the saved preparation model.
+    // Naming only instructions keeps the saved preparation selection. No
+    // action names a model, so the platform's own default is resolved when the
+    // stage starts rather than pinned here (to-do 7546).
     expect(pipeline.reviewPreparation).toMatchObject({
       agent: "claude",
       instructions: TEXT.preparation,
     });
-    expect(pipeline.reviewPreparation?.model).toBeTruthy();
+    expect(pipeline.reviewPreparation?.model).toBeUndefined();
 
     const replay = await build.harness.call("build.launch", input, { requestId: "build-1" });
     expect(replay.receipt?.replayed).toBe(true);

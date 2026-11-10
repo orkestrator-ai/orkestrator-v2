@@ -304,10 +304,15 @@ describe("OpenCode2InteractionAdapter", () => {
       fields: [{ key: "a", type: "string" }],
     });
     await provider.abort(sessionId);
-    expect(session.replies).toEqual([
-      { kind: "permission", id: "per_1", decision: "reject" },
-      { kind: "form", id: "frm_1", decision: "rejected" },
-    ]);
+    // The rejections are sent concurrently, so they reach the server in either
+    // order; the contract is that each parked request is rejected exactly once.
+    expect(session.replies).toHaveLength(2);
+    expect(session.replies).toEqual(
+      expect.arrayContaining([
+        { kind: "permission", id: "per_1", decision: "reject" },
+        { kind: "form", id: "frm_1", decision: "rejected" },
+      ]),
+    );
     expect((await provider.interactions.listPendingInteractions(sessionId)).requests).toEqual([]);
   });
 

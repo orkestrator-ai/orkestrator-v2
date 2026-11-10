@@ -1610,6 +1610,66 @@ mise run dev:stop --profile scope-cmd && mise run dev:reset --profile scope-cmd
 mise run dev:stop --profile scope-leaf && mise run dev:reset --profile scope-leaf
 ```
 
+### Live fleet ticket sync (two profiles)
+
+`e2e/agent-testing/fleet-ticket-sync-live.spec.ts` qualifies Kanban sync
+between a command node and a leaf over the real gateway, event stream and node
+link of two running `dev:test` profiles, with a real disconnect (to-do 3800
+task 1, [tickets.md](../architecture/tickets.md#sync-across-machines)). It
+renames the profiles "QA command" and "QA leaf", gives both fixture projects
+one repository identity (`gitUrl`), makes a leaf ticket, then attaches the
+leaf. In order it checks: the first sync after attach; a ticket each way
+with no manual sync; Share of the older leaf ticket; an image read each way;
+both boards on screen (the sync line, the synced-from marks); a conflict made
+while the link is disabled (`update_node` `enabled: false`), with its comment,
+the conflict list and dismissal; a real disconnect (`dev:stop` on the leaf),
+edits that wait, a coordinator build with `nodeId` refused and the single
+"Machine … reconnected" message after the leaf is started again
+([coordinator.md](../architecture/coordinator.md#tickets-on-other-machines));
+and a build started on the leaf with `nodeId` for a ticket of the command
+board, linked to the same ticket there, then cancelled. Both profiles run
+without credentials and offer only Pi, whose isolated `models.json` names a
+loopback fake model (`auto-pipeline-fake-model.ts`), so nothing logs in and
+nothing is billed. The profiles must be fresh: reset them before each run.
+
+```bash
+FLAGS="--fixture --headless --no-agent-credentials --agent-platforms pi"
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-cmd $FLAGS    # own terminal
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-leaf $FLAGS   # own terminal
+ORKESTRATOR_AGENT_TEST_FLEET_TICKET_SYNC=1 \
+ORKESTRATOR_AGENT_TEST_PROFILE=fts-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=fts-leaf \
+  mise run test:logged -- --name fleet-ticket-sync -- \
+  bunx playwright test --config e2e/agent-testing/playwright.fleet-ticket-sync.config.ts
+mise run dev:stop --profile fts-leaf && mise run dev:reset --profile fts-leaf
+mise run dev:stop --profile fts-cmd && mise run dev:reset --profile fts-cmd
+```
+
+The spec starts the leaf again itself with the same flags
+(`ORKESTRATOR_AGENT_TEST_LEAF_START_ARGS` overrides them); that launcher keeps
+running until `dev:stop`. Evidence (ids, timings, counts) is written to
+`output/agent-testing/<run>/fleet-ticket-sync/evidence.json`, screenshots to
+`output/visual-previews/fleet-ticket-sync-*.png`.
+
+The first runs (2026-11-10, Linux) found three faults the in-process tests
+could not: the command node did not subscribe to `ticket-sync-outbox-ready`,
+so a leaf edit waited up to the 60 s reconcile (48 s measured) and an image a
+leaf asked for could not arrive within its 20 s wait; and the first sync after
+attaching waited for the reconcile too (37 s), because the leaf's projects
+had not been read yet. With the fixes, the passing run measured: first sync
+0.5 s; a ticket each way 0.5 s; Share 0.5 s; image bytes 20 to 40 ms each way
+once listed; conflict recorded 0.5 s after the link returned; the leaf seen
+as gone 26 s after it stopped; the offline edits on the restarted leaf 0.3 s
+after it reattached; one reconnect message; the remote build linked to the
+leaf's ticket at once and cancelled.
+
+It does not cover what only two hosts can show: an SSH route, the relay, or a
+network partition in which the leaf stays up but unreachable (the link is
+disabled cleanly instead), and it calls the coordinator's backend commands
+(`start_coordinator_node_build_pipeline`) rather than having a model call the
+MCP tool.
+
 ### Live requests of a running agent tab
 
 `e2e/agent-testing/agent-tab-requests-live.spec.ts` counts what one visible
@@ -2115,6 +2175,55 @@ ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE=1` to `bunx playwright test --config
 e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
 fixture project's Build defaults and leaves its environments behind, so reset
 the profile afterwards.
+
+### Coordinator checkout sync with a slow remote (fake model)
+
+`mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
+fast-forward to an already fetched upstream when the remote is slow (to-do
+4720), without a login, a billed turn or the network. It starts a disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
+stops and resets the profile. The real backend, project Git service, Pi
+bridge, agent mail and renderer run; the model is
+`coordinator-slow-remote-fake-model.ts` on loopback, named in the profile's
+isolated Pi `models.json` and `settings.json`.
+
+The spec adds two disposable projects under the profile's fixture directory,
+each a checkout of its own local bare repository. Each checkout's origin is
+`ssh://git@slow.invalid/repo.git` with a checkout-local `core.sshCommand`
+shim and `ssh.variant simple`; the shim runs `git-upload-pack` on its own bare
+repository, records only a start time per invocation, and sleeps 15 s while a
+delay marker exists. No host SSH or global Git configuration changes. With the
+delay off, a direct and a backend fetch through each shim must succeed. The
+mail project's main coordinator then starts a turn that the fake model parks,
+both remotes gain two commits that each checkout fetches without merging, and
+the delay markers are created. Then:
+
+- **Typed.** Once the backend's 60 s fetch cooldown has passed, a message typed
+  in the browser to the first project's main coordinator must log
+  `checkout.message-check outcome=fast-forwarded fetch=timed-out` with
+  `durationMs` of at least 3000, move `HEAD` to the recorded upstream with one
+  new reflog entry before the late fetch can finish, and turn the toolbar's
+  "2 commits behind" into "Up to date".
+- **Mail.** A Pi worker tab in the second project sends its coordinator a
+  report through Orkestrator's `send_message` tool (same-project trust,
+  `coordinator` route). The mail must wait behind the running turn
+  (`delivery.waiting reason=working`) with the checkout still behind. When the
+  turn is released, with the delay still on, the redelivery must log
+  `checkout.mail-follow outcome=fast-forwarded-fetched` at least 5 s after the
+  shim started and before it could finish, move `HEAD` to the upstream with
+  one new reflog entry, and be injected.
+
+The content-free summary is
+`output/agent-testing/<profile>/coordinator-slow-remote/summary.json`, and
+screenshots are `output/visual-previews/coordinator-slow-remote-*.png`. To run
+the spec against a profile you started yourself, use the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-slow-remote.config.ts`. It
+reads backend log lines from the profile's `logs/electron.log`, so it needs a
+`dev:test` profile rather than a standalone backend. The shim's timestamps use
+GNU `date`, so the spec runs on Linux.
 
 ### Live goal suite
 

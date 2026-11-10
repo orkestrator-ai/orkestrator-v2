@@ -356,6 +356,13 @@ export function toolRowPreview(
   return null;
 }
 
+/** The state shown at the end of a tool row, with an optional explanation. */
+interface ToolStateBadge {
+  label: string;
+  className: string;
+  title?: string;
+}
+
 function backgroundTaskState(
   task: NativeBackgroundTask | undefined,
 ): { label: string; className: string } | undefined {
@@ -431,6 +438,7 @@ export function ToolPart({
   durationMs,
   deferredDetails = false,
   mcpServerName,
+  leftRunning = false,
 }: {
   expansionKey: string;
   /** Provider call id; keys the backend's change presentation for this row. */
@@ -468,6 +476,8 @@ export function ToolPart({
   deferredDetails?: boolean;
   /** Reported MCP server, so a same-named tool of another server is not taken for Orkestrator's. */
   mcpServerName?: string;
+  /** Still running when its turn ended, with no end to come (`toolLeftRunning`). */
+  leftRunning?: boolean;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const changeScope = useNativeChangeScope();
@@ -525,7 +535,7 @@ export function ToolPart({
     (!displayInfo || displayInfo.generic) &&
     displayToolTitle !== displayToolName;
   const lifecycleState = backgroundTaskState(backgroundTask);
-  const toolResultState = toolState
+  const toolResultState: ToolStateBadge | undefined = toolState
     ? {
         label:
           toolState === "failure"
@@ -539,14 +549,22 @@ export function ToolPart({
                 : toolState,
         className: stateColors[toolState],
       }
-    : undefined;
+    : leftRunning
+      ? {
+          // Settled as far as anything will report: no spinner, and no claim
+          // that it succeeded or failed.
+          label: "left running",
+          className: "text-muted-foreground",
+          title: "Still running when the turn ended. The agent reports nothing more about it.",
+        }
+      : undefined;
   /*
    * A failed tool result outranks the task's lifecycle badge. Stopping a task
    * that already finished is rejected by the tool ("Task <id> is not running"),
    * and the task itself is still `completed` — so deferring to the lifecycle
    * here would paint a green "completed" over an action that failed.
    */
-  const displayedState = denied
+  const displayedState: ToolStateBadge | undefined = denied
     ? { label: "denied", className: stateColors.failure }
     : toolState === "failure"
       ? toolResultState
@@ -628,7 +646,10 @@ export function ToolPart({
         legacyChanges && <CommandChangeStats change={legacyChanges} />
       )}
       {displayedState && (
-        <span className={cn("ml-auto shrink-0", displayedState.className)}>
+        <span
+          className={cn("ml-auto shrink-0", displayedState.className)}
+          title={displayedState.title}
+        >
           {displayedState.label}
         </span>
       )}

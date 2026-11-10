@@ -74,6 +74,12 @@ export interface TicketSyncNode {
   displayName: string;
   available: boolean;
   projects: Array<{ projectId: string; name?: string; repositoryHint?: string }>;
+  /**
+   * This node has not read the node's projects yet (a node just attached):
+   * `projects` is empty for want of a read, not because there are none, so
+   * pairing waits and retries instead of finding nothing to sync.
+   */
+  summaryPending?: boolean;
 }
 
 export interface NodeTicketSyncDeps {
@@ -111,6 +117,8 @@ export interface NodeTicketSyncResult {
   sent: number;
   /** Images delivered to the leaf. */
   images?: number;
+  /** Nothing was paired yet: the node's projects are still being read; retried shortly. */
+  waiting?: boolean;
 }
 
 const MAX_ROUNDS = 200;
@@ -218,13 +226,19 @@ export class NodeTicketSync {
           conflicts: total.conflicts + result.conflicts,
           sent: total.sent + result.sent,
         };
-        if (!this.again.has(nodeId) || this.disposed || result.state !== "in-sync") break;
+        if (
+          !this.again.has(nodeId) ||
+          this.disposed ||
+          result.state !== "in-sync" ||
+          result.waiting
+        )
+          break;
       }
       this.outcomes.set(nodeId, {
         state: total.state,
         ...(total.message ? { message: total.message } : {}),
       });
-      if (total.state === "error") this.retry(nodeId);
+      if (total.state === "error" || total.waiting) this.retry(nodeId);
       else this.delays.delete(nodeId);
       this.deps.emit(ticketSyncStatusChangedEvent, { nodeId });
       return total;
@@ -335,6 +349,9 @@ export class NodeTicketSync {
         message: olderLeafTicketMessage(node.displayName),
       };
     }
+    // Without the node's projects nothing pairs; the attach read lands within
+    // moments, so try again then rather than at the next reconcile.
+    if (node.summaryPending) return { ...empty, state: "in-sync", waiting: true };
     const controllerId = await this.deps.selfId();
     const pairs = await this.pairs(node);
     const localIds = new Set((await this.deps.localProjects()).map((project) => project.id));

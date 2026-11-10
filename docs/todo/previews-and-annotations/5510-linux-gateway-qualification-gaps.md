@@ -24,7 +24,7 @@ Tasks 2 and 3 worked on 2026-11-09 against main at `c6de4733c5beb87a578f82a85487
 
 **Problem.** The tested rootless daemon disabled host loopback, so the run cannot establish reach or isolation for loopback-bound services when it is enabled.
 
-**Context.** [Todo 0109](../containers-and-environments/0109-rootless-linux-runtime-gaps.md) tracks rootless host reachability. The prior named service port was unreachable in both modes and was not a positive control.
+**Context.** Rootless host reachability, and why a daemon with host loopback off reports `blocked`, is in [container lifecycle](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (decided in todo 0109, retired on 2026-11-10); the remaining rootless reachability gap is [7548](../containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md). The prior named service port was unreachable in both modes and was not a positive control.
 
 **Investigation.** On a disposable daemon configured for host loopback, compare restricted and full reach to a loopback-bound real gateway and a named service port. Confirm the named service is reachable before interpreting gateway refusals; record counters and peer addresses. Keep the shared host's Docker and firewall configuration unchanged.
 
@@ -92,7 +92,8 @@ The 2026-11-05 rootful and rootless observations stand. On 2026-11-09 the rootle
 - [Gateway security notes](../../architecture/remote-gateway.md#security-notes)
 - [Shipping Safari checks](5500-shipping-safari-gateway-security-checks.md)
 - [Preview rollout](0042-service-preview-rollout.md)
-- [Rootless runtime gaps](../containers-and-environments/0109-rootless-linux-runtime-gaps.md)
+- [Rootless agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)
+- [Rootless gvisor-tap-vsock host loopback](../containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
 
 ## Replaces
 

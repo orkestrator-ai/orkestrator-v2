@@ -4,26 +4,37 @@ import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { APP_VERSION } from "./constants.js";
 import type { DiagnosticsSources } from "./diagnostics-bundle.js";
+import {
+  collectContainerLogs,
+  dockerContainerLogReader,
+  type ContainerLogReader,
+} from "./diagnostics-container-logs.js";
 import { getLogStorageStats } from "./log-storage.js";
 
-const NOT_COLLECTED = [
-  {
-    name: "container server logs",
-    reason:
-      "Not collected: reading them takes a `docker exec` per server and they are raw provider lines.",
-  },
-  {
-    name: "prompts, transcripts, terminal output, files and credentials",
-    reason: "Never collected.",
-  },
-];
+const NOT_CHOSEN_CONTAINER_LOGS = {
+  name: "container server logs",
+  reason:
+    "Not chosen: add them per environment in Settings → Debug → Export diagnostics. Reading them takes a docker exec per server, and they are raw provider lines.",
+};
+const NEVER_COLLECTED = {
+  name: "prompts, transcripts, terminal output, files and credentials",
+  reason: "Never collected.",
+};
 
 /**
  * What one backend's bundle holds, read in-process through the same functions
  * `/metrics` and the commands use. No loopback call and no credential: this
- * works the same on a standalone backend.
+ * works the same on a standalone backend. Container server logs are read only
+ * for the environments the user chose (`diagnostics-container-logs.ts`).
  */
-export async function diagnosticsSources(context: CommandContext): Promise<DiagnosticsSources> {
+export async function diagnosticsSources(
+  context: CommandContext,
+  options: {
+    /** Environments whose container server logs the user chose to add; canonical. */
+    containerLogs?: readonly string[];
+    reader?: ContainerLogReader;
+  } = {},
+): Promise<DiagnosticsSources> {
   const diagnostics = context.diagnostics;
   const dataDir = context.storage.getDataDir();
   const logsDir = context.storage.getLogDirectory();
@@ -34,6 +45,17 @@ export async function diagnosticsSources(context: CommandContext): Promise<Diagn
   };
   const logStorage = await getLogStorageStats(logsDir).catch(() => null);
   const tracking = context.runtime.changeTracking;
+  const chosen = options.containerLogs ?? [];
+  const containerLogs =
+    chosen.length > 0
+      ? await collectContainerLogs(
+          chosen,
+          options.reader ??
+            dockerContainerLogReader((environmentId) =>
+              context.storage.getEnvironment(environmentId),
+            ),
+        )
+      : null;
   return {
     now: () => new Date(),
     appVersion: APP_VERSION,
@@ -106,6 +128,10 @@ export async function diagnosticsSources(context: CommandContext): Promise<Diagn
         absentAs: "The log directory could not be measured.",
       },
     ],
-    notCollected: NOT_COLLECTED,
+    texts: containerLogs?.texts ?? [],
+    notCollected: [
+      ...(containerLogs ? containerLogs.absent : [NOT_CHOSEN_CONTAINER_LOGS]),
+      NEVER_COLLECTED,
+    ],
   };
 }

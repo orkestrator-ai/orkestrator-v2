@@ -1,12 +1,23 @@
 /** Real SDK lifecycle/store; only model lookup and executor startup are stubbed. */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
-import * as sdk from "@cursor/sdk";
+import type * as Sdk from "@cursor/sdk";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousApiKey = process.env.CURSOR_API_KEY;
+const previousBackendUrl = process.env.CURSOR_BACKEND_URL;
+/**
+ * With `CURSOR_API_KEY` set, the real SDK's first `send` starts a request to
+ * Cursor's backend (`/auth/exchange_user_api_key`, for its HTTP/2 config) that
+ * has no deadline, and disposing the agent waits for it. A slow or unreachable
+ * backend timed out every later case that detaches an agent (flake 1530).
+ * Port 0 can never accept a connection, so those requests fail at once on any
+ * host. The SDK reads this variable when it loads, so it is imported below.
+ */
+process.env.CURSOR_BACKEND_URL = "http://127.0.0.1:0";
+const sdk: typeof Sdk = await import("@cursor/sdk");
 const root = await mkdtemp(join(tmpdir(), "cursor-initial-run-"));
 process.env.CURSOR_BRIDGE_STATE_DIR = root;
 
@@ -16,22 +27,22 @@ process.env.CURSOR_BRIDGE_STATE_DIR = root;
  * direct injection keeps this owner independent of which suite imported it
  * first without replacing `@cursor/sdk` in Bun's shared module registry.
  */
-const store: sdk.LocalAgentStore = new sdk.JsonlLocalAgentStore(join(root, "cursor-sdk"));
+const store: Sdk.LocalAgentStore = new sdk.JsonlLocalAgentStore(join(root, "cursor-sdk"));
 
-let platform: sdk.CursorAgentPlatform;
-let listedAgents: sdk.SDKAgentInfo[] = [];
-const createdOptions: sdk.AgentOptions[] = [];
+let platform: Sdk.CursorAgentPlatform;
+let listedAgents: Sdk.SDKAgentInfo[] = [];
+const createdOptions: Sdk.AgentOptions[] = [];
 const acquiredExecutorOptions: Array<{
   settingSources?: readonly string[];
   mcpServers?: Record<string, unknown>;
 }> = [];
 const testAgent = {
   ...sdk.Agent,
-  create: async (options: sdk.AgentOptions) => {
+  create: async (options: Sdk.AgentOptions) => {
     createdOptions.push(options);
     return platform.createAgent(options);
   },
-  resume: (id: string, options: sdk.AgentOptions) => platform.resumeAgent(id, options),
+  resume: (id: string, options: Sdk.AgentOptions) => platform.resumeAgent(id, options),
   list: async () => ({ items: listedAgents, nextCursor: undefined }),
 } as typeof sdk.Agent;
 
@@ -57,7 +68,7 @@ platform.acquireLocalExecutor = async (options) => {
   throw executorBoundary;
 };
 
-let replacedStore: sdk.LocalAgentStore;
+let replacedStore: Sdk.LocalAgentStore;
 let restoreAgent: () => void;
 let restoreRuntime: () => void;
 let restoreModels: () => void;
@@ -106,6 +117,8 @@ afterAll(async () => {
   else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousApiKey;
+  if (previousBackendUrl === undefined) delete process.env.CURSOR_BACKEND_URL;
+  else process.env.CURSOR_BACKEND_URL = previousBackendUrl;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -127,8 +140,8 @@ async function reservation(agentId: string) {
 }
 
 /** One picker row, carrying only the fields `listResumableSessions` reads. */
-function listedAgent(agentId: string): sdk.SDKAgentInfo {
-  return { agentId, name: "Orkestrator", status: "idle" } as unknown as sdk.SDKAgentInfo;
+function listedAgent(agentId: string): Sdk.SDKAgentInfo {
+  return { agentId, name: "Orkestrator", status: "idle" } as unknown as Sdk.SDKAgentInfo;
 }
 
 test("settingSources stay empty on the live SDK while the injected Orkestrator MCP remains", async () => {

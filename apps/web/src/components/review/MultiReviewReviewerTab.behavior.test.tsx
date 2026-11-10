@@ -687,7 +687,16 @@ describe("MultiReviewReviewerTab", () => {
         timeoutCallback?.();
         await Promise.resolve();
       });
-      fireEvent.click(await openTranscriptRefreshMenu());
+      await openTranscriptRefreshMenu();
+      // The item re-arms on the render that clears the timed-out attempt. That
+      // render can land after the menu reopens on a loaded worker, and a click
+      // on the still-disabled item is (rightly) ignored, so wait for it.
+      const rearmed = await waitFor(() => {
+        const item = screen.getByRole("menuitem", { name: "Refresh transcript" });
+        expect(item.getAttribute("aria-disabled")).not.toBe("true");
+        return item;
+      });
+      fireEvent.click(rearmed);
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
 
       await act(async () => {

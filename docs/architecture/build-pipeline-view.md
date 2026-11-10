@@ -65,7 +65,11 @@ session gets (a Codex default a ChatGPT login does not offer runs on the live
 list's first model, for that stage only). A launcher may still resolve the same
 defaults to display them (`@orkestrator/protocol/build-pipeline-defaults`);
 panels that resolve rows against the catalogue fill the inherited model back in
-for display (`buildPipelineLauncherDefaults`). The ticket snapshot, source
+before catalogue resolution (`buildPipelineLauncherDefaults`). The New
+Environment feature launcher submits these concrete choices even with
+Customize models off, so it relies on the renderer catalogue fallback, not
+the stage-time unoffered-default swap. The Build dialog also submits concrete
+choices. The ticket snapshot, source
 link and naming prompt come from the mappers in
 `@orkestrator/protocol/build-pipeline-tickets`.
 

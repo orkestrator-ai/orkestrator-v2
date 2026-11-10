@@ -131,7 +131,10 @@ The renderer panels that read these rows were checked:
   dialog keeps it visible while the project catalogue loads.
 - The New Environment dialog's feature panel resolves rows with no preferred
   fallback, so it reads `buildPipelineLauncherDefaults`, which fills the
-  inherited platform model back in for display only.
+  inherited platform model before catalogue resolution. The feature launcher
+  submits those concrete choices even with Customize models off; like the Build
+  dialog, it relies on the renderer catalogue fallback rather than the
+  stage-time unoffered-default swap.
 
 The con named under Decisions (the dialog must say the model may be
 substituted) did not apply: the dialog shows a concrete catalogue row and
@@ -183,7 +186,10 @@ and one rule keeps the launch shape the same for all of them.
 
 The shared resolver now returns rows without an inherited model, and the one
 panel that could not fall back on its own (the New Environment feature panel)
-reads `buildPipelineLauncherDefaults`, which fills the model in for display. A
+reads `buildPipelineLauncherDefaults`, which fills the model in before catalogue
+resolution and submission. This launcher submits concrete models even when
+Customize models is off; it relies on the renderer catalogue, not stage-time
+substitution. Keeping this behavior preserves the shown-model/run-model rule. A
 second resolver shape for the renderer was not added: the Build dialog already
 opens rows on the platform's preferred model, as it does the build row.
 

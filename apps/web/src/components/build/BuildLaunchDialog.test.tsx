@@ -579,6 +579,41 @@ describe("BuildLaunchDialog", () => {
     });
   });
 
+  test.each([false, true])(
+    "model-less review rows use preferred models (fan-out: %p)",
+    (fanout) => {
+      const inherited = { agent: "claude" as const };
+      const { onConfirm } = renderDialog({
+        preferredModels: { claude: "claude-b" },
+        pipelineDefaults: {
+          steps: {
+            review: inherited,
+            address: inherited,
+            verify: inherited,
+            pr: inherited,
+            "resolve-conflicts": inherited,
+          },
+          reviewers: fanout ? [inherited, inherited] : [inherited],
+          reviewPreparation: inherited,
+        },
+      });
+
+      const labels = fanout
+        ? ["Reviewer 1", "Reviewer 2", "Review preparation & consolidation"]
+        : ["Review"];
+      for (const label of labels) {
+        expect(picker(label).textContent).toContain("Claude B");
+      }
+      submit();
+      const selection = onConfirm.mock.calls[0]![0];
+      expect(selection.steps.review.model).toBe("claude-b");
+      if (fanout) {
+        expect(selection.reviewers?.map((row) => row.model)).toEqual(["claude-b", "claude-b"]);
+        expect(selection.reviewPreparation?.model).toBe("claude-b");
+      }
+    },
+  );
+
   test("submits the shared Multi Review fan-out and dedicated verify default", () => {
     const { onConfirm } = renderDialog({
       pipelineDefaults: {

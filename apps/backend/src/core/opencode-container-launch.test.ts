@@ -41,16 +41,19 @@ setDefaultTimeout(30_000);
 describe("the launcher and the backend agree", () => {
   test("on where OpenCode reads its configuration and home, and what it runs", () => {
     expect(launcher).toContain("# ORKESTRATOR_CAPABILITY opencode-launch=1");
+    expect(launcher).toContain(`root=${OPENCODE_LAUNCH_ROOT}\n`);
     expect(launcher).toContain(`export XDG_CONFIG_HOME=${OPENCODE_LAUNCH_CONFIG_HOME}\n`);
-    expect(launcher).toContain(`export OPENCODE_TEST_HOME=${OPENCODE_LAUNCH_HOME}\n`);
+    expect(OPENCODE_LAUNCH_HOME).toBe(`${OPENCODE_LAUNCH_ROOT}/home`);
+    expect(launcher).toContain('export OPENCODE_TEST_HOME="$root/home"\n');
     expect(launcher).toContain("OPENCODE_DISABLE_PROJECT_CONFIG=1");
-    // Which also drops the checkout's AGENTS.md, named back in as instructions.
+    // Which also drops the checkout's AGENTS.md; it returns as root's copy
+    // through the filtered project file, never by its checkout path.
+    expect(launcher).not.toContain("/workspace/AGENTS.md");
+    expect(launcher).toContain("unset OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT\n");
     expect(launcher).toContain(
-      `export OPENCODE_CONFIG_CONTENT='{"instructions":["/workspace/AGENTS.md"]}'`,
+      `binary=${OPENCODE_CONTAINER_BINARY} port=${OPENCODE_SERVER_PORT}\n`,
     );
-    expect(launcher).toContain(
-      `setsid ${OPENCODE_CONTAINER_BINARY} serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`,
-    );
+    expect(launcher).toContain('setsid "$binary" serve --port "$port" --hostname 0.0.0.0');
     // The OpenCode variables come after the backend's, so stdin cannot replace them.
     expect(launcher.indexOf('for line in "$@"; do export "$line"; done')).toBeLessThan(
       launcher.indexOf(`export XDG_CONFIG_HOME=`),
@@ -60,7 +63,7 @@ describe("the launcher and the backend agree", () => {
 
   test("the password is never an argument of a process that outlives the launch", () => {
     const branch = launcher.slice(
-      launcher.indexOf('if [ "$kind" = opencode ]; then'),
+      launcher.indexOf('if [ "$kind" = opencode ] || [ "$kind" = opencode2 ]; then'),
       launcher.indexOf("# A new session, detached from this exec"),
     );
     // Not `env -i NAME=VALUE ...` and not a long-lived `sh -c` wrapper.

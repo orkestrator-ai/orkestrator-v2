@@ -84,6 +84,26 @@ export const OPENCODE_LAUNCH_ROOT = "/run/orkestrator-opencode";
 export const OPENCODE_LAUNCH_CONFIG_HOME = `${OPENCODE_LAUNCH_ROOT}/config`;
 export const OPENCODE_LAUNCH_CONFIG_DIR = `${OPENCODE_LAUNCH_CONFIG_HOME}/opencode`;
 export const OPENCODE_LAUNCH_HOME = `${OPENCODE_LAUNCH_ROOT}/home`;
+/**
+ * The 1.x server's package cache (`XDG_CACHE_HOME`), root-owned and filled by
+ * the backend's root exec, so no package it imports is the agent's to change.
+ */
+export const OPENCODE_LAUNCH_CACHE_HOME = `${OPENCODE_LAUNCH_ROOT}/cache`;
+/** The project configuration the backend filtered, passed as `OPENCODE_CONFIG`. */
+export const OPENCODE_LAUNCH_PROJECT_CONFIG = `${OPENCODE_LAUNCH_ROOT}/project/opencode.json`;
+
+/**
+ * The same for the OpenCode 2.x server on an `opencode2-launch=1` image. 2.x
+ * reads its global configuration from `OPENCODE_CONFIG_DIR`, which replaces
+ * the XDG one (`opencode2/user-config.ts`), so that is where root writes the
+ * plugins and the mirror; `XDG_CONFIG_HOME` and the home stay empty.
+ */
+export const OPENCODE2_LAUNCH_ROOT = "/run/orkestrator-opencode2";
+export const OPENCODE2_LAUNCH_CONFIG_HOME = `${OPENCODE2_LAUNCH_ROOT}/config`;
+export const OPENCODE2_LAUNCH_CONFIG_DIR = `${OPENCODE2_LAUNCH_ROOT}/opencode`;
+export const OPENCODE2_LAUNCH_HOME = `${OPENCODE2_LAUNCH_ROOT}/home`;
+export const OPENCODE2_LAUNCH_CACHE_HOME = `${OPENCODE2_LAUNCH_ROOT}/cache`;
+export const OPENCODE2_LAUNCH_PROJECT_CONFIG = `${OPENCODE2_LAUNCH_ROOT}/project/opencode.json`;
 
 /**
  * What a bridge does for itself (`loadBridgeCredential`), for OpenCode, which
@@ -160,15 +180,17 @@ export const OrkestratorCredentialPlugin = async () => {
  * `process.env` when it uses them (a later `OPENCODE_CONFIG_DIR` would load
  * plugins from wherever it named). `XDG_CONFIG_HOME` points at the server's
  * root-owned configuration, which its tools must not inherit; OpenCode
- * resolved it when it started.
+ * resolved it when it started. `XDG_CACHE_HOME` points at the root-owned
+ * package cache, which is read-only to the tools, and is never taken from the
+ * snapshot either: a later read of it must not find node's cache.
  */
-const OPENCODE_LAUNCH_ENVIRONMENT_SOURCE = `import { closeSync, constants, fstatSync, openSync, readSync, rmSync } from "node:fs";
+export const OPENCODE_LAUNCH_ENVIRONMENT_SOURCE = `import { closeSync, constants, fstatSync, openSync, readSync, rmSync } from "node:fs";
 
 const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 const MAX_SNAPSHOT_ENTRIES = 4096;
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_%.-]*$/;
 const LAUNCH_ONLY = /^OPENCODE_|^ORKESTRATOR_BRIDGE_|(?:_BRIDGE_TOKEN|_TOKEN_SHA256|_AUTHORITY_KEY)$/;
-const NOT_APPLIED = new Set(["PWD", "OLDPWD", "SHLVL", "_", "NODE_PATH"]);
+const NOT_APPLIED = new Set(["PWD", "OLDPWD", "SHLVL", "_", "NODE_PATH", "XDG_CACHE_HOME"]);
 
 function readSnapshot(file) {
   let fd;
@@ -204,6 +226,7 @@ function applyLaunchEnvironment() {
   delete process.env.ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT;
   delete process.env.ORKESTRATOR_BRIDGE_LAUNCH_KEYS;
   delete process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CACHE_HOME;
   const snapshot = readSnapshot(file);
   try {
     rmSync(file, { force: true });

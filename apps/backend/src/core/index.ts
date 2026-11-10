@@ -225,6 +225,7 @@ import {
   containerRunsOpenCode2,
   openCode2EnvironmentServer,
 } from "./opencode2-container-server.js";
+import { openCodeEnvironmentListenerRecheck } from "./opencode-environment-listener.js";
 import { openCodeWorkflowRoutingDependencies } from "./native-agent-opencode-protocol.js";
 import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
@@ -1102,6 +1103,7 @@ export class OrkestratorBackend {
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         openCodeCoordinatorResearch: this.runtime.localServers.openCodeAgentTools.research,
+        openCodeListenerRecheck: openCodeEnvironmentListenerRecheck(storage),
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",

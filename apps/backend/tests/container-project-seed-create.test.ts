@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createDockerContainer } from "../src/core/commands-containers";
 import { formatSetupTerminalIntro, spawnSetupTerminal } from "../src/core/commands-environment";
+import type { PtyExitEvent, PtyProcess } from "../src/core/pty";
 import {
   formatProjectSeedRefusals,
   readProjectSeedRefusals,
@@ -18,6 +19,9 @@ import {
   tempDir,
   withDockerScript,
 } from "./container-lifecycle-fixtures";
+
+/** `SETUP_DONE_OSC_SEQUENCE` as a `printf` format. */
+const SETUP_DONE_PRINTF_FORMAT = "\\033]9999;setup_done\\007";
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -235,26 +239,62 @@ test("missing project seeds use validated command-node snapshots", async () => {
   );
 });
 
+/**
+ * The terminal a previous setup run left open: exits when terminated, as a
+ * real one does, so a new run retires it and starts its own.
+ */
+function finishedSetupPty(pid: number): { pty: PtyProcess; terminated: () => boolean } {
+  const exitListeners = new Set<(event: PtyExitEvent) => void>();
+  let terminated = false;
+  const pty = {
+    pid,
+    onExit: (callback: (event: PtyExitEvent) => void) => {
+      exitListeners.add(callback);
+      return { dispose: () => exitListeners.delete(callback) };
+    },
+    terminate: async () => {
+      terminated = true;
+      for (const listener of Array.from(exitListeners)) listener({ exitCode: 0 });
+      return true;
+    },
+    kill: () => undefined,
+  } as unknown as PtyProcess;
+  return { pty, terminated: () => terminated };
+}
+
 test("spawnSetupTerminal reads the container label and emits its notices", async () => {
   const dir = await tempDir("ork-seed-terminal-");
   cleanup.push(dir);
   const environment = lifecycleEnvironment({ containerId: "seed-container" });
   const { context, events } = memoryLifecycleContext([environment], dir);
   const sessionId = `${environment.id}:setup`;
-  // Reuse a terminal handle so this integration test exercises the production
-  // notice path without spawning a real interactive Docker shell.
-  Object.assign(context.runtime.terminals, { process: () => ({ pid: fakePid(123) }) });
+  const terminals = context.runtime.terminals;
+  const previous = finishedSetupPty(fakePid(123));
+  terminals.registerProcess(sessionId, previous.pty);
+  // The fake `docker exec` is the setup shell: it reports success at once.
   await withDockerScript(
     `#!/bin/sh
 case "$*" in
   *orkestrator-project-seed-refused*) printf '.env=symlink\\n' ;;
+  exec\\ -it*)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+    printf '${SETUP_DONE_PRINTF_FORMAT}'
+    ;;
   *) printf 'running\\n' ;;
 esac
 `,
-    async () => {
+    async (log) => {
       const result = await spawnSetupTerminal(environment, ["echo setup"], context);
       expect(result.sessionId).toBe(sessionId);
+      expect(previous.terminated()).toBe(true);
       expect(JSON.stringify(events)).toContain("Skipped .env from the project folder");
+      const shell = terminals.containerShell(sessionId);
+      expect(shell?.containerId).toBe("seed-container");
+      expect(await result.completion).toBe(true);
+      const exec = await log.read();
+      expect(exec).toContain(
+        `--env ORKESTRATOR_TERMINAL_SESSION=${shell?.token} seed-container bash -c`,
+      );
     },
   );
 });

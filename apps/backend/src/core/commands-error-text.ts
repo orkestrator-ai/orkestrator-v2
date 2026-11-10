@@ -39,6 +39,8 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
     "A setup command exited with an error. The setup output shows which one; fix it, then retry setup.",
   rootSetupNeedsFullNetwork:
     'This project\'s orkestrator-ai.json has "root" setup steps, and root steps only run in containers with full network access. This environment\'s network is restricted. Create the environment again with network access set to Full, or remove the "root" field from orkestrator-ai.json.',
+  setupStillRunning:
+    "The previous setup run's processes did not stop, so setup was not started again. Retry setup in a moment.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
   imageUnavailable:
@@ -137,6 +139,9 @@ export function setupScriptFailedError(reason?: SetupFailureReason): Error {
   );
 }
 
+/** The message of the error a setup retry throws when the previous run's tree survives. */
+export const SETUP_TERMINAL_STILL_RUNNING_MESSAGE = "Previous setup terminal did not stop";
+
 const SETUP_FAILURE_MESSAGES: Record<SetupFailureReason, string> = {
   "root-steps-need-full-network": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.rootSetupNeedsFullNetwork,
 };
@@ -202,6 +207,9 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
     return reason
       ? SETUP_FAILURE_MESSAGES[reason]
       : ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
+  }
+  if (message === SETUP_TERMINAL_STILL_RUNNING_MESSAGE) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupStillRunning;
   }
   if (isGitSshAuthenticationFailure(message)) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication;

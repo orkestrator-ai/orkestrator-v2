@@ -12,6 +12,7 @@ import {
   setupFailureReasonOscSequence,
   type SetupFailureReason,
 } from "./container-scripts.js";
+import { SETUP_TERMINAL_STILL_RUNNING_MESSAGE } from "./commands-error-text.js";
 import type { PtyProcess } from "./pty.js";
 import type { TerminalRuntime } from "./terminal-runtime.js";
 
@@ -83,40 +84,74 @@ export function createSetupCompletionTracker(): SetupCompletionTracker {
 }
 
 /**
+ * PTYs a setup retry has taken over. Their exit, however late, belongs to a
+ * finished run: `spawnTerminalProcess` must not complete the session's history
+ * or unregister it, because by then they may describe the replacement run,
+ * even one still in its preflight with nothing registered yet.
+ */
+const retiredSetupTerminals = new WeakSet<PtyProcess>();
+
+export function isRetiredSetupTerminal(process: PtyProcess): boolean {
+  return retiredSetupTerminals.has(process);
+}
+
+/** The previous run's process tree survived termination; nothing was replaced. */
+export class SetupTerminalStillRunningError extends Error {
+  constructor() {
+    super(SETUP_TERMINAL_STILL_RUNNING_MESSAGE);
+    this.name = "SetupTerminalStillRunningError";
+  }
+}
+
+export type SetupTerminalRetirementRuntime = Pick<
+  TerminalRuntime,
+  | "process"
+  | "cleanupSession"
+  | "history"
+  | "takeContainerShell"
+  | "recordContainerShell"
+  | "closeContainerShellAndWait"
+>;
+
+/**
  * Ends the terminal a previous setup run left open, so a new run gets its own.
  *
  * Only called once no setup run is in flight, so a terminal still registered
  * here belongs to a finished run: its commands are done and it is sitting at
  * the prompt `exec <shell> -l` left. Reusing it would run nothing, attach no
- * completion tracker and leave the new run waiting forever. Returns whether a
- * terminal was ended.
+ * completion tracker and leave the new run waiting forever.
+ *
+ * The retirement owns the old run's teardown: it completes its history and
+ * unregisters it, and the old PTY's own exit handler leaves the session alone
+ * (`isRetiredSetupTerminal`). A container setup terminal's in-container shell,
+ * which outlives its host `docker exec` client, is ended and waited for too.
+ *
+ * Throws `SetupTerminalStillRunningError`, keeping the old terminal and its
+ * shell record registered, when its process tree did not exit: starting a new
+ * run then would let two setups write to the same workspace and lose the
+ * handle that can still end the first. Returns whether a terminal was ended.
  */
 export async function retireFinishedSetupTerminal(
   sessionId: string,
-  terminals: Pick<TerminalRuntime, "process" | "cleanupSession">,
-  options: { exitWaitMs?: number } = {},
+  terminals: SetupTerminalRetirementRuntime,
 ): Promise<boolean> {
-  const stale: PtyProcess | undefined = terminals.process(sessionId);
+  const stale = terminals.process(sessionId);
   if (!stale) return false;
-  // Wait for the exit event as well as the process: the exit handlers
-  // `spawnTerminalProcess` registered first (unregistering the PTY, completing
-  // its history) must run before the new run configures this session again.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let subscription: { dispose: () => void } | undefined;
-  const exited = new Promise<void>((resolve) => {
-    subscription = stale.onExit(() => resolve());
-    timer = setTimeout(resolve, options.exitWaitMs ?? 2_000);
-  });
-  try {
-    await stale.terminate().catch(() => false);
-    await exited;
-  } finally {
-    if (timer) clearTimeout(timer);
-    subscription?.dispose();
+  const shell = terminals.takeContainerShell(sessionId);
+  retiredSetupTerminals.add(stale);
+  const exited = await Promise.resolve()
+    .then(() => stale.terminate())
+    .then(
+      (result) => result === true,
+      () => false,
+    );
+  if (!exited) {
+    retiredSetupTerminals.delete(stale);
+    if (shell) terminals.recordContainerShell(sessionId, shell);
+    throw new SetupTerminalStillRunningError();
   }
-  // If the exit was not delivered in time, unregister it here so the new run is
-  // not handed the old process. Its late exit handler then finds another
-  // process registered and leaves the session alone.
+  await terminals.history.complete(sessionId).catch(() => undefined);
   if (terminals.process(sessionId) === stale) terminals.cleanupSession(sessionId);
+  if (shell) await terminals.closeContainerShellAndWait(shell);
   return true;
 }

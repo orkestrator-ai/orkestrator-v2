@@ -1020,7 +1020,9 @@ esac`,
   test("workspace setup treats a failed root step as fatal", () => {
     const setup = read("docker/workspace-setup.sh");
     expect(setup).toContain("Root setup failed with code");
-    expect(setup).toContain('exit "$ROOT_EXIT"');
+    // Executed end to end in workspace-setup-root-steps.test.ts.
+    expect(setup).toContain('return "$root_exit"');
+    expect(setup).toContain("run_project_root_setup /workspace/orkestrator-ai.json");
     expect(setup).not.toContain("Root setup exited with code");
   });
 

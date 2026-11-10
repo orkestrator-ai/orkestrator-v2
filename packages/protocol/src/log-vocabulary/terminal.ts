@@ -17,6 +17,8 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
       "setup.pty-reused": "A setup terminal reused its existing PTY.",
       "setup.pty-retired":
         "A setup retry ended the terminal the previous run left open, so the new run gets its own.",
+      "setup.pty-retire-failed":
+        "A setup retry could not end the previous run's process tree, so it kept that terminal and started nothing.",
       "setup.pty-spawning":
         "A setup terminal is spawning its PTY. The argument count only, never the arguments.",
       "setup.pty-spawned": "A setup terminal's PTY started.",

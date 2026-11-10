@@ -112,10 +112,13 @@ import {
   reconcileProjectHomeEnvironment,
 } from "./project-home-environment.js";
 import type { Environment, EnvironmentStatus } from "./models.js";
-import type { PtyProcess } from "./pty.js";
+import type { PtyExitEvent, PtyProcess } from "./pty.js";
+import type { TerminalRuntime } from "./terminal-runtime.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
   CONTAINER_ROOT_USER_ARGS,
+  CONTAINER_TERMINAL_PID_RECORD_COMMAND,
+  CONTAINER_TERMINAL_SESSION_ENV,
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_PRINTF_CMD,
   SETUP_FAILED_PRINTF_CMD,
@@ -180,8 +183,11 @@ import {
 } from "./agent-accounts-containers.js";
 import {
   createSetupCompletionTracker,
+  isRetiredSetupTerminal,
   retireFinishedSetupTerminal,
+  SetupTerminalStillRunningError,
 } from "./setup-terminal-attempt.js";
+import { newContainerTerminalToken } from "./container-terminal-shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -236,27 +242,43 @@ export function spawnTerminalProcess(
     terminals.emitOutput(id, data, context.emit);
     hooks.onData?.(data);
   });
-  terminalProcess.onExit(({ exitCode, signal }) => {
-    // A setup retry ends the previous run's terminal and may register its
-    // replacement before this exit arrives; the session is no longer ours.
-    const current = terminals.process(id);
-    if (current && current !== terminalProcess) {
-      hooks.onExit?.();
-      return;
-    }
-    if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("setup.pty-exited", {
-        sessionId: id,
-        exitCode,
-        signal,
-        bufferChars: terminals.outputLength(id),
-      });
-    }
-    hooks.onExit?.();
-    void terminals.history.complete(id).catch(() => undefined);
-    terminals.cleanupSession(id);
-  });
+  terminalProcess.onExit((event) =>
+    settleTerminalProcessExit(id, terminalProcess, event, terminals, hooks),
+  );
   return terminalProcess;
+}
+
+/**
+ * What a terminal PTY's exit does to its session: completes its history and
+ * unregisters it, unless the session is no longer this PTY's.
+ */
+export function settleTerminalProcessExit(
+  id: string,
+  terminalProcess: PtyProcess,
+  { exitCode, signal }: PtyExitEvent,
+  terminals: Pick<TerminalRuntime, "process" | "outputLength" | "history" | "cleanupSession">,
+  hooks: { onExit?: () => void } = {},
+): void {
+  // A setup retry ends the previous run's terminal and takes over its
+  // teardown; the replacement may already be registered, or still in its
+  // preflight with nothing registered, when this exit arrives. Either way the
+  // session's history and registration are no longer ours.
+  const current = terminals.process(id);
+  if (isRetiredSetupTerminal(terminalProcess) || (current && current !== terminalProcess)) {
+    hooks.onExit?.();
+    return;
+  }
+  if (isSetupTerminalSessionId(id)) {
+    logSetupTerminal("setup.pty-exited", {
+      sessionId: id,
+      exitCode,
+      signal,
+      bufferChars: terminals.outputLength(id),
+    });
+  }
+  hooks.onExit?.();
+  void terminals.history.complete(id).catch(() => undefined);
+  terminals.cleanupSession(id);
 }
 
 export async function inspectDockerContainerIdentity(containerId: string): Promise<{
@@ -519,6 +541,17 @@ export function buildSetupTerminalCommand(commands: string[], finalShellCommand:
   return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}; exec ${finalShellCommand}`;
 }
 
+/**
+ * The `bash -c` script a container setup terminal runs: record the shell under
+ * its token (`CONTAINER_TERMINAL_PID_RECORD_COMMAND`), then exec a login zsh
+ * running the setup in the same process.
+ */
+export function containerSetupShellCommand(setupCommand: string): string {
+  return [CONTAINER_TERMINAL_PID_RECORD_COMMAND, `exec zsh -lc ${quoteShell(setupCommand)}`].join(
+    "\n",
+  );
+}
+
 export function formatSetupTerminalIntro(
   environment: Environment,
   commands: string[],
@@ -630,8 +663,15 @@ export async function spawnSetupTerminal(
   const terminals = context.runtime.terminals;
   // A failed run leaves its terminal open at a shell prompt. A retry must start
   // a new one: the old terminal would run nothing and never report completion.
-  if (await retireFinishedSetupTerminal(sessionId, terminals)) {
-    logSetupTerminal("setup.pty-retired", { sessionId });
+  try {
+    if (await retireFinishedSetupTerminal(sessionId, terminals)) {
+      logSetupTerminal("setup.pty-retired", { sessionId });
+    }
+  } catch (error) {
+    if (error instanceof SetupTerminalStillRunningError) {
+      logSetupTerminal("setup.pty-retire-failed", { sessionId });
+    }
+    throw error;
   }
   const existingSession = options.continuesPreparationSession
     ? context.runtime.environments.setupSession(environment.id)
@@ -704,15 +744,32 @@ export async function spawnSetupTerminal(
     introNotices.push(
       ...formatProjectSeedRefusals(await readProjectSeedRefusals(environment.containerId)),
     );
+    // Docker keeps an exec running after its client is gone, so the shell is
+    // marked with a per-PTY token and records its PID the way a container
+    // terminal's does (`container-terminal-shell.ts`): a retry or a close then
+    // ends the shell and its setup processes in the container as well. bash
+    // records `$$` and execs zsh in place, so the recorded PID is the shell
+    // that runs the setup and then stays at the prompt.
+    const token = newContainerTerminalToken();
     const setupCommand = buildSetupTerminalCommand(commands, "zsh -l");
     spawnTerminalProcess(
       sessionId,
       "docker",
-      ["exec", "-it", environment.containerId, "zsh", "-lc", setupCommand],
+      [
+        "exec",
+        "-it",
+        "--env",
+        `${CONTAINER_TERMINAL_SESSION_ENV}=${token}`,
+        environment.containerId,
+        "bash",
+        "-c",
+        containerSetupShellCommand(setupCommand),
+      ],
       { cols: 80, rows: 24 },
       context,
       { onData: tracker.onData, onExit: tracker.onExit },
     );
+    terminals.recordContainerShell(sessionId, { containerId: environment.containerId, token });
   }
 
   terminals.emitOutput(

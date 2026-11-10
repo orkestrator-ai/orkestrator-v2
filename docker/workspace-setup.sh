@@ -652,6 +652,91 @@ if [ "$PREPARE_ONLY" = true ]; then
     exit 0
 fi
 
+# Number of root commands orkestrator-ai.json's "root" field names: a
+# non-empty string is one, an array counts its non-empty entries. An absent or
+# empty field (including "root": []) names none, so it needs no root phase and
+# no network check.
+project_root_step_count() {
+    jq -r '.root
+        | if type == "array" then map(select(. != null and . != "")) | length
+          elif type == "string" then (if . == "" then 0 else 1 end)
+          elif . == null or . == false then 0
+          else 1 end' "$1" 2>/dev/null || echo 0
+}
+
+# One root step, through the root-owned wrapper. Restricted containers never
+# grant the agent a reusable root shell: the wrapper consults PID 1's
+# immutable Docker environment and permits project root setup only in full mode.
+run_root_step() {
+    local step="$1"
+    echo -e "Root command: ${GREEN}$step${NC}"
+    sudo /usr/local/bin/run-root-setup.sh "$step"
+}
+
+# Runs the "root" steps of orkestrator-ai.json ($1). $2 is the file holding the
+# container's recorded network mode. Returns 0 when there are no root steps or
+# all of them succeeded, and the failing status otherwise.
+run_project_root_setup() {
+    local config="$1"
+    local network_mode_file="$2"
+    local count
+    count=$(project_root_step_count "$config")
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    if [ "$count" -eq 0 ]; then
+        echo "  No root setup defined (root field is empty)"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}=== Running Root Setup ===${NC}"
+    echo ""
+
+    # Root steps run only with full network access (run-root-setup.sh refuses
+    # them otherwise). Say so plainly before trying, and print the reason
+    # marker the backend turns into the environment's error message
+    # (SETUP_FAILURE_REASONS in apps/backend/src/core/container-scripts.ts).
+    # Without a recorded mode, the wrapper decides.
+    local network_mode=""
+    IFS= read -r network_mode 2>/dev/null < "$network_mode_file" || true
+    if [ -n "$network_mode" ] && [ "$network_mode" != "full" ]; then
+        echo -e "${RED}Root setup steps cannot run in this environment${NC}"
+        echo ""
+        echo "  orkestrator-ai.json has a \"root\" field. Root steps run as the root user,"
+        echo "  so they only run in containers with full network access, and this"
+        echo "  environment's network is ${network_mode}."
+        echo ""
+        echo "  To fix it, either:"
+        echo "    - create the environment again with network access set to Full, or"
+        echo "    - remove the \"root\" field from orkestrator-ai.json. The image already"
+        echo "      has git, mise, bun and node, so many root steps are not needed."
+        printf '\033]9999;setup_failure_reason=root-steps-need-full-network\007'
+        return 1
+    fi
+
+    local root_exit=0
+    local step
+    if [ "$(jq -r '.root | type' "$config" 2>/dev/null)" = "array" ]; then
+        # Array steps run in order; the first failure stops the rest.
+        while IFS= read -r step; do
+            if [ -z "$step" ]; then
+                continue
+            fi
+            run_root_step "$step" || { root_exit=$?; break; }
+        done < <(jq -r '.root[] | select(. != null)' "$config" 2>/dev/null)
+    else
+        run_root_step "$(jq -r '.root' "$config" 2>/dev/null)" || root_exit=$?
+    fi
+
+    echo ""
+    if [ "$root_exit" -eq 0 ]; then
+        echo -e "${GREEN}Root setup completed successfully!${NC}"
+        return 0
+    fi
+    echo -e "${RED}Root setup failed with code $root_exit${NC}"
+    echo "A root step in orkestrator-ai.json exited with an error; its output is above."
+    return "$root_exit"
+}
+
 # Project seed files bound read-only. Under rootless Docker node cannot open an
 # owner-only one; the root entrypoint then relayed it into node's own
 # /run/orkestrator-inputs (network-policy-entrypoint.sh, relay_staged_inputs).
@@ -750,80 +835,9 @@ if [ -f /workspace/orkestrator-ai.json ]; then
     cat /workspace/orkestrator-ai.json
     echo ""
 
-    # Parse the root field (string or array) - runs as root user before regular scripts
-    ROOT_SCRIPT=$(jq -r '.root // empty' /workspace/orkestrator-ai.json 2>/dev/null)
-    ROOT_SCRIPT_TYPE=$(jq -r 'if .root==null then "empty" elif (.root|type)=="array" then "array" elif (.root|type)=="string" then "string" else "other" end' /workspace/orkestrator-ai.json 2>/dev/null)
-    ROOT_ARRAY_LENGTH=$(jq -r '.root | if type=="array" then length else 0 end' /workspace/orkestrator-ai.json 2>/dev/null)
-
-    if [ -n "$ROOT_SCRIPT" ] || { [ "$ROOT_SCRIPT_TYPE" = "array" ] && [ "$ROOT_ARRAY_LENGTH" -gt 0 ]; }; then
-        echo ""
-        echo -e "${BLUE}=== Running Root Setup ===${NC}"
-        echo ""
-
-        cd /workspace
-
-        # Root steps run only with full network access (run-root-setup.sh
-        # refuses them otherwise). Say so plainly before trying, and print the
-        # reason marker the backend turns into the environment's error message
-        # (SETUP_FAILURE_REASONS in apps/backend/src/core/container-scripts.ts).
-        ROOT_NETWORK_MODE=""
-        IFS= read -r ROOT_NETWORK_MODE 2>/dev/null < /etc/orkestrator/network-mode || true
-        if [ -n "$ROOT_NETWORK_MODE" ] && [ "$ROOT_NETWORK_MODE" != "full" ]; then
-            echo -e "${RED}Root setup steps cannot run in this environment${NC}"
-            echo ""
-            echo "  orkestrator-ai.json has a \"root\" field. Root steps run as the root user,"
-            echo "  so they only run in containers with full network access, and this"
-            echo "  environment's network is ${ROOT_NETWORK_MODE}."
-            echo ""
-            echo "  To fix it, either:"
-            echo "    - create the environment again with network access set to Full, or"
-            echo "    - remove the \"root\" field from orkestrator-ai.json. The image already"
-            echo "      has git, mise, bun and node, so many root steps are not needed."
-            printf '\033]9999;setup_failure_reason=root-steps-need-full-network\007'
-            exit 1
-        fi
-
-        run_root_step() {
-            local step="$1"
-            echo -e "Root command: ${GREEN}$step${NC}"
-            # Restricted containers never grant the agent a reusable root
-            # shell. The root-owned wrapper consults PID 1's immutable Docker
-            # environment and permits project root setup only in full mode.
-            sudo /usr/local/bin/run-root-setup.sh "$step"
-        }
-
-        ROOT_EXIT=0
-        set +e
-        if [ "$ROOT_SCRIPT_TYPE" = "array" ]; then
-            # Iterate array steps in order
-            while IFS= read -r step; do
-                if [ -z "$step" ]; then
-                    continue
-                fi
-                run_root_step "$step"
-                ROOT_EXIT=$?
-                if [ $ROOT_EXIT -ne 0 ]; then
-                    break
-                fi
-            done < <(jq -r '.root[]' /workspace/orkestrator-ai.json 2>/dev/null)
-        else
-            # Single command string
-            run_root_step "$ROOT_SCRIPT"
-            ROOT_EXIT=$?
-        fi
-        set -e
-
-        echo ""
-        if [ $ROOT_EXIT -eq 0 ]; then
-            echo -e "${GREEN}Root setup completed successfully!${NC}"
-        else
-            echo -e "${RED}Root setup failed with code $ROOT_EXIT${NC}"
-            echo "A root step in orkestrator-ai.json exited with an error; its output is above."
-            exit "$ROOT_EXIT"
-        fi
-    else
-        echo "  No root setup defined (root field is empty)"
-    fi
+    # Root steps run as the root user before the regular setup steps.
+    cd /workspace
+    run_project_root_setup /workspace/orkestrator-ai.json /etc/orkestrator/network-mode || exit $?
 
     # Parse the setupContainer field (string or array) - runs for container environments
     SETUP_SCRIPT=$(jq -r '.setupContainer // empty' /workspace/orkestrator-ai.json 2>/dev/null)

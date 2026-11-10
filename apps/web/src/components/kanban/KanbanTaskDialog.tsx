@@ -53,6 +53,7 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
+import { kanbanBuildStartOptions } from "./kanban-build-start";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
@@ -712,13 +713,7 @@ export function KanbanTaskDialog({
         task,
         selection.environmentType,
         selection.steps.build.agent,
-        {
-          steps: selection.steps,
-          reviewers: selection.reviewers,
-          reviewPreparation: selection.reviewPreparation,
-          deliveryPolicy: selection.deliveryPolicy,
-          networkAccessMode: selection.networkAccessMode,
-        },
+        kanbanBuildStartOptions(selection),
       );
       if (!pipelineId) return;
       handleOpenChange(false);
@@ -793,13 +788,7 @@ export function KanbanTaskDialog({
         newTask,
         selection.environmentType,
         selection.steps.build.agent,
-        {
-          steps: selection.steps,
-          reviewers: selection.reviewers,
-          reviewPreparation: selection.reviewPreparation,
-          deliveryPolicy: selection.deliveryPolicy,
-          networkAccessMode: selection.networkAccessMode,
-        },
+        kanbanBuildStartOptions(selection),
       );
       if (!pipelineId) return;
       handleOpenChange(false);

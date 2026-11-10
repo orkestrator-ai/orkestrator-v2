@@ -1,4 +1,5 @@
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
+import { errorCode, ipcErrorMessage } from "@orkestrator/protocol/contract/ipc-error";
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +8,9 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { StorageService } from "./storage.js";
 import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import {
+  isPromptQueueMessageConflict,
   PROMPT_QUEUE_MESSAGE_CONFLICT,
+  PromptQueueMessageConflictError,
   canonicalPromptQueueMessageFingerprint,
 } from "./storage-prompts.js";
 
@@ -116,11 +119,30 @@ describe("enqueuePromptQueueMessageIfAbsent", () => {
   test("rejects a different body for an id that is already queued", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
-      await expect(
-        storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1", "changed")),
-      ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_CONFLICT);
+      const conflict = await storage
+        .enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1", "changed"))
+        .catch((error: unknown) => error);
+      // The registered code decides; the message keeps its marker for older readers.
+      expect(errorCode(conflict)).toBe("prompt-queue-message-conflict");
+      expect((conflict as Error).message).toStartWith(PROMPT_QUEUE_MESSAGE_CONFLICT);
+      expect(isPromptQueueMessageConflict(conflict)).toBe(true);
+      expect(errorCode(new Error(ipcErrorMessage(conflict) ?? ""))).toBe(
+        "prompt-queue-message-conflict",
+      );
       expect((await storage.getPromptQueue(KEY))?.messages).toEqual([message("r1")]);
     });
+  });
+
+  test("recognises a conflict by its code, and by its marker only without a code", () => {
+    expect(
+      isPromptQueueMessageConflict(new PromptQueueMessageConflictError({ message: "reworded" })),
+    ).toBe(true);
+    expect(isPromptQueueMessageConflict(new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} r1`))).toBe(
+      true,
+    );
+    expect(
+      isPromptQueueMessageConflict(new Error("Prompt queue belongs to another environment")),
+    ).toBe(false);
   });
 
   test("treats an in-flight reservation as present and never appends a twin", async () => {

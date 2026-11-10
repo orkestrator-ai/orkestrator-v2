@@ -5,6 +5,7 @@
  * surviving run must be cancelled before the removal is published. Adoption of
  * that conversation in `agent-session.ts` waits on the same per-id operation.
  */
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { CANCEL_ACK_TIMEOUT_MS, CLOSE_ACK_TIMEOUT_MS } from "./config.js";
 import { cancelSurvivingRuns, SessionConflictError } from "./cursor-runs.js";
 import { persistBarrier } from "./persistence.js";
@@ -34,8 +35,8 @@ export async function closeRestoredTombstone(
   ackTimeoutMs: number = CLOSE_ACK_TIMEOUT_MS,
 ): Promise<CloseOutcome> {
   if (!closingTombstones.has(id) && !tombstoneCloses.has(id)) return "closed";
-  const outcome = await withBudget(finishTombstone(id), ackTimeoutMs);
-  return outcome === "timeout" ? "pending" : outcome;
+  const outcome = await boundedWait(finishTombstone(id), ackTimeoutMs);
+  return outcome.settled ? outcome.value : "pending";
 }
 
 const tombstoneCloses = new Map<string, Promise<CloseOutcome>>();
@@ -157,19 +158,4 @@ export async function finishRestoredTombstones(): Promise<{
     log.warn("startup.closes-incomplete", { closes: result.pending + result.failed });
   }
   return result;
-}
-
-async function withBudget<T>(work: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

@@ -183,6 +183,17 @@ describe("createDesktopNodeClient", () => {
     node.api.invoke.mockImplementationOnce(() => Promise.reject(refusal("node-admin-refused")));
     await expect(client.invokeRaw("set_config")).rejects.toThrow("[node-admin-refused]");
     expect(client.connection.get()).toBe("live");
+
+    // Only the message crosses the context bridge: the refusal is still read
+    // from it, and the error the caller shows has the text without the prefix.
+    node.setState("disconnected");
+    node.api.invoke.mockImplementationOnce(() =>
+      Promise.reject(new Error("[node-unavailable] The workspace could not open.")),
+    );
+    const failure = await client.invokeRaw("get_projects").catch((error: unknown) => error);
+    expect((failure as Error).message).toBe("The workspace could not open.");
+    expect(nodeRefusalCode(failure)).toBe("node-unavailable");
+    expect(client.connection.get()).toBe("failed");
   });
 
   test("eventStreamReady opens the node and reports its refusal", async () => {

@@ -7,6 +7,7 @@
 // already: its initialize answer holds the models and the account, and its
 // control channel answers `/usage`.
 
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import type { ClaudeQueryControl } from "../types/index.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
@@ -68,24 +69,14 @@ export async function readFromLiveClaude<T>(
   timeoutMs = LIVE_CLAUDE_READ_TIMEOUT_MS,
 ): Promise<T | undefined> {
   for (const control of liveClaudeControls()) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const answer = read(control);
       if (answer === undefined) continue;
-      // The losing side of the race still settles; keep it handled.
-      answer.catch(() => undefined);
-      const value = await Promise.race([
-        answer,
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      if (value !== undefined) return value;
+      // A slow answer moves on; `boundedWait` keeps its late settlement handled.
+      const outcome = await boundedWait(answer, timeoutMs);
+      if (outcome.settled && outcome.value !== undefined) return outcome.value;
     } catch (error) {
       debugLog("[live-claude-control] A running CLI could not answer:", error);
-    } finally {
-      clearTimeout(timer);
     }
   }
   return undefined;

@@ -5,6 +5,7 @@
  * a surviving run without importing the session lifecycle that waits on it.
  */
 import { Agent, type Run } from "@cursor/sdk";
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 
 export class SessionConflictError extends Error {
@@ -81,17 +82,6 @@ export async function cancelSurvivingRuns(
   return stopped.every(Boolean) ? "cancelled" : "running";
 }
 
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Cursor history read timed out")), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  return boundedWaitOrThrow(work, timeoutMs, () => new Error("Cursor history read timed out"));
 }

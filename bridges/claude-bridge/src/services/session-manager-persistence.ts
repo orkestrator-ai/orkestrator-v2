@@ -1,3 +1,4 @@
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { MAX_IMAGE_ATTACHMENT_BYTES, parseBase64ImageData } from "./image-attachment-data.js";
 export {
   SUPPORTED_IMAGE_MEDIA_TYPES,
@@ -834,25 +835,18 @@ async function closeTransientRewindQuery(
     await control.return();
     onShutdown();
   });
-  let shutdownTimeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await boundedWaitOrThrow(
       shutdown,
-      new Promise<never>((_, reject) => {
-        shutdownTimeout = setTimeout(
-          () => reject(new Error("shutdown pending")),
-          REWIND_SHUTDOWN_TIMEOUT_MS,
-        );
-      }),
-    ]);
+      REWIND_SHUTDOWN_TIMEOUT_MS,
+      () => new Error("shutdown pending"),
+    );
   } catch (error) {
     debugLog("[session-manager] Failed to confirm rewind query shutdown:", error);
     throw sessionOperationError(
       "conflict",
       "Claude file rewind shutdown is pending; retry after it stops",
     );
-  } finally {
-    clearTimeout(shutdownTimeout);
   }
 }
 

@@ -4,6 +4,7 @@ import {
   GraphAgentGuardError,
   GraphAgentGuards,
   graphPathsDigest,
+  lsRemoteRetryable,
   mergeGraphGuardResults,
 } from "./graph-agent-guards.js";
 import { FakeGraphRepo } from "./graph-agent-test-support.js";
@@ -19,6 +20,7 @@ function guardsOver(repo: FakeGraphRepo, systemPushes: string[] = []) {
     git: repo.git,
     lsRemote: repo.lsRemote,
     systemPushes: async () => new Set(systemPushes),
+    lsRemoteBackoff: { baseDelayMs: 1, maxDelayMs: 1 },
   });
 }
 
@@ -89,6 +91,35 @@ describe("GraphAgentGuards capture", () => {
     expect(unreachable.results[0]).toMatchObject({ guard: "remote-ref", outcome: "unavailable" });
     // Three attempts before giving up.
     expect(repo.lsRemoteCalls).toBe(3);
+  });
+
+  test("a refused credential fails closed after one attempt", async () => {
+    const repo = new FakeGraphRepo();
+    const guards = new GraphAgentGuards({
+      probe: repo.probe,
+      git: repo.git,
+      lsRemote: async () => {
+        repo.lsRemoteCalls += 1;
+        throw new Error("fatal: Authentication failed for 'https://example.invalid/repo.git/'");
+      },
+      // A retry would wait this long, so a second attempt would time the test out.
+      lsRemoteBackoff: { baseDelayMs: 60_000, maxDelayMs: 60_000 },
+    });
+    const error = await failure(guards.capture(environment, builder));
+    expect(error.results[0]).toMatchObject({ guard: "remote-ref", outcome: "unavailable" });
+    expect(repo.lsRemoteCalls).toBe(1);
+  });
+
+  test("only failures another attempt could change are retried", () => {
+    expect(lsRemoteRetryable(new Error("fatal: unable to access the remote"))).toBe(true);
+    expect(lsRemoteRetryable(new Error("ssh: Could not resolve host github.com"))).toBe(true);
+    expect(lsRemoteRetryable(new Error("git@github.com: Permission denied (publickey)."))).toBe(
+      false,
+    );
+    expect(
+      lsRemoteRetryable(new Error("fatal: could not read Username for 'https://github.com'")),
+    ).toBe(false);
+    expect(lsRemoteRetryable(new Error("remote: Repository not found."))).toBe(false);
   });
 
   test("without an ls-remote dependency nothing is dispatched", async () => {

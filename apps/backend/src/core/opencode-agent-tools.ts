@@ -1,3 +1,4 @@
+import { abortableSleep } from "./abortable-timing.js";
 import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
 import { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import { createHash } from "node:crypto";
@@ -111,23 +112,6 @@ export function openCodeAgentToolsFingerprint(
     .update("\0")
     .update(agentToolConnectionFingerprint(connection))
     .digest("hex");
-}
-
-export function waitForOpenCodeAgentToolsRetry(
-  delayMs: number,
-  signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, delayMs);
-    timer.unref?.();
-    signal.addEventListener("abort", finish, { once: true });
-    function finish(): void {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    }
-  });
 }
 
 export const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS: readonly number[] = [
@@ -288,7 +272,7 @@ export class OpenCodeAgentToolsReconciler {
             log.warn("agent-tools.unavailable", { key, error: formatLogError(error) });
             return;
           }
-          await waitForOpenCodeAgentToolsRetry(delays[attempt]!, controller.signal);
+          await abortableSleep(delays[attempt]!, controller.signal);
           // An abort during the backoff resolves rather than throwing, so the
           // cancellation has to be observed here instead of via the next fetch.
           if (controller.signal.aborted) return;

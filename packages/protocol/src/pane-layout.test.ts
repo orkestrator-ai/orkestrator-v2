@@ -1,3 +1,4 @@
+import { ipcErrorMessage } from "./contract/ipc-error.js";
 import { describe, expect, test } from "bun:test";
 import {
   isPaneLayoutUnsupportedVersion,
@@ -46,6 +47,24 @@ describe("isPaneLayoutRevisionConflict", () => {
         new Error(`Error invoking remote method 'orkestrator:invoke': Error: ${raw}`),
       ),
     ).toBe(true);
+  });
+
+  test("reads the registered code first, from every transport", () => {
+    const coded = Object.assign(new Error("reworded"), {
+      code: "pane-layout-revision-conflict",
+    });
+    // In process and over the gateway (the code is kept on the error).
+    expect(isPaneLayoutRevisionConflict(coded)).toBe(true);
+    // Over Electron IPC: only the message crosses, led by the code.
+    expect(isPaneLayoutRevisionConflict(new Error(ipcErrorMessage(coded) ?? ""))).toBe(true);
+    // A different registered code decides against, even beside the marker.
+    expect(
+      isPaneLayoutRevisionConflict(
+        Object.assign(new Error(paneLayoutRevisionConflictMessage(1, 2)), {
+          code: "design-revision-conflict",
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("does not fire for other failures or non-errors", () => {

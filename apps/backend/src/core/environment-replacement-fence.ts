@@ -1,7 +1,7 @@
 import path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 
 function overlaps(a: string, b: string): boolean {
   const inside = (child: string, parent: string) => {
@@ -195,11 +195,9 @@ export class EnvironmentMutationFence {
       );
     }
     if (this.isBeingReplaced(environmentId)) {
-      throw new Error(
-        formatContainerLifecycleError(
-          "operation-in-progress",
-          "This environment's container is being rebuilt. The prompt was not sent; send it again when the rebuild finishes.",
-        ),
+      throw new ContainerLifecycleError(
+        "operation-in-progress",
+        "This environment's container is being rebuilt. The prompt was not sent; send it again when the rebuild finishes.",
       );
     }
   }

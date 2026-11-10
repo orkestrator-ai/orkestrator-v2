@@ -43,6 +43,7 @@ import {
   type WorkflowResultKind,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
+import { abortableSleep } from "./abortable-timing.js";
 import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import {
   AgentBranchRunner,
@@ -97,20 +98,6 @@ const WORDING: AgentBranchWording = Object.freeze({
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    timer.unref?.();
-    signal.addEventListener("abort", done);
-  });
 }
 
 /** The result calls one verdict makes. */
@@ -556,7 +543,7 @@ export class NativeAgentGoalVerifier implements GoalVerifierHost {
         }
         await runner.advanceIsolated(branch, 0, 1);
         await runner.flushObservations();
-        if (!agentBranchSettled(branch)) await delay(this.pollIntervalMs, signal);
+        if (!agentBranchSettled(branch)) await abortableSleep(this.pollIntervalMs, signal);
       }
       if (branch.status === "completed" && host.verdict) {
         return goalVerdictRun(host.verdict, branch.tokenCount);

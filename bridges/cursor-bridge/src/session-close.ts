@@ -23,6 +23,7 @@
  * Deleting is local. The SDK agent is disposed, never deleted: the user's
  * Cursor conversation is theirs, and closing a tab does not destroy it.
  */
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { CLOSE_ACK_TIMEOUT_MS } from "./config.js";
 import { detachAgent } from "./agent-session.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
@@ -57,17 +58,8 @@ export async function closeSessionPermanently(
       if (state.closing === operation) state.closing = undefined;
     });
   }
-  const operation = state.closing;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<"pending">((resolve) => {
-    timer = setTimeout(() => resolve("pending"), ackTimeoutMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([operation.then(() => "closed" as const), timedOut]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  const outcome = await boundedWait(state.closing, ackTimeoutMs);
+  return outcome.settled ? "closed" : "pending";
 }
 
 async function runClose(state: SessionState): Promise<void> {

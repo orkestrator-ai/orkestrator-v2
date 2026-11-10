@@ -42,7 +42,7 @@ import {
 import { assertValidPromptAttachments } from "./prompt-attachments.js";
 import type { StorageService } from "./storage.js";
 import {
-  PROMPT_QUEUE_MESSAGE_CONFLICT,
+  isPromptQueueMessageConflict,
   PROMPT_QUEUE_NEW_PUBLICATION_REFUSED,
 } from "./storage-prompts.js";
 import type {
@@ -662,7 +662,7 @@ export class WebAnnotationDispatchAdapter implements WebAnnotationDispatchPort {
             "The session is no longer in Plan mode, so this read-only discussion was not sent. Switch the session to Plan in its chat, or discuss again to send it as advisory.",
         };
       }
-      if (reason.startsWith(PROMPT_QUEUE_MESSAGE_CONFLICT)) {
+      if (isPromptQueueMessageConflict(error)) {
         // The same request/body may already be queued with other delivery
         // fields (a message written by an earlier backend version). That is
         // this request, not a conflicting one.

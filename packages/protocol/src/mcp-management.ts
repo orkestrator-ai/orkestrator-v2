@@ -13,6 +13,7 @@
  */
 
 import { AGENT_PLATFORMS, type AgentPlatform, isAgentPlatform } from "./agent-platforms.js";
+import { codedErrorParts } from "./contract/ipc-error.js";
 
 /** Bumped when a wire shape in this module changes incompatibly. */
 export const MCP_MANAGEMENT_PROTOCOL_VERSION = 1;
@@ -859,10 +860,20 @@ export function mcpManagementError(
   return { code, ...ERROR_DEFAULTS[code], ...overrides, message };
 }
 
-/** An `Error` whose message round-trips the code through string-only transports. */
+/**
+ * An MCP management failure. Registered code `mcp-management` with the failure
+ * code as its `reason` detail (`contract/ipc-error.ts`), which the gateway and
+ * Electron IPC carry; the message keeps `McpManagementError:<reason>: text` so
+ * an older reader still matches it.
+ *
+ * A plain `Error` rather than an Effect `Data.TaggedError`: the bridges import
+ * this module, and they carry no Effect (docs/development/effect-usage.md).
+ */
 export class McpManagementFailure extends Error {
   // Declared explicitly: parameter properties do not survive Node's strip-only TypeScript loader.
   readonly detail: McpManagementError;
+  readonly code = "mcp-management" as const;
+  readonly details: { readonly reason: McpManagementErrorCode };
 
   constructor(detail: McpManagementError) {
     super(
@@ -871,6 +882,7 @@ export class McpManagementFailure extends Error {
       }`,
     );
     this.detail = detail;
+    this.details = { reason: detail.code };
     this.name = "McpManagementFailure";
   }
 }
@@ -882,17 +894,38 @@ export function mcpFailure(
   return new McpManagementFailure(mcpManagementError(code, overrides));
 }
 
-/** Recover a code from any thrown value, including flattened transport errors. */
+/**
+ * Recover a code from any thrown value, including flattened transport errors.
+ *
+ * The registered code `mcp-management` decides when present, from any
+ * transport, with its `reason` detail as the failure code; another registered
+ * code means this is not an MCP management failure. Without a registered code
+ * (an older backend) the `McpManagementError:<code>:` marker is read anywhere
+ * in the message.
+ */
 export function mcpManagementErrorFromUnknown(error: unknown): McpManagementError | null {
   if (error instanceof McpManagementFailure) return error.detail;
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const coded = error instanceof Error || typeof error === "string" ? codedErrorParts(error) : null;
+  if (coded && coded.code !== "mcp-management") return null;
+  const message = coded
+    ? coded.message
+    : error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "";
   const index = message.indexOf(MCP_MANAGEMENT_ERROR_MARKER);
-  if (index < 0) return null;
-  const rest = message.slice(index + MCP_MANAGEMENT_ERROR_MARKER.length);
-  const separator = rest.indexOf(":");
-  const code = separator < 0 ? rest : rest.slice(0, separator);
+  const rest = index < 0 ? null : message.slice(index + MCP_MANAGEMENT_ERROR_MARKER.length);
+  const separator = rest === null ? -1 : rest.indexOf(":");
+  const marked = rest === null ? undefined : separator < 0 ? rest : rest.slice(0, separator);
+  const code = coded?.details.reason ?? marked;
   if (!isMcpManagementErrorCode(code)) return null;
-  let detail = separator < 0 ? "" : rest.slice(separator + 1).trim();
+  let detail =
+    rest !== null && marked === code
+      ? separator < 0
+        ? ""
+        : rest.slice(separator + 1).trim()
+      : message.trim();
   const reference = CORRELATION_SUFFIX_PATTERN.exec(detail);
   const correlationId = reference?.[1];
   if (reference) detail = detail.slice(0, reference.index).trimEnd();

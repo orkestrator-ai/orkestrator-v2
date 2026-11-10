@@ -57,3 +57,24 @@ The owning spec and its implementation were unchanged. No assertion, deadline,
 retry or skip was changed. This establishes intermittency, not its cause.
 The full run and remaining undetermined failures are recorded in
 [9924](9924-auto-pipeline-fix-browser-owners.md).
+
+## Effect adoption validation recurrence — 2026-11-10
+
+Observing branch base: `04639b12b71d4326a3b8941485367aca197f4966`;
+reviewed head: `c6b3ce9792c064bcac5e9eb7a287675fcbe73118`.
+`mise run flaky:recurrence -- 7272` reported open.
+`mise run test:logged -- --name browser -- mise run test:browser` (eight workers)
+repeated the SidebarMotion line 47 assertion on mobile: three content widths
+instead of at most two.
+
+The complete unchanged owner passed alone in 114.3 s:
+`mise run test:logged -- --name address-sidebar-owner -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/SidebarMotion.spec.ts --workers=1 --output=output/playwright/address-sidebar-owner`.
+Passing test totals are unavailable because the logged runner deleted its output.
+No assertion, timeout or sidebar implementation changed. Intermittence is
+established; the cause and independence from this branch remain unproved.
+Aggregate evidence and final counts are also recorded in the Address Findings
+result for this validation attempt.
+
+Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
+1,810 cases, with 14 reported failures; no final pass/skip totals and no
+public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.

@@ -34,7 +34,7 @@ describe("host OpenCode database at spawn boundaries", () => {
     database.close();
   });
   afterEach(() => {
-    for (const name of ["XDG_DATA_HOME", "OPENCODE_DB"]) {
+    for (const name of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "OPENCODE_DB"]) {
       if (previous[name] === undefined) delete process.env[name];
       else process.env[name] = previous[name];
     }
@@ -68,6 +68,72 @@ describe("host OpenCode database at spawn boundaries", () => {
       // Subsequent user input is untouched, including a user's own OpenCode.
       commands.get("local_terminal_write")!({ sessionId, data: "opencode\n" }, context);
       expect(ptyProcesses.at(-1)!.write).toHaveBeenLastCalledWith("opencode\n");
+    },
+  );
+
+  test.each([
+    { setting: "v2", installed: true, expected: "v2" },
+    { setting: "v2", installed: false, expected: "missing" },
+    { setting: "legacy", installed: true, expected: "1.x" },
+  ] as const)(
+    "a new OpenCode tab follows the OpenCode 2 setting: %p",
+    async ({ setting, installed, expected }) => {
+      process.env.XDG_CONFIG_HOME = path.join(root, "xdg-config");
+      const bin = path.join(root, "toolchain bin");
+      await fs.mkdir(bin, { recursive: true });
+      if (installed) {
+        await fs.writeFile(path.join(bin, "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+      const dataDir = path.join(root, "data");
+      const environment = createEnvironment({ worktreePath: root });
+      const { context } = createContext(environment, {
+        dataDir,
+        globalConfig: { openCodeProtocol: setting },
+      });
+      context.toolchainBinDir = bin;
+      const commands = createCommandRegistry();
+      const { sessionId } = terminalSessionResult(
+        await commands.get("create_local_terminal_session")!(
+          { environmentId: environment.id, cols: 80, rows: 24 },
+          context,
+        ),
+      );
+      await commands.get("start_local_terminal_session")!({ sessionId }, context);
+      const data = `${buildTerminalAgentLaunchCommand({
+        tabType: "opencode",
+        model: "opencode-go/claude-haiku-5-5",
+        initialPrompt: "Hi",
+      })}\n`;
+      expect(
+        await commands.get("bootstrap_terminal_session")!({ sessionId, data }, context),
+      ).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+      const written = ptyProcesses.at(-1)!.write.mock.calls[0]?.[0] as string;
+      expect(written).toEndWith("\n");
+      if (expected === "v2") {
+        expect(written).toStartWith("env -u OPENCODE_CONFIG ");
+        expect(written).toContain(
+          `OPENCODE_DB='${path.join(dataDir, "opencode2", "opencode.db")}'`,
+        );
+        expect(written).toContain(
+          `OPENCODE_CONFIG_CONTENT='{"model":"opencode-go/claude-haiku-5-5"}'`,
+        );
+        expect(written).toEndWith(`'${path.join(bin, "opencode2")}' --standalone --prompt 'Hi'\n`);
+        expect(written).not.toContain("--model");
+        // The tab's 2.x shares the host 2.x servers' configuration directory.
+        expect(
+          await fs.stat(path.join(dataDir, "opencode2", "config")).then((s) => s.isDirectory()),
+        ).toBe(true);
+      } else if (expected === "missing") {
+        expect(written).toStartWith("printf '%s\\n' 'OpenCode 2 is not installed yet.");
+      } else {
+        // The private 1.x database applies exactly as before.
+        expect(written).toBe(`OPENCODE_DB='${ORKESTRATOR_OPENCODE_DB_FILE}' ${data}`);
+      }
+      // A replay is a duplicate of the original launch data, not of the rewrite.
+      expect(
+        await commands.get("bootstrap_terminal_session")!({ sessionId, data }, context),
+      ).toMatchObject({ duplicate: true, matchesExisting: true });
+      expect(ptyProcesses.at(-1)!.write).toHaveBeenCalledTimes(1);
     },
   );
 

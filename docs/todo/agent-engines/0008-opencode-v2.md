@@ -2365,6 +2365,48 @@ providers, models and `AGENTS.md` as a 1.x one. The guard plugin still
 refuses every tool outside the read-only set, so the user's MCP servers load
 but their tools are refused, as the session rules already did.
 
+### Task 5: terminal tabs on 2.x (2026-11-10)
+
+Reported: with terminal mode and the OpenCode 2 setting on, a new local
+environment's OpenCode tab printed OpenCode 2's usage and `ERROR` instead of
+starting. The tab ran `OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model … --prompt
+…`, a bare `opencode` that the login shell (`zsh -l`) resolved. macOS's
+`path_helper` moves the managed toolchain directory that
+`envWithManagedBinaries` prepends behind Homebrew, mise shims and
+`~/.local/bin`, so the user's own `opencode`, a 2.x install, ran instead of
+the pinned 1.19.5. The 2.x TUI has no `--model` (only `opencode run` does), so
+it refused the line. The setting was not involved: terminal tabs ignored it.
+
+Chosen (owner, 2026-11-10): terminal tabs follow the setting. A new tab is
+rewritten when `bootstrap_terminal_session` delivers it
+(`apps/backend/src/core/opencode2/terminal-launch.ts`):
+
+- Only the exact line `buildTerminalAgentLaunchCommand` builds for OpenCode is
+  rewritten (`parseTerminalOpenCodeLaunchCommand`), only in a local
+  environment, and only while the setting is `v2`. Anything else, and an
+  unreadable environment or setting, keeps the 1.x line and its private
+  `OPENCODE_DB` exactly as before. A tab restored later is never
+  re-bootstrapped, so existing tabs stay on the line they started on.
+- The managed `opencode2` runs by its full path with `--standalone`, so it
+  starts no background service that outlives the tab. It uses the host 2.x
+  servers' database and configuration directory (`openCode2HostPaths`,
+  `writeOpenCode2HostConfig`), the same flags, autoupdate off, the server
+  credentials a shell may export unset, and a user `OPENCODE_CONFIG` only as
+  its mirror. Sign-ins Orkestrator mirrors into the 2.x database therefore
+  reach the tab, and the user's `opencode.db` is never opened.
+- The model goes in as `OPENCODE_CONFIG_CONTENT='{"model":"…"}'`. Checked
+  against 2.2.6 in an isolated `HOME`/XDG: the TUI started on
+  `opencode/glm-5.3-flash-free` when that was named, and on Big Pickle when it
+  was not. The reasoning level is dropped, as for 1.x.
+- With the setting on and no managed `opencode2`, the tab prints the same
+  "not installed yet" message the native path raises rather than running 1.x.
+
+Not changed: container terminal tabs stay on the image's 1.x `opencode`, even
+on an image that carries `opencode2` (not checked: whether anything in a
+container can put a 2.x `opencode` ahead of the image's). A 1.x tab on a host whose own
+`opencode` is 2.x, with the setting off, still runs the user's binary. Not
+run: a live terminal tab in a `dev:test` profile.
+
 ## Related
 
 - [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) (OpenCode

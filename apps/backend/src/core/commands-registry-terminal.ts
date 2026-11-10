@@ -1,4 +1,10 @@
-import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import {
+  buildTerminalAgentLaunchCommand,
+  parseTerminalOpenCodeLaunchCommand,
+} from "@orkestrator/protocol/terminal-agent-launch";
+import { resolveManagedBinary } from "./commands-agent-support.js";
+import { resolveOpenCode2TerminalCommand } from "./opencode2/terminal-launch.js";
+import { writeOpenCode2HostConfig } from "./opencode2/server.js";
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
@@ -694,26 +700,48 @@ export function registerTerminalCommands(
     if (!config) return { bootstrapped: false, delivered: false, duplicate: false };
     config.bootstrapped = true;
     config.bootstrapDataHash = bootstrapDataHash;
-    try {
-      // Only the canonical managed OpenCode launch gets the private database.
-      // Plain commands and the shared interactive shell keep the user's defaults.
-      const openCodeLaunch = buildTerminalAgentLaunchCommand({ tabType: "opencode" })!;
-      const data =
-        config.kind === "local" &&
-        config.openCodeDatabase &&
-        (terminalData === openCodeLaunch ||
-          terminalData.startsWith(`${openCodeLaunch} `) ||
-          terminalData.startsWith(`${openCodeLaunch}\n`))
-          ? `OPENCODE_DB=${quoteShell(config.openCodeDatabase)} ${terminalData}`
-          : terminalData;
+    const deliver = (data: string) => {
       terminalProcess.write(data);
       runtime.terminals.recordInputActivity(id, data, context);
       return { bootstrapped: true, delivered: true, duplicate: false };
-    } catch (error) {
+    };
+    const undo = (error: unknown): never => {
       config.bootstrapped = false;
       config.bootstrapDataHash = undefined;
       throw error;
+    };
+    // Only the canonical managed OpenCode launch gets the private database.
+    // Plain commands and the shared interactive shell keep the user's defaults.
+    const openCodePrefix = buildTerminalAgentLaunchCommand({ tabType: "opencode" })!;
+    const legacy =
+      config.kind === "local" &&
+      config.openCodeDatabase &&
+      (terminalData === openCodePrefix ||
+        terminalData.startsWith(`${openCodePrefix} `) ||
+        terminalData.startsWith(`${openCodePrefix}\n`))
+        ? `OPENCODE_DB=${quoteShell(config.openCodeDatabase)} ${terminalData}`
+        : terminalData;
+    const openCodeLaunch =
+      config.kind === "local" ? parseTerminalOpenCodeLaunchCommand(terminalData) : null;
+    if (config.kind !== "local" || !openCodeLaunch) {
+      try {
+        return deliver(legacy);
+      } catch (error) {
+        return undo(error);
+      }
     }
+    // A new tab follows "Use OpenCode 2 for new sessions" (opencode2/terminal-launch.ts).
+    return resolveOpenCode2TerminalCommand(
+      {
+        storage: context.storage,
+        resolveCliPath: () => resolveManagedBinary(context, "opencode2"),
+        writeConfig: writeOpenCode2HostConfig,
+      },
+      config.environmentId,
+      openCodeLaunch,
+    )
+      .then((v2) => deliver(v2 === undefined ? legacy : `${v2}${openCodeLaunch.lineEnding}`))
+      .catch(undo);
   });
   register(getTerminalOutputBufferCommand, ({ sessionId: id }, { runtime }) => {
     const buffer = runtime.terminals.readOutput(id);

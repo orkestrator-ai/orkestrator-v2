@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandInvocationCount } from "@orkestrator/protocol/node/command-capture";
 import type { ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
-import { HostCaptureExecutor } from "./capture.js";
+import { ContainerCaptureExecutor, HostCaptureExecutor } from "./capture.js";
+import * as shell from "../shell.js";
 import { objectId } from "./object-store.js";
 import {
   containerConditionalWrites,
@@ -62,7 +63,7 @@ function installDockerShim(prelude = ""): void {
   const shim = join(bin, "docker");
   writeFileSync(
     shim,
-    `#!/bin/sh\nshift\nif [ "$1" = "-i" ]; then shift; fi\nshift\nexec "$1" "$2" '${prelude}'"$3"\n`,
+    `#!/bin/sh\nshift\nif [ "$1" = "-i" ]; then shift; fi\nshift\ncommand_="$1"\noption_="$2"\nhelper_="$3"\nshift 3\nexec "$command_" "$option_" '${prelude}'"$helper_" "$@"\n`,
   );
   chmodSync(shim, 0o755);
   process.env.PATH = `${bin}:${originalPath}`;
@@ -207,6 +208,48 @@ test("a helper that dies part-way reports exactly the writes it completed", asyn
     true,
   ]);
 });
+
+test("a helper timeout preserves completed writes and fails unanswered actions", async () => {
+  // Block before the third mutation; the command runner must time out rather
+  // than return a normal exit. Earlier synchronous result lines must survive.
+  installDockerShim(
+    'const fs_=require("node:fs"),unlink_=fs_.unlinkSync;let n_=0;fs_.unlinkSync=(...a)=>{if(++n_===3)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);return unlink_.apply(fs_,a);};',
+  );
+  const names = ["f0.txt", "f1.txt", "f2.txt", "f3.txt"];
+  const directory = root(Object.fromEntries(names.map((name) => [name, name])));
+  const run = shell.runCommandBuffer;
+  let timeoutObserved = false;
+  const command = spyOn(shell, "runCommandBuffer").mockImplementation(
+    async (exe, args, options) => {
+      try {
+        // Only shorten the deadline; run the real command/output/termination path.
+        return await run(exe, args, { ...options, timeoutMs: 2_000 });
+      } catch (error) {
+        expect(error).toBeInstanceOf(shell.CommandFailedError);
+        timeoutObserved = error instanceof shell.CommandFailedError && error.timedOut;
+        throw error;
+      }
+    },
+  );
+  try {
+    expect(
+      await containerConditionalWrites(
+        "fake",
+        directory,
+        names.map((name) => deleteItem(name, name)),
+      ),
+    ).toEqual(["applied", "applied", "failed", "failed"]);
+    expect(timeoutObserved).toBe(true);
+    expect(names.map((name) => existsSync(join(directory, name)))).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ]);
+  } finally {
+    command.mockRestore();
+  }
+}, 15_000);
 
 test("result lines that are torn, out of range or unknown answer failed", () => {
   const stdout = [
@@ -461,6 +504,67 @@ for (const failure of ["missing", "reject"] as const) {
       expect(writes).toHaveBeenCalledTimes(1);
     } finally {
       get.mockRestore();
+      writes.mockRestore();
+    }
+  });
+}
+
+for (const readFailure of [false, true]) {
+  test(`container apply describes every endpoint together before writes (read failure: ${readFailure})`, async () => {
+    const { h, owner, restore } = await batchHarness();
+    installDockerShim();
+    const executor = new ContainerCaptureExecutor("fake", h.repo);
+    const containerOwner = {
+      executor,
+      identity: { ...owner.identity, runtimeKind: "container", runtimeId: "fake" },
+      assertCurrent: () => owner.assertCurrent(),
+    } as unknown as WorktreeChangeOwner;
+    writeFileSync(join(h.repo, "renamed.txt"), "user edit");
+    writeFileSync(join(h.repo, "other.txt"), "agent");
+    const old = {
+      action: {
+        pathId: "u:old.txt",
+        expectedOid: null,
+        expectedMode: null,
+        targetBlob: null,
+        mode: null,
+      },
+      bytes: null,
+    };
+    const moved = deleteItem("renamed.txt", "agent");
+    const other = deleteItem("other.txt", "agent");
+    const describe = executor.describe.bind(executor);
+    let described = false;
+    const reads = spyOn(executor, "describe").mockImplementation(async (...args) => {
+      expect(args[0]).toEqual(["u:old.txt", "u:renamed.txt", "u:other.txt"]);
+      described = true;
+      if (readFailure) throw new Error("container unavailable");
+      return describe(...args);
+    });
+    const write = restore.writeBatch.bind(restore);
+    const writes = spyOn(restore, "writeBatch").mockImplementation(async (...args) => {
+      expect(described).toBe(true);
+      // A moved endpoint excludes both ends of the rename before any write.
+      expect(args[1].map((item) => item.action.pathId)).toEqual(["u:other.txt"]);
+      return write(...args);
+    });
+    try {
+      const outcomes = await restore.applyBatch(containerOwner, [
+        [old.action, moved.action],
+        [other.action],
+      ]);
+      expect(outcomes.map(([, outcome]) => outcome)).toEqual([
+        "failed",
+        "failed",
+        readFailure ? "failed" : "applied",
+      ]);
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(writes).toHaveBeenCalledTimes(readFailure ? 0 : 1);
+      expect(existsSync(join(h.repo, "old.txt"))).toBe(false);
+      expect(readFileSync(join(h.repo, "renamed.txt"), "utf8")).toBe("user edit");
+      expect(existsSync(join(h.repo, "other.txt"))).toBe(readFailure);
+    } finally {
+      reads.mockRestore();
       writes.mockRestore();
     }
   });

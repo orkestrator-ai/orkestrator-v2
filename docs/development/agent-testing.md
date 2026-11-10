@@ -2128,6 +2128,55 @@ proves the plumbing and the wording the model receives, not that a real model
 obeys it; that needs the billed `routing` run. The content-free summary is
 `output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
 
+### Coordinator checkout sync with a slow remote (fake model)
+
+`mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
+fast-forward to an already fetched upstream when the remote is slow (to-do
+4720), without a login, a billed turn or the network. It starts a disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
+stops and resets the profile. The real backend, project Git service, Pi
+bridge, agent mail and renderer run; the model is
+`coordinator-slow-remote-fake-model.ts` on loopback, named in the profile's
+isolated Pi `models.json` and `settings.json`.
+
+The spec adds two disposable projects under the profile's fixture directory,
+each a checkout of its own local bare repository. Each checkout's origin is
+`ssh://git@slow.invalid/repo.git` with a checkout-local `core.sshCommand`
+shim and `ssh.variant simple`; the shim runs `git-upload-pack` on its own bare
+repository, records only a start time per invocation, and sleeps 15 s while a
+delay marker exists. No host SSH or global Git configuration changes. With the
+delay off, a direct and a backend fetch through each shim must succeed. The
+mail project's main coordinator then starts a turn that the fake model parks,
+both remotes gain two commits that each checkout fetches without merging, and
+the delay markers are created. Then:
+
+- **Typed.** Once the backend's 60 s fetch cooldown has passed, a message typed
+  in the browser to the first project's main coordinator must log
+  `checkout.message-check outcome=fast-forwarded fetch=timed-out` with
+  `durationMs` of at least 3000, move `HEAD` to the recorded upstream with one
+  new reflog entry before the late fetch can finish, and turn the toolbar's
+  "2 commits behind" into "Up to date".
+- **Mail.** A Pi worker tab in the second project sends its coordinator a
+  report through Orkestrator's `send_message` tool (same-project trust,
+  `coordinator` route). The mail must wait behind the running turn
+  (`delivery.waiting reason=working`) with the checkout still behind. When the
+  turn is released, with the delay still on, the redelivery must log
+  `checkout.mail-follow outcome=fast-forwarded-fetched` at least 5 s after the
+  shim started and before it could finish, move `HEAD` to the upstream with
+  one new reflog entry, and be injected.
+
+The content-free summary is
+`output/agent-testing/<profile>/coordinator-slow-remote/summary.json`, and
+screenshots are `output/visual-previews/coordinator-slow-remote-*.png`. To run
+the spec against a profile you started yourself, use the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-slow-remote.config.ts`. It
+reads backend log lines from the profile's `logs/electron.log`, so it needs a
+`dev:test` profile rather than a standalone backend. The shim's timestamps use
+GNU `date`, so the spec runs on Linux.
+
 ### Live goal suite
 
 `mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`

@@ -2,11 +2,11 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; tasks 1, 2 and 5 acted on 2026-11-09 against main at `c6de4733c5beb87a578f82a8548725305e1ff254`.
+Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; tasks 1, 2 and 5 acted on 2026-11-09 against main at `c6de4733c5beb87a578f82a8548725305e1ff254`; task 1 run 2026-11-10 against main at `04639b12b`.
 
 ### Tasks
 
-1. **Run the evidence script on Linux Engine**: the topology where the subnets matter. Status: open (depends on a rootful daemon this build can reach: [4730](4730-disposable-docker-daemon-for-live-suites.md)'s nested rootful mode, or access to a host daemon).
+1. **Run the evidence script on Linux Engine**: the topology where the subnets matter. Status: done 2026-11-10 (in the network namespace of `docker:disposable`'s nested rootful daemon on beelink's rootful Engine; every peer was decided as expected, no code change).
 2. **Run it on rootless Docker with host loopback**: the peer is expected to be loopback. Status: done 2026-11-09 (the peer is `127.0.0.1`; no new code needed).
 3. **Run the C22 live qualification case on Linux CI**: its filter now follows the scene's owner. Status: open.
 4. **Check Docker Desktop on Linux and Windows**: expected to match macOS. Status: open.
@@ -30,7 +30,7 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; 
     - Pros: repeats on every relevant PR on both architectures.
     - Cons: a new live case in a workflow that is already not a required check; task 3 already covers the path the backend uses.
 
-**Result (2026-11-09).** Not run; still open. The build ran on beelink2
+**Result (2026-11-09).** Not run that day (superseded by the 2026-11-10 result below). The build ran on beelink2
 (Linux 7.2.15, x86_64), but this account cannot reach the host daemon:
 `/var/run/docker.sock` is `root:docker` mode `0660`, the `docker` group has no
 members, and `docker.service` is inactive behind its socket unit, so every
@@ -42,9 +42,74 @@ subnets, so a run there is not Linux Engine evidence. What remains: run
 `mise exec -- bun apps/backend/scripts/agent-tools-peer-evidence.ts` once
 against a rootful Linux daemon whose bridges live in the script's own network
 namespace, which is either a host Engine the account may use or 4730's nested
-rootful mode (`docker:29-dind`, still being built) with the script run inside
+rootful mode (`docker:29-dind`, then still being built; merged in #2028) with the script run inside
 that namespace; then fill in the Linux Engine row of
 [Who may connect](../../architecture/container-lifecycle.md#who-may-connect).
+
+**Result (2026-11-10).** Done. The build ran on beelink (Omarchy, kernel
+7.1.8, x86_64), where this account can use the host's rootful Engine 29.9.2
+(`SecurityOptions` without `rootless`). [4730](4730-disposable-docker-daemon-for-live-suites.md)'s
+nested rootful mode gave the rootful daemon, so the script never created a
+network on the shared host daemon:
+
+```bash
+# PATH starts with apps/desktop/scripts/dev/docker-qualification-bin
+mise run docker:disposable -- start --mode rootful --name s6820rf
+# record: outerHost unix:///var/run/docker.sock, outerRootless false
+DOCKER_HOST=unix:///tmp/ork-ddd-1000-s6820rf/docker.sock docker pull <CONTAINER_HOST_PROBE_IMAGE>
+# the dind image's static docker CLI, for the runner
+docker cp ork-ddd-1000-s6820rf-<marker>:/usr/local/bin/docker output/s6820-runner/docker
+# the script, inside the nested daemon's own network namespace
+docker run --rm --network container:ork-ddd-1000-s6820rf-<marker> -u 1000:1000 \
+  -e HOME=/tmp -e DOCKER_HOST=unix:///tmp/ork-ddd-1000-s6820rf/docker.sock \
+  -e ORKESTRATOR_QUALIFICATION_DOCKER=/opt/s6820/docker \
+  -e PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:/opt/s6820:/usr/local/bin:/usr/bin:/bin" \
+  -v /tmp/ork-ddd-1000-s6820rf:/tmp/ork-ddd-1000-s6820rf -v "$PWD:$PWD:ro" \
+  -v "$PWD/output/s6820-runner/docker:/opt/s6820/docker:ro" -w "$PWD" \
+  --entrypoint bun oven/bun:1.4.4 apps/backend/scripts/agent-tools-peer-evidence.ts
+mise run docker:disposable -- stop --name s6820rf
+```
+
+The runner is an `oven/bun:1.4.4` container (the image `docker/` is built
+from) sharing the dind container's network namespace, so the server's
+`0.0.0.0` listener, `host-gateway` (the inner `docker0`, `10.213.0.1`) and
+the inner bridges are all in one namespace, as on a host. Start took 12.9 s
+including the dind pull. Inner daemon: Engine 29.9.3, Alpine Linux 3.24
+(containerized), no `rootless` option, `INPUT` policy `ACCEPT`.
+
+Observed, identical in both runs (ports 64731 and 53897):
+
+- `dockerRootless: false`; environment network `172.30.0.0/24`.
+- `containerSources` (`host-gateway`): environment network `172.30.0.2` and
+  default bridge `10.213.0.2` arrived **from their own addresses (admit)**
+  and got `HTTP/1.1 405 Method Not Allowed`. The unowned network's
+  `172.30.1.2` arrived as itself and was **refused**: busybox reported
+  `Connection reset by peer`, with no HTTP response.
+- Environment-container probe: `reachable`/405. Host check: `reachable`,
+  `dockerRootless: false`; its default-bridge and environment-network probes
+  `reachable`/405 (the probe network, `172.30.2.0/24`, was admitted while it
+  existed: the filter logged three subnets).
+- The host's own addresses, `172.17.0.2` (the dind container's outer
+  address) and the gateways `10.213.0.1`, `172.30.0.1` and `172.30.1.1`: all
+  closed with no bytes. Every one arrived from `172.17.0.2`, which no
+  admitted subnet covers: a local connection to a gateway address is
+  masqueraded by Docker's per-bridge `MASQUERADE` rule (for the default
+  bridge `-s 10.213.0.0/24 ! -o docker0`), since it leaves through `lo`.
+  Loopback: 405.
+- Admitted subnets `["10.213.0.0/24", "172.30.0.0/24"]`, then
+  `["10.213.0.0/24"]` after the environment network was removed
+  (`removal: removed`). Unresolved cleanup and every leftover list empty;
+  exit status 0.
+
+`stop` then removed the dind container, its volume, the runtime directory and
+the dind image it had pulled; nothing labelled
+`orkestrator-disposable-docker` was left on the host daemon. The busybox and
+`oven/bun:1.4.4` images were already on the host daemon and were left.
+Local evidence (git-ignored):
+`output/agent-testing/s6820/rootful-nested-host-outer.json` and
+`rootful-nested-host-outer-2.log`. The Linux Engine row of
+[Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
+now records this.
 
 ### 2. Run it on rootless Docker with host loopback
 
@@ -281,14 +346,39 @@ and 5, so it became follow-up
 [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) rather than a change
 here.
 
-### Task 1: left open rather than run on a substitute (2026-11-09)
+### Task 1: left open rather than run on a substitute (2026-11-09; superseded 2026-11-10)
 
 The disposable rootless daemon could run the script, but the filter grants no
 subnets on rootless, so it would exercise loopback admission again rather
 than the subnet path task 1 exists to prove. Running the script inside
-RootlessKit's namespace would be refused for the same reason. Task 1 waits
-for a rootful daemon this build can reach (4730's nested rootful mode or host
-daemon access) instead of counting a substitute.
+RootlessKit's namespace would be refused for the same reason. Task 1 was
+left for a rootful daemon a build could reach instead of counting a
+substitute; the 2026-11-10 run below used 4730's nested rootful mode.
+
+### Task 1: run in the nested daemon's namespace, on a rootful outer (2026-11-10)
+
+The nested daemon's bridges, `host-gateway` and NAT live in the dind
+container's network namespace, so the script had to run there to see what a
+host process sees. Options: run it in a container on the **outer** daemon
+with `--network container:<dind>` (chosen), or in a `--network host`
+container on the **inner** daemon, as 5510 did. The chosen form needs only
+`oven/bun:1.4.4` (already on the host) and the dind image's static CLI, not a
+6 GB qualification image copied into the inner daemon; both put the server in
+the same namespace. Running the script directly against the host's own
+Engine was possible on beelink but not chosen: the ticket asked for the
+disposable daemon, and it keeps the script's networks off a daemon other
+builds share. The outer daemon was the host's rootful Engine
+(`outerRootless: false`), so the nested daemon is root in the initial user
+namespace, unlike 5510's run inside a rootless outer daemon; that makes this
+a privileged dind on a rootful host, the topology 4730 task 4 asks about, but
+only the launcher's start and stop were observed for that task.
+
+### Task 1: no code change (2026-11-10)
+
+Every source was decided as the design expected: owned and default-bridge
+peers admitted by subnet, the unowned network and the host's own addresses
+refused, the list shrinking when the network went. Nothing in the filter
+changes.
 
 ### Task 5: closed without a host survey (2026-11-09)
 
@@ -299,7 +389,7 @@ the report gave. The doc now states the accepted residual exposure.
 
 ## Current state
 
-Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS and, on 2026-11-09, on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`). What is left is native rootful Linux Engine (task 1), the C22 case on Linux CI (task 3) and Docker Desktop for Linux (task 4).
+Carried from the security report's S-0170 file (finding L15) when it was closed on 2026-11-05. The agent-tools server still listens on `0.0.0.0`, but it now closes every connection whose peer is not loopback or, on native Linux Engine only, inside a subnet of this backend's own Docker networks, before routing ([Who may connect](../../architecture/container-lifecycle.md#who-may-connect)). It was proven in real containers on Docker Desktop for macOS, on 2026-11-09 on a rootless Linux daemon through RootlessKit's host loopback (peer `127.0.0.1`), and on 2026-11-10 on rootful Linux Engine (`docker:disposable`'s nested rootful daemon on beelink's rootful Engine), where containers arrive from their own addresses and are admitted by their network's subnet. What is left is the C22 case on Linux CI (task 3) and Docker Desktop for Linux (task 4).
 
 The 2026-11-06 review fixes measure freshness and failure backoff from read
 completion. Null reads warn and clear permissions. Inspect failures other than

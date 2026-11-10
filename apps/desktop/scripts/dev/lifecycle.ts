@@ -152,11 +152,16 @@ export function withOutputTails(message: string, tails: Record<string, () => str
   return `${message}${sections.join("")}`;
 }
 
-async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForUrl(
+  url: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<void> {
+  const deadline = Date.now() + (options.timeoutMs ?? 45_000);
   while (Date.now() < deadline) {
+    // The caller stopped waiting (the child it waits on exited).
+    if (options.signal?.aborted) return;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: options.signal });
       if (response.ok) return;
     } catch {
       // The strict-port child is still starting.
@@ -165,6 +170,39 @@ async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
   }
   throw new Error(`Timed out waiting for ${url}`);
 }
+
+type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
+
+/** Resolves when `child` exits; attach it right after spawn so no exit is missed. */
+function childExit(child: ChildProcess): Promise<ChildExit> {
+  return new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+}
+
+/**
+ * Waits for `url` while `exited` is pending. Returns null once the URL serves,
+ * or the child's exit if it ended first: polling a dead child's URL would only
+ * time out after the full 45 s.
+ */
+async function waitForUrlWhileRunning(
+  url: string,
+  exited: Promise<ChildExit>,
+  wait: typeof waitForUrl,
+): Promise<ChildExit | null> {
+  const stop = new AbortController();
+  try {
+    return await Promise.race([wait(url, { signal: stop.signal }).then(() => null), exited]);
+  } finally {
+    stop.abort();
+  }
+}
+
+/**
+ * Vite starts this many times before startup fails. The renderer port is
+ * reserved by binding and closing it long before Vite binds it again (after
+ * the Electron compile and bridge builds), so another process can take it in
+ * between; a strict-port Vite then exits at once and a fresh port is needed.
+ */
+const VITE_START_ATTEMPTS = 3;
 
 /** The production app's dev worktree location setting, if one is saved. */
 export async function configuredDevWorktreeRoot(
@@ -696,7 +734,7 @@ export async function startDevelopment(
   }
 
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
-  const profile = resolveRuntimeProfile({
+  let profile = resolveRuntimeProfile({
     repositoryRoot,
     requestedId: args.profile,
     flavor,
@@ -715,7 +753,7 @@ export async function startDevelopment(
   const profilePath = await initializeProfile(profile);
   await seedAgentTestProfileState(profile, flavor);
   const statusPath = statusManifestPath(profile);
-  const rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
+  let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();
   const launcherStart = processStartTime(process.pid) ?? Date.now();
   let status: RuntimeStatusManifest = {
@@ -820,27 +858,47 @@ export async function startDevelopment(
       truncate(path.join(profile.logDir, "vite.log"), 0).catch(() => undefined),
       truncate(path.join(profile.logDir, "electron.log"), 0).catch(() => undefined),
     ]);
-    vite = (dependencies.spawn ?? spawn)("bun", ["run", "dev"], {
-      cwd: webRoot,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        VITE_DEV_HOST: profile.rendererHost,
-        VITE_DEV_PORT: String(profile.rendererPort),
-        VITE_ORKESTRATOR_PROFILE: profile.id,
-        // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
-        VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
-      },
-    });
-    attachLog(vite, path.join(profile.logDir, "vite.log"));
-    const viteTail = outputTail(vite);
-    if (!vite.pid) throw new Error("Vite failed to start");
-    await writeStatus({
-      pids: { ...status.pids, vite: vite.pid },
-      processStartTimes: { ...status.processStartTimes, vite: childStartTime(vite) },
-    });
-    await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
+    let viteTail: () => string = () => "";
+    let viteExited: Promise<ChildExit> | null = null;
+    for (let attempt = 1; ; attempt += 1) {
+      vite = (dependencies.spawn ?? spawn)("bun", ["run", "dev"], {
+        cwd: webRoot,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          VITE_DEV_HOST: profile.rendererHost,
+          VITE_DEV_PORT: String(profile.rendererPort),
+          VITE_ORKESTRATOR_PROFILE: profile.id,
+          // Lets an agent-test renderer install its test-only harnesses (plan item 2013).
+          VITE_ORKESTRATOR_PROFILE_FLAVOR: profile.flavor,
+        },
+      });
+      viteExited = childExit(vite);
+      attachLog(vite, path.join(profile.logDir, "vite.log"));
+      viteTail = outputTail(vite);
+      if (!vite.pid) throw new Error("Vite failed to start");
+      await writeStatus({
+        pids: { ...status.pids, vite: vite.pid },
+        processStartTimes: { ...status.processStartTimes, vite: childStartTime(vite) },
+      });
+      const early = await waitForUrlWhileRunning(
+        rendererUrl,
+        viteExited,
+        dependencies.waitForUrl ?? waitForUrl,
+      );
+      if (!early) break;
+      const exitMessage = `Vite exited before serving ${rendererUrl} (code ${early.code ?? "unknown"}, signal ${early.signal ?? "none"})`;
+      if (attempt >= VITE_START_ATTEMPTS) {
+        throw new Error(withOutputTails(exitMessage, { Vite: viteTail }));
+      }
+      console.warn(`${exitMessage}; retrying on a new renderer port.`);
+      const [nextPort] = (await reserveLoopbackPorts(1)) as [number];
+      profile = { ...profile, rendererPort: nextPort };
+      rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
+      await atomicWriteJson(profilePath, profile);
+      await writeStatus({ rendererUrl });
+    }
 
     const platform = dependencies.platform ?? process.platform;
     const headlessInputs = {
@@ -874,6 +932,10 @@ export async function startDevelopment(
         },
       },
     );
+    // Listen for the exit now: Electron can exit while readiness, status
+    // writes or fixture seeding are still pending, and a listener added
+    // after that would wait forever with Vite still running.
+    const electronExited = childExit(electron);
     if (!electron.pid) throw new Error("Electron failed to start");
     let electronTail = () => "";
     const startupFailure = (message: string) =>
@@ -958,16 +1020,8 @@ export async function startDevelopment(
     printHumanStatus(status, liveness(status));
 
     const termination = await Promise.race([
-      new Promise<{ child: "electron"; code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve) => {
-          electron!.once("exit", (code, signal) => resolve({ child: "electron", code, signal }));
-        },
-      ),
-      new Promise<{ child: "vite"; code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve) => {
-          vite!.once("exit", (code, signal) => resolve({ child: "vite", code, signal }));
-        },
-      ),
+      electronExited.then((exit) => ({ child: "electron" as const, ...exit })),
+      viteExited!.then((exit) => ({ child: "vite" as const, ...exit })),
     ]);
     const cleanElectronExit =
       termination.child === "electron" &&

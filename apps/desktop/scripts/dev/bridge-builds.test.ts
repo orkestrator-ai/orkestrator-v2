@@ -365,67 +365,85 @@ describe("dev:test bridge builds", () => {
     };
   }
 
-  test("a successful start records bridges before launching the runtime and accepts backend readiness", async () => {
-    const roots = await profileRoots("ork-dev-bridge-success-");
-    const repository = await temporaryDirectory("ork-dev-bridge-repo-");
-    const args = parseAgentTestArguments(["--profile", "bridge-success"]);
-    const profile = resolveRuntimeProfile({
-      repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
-      requestedId: args.profile,
-      flavor: "agent-test",
-      roots,
-    });
-    const statusPath = statusManifestPath(profile);
-    const order: string[] = [];
-    const prepare = prepareProfileBridgeBuilds;
-    // Keep real build/record behavior, with bundles confined to a temporary checkout.
-    const preparation = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockImplementation(
-      async (options) => {
-        const result = await prepare({ ...options, repositoryRoot: repository });
-        order.push("record");
-        return result;
-      },
-    );
-    const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
-    const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
-      seeded: [],
-      failed: [],
-    });
-    const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
-      downloaded: [],
-    });
-    const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue([]);
-    const log = spyOn(console, "log").mockImplementation(() => {});
-    // Root runs preload Happy DOM; package runs use Bun's native fetch already.
-    const nativePlatform = Reflect.get(
-      globalThis,
-      Symbol.for("orkestrator.tests.native-web-platform"),
-    ) as { fetch: typeof fetch } | undefined;
-    const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
-    const request = spyOn(globalThis, "fetch").mockImplementation(((input, init) => {
-      if (!String(input).startsWith("http://127.0.0.1:"))
-        throw new Error("Outbound fetch forbidden in lifecycle test");
-      return fetchRuntime(input, init);
-    }) as typeof fetch);
-    const signals = new Map(
-      (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
-    );
-    const children: childProcess.ChildProcess[] = [];
-    const spawn = childProcess.spawn;
-    // Exercise real child readiness, status writes and shutdown without starting
-    // the desktop app or reading provider credentials. The Electron stand-in
-    // reports its backend then exits only after the launcher persisted "ready".
-    const launchStandIn = (
-      command: string,
-      _args?: readonly string[],
-      options?: childProcess.SpawnOptions,
-    ) => {
-      expect(order).toContain("record");
-      const vite = command === "bun";
-      order.push(vite ? "vite" : "electron/backend");
-      const script = vite
-        ? `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready")});`
-        : `
+  test.each([false, true])(
+    "a successful start records bridges before launching the runtime and accepts backend readiness (renderer port taken after reservation: %p)",
+    async (rendererPortTaken) => {
+      const roots = await profileRoots("ork-dev-bridge-success-");
+      const repository = await temporaryDirectory("ork-dev-bridge-repo-");
+      const args = parseAgentTestArguments(["--profile", "bridge-success"]);
+      const profile = resolveRuntimeProfile({
+        repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
+        requestedId: args.profile,
+        flavor: "agent-test",
+        roots,
+      });
+      const statusPath = statusManifestPath(profile);
+      const order: string[] = [];
+      const prepare = prepareProfileBridgeBuilds;
+      // Keep real build/record behavior, with bundles confined to a temporary checkout.
+      const preparation = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockImplementation(
+        async (options) => {
+          const result = await prepare({ ...options, repositoryRoot: repository });
+          order.push("record");
+          return result;
+        },
+      );
+      const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
+      const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
+        seeded: [],
+        failed: [],
+      });
+      const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
+        downloaded: [],
+      });
+      const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue(
+        [],
+      );
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      // Root runs preload Happy DOM; package runs use Bun's native fetch already.
+      const nativePlatform = Reflect.get(
+        globalThis,
+        Symbol.for("orkestrator.tests.native-web-platform"),
+      ) as { fetch: typeof fetch } | undefined;
+      const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
+      const request = spyOn(globalThis, "fetch").mockImplementation(((input, init) => {
+        if (!String(input).startsWith("http://127.0.0.1:"))
+          throw new Error("Outbound fetch forbidden in lifecycle test");
+        return fetchRuntime(input, init);
+      }) as typeof fetch);
+      const signals = new Map(
+        (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
+      );
+      const children: childProcess.ChildProcess[] = [];
+      const spawn = childProcess.spawn;
+      // Another process can bind the reserved renderer port before Vite does
+      // (flake 1202). Hold the first one so the stand-in Vite cannot bind it.
+      const takenPorts: { port: number; stop: () => void }[] = [];
+      // Exercise real child readiness, status writes and shutdown without starting
+      // the desktop app or reading provider credentials. The Electron stand-in
+      // reports its backend then exits only after the launcher persisted "ready".
+      const launchStandIn = (
+        command: string,
+        _args?: readonly string[],
+        options?: childProcess.SpawnOptions,
+      ) => {
+        expect(order).toContain("record");
+        const vite = command === "bun";
+        order.push(vite ? "vite" : "electron/backend");
+        if (vite && rendererPortTaken && takenPorts.length === 0) {
+          const holder = Bun.listen({
+            hostname: "127.0.0.1",
+            port: Number(options?.env?.VITE_DEV_PORT),
+            socket: {
+              open: (socket) => void socket.end(),
+              data: () => undefined,
+            },
+          });
+          takenPorts.push({ port: holder.port, stop: () => holder.stop(true) });
+        }
+        const script = vite
+          ? `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready")});`
+          : `
           console.log(JSON.stringify({
             type: "orkestrator-electron-ready", profile: "bridge-success",
             electronPid: process.pid, backendPid: process.pid,
@@ -436,72 +454,91 @@ describe("dev:test bridge builds", () => {
             if (status.status === "ready") process.exit(0);
           }, 10);
         `;
-      const child = spawn(process.execPath, ["-e", script], options ?? {});
-      children.push(child);
-      return child;
-    };
-    const launch = spyOn(childProcess, "spawn").mockImplementation(
-      launchStandIn as typeof childProcess.spawn,
-    );
-    try {
-      await startDevelopment(args, "agent-test", {
-        roots,
-        prune: async () => [],
-        typecheck: () => {
-          order.push("typecheck");
-          return { status: 0 };
-        },
-        bundle: async () => {
-          order.push("bundle");
-          return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
-        },
-        turbo: fakeTurbo(repository, {
-          inputs: allInputs,
-          bundles: Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, `// ${bridge}`])),
-        }),
-      });
-      expect(order).toEqual(["typecheck", "bundle", "record", "vite", "electron/backend"]);
-      const status = await profileIo.readStatus(statusPath);
-      expect(status?.status).toBe("stopped");
-      expect(status?.browserUrl).toBe("http://fixture/");
-      expect(status?.pids.backend).toBe(children[1]?.pid);
-      const built = await readBridgeBuildRecord(statusPath);
-      expect(built).not.toBeNull();
-      expect(
-        compareBridgeBuilds(
-          built!,
-          snapshotBridgeBuilds(repository, {
-            run: fakeTurbo(repository, { inputs: allInputs, bundles: {} }),
+        const child = spawn(process.execPath, ["-e", script], options ?? {});
+        children.push(child);
+        return child;
+      };
+      const launch = spyOn(childProcess, "spawn").mockImplementation(
+        launchStandIn as typeof childProcess.spawn,
+      );
+      try {
+        await startDevelopment(args, "agent-test", {
+          roots,
+          prune: async () => [],
+          typecheck: () => {
+            order.push("typecheck");
+            return { status: 0 };
+          },
+          bundle: async () => {
+            order.push("bundle");
+            return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
+          },
+          turbo: fakeTurbo(repository, {
+            inputs: allInputs,
+            bundles: Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, `// ${bridge}`])),
           }),
-        ),
-      ).toEqual([]);
-      expect(children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(
-        true,
-      );
-    } finally {
-      launch.mockRestore();
-      preparation.mockRestore();
-      cache.mockRestore();
-      toolchains.mockRestore();
-      prefetch.mockRestore();
-      credentials.mockRestore();
-      log.mockRestore();
-      request.mockRestore();
-      for (const [signal, before] of signals) {
-        for (const listener of process.listeners(signal)) {
-          if (!before.includes(listener)) process.removeListener(signal, listener);
+        });
+        expect(order).toEqual([
+          "typecheck",
+          "bundle",
+          "record",
+          ...(rendererPortTaken ? ["vite", "vite"] : ["vite"]),
+          "electron/backend",
+        ]);
+        const status = await profileIo.readStatus(statusPath);
+        expect(status?.status).toBe("stopped");
+        expect(status?.browserUrl).toBe("http://fixture/");
+        expect(status?.pids.backend).toBe(children.at(-1)?.pid);
+        expect(takenPorts.length).toBe(rendererPortTaken ? 1 : 0);
+        for (const { port } of takenPorts) {
+          // The launcher moved Vite, its status and the profile to a new port.
+          expect(status?.rendererUrl).not.toBe(`http://127.0.0.1:${port}`);
+          expect(status?.pids.vite).toBe(children.at(-2)?.pid);
+          const stored = JSON.parse(
+            await readFile(path.join(profile.profileRoot, "profile.json"), "utf8"),
+          ) as { rendererPort: number };
+          expect(status?.rendererUrl).toBe(`http://127.0.0.1:${stored.rendererPort}`);
         }
+        const built = await readBridgeBuildRecord(statusPath);
+        expect(built).not.toBeNull();
+        expect(
+          compareBridgeBuilds(
+            built!,
+            snapshotBridgeBuilds(repository, {
+              run: fakeTurbo(repository, { inputs: allInputs, bundles: {} }),
+            }),
+          ),
+        ).toEqual([]);
+        expect(
+          children.every((child) => child.exitCode !== null || child.signalCode !== null),
+        ).toBe(true);
+      } finally {
+        for (const taken of takenPorts) taken.stop();
+        launch.mockRestore();
+        preparation.mockRestore();
+        cache.mockRestore();
+        toolchains.mockRestore();
+        prefetch.mockRestore();
+        credentials.mockRestore();
+        log.mockRestore();
+        request.mockRestore();
+        for (const [signal, before] of signals) {
+          for (const listener of process.listeners(signal)) {
+            if (!before.includes(listener)) process.removeListener(signal, listener);
+          }
+        }
+        await Promise.all(
+          children.map(async (child) => {
+            if (child.exitCode !== null || child.signalCode !== null) return;
+            const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+            child.kill("SIGKILL");
+            await exited;
+          }),
+        );
       }
-      await Promise.all(
-        children.map(async (child) => {
-          if (child.exitCode !== null || child.signalCode !== null) return;
-          const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-          child.kill("SIGKILL");
-          await exited;
-        }),
-      );
-    }
-  }, 15_000);
+    },
+    15_000,
+  );
 
   test("an agent-test start builds the bridges after Electron compiles, and a failure stops it", async () => {
     const roots = await profileRoots("ork-dev-bridge-build-");

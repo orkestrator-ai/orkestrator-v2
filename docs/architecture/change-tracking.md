@@ -549,7 +549,10 @@ helper:
 
 - Every endpoint of every group in a batch is described before any write in
   the batch; a group whose destination moved since the preview is skipped
-  whole, as before.
+  whole, as before. Host destination reads run one path at a time and discard
+  file bodies before retaining precondition metadata, bounding destination-body
+  retention independently of the 500-group write batch. Container destination
+  checks remain batched because they return metadata only.
 - The owner fence is asserted before each helper call, so an owner replaced
   mid-apply stops at the next batch instead of the next file.
 - A helper that dies part-way has already reported every write it finished;

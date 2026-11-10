@@ -20,9 +20,13 @@ import {
   hostConditionalWrites,
   parseConditionalWriteResults,
   RESTORE_WRITE_BATCH_GROUPS,
+  RESTORE_WRITE_BATCH_BYTES,
+  type ConditionalWriteOutcome,
   type ConditionalWriteItem,
 } from "./restore.js";
 import { createHarness, type Harness } from "./service-test-support.js";
+import type { WorktreeChangeOwner } from "./worktree-owner.js";
+import type { ReadRecord } from "./capture.js";
 import { turnIdFor } from "./turn-boundaries.js";
 
 /**
@@ -261,15 +265,10 @@ describe("restore apply batching", () => {
       expect(applied.completedPathIds).toHaveLength(files - 1);
       // Three batches: 500, 500 and 1 groups, each one helper process.
       expect(commandInvocationCount(process.execPath) - helpersBefore).toBe(3);
-      // The apply's own destination checks (capture reads with 8 readers).
-      const checks = describe.mock.calls.filter(
-        ([paths, limits]) => limits.readers === 1 && limits.maxCandidates === paths.length,
-      );
-      expect(checks.map(([paths]) => paths.length)).toEqual([
-        RESTORE_WRITE_BATCH_GROUPS,
-        RESTORE_WRITE_BATCH_GROUPS,
-        1,
-      ]);
+      // Host destination bodies are read one at a time; writes stay batched.
+      const checks = describe.mock.calls.filter(([, limits]) => limits.readers === 1);
+      expect(checks.length).toBeGreaterThanOrEqual(files);
+      expect(checks.every(([paths]) => paths.length === 1)).toBe(true);
     } finally {
       describe.mockRestore();
     }
@@ -318,3 +317,151 @@ describe("restore apply batching", () => {
       expect(existsSync(join(h.repo, "bulk", `f${index}.txt`))).toBe(true);
   });
 });
+
+// Exercise the apply batching seam without checkpoint/result captures obscuring
+// which reads and writes belong to the apply-time checks.
+type ApplyBatchSeam = {
+  applyBatch: (
+    owner: WorktreeChangeOwner,
+    groups: ConditionalWriteItem["action"][][],
+  ) => Promise<Array<[ConditionalWriteItem["action"], ConditionalWriteOutcome]>>;
+  writeBatch: (
+    owner: WorktreeChangeOwner,
+    items: readonly ConditionalWriteItem[],
+  ) => Promise<ConditionalWriteOutcome[]>;
+};
+
+async function batchHarness() {
+  const h = createHarness();
+  harnesses.push(h);
+  const turn = await addFilesInTurn(h, 1);
+  return {
+    h,
+    owner: h.service.registry.ownerById(turn.worktreeId)!,
+    restore: h.service.restore as unknown as ApplyBatchSeam,
+  };
+}
+
+test("host destination bodies are released before the next describe and before writes", async () => {
+  const { h, owner, restore } = await batchHarness();
+  const body = new Uint8Array(8 * 1024 * 1024).fill(65);
+  const actions = Array.from({ length: 5 }, (_, i) => ({
+    ...deleteItem(`large${i}`, "").action,
+    expectedOid: objectId("blob", body),
+  }));
+  for (const action of actions) writeFileSync(join(h.repo, action.pathId.slice(2)), body);
+  const records: ReadRecord[] = [];
+  const assertReleased = () => {
+    for (const record of records) {
+      if (record.kind === "file") expect(record.bytes === undefined).toBe(true);
+    }
+  };
+  const describe = owner.executor.describe.bind(owner.executor);
+  const reads = spyOn(owner.executor, "describe").mockImplementation(async (paths, ...args) => {
+    assertReleased();
+    expect(paths).toHaveLength(1);
+    const result = await describe(paths, ...args);
+    expect(result[0]?.kind).toBe("file");
+    records.push(...result);
+    return result;
+  });
+  const writes = spyOn(restore, "writeBatch").mockImplementation(async (_, items) => {
+    assertReleased();
+    expect(records).toHaveLength(actions.length);
+    return items.map(() => "applied");
+  });
+  try {
+    expect(
+      (
+        await restore.applyBatch(
+          owner,
+          actions.map((a) => [a]),
+        )
+      ).map(([, r]) => r),
+    ).toEqual(actions.map(() => "applied"));
+    expect(reads).toHaveBeenCalledTimes(actions.length);
+    expect(writes).toHaveBeenCalledTimes(1);
+  } finally {
+    reads.mockRestore();
+    writes.mockRestore();
+  }
+});
+
+test("target byte limit flushes without splitting a rename group and preserves outcomes", async () => {
+  const { h, owner, restore } = await batchHarness();
+  const unit = RESTORE_WRITE_BATCH_BYTES / 4;
+  const sizes = [unit * 3, unit, unit, unit * 2];
+  const actions = sizes.map((_, i) => ({
+    pathId: `u:target${i}`,
+    expectedOid: null,
+    expectedMode: null,
+    targetBlob: `blob${i}`,
+    mode: "100644",
+  }));
+  const get = spyOn(h.service.objects, "get").mockImplementation(
+    async (id) => new Uint8Array(sizes[Number(id.slice(4))]!),
+  );
+  const batches: string[][] = [];
+  const writes = spyOn(restore, "writeBatch").mockImplementation(async (_, items) => {
+    expect(items.reduce((n, item) => n + (item.bytes?.byteLength ?? 0), 0)).toBeLessThanOrEqual(
+      RESTORE_WRITE_BATCH_BYTES,
+    );
+    batches.push(items.map((item) => item.action.pathId));
+    return items.map((item) => (item.action === actions[2] ? "failed" : "applied"));
+  });
+  try {
+    const outcomes = await restore.applyBatch(owner, [
+      [actions[0]!],
+      actions.slice(1, 3),
+      [actions[3]!],
+    ]);
+    expect(batches).toEqual([["u:target0"], ["u:target1", "u:target2", "u:target3"]]);
+    expect(outcomes.map(([, result]) => result)).toEqual([
+      "applied",
+      "applied",
+      "failed",
+      "applied",
+    ]);
+  } finally {
+    get.mockRestore();
+    writes.mockRestore();
+  }
+});
+
+for (const failure of ["missing", "reject"] as const) {
+  test(`a ${failure} blob partway through a group preserves loaded writes and fails the remainder`, async () => {
+    const { h, owner, restore } = await batchHarness();
+    const actions = Array.from({ length: 4 }, (_, i) => ({
+      pathId: `u:target${i}`,
+      expectedOid: null,
+      expectedMode: null,
+      targetBlob: `blob${i}`,
+      mode: "100644",
+    }));
+    const get = spyOn(h.service.objects, "get").mockImplementation(async (id) => {
+      if (id === "blob1") {
+        if (failure === "reject") throw new Error("unreadable blob");
+        return null;
+      }
+      return encode(id);
+    });
+    const writes = spyOn(restore, "writeBatch").mockImplementation(async (_, items) => {
+      expect(items.map((item) => item.action.pathId)).toEqual(["u:target0", "u:target3"]);
+      return items.map(() => "applied");
+    });
+    try {
+      const outcomes = await restore.applyBatch(owner, [actions.slice(0, 3), [actions[3]!]]);
+      expect(outcomes.map(([, result]) => result)).toEqual([
+        "applied",
+        "failed",
+        "failed",
+        "applied",
+      ]);
+      expect(get.mock.calls.map(([id]) => id)).toEqual(["blob0", "blob1", "blob3"]);
+      expect(writes).toHaveBeenCalledTimes(1);
+    } finally {
+      get.mockRestore();
+      writes.mockRestore();
+    }
+  });
+}

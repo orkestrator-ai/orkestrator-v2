@@ -736,20 +736,29 @@ export class ChangeRestoreService {
     const outcomes = new Map<RestoreAction, ConditionalWriteOutcome>();
     const paths = groups.flatMap((group) => group.map((action) => action.pathId));
     // Check every endpoint at apply time before any mutation in this batch.
-    const current = await owner.executor
-      .describe(
-        paths,
-        {
-          maxCandidates: paths.length,
-          maxFileBytes: 16 * 1024 * 1024,
-          maxCaptureBytes: 256 * 1024 * 1024,
-          readers: 1,
-          stableReadAttempts: 2,
-        },
-        new AbortController().signal,
-      )
-      .catch(() => [] as ReadRecord[]);
-    const described = new Map(current.map((record) => [record.pathId, record]));
+    const described = new Map<string, ReadRecord>();
+    // Host describe returns full bodies. Retain only metadata and release each
+    // body before reading the next path; container describe is metadata-only.
+    const batchSize = owner.executor.kind === "host-worker" ? 1 : paths.length;
+    for (let index = 0; index < paths.length; index += batchSize) {
+      const current = await owner.executor
+        .describe(
+          paths.slice(index, index + batchSize),
+          {
+            maxCandidates: paths.length,
+            maxFileBytes: 16 * 1024 * 1024,
+            maxCaptureBytes: 256 * 1024 * 1024,
+            readers: 1,
+            stableReadAttempts: 2,
+          },
+          new AbortController().signal,
+        )
+        .catch(() => [] as ReadRecord[]);
+      for (const record of current) {
+        if (record.kind === "file" || record.kind === "symlink") record.bytes = undefined;
+        described.set(record.pathId, record);
+      }
+    }
     let pending: ConditionalWriteItem[] = [];
     let pendingBytes = 0;
     const flush = async () => {

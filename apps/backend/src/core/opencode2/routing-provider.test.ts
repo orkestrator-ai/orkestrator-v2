@@ -460,3 +460,20 @@ describe("a coordinator's 2.x server through the router", () => {
     ).rejects.toThrow(PromptRejectedError);
   });
 });
+
+test("closed routing history is not registered on a replacement generation", async () => {
+  const { router, server, state } = setup();
+  const closed = await router.createSession("build", "a", { openCodeProtocol: "v2" });
+  const open = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+  // Resume replacement closes the old session without calling releaseSession.
+  await router.closeSession(closed);
+  // A metadata lookup must not reacquire ownership.
+  expect(await router.sessionProtocol(closed)).toBe("v2");
+  state.generation = "g2";
+  await router.setResumableSessionArchived(`opencode2:${closed}`, true);
+  expect(server.sessions.get(closed)?.archived).toBe(true);
+  await expect(router.setResumableSessionArchived(`opencode2:${open}`, true)).rejects.toThrow(
+    "open in a tab",
+  );
+  expect(server.sessions.get(open)?.archived).toBeFalsy();
+});

@@ -129,7 +129,9 @@ describe("NativeResumeSessionDialog", () => {
     const newRow = screen.getByText("New one").closest(".group") as HTMLElement;
     expect(within(newRow).getByRole("button", { name: "Remove from list" })).toBe(removes[0]!);
     const legacyRow = screen.getByText("Legacy one").closest(".group") as HTMLElement;
-    expect(within(legacyRow).queryByRole("button", { name: "Remove from list" })).toBeNull();
+    expect(within(legacyRow).queryByRole("button", { name: "Remove from list" }) === null).toBe(
+      true,
+    );
 
     // The legacy row still resumes.
     fireEvent.click(within(legacyRow).getAllByRole("button")[0]!);

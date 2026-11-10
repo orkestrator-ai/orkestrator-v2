@@ -159,6 +159,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   readonly agent = "opencode" as const;
   readonly usageMessageLimit: number | undefined;
   readonly messageReadLimit: number | undefined;
+  private readonly liveV2Sessions = new Set<string>();
   private readonly lines = new Map<string, Line>();
   private readonly lookups = new Map<string, Promise<Line>>();
   private current: { generation: string; provider: OpenCode2Provider } | undefined;
@@ -264,6 +265,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
         });
       }
     }
+    this.liveV2Sessions.add(id);
     this.remember(id, "v2");
     return id;
   }
@@ -590,6 +592,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     }
     const provider = await this.requireV2();
     const resumed = await provider.resumeSession(sessionId);
+    this.liveV2Sessions.add(resumed);
     this.remember(resumed, "v2");
     return resumed;
   }
@@ -614,6 +617,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     if ((await this.lineOf(sessionId)) === "v2") {
       const outcome = await (await this.requireV2()).forkSession(sessionId, messageId);
       // The fork's tab resumes it by this id next; it is a 2.x session too.
+      this.liveV2Sessions.add(outcome.sessionId);
       this.remember(outcome.sessionId, "v2");
       return outcome;
     }
@@ -658,9 +662,11 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     if ((await this.lineOf(sessionId)) !== "v2") return this.legacy.closeSession(sessionId);
     const provider = await this.observedV2();
     if (provider) await provider.closeSession(sessionId);
+    this.liveV2Sessions.delete(sessionId);
   }
 
   releaseSession(sessionId: string): void {
+    this.liveV2Sessions.delete(sessionId);
     const line = this.lines.get(sessionId);
     this.lines.delete(sessionId);
     this.lookups.delete(sessionId);
@@ -673,6 +679,7 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     this.disposed = true;
     const current = this.current;
     this.current = undefined;
+    this.liveV2Sessions.clear();
     this.lines.clear();
     this.lookups.clear();
     await Promise.all([
@@ -699,7 +706,10 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
   ): void {
     if (this.disposed) return;
     if (line === "legacy") this.legacy.registerSession(sessionId, interaction);
-    else this.current?.provider.registerSession(sessionId, interaction);
+    else {
+      this.liveV2Sessions.add(sessionId);
+      this.current?.provider.registerSession(sessionId, interaction);
+    }
   }
 
   private lineOf(sessionId: string): Promise<Line> {
@@ -756,9 +766,8 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
         ...(connection.coordinator ? { coordinator: connection.coordinator } : {}),
       });
     this.current = { generation: connection.generation, provider };
-    for (const [sessionId, line] of this.lines) {
-      if (line === "v2") provider.registerSession(sessionId);
-    }
+    // Routing lookups are history, not evidence that a tab still holds an id.
+    for (const sessionId of this.liveV2Sessions) provider.registerSession(sessionId);
     if (previous) {
       void Promise.resolve(previous.provider.dispose()).catch((error: unknown) => {
         log.debug("provider.dispose-failed", { error: formatLogError(error, { message: false }) });

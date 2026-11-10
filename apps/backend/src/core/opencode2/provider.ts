@@ -546,10 +546,12 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
    */
   async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
     const sessionId = openCode2ResumeSessionId(resumableSessionId) ?? resumableSessionId;
-    if (archived && this.sessions.has(sessionId)) {
-      throw new PromptRejectedError("This conversation is open in a tab");
-    }
-    await this.features.setArchived(resumableSessionId, archived);
+    await this.grants.runExclusive(sessionId, async () => {
+      if (archived && this.sessions.has(sessionId)) {
+        throw new PromptRejectedError("This conversation is open in a tab");
+      }
+      await this.features.setArchived(resumableSessionId, archived);
+    });
   }
 
   /**
@@ -557,12 +559,13 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
    * exist. On a coordinator's server the launch's rules are restated first.
    */
   async resumeSession(resumableSessionId: string): Promise<string> {
-    const sessionId = await this.features.resumableSession(resumableSessionId);
-    if (this.coordinator) {
-      await this.grants.runExclusive(sessionId, () => this.grants.restate(sessionId));
-    }
-    this.registerSession(sessionId);
-    return sessionId;
+    const key = openCode2ResumeSessionId(resumableSessionId) ?? resumableSessionId;
+    return this.grants.runExclusive(key, async () => {
+      const sessionId = await this.features.resumableSession(resumableSessionId);
+      if (this.coordinator) await this.grants.restate(sessionId);
+      this.registerSession(sessionId);
+      return sessionId;
+    });
   }
 
   /**

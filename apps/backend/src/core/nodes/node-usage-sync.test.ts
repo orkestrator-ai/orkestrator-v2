@@ -1,5 +1,7 @@
 import { NodeReadModel } from "./node-read-model.js";
-import { TestNodeNetwork } from "./node-network-test-support.js";
+import { stopTestNodeNetworks, TestNodeNetwork } from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";

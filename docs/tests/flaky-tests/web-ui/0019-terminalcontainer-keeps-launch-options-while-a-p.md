@@ -1,7 +1,7 @@
 # `TerminalContainer > keeps launch options while a pending native launch is still outstanding` (`apps/web/src/components/terminal/TerminalContainer.view.test.tsx:6643`)
 
 - **ID:** 0019
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** the web workspace ran its parallel package suite
@@ -19,3 +19,22 @@
   Its isolated duration matches that wait, while the aggregate reported more
   than six minutes and also timed out unrelated focus and bridge tests. This
   supports runner/host starvation rather than a launch-state regression.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** the test waited a fixed 3.5 s of real time
+  (`setTimeout(resolve, 3500)`) to step past the renderer's native-launch
+  fallback timer, and then asserted that the pending launch was still
+  recorded. Under the aggregate's six-minute starvation that wall-clock wait
+  could not hold its 12-second budget. The renderer-side pending-launch state
+  it exercised no longer exists.
+- **Fix:** none needed in this change. `c3cd641e1` (#554, 2026-09-01) moved
+  Resolve and action-bar launches to backend-owned native agent and terminal
+  job commands and deleted this test from
+  `apps/web/src/components/terminal/TerminalContainer.view.test.tsx`;
+  `066fcb497` (#1549) then removed the renderer's pending native launch state
+  (`pendingNativeLaunches`, `getPendingNativeLaunch`) altogether. No code under
+  `apps/web/src` refers to it now, and the owning file has no 3.5-second wait.
+- **Reproduced:** no — the test and the state it measured were removed after
+  the only observation, so there is nothing left to race.
+- **Stress:** not applicable; the case's test no longer exists.

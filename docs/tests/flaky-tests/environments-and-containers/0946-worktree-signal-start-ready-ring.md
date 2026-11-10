@@ -1,7 +1,7 @@
 # Worktree-signal start fixture loses its `ready` ring in the aggregate
 
 - **ID:** 0946
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher`
 - **File:** `apps/backend/src/core/container-worktree-signal-install.test.ts:319`
@@ -30,3 +30,36 @@ The aggregate repeated the missing `ready` ring (81.74 ms). The complete unchang
 - **Failure:** the same assertion, now at line 339, received `["lost"]` instead of `["lost", "ready"]` after 58.14 ms.
 - **Suite counts:** backend 13,022 passed, 154 skipped, two failed across 13,178 tests in 798 files (682.75 s). The other failure was the `storage-writer-guards.test.ts` deadline already recorded in aggregate cases 1003, 1010 and 1166.
 - **Isolated rerun:** `mise exec -- bun test --preload ../../tests/setup-node.ts src/core/container-worktree-signal-install.test.ts` from `apps/backend`, under a private `TMPDIR`, passed 13 of 13. The backend re-sweep at `f1fd52100` passed it too (13,025 passed, 0 failed).
+
+## Resolution (2026-11-10)
+
+- **Root cause:** the fixture read the ring file before the `ready` ring had
+  been written. `docker/orkestrator-worktree-signal.sh` sends every ring as a
+  detached `curl … &`. The `ready` ring is started inside the
+  `inotifywait | { … }` pipeline's subshell, so it is that subshell's child;
+  the script's final `wait` only waits for the main shell's own children (the
+  `lost` ring). Once the fake watcher exited, the script returned while the
+  `ready` fake curl could still be starting, and the test's `run` helper
+  (`runCommand`) resolves at leader exit by default. On a loaded host the
+  orphaned curl lost that race, giving `["lost"]`. Not a product defect: the
+  rings are independent HTTP requests, and a `ready` that arrives after
+  `lost` is refused because the demotion on `lost` revokes the credential
+  (`ContainerWorktreeSignals.demote` in
+  `apps/backend/src/core/container-worktree-signal.ts`).
+- **Fix:** the fixture's `run` helper in
+  `apps/backend/src/core/container-worktree-signal-install.test.ts` passes
+  `waitForDescendants: true`, so it returns only once every process in the
+  script's group, every ring included, has exited. No assertion or deadline
+  changed.
+- **Reproduced:** yes — a temporary `sleep 0.5` in the fake `curl` for the
+  `ready` header failed the unchanged test with the recorded
+  `["lost"]` (expected `["lost", "ready"]`); with the fix and the same delay
+  the test passed 5 of 5 (`--rerun-each=5`).
+- **Stress:** `mise run test:logged -- --name stress-0946 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts -t "start writes a private config|without a readable config|worktree signal install" --rerun-each=10`
+  passed. Separately, at host load average 60 to 70 the wall-clock
+  `400 ms bursts over a minute` case hit its 80 s fixture deadline with and
+  without this change, and `rings ready, one ring per burst` (which uses real
+  settle windows) once lost a `change` or `overflow` ring while the
+  injected `ready` delay was in place; neither is this case and neither was
+  changed here. The `rings ready` case passed 8 of 8 with the fix and no
+  injection.

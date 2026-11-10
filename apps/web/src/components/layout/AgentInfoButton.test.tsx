@@ -1060,8 +1060,12 @@ describe("AgentInfoButton usage panel", () => {
 
       const dialog = within(screen.getByRole("dialog", { name: "Agent information" }));
       const section = dialog.getByTestId("agent-info-account");
-      expect(await within(section).findByRole("button", { name: "Add an account" })).toBeTruthy();
-      expect(within(section).queryByText("Reading account…") === null).toBe(true);
+      // The settings button renders before the account read settles, so wait
+      // for the read itself rather than for the button.
+      await waitFor(() =>
+        expect(within(section).queryByText("Reading account…") === null).toBe(true),
+      );
+      expect(within(section).getByRole("button", { name: "Add an account" })).toBeTruthy();
       expect(
         within(section).getByText(`${provider === "claude" ? "Claude Code" : "Codex"} account`),
       ).toBeTruthy();

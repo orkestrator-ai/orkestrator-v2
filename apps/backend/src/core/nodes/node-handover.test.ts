@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   MAX_REGISTERED_NODES,
@@ -10,7 +10,15 @@ import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
 import { readStoredNodeRegistry } from "./node-store-format.js";
 
-import { settle, TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
+import {
+  settle,
+  stopTestNodeNetworks,
+  TestNodeNetwork,
+  type TestNode,
+} from "./node-network-test-support.js";
+
+// Stop every node a test left running; see `stopTestNodeNetworks`.
+afterEach(stopTestNodeNetworks);
 
 function httpsRoute(node: TestNode): NodeRoute {
   return { id: "primary" as RouteId, kind: "https", enabled: true, origin: node.origin };

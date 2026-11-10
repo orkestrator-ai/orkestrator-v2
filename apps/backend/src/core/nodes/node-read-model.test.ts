@@ -1,10 +1,17 @@
 import { eventSink } from "../backend-emit.js";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { NodeReadModel } from "./node-read-model.js";
+
+// Stop every node a test left running, so a network's summary jobs do not
+// outlive it; see `stopTestNodeNetworks`.
+afterEach(async () => {
+  const { stopTestNodeNetworks } = await import("./node-network-test-support.js");
+  await stopTestNodeNetworks();
+});
 
 function harness() {
   let now = 0;

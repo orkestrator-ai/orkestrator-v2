@@ -361,7 +361,10 @@ command's synchronous part of 250 ms or more overlapped the window. The
 recurring-work source (`recurringWorkMetrics.stallContext`) adds `jobsInWindow`,
 the attempts of recurring jobs (diff scans, file-tree reads, sweeps; the kinds in
 `@orkestrator/protocol/recurring-work`) that were running during the window or
-settled inside it, and `jobs`, up to three of their kinds, newest first. An
+settled inside it, and `jobs`, up to three of their kinds, newest first. Each
+attempt counts once; one started while the tracked table was full counts while
+it is in flight and, once settled, only for windows it overlapped, but its kind
+is not named. An
 attempt's span includes its awaits, so a named job ran around the stall rather
 than necessarily causing it; a kind that keeps coming back is the lead. A stall
 with no storage fields was not SQLite holding the loop for 250 ms at a time.

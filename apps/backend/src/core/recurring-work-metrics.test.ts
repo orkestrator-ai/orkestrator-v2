@@ -302,6 +302,56 @@ describe("RecurringWorkMetrics", () => {
     expect(metrics.stallContext({ fromMs: 0, toMs: time.now() })).toEqual({ jobsInWindow: 0 });
   });
 
+  test("counts overflowed attempts once, and only while they overlap the window", async () => {
+    const time = clock(1_000);
+    const metrics = new RecurringWorkMetrics({ now: time.now, maxTrackedActive: 1 });
+    const gates = [deferred(), deferred()];
+    const runs = gates.map((gate) => metrics.observe("diff-scan", () => gate.promise));
+    time.advance(100);
+    // One tracked and one untracked attempt, both in flight.
+    expect(metrics.stallContext({ fromMs: 1_000, toMs: time.now() })).toEqual({
+      jobsInWindow: 2,
+      jobs: "diff-scan",
+    });
+
+    for (const gate of gates) gate.resolve();
+    await Promise.all(runs);
+    await flushMicrotasks();
+    // Both settled inside this window: two attempts, not three.
+    expect(metrics.stallContext({ fromMs: 1_000, toMs: time.now() })).toEqual({
+      jobsInWindow: 2,
+      jobs: "diff-scan",
+    });
+    // A later window that neither attempt overlapped reports none.
+    expect(metrics.stallContext({ fromMs: 5_000, toMs: 6_000 })).toEqual({ jobsInWindow: 0 });
+    // The cumulative overflow count is kept for the snapshot.
+    expect(metrics.snapshot().untrackedActive).toBe(1);
+  });
+
+  test("an overflowed attempt started before a reset does not offset later ones", async () => {
+    const time = clock(1_000);
+    const metrics = new RecurringWorkMetrics({ now: time.now, maxTrackedActive: 1 });
+    const before = [deferred(), deferred()];
+    const beforeRuns = before.map((gate) => metrics.observe("diff-scan", () => gate.promise));
+    metrics.reset();
+    const after = [deferred(), deferred()];
+    const afterRuns = after.map((gate) => metrics.observe("file-tree-read", () => gate.promise));
+    for (const gate of before) gate.resolve();
+    await Promise.all(beforeRuns);
+    await flushMicrotasks();
+    time.advance(5_000);
+    // Only the two post-reset attempts are in flight; the pre-reset ones
+    // settled into the window before this one.
+    expect(metrics.stallContext({ fromMs: 5_500, toMs: time.now() })).toEqual({
+      jobsInWindow: 2,
+      jobs: "file-tree-read",
+    });
+    for (const gate of after) gate.resolve();
+    await Promise.all(afterRuns);
+    await flushMicrotasks();
+    expect(metrics.stallContext({ fromMs: 50_000, toMs: 60_000 })).toEqual({ jobsInWindow: 0 });
+  });
+
   test("classifies spawn units and error categories by shape only", () => {
     expect(spawnWorkUnit("git", ["status"])).toBe("git-spawn");
     expect(spawnWorkUnit("/usr/local/bin/gh", ["pr", "view"])).toBe("gh-spawn");

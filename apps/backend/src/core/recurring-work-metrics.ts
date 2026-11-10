@@ -105,6 +105,8 @@ class ActiveSpan implements RecurringWorkSpan {
   outcome: "changed" | "unchanged" | undefined;
   settled = false;
   tracked = false;
+  /** The recorder's reset generation this attempt started in. */
+  generation = 0;
 
   constructor(
     private readonly owner: RecurringWorkMetrics,
@@ -231,7 +233,14 @@ export class RecurringWorkMetrics {
   private enabledFlag: boolean;
   private createdAt: number;
   private droppedLabels = 0;
+  /** Cumulative: attempts started while the tracked table was full. */
   private untrackedActive = 0;
+  /**
+   * Gauge: of those, the ones still in flight. Settled attempts are counted
+   * through `recentSettled` instead, so a stall window never counts one twice.
+   */
+  private untrackedInFlight = 0;
+  private generation = 0;
   private recorderFaults = 0;
 
   constructor(options: RecurringWorkMetricsOptions = {}) {
@@ -404,7 +413,9 @@ export class RecurringWorkMetrics {
       for (const span of this.recentSettled) {
         if (span.startedAt <= toMs && span.endedAt >= fromMs) overlapping.push(span);
       }
-      const count = overlapping.length + this.untrackedActive;
+      // An untracked attempt still in flight overlaps any window ending now;
+      // its kind is not kept, so it is counted but not named.
+      const count = overlapping.length + this.untrackedInFlight;
       if (count === 0) return { jobsInWindow: 0 };
       overlapping.sort((left, right) => right.startedAt - left.startedAt);
       const names: RecurringJobKind[] = [];
@@ -506,6 +517,8 @@ export class RecurringWorkMetrics {
     this.recentSettled.length = 0;
     this.droppedLabels = 0;
     this.untrackedActive = 0;
+    this.untrackedInFlight = 0;
+    this.generation += 1;
     this.recorderFaults = 0;
     this.createdAt = this.safeNow();
   }
@@ -515,6 +528,7 @@ export class RecurringWorkMetrics {
       const stats = this.stats(kind);
       if (!stats) return undefined;
       const span = new ActiveSpan(this, kind, this.now());
+      span.generation = this.generation;
       stats.started += 1;
       stats.active += 1;
       if (options.queueDelayMs !== undefined) recordSummary(stats.queueDelay, options.queueDelayMs);
@@ -523,6 +537,7 @@ export class RecurringWorkMetrics {
         span.tracked = true;
       } else {
         this.untrackedActive += 1;
+        this.untrackedInFlight += 1;
       }
       return span;
     } catch {
@@ -536,6 +551,9 @@ export class RecurringWorkMetrics {
       if (span.settled) return;
       span.settled = true;
       if (span.tracked) this.activeSpans.delete(span);
+      else if (span.generation === this.generation) {
+        this.untrackedInFlight = Math.max(0, this.untrackedInFlight - 1);
+      }
       const stats = this.stats(span.kind);
       if (!stats) return;
       const now = this.now();

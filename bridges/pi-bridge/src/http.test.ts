@@ -3661,8 +3661,8 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
-      // Extensions never load in this shared process, so the attach can add
-      // nothing the resource-only read missed: the list is already complete.
+      // Discovered extensions are excluded under every policy, so nothing can
+      // add a command at attach and the pre-attach read is the whole inventory.
       expect(body).toMatchObject({
         catalogueVersion: 1,
         status: "ready",

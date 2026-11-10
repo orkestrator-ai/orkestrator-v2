@@ -63,7 +63,10 @@ export interface SandboxReport {
  * observed on the pinned CLI (macOS 2026-11-06, Linux 2026-11-10).
  */
 export interface PlatformSandboxExpectations {
-  /** The shell's error for a write outside the writable paths. */
+  /**
+   * The shell's error for a write outside the writable paths, compared
+   * case-insensitively: bash and zsh word the same errno differently.
+   */
   outsideWriteRefusal: string;
   /**
    * Whether a direct loopback request reaches the host with full network.

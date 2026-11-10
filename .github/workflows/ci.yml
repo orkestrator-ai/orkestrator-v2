@@ -70,7 +70,9 @@ jobs:
   mobile-shell-browser:
     name: Mobile shell (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The tests take about 2.5 minutes; the rest is headroom for the browser
+    # install, which is bounded separately below.
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
@@ -87,8 +89,18 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # WebKit's --with-deps pulls ~200 apt packages. The install usually takes
+      # 30-60s, but a stalled Azure mirror has held it for the job's whole
+      # budget (each stalled fetch waits ~30s before apt moves on). Short apt
+      # timeouts with retries move past a stalled mirror sooner, and the step
+      # has its own bound so a stall fails visibly instead of starving the
+      # tests of the job's time.
       - name: Install browser
-        run: bunx playwright install --with-deps ${{ matrix.browser }}
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Test mobile shell input
         env:

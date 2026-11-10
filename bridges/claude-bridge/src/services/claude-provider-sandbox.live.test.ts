@@ -135,7 +135,11 @@ function observation(report: SandboxReport, name: string): SandboxObservation {
       const write = observation(report, name);
       expect(write.wrote, name).toBe(false);
       expect(write.toolResult!.isError, name).toBe(true);
-      expect(write.toolResult!.excerpt, name).toContain(expected.outsideWriteRefusal);
+      // The wording comes from the shell the CLI runs, and its case varies:
+      // bash prints "Read-only file system", zsh "read-only file system".
+      expect(write.toolResult!.excerpt.toLowerCase(), name).toContain(
+        expected.outsideWriteRefusal.toLowerCase(),
+      );
       expect(write.approvals, name).toEqual([]);
     }
 

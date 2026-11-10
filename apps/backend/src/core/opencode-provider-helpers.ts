@@ -274,6 +274,10 @@ export async function listOpenCodeResumableSessions(
         ...(typeof session?.title === "string" ? { title: session.title } : {}),
         ...(createdAt ? { createdAt } : {}),
         ...(updatedAt ? { updatedAt } : {}),
+        // OpenCode's platform table offers `archive` for 2.x conversations
+        // (`opencode2/sessions.ts`); the 1.x wire this provider speaks has no
+        // archive this repo drives, so the picker offers no remove on its rows.
+        archivable: false,
       },
     ];
   });

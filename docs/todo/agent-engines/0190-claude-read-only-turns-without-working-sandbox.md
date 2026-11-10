@@ -84,7 +84,7 @@ reviewers and a Claude preparation/consolidation model.
 - Run 1: the reviewers failed "Not logged in": read-only turns load no
   settings files, so the fake's base URL in `~/.claude/settings.json` never
   reached them. A fixture limitation here, and a real gap for users who
-  configure Claude that way: [7561](7561-claude-read-only-turns-ignore-settings-env.md).
+  configure Claude that way: [7565](7565-claude-read-only-turns-ignore-settings-env.md).
   The fake is now staged as managed settings.
 - Run 2: every reviewer turn ran (the sandbox-off note was on both reviewers),
   but the hook refused the package's `diffCommand`: without the sandbox it
@@ -414,7 +414,7 @@ Made 2026-10-28 while implementing.
   the probe and the refusal this would reuse.
 - [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md):
   the read-only hook and the `unavailable` coordinator path.
-- [7561-claude-read-only-turns-ignore-settings-env.md](7561-claude-read-only-turns-ignore-settings-env.md):
+- [7565-claude-read-only-turns-ignore-settings-env.md](7565-claude-read-only-turns-ignore-settings-env.md):
   found by task 3; read-only turns load no settings files.
 - [7080-linux-host-firewall-blocks-profile-signals.md](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
   why the container run used a disposable rootless daemon.

@@ -90,4 +90,33 @@ describe("sessionRuntimeHealthBody", () => {
       ).state,
     ).toBe("attached");
   });
+
+  /*
+   * 0005 task 8: which CLI the session runs, as a bare counter beside the
+   * state, with or without recorded health, and kept once the CLI is released.
+   */
+  test("reports the runtime generation beside the state, and only once a CLI launched", () => {
+    const open = {
+      state: "open",
+      abortController: { signal: { aborted: false } },
+    } as unknown as NonNullable<SessionState["claudeRuntime"]>;
+    expect(
+      sessionRuntimeHealthBody(session({ claudeRuntime: open, claudeRuntimeGeneration: 4 }))
+        .summary,
+    ).toEqual({ state: "attached", runtimeGeneration: 4 });
+    expect(sessionRuntimeHealthBody(session({ claudeRuntimeGeneration: 4 })).summary).toEqual({
+      state: "detached",
+      runtimeGeneration: 4,
+    });
+    const health = new RuntimeHealthRecorder();
+    health.recordUnknown("future-event");
+    expect(
+      sessionRuntimeHealthBody(session({ claudeRuntimeGeneration: 2, health })).summary,
+    ).toEqual({
+      state: "detached",
+      runtimeGeneration: 2,
+      drift: { unknownEvents: 1, unknownKinds: ["future-event"] },
+    });
+    expect(sessionRuntimeHealthBody(session()).summary).toEqual({ state: "detached" });
+  });
 });

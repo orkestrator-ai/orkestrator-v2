@@ -8,6 +8,7 @@ import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-dea
 import {
   AGENT_INTERACTION_LIMITS,
   mcpServerInteractionSource,
+  type AgentInteractionToolHints,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
   ClaudeElicitationRequest,
@@ -232,12 +233,17 @@ function webFetchHost(input: Record<string, unknown>): string | undefined {
  * the turn, which is what the card's "Cancel turn" means. An allow never
  * carries the SDK's `suggestions`: they are durable rules, and an allow-once
  * decision must not widen permissions.
+ *
+ * `toolHints` are what an `mcp__*` tool's server declares about it
+ * (`claude-mcp-tool-hints.ts`); they reach the card only beside a named MCP
+ * server and never affect `ruleEligible`.
  */
 export async function requestClaudeToolApproval(
   sessionId: string,
   toolName: string,
   input: Record<string, unknown>,
   permissionContext: Parameters<CanUseTool>[2],
+  toolHints?: AgentInteractionToolHints,
 ): Promise<PermissionResult> {
   const now = Date.now();
   const path = bounded(input.file_path ?? input.notebook_path);
@@ -336,6 +342,7 @@ export async function requestClaudeToolApproval(
     ...(networkHost ? { networkHost } : {}),
     ...(ruleEligible ? { ruleEligible: true } : {}),
     ...(humanRequired ? { humanRequired: true } : {}),
+    ...(toolHints && mcpServer && toolName.startsWith("mcp__") ? { toolHints } : {}),
     ...(proposedCommandPrefix ? { proposedCommandPrefix } : {}),
   };
   const outcome = await parkInteraction(request, permissionContext?.signal);

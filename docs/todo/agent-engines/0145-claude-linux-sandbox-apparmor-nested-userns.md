@@ -2,14 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; task 4 re-analysed and
+run 2026-11-10 against `main` at `c98b20e6f`.
 
 ### Tasks
 
 1. **Code items 1-3 (probe, user guidance, interactive refusal)**: the nested-namespace probe, the reason naming the remedy, and the bridge's up-front refusal. Status: done.
 2. **Paired AppArmor CI qualification**: restricted and remediated phases on an Ubuntu 26.04 runner. Status: done.
 3. **Stock AppArmor desktops, live**: Ubuntu 24.04 and 26.04 desktops, with and without the profile change, including the Agent Info tier. Status: blocked (no such desktop available).
-4. **Other platforms**: Debian with AppArmor, Fedora (SELinux) and Docker containers, from "Needs verification". Status: open.
+4. **Other platforms**: Debian with AppArmor, Fedora (SELinux) and Docker containers, from "Needs verification". Status: done (Docker containers probed with `docker exec` in a real environment container on 2026-11-10: `missing-programs`, and the container's own bridge refuses a provider-sandbox prompt with 422; Debian and Fedora stay optional, best-effort entries in 0031 and do not gate this file, as decided below).
 5. **CLI nested-namespace setting**: the open question, whether a newer CLI drops the nesting or offers a setting that avoids it. Status: deferred (re-checked on every Claude bump).
 
 ### 1. Code items 1-3
@@ -63,16 +64,28 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 4. Other platforms
 
-**Problem.** Debian with AppArmor, Fedora (SELinux) and Docker containers have not been observed.
+**Problem.** Debian with AppArmor, Fedora (SELinux) and Docker containers had not been observed. Docker containers were on 2026-11-10 (below); Debian and Fedora still have not.
 
 **Context.** Docker is a different case from the others. The image installs no `bubblewrap` or `socat` (no match in `docker/Dockerfile`), so a container probe answers `missing-programs`, and the bridge refuses provider-sandbox turns with that reason (the probe runs inside the container, D3).
 
 **Investigation.** The container behaviour is fully determined by the code and the missing programs. It overlaps 0190, whose container read-only turns fail for the same reason. Debian enables AppArmor by default but does not ship Ubuntu's `bwrap-userns-restrict`; Fedora uses SELinux, which the probe does not name. Both are expected to answer `available` unless local policy differs.
 
+Container run, 2026-11-10 on `beelink2` (Arch/Omarchy, kernel 7.2.15, x86_64). The image was built from this checkout (`docker/Dockerfile` at `c98b20e6f`, Debian 13 base, pinned CLI 2.1.319) inside a disposable rootless daemon (`mise run docker:disposable`, Docker Engine 29.9.2, builtin seccomp profile), because the host daemon was not open to this run and must not be changed. A throwaway `dev:test` profile (`--fixture --fixture-environments local,container --no-agent-credentials`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the `docker-qualification-bin` shim on `PATH`) let the backend create the fixture's container environment itself: a restricted runtime joined to its egress gateway, user `node`, `--init`, `CAP_NET_RAW` dropped, no capability added, not privileged. Then, with `docker exec -u node` in that runtime:
+
+- **The probe.** `command -v` found `unshare` but neither `bwrap` nor `socat`. `probeClaudeLinuxSandbox()` (the module copied into `/tmp`, the same code the bridge bundles) answered in 0.3 ms: `{"available":false,"failure":"missing-programs","reason":"… needs bubblewrap and socat on PATH, and bwrap and socat are missing. …"}`.
+- **The bridge's refusal.** The container's own `/opt/claude-bridge/dist/index.js`, imported in process with a temporary HOME, a fixture key and no port bound, created a session with policy `sandbox: "provider"` (201) and answered its prompt 422 `{ "kind": "sandbox-unavailable" }` with that reason. The session stayed `idle` with no messages; a `sandbox: "container"` session was created normally as the control. Both were closed.
+
+Two throwaway containers from the same image show what shipping the programs would change (outside the environment, with `bubblewrap` 0.12.0 and `socat` installed by `apt-get`, run as `node`, the runtime's `--init` and `--cap-drop NET_RAW`):
+
+- With Docker's default seccomp profile the probe answers `user-namespace` ("No permissions to create a new namespace"), and the CLI's own availability check, `bwrap --unshare-user --dev-bind / / true`, fails the same way, so the CLI would refuse the turn itself.
+- With `--security-opt seccomp=unconfined` the namespace is created, and bubblewrap then fails to mount `/proc` ("Operation not permitted") under Docker's masked `/proc`. Still `user-namespace`.
+
+So adding the packages to the image would not give containers a working Claude sandbox without weakening the container's own seccomp and `/proc` settings; the container stays the sandbox (`sandbox: "container"`), and a session overridden to `provider` inside one is refused with a reason that names the cause. These two runs were under a rootless daemon; a rootful daemon applies the same default seccomp profile and masked paths, which is what refused here. Everything this run created (profile, containers, volumes, network, daemon, image) was removed with `dev:stop`, `dev:reset` and `docker:disposable stop`.
+
 **Decisions.**
 
 - **How are the containers verified?**
-  - **One `docker exec` probe in a real environment, recorded here and reused by 0190 (recommended).**
+  - **One `docker exec` probe in a real environment, recorded here and reused by 0190 (recommended; done 2026-11-10).**
     - Pros: cheap; settles both files' container question at once.
     - Cons: needs a running container environment.
   - **Accept the code reading.**
@@ -191,8 +204,11 @@ failed every Bash call.
   [`upgrade-agents.md`](../../development/upgrade-agents.md).
 - **Verified on an AppArmor-restricted Ubuntu 26.04.1 CI host:** the paired
   run below demonstrates downgrade before remediation and enforcement after it.
+- **Verified in a real container environment (2026-11-10):** the probe
+  answers `missing-programs` and the container's bridge refuses a
+  provider-sandbox prompt with 422 (task 4).
 - **Not verified:** a stock Ubuntu 24.04 or 26.04 desktop, Debian with
-  AppArmor, Fedora (SELinux) and Docker containers.
+  AppArmor and Fedora (SELinux).
 
 ## Outstanding work
 
@@ -246,6 +262,11 @@ the pinned CLI 2.1.309 on macOS and on `omarchy-hp`.
 - [x] **AppArmor-restricted Ubuntu runner, paired probe/CLI qualification.**
   Passed 2026-10-26 in [CI run 40259536593](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/40259536593/job/121368688956),
   before and after remediation on the same runner. See the evidence below.
+- [x] **Docker containers.** Done 2026-11-10: `docker exec` in a real
+  environment container answered `missing-programs`, and the container's own
+  bridge refused a provider-sandbox prompt with 422 before journaling. With
+  the packages added, Docker's default seccomp and masked `/proc` still refuse
+  bubblewrap. See task 4.
 - [ ] **Stock AppArmor desktops, live.** Run the coordinator sandbox
   qualification on a stock Ubuntu 24.04 host and a stock 26.04 desktop, with
   and without the profile change, and record the tier Agent Info shows. Not
@@ -406,6 +427,28 @@ a graphical desktop inspection remains in the checklist above.
   bubblewrap would otherwise refuse them. **Cons:** a test that wants the real
   cached probe must clear the pin first (the protocol cache test does).
 
+### D6. How the container probe was run (task 4, 2026-11-10)
+
+- **Options.** (a) `docker run` the image by hand with the backend's flags.
+  (b) Let a throwaway `dev:test` profile's backend create the fixture's
+  container environment, then `docker exec` into it. (c) Accept the code
+  reading.
+- **Chosen:** (b), on an image built from this checkout inside a disposable
+  rootless daemon, plus two throwaway containers with the packages installed.
+- **Why.** (b) is the container a user's environment really is (the
+  backend's own create arguments, egress gateway, user and capabilities),
+  which (a) only imitates; (c) leaves 0190's request for a real container
+  unmet. The host's Docker daemon was not available to this run and must not
+  be changed, so the image was built in the disposable daemon. The extra
+  containers answer the follow-up a reader would ask (would shipping
+  bubblewrap fix it?) without touching the environment.
+- **Pros.** Real evidence for the probe answer and the bridge's 422 in the
+  production container; the seccomp and `/proc` layers are told apart.
+- **Cons.** The daemon was rootless; the refusals come from Docker's default
+  seccomp profile and masked paths, which a rootful daemon applies too, but a
+  rootful run was not made. The image has to be built in the disposable
+  daemon first, which is the slow part of the run.
+
 ## Open questions
 
 - Does a newer Claude CLI drop the nested namespace, or offer a setting that
@@ -419,8 +462,9 @@ a graphical desktop inspection remains in the checklist above.
 
 ## Needs verification
 
-- Ubuntu 24.04, Debian with AppArmor, Fedora (SELinux) and Docker containers
-  (see Qualification).
+- Ubuntu 24.04 (see Qualification). Debian with AppArmor and Fedora (SELinux)
+  are optional, best-effort runs batched in 0031 (task 4). Docker containers
+  were verified on 2026-11-10.
 
 ## Related
 
@@ -431,7 +475,11 @@ a graphical desktop inspection remains in the checklist above.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   where the stock-host run is batched.
 - [0190-claude-read-only-turns-without-working-sandbox.md](0190-claude-read-only-turns-without-working-sandbox.md):
-  read-only review turns on such hosts, split out of item 3.
+  read-only review turns on such hosts, split out of item 3. Its container
+  question can reuse task 4's run.
+- [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
+  task 9: the provider sandbox on a real CLI, Linux half run on a host where
+  this probe answers `available`.
 
 ## Replaces
 

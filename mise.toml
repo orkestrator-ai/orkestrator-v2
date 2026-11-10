@@ -377,6 +377,10 @@ run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 description = "Coordinator routing build case (a cancelled build is not restarted) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-routing-fake.ts"
 
+[tasks."test:agent:coordinator:node-mail-fake"]
+description = "Coordinator-to-coordinator node mail (round trip, loop bound, main replacement) between two disposable Pi-only profiles, one the other's leaf, with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-node-mail-fake.ts"
+
 [tasks."test:agent:coordinator-slow-remote"]
 description = "Coordinator typed message and mail fast-forward with a slow local remote, on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-slow-remote.ts"
@@ -458,7 +462,7 @@ description = "Prove what a parked Claude spare does and refuses, on the pinned 
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-first-turn.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."verify:claude:sandbox-live"]
-description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS; real CLI, no credentials, scripted model)"
+description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS, or Linux whose bubblewrap can nest the CLI's namespace; real CLI, no credentials, scripted model)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-provider-sandbox.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."measure:claude:first-turn"]

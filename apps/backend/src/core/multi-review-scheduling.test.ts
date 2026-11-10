@@ -4,6 +4,7 @@ import {
   isGraphEngineProjection,
   multiReviewDiscovery,
   multiReviewObligation,
+  resultKeysAwaitingTurnEnd,
   stableJitterMs,
   supervisionDemand,
 } from "./multi-review-scheduling.js";
@@ -120,5 +121,56 @@ describe("stable workflow jitter", () => {
       expect(jitter).toBeLessThan(1_000);
     }
     expect(stableJitterMs("a", 0)).toBe(0);
+  });
+});
+
+describe("result slots awaiting their turn's end (todo 7557)", () => {
+  type Reviewer = MultiReviewWorkflow["reviewers"][number];
+  const reviewer = (fields: Partial<Reviewer>): Reviewer =>
+    ({ id: "r", agent: "codex", model: "default", status: "running", ...fields }) as Reviewer;
+
+  test("name the sent tool-mode step request", () => {
+    const step = (request: Partial<NonNullable<MultiReviewWorkflow["activeRequest"]>>) =>
+      workflow({
+        phase: "consolidating",
+        activeRequest: {
+          kind: "consolidate",
+          requestId: "step",
+          state: "sent",
+          resultTransport: "tool-v1",
+          createdAt: "now",
+          ...request,
+        },
+      });
+    expect(resultKeysAwaitingTurnEnd(step({}))).toEqual(["step"]);
+    // Not dispatched yet, or a provider structured-output turn: no tool slot to wait on.
+    expect(resultKeysAwaitingTurnEnd(step({ state: "prepared" }))).toEqual([]);
+    expect(resultKeysAwaitingTurnEnd(step({ state: "dispatching" }))).toEqual([]);
+    expect(resultKeysAwaitingTurnEnd(step({ resultTransport: "structured-output-v1" }))).toEqual(
+      [],
+    );
+  });
+
+  test("name each running reviewer's sent tool-mode request while reviewing", () => {
+    const reviewing = workflow({
+      phase: "reviewing",
+      reviewers: [
+        reviewer({ requestId: "a", dispatchState: "sent", resultTransport: "tool-v1" }),
+        reviewer({ requestId: "b", dispatchState: "prepared", resultTransport: "tool-v1" }),
+        reviewer({
+          requestId: "c",
+          dispatchState: "sent",
+          resultTransport: "structured-output-v1",
+        }),
+        reviewer({
+          requestId: "d",
+          dispatchState: "sent",
+          resultTransport: "tool-v1",
+          status: "completed",
+        }),
+      ],
+    });
+    expect(resultKeysAwaitingTurnEnd(reviewing)).toEqual(["a"]);
+    expect(resultKeysAwaitingTurnEnd({ ...reviewing, phase: "consolidating" })).toEqual([]);
   });
 });

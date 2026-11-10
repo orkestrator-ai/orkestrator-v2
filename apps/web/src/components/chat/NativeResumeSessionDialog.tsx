@@ -39,6 +39,12 @@ export interface ResumableSession {
   detail?: string;
   /** Out of the list until "Show archived"; has to be restored to continue. */
   archived?: boolean;
+  /**
+   * `false` hides this row's remove/restore control even where the dialog has
+   * `onArchive`: an OpenCode list mixes 1.x conversations, which cannot be
+   * archived, with 2.x ones, which can.
+   */
+  archivable?: boolean;
 }
 
 interface NativeResumeSessionDialogProps {
@@ -325,7 +331,7 @@ export function NativeResumeSessionDialog({
                         </div>
                       </div>
                     </button>
-                    {onArchive && (
+                    {onArchive && session.archivable !== false && (
                       <button
                         type="button"
                         aria-label={session.archived ? "Restore to list" : "Remove from list"}

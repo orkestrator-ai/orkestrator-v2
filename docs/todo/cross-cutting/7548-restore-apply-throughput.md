@@ -1,7 +1,3 @@
-# Restore apply throughput at bulk sizes
-
-From [todo 7310](https://github.com/orkestrator-ai/orkestrator-v2/blob/b8aa0721b/docs/todo/cross-cutting/7310-bulk-turn-restore-limits.md) task 2 (done and deleted 2026-11-09; its results are in [Change tracking: restore](../../architecture/change-tracking.md#restore)). Undoing a bulk turn now gets a measurement and a checkpoint, but the apply itself takes minutes.
-
 ## Task analysis
 
 Analysed 2026-11-09 against `main` at `b8aa0721b`, with 7310's change applied.
@@ -10,7 +6,7 @@ Analysed 2026-11-09 against `main` at `b8aa0721b`, with 7310's change applied.
 
 1. **Batch the apply's conditional writes**: restore 10,000 files in seconds rather than minutes, without weakening the per-file precondition. Status: open.
 2. **Check what the client does while a multi-minute apply runs**: whether the gateway or the dialog gives up before the backend answers. Status: open.
-3. **Repeat 7310's measurements on a quieter host and on a live profile**: the bulk restore and end-recovery numbers so far come from a busy host through the service benchmark. Status: open.
+3. **Repeat 7310's measurements on a quieter host and on a live profile**: the bulk restore and end-recovery numbers so far come from a busy host through the service benchmark. Status: open (tracked in 7310 task 2).
 
 ### 1. Batch the apply's conditional writes
 
@@ -77,3 +73,9 @@ Analysed 2026-11-09 against `main` at `b8aa0721b`, with 7310's change applied.
 
 - [Change tracking: restore](../../architecture/change-tracking.md#restore) and [turn and thread boundaries](../../architecture/change-tracking.md#turn-and-thread-boundaries).
 - [4960-measurement-rows-live-soak.md](4960-measurement-rows-live-soak.md): the preview measurements this follows.
+
+## Assumptions and decisions
+
+### Task 3: qualification ownership
+
+Keep quiet-host and isolated live-profile evidence open under 7310 task 2. This ticket owns throughput improvements; its service benchmark is partial evidence only.

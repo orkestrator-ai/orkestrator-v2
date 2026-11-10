@@ -546,6 +546,7 @@ export class TurnBoundaryService {
    */
   private endRecoveryBlocked(turn: TurnBoundaryRow | null): string | null {
     const { ledger } = this.deps;
+    if (turn && ledger.pendingEndRecoverySnapshot(turn.turn_id)) return null;
     if (!turn || turn.lifecycle !== "end-unavailable" || turn.reason !== END_CAPTURE_TIMEOUT_REASON)
       return "not-eligible";
     if (ledger.latestTurnForThread(turn.thread_id)?.turn_id !== turn.turn_id) return "superseded";
@@ -588,6 +589,8 @@ export class TurnBoundaryService {
     const turn = ledger.turn(turnId);
     const blocked = this.endRecoveryBlocked(turn);
     if (blocked || !turn) return { kind: "done", reason: blocked ?? "not-eligible" };
+    const pending = ledger.pendingEndRecoverySnapshot(turnId);
+    if (pending) return this.publishRecoveredEnd(turnId, pending);
     const owner = this.deps.registry.ownerById(turn.worktree_id);
     if (!owner) return { kind: "done", reason: "worktree-removed" };
     if (this.recoveries.has(turn.worktree_id)) return { kind: "retry", reason: "recovery-running" };
@@ -623,6 +626,12 @@ export class TurnBoundaryService {
         snapshotId,
         reason: "turn-recovered",
       });
+      ledger.addReference({
+        ownerKind: "turn",
+        ownerId: turnId,
+        snapshotId,
+        reason: "turn-recovery-pending",
+      });
       ledger.updateSegment(turn.segment_id, {
         final_snapshot_id: snapshotId,
         latest_live_snapshot_id: snapshotId,
@@ -636,10 +645,20 @@ export class TurnBoundaryService {
       return true;
     });
     if (!recovered) return { kind: "done", reason: "superseded" };
-    return {
-      kind: "recovered",
-      keys: await this.publishTurn(turnId, snapshotId, true, false, true),
-    };
+    return this.publishRecoveredEnd(turnId, snapshotId);
+  }
+
+  private async publishRecoveredEnd(
+    turnId: string,
+    snapshotId: string,
+  ): Promise<EndRecoveryResult> {
+    // Snapshot references survive a crash between the two publications.
+    // Measurement ids are content-derived, so repeating either is idempotent.
+    const keys = await this.publishTurn(turnId, snapshotId, true, false, true);
+    this.deps.ledger.transaction(() =>
+      this.deps.ledger.removeReferences("turn", turnId, "turn-recovery-pending"),
+    );
+    return { kind: "recovered", keys };
   }
 
   /** Every retry ran out too: stop offering the turn for recovery, even after a restart. */
@@ -712,7 +731,7 @@ export class TurnBoundaryService {
     });
     if (turnOutcome.revision !== null) advanced.push(keys.turnNet);
     const segment = ledger.segment(turn.segment_id);
-    if (segment) {
+    if (segment && (!later || ledger.latestTurnForThread(turn.thread_id)?.turn_id === turnId)) {
       const threadKey = threadResourceKey(segment.segment_id);
       const baseline =
         segment.baseline_state === "active" ? this.snapshotRow(segment.baseline_snapshot_id) : null;

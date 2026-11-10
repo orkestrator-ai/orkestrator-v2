@@ -133,6 +133,128 @@ describe("end capture recovery", () => {
     expect(existsSync(join(h.repo, "b.txt"))).toBe(false);
   });
 
+  for (const restart of [false, true]) {
+    for (const failedScope of ["turn-net", "thread-net"]) {
+      test(`publication resumes after a partial failure (restart=${restart}, scope=${failedScope})`, async () => {
+        const h = harness({ policy: TIMED_OUT });
+        await timedOutTurn(h);
+        const measure = h.service.measurements.measureSnapshots.bind(h.service.measurements);
+        const failure = spyOn(h.service.measurements, "measureSnapshots").mockImplementation(
+          async (input) => {
+            if (input.scope === failedScope) throw new Error("publication failed");
+            return measure(input);
+          },
+        );
+        await expect(h.service.endRecovery.attempt(turnId("r1"))).rejects.toThrow(
+          "publication failed",
+        );
+        failure.mockRestore();
+        const recoveredId = turnMeasurement(h.service, "r1").measurementId;
+        const snapshot = h.service.ledger.pendingEndRecoverySnapshot(turnId("r1"));
+        expect(snapshot).not.toBeNull();
+        expect(awaiting(h.service)).toEqual([turnId("r1")]);
+        let service = h.service;
+        if (restart) {
+          h.service.shutdown();
+          h.database().close();
+          const database = openChangeLedgerDatabase(h.dataDir);
+          service = new ChangeTrackingService({
+            dataDir: h.dataDir,
+            database: () => database,
+            emit: () => undefined,
+            environmentTarget: async () => ({ kind: "local", worktreePath: h.repo }),
+            durable: false,
+            manualScheduling: false,
+            policy: { ...TIMED_OUT, endRecoveryDelayMs: 0 },
+          });
+          extraCleanups.push(() => {
+            service.shutdown();
+            database.close();
+          });
+          service.start();
+          await service.endRecovery.idle();
+        } else {
+          expect((await service.endRecovery.attempt(turnId("r1"))).kind).toBe("recovered");
+        }
+        if (failedScope === "thread-net")
+          expect(turnMeasurement(service, "r1").measurementId).toBe(recoveredId);
+        expect(turnMeasurement(service, "r1").afterSnapshotId).toBe(snapshot);
+        const turn = service.ledger.turn(turnId("r1"))!;
+        expect(
+          service.ledger.latestMeasurement("segment", turn.segment_id, "thread-net")
+            ?.afterSnapshotId,
+        ).toBe(snapshot);
+        expect(awaiting(service)).toEqual([]);
+      });
+    }
+  }
+
+  test("a refused dispatch on another thread does not supersede recovery", async () => {
+    const h = harness({ policy: TIMED_OUT, aliases: ["env-2"] });
+    await timedOutTurn(h);
+    await h.service.prepareTurnStart({
+      environmentId: "env-2",
+      logicalSessionKey: "env-env-2:tab",
+      requestId: "refused",
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-2", "env-env-2:tab", "refused", "rejected");
+    expect(h.service.ledger.turn(turnId("refused", "env-2", "env-env-2:tab"))?.lifecycle).toBe(
+      "abandoned",
+    );
+    expect((await h.service.endRecovery.attempt(turnId("r1"))).kind).toBe("recovered");
+  });
+
+  test("restore apply cancels a running recovery before its checkpoint", async () => {
+    const h = harness();
+    await startTurn(h.service, "earlier");
+    writeFileSync(join(h.repo, "a.txt"), "earlier edit\n");
+    await finishTurn(h.service, "earlier");
+    const preview = await h.service.restore.prepare({
+      measurementId: turnMeasurement(h.service, "earlier").measurementId,
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    h.service.policies.update({ finalizationDeadlineMs: 0 }, "test-timeout");
+    await startTurn(h.service, "r1");
+    await finishTurn(h.service, "r1");
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const original = HostCaptureExecutor.prototype.describe;
+    let blocking = true;
+    const slow = spyOn(HostCaptureExecutor.prototype, "describe").mockImplementation(
+      async function (
+        this: HostCaptureExecutor,
+        ...args: Parameters<HostCaptureExecutor["describe"]>
+      ) {
+        if (blocking) {
+          entered();
+          await new Promise((resolve) =>
+            args[2].addEventListener("abort", resolve, { once: true }),
+          );
+          args[2].throwIfAborted();
+        }
+        return original.apply(this, args);
+      },
+    );
+    try {
+      const recovery = h.service.endRecovery.attempt(turnId("r1"));
+      await reached;
+      blocking = false;
+      expect(
+        await h.service.restore.apply({
+          actionToken: preview.actionToken,
+          idempotencyKey: "restore-during-recovery",
+        }),
+      ).toMatchObject({ kind: "applied", outcome: "complete" });
+      expect(await recovery).toEqual({ kind: "done", reason: "cancelled" });
+      expect(readFileSync(join(h.repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
+    } finally {
+      slow.mockRestore();
+    }
+  });
+
   test("a later turn of the thread ends the turn's eligibility", async () => {
     const h = harness({ policy: TIMED_OUT });
     await timedOutTurn(h);

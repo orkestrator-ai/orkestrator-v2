@@ -266,6 +266,7 @@ export class ChangeRestoreService {
       preflightDeadlineMs: (paths: number) => number;
       /** Checkpoint and result capture deadline for an apply of this many paths. */
       captureDeadlineMs: (paths: number) => number;
+      beforeCheckpoint?: (worktreeId: string) => void;
       onApplied?: (worktreeId: string, environmentId: string | null) => void;
     },
   ) {}
@@ -530,6 +531,7 @@ export class ChangeRestoreService {
     let outcome: ChangesApplyRestoreResult;
     const captureDeadlineMs = this.deps.captureDeadlineMs(payload.actions.length);
     try {
+      this.deps.beforeCheckpoint?.(payload.worktreeId);
       const checkpoint = await owner.capture({
         purpose: "restore-checkpoint",
         deadlineMs: captureDeadlineMs,

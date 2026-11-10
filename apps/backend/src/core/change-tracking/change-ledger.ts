@@ -1041,9 +1041,18 @@ export class ChangeLedger {
   turnsAwaitingEndRecovery(limit: number): TurnBoundaryRow[] {
     return this.db
       .query(
-        "SELECT * FROM change_turn_boundaries WHERE lifecycle = 'end-unavailable' AND reason = ? ORDER BY finished_at DESC LIMIT ?",
+        "SELECT * FROM change_turn_boundaries WHERE lifecycle = 'end-unavailable' AND (reason = ? OR EXISTS (SELECT 1 FROM change_references r WHERE r.owner_kind = 'turn' AND r.owner_id = change_turn_boundaries.turn_id AND r.reason = 'turn-recovery-pending')) ORDER BY finished_at DESC LIMIT ?",
       )
       .all(END_CAPTURE_TIMEOUT_REASON, limit) as TurnBoundaryRow[];
+  }
+
+  pendingEndRecoverySnapshot(turnId: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT snapshot_id FROM change_references WHERE owner_kind = 'turn' AND owner_id = ? AND reason = 'turn-recovery-pending' LIMIT 1",
+      )
+      .get(turnId) as { snapshot_id: string } | null;
+    return row?.snapshot_id ?? null;
   }
 
   /**

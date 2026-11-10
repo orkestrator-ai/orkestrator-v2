@@ -1,7 +1,3 @@
-# Prove the measurement row cap on a busy live profile
-
-From efficiency report (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`) R14, part 0700 of batch E2, task 4 ("Prove the size curve flattens"). The batch file was deleted when E2 was built; it is in Git history at base commit `e198fd4a7`.
-
 ## Task analysis
 
 Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. Task 2 analysed again and done 2026-11-06 against `main` at `c1724ab74`.
@@ -9,7 +5,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. T
 ### Tasks
 
 1. **Soak the row cap on a busy live profile**: confirm the database stays near the new bound under real work. Status: open.
-2. **Check a restore of tens of thousands of files**: does the preflight finish inside its deadline. Status: done (2026-11-06). It did not: on a busy host 10,000 files reached the 10 s deadline, so the deadline now scales with the plan. Its follow-ups (7310, done 2026-11-09) are in [Change tracking: restore](../../architecture/change-tracking.md#restore) and [7548](7548-restore-apply-throughput.md).
+2. **Check a restore of tens of thousands of files**: does the preflight finish inside its deadline. Status: done (2026-11-06). It did not: on a busy host 10,000 files reached the 10 s deadline, so the deadline now scales with the plan. Its follow-ups (7310, implementation done; quiet-host/live-profile qualification open) are in [Change tracking: restore](../../architecture/change-tracking.md#restore) and [7548](7548-restore-apply-throughput.md).
 
 ### 1. Soak the row cap on a busy live profile
 
@@ -100,8 +96,14 @@ Chosen: the old 10 s stays as a floor, the budget is 5 ms per planned path, and 
 
 ## Related
 
-- [7548](7548-restore-apply-throughput.md): restore apply throughput at bulk sizes. Its predecessor 7310 (done 2026-11-09) made turns whose end capture timed out restorable and gave the restore checkpoint a longer deadline.
+- [7548](7548-restore-apply-throughput.md): restore apply throughput at bulk sizes. Its predecessor [7310](7310-bulk-turn-restore-limits.md) (qualification still open) made turns whose end capture timed out restorable and gave the restore checkpoint a longer deadline.
 
 - [4961](4961-measurement-directory-rows.md) and [4962](4962-provisional-capture-spacing.md) wait on this soak.
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md)
 - [Change tracking](../../architecture/change-tracking.md#retention-and-backup)
+
+## Assumptions and decisions
+
+### Task 2: qualification stays open in 7310
+
+Retain the missing quiet-host and isolated live-profile evidence in 7310 rather than treating busy-host service benchmarks as completion. 7548 remains the throughput follow-up.

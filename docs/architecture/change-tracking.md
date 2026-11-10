@@ -478,8 +478,8 @@ costs about 40 ms per file under load.
 that writes `--restore-files` new files through the whole service on a real
 repository, then times the preview and apply end to end (each plan a delete
 per file). On 2026-11-09 on a shared 16-core Linux host at a load average of
-48 to 60, with the worktree on disk, not tmpfs (todo 7310, done and deleted
-2026-11-09; in Git history):
+48 to 60, with the worktree on disk, not tmpfs ([todo 7310](../todo/cross-cutting/7310-bulk-turn-restore-limits.md),
+whose quiet-host and isolated live-profile qualification remains open):
 
 | Files | Turn end | Preview | Checkpoint (deadline) | Apply | Restored |
 | --- | --- | --- | --- | --- | --- |

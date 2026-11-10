@@ -260,6 +260,7 @@ export class ChangeTrackingService {
       tokenTtlMs: () => policy().restoreTokenTtlMs,
       preflightDeadlineMs: (paths) => restorePreflightDeadlineMs(paths, policy()),
       captureDeadlineMs: (paths) => restoreCaptureDeadlineMs(paths, policy()),
+      beforeCheckpoint: (worktreeId) => this.turns.cancelEndRecovery(worktreeId),
       onApplied: (_worktreeId, environmentId) => {
         if (environmentId) options.requestEnvironmentRefresh?.(environmentId);
       },

@@ -318,7 +318,7 @@ onLinux("a zombie Bun retained by a stopped launcher cannot vouch for an imposte
     "sh",
     [
       "-c",
-      '\"$1\" -e \'console.log(process.pid); setTimeout(() => process.kill(process.pid, "SIGKILL"), 150);\' & kill -STOP $$; wait',
+      '"$1" -e \'console.log(process.pid); setTimeout(() => process.kill(process.pid, "SIGKILL"), 150);\' & kill -STOP $$; wait',
       "launcher",
       process.execPath,
     ],

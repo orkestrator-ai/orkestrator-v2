@@ -65,6 +65,8 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_ticket_sync_cursor",
   "collect_ticket_sync_outbox",
   "ack_ticket_sync_outbox",
+  "read_ticket_image",
+  "put_ticket_image",
   "sync_node_tickets",
   // Shared usage readings move over the link between a command node and its leaf only.
   "collect_shared_usage_readings",
@@ -86,6 +88,7 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "launch_coordinator_node_environment",
   "assert_coordinator_node_delegation_available",
   "assert_coordinator_environment_scope",
+  "note_coordinator_node_unavailable",
   "open_coordinator_node_delegation",
   "send_coordinator_node_mail",
   "get_coordinator_node_mailbox",

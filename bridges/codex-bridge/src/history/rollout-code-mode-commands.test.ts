@@ -154,6 +154,55 @@ async function liveCommandPart(id: string, cmd: string, output: string): Promise
 }
 
 describe("code-mode commands in a reloaded transcript", () => {
+  for (const ending of [
+    "active",
+    "task_complete",
+    "turn_aborted",
+    "later-success",
+    "later-failure",
+  ]) {
+    test(`unfinished replay command: ${ending}`, async () => {
+      const record = commandRecord(2, "exec-background", "bun run dev", "listening");
+      Object.assign(record.payload.item, { status: "in_progress", exit_code: null });
+      const records: object[] = [
+        execCell(2, "cell", "bun run dev"),
+        record,
+        execOutput(3, "cell", "Script completed"),
+      ];
+      if (ending !== "active")
+        records.push({
+          type: "event_msg",
+          payload: {
+            type: ending === "turn_aborted" ? "turn_aborted" : "task_complete",
+            turn_id: TURN,
+          },
+        });
+      if (ending.startsWith("later-")) {
+        const later = commandRecord(5, "exec-background", "bun run dev", "stopped");
+        if (ending === "later-failure")
+          Object.assign(later.payload.item, { status: "failed", exit_code: 1 });
+        records.push(later);
+      }
+      const messages = await hydrate(records);
+      const parts = messages
+        .flatMap(toolParts)
+        .filter((part) => part.toolUseId === "exec-background");
+      expect(parts).toHaveLength(1);
+      const part = parts[0]!;
+      if (ending === "active") {
+        expect(part.toolState).toBe("pending");
+        expect(part.toolLeftRunning).toBeUndefined();
+      } else if (ending.startsWith("later-")) {
+        expect(part.toolState).toBe(ending === "later-success" ? "success" : "failure");
+        expect(part.toolLeftRunning).toBeUndefined();
+        expect(part.toolOutput ?? part.toolError).toBe("stopped");
+      } else {
+        expect(part.toolState).toBeUndefined();
+        expect(part.toolLeftRunning).toBe(true);
+      }
+    });
+  }
+
   test("a cell's command renders as the live item did, under its id, with no exec row", async () => {
     const messages = await hydrate([
       ...cellRunning(2, "call_cell_1", "exec-11111111", "cat a.txt", "Stop 1. Next: b.txt\n"),

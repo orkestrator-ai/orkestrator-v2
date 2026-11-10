@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
 import { MultiReviewLaunchDialog } from "./MultiReviewLaunchDialog";
@@ -194,11 +194,93 @@ test("a hanging draft can be dismissed without confirmation", async () => {
   });
   fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
   await screen.findByText("Drafting ticket and Build notes…");
+  // The working state shows a spinner beside the status text, hidden from assistive tech.
+  const spinner = screen.getByRole("status").querySelector('[data-testid="auto-pipeline-spinner"]');
+  expect(spinner?.getAttribute("class")).toContain("animate-spin");
+  expect(spinner?.getAttribute("aria-hidden")).toBe("true");
+  expect(screen.getByRole("dialog").getAttribute("aria-busy")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   await waitFor(() => expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1));
   await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
 });
+
+test("a pending confirmation shows the spinner with the promotion status", async () => {
+  const node = client().respond("confirm_auto_pipeline", () => new Promise(() => {}));
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  expect(screen.queryByTestId("auto-pipeline-spinner") === null).toBe(true);
+  expect(screen.getByRole("dialog").getAttribute("aria-busy")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await screen.findByText(/Promoting environment:/);
+  expect(
+    screen.getByRole("status").querySelector('[data-testid="auto-pipeline-spinner"]'),
+  ).toBeTruthy();
+});
+
+test("reopening a cancelled draft shows drafting and can cancel the new pending request", async () => {
+  const node = client();
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  const pending = Promise.withResolvers<typeof draft>();
+  node.respond("draft_auto_pipeline", () => pending.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Auto-pipeline" }));
+  expect(screen.getByRole("status").textContent).toContain("Drafting ticket and Build notes");
+  expect(screen.queryByLabelText("Title") === null).toBe(true);
+  expect(screen.queryByRole("button", { name: "Confirm Auto-pipeline" }) === null).toBe(true);
+  expect(screen.getByTestId("auto-pipeline-spinner")).toBeTruthy();
+  expect(screen.getByRole("dialog").getAttribute("aria-busy")).toBe("true");
+  expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  expect(cancel.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(cancel);
+  expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1);
+  expect(node.calls("cancel_auto_pipeline_draft")[0]!.args).toEqual({
+    environmentId: "env",
+    tabId: "original",
+  });
+  await act(async () => {
+    pending.resolve(draft);
+    await pending.promise;
+  });
+  expect(screen.queryByRole("dialog") === null).toBe(true);
+  expect(node.calls("draft_auto_pipeline")).toHaveLength(2);
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+});
+
+for (const invalid of [
+  { name: "blank title", title: " " },
+  { name: "blank description", description: "\n " },
+  { name: "empty criteria", acceptanceCriteria: [] },
+  { name: "blank criterion", acceptanceCriteria: ["Valid", " "] },
+]) {
+  test(`confirmation handler refuses ${invalid.name} independently of the disabled button`, async () => {
+    const node = client().respond("draft_auto_pipeline", { ...draft, ...invalid });
+    renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+      client: node,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+    const confirm = await screen.findByRole("button", { name: "Confirm Auto-pipeline" });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    // Call the actual React handler directly: DOM clicks on a disabled button
+    // cannot exercise the submission guard and would pass without that guard.
+    const propsKey = Object.getOwnPropertyNames(confirm).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    expect(propsKey).toBeDefined();
+    const props = Reflect.get(confirm, propsKey!) as { onClick: () => void };
+    await act(async () => props.onClick());
+    expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+}
 test("draft failure offers retry and plain review; confirmation errors retain the draft", async () => {
   const node = client().respond("draft_auto_pipeline", () => {
     throw new Error("draft unavailable");
@@ -237,4 +319,86 @@ test("multiple sources permit explicit selection and preserve it across refresh"
     timeout: 4000,
   });
   expect((picker as HTMLSelectElement).value).toBe("other");
+});
+
+test("a refused confirmation shows its reason beside the buttons, outside the scrolled draft", async () => {
+  let refuse: (error: Error) => void = () => undefined;
+  const node = client().respond(
+    "confirm_auto_pipeline",
+    () =>
+      new Promise((_resolve, reject) => {
+        refuse = reject;
+      }),
+  );
+  let promoted = 0;
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => promoted++} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  const body = screen.getByRole("region", { name: "Auto-pipeline draft" });
+  const progress = await screen.findByText(/^Promoting environment/);
+  expect(body.contains(progress)).toBe(false);
+  expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+  refuse(
+    new Error("Close this environment's terminals before promotion; a shell may still write."),
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Close this environment's terminals");
+  expect(body.contains(alert)).toBe(false);
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(promoted).toBe(0);
+  expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+});
+
+test("a successful confirmation closes the review and reports the promotion", async () => {
+  const node = client();
+  let promoted = 0;
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => promoted++} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await waitFor(() => expect(promoted).toBe(1));
+  await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(1);
+});
+
+test("an empty criteria list explains why confirmation is disabled", async () => {
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: client(),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  const tab = await screen.findByRole("tab", { name: "Acceptance criteria (2)" });
+  fireEvent.mouseDown(tab, { button: 0 });
+  fireEvent.click(tab);
+  fireEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove criterion 1" }));
+  expect(screen.getByText("Add at least one acceptance criterion before confirming.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Confirm Auto-pipeline" }).hasAttribute("disabled"),
+  ).toBe(true);
+});
+
+test("the Build transcript dropdown shares the reviewer Focus dropdown's theme", async () => {
+  renderInNodeScope(
+    <MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      onConfirm={() => undefined}
+      defaultAgent="codex"
+      catalog={{ claude: [], codex: [], opencode: [] }}
+      autoPipelineEnvironmentId="env"
+    />,
+    { client: client() },
+  );
+  const transcript = await screen.findByRole("combobox", { name: "Build transcript" });
+  const focus = screen.getByRole("combobox", { name: "Reviewer 1 focus" });
+  for (const select of [transcript, focus]) {
+    expect(select.getAttribute("data-slot")).toBe("native-select");
+    expect(select.className).toContain("bg-input-surface");
+  }
+  expect(transcript.className).toBe(focus.className);
 });

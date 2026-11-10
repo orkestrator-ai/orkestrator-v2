@@ -12,6 +12,7 @@
 // its frames. Turns are what `sendPrompt` creates: each one handles the frames
 // routed to it, and the newest one owns the root conversation.
 
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createHash } from "node:crypto";
 import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import type {
@@ -537,21 +538,8 @@ export async function retireDrainingClaudeRuntime(
   const runtime = session.claudeRuntime;
   if (!runtime || runtime.state === "ended") return;
   if (runtime.state === "open") drainClaudeRuntime(runtime);
-  const waitForEnd = async () => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        runtime.ended.then(() => true),
-        new Promise<false>((resolve) => {
-          timer = setTimeout(() => resolve(false), waitMs);
-          // A bounded wait, not work: it must not keep the process alive.
-          timer.unref?.();
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  // A bounded wait, not work: its timer must not keep the process alive.
+  const waitForEnd = async () => (await boundedWait(runtime.ended, waitMs)).settled;
   if (await waitForEnd()) return;
   // close may throw, reject or never settle. Only the consumer's ended signal
   // proves that this writer is gone; observe close failures without awaiting it.

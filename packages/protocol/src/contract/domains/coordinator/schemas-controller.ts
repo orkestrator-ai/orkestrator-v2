@@ -60,6 +60,8 @@ export const NativeAgentJobLaunchResultSchema = openRecord({
   agent: optionalString,
   logicalSessionKey: optionalString,
   error: optionalString,
+  /** A `rejected` launch the provider refused temporarily, nothing sent: a new request id may succeed. */
+  transient: optionalBoolean,
   completionActionArmed: optionalBoolean,
   warning: optionalString,
 });

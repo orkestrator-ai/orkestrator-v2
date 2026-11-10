@@ -16,6 +16,7 @@ import type {
   NativeAgentServiceOptions,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSessionProjection,
   PersistedNativeAgentSession,
   StorageService,
@@ -513,6 +514,24 @@ export class NativeAgentSessionOperations {
     return outcome;
   }
 
+  /**
+   * The conversation's other branches, for a branch picker or the public CLI.
+   * Pi only (`actions.branches`); the entry ids are `switch-branch` targets.
+   */
+  async listProjectionBranches(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionBranchList> {
+    if (!nativeCapabilities(input.agent).actions?.branches) {
+      throw new Error(`${input.agent} conversations have no branches`);
+    }
+    const resolved = await this.host.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    if (!resolved.provider.listSessionBranches) {
+      throw new Error(`${input.agent} conversations have no branches`);
+    }
+    return resolved.provider.listSessionBranches(resolved.session.providerSessionId);
+  }
+
   async performProjectionMcpAction(
     input: NativeAgentProjectionInput & {
       serverId: string;
@@ -525,13 +544,28 @@ export class NativeAgentSessionOperations {
     if (!resolved.provider.mcpServerAction) {
       throw new Error(`${input.agent} does not support MCP server actions`);
     }
-    const outcome = await resolved.provider.mcpServerAction(
-      resolved.session.providerSessionId,
-      input.serverId,
-      input.action,
-    );
-    this.host.projections.invalidateProjection(resolved.key);
-    return outcome;
+    return this.host.projections.withMcpActionFence(input, async (isCurrent) => {
+      const outcome = await resolved.provider.mcpServerAction!(
+        resolved.session.providerSessionId,
+        input.serverId,
+        input.action,
+      );
+      if (!isCurrent()) return outcome;
+      const current = await this.host.resolveProjectionSession(input);
+      if (
+        !isCurrent() ||
+        current?.provider !== resolved.provider ||
+        current.session.providerSessionId !== resolved.session.providerSessionId
+      )
+        return outcome;
+      this.host.projections.invalidateProjection(resolved.key);
+      await this.host.projections.refreshMcpAfterAction(
+        input,
+        resolved.provider,
+        resolved.session.providerSessionId,
+      );
+      return outcome;
+    });
   }
 
   /**

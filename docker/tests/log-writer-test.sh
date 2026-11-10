@@ -159,7 +159,9 @@ pid=$!
 exec 3>"$work/input"
 printf 'before\n' >&3
 wait_content "$work/failed" ready
-printf 'kept\npartial\n' >&3
+# One write(2), so the writer reads both lines at once: bash's printf flushes
+# each line separately into a FIFO, and the injected failure counts writes.
+perl -e 'syswrite(STDOUT, "kept\npartial\n") == 13 or exit 1' >&3
 first=$'[orkestrator-log-writer] dropped 1 lines\nkept\npar'
 wait_content "$file" "$first"
 printf 'after\n' >&3

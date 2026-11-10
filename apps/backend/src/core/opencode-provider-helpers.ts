@@ -39,6 +39,7 @@ import type {
   ProviderTabMail,
   ProviderWorkerMail,
 } from "./agent-provider-contract.js";
+import { abortableSleep } from "./abortable-timing.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -96,6 +97,11 @@ export interface OpenCodeProviderDependencies {
   monitorRetryMaxMs?: number;
   /** Jitter source for the monitor's reconnect backoff; uniform in [0, 1). */
   monitorRetryRandom?: () => number;
+  /**
+   * Longest silence the event monitor accepts once its stream has
+   * heartbeated (`OPENCODE_EVENT_STREAM_SILENCE_MS` by default).
+   */
+  monitorSilenceMs?: number;
   /** Test seam for the monitor's cancellable reconnect wait. */
   waitForMonitorRetry?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;
@@ -902,22 +908,13 @@ export function openCodeMessageIdScope(connection: BridgeConnection, sessionId: 
   return JSON.stringify([connection.baseUrl, connection.directory, sessionId]);
 }
 
-export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
+/**
+ * The monitor's reconnect wait. Unlike the shared {@link abortableSleep}, it
+ * rejects with the signal's reason on abort: `waitForMonitorRetry`'s contract,
+ * which the monitor loop and its tests rely on.
+ */
+export async function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (!(await abortableSleep(ms, signal))) throw signal.reason;
 }
 
 /** Keep plain prompt tool masks consistent with the session permission grant. */

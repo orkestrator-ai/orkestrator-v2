@@ -239,7 +239,7 @@ export function registerWorkerQuestionRelayCommands(
     const selfId = (await context.nodes?.status())?.nodeId;
     const remote =
       nodeId && nodeId !== selfId
-        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        ? await coordinatorNodeTarget(context, caller, nodeId)
         : undefined;
     const environment = remote
       ? await remote.environment(asNonBlankString(input.environmentId, "environmentId"))

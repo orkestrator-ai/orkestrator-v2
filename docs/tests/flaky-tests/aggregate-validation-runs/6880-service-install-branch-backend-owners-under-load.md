@@ -35,4 +35,4 @@ Each ran through `mise run test:logged` as `bun --cwd=apps/backend test <file> -
 
 ## Fix
 
-None here. No assertion, deadline or fixture changed. The tests belong to other areas. To-do 6601 fixed the classifier match; [to-do 6920](../../../todo/coordinator-and-multi-review/6920-triage-related-through-a-widely-shared-import.md) carries the separate follow-up for widely shared changed imports.
+None here. No assertion, deadline or fixture changed. The tests belong to other areas. To-do 6601 fixed the classifier match; to-do 6920 then limited how far a changed import may be before it alone makes a failure `related` ([failure triage](../../../architecture/review-preparation.md#failure-triage)).

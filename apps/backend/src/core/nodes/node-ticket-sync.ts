@@ -9,6 +9,9 @@ import {
   offlineTicketMessage,
   olderLeafTicketMessage,
   parseTicketSyncOutboxItem,
+  ticketImageUnavailableMessage,
+  TICKET_SYNC_FEATURES,
+  TICKET_SYNC_LIMITS,
   TICKET_SYNC_OUTBOX_READY_EVENT,
   type TicketSyncItem,
   type TicketSyncNodeState,
@@ -17,7 +20,7 @@ import {
 } from "@orkestrator/protocol/ticket-sync";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { KanbanStorage } from "../storage-kanban.js";
+import type { TicketSyncStorage } from "../storage-kanban-sync-repository.js";
 import { linkDomainApi, type EnvelopeLink } from "./node-domain-clients.js";
 
 const log = createLogger("nodes");
@@ -31,6 +34,9 @@ const log = createLogger("nodes");
  *    board in order and exactly once, and only then acknowledge them.
  * 2. Down: read the leaf's cursor and send it every change after it, in this
  *    node's change order, until it is current.
+ * 3. Images: deliver the images the leaf asked for (`wantedImages`), reading
+ *    them from this machine or from the leaf that holds them. A leaf never
+ *    reaches this node, so it asks when this node collects.
  *
  * It runs on every (re)connect and stream resync, when the leaf announces
  * queued changes, and shortly after any change to a synced board here. A
@@ -67,7 +73,13 @@ export interface TicketSyncNode {
   nodeId: string;
   displayName: string;
   available: boolean;
-  projects: Array<{ projectId: string; repositoryHint?: string }>;
+  projects: Array<{ projectId: string; name?: string; repositoryHint?: string }>;
+  /**
+   * This node has not read the node's projects yet (a node just attached):
+   * `projects` is empty for want of a read, not because there are none, so
+   * pairing waits and retries instead of finding nothing to sync.
+   */
+  summaryPending?: boolean;
 }
 
 export interface NodeTicketSyncDeps {
@@ -77,13 +89,17 @@ export interface NodeTicketSyncDeps {
   nodes(): Promise<TicketSyncNode[]>;
   /** This node's projects. */
   localProjects(): Promise<Array<{ id: string; gitUrl?: string | null }>>;
-  kanban: Pick<
-    KanbanStorage,
+  ticketSync: Pick<
+    TicketSyncStorage,
     | "ticketSyncChangesSince"
     | "applyTicketSyncOps"
     | "recordTicketSyncPeer"
     | "getTicketSyncOverview"
+    | "findTicketImage"
+    | "storeTicketImageCopy"
   >;
+  /** The bytes of an image attached on this machine, or `null`. */
+  localImage(imageId: string): Promise<string | null>;
   emit: BackendEmit;
   retryDelayMs?: number;
   /** Delay before a board change here is sent out, so a burst of edits goes once. */
@@ -99,6 +115,10 @@ export interface NodeTicketSyncResult {
   conflicts: number;
   /** Snapshots and tombstones sent down. */
   sent: number;
+  /** Images delivered to the leaf. */
+  images?: number;
+  /** Nothing was paired yet: the node's projects are still being read; retried shortly. */
+  waiting?: boolean;
 }
 
 const MAX_ROUNDS = 200;
@@ -206,13 +226,19 @@ export class NodeTicketSync {
           conflicts: total.conflicts + result.conflicts,
           sent: total.sent + result.sent,
         };
-        if (!this.again.has(nodeId) || this.disposed || result.state !== "in-sync") break;
+        if (
+          !this.again.has(nodeId) ||
+          this.disposed ||
+          result.state !== "in-sync" ||
+          result.waiting
+        )
+          break;
       }
       this.outcomes.set(nodeId, {
         state: total.state,
         ...(total.message ? { message: total.message } : {}),
       });
-      if (total.state === "error") this.retry(nodeId);
+      if (total.state === "error" || total.waiting) this.retry(nodeId);
       else this.delays.delete(nodeId);
       this.deps.emit(ticketSyncStatusChangedEvent, { nodeId });
       return total;
@@ -239,11 +265,21 @@ export class NodeTicketSync {
   }
 
   /** Pairs this node's projects with the node's copies, by repository identity. */
-  private async pairs(
-    node: TicketSyncNode,
-  ): Promise<Array<{ projectId: string; leafProjectId: string }>> {
+  private async pairs(node: TicketSyncNode): Promise<
+    Array<{
+      projectId: string;
+      leafProjectId: string;
+      leafProjectName?: string;
+      otherCopies: number;
+    }>
+  > {
     const local = await this.deps.localProjects();
-    const pairs: Array<{ projectId: string; leafProjectId: string }> = [];
+    const pairs: Array<{
+      projectId: string;
+      leafProjectId: string;
+      leafProjectName?: string;
+      otherCopies: number;
+    }> = [];
     const usedHints = new Set<string>();
     for (const project of local) {
       const hint = repositoryHint(project.gitUrl);
@@ -251,20 +287,45 @@ export class NodeTicketSync {
       // first copy of it there, so a ticket id names one row on each side.
       if (!hint || usedHints.has(hint)) continue;
       usedHints.add(hint);
-      const copy = node.projects.find((entry) => entry.repositoryHint === hint);
-      if (copy) pairs.push({ projectId: project.id, leafProjectId: copy.projectId });
+      const copies = node.projects.filter((entry) => entry.repositoryHint === hint);
+      const copy = copies[0];
+      if (copy) {
+        pairs.push({
+          projectId: project.id,
+          leafProjectId: copy.projectId,
+          ...(copy.name ? { leafProjectName: copy.name } : {}),
+          otherCopies: copies.length - 1,
+        });
+      }
     }
     return pairs;
   }
 
-  private async nodesWithProject(
-    projectId: string,
-  ): Promise<Array<{ node: TicketSyncNode; leafProjectId: string }>> {
+  private async nodesWithProject(projectId: string): Promise<
+    Array<{
+      node: TicketSyncNode;
+      leafProjectId: string;
+      leafProjectName?: string;
+      otherCopies: number;
+    }>
+  > {
     const nodes = await this.deps.nodes();
-    const result: Array<{ node: TicketSyncNode; leafProjectId: string }> = [];
+    const result: Array<{
+      node: TicketSyncNode;
+      leafProjectId: string;
+      leafProjectName?: string;
+      otherCopies: number;
+    }> = [];
     for (const node of nodes) {
       const pair = (await this.pairs(node)).find((entry) => entry.projectId === projectId);
-      if (pair) result.push({ node, leafProjectId: pair.leafProjectId });
+      if (pair) {
+        result.push({
+          node,
+          leafProjectId: pair.leafProjectId,
+          ...(pair.leafProjectName ? { leafProjectName: pair.leafProjectName } : {}),
+          otherCopies: pair.otherCopies,
+        });
+      }
     }
     return result;
   }
@@ -288,6 +349,9 @@ export class NodeTicketSync {
         message: olderLeafTicketMessage(node.displayName),
       };
     }
+    // Without the node's projects nothing pairs; the attach read lands within
+    // moments, so try again then rather than at the next reconcile.
+    if (node.summaryPending) return { ...empty, state: "in-sync", waiting: true };
     const controllerId = await this.deps.selfId();
     const pairs = await this.pairs(node);
     const localIds = new Set((await this.deps.localProjects()).map((project) => project.id));
@@ -297,8 +361,16 @@ export class NodeTicketSync {
 
     // Up first, so the leaf's queued changes are decided before it is sent the board.
     let after = 0;
+    const wanted = new Set<string>();
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
-      const batch = await sync.collectOutbox({ controllerId, after });
+      const batch = await sync.collectOutbox({
+        controllerId,
+        after,
+        features: [TICKET_SYNC_FEATURES.images],
+      });
+      for (const imageId of Array.isArray(batch?.wantedImages) ? batch.wantedImages : []) {
+        if (wanted.size < TICKET_SYNC_LIMITS.maxWantedImages) wanted.add(imageId);
+      }
       if (!batch?.epoch || !Array.isArray(batch.items) || batch.items.length === 0) break;
       let items: TicketSyncOutboxItem[];
       try {
@@ -317,7 +389,7 @@ export class NodeTicketSync {
       const firstUnknown = items.findIndex((item) => !localIds.has(item.sourceProjectId));
       const known = firstUnknown < 0 ? items : items.slice(0, firstUnknown);
       if (known.length !== items.length) log.warn("ticket-sync.unknown-project");
-      const result = await this.deps.kanban.applyTicketSyncOps({
+      const result = await this.deps.ticketSync.applyTicketSyncOps({
         nodeId,
         nodeName: node.displayName,
         epoch: batch.epoch,
@@ -350,10 +422,12 @@ export class NodeTicketSync {
           : 0;
       let epoch = typeof position?.epoch === "string" ? position.epoch : undefined;
       for (let round = 0; round < MAX_ROUNDS; round += 1) {
-        const changes = await this.deps.kanban.ticketSyncChangesSince(
+        const changes = await this.deps.ticketSync.ticketSyncChangesSince(
           pair.projectId,
           cursor,
           epoch,
+          TICKET_SYNC_LIMITS.maxBatchItems,
+          controllerId,
         );
         if (changes.items.length === 0 && !changes.reset) break;
         const answer = await sync.apply({
@@ -373,29 +447,70 @@ export class NodeTicketSync {
         epoch = changes.epoch;
         if (!changes.more) break;
       }
-      await this.deps.kanban.recordTicketSyncPeer(
+      await this.deps.ticketSync.recordTicketSyncPeer(
         nodeId,
         pair.projectId,
         pair.leafProjectId,
         cursor,
       );
     }
-    return { nodeId, state: "in-sync", applied, conflicts, sent };
+    // After the board went down, so every image the leaf asks for is on it.
+    let images = 0;
+    for (const imageId of wanted) {
+      const data = await this.imageBytes(imageId).catch(() => null);
+      const answer = await sync.putImage({ controllerId, imageId, ...(data ? { data } : {}) });
+      if (answer?.stored) images += 1;
+    }
+    return { nodeId, state: "in-sync", applied, conflicts, sent, ...(images ? { images } : {}) };
+  }
+
+  /**
+   * The bytes of an image on one of this node's boards: attached here, or
+   * read from the leaf that holds them (and kept here, so that is once).
+   */
+  async imageBytes(imageId: string): Promise<string | null> {
+    const local = await this.deps.localImage(imageId);
+    if (local) return local;
+    const found = await this.deps.ticketSync.findTicketImage(imageId);
+    // A copy of another command node's ticket is not this node's to serve.
+    if (!found?.image.nodeId || found.task.sync?.replica) return null;
+    return this.readImage(found.image.nodeId, imageId, found.image.nodeName);
+  }
+
+  /** Reads an image's bytes from the leaf that holds them, over its link, and keeps a copy here. */
+  async readImage(nodeId: string, imageId: string, nodeName?: string): Promise<string> {
+    const link = this.deps.link(nodeId);
+    const name =
+      nodeName ??
+      (await this.deps.nodes()).find((node) => node.nodeId === nodeId)?.displayName ??
+      nodeId;
+    const sync = link?.connected ? ticketSyncApi(link) : null;
+    if (!sync) throw new Error(ticketImageUnavailableMessage(name));
+    const answer = await sync.readImage({ controllerId: await this.deps.selfId(), imageId });
+    const data = typeof answer?.data === "string" ? answer.data : null;
+    if (!data || data.length > TICKET_SYNC_LIMITS.maxImageDataChars) {
+      throw new Error(`This image is no longer on ${name}.`);
+    }
+    await this.deps.ticketSync.storeTicketImageCopy(nodeId, imageId, data);
+    return data;
   }
 
   /** Where each leaf with a copy of the project stands, for the board and the tools. */
   async status(projectId: string): Promise<TicketSyncStatusResult> {
     const [overview, withProject] = await Promise.all([
-      this.deps.kanban.getTicketSyncOverview(projectId),
+      this.deps.ticketSync.getTicketSyncOverview(projectId),
       this.nodesWithProject(projectId),
     ]);
-    const nodes: TicketSyncNodeState[] = withProject.map(({ node, leafProjectId }) => {
-      const peer = overview.peers.find((entry) => entry.nodeId === node.nodeId);
+    const nodes: TicketSyncNodeState[] = withProject.map((entry) => {
+      const { node, leafProjectId } = entry;
+      const peer = overview.peers.find((candidate) => candidate.nodeId === node.nodeId);
       const link = this.deps.link(node.nodeId);
       const base = {
         nodeId: node.nodeId,
         nodeName: node.displayName,
         projectId: leafProjectId,
+        ...(entry.leafProjectName ? { projectName: entry.leafProjectName } : {}),
+        ...(entry.otherCopies > 0 ? { otherCopies: entry.otherCopies } : {}),
         latestSeq: overview.latestSeq,
         cursor: peer?.cursor ?? 0,
         ...(peer?.syncedAt ? { lastSyncedAt: peer.syncedAt } : {}),
@@ -428,7 +543,12 @@ export class NodeTicketSync {
       }
       return { ...base, state: "in-sync" };
     });
-    return { projectId, nodes, conflicts: overview.conflicts.slice(-20) };
+    return {
+      projectId,
+      nodes,
+      conflicts: overview.conflicts.slice(-TICKET_SYNC_LIMITS.maxStatusConflicts),
+      conflictCount: overview.conflicts.length,
+    };
   }
 
   /** One node's state for one project, after syncing it now. */

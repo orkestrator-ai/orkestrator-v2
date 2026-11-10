@@ -3,6 +3,7 @@
  * `createControlMcp` gives them and the delegation helpers more than one
  * of them uses.
  */
+import { coordinatorCallTurnOrigin } from "@orkestrator/protocol/coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { ControlMcpCaller } from "./control-mcp-caller.js";
 import type { createNodeTargets, NodeTarget } from "./control-mcp-nodes.js";
@@ -45,6 +46,35 @@ export interface ControlMcpToolContext {
     where: JsonRecord;
     layout(): Promise<unknown>;
   }>;
+}
+
+/**
+ * Whether a coordinator call's delegated prompt says it arose from agent mail:
+ * the scope's own origin (a scheduled fire's), else the conversation's newest
+ * turn. A conversation that cannot be read counts as mail, so a failed read
+ * marks the prompt rather than sending it as the user's.
+ */
+export async function coordinatorScopeTurnOrigin(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+): Promise<"mail" | undefined> {
+  if (scope.turnOrigin) return coordinatorCallTurnOrigin(undefined, scope.turnOrigin);
+  const snapshot = await invoke<unknown>("get_project_coordinator", {
+    projectId: scope.projectId,
+  }).catch((error: unknown) => {
+    log.warn("delegation.turn-origin-unreadable", { error: formatLogError(error) });
+    return null;
+  });
+  const workspace = isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+  const conversation =
+    workspace?.id === scope.coordinatorId && Array.isArray(workspace.conversations)
+      ? workspace.conversations.find(
+          (item: unknown) => isRecord(item) && item.id === scope.conversationId,
+        )
+      : undefined;
+  return coordinatorCallTurnOrigin(
+    isRecord(conversation) ? conversation.lastTurnOrigin : undefined,
+  );
 }
 
 /**

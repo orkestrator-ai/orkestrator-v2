@@ -11,6 +11,7 @@
 //      remembered, so the next read tries again.
 
 import type { AccountInfo, ModelInfo as SdkModelInfo } from "@anthropic-ai/claude-agent-sdk";
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -205,7 +206,6 @@ function fallbackCatalog(): ClaudeModelCatalog {
 /** A control-only query: `supportedModels()` without running a turn. */
 async function probeModels(at: number): Promise<ClaudeModelCatalog> {
   let q: ReturnType<typeof controlOnlyQuery> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
     debugLog("[session-manager] Fetching supported models", { cwd });
@@ -223,16 +223,11 @@ async function probeModels(at: number): Promise<ClaudeModelCatalog> {
         : undefined,
     ]);
     answer.catch(() => undefined);
-    const [models, account] = await Promise.race([
+    const [models, account] = await boundedWaitOrThrow(
       answer,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("The model probe did not answer in time")),
-          CLAUDE_MODEL_PROBE_TIMEOUT_MS,
-        );
-        timer.unref?.();
-      }),
-    ]);
+      CLAUDE_MODEL_PROBE_TIMEOUT_MS,
+      () => new Error("The model probe did not answer in time"),
+    );
     debugLog("[session-manager] Supported models fetched", { count: models.length });
     await rememberModels(models, account, at);
     return { source: "sdk", models: catalogModels(models) };
@@ -240,7 +235,6 @@ async function probeModels(at: number): Promise<ClaudeModelCatalog> {
     log.warn("models.fetch-failed", { error: formatLogError(error) });
     return fallbackCatalog();
   } finally {
-    clearTimeout(timer);
     if (q?.return) {
       try {
         await q.return();

@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { ROOTLESS_SECURITY_OPTION } from "../src/core/agent-tools-peer-filter.js";
 
 const FORBIDDEN_PORTS = new Set([34121, 34122]);
 
@@ -43,4 +44,16 @@ export async function cleanupEvidenceResources(
   await removeTrackedResources(created.containers, (id) => docker(["rm", "-f", id]));
   await removeTrackedResources(created.networks, (name) => docker(["network", "rm", name]));
   return { containers: Array.from(created.containers), networks: Array.from(created.networks) };
+}
+
+/**
+ * Whether `docker info --format '{{json .SecurityOptions}}'` names a rootless
+ * daemon, matched exactly as the production peer filter matches it.
+ */
+export function daemonIsRootless(securityOptionsJson: string): boolean {
+  const options: unknown = JSON.parse(securityOptionsJson.trim() || "null");
+  return (
+    Array.isArray(options) &&
+    options.some((option) => typeof option === "string" && ROOTLESS_SECURITY_OPTION.test(option))
+  );
 }

@@ -23,6 +23,7 @@ import type {
   NativeAgentComposerState,
   NativeAgentSelectionPricing,
 } from "@orkestrator/protocol/native-agent";
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { CATALOG_TIMEOUT_MS, MAX_MODEL_ID_BYTES } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 
@@ -396,17 +397,6 @@ function boundId(value: string): string {
   return Buffer.byteLength(trimmed) > MAX_MODEL_ID_BYTES ? "" : trimmed;
 }
 
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Cursor catalogue read timed out")), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  return boundedWaitOrThrow(work, timeoutMs, () => new Error("Cursor catalogue read timed out"));
 }

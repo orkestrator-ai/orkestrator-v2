@@ -26,6 +26,7 @@ import {
 } from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync } from "node:fs";
 import { deleteEnvironmentTask } from "./environment-delete.js";
+import { abortableSleep } from "./abortable-timing.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -736,9 +737,11 @@ export async function startLocalServerUnlocked(
       const delayMs = isOpenCodeDatabaseLockedError(error)
         ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
         : undefined;
-      if (delayMs === undefined || context.runtime.localServers.isShuttingDown()) throw error;
+      const localServers = context.runtime.localServers;
+      if (delayMs === undefined || localServers.isShuttingDown()) throw error;
       log.warn("opencode.database-lost-retrying", { environmentId, delayMs });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // Shutdown ends the wait early; the next attempt then refuses to start.
+      await abortableSleep(delayMs, localServers.shutdownSignal);
     }
   }
 }

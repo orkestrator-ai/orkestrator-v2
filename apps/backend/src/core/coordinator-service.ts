@@ -50,6 +50,10 @@ import {
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { CoordinatorNodeReleases } from "./coordinator-node-release.js";
 import {
+  CoordinatorNodeReconnectWakes,
+  type CoordinatorNodeAttempt,
+} from "./coordinator-node-reconnect-wakes.js";
+import {
   decideDelegation,
   type DelegationDecision,
   type DelegationDecisionState,
@@ -247,6 +251,8 @@ export class CoordinatorService {
    * beside the maps above (`coordinator-node-release.ts`).
    */
   private readonly nodeReleases: CoordinatorNodeReleases;
+  /** Who tried a node while it was disconnected (`coordinator-node-reconnect-wakes.ts`). */
+  private readonly nodeReconnectWakes: CoordinatorNodeReconnectWakes;
 
   constructor(
     private readonly storage: StorageService,
@@ -280,19 +286,22 @@ export class CoordinatorService {
       ...(options.gitHubCli ? { gitHubCli: options.gitHubCli } : {}),
       ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
+    const mainAddress = async (coordinatorId: string) => {
+      const owner = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+      if (!owner) return null;
+      const { workspace, main } = await this.ensureMainConversation(owner.projectId);
+      return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+    };
+    const nodeName = (nodeId: string) => this.remote?.nodeName(nodeId) ?? Promise.resolve(nodeId);
     this.nodeReleases = new CoordinatorNodeReleases({
       storage,
-      mainAddress: async (coordinatorId) => {
-        const owner = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
-        if (!owner) return null;
-        const { workspace, main } = await this.ensureMainConversation(owner.projectId);
-        return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
-      },
-      nodeName: (nodeId) => this.remote?.nodeName(nodeId) ?? Promise.resolve(nodeId),
+      mainAddress,
+      nodeName,
       ...(options.nodeOfflineNoticeMs !== undefined
         ? { offlineNoticeMs: options.nodeOfflineNoticeMs }
         : {}),
     });
+    this.nodeReconnectWakes = new CoordinatorNodeReconnectWakes({ storage, mainAddress, nodeName });
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
     this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
@@ -330,6 +339,16 @@ export class CoordinatorService {
         this.backgroundWorkSince.delete(id);
       }
     }
+  }
+
+  /** A coordinator's call on a disconnected node was refused; woken once it reconnects. */
+  noteNodeUnavailable(attempt: CoordinatorNodeAttempt): void {
+    this.nodeReconnectWakes.noteRefused(attempt);
+  }
+
+  /** A node connected (again): wake the conversations that tried it meanwhile. Never throws. */
+  nodeConnected(nodeId: string): Promise<void> {
+    return this.nodeReconnectWakes.nodeConnected(nodeId);
   }
 
   /**

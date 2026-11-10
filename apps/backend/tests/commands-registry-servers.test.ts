@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import os from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
+import { bridgeRestarts } from "../src/core/bridge-restarts.js";
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
 
@@ -150,6 +151,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"||q.url==="/global/auth-check"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url.split("?")[0]==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -256,6 +258,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -386,6 +389,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -599,6 +603,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -863,6 +868,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1029,6 +1035,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1141,6 +1148,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1280,6 +1288,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1436,6 +1445,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1519,6 +1529,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     # Only the bridge launch starts a server; credential syncs run first.
@@ -1654,6 +1665,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1861,6 +1873,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -1979,6 +1992,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2066,6 +2080,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2131,6 +2146,7 @@ case "$1" in
     case "$*" in
       *refresh_token*) exit 0 ;;
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -2207,6 +2223,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2228,6 +2245,7 @@ exit 0
       try {
         await withFakeDocker(dockerScript, async (logs) => {
           const captured = captureLogs();
+          const launchesBefore = bridgeRestarts.snapshot().codex?.containerLaunches ?? 0;
           const result = (await commands.get("start_codex_server")?.(
             { containerId: "container-codex-legacy" },
             context,
@@ -2236,6 +2254,8 @@ exit 0
             .records()
             .filter((record) => record.event === "bridge.launched");
           captured.restore();
+          // The health row counts the relaunch beside its log line.
+          expect(bridgeRestarts.snapshot().codex?.containerLaunches).toBe(launchesBefore + 1);
 
           expect(result).toMatchObject({ hostPort, wasRunning: false });
           expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
@@ -2296,6 +2316,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2359,6 +2380,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in
@@ -2453,6 +2475,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in

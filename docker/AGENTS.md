@@ -39,6 +39,10 @@ Agent CLIs, one per supported platform (two for OpenCode while it moves to 2.x):
   `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
 - Grok Build (`grok`) is downloaded as a hash-verified pinned artifact. Pi is
   downloaded the same way, as a bundle rather than a single file.
+- OpenCode 1.x is root-owned in `/opt/opencode/bin`; `OPENCODE_CLI_PATH`
+  (`/home/node/.opencode/bin/opencode`) is a symlink to it. The container's
+  server runs it through the launcher (`opencode-launch=1`), so it must stay
+  root-owned: a binary node could replace would run beside the password.
 - OpenCode 2.x is installed beside 1.x as `opencode2`
   (`OPENCODE2_CLI_PATH`, `/home/node/.opencode/bin/opencode2`) from its
   hash-verified npm platform tarball, for the 2.x provider being built
@@ -67,6 +71,12 @@ Prebuilt bridge servers, so a container never builds them at runtime:
   (dash reads no startup file; bash would read `$BASH_ENV`), and call every
   program by a root-owned path. Never make it source anything `node` can write
   ([agent-approvals.md](../docs/architecture/agent-approvals.md#fixed-launch-bridge-launch1)).
+  With `opencode-launch=1` it also starts OpenCode 1.x, from `/workspace`, with
+  its configuration in root-owned `/run/orkestrator-opencode`. OpenCode takes a
+  plain password, so that branch must never put a backend value in any argv
+  (every argv is readable by `node`) nor leave a long-lived wrapper holding
+  one in its environment
+  ([agent-approvals.md](../docs/architecture/agent-approvals.md#opencode-under-the-launcher-opencode-launch1)).
 
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the

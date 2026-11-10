@@ -2,6 +2,72 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { parseAutoPipelineTicket } from "../packages/protocol/src/auto-pipeline";
 
+type DraftProbe = { drafts: number; cancels: number; confirms: number; release: () => void };
+type ProbeWindow = Window & { autoPipelineProbe?: DraftProbe };
+
+test("a new draft after Cancel stays cancellable and ignores its late response", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline");
+  await page.evaluate(() => {
+    const original = window.orkestrator!.invoke;
+    const probe: DraftProbe = { drafts: 0, cancels: 0, confirms: 0, release: () => undefined };
+    (window as ProbeWindow).autoPipelineProbe = probe;
+    window.orkestrator!.invoke = async (command, args) => {
+      if (command === "draft_auto_pipeline" && ++probe.drafts === 2)
+        await new Promise<void>((resolve) => {
+          probe.release = resolve;
+        });
+      if (command === "cancel_auto_pipeline_draft") probe.cancels++;
+      if (command === "confirm_auto_pipeline") probe.confirms++;
+      return original(command, args);
+    };
+  });
+  const launch = page.getByRole("button", { name: "Auto-pipeline", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
+  await launch.click();
+  await expect(dialog.getByLabel("Title", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-before-redraft-${testInfo.project.name}.png`,
+    ),
+    fullPage: true,
+  });
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await launch.click();
+  await expect(dialog.getByRole("status")).toHaveText("Drafting ticket and Build notes…");
+  await expect(dialog).toHaveAttribute("aria-busy", "true");
+  await expect(dialog.getByTestId("auto-pipeline-spinner")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Confirm Auto-pipeline" })).toHaveCount(0);
+  await expect(dialog.getByLabel("Title", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeVisible();
+  const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancel).toBeEnabled();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-redraft-fixed-${testInfo.project.name}.png`,
+    ),
+    fullPage: true,
+  });
+  await cancel.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => (window as ProbeWindow).autoPipelineProbe!.cancels))
+    .toBe(1);
+  await page.evaluate(() => (window as ProbeWindow).autoPipelineProbe!.release());
+  // A third completed draft is an observable barrier after the cancelled request.
+  await launch.click();
+  await expect(dialog.getByLabel("Title", { exact: true })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => (window as ProbeWindow).autoPipelineProbe!.drafts))
+    .toBe(3);
+  expect(await page.evaluate(() => (window as ProbeWindow).autoPipelineProbe!.confirms)).toBe(0);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+});
+
 test("criterion Enter and multiline paste submit a valid single-line ticket", async ({
   page,
 }, testInfo) => {
@@ -24,9 +90,15 @@ test("criterion Enter and multiline paste submit a valid single-line ticket", as
   await expect(criterion).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByText("Enter an acceptance criterion.")).toBeVisible();
   await expect(confirm).toBeDisabled();
-  await page.getByRole("dialog", { name: "Review Auto-pipeline draft" }).evaluate((dialog) => {
-    dialog.scrollTop = 0;
+  const body = page.getByRole("region", { name: "Auto-pipeline draft" });
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
   });
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await body.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0);
   await page.screenshot({
     path: path.resolve(
       `output/visual-previews/auto-pipeline-criterion-validation-v2-${testInfo.project.name}.png`,
@@ -35,9 +107,10 @@ test("criterion Enter and multiline paste submit a valid single-line ticket", as
   });
   await criterion.fill("First\nSecond");
   await expect(criterion).toHaveValue("First Second");
-  await page.getByRole("dialog", { name: "Review Auto-pipeline draft" }).evaluate((dialog) => {
-    dialog.scrollTop = 0;
+  await body.evaluate((element) => {
+    element.scrollTop = 0;
   });
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0);
   await page.screenshot({
     path: path.resolve(
       `output/visual-previews/auto-pipeline-criterion-normalized-v2-${testInfo.project.name}.png`,
@@ -180,6 +253,40 @@ test("Notes retains generated Build notes after later pipeline updates", async (
   await expect(page.getByText("Finished interactive feature work.", { exact: true })).toBeVisible();
   await page.screenshot({
     path: path.resolve(`output/visual-previews/auto-pipeline-notes-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+});
+
+test("a refused confirmation shows its reason beside Confirm wherever the draft is scrolled", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline?long&refused");
+  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
+  await page.getByRole("tab", { name: "Acceptance criteria (8)" }).click();
+  await expect(page.getByRole("textbox", { name: "Criterion 8", exact: true })).toBeVisible();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-criteria-after-${testInfo.project.name}.png`,
+    ),
+    fullPage: true,
+  });
+  const body = dialog.getByRole("region", { name: "Auto-pipeline draft" });
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const confirm = dialog.getByRole("button", { name: "Confirm Auto-pipeline" });
+  await expect(confirm).toBeInViewport();
+  await confirm.click();
+  await expect(dialog.getByRole("status")).toBeInViewport();
+  const alert = dialog.getByRole("alert");
+  await expect(alert).toContainText("Close this environment's terminals");
+  await expect(alert).toBeInViewport();
+  await expect(confirm).toBeEnabled();
+  await page.screenshot({
+    path: path.resolve(
+      `output/visual-previews/auto-pipeline-refused-after-${testInfo.project.name}.png`,
+    ),
     fullPage: true,
   });
 });

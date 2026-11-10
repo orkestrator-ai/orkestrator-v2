@@ -85,6 +85,11 @@ export type TerminalWebSocketClientOptions = {
   acknowledgementDelayMs?: number;
   /** How long a foreground liveness probe waits for its pong before replacing the socket. */
   foregroundProbeTimeoutMs?: number;
+  /**
+   * Interval of the visible-page heartbeat. Each quiet interval sends a ping;
+   * two unanswered pings replace the socket. `0` disables it.
+   */
+  heartbeatIntervalMs?: number;
   createSocket?: (url: string, protocols: string | string[]) => WebSocket;
   onFallbackRequired(): void;
   onSocketReady(): void;
@@ -111,11 +116,30 @@ const DEFAULT_RECONNECT_HEALTHY_AFTER_MS = 30_000;
  * mobile WebView kept OPEN but dead is replaced soon after the page returns.
  */
 export const DEFAULT_FOREGROUND_PROBE_TIMEOUT_MS = 2_500;
+/**
+ * While the page stays visible, a socket heard from nothing for one interval is
+ * pinged, and one that leaves two pings unanswered is replaced: a stall is
+ * noticed within two to three intervals (20 to 30 s), before the 30 s operation
+ * timeout and without waiting for the user to type. A busy socket sends no
+ * pings, since any inbound frame proves it live.
+ */
+export const DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS = 10_000;
+/** Unanswered heartbeat pings after which the socket is replaced. */
+export const TERMINAL_HEARTBEAT_MISSED_PINGS = 2;
 
 type LivenessProbe = {
   socket: WebSocket;
   nonce: number;
   timer: ReturnType<typeof setTimeout>;
+};
+
+type Heartbeat = {
+  socket: WebSocket;
+  timer: ReturnType<typeof setTimeout>;
+  /** Pings sent since the socket was last heard from. */
+  unanswered: number;
+  /** Monotonic deadline for the next quiet-interval probe. */
+  nextProbeAt: number;
 };
 
 export class TerminalWebSocketClient {
@@ -141,6 +165,7 @@ export class TerminalWebSocketClient {
   /** Whether the current socket's `ready` frame advertised the `ping` feature. */
   private serverAnswersPing = false;
   private livenessProbe: LivenessProbe | null = null;
+  private heartbeat: Heartbeat | null = null;
   private pingNonce = 0;
   private disposed = false;
   private token: string | undefined;
@@ -363,6 +388,7 @@ export class TerminalWebSocketClient {
     this.disposed = true;
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.clearLivenessProbe();
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     for (const channel of this.desired.values()) {
@@ -380,7 +406,12 @@ export class TerminalWebSocketClient {
   }
 
   private readonly onVisibilityChange = (): void => {
-    if (document.visibilityState !== "visible" || this.desired.size === 0) return;
+    if (document.visibilityState !== "visible") {
+      // Hidden pages send nothing; the return to the page probes afresh.
+      this.stopHeartbeat();
+      return;
+    }
+    if (this.desired.size === 0) return;
     // OPEN and an earlier ready frame cannot prove this transport is still live:
     // a mobile WebView can keep a dead socket OPEN while backgrounded, and the
     // main event stream has its own connection that may keep heartbeating while
@@ -395,10 +426,80 @@ export class TerminalWebSocketClient {
       socket.readyState === WebSocket.OPEN
     ) {
       if (this.livenessProbe?.socket !== socket) this.probeLiveness(socket);
+      this.startHeartbeat();
       return;
     }
     this.replaceSocketForForeground();
   };
+
+  /**
+   * The visible-page heartbeat (to-do 7200 task 4). Runs only while channels
+   * are desired, the page is visible and the current socket is ready and
+   * answers pings; every other state stops it, and `dispose` cancels it.
+   */
+  private startHeartbeat(): void {
+    const socket = this.socket;
+    const interval = this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS;
+    if (!this.heartbeatEligible(socket) || interval <= 0) {
+      this.stopHeartbeat();
+      return;
+    }
+    if (this.heartbeat?.socket === socket) return;
+    this.stopHeartbeat();
+    this.heartbeat = {
+      socket: socket!,
+      timer: setTimeout(() => this.heartbeatTick(), interval),
+      unanswered: 0,
+      nextProbeAt: performance.now() + interval,
+    };
+  }
+
+  private heartbeatEligible(socket: WebSocket | null): boolean {
+    return (
+      !this.disposed &&
+      socket !== null &&
+      socket === this.socket &&
+      this.desired.size > 0 &&
+      this.serverReady &&
+      this.serverAnswersPing &&
+      socket.readyState === WebSocket.OPEN &&
+      document.visibilityState === "visible"
+    );
+  }
+
+  private heartbeatTick(): void {
+    const heartbeat = this.heartbeat;
+    if (!heartbeat) return;
+    if (!this.heartbeatEligible(heartbeat.socket)) {
+      this.stopHeartbeat();
+      return;
+    }
+    const interval = this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS;
+    const remaining = heartbeat.nextProbeAt - performance.now();
+    if (remaining > 0) {
+      heartbeat.timer = setTimeout(() => this.heartbeatTick(), remaining);
+      return;
+    }
+    if (heartbeat.unanswered >= TERMINAL_HEARTBEAT_MISSED_PINGS) {
+      this.replaceSocketForForeground();
+      return;
+    } else {
+      heartbeat.unanswered += 1;
+      try {
+        this.send({ type: "ping", nonce: ++this.pingNonce });
+      } catch {
+        this.replaceSocketForForeground();
+        return;
+      }
+    }
+    heartbeat.nextProbeAt = performance.now() + interval;
+    heartbeat.timer = setTimeout(() => this.heartbeatTick(), interval);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat) clearTimeout(this.heartbeat.timer);
+    this.heartbeat = null;
+  }
 
   private probeLiveness(socket: WebSocket): void {
     this.clearLivenessProbe();
@@ -427,6 +528,7 @@ export class TerminalWebSocketClient {
 
   private replaceSocketForForeground(): void {
     this.clearLivenessProbe();
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const oldSocket = this.socket;
@@ -445,6 +547,7 @@ export class TerminalWebSocketClient {
   dropConnection(): void {
     const socket = this.socket;
     if (!socket) return;
+    this.stopHeartbeat();
     this.socket = null;
     this.serverReady = false;
     socket.close(1000, "Link went silent");
@@ -488,6 +591,7 @@ export class TerminalWebSocketClient {
     socket.onerror = () => {};
     socket.onclose = () => {
       if (this.socket !== socket) return;
+      this.stopHeartbeat();
       this.socket = null;
       this.serverReady = false;
       this.resetChannelsForReconnect(
@@ -499,6 +603,12 @@ export class TerminalWebSocketClient {
 
   private onMessage(socket: WebSocket, message: MessageEvent): void {
     if (socket !== this.socket) return;
+    if (this.heartbeat?.socket === socket) {
+      this.heartbeat.unanswered = 0;
+      this.heartbeat.nextProbeAt =
+        performance.now() +
+        (this.options.heartbeatIntervalMs ?? DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS);
+    }
     if (typeof message.data === "string") {
       let frame;
       try {
@@ -514,6 +624,7 @@ export class TerminalWebSocketClient {
           this.socketBackoff.connected();
           this.options.onSocketReady();
           for (const channel of this.desired.values()) this.sendSubscribe(channel);
+          this.startHeartbeat();
           break;
         case "subscribed": {
           const channel = this.pendingRequests.get(frame.requestId);
@@ -1092,6 +1203,7 @@ export class TerminalWebSocketClient {
   }
 
   private closeIdleSocket(): void {
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     // A later subscription starts a fresh connection, not the tail of an outage.

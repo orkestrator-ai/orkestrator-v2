@@ -35,6 +35,7 @@ import {
   publicInteractions,
   resolveApproval,
 } from "./interactions.js";
+import { observeSessionRequest, publicLiveness } from "./liveness.js";
 import { listModels, markSessionDefault, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
@@ -118,6 +119,7 @@ import {
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
+import { readSessionBranches } from "./session-branches.js";
 import { HistoryTargetError } from "./history-target.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
@@ -608,19 +610,12 @@ async function routeSession(
     return json(response, 404, { error: "Session not found" });
   }
 
-  // Liveness only. `/activity` and `/dispatch` deliberately do not touch it:
-  // the backend sweeps every persisted session every couple of seconds, so
-  // refreshing on those would put idle detaching permanently out of reach.
-  if (
-    action !== "activity" &&
-    action !== "runtime-health" &&
-    action !== "dispatch" &&
-    !(action === "steer" && subject === "dispatch") &&
-    // A catalogue read is metadata; it must not keep an idle session warm.
-    !(action === "commands" && request.method === "GET")
-  ) {
-    state.lastAccessed = Date.now();
-  }
+  // Liveness: only a person's action (a write route) refreshes the idle
+  // clock. Reads never do — the backend's two-second sweep, an open tab's
+  // live updates and its 30 s discovery renewals would otherwise keep every
+  // session attached for as long as a tab shows it (todo 7540). Every
+  // request is counted by route for the runtime-health body.
+  observeSessionRequest(state, { method: request.method, action, subject, detail });
 
   // `restoreComposer` drops the persisted model rows by design. Rehydrate on
   // the routes that publish or mutate composer state so a restarted bridge's
@@ -713,6 +708,9 @@ async function routeSession(
       // to report which MCP configuration it loaded.
       mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       ...(mcpConfig ? { mcpConfig } : {}),
+      // Which routes reached this session and which kept it attached
+      // (todo 7540). Route labels and counts only.
+      liveness: publicLiveness(state),
     });
   }
   if (action === "dispatch" && request.method === "GET") {
@@ -808,8 +806,14 @@ async function routeSession(
     await persistBarrier();
     return json(response, 200, { rewound: true });
   }
+  if (action === "branches" && !subject && request.method === "GET") {
+    // Leaves of the session's tree that are not the active branch, by Pi entry
+    // id: the only ids `POST /branches/:entryId` can switch to once a rewind
+    // has replaced the rendered rows.
+    return json(response, 200, await readSessionBranches(state));
+  }
   if (action === "branches" && subject && request.method === "POST") {
-    await navigateSessionHistory(state, decodeURIComponent(subject));
+    await navigateSessionHistory(state, decodeURIComponent(subject), "at");
     await persistBarrier();
     return json(response, 200, { switched: true });
   }
@@ -1070,6 +1074,7 @@ async function handleCompact(
     if (state.manualCompaction === compaction) state.manualCompaction = undefined;
     settle(stopped);
     state.compacting = false;
+    state.lastAccessed = Date.now();
     state.dispatching = false;
     state.revision += 1;
     schedulePersist();

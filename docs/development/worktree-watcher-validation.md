@@ -16,7 +16,7 @@ The original aggregate exited **1** after **2468.77 s** (inner group orchestrati
 ## In-scope repairs and final verification
 
 - Permission/coverage regressions were added at `310f4fd7a`.
-- Real macOS ignore-proof tests previously raced fixture readiness; the delayed reproduction, repair and stress evidence live in [case 9919](../tests/flaky-tests/environments-and-containers/9919-worktree-watcher-ignore-proof-readiness.md).
+- Real macOS ignore-proof tests previously raced fixture readiness; the delayed reproduction, repair and stress evidence live in [case 9925](../tests/flaky-tests/environments-and-containers/9925-worktree-watcher-ignore-proof-readiness.md).
 - The new unreadable-child test's fixed delay was replaced with an explicit initial-plan hint wait, keeping initial unknown-path hint coalescing outside the asserted event. This removes the extra source-guard finding without raising its baseline.
 - The affected older `diff-stats-service.test.ts` expected immediate qualified-coverage retry reset. Its corrected parameterized contract covers 0, `WATCHER_STABLE_MS - 1`, and `WATCHER_STABLE_MS`, retaining 60 s backoff before stability and returning to 30 s at the threshold.
 
@@ -317,7 +317,7 @@ The exact commands include JUnit report paths because the logged runner deletes 
 
 ## Registry disposition and decisions
 
-Exact owning-file-pass recurrences update existing cases 9910, 9906, 6603, 9839, 6600, 6561 and 1651; their recurrence checks used base 08d3da4a against the current registry ref. Case 6603 is reopened because its prior fix is in the base; local 6561 is reopened to match its already-open upstream state. Prior resolutions remain history, not a claim that their old causes have returned. Distinct unmatched owner-pass observations are grouped once in [case 9920](../tests/flaky-tests/aggregate-validation-runs/9920-worktree-watcher-review-mixed-owner-timeouts.md).
+Exact owning-file-pass recurrences update existing cases 9910, 9906, 6603, 9839, 6600, 6561 and 1651; their recurrence checks used base 08d3da4a against the current registry ref. Case 6603 is reopened because its prior fix is in the base; local 6561 is reopened to match its already-open upstream state. Prior resolutions remain history, not a claim that their old causes have returned. Distinct unmatched owner-pass observations are grouped once in [case 9926](../tests/flaky-tests/aggregate-validation-runs/9926-worktree-watcher-review-mixed-owner-timeouts.md).
 
 Pi preview fails alone consistently and is reported as an unrelated deterministic catalogue-contract failure. Firewall, attachments, PR wakes, named-pipe fixture, hook writer, helper/rewrite, real listener, worker-turn, node-seed, replacement-input and fake-workload owners remained non-green; no new flake classification or production fix is invented for them. Existing histories such as 9837/6602, 9852, 4843, 1102 and 6600 remain relevant context. Environmental case 5561 requires its measured spawn-latency signature; that measurement was not made during this observation, so no such cause is claimed.
 

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 
@@ -40,6 +40,8 @@ import {
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
 
+import { deferred } from "./recurring-test-support.js";
+import { PendingNativeAgentDispatchError } from "./storage-shared-extra.js";
 import { StorageService } from "./storage.js";
 import { collaborators, queueInternals } from "./native-agent-service-test-collaborators.js";
 
@@ -206,7 +208,6 @@ async function withService(
     launchReconcileIntervalMs?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
     artifactDispatch?: NativeAgentServiceOptions["artifactDispatch"];
-    keyedQueueScheduling?: boolean;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -252,9 +253,6 @@ async function withService(
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
-    ...(setup.keyedQueueScheduling === undefined
-      ? {}
-      : { keyedQueueScheduling: setup.keyedQueueScheduling }),
     ...(setup.launchReconcileIntervalMs === undefined
       ? {}
       : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
@@ -1384,6 +1382,101 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test.each(["cleared", "read-failed", "newer-pending"] as const)(
+    "foreground admission after background settlement: %s",
+    async (scenario) => {
+      let accepted = false;
+      const stub = createProviderStub("cursor", {
+        send: async () => {
+          if (!accepted) throw new AmbiguousPromptDispatchError("Response was lost");
+        },
+        dispatchStatus: async (_session, request) =>
+          accepted && request === "parked" ? "dispatched" : "unknown",
+      });
+      await withService(
+        { prefix: "native-settlement-race-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const base = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Work",
+          };
+          const key = nativeAgentSessionStorageKey(
+            base.environmentId,
+            base.agent,
+            base.logicalSessionKey,
+          );
+          expect(await service.dispatchIntent({ ...base, requestId: "parked" })).toMatchObject({
+            outcome: "unknown",
+          });
+          const refused = deferred<void>();
+          const resume = deferred<void>();
+          const original = storage.dispatchNativeAgentPromptOnce.bind(storage);
+          const admission = spyOn(storage, "dispatchNativeAgentPromptOnce").mockImplementation(
+            async (...args) => {
+              try {
+                return await original(...args);
+              } catch (error) {
+                if (error instanceof PendingNativeAgentDispatchError && args[1] === "second") {
+                  refused.resolve();
+                  await resume.promise;
+                }
+                throw error;
+              }
+            },
+          );
+          let reads: ReturnType<typeof spyOn> | undefined;
+          const next = service.dispatchIntent({ ...base, requestId: "second" });
+          try {
+            await refused.promise;
+            accepted = true;
+            // An independent snapshot/readiness read confirms the older request
+            // while foreground dispatch is paused after the storage refusal.
+            await service.promptReadiness(base);
+            expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+            if (scenario === "newer-pending") {
+              await expect(
+                original(
+                  key,
+                  "newer",
+                  async () => {
+                    throw new AmbiguousPromptDispatchError("lost");
+                  },
+                  { requestId: "newer", prompt: "New work", createdAt: new Date().toISOString() },
+                ),
+              ).rejects.toThrow("lost");
+            }
+            if (scenario === "read-failed") {
+              reads = spyOn(storage, "getNativeAgentSession").mockRejectedValue(
+                new Error("unreadable"),
+              );
+            }
+            resume.resolve();
+            const outcome = await next;
+            expect(outcome.outcome).toBe(scenario === "cleared" ? "accepted" : "rejected");
+            expect(stub.send).toHaveBeenCalledTimes(scenario === "cleared" ? 2 : 1);
+            expect(admission).toHaveBeenCalledTimes(scenario === "read-failed" ? 1 : 2);
+            reads?.mockRestore();
+            if (scenario === "newer-pending")
+              expect((await storage.getNativeAgentSession(key))?.pendingDispatch?.requestId).toBe(
+                "newer",
+              );
+            if (scenario === "cleared")
+              expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds).toEqual(
+                expect.arrayContaining(["parked", "second"]),
+              );
+          } finally {
+            resume.resolve();
+            await next;
+            reads?.mockRestore();
+            admission.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
   test("attaches the provider before the pending dispatch record is written", async () => {
     const order: string[] = [];
     const stub = createProviderStub("cursor", {
@@ -1709,65 +1802,79 @@ describe("NativeAgentService", () => {
     );
   });
 
-  // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=native-queues).
-  test("runs launch and queue work from the background timer", async () => {
-    await withService(
-      {
-        prefix: "orkestrator-native-launch-timer-body-",
-        launchReconcileIntervalMs: 40,
-        keyedQueueScheduling: false,
-      },
-      async ({ service }) => {
-        // Replace the scans on the collaborators that own them.
-        const launchScans = collaborators(service).launches as unknown as {
-          reconcilePendingLaunches(): Promise<void>;
-        };
-        const queueScans = collaborators(service).promptQueues as unknown as {
-          drainPromptQueues(): Promise<void>;
-        };
-        const launches = mock(async () => undefined);
-        const drains = mock(async () => undefined);
-        launchScans.reconcilePendingLaunches = launches;
-        queueScans.drainPromptQueues = drains;
-        await service.init();
-        await Bun.sleep(120);
-        expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
-        expect(drains.mock.calls.length).toBeGreaterThanOrEqual(2);
-      },
-    );
+  // The keyed launch/queue driver is the only one: the rollback 2 s timer
+  // (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=native-queues) was removed by
+  // todo 0048 task 13, so a rollback value no longer arms any timer.
+  test("runs launch scans and drains queued prompts despite a retired rollback value", async () => {
+    const previous = process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK;
+    process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK = "native-queues,backend-activity";
+    const { provider, send } = createProviderStub("codex");
+    try {
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-keyed-body-",
+          launchReconcileIntervalMs: 40,
+          provider: async () => provider,
+        },
+        async ({ service, storage }) => {
+          // Replace the scan on the collaborator that owns it.
+          const launchScans = collaborators(service).launches as unknown as {
+            reconcilePendingLaunches(): Promise<number>;
+          };
+          const launches = mock(async () => 1);
+          launchScans.reconcilePendingLaunches = launches;
+          const queueKey = "codex\u0000env-env-1:tab-1";
+          await storage.savePromptQueue(queueKey, "env-1", [
+            { id: "row-1", requestId: "request-1", text: "Queued prompt" },
+          ]);
+          await service.init();
+          expect(queueInternals(service).queueScheduling()).not.toBeNull();
+          await waitForCondition(
+            () => launches.mock.calls.length >= 3 && send.mock.calls.length === 1,
+          );
+          expect(send.mock.calls[0]?.[1]).toBe("Queued prompt");
+          expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK;
+      else process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK = previous;
+    }
   });
 
-  test("the launch reconcile timer keeps the production default and a safe floor", async () => {
-    const originalSetInterval = globalThis.setInterval;
+  test("the keyed launch/queue cadence keeps the production default and a safe floor", async () => {
     const record = async (launchReconcileIntervalMs?: number) => {
-      const delays: number[] = [];
-      const spy = ((...args: Parameters<typeof originalSetInterval>) => {
-        delays.push((args[1] as number | undefined) ?? 0);
-        return originalSetInterval(...args);
-      }) as typeof globalThis.setInterval;
+      let options: { progressIntervalMs: number; discoveryIntervalMs: number } | undefined;
       await withService(
         {
           prefix: "orkestrator-native-launch-interval-",
-          keyedQueueScheduling: false,
           ...(launchReconcileIntervalMs === undefined ? {} : { launchReconcileIntervalMs }),
         },
         async ({ service }) => {
-          globalThis.setInterval = spy;
-          try {
-            await service.init();
-          } finally {
-            globalThis.setInterval = originalSetInterval;
-          }
+          const dispatcher = collaborators(service).promptQueues as unknown as {
+            startKeyedScheduling(
+              launchScan: () => Promise<number>,
+              options: { progressIntervalMs: number; discoveryIntervalMs: number },
+            ): void;
+          };
+          dispatcher.startKeyedScheduling = (_launchScan, received) => {
+            options = {
+              progressIntervalMs: received.progressIntervalMs,
+              discoveryIntervalMs: received.discoveryIntervalMs,
+            };
+          };
+          await service.init();
         },
       );
-      return delays;
+      return options;
     };
-    expect(await record()).toEqual([2_000]);
-    expect(await record(75)).toEqual([75]);
-    expect(await record(0)).toEqual([20]);
-    expect(await record(-50)).toEqual([20]);
-    expect(await record(Number.NaN)).toEqual([2_000]);
-    expect(await record(Number.POSITIVE_INFINITY)).toEqual([2_000]);
+    const production = { progressIntervalMs: 2_000, discoveryIntervalMs: 30_000 };
+    expect(await record()).toEqual(production);
+    expect(await record(75)).toEqual({ progressIntervalMs: 75, discoveryIntervalMs: 75 });
+    expect(await record(0)).toEqual({ progressIntervalMs: 20, discoveryIntervalMs: 20 });
+    expect(await record(-50)).toEqual({ progressIntervalMs: 20, discoveryIntervalMs: 20 });
+    expect(await record(Number.NaN)).toEqual(production);
+    expect(await record(Number.POSITIVE_INFINITY)).toEqual(production);
   });
 
   test("does not report a parked waiting turn as completed or complete it when it becomes idle", async () => {

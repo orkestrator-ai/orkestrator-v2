@@ -21,7 +21,7 @@ Codex and Grok parity guards added, agent-account copies kept in step.
 Tasks 14 and 11 closed and task 5's harness half done on 2026-11-06 from
 `c1724ab7` (branch `mcp-management-0c257de34897-r1`; follow-ups
 7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents))
-and [7221](7221-live-panel-stale-after-probe-reconnect.md)).
+and 7221 (closed 2026-11-09; see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action))).
 Tasks 5, 6 (Claude, Codex and Pi), 7, 9 and 13 worked on 2026-11-06 from
 `ee2cc842` (branch `mcp-management-3b93ef501ce9-r1`) with **fake-model runs
 only**: the pinned CLIs, app-server and SDK against a scripted loopback model,
@@ -37,7 +37,7 @@ no login and no billed turn (see
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
 6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: partly done (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; OpenCode's in-place reload and rename are open because this ticket covered only Claude, Codex and Pi and no OpenCode fake was built; Cursor stays out because it needs a login).
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task).
-8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case has failed since 2026-11-06 with the panel left stale, follow-up 7221).
+8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
 10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (a release decision for a maintainer; the 2026-11-06 runs are fake-model evidence of the runtime side only, and Grok, Cursor and OpenCode cells remain).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
@@ -567,7 +567,8 @@ succeeds and the CLI stays warm. Run `mcp0039-fake-t13`: 1 passed, 619 s, at
   symptom on the live-control path too, not only after a probe; the case
   records it (annotation `panel-after-warm-reconnect`) and checks the panel
   after a hard reload instead, where it matched the backend. Added to
-  [7221](7221-live-panel-stale-after-probe-reconnect.md).
+  7221 (closed 2026-11-09; see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action));
+  since then the case asserts the live refresh.
 - **After the CLI exits.** The bridge released the idle CLI 10 minutes
   after the turn (both servers logged their exit). The session kept its
   last list (all three rows `connected`). A reconnect of `mcpui-late` then
@@ -670,7 +671,7 @@ no Claude credential).
     reload" fails at its reconnect step: the backend reads `mcpui-late`
     `connected` while the panel keeps it failed. It fails the same way with
     the spec at `HEAD` and on its own, so it predates this work and is not a
-    flake: [7221](7221-live-panel-stale-after-probe-reconnect.md). The
+    flake: 7221 (closed 2026-11-09; see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action)). The
     editor case passed in every run.
 - The shared live-panel helpers of task 8's case moved into `liveSession`,
   `isMcpAction` and `describeServers` in the same file, so both cases use them.
@@ -967,7 +968,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   on a running CLI remains (task 13). On 2026-11-06 the same spec gained the
   refused-CLI `unknown` case (task 14, passing), and task 8's reconnect case
   went red with the panel left stale
-  ([7221](7221-live-panel-stale-after-probe-reconnect.md)).
+  (7221 (closed 2026-11-09; see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action))).
 - **Containers and remote.** Moved to
   [0040](0040-mcp-environment-delivery.md) on 2026-11-06 (task 9): container
   targets are writable now and 0040 owns their qualification, and the remote
@@ -1694,7 +1695,8 @@ and assert the panel after a reload. Chose (b): the case's own claims (whole
 list from the live control, `orkestrator` kept, layers, the probe path, the
 next turn's report, the reload) all hold, and the stale panel is already
 tracked and kept red in task 8's case; 7221 now has this case as evidence
-and the note to tighten it once fixed.
+and the note to tighten it once fixed. Superseded 2026-11-09: 7221 is fixed
+and the case asserts the live refresh (option a).
 
 #### Task 9: where the remote host-target check lives
 
@@ -1768,8 +1770,9 @@ areas (the agent tools server, the renderer's projection refresh), so they
 are recorded rather than fixed:
 7220 (closed 2026-11-06; see [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents))
 (High: a scoped bearer token reaches another process) and
-[7221](7221-live-panel-stale-after-probe-reconnect.md) (Medium). Task 8's
-spec case is left as it is, red until 7221 is fixed, rather than loosened.
+7221 (Medium; closed 2026-11-09, see [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action)).
+Task 8's spec case was left as it was, red until 7221 was fixed, rather than
+loosened; it passes since the fix.
 
 #### Task 5: read the inventory on every failed probe
 
@@ -1992,8 +1995,9 @@ instead because it fitted in the same bridge change.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).
-- [7221-live-panel-stale-after-probe-reconnect.md](7221-live-panel-stale-after-probe-reconnect.md):
-  task 8's reconnect case, red since 2026-11-06.
+- [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action)
+  in `native-transcripts.md`: the fix for the stale live panel found under
+  task 14 (todo 7221, closed 2026-11-09); task 8's reconnect case passes again.
 - [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a
   read-only Claude plugin source (split from item 7).
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,

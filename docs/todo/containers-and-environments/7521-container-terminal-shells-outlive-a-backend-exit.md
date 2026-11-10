@@ -90,4 +90,4 @@ container case exercises those scripts on mini, where host `/proc` is absent.
 
 ## Replaces
 
-- Number 7520, renumbered on 2026-11-06. Three pull requests merged a 7520 the same day; the earliest to merge, [7520](../agent-engines/7520-message-rewind-and-branch-switch-have-no-client-surface.md) (#1957), kept it.
+- Number 7520, renumbered on 2026-11-06. Three pull requests merged a 7520 the same day; the earliest to merge, 7520 (#1957), kept it; that to-do was done and deleted on 2026-11-09.

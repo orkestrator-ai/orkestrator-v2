@@ -1,6 +1,6 @@
 import { describe, expect, jest, test } from "bun:test";
 import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
-import { hashCwd } from "./sessions/persistence.js";
+import { type BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -218,6 +218,18 @@ describe("at-most-once dispatch", () => {
       },
       { initialPromptRetryDelayMs: 30 },
     );
+    // Delete while the retry is parked. Polling for the first attempt let a
+    // slow poll land after the 30 ms delay, when the retry was already past its
+    // deletion check (flake 0492).
+    const journal = h.runtime.getJournal();
+    const markRetryable = journal.markRetryable.bind(journal);
+    const retryArmed = deferredSignal();
+    const retryHeld = deferredSignal();
+    journal.markRetryable = async (requestId) => {
+      await markRetryable(requestId);
+      retryArmed.resolve();
+      await retryHeld.promise;
+    };
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-deleted";
     const pending = h.runtime.prompt(sessionId, {
@@ -225,12 +237,77 @@ describe("at-most-once dispatch", () => {
       requestId,
       attachments: [],
     });
-    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+    await retryArmed.promise;
 
-    expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+    try {
+      expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+    } finally {
+      retryHeld.resolve();
+    }
     expect(await pending).toMatchObject({ ok: false, status: 404 });
     expect(attempts).toBe(1);
-    expect(h.runtime.getJournal().get(requestId)).toBeUndefined();
+    expect(journal.get(requestId)).toBeUndefined();
+  });
+
+  test("a deletion still publishing its removal fences the delayed initial-prompt retry", async () => {
+    // DELETE keeps the session registered until its tombstone write lands. On a
+    // loaded host that write outlasted the retry delay, and the retry either
+    // dispatched (`ok: true`) or reached a handle the release had just dropped
+    // (503). Hold the retry until the deletion has started, and the deletion's
+    // write until the retry has answered (flake 0492).
+    let attempts = 0;
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "must-not-run" } };
+        },
+      },
+      { initialPromptRetryDelayMs: 1 },
+    );
+    const journal = h.runtime.getJournal();
+    const markRetryable = journal.markRetryable.bind(journal);
+    const retryArmed = deferredSignal();
+    const retryHeld = deferredSignal();
+    journal.markRetryable = async (requestId) => {
+      await markRetryable(requestId);
+      retryArmed.resolve();
+      await retryHeld.promise;
+    };
+    const store = (h.runtime as unknown as { store: BridgeSessionStore }).store;
+    const publishRemoval = store.publishRemoval.bind(store);
+    const removalHeld = deferredSignal();
+    const removalStarted = deferredSignal();
+    store.publishRemoval = async (sessionId) => {
+      removalStarted.resolve();
+      await removalHeld.promise;
+      await publishRemoval(sessionId);
+    };
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-deleting";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await retryArmed.promise;
+
+    const deleted = h.runtime.deleteSession(sessionId);
+    await removalStarted.promise;
+    retryHeld.resolve();
+    try {
+      expect(await pending).toMatchObject({ ok: false, status: 404 });
+      expect(attempts).toBe(1);
+    } finally {
+      removalHeld.resolve();
+    }
+    expect(await deleted).toBe(true);
+    expect(journal.get(requestId)).toBeUndefined();
   });
 
   test("shutdown cancels a delayed retry and leaves a durable retry marker", async () => {

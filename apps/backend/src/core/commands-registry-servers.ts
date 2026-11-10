@@ -100,12 +100,13 @@ import {
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
-import { containerCredentialMode } from "./container-credential-mode.js";
+import { containerCredentialMode, containerOpenCodeMode } from "./container-credential-mode.js";
 import {
   CONTAINER_TOKEN_FILES,
   containerBridgeLaunch,
   readContainerBridgeToken,
   removeContainerBridgeCredential,
+  stopContainerBridgeProcess,
 } from "./container-bridge-credential.js";
 import {
   reconcileContainerAgentAccount,
@@ -213,7 +214,7 @@ export function registerServerCommands(
     return enqueueContainerBridgeOperation(context, "opencode", operationId, async () => {
       await syncContainerLoginUnlocked(context, "opencode", id);
       const started = await startContainerOpenCodeServer(id, () =>
-        containerCredentialMode(context, id),
+        containerOpenCodeMode(context, id),
       );
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
@@ -450,6 +451,7 @@ export function registerServerCommands(
       };
       const replaceRunningBridge = async (port: number): Promise<void> => {
         await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
+        await stopContainerBridgeProcess(id, "codex");
         await waitForUnhealthy(port);
       };
       const startWithFreshToken = async (): Promise<{
@@ -621,6 +623,7 @@ export function registerServerCommands(
               return { hostPort, wasRunning: true, authToken: existingToken };
             }
             await dockerExec(id, `pkill -f '${bridgePattern}' || true`);
+            await stopContainerBridgeProcess(id, provider);
             await waitForUnhealthy(hostPort);
           }
           const credential = containerBridgeLaunch(
@@ -763,6 +766,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           return { hostPort, wasRunning: true, authToken: existingToken };
         }
         await dockerExec(id, `pkill -f '${processPattern}' || true`);
+        await stopContainerBridgeProcess(id, "pi");
         await waitForUnhealthy(hostPort);
       }
       const credential = containerBridgeLaunch("pi", await containerCredentialMode(context, id));

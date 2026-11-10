@@ -51,7 +51,10 @@ layouts unavailable on a fresh profile) or its execs were not charged to
 a minute, so something else in the job, or `confirmTmuxSessionGone` on a
 container with no tmux server, adds the rest. The output volume (about 94 KB
 a minute) is more than an empty `tmux list-sessions` prints; what produces it
-was not checked.
+was not checked. Since to-do 7020 task 1 (2026-11-09), a census that lists any
+tmux process is followed by one more exec, an `sh` probe of `/proc`
+(`tmux-socket-owner.ts`), so a measurement after that date can count one more
+`process-spawn` or `docker-exec` per unreachable socket.
 
 **Decisions.**
 
@@ -76,4 +79,4 @@ was not checked.
 
 ## Replaces
 
-- Number 7530, renumbered on 2026-11-06. [7530](../transcripts-and-observation/7530-codex-idle-discovery-renewals.md) (#1960) merged first and kept it.
+- Number 7530, renumbered on 2026-11-06. 7530 (#1960, closed and deleted 2026-11-10) merged first and kept it.

@@ -15,6 +15,7 @@ import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 import { OpenCode2HostServerState } from "./opencode2/host-server-state.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { bridgeRestarts, type BridgeRestartCounter } from "./bridge-restarts.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("local-server");
@@ -107,6 +108,8 @@ export type LocalServerRuntimeOptions = {
   /** Waits before each retry of a host OpenCode start that lost the database. */
   openCodeLockedStartRetryDelaysMs?: readonly number[];
   piCatalog?: PiCatalogProbesOptions;
+  /** Where bridge starts and unrequested exits are counted; the process-wide counter by default. */
+  bridgeRestarts?: BridgeRestartCounter;
 };
 
 /**
@@ -138,6 +141,7 @@ export class LocalServerRuntime {
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly reapGroup: typeof reapProcessGroup;
+  private readonly restarts: BridgeRestartCounter;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   /** Children the backend asked to stop, so their exit is not reported as a surprise. */
   private readonly stopRequests = new WeakSet<ChildProcessWithoutNullStreams>();
@@ -167,11 +171,14 @@ export class LocalServerRuntime {
   private readonly environmentOperations = new Map<string, Promise<void>>();
   private readonly containerBridgeOperations = new Map<string, Promise<void>>();
   private shutdownRequested = false;
+  /** Aborted when admission closes, so a wait before a retried start wakes then. */
+  private readonly shutdownAbort = new AbortController();
   private shutdownPromise: Promise<void> | null = null;
 
   constructor(options: LocalServerRuntimeOptions = {}) {
     this.spawn = options.spawn ?? spawnLowPriority;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
+    this.restarts = options.bridgeRestarts ?? bridgeRestarts;
     // A substituted spawn hands out fake children whose pids name nobody's
     // group; signalling `-pid` for one could reach a real process on the host.
     this.reapGroup =
@@ -287,6 +294,7 @@ export class LocalServerRuntime {
 
   reportBridgeStart(key: string, child: ChildProcessWithoutNullStreams): void {
     log.info("bridge.started", { key, pid: child.pid ?? null });
+    this.restarts.localStarted(key);
   }
 
   /**
@@ -309,6 +317,7 @@ export class LocalServerRuntime {
       signal,
       requested,
     });
+    this.restarts.localExited(key, requested);
   }
 
   /**
@@ -487,6 +496,19 @@ export class LocalServerRuntime {
   }
 
   /**
+   * Aborts once {@link isShuttingDown} turns true, for a wait that should end
+   * then rather than run out its delay. Listeners must not throw.
+   */
+  get shutdownSignal(): AbortSignal {
+    return this.shutdownAbort.signal;
+  }
+
+  private requestShutdown(): void {
+    this.shutdownRequested = true;
+    this.shutdownAbort.abort(new Error(BACKEND_SHUTTING_DOWN));
+  }
+
+  /**
    * Closes admission for everything that would start new owned processes, without
    * waiting for any of it to drain.
    *
@@ -496,7 +518,7 @@ export class LocalServerRuntime {
    * clean up — or that a SIGKILL leaves orphaned.
    */
   closeAdmission(): void {
-    this.shutdownRequested = true;
+    this.requestShutdown();
     this.openCodeAgentTools.cancelAll();
   }
 
@@ -511,7 +533,7 @@ export class LocalServerRuntime {
    */
   async shutdown(options: { operationDrainTimeoutMs?: number } = {}): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
-    this.shutdownRequested = true;
+    this.requestShutdown();
 
     const attempt = (async () => {
       await this.waitForEnvironmentOperations(options.operationDrainTimeoutMs);

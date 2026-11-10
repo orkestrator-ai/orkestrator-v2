@@ -848,6 +848,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       renew?: () => Promise<unknown>;
       onListen?: () => void;
       lookupHost?: (hostname: string) => Promise<string[]>;
+      isRemote?: () => boolean;
     } = {},
   ) {
     const invoked: Array<{ command: string; args: Record<string, unknown> }> = [];
@@ -866,7 +867,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
         return undefined as T;
       },
       tunnelUrl: () => null,
-      isRemote: () => remote,
+      isRemote: options.isRemote ?? (() => remote),
       partitionFor: (service) => `persist:test-${service.serviceId}`,
       sessionFor: (partition) => {
         let session = sessions.get(partition);
@@ -1139,6 +1140,45 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       // Resolution failures fail open: Chromium's own lookup fails too.
       expect(await session.cancels("https://unresolvable.example/")).toBe(false);
       expect(lookups.filter((host) => host === "cdn.example.com")).toHaveLength(1);
+      await manager.disposeAll();
+    });
+
+    test("a local-network check that throws still answers, by cancelling (7060)", async () => {
+      const throwingRemote = setup({
+        isRemote: () => {
+          throw new Error("The requesting window is no longer available.");
+        },
+      });
+      const descriptor = await throwingRemote.manager.acquire(target, "tab-1");
+      const session = throwingRemote.sessions.get(descriptor.partition)!;
+      expect(await session.cancels("http://93.184.216.34/")).toBe(true);
+      // The service's own origin needs no check and is still admitted.
+      expect(await session.cancels(`${descriptor.origin}/app`)).toBe(false);
+      await throwingRemote.manager.disposeAll();
+
+      const { manager, session: lookupSession } = await hooked(((_hostname: string) => {
+        throw new Error("resolver unavailable");
+      }) as (hostname: string) => Promise<string[]>);
+      expect(await lookupSession.cancels("https://cdn.example.com/lib.js")).toBe(true);
+      await manager.disposeAll();
+    });
+
+    test("a header hook that throws still answers, without the ingress credential (7060)", async () => {
+      const { manager, session, descriptor } = await hooked(async () => ["93.184.216.34"]);
+      let reads = 0;
+      const requestHeaders: Record<string, string> = { Accept: "*/*" };
+      requestHeaders["X-Orkestrator-Preview-Ingress"] = "forged";
+      Object.defineProperty(requestHeaders, "X-Flaky", {
+        enumerable: true,
+        get() {
+          reads += 1;
+          if (reads === 1) throw new Error("The requesting window is no longer available.");
+          return "1";
+        },
+      });
+      const headers = await session.headersFor(`${descriptor.origin}/app`, requestHeaders);
+      expect(reads).toBe(2);
+      expect(headers).toEqual({ Accept: "*/*", "X-Flaky": "1" });
       await manager.disposeAll();
     });
 

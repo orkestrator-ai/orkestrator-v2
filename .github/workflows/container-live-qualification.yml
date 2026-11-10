@@ -48,6 +48,8 @@ on:
       - "docker/orkestrator-egress-gateway.sh"
       - "docker/orkestrator-egress-filter.pl"
       - "apps/backend/src/core/egress-gateway.ts"
+      - "apps/backend/src/core/github-ranges-cache.ts"
+      - "apps/backend/scripts/github-ranges-seed.ts"
       - "scripts/qualify-opencode-seeded-data.sh"
       - "scripts/opencode-seeded-data/**"
 
@@ -121,6 +123,26 @@ jobs:
       - name: Record the daemon
         run: docker info --format '{{.ServerVersion}} {{.OperatingSystem}} {{.Architecture}} cgroup={{.CgroupVersion}} {{.SecurityOptions}}'
 
+      # Restricted firewalls fail closed without GitHub's ranges, and every
+      # suite's fresh data directory would ask api.github.com/meta
+      # unauthenticated; a hosted runner's shared address has often spent that
+      # quota (60 an hour), which failed the firewall suites with `not-ready`.
+      # Fetch the ranges once with the job token for every suite
+      # (`seedLiveGithubRanges`). Best effort: without a seed the suites fetch.
+      - name: Seed GitHub's address ranges
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          seed="${RUNNER_TEMP}/github-ranges.txt"
+          if gh api meta > "${RUNNER_TEMP}/github-meta.json" &&
+            bun apps/backend/scripts/github-ranges-seed.ts "${RUNNER_TEMP}/github-meta.json" "$seed"; then
+            echo "ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=${seed}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::GitHub's ranges could not be seeded; the live suites fetch them themselves."
+          fi
+
       # One step per suite so each result maps to one check; every step runs
       # even when an earlier one fails.
       - name: Live lifecycle (C09, C11, C12, C20)
@@ -166,6 +188,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
 
+      - name: Live firewall without workflow seed
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_LIVE_GITHUB_RANGES_SEED: ""
+        run: mise run test:logged -- --name firewall-without-seed -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1 --test-name-pattern 'restricted boot fetches GitHub ranges without a workflow seed'
+
       # IPv6 on an attached network and DNS rotation. The daemon-restart case
       # needs a disposable daemon and stays a manual run (0018 task 3).
       - name: Live egress conditions (IPv6, DNS rotation)
@@ -192,6 +220,20 @@ jobs:
       - name: Live rootless default loopback
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-loopback.test.ts --parallel=1
+
+      # Requires a rootless daemon started with host loopback enabled and
+      # ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=enabled. It skips on these
+      # rootful runners; use a disposable --host-loopback daemon for a live run.
+      - name: Live rootless enabled host loopback
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name rootless-host-loopback -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-host-loopback.test.ts --parallel=1
+
+      # Requires execution on the rootful daemon's host and an explicit
+      # ORKESTRATOR_LIVE_HOST_FIREWALL=none declaration. Hosted runners do not
+      # guarantee that prerequisite, so leave it unset and skip this case.
+      - name: Live rootful host reach without a host firewall
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name rootful-host-reach -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootful-host-reach.test.ts --parallel=1
 
       - name: Live readiness faults (C09, C10, C22, C23)
         if: ${{ !cancelled() }}

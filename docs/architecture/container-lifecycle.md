@@ -191,8 +191,13 @@ Desktop for Linux) provides its own DNS entry.
 
 Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
 4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
-Rootless daemons are supported with gated features but not yet qualified on a
-Linux host. A resource budget axis the daemon reports it cannot enforce is
+Rootless daemons are supported with gated features and were qualified on a
+Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
+2026-11-09 with an image built from `main`; the gaps those runs left are
+[7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
+(host loopback on the gvisor-tap-vsock driver) and
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+(`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
 refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
 and a restricted firewall that cannot be applied fails the boot closed. The
 evidence and what each run covered are in
@@ -787,6 +792,22 @@ daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
 
+Why a root-phase relay (decided 2026-10-26, todo 0109). `docker cp` of the
+revision would put credentials in the container layer, where revocation
+cannot empty them before the next start, and would have to be repeated on
+every start. Writing the revision as the mapped UID (`unshare --map-auto`
+and `chown`) needs `newuidmap` and a subordinate range on the backend host
+and would leave the files unreadable to the backend's own user. The relay
+keeps the bound revision as the single source, so revocation and login
+renewal through `replaceStagedInputFile` keep working, changes nothing on
+the host, and does nothing on a rootful daemon whose host user is UID 1000.
+It is triggered by what `node` can read, not by the backend's topology flag,
+so it needs no creation input a stale runtime could carry and also covers a
+rootful host whose user is not UID 1000. The costs are a new image
+(`staged-inputs=3`; an older image on rootless is flagged, not fixed), a
+relayed copy in `/run` for the container's life, and the explicit removal
+on revocation described above.
+
 - Reading: the host home entry itself is resolved (a dotfiles manager may link
   it, and the bind mount it replaces followed that link); nothing below it is
   followed. Every file is opened `O_NOFOLLOW` and re-checked against the
@@ -1044,6 +1065,18 @@ bind already pinned the seed as it was at creation (the backend replaces it by
 rename), so nothing is lost. A failed copy leaves the container to fetch the
 ranges itself.
 
+Why copy the seed and classify the rest (decided 2026-10-26, todo 0109). The
+GitHub ranges seed is the only single-file bind outside the input revision;
+it is not a secret and nothing revokes it, so copying it in costs nothing a
+bind gave. Staged-input file binds stay binds, because revocation empties
+them in place. Any other refused remount is classified rather than worked
+around, reusing `unsupported-topology` so older clients still parse it. The
+start-time refusal pattern comes from the 2026-10-25 report and has not been
+captured from a start; the 2026-11-09 rootless run captured the same refusal
+from `docker cp`, which, with `docker cp` into a container that is not
+running, is
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md).
+
 Every start of a runtime, rebuild candidate or egress gateway goes through
 `startDockerContainer` (`container-start.ts`). A read-only bind Docker refuses
 to remount (`remount-ro … operation not permitted`) becomes an
@@ -1051,11 +1084,29 @@ to remount (`remount-ro … operation not permitted`) becomes an
 picks an automatic host port inside RootlessKit's namespace, which cannot see
 host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
-start is retried once. Docker 29.9 detaches the container from its network
-on that failed start, and a bare retry ran it with no network and no published
-ports, so the helper connects the container's own network again first and
-stops it if the retry still has none. A second collision, or one on a fixed
-port, is the existing `port-conflict`.
+start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
+dockerd hands out automatic ports in sequence, and short-lived outbound
+sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+container from its network on each failed start, and a bare retry ran it
+with no network and no published ports, so the helper connects the
+container's own network again before every retry and stops it if the
+started container still has none. A collision past the retries, or one on
+a fixed port, is the existing `port-conflict`.
+
+The same rootless daemon refuses every `docker cp` into or out of a
+container with a read-only bind whose source filesystem is mounted
+`nosuid`/`nodev`, running or stopped, while start and `exec` work: the
+daemon's archive path remounts the bind without the locked flags
+(`remount-ro … flags: 0x1021: operation not permitted`). A refused copy is
+classified (`docker-copy-refusal.ts`) rather than reported as a generic
+failure: configured project files and project seed files fail creation
+with `unsupported-topology` and the remedy (move Orkestrator's data
+directory or run Docker rootful), a rebuild's copy step likewise, the
+boot record read reports `boot-record-copy-refused` instead of
+`container-exited`, and the best-effort GitHub seed logs
+`refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
+copy into a directory (`must be a directory`), so a failed copy asks once
+more with a copy out of a path that cannot exist.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
@@ -1352,21 +1403,39 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 On a rootless daemon (`dockerRootless`) `host-gateway` names a bridge inside
 RootlessKit's network namespace, where nothing of the host listens. When
 those probes do not all answer, the check probes again through RootlessKit's
-host loopback address (`10.0.2.2`, `ROOTLESSKIT_HOST_LOOPBACK_ADDRESS`), which
-the daemon refuses unless it runs with
-`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. If that answers,
-the snapshot's `hostAddress` is set and new containers and gateways get
-`--add-host host.docker.internal:10.0.2.2` (creation waits up to 45 s for the
+host loopback addresses (`ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES`): slirp4netns's
+`10.0.2.2`, then gvisor-tap-vsock's `10.0.2.1`, which `dockerd-rootless.sh`
+falls back to on a host without slirp4netns, pasta or vpnkit. The daemon
+refuses both unless it runs with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. The first address
+that answers on every probe network becomes the snapshot's `hostAddress`, and
+new containers and gateways get `--add-host host.docker.internal:<address>`
+(creation waits up to 45 s for the
 first check, `resolveContainerHostAddress`), so the firewall's host-service
 rule names it; the in-container alias repair before a bridge start uses it
-too. If not, the verdict is `blocked` with a rootless remediation (a systemd
-drop-in for the user's Docker service and its cost: a Docker restart, and
-every container of that daemon reaching the host's loopback services)
-instead of firewall rules, which cannot help. The environment settings
+too; an existing container whose alias already names either address keeps it
+while no check has answered. If none answers, the verdict is `blocked` with a
+rootless remediation instead of firewall rules, which cannot help: a systemd
+drop-in for the user's Docker service and its cost (a Docker restart, and
+every container of that daemon reaching the host's loopback services). It
+names no address, since that depends on the network driver; the reachable
+verdict's summary shows the one in use. The environment settings
 network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
+
+Why detect rather than configure (decided 2026-10-26, todo 0109). Orkestrator
+never owns or restarts the user's daemon, and enabling host loopback lets
+every container of that daemon reach every host loopback service, a security
+trade only the user can make. Publishing the service back through a
+container's forwarded port would need a multiplexing relay in every
+container for one path, and the host's LAN address was tried live and
+refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
+gvisor-tap-vsock driver host loopback is `10.0.2.1` and the check still
+reports `blocked`
+([7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)),
+and other drivers stay `blocked` with the same remediation.
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
 
@@ -1433,8 +1502,11 @@ use loopback only: VM and RootlessKit namespace ranges may overlap host LAN/VPN
 addresses and cannot identify container peers on the host. Missing or malformed
 security options on a non-Desktop daemon revoke subnet permissions. Changing
 from rootful Engine to Desktop or rootless therefore clears any previous list.
-A rootless peer arriving outside loopback stays refused; record its actual
-identity before adding any explicit topology-specific permission (todo 6820).
+A rootless peer arriving outside loopback stays refused. None has been seen:
+through RootlessKit's host loopback (slirp4netns and gvisor-tap-vsock) every
+container arrives as `127.0.0.1` (todos 6820 and 7548, 2026-11-09 and
+2026-11-10), so rootless needs no topology-specific
+permission.
 
 The native Engine subnet list is read with `docker network ls --filter
 label=orkestrator-owner=<owner>` and one `docker network inspect` per network
@@ -1463,8 +1535,10 @@ The peer address a container's call arrives from, by topology:
 | Topology | Peer seen by the server | Admitted by | Evidence |
 | --- | --- | --- | --- |
 | Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
-| Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
-| Rootless (RootlessKit host loopback `10.0.2.2`) | Expected `127.0.0.1`: the port driver connects from the host's loopback | Loopback | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+| Linux Engine (rootful) | The container's own address on its network (no NAT for traffic to a host address): `172.30.0.2` on the environment network, `10.213.0.2` on the default bridge; an unowned network's `172.30.1.2` is refused | The network's subnet | Run twice 2026-11-10 on beelink with the same script, inside the network namespace of `docker:disposable`'s nested rootful daemon (Engine 29.9.3, linux/amd64) on the host's rootful Engine 29.9.2; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 1 |
+| Rootless, slirp4netns, host loopback on (`10.0.2.2`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-09 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, slirp4netns 1.3.3, linux/amd64) with the same script; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 2 |
+| Rootless, gvisor-tap-vsock, host loopback on (`10.0.2.1`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike; `10.0.2.2` is unreachable | Loopback | Run 2026-11-10 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, linux/amd64) with the same script; todo 7548, [evidence](../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10) |
+| Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same runs; the host check then switches to whichever host loopback address answers |
 
 On Docker Desktop no VM subnet grants admission. This means every container
 on the daemon, owned or not, and every local process can still reach the port, as before; the token remains
@@ -1476,6 +1550,29 @@ tailnet calls closed without bytes. The permitted subnet list stayed empty
 before and after removal, with zero leftover resources. The captured result
 is `output/agent-testing/s0170-address/desktop-peer-evidence.json` (local,
 git-ignored); it does not establish native Linux or rootless behavior.
+
+On rootful Linux Engine (todo 6820 task 1, 2026-11-10) the admitted list was
+the default bridge's and the environment network's subnets, and only the
+default bridge's once the environment network was removed. Requests from the
+daemon's host to its own addresses (its outer address and every bridge
+gateway, `10.213.0.1` included) were closed with no bytes: each arrived from
+the host's primary address (`172.17.0.2` there), outside every admitted
+subnet. That fits Docker's per-bridge `MASQUERADE` rule (for the default
+bridge, `-s 10.213.0.0/24 ! -o docker0`), which matches a local connection
+sourced from a gateway address but leaving through `lo`. Without that rule
+such a request would arrive from the gateway address and be admitted, which
+would give a local process nothing it does not already have on loopback.
+
+A host firewall is not part of this boundary. The gate refuses outside peers
+whatever the firewall does, so whether a typical host's firewall would also
+hide the port no longer decides anything (todo 6820 task 5, closed
+2026-11-09). What stays visible without one is the instant open-then-close of
+the TCP handshake: a LAN port scan sees the port as open, and every request
+it sends is closed with no bytes. Binding per-gateway listeners instead, so
+that nothing on the LAN accepts at all, was rejected because listeners would
+have to follow network creation and removal and each port must be free on
+every gateway. A firewall that drops Docker traffic (ufw's default incoming
+policy) still matters for reachability, which is the check above.
 
 The C22 live qualification case passes its scene's owner
 to the filter, because its server's data directory differs from the one that
@@ -1825,10 +1922,11 @@ need it once cloned.
 
 | Path | Holds |
 | --- | --- |
-| `<data>/git-mirrors/<project id>/mount/` | The bind source, mounted read-only at `/orkestrator-git-mirror` with `-v` |
-| `.../mount/mirror.git` | The mirror. Appears only by rename, once complete. `ORKESTRATOR_GIT_MIRROR` names it |
-| `.../state.json` | Last attempt, consecutive failures, remote hash, oversized and suspect marks. Outside the mount, so a container cannot read it |
-| `.../.building-*`, `.../.retired-*` | Scratch for a build and for what it replaces, removed by the same refresh or the next |
+| `<data>/git-mirrors/<project id>/mount-<kind>/` | A bind source per access kind (authenticated readers add a random UUID suffix) (`anonymous`, `github-pat`, `github-host-cli`), mounted read-only at `/orkestrator-git-mirror` with `-v` into the containers given that access |
+| `.../mount-<kind>/mirror.git` | That kind's mirror. Appears only by rename, once complete. `ORKESTRATOR_GIT_MIRROR` names it. At most one kind holds one |
+| `.../mount/` | The single bind source from before access kinds. Kept, empty, because stopped containers still name it; its mirror is retired by the first refresh |
+| `.../state.json` | Last attempt, consecutive failures, remote hash, the access kind and GitHub login the live mirror was fetched with, oversized and suspect marks. Outside the mounts, so a container cannot read it |
+| `.../.building-*`, `.../.retired-*` | Scratch for a build, a fetch's empty home and what a refresh replaces or withdraws, removed by the same refresh or the next |
 
 - **The clone.** The setup script checks the mirror cheaply (the directory exists,
   its refs can be read, the tip's tree is present), then runs `git clone --no-tags
@@ -1912,29 +2010,84 @@ need it once cloned.
   alone cannot revoke a bind mount. Other environments'
   shared mirror is never removed to revoke one reader. Rebuilt runtimes that
   reuse their checkout have no mirror mount and can apply later edits live.
-- **Credentials.** A refresh runs on the host through `runRemoteGit` and
-  `gitHubGitCredentials`, the path project clones use. The URL and any credential
-  are passed per transfer, and no `remote` section exists, so the config holds
-  neither; `--no-write-fetch-head` keeps the URL out of `FETCH_HEAD`. A container
+- **Access.** A container reads through the mount only what its own
+  credential could fetch (`project-git-mirror-access.ts`). Containers get a
+  GitHub token only when Settings chooses one (`containerGitHubCredential`,
+  `none` by default), only for `https://github.com`, and nothing for other
+  hosts. So `createDockerContainer` resolves the access a new container is
+  given (`resolveGitMirrorAccess`): `github-pat` or `github-host-cli` when the
+  remote, as the container's clone converts it, is GitHub over HTTPS and
+  `resolveContainerGitHubToken` returns a token; otherwise `anonymous`, which
+  is also every agent-test profile's, since those never sync a credential in.
+  Anonymous containers use `mount-anonymous/`. Authenticated containers receive no mirror
+  mount and schedule no mirror refresh: a fresh authenticated generation cannot help
+  its initial clone, and a background download would be wasted. They clone directly
+  with their runtime credential. This also removes the need to coordinate a token
+  snapshot between mirror selection and credential delivery.
+  - **The fetch is the container's.** The URL converted as
+    `convert_ssh_to_https` converts it, `GIT_ALLOW_PROTOCOL` limited to its
+    scheme (`file` only for the agent-test fixture, which the container
+    reaches through its own bind), `GIT_CONFIG_GLOBAL=/dev/null`,
+    `GIT_CONFIG_NOSYSTEM=1`, no `GIT_*` variable, `GH_TOKEN`, `GITHUB_TOKEN`
+    or `SSH_ASKPASS` of the backend's, an empty `HOME` per fetch (libcurl
+    reads `~/.netrc`), `credential.helper=` and, for a GitHub kind, the
+    `https://github.com` helper fed that kind's token by environment. The
+    host's credential helpers, `.netrc`, askpass, SSH keys and Git settings
+    such as `http.proxy` therefore play no part; proxy variables still do. A
+    private repository under `anonymous` gets no mirror, which matches its
+    container's clone failing anyway; a public one keeps the mirror under the
+    default `none`. The backend's own GitHub credential is never used.
+  - **One live mirror.** Every refresh first retires the mirror of every other
+    kind, and the legacy `mount/mirror.git`, keeping their directories for
+    stopped containers' `-v`. A container whose access no longer matches what
+    containers are given finds an empty mount and clones from the remote. A
+    change of kind (recorded in `state.json`) rebuilds at once, inside the
+    refresh interval (`git-mirror.access-changed`).
+  - **The same setting, another account.** A token can act as another account
+    under an unchanged setting (another `gh auth login`, a new PAT). Each
+    refresh with a token reads its login with `gh api user`
+    (`getGitHubTokenLogin`) and keeps it, lower-cased, in `state.json`. The
+    login is not secret; no token or token-derived value is stored. A
+    different login withdraws the mirror before fetching and rebuilds it. A
+    login that cannot be read (no `gh`, no network, a refused token) withdraws
+    the mirror too, without bypassing the interval, and records `null`, so the
+    next refresh builds it anew with the current token.
+  - **Historical authenticated mounts.** Before runtime credential synchronization
+    (including restart and token propagation), the backend cancels and drains the
+    project's active mirror writer, then withdraws every authenticated and legacy
+    mirror. Bind directories remain for existing containers, but are empty before
+    the token is replaced or removed. A withdrawal failure prevents credential
+    synchronization. Anonymous mirrors contain only anonymously fetched objects
+    and remain safe through credential changes.
+  - **Retry bounds.** The lower-level authenticated refresh path retains its
+    oversized and attempt deadlines across fresh reader generations when access
+    kind and account are unchanged. A generation changes publication, not retry
+    eligibility. New production containers do not use this path.
+  - **Access transitions during refresh.** A different access request aborts
+    the active writer and queues the latest request. The writer settles before
+    the queued reconciliation runs; shutdown also drains it without restarting.
+  - **Refused seeds.** Before copying checkout objects, the isolated remote
+    access is probed with `ls-remote`. A refusal ends the attempt without a
+    seed copy or fallback fetch; normal failed-attempt backoff applies.
+
+- **Credentials at rest.** The URL and any credential are passed per transfer,
+  and no `remote` section exists, so the config holds neither;
+  `--no-write-fetch-head` keeps the URL out of `FETCH_HEAD`. A container
   fetches with its own credential, as before, and cannot write to the mirror.
 - **Read-only and readable.** The bind is `:ro`, for root in the container too.
   Files are `0644` and directories `0755` (`core.sharedRepository`), because under
   rootless Docker the workload user is not the backend's user; `<data>/git-mirrors`
   and the project directory are `0700`, so no other host user gets that far. Git
   allows the foreign owner because everything uses an explicit `--git-dir`. Every
-  environment of a project can read every branch of it through the mount, whatever
-  credential that environment holds; a branch deleted on the remote leaves at the
-  next refresh, and its objects at a later compaction. Because the mirror is
-  fetched with the backend's credential, a container given none (the default
-  container GitHub credential) can read a private repository's branches this way;
-  [6741](../todo/containers-and-environments/6741-git-mirror-access.md) holds the
-  fix, a mirror per kind of access fetched with what its readers hold.
+  environment of a project given the same access can read every branch that
+  access fetches through the mount; a branch deleted on the remote leaves at the
+  next refresh, and its objects at a later compaction.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
   survives its mirror being removed by any route. If the project parent was
   removed too, rootful Docker can recreate it as root: automatic rebuild and
   cleanup then require host ownership repair. For manual cache reclamation,
-  remove only `mount/mirror.git`; see the
+  remove only `mount-<kind>/mirror.git`; see the
   [ownership recovery instructions](../development/disk-usage.md#project-git-mirrors).
 - **Removal.** `cleanupProjectForRemoval` stops any refresh and removes the
   project's directory; a failure is logged and never blocks removing the project.
@@ -1945,7 +2098,12 @@ need it once cloned.
 
 Qualified by `tests/unit/workspace-setup-git-mirror.test.ts` (the script against
 real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
-credentials, concurrency, removal) and, in real containers,
+credentials, access kinds and accounts, concurrency, removal; a private remote
+over smart HTTP that the host's helper, `.netrc` and askpass each open is
+refused to the mirror), `project-git-mirror-access.test.ts` (which access a
+container is given, the fetch environment, the login read through a fake `gh`),
+`project-git-mirror-create.test.ts` (the kind a `docker create` binds) and, in
+real containers,
 `project-git-mirror-docker.test.ts` (read-only mount, foreign owner, removal, a
 restart with the source gone).
 
@@ -1967,6 +2125,9 @@ Not yet qualified:
   not run together against real Docker.
 - A seed against a real network remote. It was measured against a local bare clone
   (see [disk-usage.md](../development/disk-usage.md#project-git-mirrors)).
+- A GitHub kind against github.com. The token helper, the login read and an
+  account change were run against a local remote and a fake `gh`, not with a
+  real container token, a real `gh api user` or a real private repository.
 
 ## Container lifecycle events
 
@@ -1998,6 +2159,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
 | `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
+| `/run/orkestrator-bridge/opencode-listener` (`opencode-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
+| `/run/orkestrator-opencode` (`opencode-launch=1`) | OpenCode's configuration and empty home: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
 | The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
@@ -2049,12 +2212,15 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 
 What the agent's uid can still do is in
 [agent-approvals.md](agent-approvals.md#what-the-agents-uid-can-still-do):
-replace the bridge with one it runs
-([7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md)),
+kill the bridge, or replace it between two of the backend's checks of the
+socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
 next start. OpenCode has no bridge and takes the plain password, in
-`opencode-token` in the same directory
-([7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md));
+`opencode-token` in the same directory; on an `opencode-launch=1` image the
+launcher starts it from root's binary and configuration and the backend sends
+the password only to the listening socket it recorded in `opencode-listener`
+([agent-approvals.md](agent-approvals.md#opencode-under-the-launcher-opencode-launch1),
+follow-ups in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md));
 a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
 `agent-credential-files.ts`). In a container, a server the plugin could not harden
 refuses tools; on a host it only logs, because a host's OpenCode can be any build.

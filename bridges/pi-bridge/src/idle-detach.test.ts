@@ -1,13 +1,27 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import { ensureSession, newSessionState, setAgentSessionTestHooks } from "./agent-session.js";
-import { IDLE_DETACH_MS, settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
+import {
+  IDLE_DETACH_MS,
+  idleDetachDue,
+  settleIdleDetaches,
+  sweepIdleSessions,
+} from "./idle-detach.js";
 import { refreshModels } from "./models.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
-import { clientSessionKeys, type PendingApproval, type SessionState, sessions } from "./state.js";
+import {
+  claimPromptTurn,
+  releasePromptClaim,
+  clientSessionKeys,
+  type PendingApproval,
+  type SessionState,
+  sessions,
+} from "./state.js";
+import { applySessionEvent } from "./translate.js";
+import { observeSessionRequest } from "./liveness.js";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 const NOW = 50 * IDLE_DETACH_MS;
@@ -104,6 +118,53 @@ afterEach(async () => {
 });
 
 describe("sweepIdleSessions", () => {
+  test("a long turn gets a full idle interval after its owning claim settles", () => {
+    const state = idleSession();
+    state.lastAccessed = NOW;
+    const claim = claimPromptTurn(state);
+    const endedAt = NOW + IDLE_DETACH_MS + 60_000;
+    const clock = spyOn(Date, "now").mockReturnValue(endedAt);
+    try {
+      expect(idleDetachDue(state, endedAt)).toBe(false);
+      releasePromptClaim(state, claim);
+      expect(state.lastAccessed).toBe(endedAt);
+      expect(idleDetachDue(state, endedAt)).toBe(false);
+      expect(idleDetachDue(state, endedAt + IDLE_DETACH_MS - 1)).toBe(false);
+      expect(idleDetachDue(state, endedAt + IDLE_DETACH_MS)).toBe(true);
+      state.lastAccessed = endedAt - 1;
+      releasePromptClaim(state, claim);
+      expect(state.lastAccessed).toBe(endedAt - 1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a long compaction starts the idle interval at completion", () => {
+    const state = idleSession();
+    applySessionEvent(state, { type: "compaction_start" });
+    const endedAt = NOW + IDLE_DETACH_MS + 60_000;
+    const clock = spyOn(Date, "now").mockReturnValue(endedAt);
+    try {
+      expect(idleDetachDue(state, endedAt)).toBe(false);
+      applySessionEvent(state, { type: "compaction_end", aborted: true });
+      expect(idleDetachDue(state, endedAt)).toBe(false);
+      expect(idleDetachDue(state, endedAt + IDLE_DETACH_MS)).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("an approval answered after the idle threshold refreshes the clock", () => {
+    const state = idleSession();
+    state.approvals.set("approval-1", parkedApproval());
+    const answeredAt = NOW + IDLE_DETACH_MS + 60_000;
+    expect(idleDetachDue(state, answeredAt)).toBe(false);
+    observeSessionRequest(state, { method: "POST", action: "approvals" }, answeredAt);
+    state.approvals.clear();
+    expect(idleDetachDue(state, answeredAt)).toBe(false);
+    expect(idleDetachDue(state, answeredAt + IDLE_DETACH_MS)).toBe(true);
+  });
+
   test("detaches an idle session, which later reattaches to the same conversation", async () => {
     const first = fakeSession("pi-first");
     const state = idleSession(first);

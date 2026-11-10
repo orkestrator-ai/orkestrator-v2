@@ -1,4 +1,4 @@
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 
 /**
  * Backend-wide admission for expensive container work.
@@ -53,13 +53,11 @@ class AdmissionPool {
     }
     if (this.waiters.length >= this.limits.waiting) {
       return Promise.reject(
-        new Error(
-          formatContainerLifecycleError(
-            "resource-exhausted",
-            this.kind === "copy"
-              ? "Too many rebuilds are waiting. Retry once some have finished."
-              : "Too many containers are waiting to start. Retry once some have started.",
-          ),
+        new ContainerLifecycleError(
+          "resource-exhausted",
+          this.kind === "copy"
+            ? "Too many rebuilds are waiting. Retry once some have finished."
+            : "Too many containers are waiting to start. Retry once some have started.",
         ),
       );
     }

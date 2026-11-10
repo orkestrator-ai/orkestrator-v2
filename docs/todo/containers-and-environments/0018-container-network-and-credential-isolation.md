@@ -88,7 +88,7 @@ That run's arm64 job (Engine 28.0.4) passed M12, network 4/4 and readiness
 
 **Problem.** Rootless Docker is a supported topology, and the gateway is on there by default too. A rootless kernel without `hash:net,port` would fail closed at boot.
 
-**Context.** Same qualification entry, plus [0109](0109-rootless-linux-runtime-gaps.md), which closed the rootless runtime gaps in #1307 (`1aabf049`).
+**Context.** Same qualification entry, plus 0109 (retired on 2026-11-10), which closed the rootless runtime gaps in #1307 (`1aabf049`); what is left on rootless is [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) and [7549](7549-rootless-docker-cp-refusals.md).
 
 **Investigation.** Two rootless runs since this file was checked cover parts of it:
 - The 2026-10-25 run on a real rootless Engine 29.9.1 host passed the live firewall suite 2/2, including the policy 3 tuples, with `ip_set`, `xt_set` and `nf_tables` loaded (`container-qualification.md:215`). That answers this file's "a rootless kernel is still unconfirmed" for that kernel. The image was a review build, and whether it carried `egress-gateway=1` is not recorded.
@@ -1329,8 +1329,11 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
 ## Related
 
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
-  [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
-  (staged inputs and host access on rootless),
+  [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
+  and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
+  (rootless gaps left after 0109, retired on 2026-11-10; staged inputs and
+  host access on rootless are in
+  [container lifecycle](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)),
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).

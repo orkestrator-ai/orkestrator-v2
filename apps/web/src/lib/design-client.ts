@@ -1,4 +1,9 @@
-import type { DesignCanvas, DesignElement } from "@orkestrator/protocol/design-canvas";
+import {
+  DESIGN_CONFLICT,
+  type DesignCanvas,
+  type DesignElement,
+} from "@orkestrator/protocol/design-canvas";
+import { hasErrorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import type {
   DesignCapabilities,
   DesignCommandResult,
@@ -82,8 +87,18 @@ export function classifyTransportError(error: unknown): DesignTransportFailure {
 
 export function failureOf(error: unknown): DesignFailure {
   if (error instanceof DesignClientError) return error.failure;
-  const kind = classifyTransportError(error);
   const message = error instanceof Error ? error.message : String(error);
+  // A revision conflict is decided before the transport classification: the
+  // gateway answers it with HTTP 500, and its "Fetch the latest snapshot" text
+  // would otherwise read as a network failure. The registered code decides; an
+  // older backend's conflict has only its marker.
+  if (hasErrorCode(error, "design-revision-conflict", DESIGN_CONFLICT))
+    return {
+      code: "conflict",
+      message: ipcErrorText(message).slice(0, 300),
+      retry: "after-refresh",
+    };
+  const kind = classifyTransportError(error);
   if (kind === "disconnected")
     return {
       code: "disconnected",
@@ -99,8 +114,8 @@ export function failureOf(error: unknown): DesignFailure {
       retry: "never",
     };
   return {
-    code: message.startsWith("Design revision conflict:") ? "conflict" : "storage",
-    message: message.slice(0, 300),
+    code: "storage",
+    message: ipcErrorText(message).slice(0, 300),
     retry: "after-refresh",
   };
 }

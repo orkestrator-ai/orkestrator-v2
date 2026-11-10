@@ -44,11 +44,12 @@ export type ErrorDetailKind = "text" | "range" | "count";
  * code's thrower keeps its message text, and a reader that must work against
  * an older peer still falls back to that text when no code is present.
  *
- * Not yet migrated, and still read from their own message markers (follow-ups
- * that can register here): `ContainerLifecycleError:<code>:`,
- * `McpManagementError:<code>:`, `Pane layout revision conflict:`,
- * `Design revision conflict:`, `Prompt queue message conflict:`, and the node
- * refusal codes of `node-ipc.ts`.
+ * The domains that used to put their code only in the message text
+ * (`ContainerLifecycleError:<reason>:`, `McpManagementError:<reason>:`, the
+ * pane layout, design and prompt queue revision conflicts, and desktop main's
+ * node refusals) are registered here too. Their throwers keep the old marker
+ * in the message, and their readers use {@link hasErrorCode}, which falls back
+ * to that marker only when no registered code is present (an older peer).
  */
 export const REGISTERED_ERROR_CODES = {
   /** The peer does not have the command (`UnknownCommandError`). */
@@ -63,6 +64,30 @@ export const REGISTERED_ERROR_CODES = {
   "native-job-receipt-capacity": { limit: "count" },
   /** An authoritative provider probe proved that a native agent session no longer exists. */
   "native-agent-provider-session-missing": {},
+  /**
+   * A container lifecycle refusal; `reason` is its `CONTAINER_LIFECYCLE_ERROR_CODES`
+   * member. The message keeps `ContainerLifecycleError:<reason>: text`.
+   */
+  "container-lifecycle": { reason: "text" },
+  /**
+   * An MCP management failure; `reason` is its `MCP_MANAGEMENT_ERROR_CODES`
+   * member. The message keeps `McpManagementError:<reason>: text`.
+   */
+  "mcp-management": { reason: "text" },
+  /** A pane layout save named a stale revision (`Pane layout revision conflict:`). */
+  "pane-layout-revision-conflict": {},
+  /** A design edit named a stale canvas or frame revision (`Design revision conflict:`). */
+  "design-revision-conflict": {},
+  /** An idempotent prompt queue enqueue reused an id for a different message (`Prompt queue message conflict:`). */
+  "prompt-queue-message-conflict": {},
+  /** Desktop main's node IPC: the window's command node does not know this node. */
+  "unknown-node": {},
+  /** Desktop main's node IPC: machine administration for a leaf, done from the command node. */
+  "node-admin-refused": {},
+  /** Desktop main's node IPC: the window closed or the scope was released while opening. */
+  "node-scope-closed": {},
+  /** Desktop main's node IPC: the node is known but its workspace could not open. */
+  "node-unavailable": {},
 } as const satisfies Record<string, Readonly<Record<string, ErrorDetailKind>>>;
 
 export type RegisteredErrorCode = keyof typeof REGISTERED_ERROR_CODES;
@@ -230,6 +255,28 @@ export function ipcErrorText(message: string): string {
   return parseIpcError(message)?.message ?? message;
 }
 
+/**
+ * `error` as a renderer shows and reads it. An `Error` whose message is led by
+ * a registered code's prefix (what a desktop renderer receives over Electron
+ * IPC) becomes an `Error` whose message is the thrower's own text, with the
+ * code and its bounded details as own `code` and `details` and the received
+ * error as its `cause`. A screen that shows `error.message` then shows no
+ * prefix, while `errorCode()`, `incompatibility()` and the domain readers still
+ * read the code. Anything else, including an error that already has an own
+ * `code`, is returned unchanged.
+ */
+export function readableCodedError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  if (Object.hasOwn(error, "code")) return error;
+  const coded = parseIpcError(error.message);
+  if (!coded) return error;
+  const readable = new Error(coded.message, { cause: error });
+  readable.name = error.name;
+  Object.defineProperty(readable, "code", { value: coded.code });
+  Object.defineProperty(readable, "details", { value: coded.details });
+  return readable;
+}
+
 function messageOf(error: unknown): string | null {
   if (typeof error === "string") return error;
   if (typeof error === "object" && error !== null) {
@@ -285,6 +332,28 @@ export function errorCode(error: unknown): string | undefined {
   }
   const message = messageOf(error);
   return message === null ? undefined : parseIpcError(message)?.code;
+}
+
+/**
+ * Whether `error` is the registered `code`, for a reader that must also work
+ * against an older peer whose thrower only wrote `legacyMarker` in its message.
+ *
+ * A registered code, read from any transport ({@link codedErrorParts}), alone
+ * decides. Only when `error` carries no registered code is the message (without
+ * any IPC prefix) searched for `legacyMarker`; an unregistered `code` an older
+ * peer sent beside its text (the gateway answered any code-form `code`) does
+ * not suppress that fallback.
+ */
+export function hasErrorCode(
+  error: unknown,
+  code: RegisteredErrorCode,
+  legacyMarker?: string,
+): boolean {
+  const coded = codedErrorParts(error);
+  if (coded) return coded.code === code;
+  if (legacyMarker === undefined) return false;
+  const message = messageOf(error);
+  return message !== null && message.includes(legacyMarker);
 }
 
 /**

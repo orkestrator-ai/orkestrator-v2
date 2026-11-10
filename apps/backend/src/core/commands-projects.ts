@@ -226,6 +226,31 @@ export const SCRATCH_COMMIT_EMAIL = "projects@orkestrator.local";
 export const SCRATCH_COMMIT_SUBJECT = "Initial commit";
 
 /**
+ * The scratch repository's first commit. Auto maintenance is off for this one
+ * command: after a commit, current Git starts `git maintenance run --auto
+ * --detach`, and that detached child can still be writing inside `.git` while
+ * a failed creation's rollback removes it, which left the half-deleted
+ * repository and its folder behind (flake cases 0003, 0008 and 0690).
+ */
+export function scratchCommitArgs(projectPath: string): string[] {
+  return [
+    "-C",
+    projectPath,
+    "-c",
+    `user.name=${SCRATCH_COMMIT_AUTHOR}`,
+    "-c",
+    `user.email=${SCRATCH_COMMIT_EMAIL}`,
+    "-c",
+    "maintenance.auto=false",
+    "commit",
+    "--allow-empty",
+    "--no-gpg-sign",
+    "-m",
+    SCRATCH_COMMIT_SUBJECT,
+  ];
+}
+
+/**
  * A `gh` failure that may have created the remote deliberately leaves the local
  * repository in place, so a retry has to recognize Orkestrator's own handiwork
  * instead of failing the emptiness check forever. Only a pristine scratch
@@ -690,23 +715,7 @@ export async function initLocalProject(
           throw new Error(`Could not initialize the Git repository: ${detail}`);
         }
         try {
-          await run(
-            "git",
-            [
-              "-C",
-              projectPath,
-              "-c",
-              `user.name=${SCRATCH_COMMIT_AUTHOR}`,
-              "-c",
-              `user.email=${SCRATCH_COMMIT_EMAIL}`,
-              "commit",
-              "--allow-empty",
-              "--no-gpg-sign",
-              "-m",
-              SCRATCH_COMMIT_SUBJECT,
-            ],
-            { timeoutMs: 30_000 },
-          );
+          await run("git", scratchCommitArgs(projectPath), { timeoutMs: 30_000 });
         } catch (error) {
           throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
         }
@@ -790,23 +799,7 @@ export async function createProjectFromScratch(
         }
 
         try {
-          await run(
-            "git",
-            [
-              "-C",
-              projectPath,
-              "-c",
-              `user.name=${SCRATCH_COMMIT_AUTHOR}`,
-              "-c",
-              `user.email=${SCRATCH_COMMIT_EMAIL}`,
-              "commit",
-              "--allow-empty",
-              "--no-gpg-sign",
-              "-m",
-              SCRATCH_COMMIT_SUBJECT,
-            ],
-            { timeoutMs: 30_000 },
-          );
+          await run("git", scratchCommitArgs(projectPath), { timeoutMs: 30_000 });
         } catch (error) {
           throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
         }

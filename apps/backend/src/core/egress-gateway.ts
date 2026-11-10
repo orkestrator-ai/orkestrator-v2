@@ -1,6 +1,6 @@
 import { DOCKER_LABEL_APP, DOCKER_LABEL_OWNER, DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
 import {
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   type ContainerLifecycleErrorCode,
 } from "@orkestrator/protocol/container-lifecycle";
 import type { NetworkPolicyVersion } from "./container-network.js";
@@ -50,7 +50,7 @@ export const EGRESS_GATEWAY_ROLE = "egress-gateway";
 // The typed transport form, without importing the lifecycle service (which
 // removes runtimes through this module).
 function lifecycleError(code: ContainerLifecycleErrorCode, message: string): Error {
-  return new Error(formatContainerLifecycleError(code, message));
+  return new ContainerLifecycleError(code, message);
 }
 /** On a workload: the name of the gateway whose namespace it joins. */
 export const DOCKER_LABEL_EGRESS_GATEWAY = "orkestrator-egress-gateway";

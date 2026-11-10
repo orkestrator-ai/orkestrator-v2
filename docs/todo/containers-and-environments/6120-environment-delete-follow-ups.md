@@ -4,6 +4,7 @@
 
 Analysed 2026-11-05 against `main` at `50d4916ca`, with the delete fix on its branch.
 Re-analysed 2026-11-06 against `main` at `c1724ab74` (the fix merged as #1902); tasks 2-5 done then.
+Task 6 done 2026-11-09 against `main` at `c6de4733c`.
 
 ### Tasks
 
@@ -12,7 +13,7 @@ Re-analysed 2026-11-06 against `main` at `c1724ab74` (the fix merged as #1902); 
 3. **Per-step delete progress**: tell the user which step a slow delete is on. Status: done (2026-11-06).
 4. **Bound a delete that hangs**: a delete that neither fails nor finishes spins with only its elapsed time. Status: done (2026-11-06).
 5. **Watch readiness before `fseventsd` delivers**: a watch reports `established` before events are known to flow. Status: done (2026-11-06; decided to leave it, with evidence).
-6. **Store cleanup that holds the event loop**: a delete parses every native session and rewrites the whole agent-mail document without yielding. Status: open.
+6. **Store cleanup that holds the event loop**: a delete parses every native session and rewrites the whole agent-mail document without yielding. Status: done (2026-11-09).
 
 ### 1. Confirm the fix on the machine that reported it
 
@@ -144,9 +145,24 @@ Docker can continue work it accepted after its CLI exits; local termination does
 
 Chose to leave `established` as "the helper's `fs.watch` returned", the recommended option, on this evidence. On 2026-11-06, on this 18-core Mac (macOS 27.2, load average about 14, `fseventsd` sampled at 3-58%), 20 watches through the real helper (`watchDirectory`), each writing one new file every 20 ms from the moment `established` resolved, 250 files each, received 4,999 of the 5,000 files. The one miss was the first file of one watch, written 22 ms after `established`; the first event reached the backend 38-102 ms after it. Ten watches were in the temporary directory and ten inside the checkout. So the gap a probe write would close is tens of milliseconds on an ordinary host, while under a saturated `fseventsd` (the 2026-11-05 run below) events are lost after the stream is running too, which only the safety scan (120 s for a local worktree) covers. The probe option would also leave every watch unqualified on a host that delivers nothing. Recorded in [environment-deletion.md](../../architecture/environment-deletion.md#watches-and-the-event-loop).
 
+### Task 6: how the store cleanup is bounded
+
+Chose the recommended option, removing both whole-store passes, plus one yield inside the agent-mail delete. Measurements are in [environment-deletion.md](../../architecture/environment-deletion.md#the-work-a-delete-does-besides-watches).
+
+- **Native sessions: an indexed owner, not a second store.** `native-agent-sessions` rows now carry their environment in the existing `store_rows.owner` column (the layout's owner extractor), so `deleteNativeAgentSessionsByEnvironment` lists its keys with `listStoreRowKeysByOwner` and reads no value. A separate per-environment index store was the alternative; it would be a second write on every session create and a second record to keep consistent, where the owner column is written in the same row by the same statement.
+- **No schema version for the backfill.** Rows written before the owner existed get it from `backfillNativeAgentSessionOwners` at every open, in one transaction, the way `store_rows_position` is created on open. A numbered migration would have run once but bumped `user_version`, which makes every older build refuse to open the database. The cost is that an older build sharing the directory writes rows without an owner; the next open fixes them.
+- **The sweep still finds rows with no owner.** Its rule that no key escapes it does not depend on the backfill: rows with no owner are read through a partial index holding only those rows (`store_rows_unowned_native_agent_sessions`, from `StorageDatabaseOptions.unownedRowIndexes`) and checked individually. Without the index that read walked the store's rows (12-48 ms on beelink under load); with it it costs the rows it returns, normally none. Inserts still check the deletion tombstone in their commit, so nothing new appears behind the sweep. A store held as a document, or buffered by an atomic scope, is still read whole.
+- **Agent mail: row writes on the existing layout, no migration.** Agent mail was already stored as rows by mailbox (an envelope with `mailboxes`, `idempotency` and `counterparts` collections). The cost was in the delete cloning the whole store and the save reserializing every row. The delete now plans from the shared frozen read model (`storage-agent-mail-deletion.ts`, shallow copies of only the messages it changes) and commits through the new `StorageDatabase.updateStoreRows`: the changed rows and the envelope document (revision and inject queue) in one transaction, carrying the connection's row cache forward. No layout change or storage migration was needed, which the to-do had expected.
+- **The row write counts as a leased write.** `updateStoreRows` commits rows planned from an earlier read, so the writer guard (`storage-writer-guards-test-support.ts`) classes it with whole-value writes: it must run inside the store's lease, which every agent-mail writer shares. Agent mail therefore keeps one kind of writer, as the storage rules require; a test moves the call outside the lease and the guard refuses it.
+- **Fallbacks keep the whole-value save.** Inside an atomic scope, while a retired JSON copy of the store remains (whose pruning commits with a whole-value save), or for a store held as a document, `updateStoreRows` answers `false` and the delete uses `load()` and `save()`. A test checks both paths leave the same store.
+- **The size limit refuses growth only.** A row write that shrinks the store commits even past the 32 MiB limit; the whole-value save refused any result over the limit, which could have stopped a delete on a store already over it.
+- **One yield between reading and committing.** The mail delete awaits `setImmediate` after planning, holding the mail lease, so its two synchronous blocks become two gaps. Yields alone were the to-do's other option; here it is only a split, on top of the reduced work.
+- **What it does not change.** A delete still rewrites every mailbox holding mail the environment sent; in the benchmark's workload that is all 200, so the agent-mail call is no faster there. Repeating a delete marks the sender's already-expired messages again, as it did before.
+- **File size.** `storage-database.ts` would have passed 2,000 lines, so its pure row helpers moved to `storage-database-rows.ts`.
+
 ## Current state
 
-Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry. A slow delete names the stage it is on, the container and worktree stages request cancellation at a deadline and fail only after local termination is confirmed, and an agent-test profile can stage a real failed delete on demand. What remains is task 1 (live confirmation on `arktech-mini`, which needs a release containing the fix) and task 6 (store cleanup that holds the event loop, which overlaps the agent-mail storage work).
+Directory watches on macOS run in a helper process, the worktree is no longer watched while it is removed, recovery stands aside while a delete runs, and a failed delete shows its reason with a retry. A slow delete names the stage it is on, the container and worktree stages request cancellation at a deadline and fail only after local termination is confirmed, and an agent-test profile can stage a real failed delete on demand. A delete finds its native sessions by their indexed environment and commits only the agent-mail rows it changes. What remains is task 1 (live confirmation on `arktech-mini`, which needs a release containing the fix).
 
 ## Needs verification
 

@@ -5,8 +5,10 @@ import {
   MessageSquare,
   MoreHorizontal,
   Network,
+  Link2,
   RotateCcw,
   Server,
+  Share2,
   SquareArrowOutUpRight,
 } from "lucide-react";
 import { acceptanceCriteriaTally } from "@orkestrator/protocol/ticket-sections";
@@ -107,6 +109,17 @@ interface KanbanCardProps {
   onClearStatus?: (task: KanbanTask) => void;
   /** "Run graph…" with this ticket as the graph's input (item 214). */
   onRunGraph?: (task: KanbanTask) => void;
+  /**
+   * The command node this ticket is a copy from, on a leaf's board
+   * (docs/architecture/tickets.md, "Sync across machines").
+   */
+  syncedFrom?: string;
+  /**
+   * On a leaf board a command node syncs: the command node's name, offering
+   * Share for a ticket made here before sync began.
+   */
+  shareWith?: string;
+  onShare?: (task: KanbanTask) => void;
 }
 
 export function KanbanCard({
@@ -118,6 +131,9 @@ export function KanbanCard({
   canClearStatus,
   onClearStatus,
   onRunGraph,
+  syncedFrom,
+  shareWith,
+  onShare,
 }: KanbanCardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -180,7 +196,11 @@ export function KanbanCard({
   const showTally = criteria.length > 0 && tally.unchecked < criteria.length;
   // Work for this ticket on another machine (docs/architecture/tickets.md, "Sync across machines").
   const remoteWork = task.sync?.work;
-  const hasFooter = commentCount > 0 || !!environmentName || showTally || !!remoteWork;
+  // A copy of a command node's ticket; one still waiting for it is not yet.
+  const copyFrom = task.sync?.replica && !task.sync.replica.pendingCreate ? syncedFrom : undefined;
+  const canShare = Boolean(onShare && shareWith && !task.sync?.replica);
+  const hasFooter =
+    commentCount > 0 || !!environmentName || showTally || !!remoteWork || !!copyFrom;
 
   // While the card is being dragged the overlay copy follows the pointer, so
   // the original stays put and renders as a dashed drop target. It deliberately
@@ -276,6 +296,12 @@ export function KanbanCard({
                       Clear status
                     </DropdownMenuItem>
                   )}
+                  {canShare && (
+                    <DropdownMenuItem onSelect={() => onShare?.(task)}>
+                      <Share2 className="h-4 w-4" />
+                      Share with {shareWith}
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -303,6 +329,16 @@ export function KanbanCard({
               <span className="flex shrink-0 items-center gap-1">
                 <MessageSquare className="h-3 w-3" />
                 <span>{commentCount}</span>
+              </span>
+            )}
+            {copyFrom && (
+              <span
+                data-testid="kanban-card-synced-from"
+                className="flex min-w-0 shrink items-center gap-1"
+                title={`A copy of a ticket on ${copyFrom}'s board; changes here go back to it`}
+              >
+                <Link2 className="h-3 w-3 shrink-0" />
+                <span className="truncate">{copyFrom}</span>
               </span>
             )}
             {remoteWork && (

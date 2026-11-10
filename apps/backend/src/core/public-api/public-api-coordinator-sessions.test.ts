@@ -606,11 +606,13 @@ describe("Coordinator conversations are public sessions", () => {
     expect(!wrongTab.ok && wrongTab.error.code).toBe("not-found");
   });
 
-  test("fork, resume and a mode change are refused; the checkout stays a Coordinator's", async () => {
+  test("fork, resume, rewind, a branch switch and a mode change are refused", async () => {
     const { harness, stub, sessionId, environmentId } = await coordinatorSetup();
     const attempts = [
       ["session.fork", { sessionId }],
       ["session.resume", { sessionId, historyId: "history-1" }],
+      ["session.rewind", { sessionId, messageId: "prompt-1" }],
+      ["session.branch", { sessionId, entryId: "entry-1" }],
       ["session.prompt", { sessionId, prompt: "Hello", mode: "build" }],
       ["session.config.set", { sessionId, mode: "build" }],
     ] as const;

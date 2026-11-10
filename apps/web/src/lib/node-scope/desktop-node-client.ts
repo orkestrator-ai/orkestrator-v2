@@ -19,6 +19,7 @@
  * `domains` and `capabilities` follow the node's connection generation.
  */
 
+import { readableCodedError } from "@orkestrator/protocol/contract/ipc-error";
 import { nodeRefusalCode } from "@orkestrator/protocol/contract/node-refusal";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type {
@@ -226,9 +227,12 @@ export function createDesktopNodeClient(options: DesktopNodeClientOptions): Node
           envelope: options.envelope as unknown as Record<string, unknown>,
         })
       : api.invoke<T>(command, wireArgs);
+    // A registered code arrives as a `[code …] ` message prefix; every screen
+    // shows `error.message`, so the prefix becomes the error's own `code`.
     return sent.catch((error: unknown) => {
-      noteRefusal(error);
-      throw error;
+      const readable = readableCodedError(error);
+      noteRefusal(readable);
+      throw readable;
     });
   }
 

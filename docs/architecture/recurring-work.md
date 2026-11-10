@@ -59,7 +59,10 @@ fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
 cadence, and demotions by reason) and native session invalidations
 (`sessionInvalidations`: counts by content-free cause and by platform, from
-`native-session-invalidation-metrics.ts`), all aggregate and content-free. It is served by the
+`native-session-invalidation-metrics.ts`, plus `discoveryRenewals`: discovery
+announcements by platform and section with the value paths that changed,
+such as `value[].tools[order]`, structural names only), all aggregate and
+content-free. It is served by the
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 
@@ -193,11 +196,16 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
-  runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
-  disables graph runs (launches are refused, nothing advances; stored runs stay
-  readable and can be cancelled).
+  list of `feature-planning`, `build-pipeline`, `multi-review`, `graph-run`, or
+  `all`. A named domain runs its old whole-store driver; `multi-review` falls
+  back to `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling
+  it back disables graph runs (launches are refused, nothing advances; stored
+  runs stay readable and can be cancelled). `native-queues` and
+  `backend-activity` are no longer revertible: their rollback drivers (the
+  2 s timer over every environment and queue, and the 2 s activity bundle
+  with its 60 s tab timer) were removed after the busy live profile and the
+  long soak (todo 0048 task 13), so naming them, or `all`, leaves them on
+  their keyed drivers.
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
@@ -315,7 +323,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Mail presence | 2 s refresh, 4 s TTL (B10) | ≤ 4 s | Never inject into an active session |
 | Diff badge, watched local worktree | 400 ms settle plus scan, and at least 2 s from one scan's end to the next hinted one (`LOCAL_SCAN_MIN_GAP_MS`, B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan. Saves less than 2 s apart wait out the gap; back-to-back saves measured 1.6 to 1.7 s after settling in the packaged macOS app (todo 0048, task 7) |
 | Diff badge, container or unwatched | 15 s poll (B03) | ≤ 20 s | |
-| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action | Explicit refresh waits for a read started after the click |
+| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action, or one scan longer when a scan is already running | Explicit refresh waits for a read started after the click, so a Changes refresh that lands while a scan runs waits for that scan and then a fresh one. Accepted 2026-11-10 (todo 7201): a container Changes refresh measured p50 425 to 543 ms and p95 1.30 s and 2.23 s over two runs of 15 on macOS; All files stayed ≤ 1 s (max 881 ms) |
 | PR merge confirmation after merge-pending | 1 s (B01) | ≤ 3 s | |
 | PR created after create-pending | 5 s (B01) | ≤ 10 s | |
 | Open PR state change | 20 s (B01) | ≤ 30 s | Includes jitter |
@@ -330,7 +338,7 @@ With data saving on, the client accepts slower backstops for what it shows
 invalidations that read at once and the responsive backstop is 1 s. The Files
 panel accepts ≤ 2 s after an announced revision on a watched worktree and
 ≤ 11 s on an unwatched target (its 10 s backstop); an explicit action stays
-≤ 1 s. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
+≤ 1 s, or one scan longer behind a running scan. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
 These budgets apply only to the client that turned the preference on.
 
 The container file-list reuse bound stays at 3 s for this reason: with a 5 s

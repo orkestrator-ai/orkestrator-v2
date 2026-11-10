@@ -107,6 +107,32 @@ async function inGateway(gateway: string, ...command: string[]): Promise<string>
   return docker(["exec", "-u", "root", gateway, ...command], 200_000);
 }
 
+/**
+ * Records what decides the path the name checks take on this daemon: whether
+ * it is rootless (its network lives in RootlessKit's namespace), how Docker
+ * names its upstream resolvers in the gateway's protected resolv.conf
+ * (`host(...)` or by address, to-do 6101 task 3), and the gateway's nat
+ * redirections, Docker's own included. Printed, and appended as a JSON line to
+ * ORKESTRATOR_QUALIFICATION_EVIDENCE when set, since a logged run deletes
+ * passing output. Addresses and ports only.
+ */
+async function recordTopology(gateway: string): Promise<void> {
+  const security = await docker(["info", "--format", "{{json .SecurityOptions}}"]);
+  const resolv = await inGateway(gateway, "cat", "/etc/orkestrator/trusted-network/resolv.conf");
+  const nat = await inGateway(gateway, "iptables", "-t", "nat", "-S");
+  const line = JSON.stringify({
+    run: RUN,
+    scenario: "topology",
+    at: new Date().toISOString(),
+    daemonRootless: security.includes("name=rootless"),
+    resolvers: resolv.split("\n").filter((entry) => /^(nameserver |# ExtServers:)/.test(entry)),
+    nat: nat.split("\n").filter((entry) => /-j (DNAT|REDIRECT)\b/.test(entry)),
+  });
+  console.log(`[egress-filter] ${line}`);
+  const file = process.env.ORKESTRATOR_QUALIFICATION_EVIDENCE;
+  if (file) await fs.appendFile(file, `${line}\n`);
+}
+
 async function booted(containerId: string): Promise<void> {
   try {
     await waitForContainerBoot(containerId);
@@ -230,6 +256,7 @@ describe("M12 name checks at the egress gateway", () => {
       const fixture = await startFixture(gateway, "checks");
       await startRuntime(containerId);
       expect(await inGateway(gateway, "cat", "/etc/orkestrator/egress-filter")).toBe("on");
+      await recordTopology(gateway);
       const policy = await environmentNetworkPolicy(environment.id, context);
       expect(policy.enforcement).toBe("gateway");
       expect(policy.effective?.egressFilter).toBe("enforced");

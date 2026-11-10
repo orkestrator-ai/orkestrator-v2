@@ -4,6 +4,7 @@ import {
   type SseFrame,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import { abortableSleep } from "../abortable-timing.js";
 import type { BridgeConnection } from "../agent-provider-contract.js";
 import { bridgeEventStreamFetch } from "./transport.js";
 
@@ -83,6 +84,9 @@ export class HttpBridgeObservationStream {
   private lastFrameAt = 0;
   private cursor: string | null = null;
   private connection: AbortController | null = null;
+  /** Aborted by `close()`, so a pending reconnect delay ends at once. */
+  private readonly stopping = new AbortController();
+  private running: Promise<void> = Promise.resolve();
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private readonly backoff: ReconnectBackoff;
   private readonly now: () => number;
@@ -123,7 +127,12 @@ export class HttpBridgeObservationStream {
   start(): void {
     if (this.started || this.closed) return;
     this.started = true;
-    void this.run().catch(() => undefined);
+    this.running = this.run().catch(() => undefined);
+  }
+
+  /** Settles once the subscription loop has exited after `close()`. */
+  stopped(): Promise<void> {
+    return this.running;
   }
 
   close(): void {
@@ -133,6 +142,7 @@ export class HttpBridgeObservationStream {
     this.connection?.abort();
     this.connection = null;
     this.stopWatchdog();
+    this.stopping.abort();
   }
 
   private async run(): Promise<void> {
@@ -164,7 +174,7 @@ export class HttpBridgeObservationStream {
       if (this.connection === connection) this.connection = null;
       this.lost();
       if (this.closed) return;
-      await this.delay(this.backoff.nextDelayMs());
+      await abortableSleep(this.backoff.nextDelayMs(), this.stopping.signal);
     }
   }
 
@@ -233,13 +243,6 @@ export class HttpBridgeObservationStream {
     } catch {
       // A failed hint only costs latency; the sweep still runs.
     }
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      (timer as { unref?: () => void }).unref?.();
-    });
   }
 }
 

@@ -11,6 +11,7 @@ import {
   MONITOR_RETRY_CAP_FACTOR,
   type OpenCodeProviderDependencies,
 } from "./opencode-provider-helpers.js";
+import { OPENCODE_HEARTBEAT_EVENT } from "./opencode-events.js";
 
 /**
  * Reconnect policy for the OpenCode event monitor.
@@ -39,6 +40,90 @@ export function createOpenCodeMonitorBackoff(
       ...(dependencies.monitorRetryRandom ? { random: dependencies.monitorRetryRandom } : {}),
     },
   );
+}
+
+/**
+ * Longest silence an OpenCode event stream may have once it has proved it
+ * heartbeats. `opencode serve` writes `server.heartbeat` every 10 s (observed
+ * against 1.19.5), so this is three missed heartbeats plus slack for a busy
+ * event loop on either side.
+ */
+export const OPENCODE_EVENT_STREAM_SILENCE_MS = 35_000;
+
+/** Whether a raw `/event` frame is OpenCode's idle keepalive. */
+export function isOpenCodeHeartbeat(raw: unknown): boolean {
+  return (
+    !!raw &&
+    typeof raw === "object" &&
+    (raw as { type?: unknown }).type === OPENCODE_HEARTBEAT_EVENT
+  );
+}
+
+/**
+ * Notices an OpenCode event stream that stays open but goes quiet, so the
+ * monitor replaces it instead of trusting frozen activity until TCP gives up.
+ *
+ * One watchdog per connection. It is armed by the first `server.heartbeat`:
+ * a server that never heartbeats (an OpenCode that predates the frame) is
+ * legitimately silent while idle, and a deadline there would reconnect it
+ * forever. Once armed, any frame counts as life. The timer re-checks the
+ * elapsed silence rather than restarting on every frame, so a busy stream
+ * costs no timer churn. `stop()` is the owner's explicit cancel (AGENTS.md
+ * invariant 15); the monitor calls it whenever the connection ends.
+ */
+export class OpenCodeStreamSilenceWatchdog {
+  private lastFrameAt = 0;
+  private armed = false;
+  private stopped = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly silenceMs: number;
+  private readonly now: () => number;
+
+  constructor(
+    private readonly onSilent: (silenceMs: number) => void,
+    options: { silenceMs?: number; now?: () => number } = {},
+  ) {
+    this.silenceMs = Math.max(1, options.silenceMs ?? OPENCODE_EVENT_STREAM_SILENCE_MS);
+    this.now = options.now ?? (() => performance.now());
+  }
+
+  get isArmed(): boolean {
+    return this.armed && !this.stopped;
+  }
+
+  /** A frame arrived; a heartbeat arms the deadline. */
+  frame(heartbeat: boolean): void {
+    if (this.stopped) return;
+    this.lastFrameAt = this.now();
+    if (heartbeat && !this.armed) {
+      this.armed = true;
+      this.schedule(this.silenceMs);
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private schedule(delayMs: number): void {
+    this.timer = setTimeout(() => this.check(), delayMs);
+    // A deadline must never hold the process open on its own.
+    (this.timer as { unref?: () => void }).unref?.();
+  }
+
+  private check(): void {
+    this.timer = undefined;
+    if (this.stopped) return;
+    const silentFor = this.now() - this.lastFrameAt;
+    if (silentFor < this.silenceMs) {
+      this.schedule(this.silenceMs - silentFor);
+      return;
+    }
+    this.stop();
+    this.onSilent(this.silenceMs);
+  }
 }
 
 /**

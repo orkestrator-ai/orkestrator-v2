@@ -108,8 +108,12 @@ describe("synthetic-full-turn fixture", () => {
     expect(command?.content).toBe("ls -1");
     expect(command?.toolOutput).toContain("README.md");
     expect(command?.toolOutput).toContain("src");
-    // Still pending: the authoritative item never arrived in this truncated run.
-    expect(command?.toolState).toBe("pending");
+    // The authoritative item never arrived in this truncated run, but the turn
+    // completed: nothing will settle the command, so it reads as left running
+    // rather than "running..." on an idle thread (to-do 7522).
+    expect(summary.turns[0]?.phase).toBe("completed");
+    expect(command?.toolState).toBeUndefined();
+    expect(command?.toolLeftRunning).toBe(true);
   });
 
   test("applies the caller's command-output memory cap", async () => {

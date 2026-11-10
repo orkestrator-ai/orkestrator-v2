@@ -6,15 +6,21 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 // OpenCode SDK clients reach their server without `bridgeFetch`, so their
 // requests are charged through the fetch the SDK is given.
 
+// Every fixture binds the address the requests use. A server on the wildcard
+// (`port: 0` alone) shares its port on macOS with another process's
+// `127.0.0.1` listener, which then answers `127.0.0.1:<port>` instead
+// (flake 1146: `{}` and `{"error":"Unauthorized"}` bodies in the aggregate).
+const HOST = "127.0.0.1";
+
 afterEach(() => {
   recurringWorkMetrics.reset();
 });
 
 describe("openCodeSdkFetch", () => {
   test("charges one provider request per call to the job that made it", async () => {
-    const server = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+    const server = Bun.serve({ port: 0, hostname: HOST, fetch: () => new Response("ok") });
     try {
-      const url = `http://127.0.0.1:${server.port}/session`;
+      const url = `http://${HOST}:${server.port}/session`;
       await recurringWorkMetrics.observe("native-activity-sweep", async () => {
         expect(await (await openCodeSdkFetch(new Request(url))).text()).toBe("ok");
         expect(await (await openCodeSdkFetch(url, { method: "POST" })).text()).toBe("ok");
@@ -32,11 +38,12 @@ describe("openCodeSdkFetch", () => {
   test("the caller's signal still aborts a request", async () => {
     const server = Bun.serve({
       port: 0,
+      hostname: HOST,
       fetch: () => new Promise<Response>(() => undefined),
     });
     try {
       const controller = new AbortController();
-      const pending = openCodeSdkFetch(`http://127.0.0.1:${server.port}/event`, {
+      const pending = openCodeSdkFetch(`http://${HOST}:${server.port}/event`, {
         signal: controller.signal,
       });
       controller.abort();
@@ -47,9 +54,9 @@ describe("openCodeSdkFetch", () => {
   });
 
   test("the provider's default SDK client charges its requests", async () => {
-    const server = Bun.serve({ port: 0, fetch: () => Response.json([]) });
+    const server = Bun.serve({ port: 0, hostname: HOST, fetch: () => Response.json([]) });
     try {
-      const client = createOpenCodeSdkClient({ baseUrl: `http://127.0.0.1:${server.port}` });
+      const client = createOpenCodeSdkClient({ baseUrl: `http://${HOST}:${server.port}` });
       await recurringWorkMetrics.observe("native-activity-sweep", async () => {
         expect((await client.session.list()).data).toEqual([]);
       });
@@ -92,6 +99,7 @@ describe("openCodeSdkFetch", () => {
     });
     const server = Bun.serve({
       port: 0,
+      hostname: HOST,
       fetch(request) {
         paths.push(new URL(request.url).pathname);
         requests += 1;
@@ -115,7 +123,7 @@ describe("openCodeSdkFetch", () => {
     });
     const controller = new AbortController();
     try {
-      const client = createOpenCodeSdkClient({ baseUrl: `http://127.0.0.1:${server.port}` });
+      const client = createOpenCodeSdkClient({ baseUrl: `http://${HOST}:${server.port}` });
       await recurringWorkMetrics.observe("native-activity-sweep", async () => {
         const events = await client.event.subscribe(undefined, {
           signal: controller.signal,

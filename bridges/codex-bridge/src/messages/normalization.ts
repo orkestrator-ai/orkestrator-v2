@@ -235,6 +235,8 @@ export function mcpToolCallParts(item: McpToolCallItem): NormalizedPart[] {
 export function commandExecutionParts(item: CommandExecutionItem): NormalizedPart[] {
   const output = capCommandOutput(item.aggregated_output);
   const failed = item.status === "failed";
+  // Only an unsettled command can have been left running; a later end wins.
+  const leftRunning = item.left_running === true && item.status === "in_progress";
   return [
     {
       type: "tool-invocation",
@@ -242,8 +244,16 @@ export function commandExecutionParts(item: CommandExecutionItem): NormalizedPar
       content: item.command,
       toolName: "bash",
       toolArgs: { command: item.command },
-      toolState:
-        item.status === "failed" ? "failure" : item.status === "completed" ? "success" : "pending",
+      ...(leftRunning
+        ? { toolLeftRunning: true as const }
+        : {
+            toolState:
+              item.status === "failed"
+                ? ("failure" as const)
+                : item.status === "completed"
+                  ? ("success" as const)
+                  : ("pending" as const),
+          }),
       toolTitle: item.command,
       // A failed command used to duplicate the same potentially 256 KiB
       // string into both fields. The renderer already gives `toolError` its

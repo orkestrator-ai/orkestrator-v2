@@ -1,5 +1,6 @@
 import {
   assertCoordinatorEnvironmentScopeCommand,
+  noteCoordinatorNodeUnavailableCommand,
   assertCoordinatorNodeDelegationAvailableCommand,
   coordinatorNodeMultiReviewSurfaceCommand,
   getCoordinatorNodeLaunchEnvironmentCommand,
@@ -25,6 +26,7 @@ import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
+  coordinatorCallTurnOrigin,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   normalizeCoordinatorDelegationRequest,
@@ -76,6 +78,7 @@ import {
   sendToNodeCoordinator,
 } from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
+import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import {
   assertCoordinatorMayActOnEnvironment,
@@ -147,9 +150,20 @@ export interface CoordinatorNodeTarget {
   environment(environmentId: string): Promise<JsonRecord>;
 }
 
+/** Register before checking the live link: the offline summary may already be stale. */
+async function noteUnavailable(
+  context: CommandContext,
+  attempt: import("./coordinator-node-reconnect-wakes.js").CoordinatorNodeAttempt,
+): Promise<void> {
+  context.coordinators?.noteNodeUnavailable(attempt);
+  if (isBackendId(attempt.nodeId) && context.nodes?.link(attempt.nodeId)?.connected) {
+    await context.coordinators?.nodeConnected(attempt.nodeId);
+  }
+}
+
 export async function coordinatorNodeTarget(
   context: CommandContext,
-  projectId: string,
+  caller: Caller,
   nodeId: string,
 ): Promise<CoordinatorNodeTarget> {
   if (!context.nodePortal || !context.nodes) {
@@ -169,8 +183,15 @@ export async function coordinatorNodeTarget(
   const node = summaries.nodes[0];
   if (!node) throw new Error(`No connected node has ID ${nodeId}. Call list_nodes.`);
   if (!node.available) {
+    // Nothing is queued; this conversation is woken once it reconnects (3800 task 8).
+    await noteUnavailable(context, {
+      ...caller,
+      nodeId,
+      nodeName: node.view.displayName,
+    });
     throw new Error(offlineLaunchMessage(node.view.displayName));
   }
+  const { projectId } = caller;
   const hint = repositoryHint((await context.storage.getProject(projectId))?.gitUrl);
   const project = hint ? node.projects.find((entry) => entry.repositoryHint === hint) : undefined;
   if (!project) {
@@ -397,7 +418,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       const association = (
@@ -423,7 +444,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       if (
@@ -474,6 +495,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                   baseBranch,
                   baseCommit,
                   instruction: remoteReportInstruction(target.nodeName),
+                  turnOrigin: await coordinatorCallerTurnOrigin(context, caller, scope),
                 },
                 input.initialPrompt,
               )
@@ -556,7 +578,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       await target.environment(asNonBlankString(environmentId, "environmentId"));
@@ -578,7 +600,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const caller = await identity(scope, context);
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       const worker = asNonBlankString(environmentId, "environmentId");
@@ -613,6 +635,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
    * as it is here: the coordinator is woken once, when that worker's turn
    * ends, and its report is held until then.
    */
+  // A coordinator tool refused a disconnected node: remember who tried, so
+  // the reconnect wakes them (3800 task 8). Nothing about the work is kept.
+  register(noteCoordinatorNodeUnavailableCommand, async ({ scope, nodeId }, context) => {
+    const caller = await identity(scope, context);
+    if (!context.coordinators) return { noted: false };
+    await noteUnavailable(context, {
+      ...caller,
+      nodeId: asNonBlankString(nodeId, "nodeId"),
+    });
+    return { noted: true };
+  });
   // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
   register(assertCoordinatorEnvironmentScopeCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
@@ -624,7 +657,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     // transfer_files names this node by its own id.
     const target =
       nodeId && nodeId !== (await context.nodes?.status())?.nodeId
-        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        ? await coordinatorNodeTarget(context, caller, nodeId)
         : null;
     if (typeof named.pipelineId === "string") {
       const pipeline = target
@@ -692,7 +725,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     // The node-mail client leaves it out for a pre-contract leaf that does not
     // advertise `node-mail-turn-origin` (it would refuse the unknown key).
     const turnOrigin =
-      conversation?.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {};
+      coordinatorCallTurnOrigin(
+        conversation?.lastTurnOrigin,
+        record(args.scope) ? args.scope.turnOrigin : undefined,
+      ) === "mail"
+        ? { turnOrigin: "mail" as const }
+        : {};
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
     // Checked before anything happens, then copied to the node before the
     // message exists; a failure on either side means there is no message.
@@ -729,7 +767,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     ) {
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(args.nodeId, "nodeId"),
       );
       const own = await mailbox(context, caller);
@@ -768,7 +806,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     // Before any image reaches the node: the refusal is the whole answer.
     const checkedTarget = await coordinatorNodeTarget(
       context,
-      caller.projectId,
+      caller,
       asNonBlankString(args.nodeId, "nodeId"),
     );
     await checkedTarget.environment(toEnvironmentId);
@@ -782,7 +820,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       async () => {
         const target = await coordinatorNodeTarget(
           context,
-          caller.projectId,
+          caller,
           asNonBlankString(args.nodeId, "nodeId"),
         );
         const requestId = asNonBlankString(args.requestId, "requestId");
@@ -934,7 +972,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         throw new Error("That environment does not belong to this project.");
       }
     } else {
-      const target = await coordinatorNodeTarget(context, caller.projectId, nodeId);
+      const target = await coordinatorNodeTarget(context, caller, nodeId);
       assertNodeTakesMailAttachments(target);
       await target.environment(environmentId);
     }
@@ -985,7 +1023,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     const caller = await identity(args.scope, context);
     const target = await coordinatorNodeTarget(
       context,
-      caller.projectId,
+      caller,
       asNonBlankString(args.nodeId, "nodeId"),
     );
     return nodeCoordinatorMailbox(target) as Promise<
@@ -1000,7 +1038,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       if (
@@ -1111,7 +1149,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         );
         if (boardTicket) {
           // Shown at once; the node then reports the build's own progress.
-          await context.storage.kanban
+          await context.storage.ticketSync
             .recordTicketRemoteWork(String(input.taskId).trim(), {
               nodeId: target.nodeId,
               nodeName: target.nodeName,
@@ -1137,11 +1175,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     if (!isLaunchMultiReviewActionInput(input)) {
       throw new Error("Invalid Multi Review button action");
     }
-    const target = await coordinatorNodeTarget(
-      context,
-      caller.projectId,
-      asNonBlankString(nodeId, "nodeId"),
-    );
+    const target = await coordinatorNodeTarget(context, caller, asNonBlankString(nodeId, "nodeId"));
     await target.environment(input.environmentId);
     const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
     const payloadHash = actionHash({ action: "launch-multi-review", nodeId: target.nodeId, input });
@@ -1303,7 +1337,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     }
     const target = await coordinatorNodeTarget(
       context,
-      caller.projectId,
+      caller,
       asNonBlankString(args.nodeId, "nodeId"),
     );
     const id = asNonBlankString(args.workflowId, "workflowId");
@@ -1427,7 +1461,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       const pipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");
       const target = await coordinatorNodeTarget(
         context,
-        caller.projectId,
+        caller,
         asNonBlankString(nodeId, "nodeId"),
       );
       if (!record(input) || typeof input.environmentId !== "string") {

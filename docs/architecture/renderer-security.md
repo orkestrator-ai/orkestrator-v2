@@ -105,6 +105,43 @@ the page, so the first refusal of each kind on a session logs
 browser feature stops working in the desktop app. Previews and the artifact host
 have their own, stricter handlers.
 
+## webRequest listeners
+
+Main installs its network policy as session `webRequest` listeners: the
+renderer's file boundary (`renderer-file-policy.ts`), the gateway credential
+hooks (`remote-gateway-request-auth.ts`), the artifact host's admission policy
+and redirect observer (`artifact-host-session.ts`) and the service-preview
+partition hooks (`preview-transport-manager.ts`). Electron keeps one listener
+per event per session, and a session outlives its window, so a listener can run
+after whatever it looks up for that window is gone: a destroyed
+`WebContents`'s getters throw, as can an option callback.
+
+A listener that throws before it calls Electron's callback leaves the request
+unanswered and gives main an uncaught exception. On 2026-10-21 that opened a
+blocking error box that stopped main before a closed window released its
+preview attachments (flake 0622). So every listener is installed through
+`answering(name, decide, failClosed)` or, for an event with no callback,
+`observing(name, observe, onFailure)` (`webrequest-listener.ts`):
+
+- `decide` returns the response, or a promise of one. If it throws or rejects,
+  the listener answers `failClosed(details)`; if that throws too, it cancels.
+  The callback is called exactly once.
+- Each listener chooses what failing closed means for it: the renderer file
+  policy and the artifact host cancel; the gateway hook sends the request
+  without any ambient credential; the preview header hook strips the ingress
+  credential, and its request hook cancels a request whose local-network check
+  could not run. A redirect observer that throws still makes the redirect fatal
+  to the artifact host.
+- A failure logs `desktop.webrequest listener.failed-closed` (or
+  `observer.failed`, `callback.failed`), throttled, scoped by the listener's
+  static name. The error's message is never logged: it may hold a URL or a
+  credential.
+
+The `raw-webrequest-listener` source guard
+([linting.md](../development/linting.md#source-guards)) fails on a
+`webRequest.on*(...)` call in `apps/desktop/electron` whose listener is not
+wrapped in one of the two (or `null`, which removes a listener).
+
 ## Node scopes
 
 One renderer per window shows every node the window works with: the command

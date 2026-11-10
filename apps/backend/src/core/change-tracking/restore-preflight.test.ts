@@ -9,7 +9,7 @@ import {
   type CaptureLimits,
 } from "./capture.js";
 import { CHANGE_TRACKING_POLICY_V1, type ChangeTrackingPolicy } from "./policy-registry.js";
-import { restorePreflightDeadlineMs } from "./restore.js";
+import { restoreCaptureDeadlineMs, restorePreflightDeadlineMs } from "./restore.js";
 import { createHarness, type Harness } from "./service-test-support.js";
 import { turnIdFor } from "./turn-boundaries.js";
 
@@ -190,4 +190,47 @@ describe("restore preflight deadline", () => {
     },
     30_000,
   );
+});
+
+describe("restore apply capture deadline", () => {
+  test("is at least the finalization deadline and grows with the plan like the preview", () => {
+    const policy = CHANGE_TRACKING_POLICY_V1;
+    expect(restoreCaptureDeadlineMs(0, policy)).toBe(30_000);
+    expect(restoreCaptureDeadlineMs(2_000, policy)).toBe(30_000);
+    expect(restoreCaptureDeadlineMs(10_000, policy)).toBe(50_000);
+    expect(restoreCaptureDeadlineMs(20_000, policy)).toBe(100_000);
+    expect(restoreCaptureDeadlineMs(100_000, policy)).toBe(5 * 60_000);
+  });
+
+  test("the checkpoint and result captures run on it, not a fixed 10 s", async () => {
+    const files = 20;
+    const h = harness({
+      finalizationDeadlineMs: 30_000,
+      restorePreflightPerPathMs: 2_000,
+      restorePreflightMaxDeadlineMs: 60_000,
+    });
+    const turn = await addFilesInTurn(h, files);
+    const preview = await h.service.restore.prepare({ measurementId: turn.measurementId });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const owner = h.service.registry.ownerById(turn.worktreeId)!;
+    const capture = spyOn(owner, "capture");
+    try {
+      const applied = await h.service.restore.apply({
+        actionToken: preview.actionToken,
+        idempotencyKey: "apply-1",
+      });
+      expect(applied).toMatchObject({ kind: "applied", outcome: "complete" });
+      const deadlines = capture.mock.calls.map(([options]) => [
+        options.purpose,
+        options.deadlineMs,
+      ]);
+      // 20 planned paths × 2 s, past the 30 s finalization floor.
+      expect(deadlines).toEqual([
+        ["restore-checkpoint", 40_000],
+        ["restore-result", 40_000],
+      ]);
+    } finally {
+      capture.mockRestore();
+    }
+  });
 });

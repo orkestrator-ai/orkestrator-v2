@@ -734,7 +734,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalledWith("http://100.88.12.3:34121/");
     });
-    expect(screen.getByRole("button", { name: "Web client URL copied" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Web client URL copied" })).toBeTruthy();
   });
 
   test("confirms and resets a conflicting Tailscale Serve listener", async () => {

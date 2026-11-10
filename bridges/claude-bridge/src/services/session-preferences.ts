@@ -666,6 +666,12 @@ export async function readSessionPreferences(
 }
 
 async function writePreferencesFile(path: string, preferences: SessionPreferences): Promise<void> {
+  // Callers hold the preference lock. Clearing the last transient field must
+  // remove the empty row without racing a concurrent real preference write.
+  if (Object.values(preferences).every((value) => value === undefined)) {
+    await rm(path, { force: true });
+    return;
+  }
   await mkdir(claudeSessionPreferencesDir(), { recursive: true });
   // Written via rename so a crash mid-write leaves either the old file or the
   // new one, never a truncated document the reader would treat as "never set".

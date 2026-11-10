@@ -841,6 +841,7 @@ function fakeDockerFollowers() {
 }
 
 type BackendInternals = {
+  context: Pick<CommandContext, "storage">;
   runtime: BackendRuntime;
   claudeLoginKeeper: {
     refreshLocalLoginIfDue(): Promise<unknown>;
@@ -919,6 +920,25 @@ describe("two OrkestratorBackends in one process (todo 0733)", () => {
       expect(codex[1]).toHaveBeenCalledWith("/second-home");
 
       // Logs: each backend spawns its own follower for its own subscription.
+      // The command guard requires each registry's own persisted association;
+      // fake followers alone are not proof that a container belongs to it.
+      for (const { owner } of [first, second]) {
+        await owner.context.storage.addEnvironment({
+          id: "logs-environment",
+          projectId: "fixture-project",
+          name: "Logs fixture",
+          branch: "main",
+          containerId: "container-1",
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: new Date(0).toISOString(),
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "containerized",
+        });
+      }
       type Opened = { subscriptionId: string; sourceId: string; cursor: number };
       await first.backend.invoke<Opened>("open_container_logs", { containerId: "container-1" });
       const opened = await second.backend.invoke<Opened>("open_container_logs", {

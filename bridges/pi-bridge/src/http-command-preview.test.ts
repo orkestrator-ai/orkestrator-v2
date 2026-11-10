@@ -135,7 +135,11 @@ test.each([false, true])(
       const listed = await call(`/session/${state.id}/commands`);
       expect(listed.status).toBe(200);
       const catalogue = await listed.json();
-      expect(catalogue).toMatchObject({ status: "stale", attachPending: true });
+      // Discovered extensions are excluded under every policy, so resource
+      // discovery is complete before attach. Selection still revalidates
+      // against the attached inventory below (including an injected conflict).
+      expect(catalogue.status).toBe("ready");
+      expect(catalogue.attachPending).toBeUndefined();
       const row = catalogue.commands.find(
         (command: { id: string }) => command.id === "pi:template:review",
       );

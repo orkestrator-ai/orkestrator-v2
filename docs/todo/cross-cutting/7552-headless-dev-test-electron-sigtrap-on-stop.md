@@ -3,7 +3,8 @@
 ## Task analysis
 
 Analysed 2026-11-10 against `main` at `04639b12`. Found while qualifying
-[4720](../coordinator-and-multi-review/4720-coordinator-send-fast-forward-slow-remote.md)
+to-do 4720 (retired 2026-11-10; see
+[coordinator.md](../../architecture/coordinator.md))
 on beelink; not caused by that work, which changed no app code.
 
 ### Tasks

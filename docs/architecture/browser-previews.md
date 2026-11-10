@@ -755,6 +755,15 @@ and a peer that stops reading is cut off 30 seconds after the close.
 Liveness pings stop once the tunnel starts closing, so an unanswered ping
 cannot cut off the drain.
 
+The desktop also acts on missing answers, but only in a v2 session
+(`PreviewTunnelSession`): any inbound frame counts as an answer, and a session
+that leaves two pings unanswered is destroyed (`terminate`, not a close,
+because a dead peer never answers the close frame). A v1 stream
+(`PreviewTunnelStream`) has no such deadline: it pauses its socket when its
+consumer stops reading, so its pongs can wait behind unread data and a
+deadline would close a healthy paused stream. A dead v1 socket costs only its
+one stream.
+
 ## Framework configuration
 
 Route details → **Framework setup hints** shows the points below for one

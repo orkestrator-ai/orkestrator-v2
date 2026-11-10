@@ -2209,7 +2209,7 @@ obeys it; that needs the billed `routing` run. The content-free summary is
 
 `mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
 fast-forward to an already fetched upstream when the remote is slow (to-do
-4720), without a login, a billed turn or the network. It starts a disposable
+4720, retired 2026-11-10), without a login, a billed turn or the network. It starts a disposable
 `dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
 profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
 stops and resets the profile. The real backend, project Git service, Pi

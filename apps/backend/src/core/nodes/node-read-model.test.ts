@@ -4,7 +4,10 @@ import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
-import { NodeReadModel } from "./node-read-model.js";
+import { NodeReadModel, NODE_SUMMARY_EVENT_PREFIXES } from "./node-read-model.js";
+import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
+import { eventMatchesSubscription } from "../../gateway-support-extra.js";
+import { NODE_OUTBOX_READY_EVENT } from "./node-mail.js";
 
 function harness() {
   let now = 0;
@@ -50,6 +53,20 @@ function harness() {
     },
   };
 }
+
+test("the node stream carries every leaf announcement the command node acts on", () => {
+  // The leaf's gateway filters its stream by these prefixes
+  // (`eventMatchesSubscription`); the outbox collectors read the same stream
+  // (`onNodeEvent`). The ticket-sync announcement was once filtered out, so a
+  // leaf's change waited for the 60 s reconcile (to-do 3800 task 1).
+  const subscribed = NODE_SUMMARY_EVENT_PREFIXES.join(",").split(",");
+  for (const event of [NODE_OUTBOX_READY_EVENT, TICKET_SYNC_OUTBOX_READY_EVENT]) {
+    expect({ event, delivered: eventMatchesSubscription(event, subscribed) }).toEqual({
+      event,
+      delivered: true,
+    });
+  }
+});
 
 test("self-summary invalidations survive ten minutes idle and reconcile after sleep", async () => {
   const h = harness();

@@ -25,6 +25,7 @@ import {
   type SummaryFreshness,
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 
 import { boundSummaryIcons } from "./project-summary-icons.js";
@@ -87,11 +88,18 @@ export interface ReadModelPersistence {
   save(value: unknown): Promise<void>;
 }
 
-/** Event prefixes the read model needs from each node. */
+/**
+ * Event prefixes the read model needs from each node, and those its other
+ * consumers (`onNodeEvent`) act on: the mail outbox's `node-outbox-ready`
+ * (under `node-`) and ticket sync's `ticket-sync-outbox-ready`. The node's
+ * gateway sends nothing outside these, so an announcement left off this list
+ * is only noticed by the 60 s reconcile (found live, to-do 3800 task 1).
+ */
 export const NODE_SUMMARY_EVENT_PREFIXES = [
   AGENT_USAGE_READINGS_CHANGED_EVENT,
   RESOURCE_CHANGED_EVENT,
   BACKEND_PROFILE_CHANGED_EVENT,
+  TICKET_SYNC_OUTBOX_READY_EVENT,
   "node-",
 ] as const;
 

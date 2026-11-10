@@ -8,45 +8,16 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Runtime drift and advisories on two platforms**: Agent Info's drift counters and advisory notice render and rehydrate after a reload, on macOS and on Linux. Status: open.
-2. **Transcript part coverage**: compaction, image round trip and a long-running tool on Claude or Pi, finished while inactive, then return and reload. Status: open (OpenCode's compaction part only is covered).
-3. **Usage panel on two providers**: turns and account windows survive a reload, for two credential sources in one profile. Status: open.
-4. **Grok tool output**: a Grok shell call's terminal output renders inline and survives a reload. Status: open.
-5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; align or document. Status: open (needs a recorded stream; the current layouts are pinned by a credential-free test).
-6. **Re-qualification rule after agent bumps**: decide whether a feature qualified on one pin must be re-run after an SDK or CLI bump. Status: open (maintainer decision).
-7. **Credentials and run ownership**: record which providers have agent-test credentials and who owns the macOS, iOS and two-machine runs. Status: open.
+2. **Transcript part coverage**: write an opt-in live spec under `e2e/agent-testing/` that drives a compaction, an image round trip and a long-running tool on Claude, lets the turn finish while inactive, then returns and reloads. Status: open (the spec; running it with a real Claude login is 7568: 0031 task 2; OpenCode's compaction part only is covered).
+5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; scrub the recorded stream, add it as a fixture, then align or document. Status: blocked (waits on 7568: 0031 task 5; the current layouts are pinned by a credential-free test).
+6. **Re-qualification rule after agent bumps**: write the maintainer's chosen rule into `docs/development/upgrade-agents.md`. Status: blocked (waits on 7568: 0031 task 6).
 8. **Scheduled CI for platform runs**: decide which runs become CI jobs. Status: partly done (a weekly Docker live workflow exists; Electron and macOS are not in CI).
 9. **Keep "Current state" and the batching index current**: the pins and CI list are already stale. Status: open.
-10. **Graph capability profiles on live providers** (graphs item 209): the tiers the graph designer and launch pickers show match what each provider does to a graph agent node, and the guards and credential withholding hold on the real stack. Status: partly done (2026-10-29: steps 1, 2 and 5 on Claude, Codex, OpenCode and Pi on macOS, all claims held; Grok, Cursor, Linux, step 3 and step 4 open; the reusable `graph-profiles` scenario not built).
-
-### 1. Runtime drift and advisories on two platforms
-
-**Problem.** The Agent Info runtime section's drift counters and advisory notice have only been seen in passing (an OpenCode `server.heartbeat` counter on macOS), not checked on two platforms with a reload.
-
-**Context.** A manual pass in a `mise run dev:test --profile <p> --fixture` profile on macOS and on Linux, each with a provider whose bridge reports unrecognised events.
-
-**Investigation.** The rendering is in `apps/web/src/components/layout/AgentInfoButton.panels.tsx` (summary comment at `:517`, the "1 event this bridge did not recognise" string at `:591`). Each bridge has drift tests (for example `bridges/acp-bridge/src/acp-drift.test.ts`). The 2026-10-25 OpenCode run already produced one counter on macOS, so macOS needs only the advisory notice and the reload check.
-
-**Decisions.**
-
-- **How to produce drift on demand?**
-  - **Use OpenCode, whose `server.heartbeat` is reliably unrecognised, on both platforms (recommended).**
-    - Pros: no fault injection; already observed once; one credential source.
-    - Cons: an advisory notice may not appear without a real advisory; depends on OpenCode keeping that event unhandled.
-  - **Inject a fake unknown event through a bridge test seam.**
-    - Pros: deterministic, and could become an automated browser case.
-    - Cons: a scripted adapter is not live evidence under this file's own constraints.
-- **Which Linux host?**
-  - **A Linux node over ssh with its own isolated profile, leaving its configuration as found (recommended).**
-    - Pros: matches the file; Linux is this repository's main development platform.
-    - Cons: production Orkestrator shares the host, so the profile rules in `AGENTS.md` apply in full.
-  - **Only macOS, treating Linux as covered by unit tests.**
-    - Pros: one run.
-    - Cons: the file asks for two platforms; rendering is the same, but rehydration goes through each host's backend.
+10. **Graph capability profiles on live providers** (graphs item 209): build the reusable `graph-profiles` scenario that checks the tiers the graph designer and launch pickers show against what each provider does to a graph agent node. Status: open (2026-10-29: steps 1, 2 and 5 ran by hand on Claude, Codex, OpenCode and Pi on macOS, all claims held; the remaining live runs, Grok, Cursor, Linux, step 3 and step 4, are 7568: 0031 task 10).
 
 ### 2. Transcript part coverage
 
-**Problem.** Compaction, retry, status and image parts are not proved to render from the snapshot after a turn finishes in an inactive environment, on Claude or Pi.
+**Problem.** Compaction, retry, status and image parts are not proved to render from the snapshot after a turn finishes in an inactive environment, on Claude or Pi, and no repeatable spec exists to prove it. This task writes the spec; its live run with a real Claude login is 7568 (0031 task 2).
 
 **Context.** Replaces the remaining browser QA of `03-transcript-part-coverage.md`. Needs `--credential-source claude --agent-platforms claude` (or Pi).
 
@@ -60,7 +31,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Cons: spends Claude tokens; compaction of a small fixture conversation may be trivial.
   - **Pi.**
     - Pros: covers a newer bridge whose compaction is less exercised.
-    - Cons: Pi fronts the user's own providers; the default-model fallback issue ([0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md)) can block a fresh host.
+    - Cons: Pi fronts the user's own providers; the default-model fallback issue ([Pi default model](../../development/credentials-and-models.md#default-model)) can block a fresh host.
 - **Manual or scripted?**
   - **A scripted opt-in spec under `e2e/agent-testing/`, gated like `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE` (recommended).**
     - Pros: repeatable on every Claude bump (task 6); evidence is exact.
@@ -68,49 +39,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **A manual browser pass.**
     - Pros: fastest to close the item.
     - Cons: not repeatable; the next bump has no check.
-
-### 3. Usage panel on two providers
-
-**Problem.** The usage panel (turns and account windows) has not been seen to survive a reload on any two providers.
-
-**Context.** Needs one profile with two credential sources, for example `claude` and `codex`. OpenCode's Agent Info showed no account windows, so it does not count.
-
-**Investigation.** The usage surfaces are `apps/web/src/components/layout/AgentInfoButton.tsx`, `AgentInfoButton.panels.tsx` and `SystemUsageIndicator.tsx`. Both providers' credential routes into a profile are documented in `docs/development/credentials-and-models.md`.
-
-**Decisions.**
-
-- **Which pair?**
-  - **Claude and Codex (recommended).**
-    - Pros: both report account windows (subscription limits); both credentials are known to exist on the primary macOS host.
-    - Cons: Codex's copied ChatGPT token lapses after about ten days, so the run must follow a host Codex refresh.
-  - **Claude and Cursor or Grok.**
-    - Pros: widens coverage to a less-tested provider.
-    - Cons: unclear whether they report account windows at all; a run that shows none does not count.
-
-### 4. Grok tool output
-
-**Problem.** It is unproven that terminal output from a Grok shell call renders inline and survives a reload.
-
-**Context.** Needs `--credential-source grok --agent-platforms grok`, one prompt that runs a shell command, then a reload. The pin is now Grok 1.0.67 (`docker/Dockerfile:196`, ACP SDK 2.0.1 in `bridges/acp-bridge/package.json:14`).
-
-**Investigation.** The ACP bridge advertises `terminal: true` (`bridges/acp-bridge/src/acp-context.ts:1142`). A tool call's terminal content is rendered from a process-local map: `terminalDisplayOutput` (`bridges/acp-bridge/src/acp-client-methods.ts:46`) is read at normalisation time (`bridges/acp-bridge/src/acp-transcript.ts:222`-`:225`), and the map entry is deleted on `releaseTerminal` (`acp-client-methods.ts:257`) and on close (`:264`). If a `tool_call_update` that names the terminal is normalised after Grok releases it, the card shows `[Terminal <id>]` instead of the output. That ordering is exactly what a live run would expose, so the run is more than a formality.
-
-**Decisions.**
-
-- **What counts as a pass?**
-  - **Output text visible in the card live, after a browser reload, and after a bridge restart (`dev:stop` and `dev:test`) (recommended).**
-    - Pros: the restart case is where the process-local map could lose output.
-    - Cons: a profile restart costs a few minutes.
-  - **Live and after a browser reload only, as the file says.**
-    - Pros: matches the file.
-    - Cons: misses the release-then-normalise race above.
-- **If output is lost, where is it fixed?**
-  - **Copy the output into the tool part when the terminal exits or is released, so normalisation never depends on the map (recommended).**
-    - Pros: makes the transcript the source of truth, in line with `AGENTS.md` invariant 1.
-    - Cons: needs a byte bound per part (invariant 11), already present as `MAX_TOOL_OUTPUT_BYTES`.
-  - **Keep released terminals' output in the map for a while.**
-    - Pros: small change.
-    - Cons: still lost on bridge restart; another bounded cache to size.
 
 ### 5. Codex live and cold row layout
 
@@ -122,13 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Decisions.**
 
-- **How to get the evidence?**
-  - **Record one live sub-agent turn with `CODEX_BRIDGE_RECORD_NOTIFICATIONS` on the current pin, scrub it, and add it as the README's missing fixture (recommended).**
-    - Pros: settles this item and ticks a fixture box; replayable through `replay-recording.ts` for every future bump.
-    - Cons: a recording contains prompts and paths; it must go through `scripts/scrub-codex-recording.ts` and a manual diff read.
-  - **Decide from the existing synthetic fake.**
-    - Pros: no live run.
-    - Cons: the fake was written to the incident's shape, not to 0.164.0's actual stream.
+- **How to get the evidence?** The live sub-agent turn recorded with `CODEX_BRIDGE_RECORD_NOTIFICATIONS` on the current pin is 7568 (0031 task 5), because it spends Codex turns. This task then scrubs it with `scripts/scrub-codex-recording.ts`, reads the diff, and adds it as the fixture README's missing "sub-agent spawn and collaboration" fixture, replayable through `replay-recording.ts`. Deciding from the existing synthetic fake is not enough: it was written to the incident's shape, not to the current pin's stream.
 - **Which layout should win?**
   - **Split the live row when a `subAgentActivity` item follows a finished response, matching cold (recommended).** Only if the recording shows a `tokenUsage` report between them.
     - Pros: one row per model response, as invariant 14 requires; reload no longer reshapes the transcript.
@@ -145,36 +67,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Investigation.** `docs/development/upgrade-agents.md` now has one such rule already: slash commands must be re-qualified for every provider whose pin moved, before the upgrade merges (`:1607`), plus the inactive-path check (`:1602`). So the runbook has started answering this per feature rather than generally. Pins moved for every provider since this file was checked (task 9).
 
-**Decisions.**
-
-- **What should the runbook say?**
-  - **Adopt the file's recommendation as a general rule in `upgrade-agents.md`, with slash commands kept as the one mandatory re-qualification (recommended).**
-    - Pros: bounded cost per bump; consistent with the rule already there; qualified rows that name versions stay honest.
-    - Cons: changelog reading is judgement; a silent behaviour change can slip through.
-  - **Re-run every qualified live spec for the bumped engine.**
-    - Pros: strongest guarantee.
-    - Cons: token cost and time on every bump; agent bumps are frequent.
-  - **No rule; per-file decisions.**
-    - Pros: no runbook change.
-    - Cons: the question keeps resurfacing in each file.
-
-### 7. Credentials and run ownership
-
-**Problem.** It is not recorded which providers have agent-test credentials or who owns the macOS, iOS and two-machine runs, so batching cannot be planned.
-
-**Context.** Known on 2026-10-25: the primary macOS host has OpenCode (`opencode`, `opencode-go`), and earlier runs show Claude and Codex there.
-
-**Investigation.** Agent-test profiles can take Claude, Codex, OpenCode, Cursor, Grok and Pi credentials from the host (`--credential-source`), but nothing in the repository records which host actually holds which login, or who runs each platform batch.
-
-**Decisions.**
-
-- **Where to record it?**
-  - **A short table in this file's Current state (provider, host, credential route, last verified), updated by each run (recommended).**
-    - Pros: next to the batching index that uses it; no secrets, only availability.
-    - Cons: goes stale unless each run updates it.
-  - **In `docs/development/credentials-and-models.md`.**
-    - Pros: a living doc rather than a todo.
-    - Cons: that doc describes routes, not which machine has which login; host-specific facts do not belong there.
+**Decisions.** Which rule to adopt is the maintainer's call and moved to 7568 (0031 task 6) on 2026-11-10, with the options. This task writes the chosen rule into `upgrade-agents.md` and closes the open question below.
 
 ### 8. Scheduled CI for platform runs
 
@@ -221,7 +114,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Added 2026-10-29 by graphs item 209 (`plans/graphs/209-guards-and-enforcement.md`). The credential-free coverage is `apps/backend/src/core/graph-node-agent-guards.test.ts` (a committing reviewer refused at submit and repairing, a commit found at consumption, baseline unavailable, push detection, a tier drop between launch and dispatch), `graph-agent-guards.test.ts`, the protocol's `agent-enforcement.test.ts`, and the Claude, Grok, Codex and Pi bridges' credential-withholding tests. Item 214 added the launch surfaces (`orkestrator graph launch`, "Run graph…", Control MCP `launch_graph`), so a live run can start; a first one was made by hand on 2026-10-29 (below). The coordinator live suite (`apps/desktop/scripts/dev/coordinator-live.ts`) still has no `graph-profiles` scenario; add it there (or a sibling runner) rather than a new harness.
 
-**What remains to run live**, per provider in `COORDINATOR_LIVE_PLATFORMS` (Claude on macOS and on Linux with and without a working bubblewrap, Codex, OpenCode, Cursor, Grok, Pi), on a disposable `dev:test --fixture` profile whose fixture project has a throwaway remote:
+**What the scenario must check**, per provider in `COORDINATOR_LIVE_PLATFORMS` (Claude on macOS and on Linux with and without a working bubblewrap, Codex, OpenCode, Cursor, Grok, Pi), on a disposable `dev:test --fixture` profile whose fixture project has a throwaway remote. Running the remaining live cases with real provider logins (Grok, Cursor, Linux, steps 3 and 4) moved to 7568 (0031 task 10) on 2026-11-10:
 
 1. A `reviewer` node (read-only turn) asked to edit a file, commit and push: the provider's tier is the one the picker showed; an `enforced` provider refuses the write itself; on any provider a change is refused at submit (`worktree_changed`) or fails the activation at consumption with `read-only` evidence; a push fails it with `remote-ref` evidence.
 2. A `builder` node asked to commit (allowed) and push (refused or detected): the run branch on the remote is unchanged unless a system node pushed.
@@ -422,25 +315,12 @@ evidence. This file only points at it.
   their sources held `{"id":"gpt-5.6-luna","providerID":"opencode-go"}`. The
   fork still showed the source's model and reasoning, so the fallback (#975)
   is what carries it.
-- **Runtime drift and advisories.** On two platforms, the Agent Info runtime
-  section shows drift counters and an advisory notice, and both rehydrate after
-  a reload. Still owed (2026-10-25): a manual pass in a `dev:test --fixture`
-  profile on macOS and on Linux (for example over ssh on a Linux node, leaving
-  its configuration as found), each with a provider whose bridge reports
-  unrecognised events (the OpenCode run above showed "1 event this bridge did
-  not recognise: server.heartbeat" in Agent Info, which is one such counter).
 - **Transcript part coverage.** Drive a compaction (Claude or Pi), an image
   round trip and a long-running tool. Switch tabs, let the turn finish in the
   inactive environment, then return and reload. The compaction, retry, status
-  and image parts must render from the snapshot. Still owed: a Claude or Pi
-  profile (`--credential-source claude --agent-platforms claude`) and a
-  manual or scripted browser pass; the OpenCode run above covers OpenCode's
-  compaction part only.
-- **Usage panel.** On two providers, the usage panel shows turns and account
-  windows and keeps them across a reload. Still owed: one profile with two
-  credential sources (for example `claude` and `codex`). The OpenCode runs
-  above checked Agent Info's token usage only; their Agent Info snapshot
-  showed no account windows, so they do not count as one of the two.
+  and image parts must render from the snapshot. Still owed: the scripted
+  opt-in spec (task 2); its run on a Claude profile is in the manual-test
+  checklist. The OpenCode run above covers OpenCode's compaction part only.
 - ~~**OpenCode inactive path.**~~ Done 2026-10-25 (behaviour). The live
   spec's native-tab case starts a turn, switches to another environment,
   waits for the backend projection to settle with no UI mounted, returns,
@@ -450,12 +330,8 @@ evidence. This file only points at it.
   to be compared with (the pre-SSE code) no longer exists (decision 4).
 - **Graph capability profiles.** Graph agent nodes' tiers, guards and
   withheld GitHub credential on each live provider; see task 10 above. Still
-  owed (2026-10-29): everything, once item 214's launch surface exists.
-- **Grok tool output.** Terminal output from a Grok shell call renders inline
-  and survives a reload. The upgrade runbook already covers the argv and
-  handshake check for each Grok bump. Still owed: a profile with
-  `--credential-source grok --agent-platforms grok`, one prompt that runs a
-  shell command, then a reload.
+  owed: the `graph-profiles` scenario (task 10); the remaining live runs are
+  in the manual-test checklist.
 
 ### Qualification: batching index
 
@@ -464,11 +340,11 @@ Platform runs, and the todo files with items for each:
 | Run | Items in |
 | --- | --- |
 | macOS host with Docker Desktop (Apple Silicon) | [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0022-container-resource-budgets-and-performance.md](../containers-and-environments/0022-container-resource-budgets-and-performance.md), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md), [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md) |
-| Real Electron window (`mise run test:agent:electron` or a manual pass) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0029-multi-review-flow-graph.md](../coordinator-and-multi-review/0029-multi-review-flow-graph.md) |
+| Real Electron window (`mise run test:agent:electron` or a manual pass) | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
 | Docker live suites and `mise run test:agent:docker` | [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [7548-rootless-gvisor-tap-vsock-host-loopback.md](../containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md), [7549-rootless-docker-cp-refusals.md](../containers-and-environments/7549-rootless-docker-cp-refusals.md), [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md) |
 | Rootless Docker Engine, arm64 live suites, registry pulls | [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md), [0022-container-resource-budgets-and-performance.md](../containers-and-environments/0022-container-resource-budgets-and-performance.md) |
 | Two machines or a remote backend | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0052-remote-client-bandwidth.md](../transcripts-and-observation/0052-remote-client-bandwidth.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md) |
-| Firefox, Safari, iOS device or simulator, narrow real browser | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0046-embedded-service-previews.md](../previews-and-annotations/0046-embedded-service-previews.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0035-mobile-layout-gaps.md](0035-mobile-layout-gaps.md), [0029-multi-review-flow-graph.md](../coordinator-and-multi-review/0029-multi-review-flow-graph.md), [0860-multi-review-inspector-webkit-divergences.md](../coordinator-and-multi-review/0860-multi-review-inspector-webkit-divergences.md) |
+| Firefox, Safari, iOS device or simulator, narrow real browser | [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md), [0046-embedded-service-previews.md](../previews-and-annotations/0046-embedded-service-previews.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), to-do 0035 (retired 2026-11-10; its iOS run is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting)), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)), to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)) |
 | Live GitHub (`gh` against a real repository) | [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md) |
 | Stock Linux desktops with AppArmor or SELinux (Ubuntu 24.04 and 26.04; Debian and Fedora optional, best effort); Docker containers done 2026-11-10 (0145 task 4) | [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md), [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md), [0190-claude-read-only-turns-without-working-sandbox.md](../agent-engines/0190-claude-read-only-turns-without-working-sandbox.md) |
 
@@ -480,9 +356,9 @@ Provider runs (credentials needed). Every provider also has items in [0049-nativ
 | Codex | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0036-design-canvas-qualification.md](../design-canvas/0036-design-canvas-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
 | OpenCode | [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md) |
 | Cursor | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0005-mid-turn-steer-and-interrupt.md](../agent-engines/0005-mid-turn-steer-and-interrupt.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0004-composer-model-parameters.md](../agent-engines/0004-composer-model-parameters.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
-| Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the tool-output check above, [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
+| Grok | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0039-mcp-management.md](../mcp/0039-mcp-management.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0007-provider-sdk-adoption-backlog.md](../agent-engines/0007-provider-sdk-adoption-backlog.md), the Grok tool-output check (manual-test checklist, 0031 task 4), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
 | Pi | [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md), [0001-agent-interactions-and-permissions.md](../agent-engines/0001-agent-interactions-and-permissions.md), [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md), [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md), [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md), [0223-provider-non-delivery-proof.md](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) |
-| Several providers at once (mixed panels) | [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md), [0025-multi-review-panel-value.md](../coordinator-and-multi-review/0025-multi-review-panel-value.md), [0029-multi-review-flow-graph.md](../coordinator-and-multi-review/0029-multi-review-flow-graph.md) |
+| Several providers at once (mixed panels) | [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md), [0025-multi-review-panel-value.md](../coordinator-and-multi-review/0025-multi-review-panel-value.md), to-do 0029 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#the-multi-review-graph)) |
 
 ## Constraints and rationale
 
@@ -756,18 +632,6 @@ did; it was rerun on Sonnet).
 
 ## Open questions
 
-- Should a provider that is qualified for a feature be re-qualified after
-  every agent SDK or CLI upgrade? [`upgrade-agents.md`](../../development/upgrade-agents.md)
-  has the bump runbook but no rule for this. The CLI, slash-command and MCP
-  todo files each raise the same question. Recommendation (2026-10-25): no
-  blanket re-run; on a bump, re-run only the opt-in live specs for the bumped
-  engine (for OpenCode, `opencode-live.spec.ts`), and re-qualify a feature
-  only when the bump's changelog touches its surface. Left open because it
-  changes the upgrade runbook's cost, which is the maintainer's call.
-- Which providers have credentials available for agent-test profiles, and who
-  owns the macOS, iOS and two-machine runs? Known 2026-10-25: the primary
-  macOS host has OpenCode (`opencode`, `opencode-go`) and ran this file's
-  OpenCode and Electron checks; earlier runs show Claude and Codex there too.
 - Should any of these runs become a scheduled CI job, such as Docker live
   suites on a Docker-capable runner or a macOS runner for Electron?
   Recommendation: the credential-free Electron suite first
@@ -797,6 +661,7 @@ did; it was rerun on Sonnet).
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md) for CI gates and
   slow or flaky suites.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10.
 - [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window) for
   old-client and old-bridge runs.
 - [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration)

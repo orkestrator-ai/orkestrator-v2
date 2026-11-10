@@ -9,7 +9,7 @@ run 2026-11-10 against `main` at `c98b20e6f`.
 
 1. **Code items 1-3 (probe, user guidance, interactive refusal)**: the nested-namespace probe, the reason naming the remedy, and the bridge's up-front refusal. Status: done.
 2. **Paired AppArmor CI qualification**: restricted and remediated phases on an Ubuntu 26.04 runner. Status: done.
-3. **Stock AppArmor desktops, live**: Ubuntu 24.04 and 26.04 desktops, with and without the profile change, including the Agent Info tier. Status: blocked (no such desktop available).
+3. **Stock AppArmor desktops, live**: Ubuntu 24.04's probe and CLI answer, with and without the profile change, from a CI job on `ubuntu-24.04` (the recommended route below). Status: open. The graphical half (the picker reason and the Agent Info tier on a stock desktop) moved to 7568 on 2026-11-10.
 4. **Other platforms**: Debian with AppArmor, Fedora (SELinux) and Docker containers, from "Needs verification". Status: done (Docker containers probed with `docker exec` in a real environment container on 2026-11-10: `missing-programs`, and the container's own bridge refuses a provider-sandbox prompt with 422; Debian and Fedora stay optional, best-effort entries in 0031 and do not gate this file, as decided below).
 5. **CLI nested-namespace setting**: the open question, whether a newer CLI drops the nesting or offers a setting that avoids it. Status: deferred (re-checked on every Claude bump).
 
@@ -58,6 +58,8 @@ run 2026-11-10 against `main` at `c98b20e6f`.
   - **A disposable Ubuntu 24.04 desktop VM, or a second CI job on `ubuntu-24.04` for the probe and CLI half (recommended).**
     - Pros: a CI job needs no hardware and gives repeatable evidence for 24.04's probe answer.
     - Cons: CI gives no graphical check; the VM still needs someone to drive it.
+    - Split on 2026-11-10: the CI job is this task; the graphical check on a
+      stock desktop is in 7568.
   - **Wait for a contributor with a stock Ubuntu desktop.**
     - Pros: a real user setup.
     - Cons: no date; the file stays open indefinitely.
@@ -267,22 +269,18 @@ the pinned CLI 2.1.309 on macOS and on `omarchy-hp`.
   bridge refused a provider-sandbox prompt with 422 before journaling. With
   the packages added, Docker's default seccomp and masked `/proc` still refuse
   bubblewrap. See task 4.
-- [ ] **Stock AppArmor desktops, live.** Run the coordinator sandbox
-  qualification on a stock Ubuntu 24.04 host and a stock 26.04 desktop, with
-  and without the profile change, and record the tier Agent Info shows. Not
-  run on a desktop: no such desktop is available here, and `omarchy-hp` has no
-  AppArmor
+- [ ] **Stock AppArmor Ubuntu 24.04, probe and CLI.** Run steps 1 and 3
+  below in a CI job on `ubuntu-24.04`, paired like the 26.04 phases, and
+  record 24.04's probe answer here. Step 2 (the picker and Agent Info on a
+  stock desktop) moved to 7568 on 2026-11-10. `omarchy-hp` has no AppArmor
   (`/sys/kernel/security/lsm` lists none) and must not be changed. How:
   1. On the stock host, from a checkout of this branch,
      `bun test --cwd packages/protocol --preload ../../tests/setup-node.ts ./src/node/claude-linux-sandbox.test.ts`
      and a one-line script printing `probeClaudeLinuxSandbox()`: expect
      `nested-user-namespace` with `bwrap-userns-restrict` in the reason (if
      24.04 answers `available`, also run step 3 to check it really works).
-  2. Start Orkestrator there and open the coordinator picker: Claude shows
-     `provider-configured` with that reason; a coordinator turn runs
-     `cat`/`rg` successfully with the hook as boundary. An interactive Claude
-     session with **Settings → Execution policy** sandbox `provider` fails its
-     first prompt with the same reason.
+  2. (Moved to 7568: the coordinator picker, a coordinator turn and an
+     interactive provider-sandbox session on a stock desktop.)
   3. Apply the CI change (`.github/workflows/ci.yml`) or a local profile, wait
      5 minutes or restart, and expect `enforced`, the coordinator turn's
      `printf x > out.txt` refused under bubblewrap, and the live suite
@@ -480,6 +478,7 @@ a graphical desktop inspection remains in the checklist above.
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)
   task 9: the provider sandbox on a real CLI, Linux half run on a host where
   this probe answers `available`.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the graphical desktop half of task 3) moved there on 2026-11-10.
 
 ## Replaces
 

@@ -6,19 +6,8 @@ Tasks 2 and 3 worked on 2026-11-09 against main at `c6de4733c5beb87a578f82a85487
 
 ### Tasks
 
-1. Qualify a real Tailscale-address gateway: open.
 2. Qualify rootless host loopback with a positive control: done (2026-11-09).
-3. Extend the remaining Linux platform matrix: open. A firewall-less rootful daemon (nested in a disposable rootless one) and a workload firewall (a gateway-less variant of the current image) were run on 2026-11-09. Still open: a bare-metal rootful host with no firewall, a historical image built before the gateway, and arm64.
-
-### 1. Qualify a real Tailscale-address gateway
-
-**Problem.** The Linux run used a Tailscale-address stand-in and a TCP connection to Serve, leaving the real authenticated gateway on that address untested after security report 0260 was deleted.
-
-**Context.** The [qualification record](../../development/container-qualification.md#gateway-reach-and-project-seed-files-on-linux-engine-2026-11-05) records restricted firewall refusals before a listener, but no real gateway response at the Tailscale address. This is a remaining qualification check, not evidence of a firewall defect.
-
-**Investigation.** Use a disposable profile with its discovered ports, bind its real gateway to the test host's Tailscale address, and compare restricted and full containers on rootful and rootless Linux. Record transport reach and the unauthenticated gateway response separately, with firewall counters and a reachable control. Do not use a production gateway or record credentials.
-
-**Decisions.** Run the real gateway check (recommended): pros are closing the listener and authentication evidence gap; cons are needing a suitable tailnet host and disposable stack. Accept the stand-in as final evidence: pros are avoiding another live run; cons are leaving the actual gateway path unqualified.
+3. Extend the remaining Linux platform matrix: open. A firewall-less rootful daemon (nested in a disposable rootless one) and a workload firewall (a gateway-less variant of the current image) were run on 2026-11-09. Still open here: a historical image built before the gateway. The bare-metal rootful host with no firewall and the arm64 host moved to the manual-test checklist (7568).
 
 ### 2. Qualify rootless host loopback with a positive control
 
@@ -34,13 +23,13 @@ Tasks 2 and 3 worked on 2026-11-09 against main at `c6de4733c5beb87a578f82a85487
 
 ### 3. Extend the remaining Linux platform matrix
 
-**Problem.** Rootful full mode without a host firewall, older images with an in-container firewall, and arm64 remain outside the recorded run.
+**Problem.** Older images with an in-container firewall remain outside the recorded run. (Rootful full mode on a bare-metal host without a firewall, and arm64, also remain; they need hosts the fleet lacks and are in the manual-test checklist, 7568.)
 
 **Context.** The existing rootful full-mode probes were blocked by ufw, which the ticket required leaving enabled. The tested restricted images used an egress gateway, and the host was x86_64.
 
-**Investigation.** Run the same restricted/full comparison on suitable disposable hosts and supported images, recording exact image capabilities, architecture, host firewall state and cleanup. For older images, distinguish runtime-root control of an in-container firewall from the egress-gateway boundary.
+**Investigation.** Run the same restricted/full comparison with a supported image built before the gateway, on a disposable daemon, recording exact image capabilities, architecture, host firewall state and cleanup. For older images, distinguish runtime-root control of an in-container firewall from the egress-gateway boundary.
 
-**Decisions.** Keep these as explicit open matrix checks (recommended): pros are preserving scope and avoiding changes to the shared firewall; cons are needing additional hosts and images. Treat the current matrix as universal: pros are no additional runs; cons are unsupported security claims.
+**Decisions.** Keep this as an explicit open matrix check (recommended): pros are preserving scope and avoiding changes to the shared firewall; cons are needing an older image. Treat the current matrix as universal: pros are no additional runs; cons are unsupported security claims.
 
 **Outcome so far (2026-11-09).** Two of the three parts ran on beelink2. Details are in the [qualification record](../../development/container-qualification.md#host-loopback-rootful-reach-and-workload-firewalls-on-linux-engine-2026-11-09).
 
@@ -49,9 +38,9 @@ Tasks 2 and 3 worked on 2026-11-09 against main at `c6de4733c5beb87a578f82a85487
 
 Still open, and why:
 
-- **A bare-metal rootful host with no firewall.** beelink2's rootful daemon is not usable by the build user (not in the `docker` group, no sudo) and runs ufw, which must stay on. The nested daemon has the same bridge and NAT rules, but it runs in RootlessKit's user namespace, and its "host" is the outer container. Run `container-live-rootful-host-reach.test.ts` with `ORKESTRATOR_LIVE_HOST_FIREWALL=none` on a disposable rootful host whose firewall is off.
-- **A historical image.** The variant shares the current firewall scripts, so it shows how the backend places and runs a workload firewall. It does not show whether an image built before the gateway (policy 1 or 2 scripts) behaves the same. That needs an older image tag.
-- **arm64.** beelink2 is x86_64. Emulated arm64 (binfmt is registered here) is not a qualification of an arm64 host's kernel and iptables. Needs an arm64 Linux host.
+- **A historical image.** The variant shares the current firewall scripts, so it shows how the backend places and runs a workload firewall. It does not show whether an image built before the gateway (policy 1 or 2 scripts) behaves the same. That needs an older image tag, or an image built from a commit before the gateway.
+
+The bare-metal rootful host with no firewall (beelink2's rootful daemon is out of the build user's reach and runs ufw, which must stay on) and an arm64 Linux host (emulated arm64 is not a qualification of an arm64 kernel and iptables) moved to the manual-test checklist (7568).
 
 ## Assumptions and decisions
 
@@ -81,19 +70,20 @@ Restricted firewalls fail closed without GitHub's ranges. This host's address ha
 
 ## Current state
 
-The 2026-11-05 rootful and rootless observations stand. On 2026-11-09 the rootless daemon with host loopback enabled was qualified with a positive control (task 2), and the workload-firewall path and a nested firewall-less rootful daemon were run (task 3). Task 1 and the remaining parts of task 3 need hosts or images this node does not have.
+The 2026-11-05 rootful and rootless observations stand. On 2026-11-09 the rootless daemon with host loopback enabled was qualified with a positive control (task 2), and the workload-firewall path and a nested firewall-less rootful daemon were run (task 3). The historical-image part of task 3 remains here; task 1 and task 3's bare-metal rootful and arm64 parts need hosts the fleet lacks and moved to the manual-test checklist (7568).
 
 ## Needs verification
 
-- Task 1 (a real gateway on a Tailscale address) and the open parts of task 3. Record results in the qualification record and update task statuses here after each run.
+- Task 3's historical image. Record results in the qualification record and update the task status here after the run.
 
 ## Related
 
 - [Gateway security notes](../../architecture/remote-gateway.md#security-notes)
-- [Shipping Safari checks](5500-shipping-safari-gateway-security-checks.md)
+- Shipping Safari checks: to-do 5500 (retired 2026-11-10); see the [gateway security notes](../../architecture/remote-gateway.md#security-notes).
 - [Preview rollout](0042-service-preview-rollout.md)
 - [Rootless agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)
 - [Rootless gvisor-tap-vsock host loopback](../containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the bare-metal rootful and arm64 parts of task 3) moved there on 2026-11-10.
 
 ## Replaces
 

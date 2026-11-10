@@ -251,6 +251,16 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   run their backends with the boot probe off, so a new `…/temporary` leak
   points at a harness that does not.
 
+  The sweep also requires the `host-reachability-probe` role label and a name
+  of the exact form `ork-<16 hex>-reach-probe-net`, and keeps any network
+  Docker cannot answer about. On a shared daemon it removes networks other
+  runs created, so running it is the host owner's decision: an agent or
+  harness removes only what it created itself (by its owner label) or what its
+  own owner's reaper finds, and runs the sweep only with the owner's explicit
+  go-ahead. While the pools are full, the shim for manual container profiles
+  in [container qualification](container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)
+  gives a profile's own networks explicit subnets.
+
 ## Commands
 
 ```bash

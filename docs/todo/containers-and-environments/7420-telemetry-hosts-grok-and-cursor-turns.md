@@ -12,8 +12,7 @@ turns against a fake provider without them
 
 1. **Run a Grok turn without the telemetry hosts**: a Grok Build turn in a restricted container with the three hosts refused, against a fake provider. Status: done. (Review follow-up, 2026-11-06.)
 2. **Settle Cursor without a turn or with a real one**: decide whether the static evidence is enough for the Cursor SDK, or run one real turn. Status: open.
-3. **Say so in the next release notes**: new installs no longer allow the three hosts; stored lists keep them. Status: open.
-4. **Record native arm64 qualification**: capture the telemetry-host suite result on the workflow's linux-arm64 runner. Status: open.
+4. **Record native arm64 qualification**: capture the telemetry-host suite result on the workflow's linux-arm64 runner. Status: blocked (waits on a Container live qualification run on linux-arm64).
 
 ### 1. Run a Grok turn without the telemetry hosts
 
@@ -74,28 +73,6 @@ hosts (`AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor`) were changed.
     - Pros: observed behaviour.
     - Cons: a billed turn and the user's Cursor login.
 
-### 3. Say so in the next release notes
-
-**Problem.** A stored allowlist is never changed to match a new default, so
-existing installs keep the three hosts until their users remove them, and
-nothing tells them they can.
-
-**Context.** To-do 6100 task 2 changed only `DEFAULT_ALLOWED_DOMAINS` and the
-generated image fallback (`docker/default-allowed-domains`). Release notes are
-written when a release is cut; this repository keeps no unreleased-notes file.
-
-**Investigation.** Nothing written yet.
-
-**Decisions.**
-
-- **What do existing installs get?**
-  - **A release-note line only (recommended).** "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi and Grok completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel."
-    - Pros: matches the rule that a stored list is never narrowed behind the user.
-    - Cons: the channel stays open on installs whose users do not read the notes.
-  - **Remove them from stored lists on upgrade.**
-    - Pros: closes the channel everywhere.
-    - Cons: edits the user's own list, which nothing else does; a user who added them on purpose loses them.
-
 ### 4. Record native arm64 qualification
 
 **Problem.** The telemetry-host suite is scheduled on both Linux architectures,
@@ -143,3 +120,4 @@ nor CI configuration is substituted for an observed arm64 pass.
 
 - [6101](6101-egress-name-checks-platform-coverage.md), [6102](6102-egress-name-check-residual-channels.md)
 - Security report, M12 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the release-note line for existing installs) moved there on 2026-11-10.

@@ -8,8 +8,8 @@ the data directory on Pi and OpenCode but could not on Grok.
 
 ### Tasks
 
-1. **Find whether Grok's reads ask permission**: probe Grok's read, search and list tools under the read-only profile. Status: open (needs a Grok login).
-2. **Refuse data-directory reads where Grok asks**: add the path check to the bridge's permission answer for read calls, if task 1 shows Grok asks. Status: open (depends on 1).
+1. **Find whether Grok's reads ask permission**: extend the Grok probe so one signed-in run answers it (Grok's read, search and list tools under the read-only profile). Running the probe needs a Grok login and moved to the manual-test checklist. Status: open.
+2. **Refuse data-directory reads where Grok asks**: add the path check to the bridge's permission answer for read calls, if task 1's probe run shows Grok asks. Status: blocked (waits on 7568: 7401 task 1 probe run).
 
 ### 1. Find whether Grok's reads ask permission
 
@@ -30,7 +30,8 @@ check is `@orkestrator/protocol/node/coordinator-read-boundary`.
 signed out on the qualifying hosts
 ([0024](0024-coordinator-live-conformance.md) task 1), so no probe was run.
 `scripts/coordinator-probes/grok-web-tools-probe.mjs coordinator` is the
-existing probe to extend.
+existing probe to extend. Extending it is agent work; running it signed in is on
+the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 **Decisions.**
 
@@ -50,7 +51,7 @@ the data directory, the way it already refuses MCP calls with `reject_once`.
 **Context.** Permission answers are built in `acp-session.ts`; a refusal ends
 Grok's turn, which `POLICY_DENIAL_CONTINUATION` (`acp-prompt.ts`) resumes.
 
-**Investigation.** Depends on task 1.
+**Investigation.** Depends on task 1's probe run (on the manual-test checklist).
 
 **Decisions.**
 
@@ -66,3 +67,4 @@ Grok's turn, which `POLICY_DENIAL_CONTINUATION` (`acp-prompt.ts`) resumes.
 
 - [6080](6080-x1-coordinator-trust-boundary-follow-ups.md) task 3
 - [0024](0024-coordinator-live-conformance.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: running the Grok probe signed in) moved there on 2026-11-10.

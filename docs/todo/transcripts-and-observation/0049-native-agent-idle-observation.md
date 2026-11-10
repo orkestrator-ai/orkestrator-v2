@@ -15,12 +15,12 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 ag
 4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to 7530, closed 2026-11-10: the MCP section's tool order moved; a rerun read 0 invalidations and 8.4 reads a minute, see [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round)).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: done (2026-11-10, loopback model through a custom OpenCode provider: an idle OpenCode view read 8 times a minute over 300 s with no invalidation of any cause, so nothing is left to attribute).
-7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: partly done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to 7540, closed 2026-11-10: the full 630 s wait now passes, see `bridges/pi-bridge/AGENTS.md`); Grok blocked (needs a Grok login; no loopback model reaches it).
-8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); OpenCode open (2026-11-10, loopback model: the case ran, but the scripted model reuses Pi's script, which has no background call, so the command ran in the foreground; it needs a scripted background call, if OpenCode 1.19.5's `bash` offers one); Cursor open (no loopback model reaches it).
+7. **Pi rerun**: Pi was skipped as signed out on 2026-10-21. Status: done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to 7540, closed 2026-11-10: the full 630 s wait now passes, see `bridges/pi-bridge/AGENTS.md`). The Grok rerun needs a Grok login (no loopback model reaches it) and moved to 7568 on 2026-11-10.
+8. **Unexercised cases**: Codex sub-agents, and background shells on Codex and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); OpenCode open (2026-11-10, loopback model: the case ran, but the scripted model reuses Pi's script, which has no background call, so the command ran in the foreground; it needs a scripted background call, if OpenCode 1.19.5's `bash` offers one). The Cursor background shell needs a Cursor login (no loopback model reaches it) and moved to 7568 on 2026-11-10.
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
 
-All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Live cases run between the 2026-10-24 marker change and [0199](0199-idle-observation-spec-sidebar-probe.md)'s 2026-10-28 probe fix are blind on the sidebar, because the probe read `unknown`. The 2026-10-23 sidebar timings predate that change and are valid. The fixed probe reads the marker's `data-state`; the 2026-10-28 review qualification below confirms real working/idle transitions and missed-final recovery on Claude and Codex. Other outstanding live cases remain open.
+All five code items match HEAD. The only later changes in this area are refactors (#1180, #1284) and #1298's stopped-runtime fencing in `native-agent-launch-activity-reconciler.ts`; no behaviour described here moved. 0048 hands its live-provider task to this file. Live cases run between the 2026-10-24 marker change and the 2026-10-28 probe fix (to-do 0199, retired 2026-11-10; see [agent-testing.md](../../development/agent-testing.md#manual-browser-qa)) are blind on the sidebar, because the probe read `unknown`. The 2026-10-23 sidebar timings predate that change and are valid. The fixed probe reads the marker's `data-state`; the 2026-10-28 review qualification below confirms real working/idle transitions and missed-final recovery on Claude and Codex. Other outstanding live cases remain open.
 
 ### Sidebar-probe qualification, 2026-10-28
 
@@ -342,9 +342,9 @@ attribute did not occur. One sample on a loopback model; real-provider
 latency is not part of it. Every other case also ran (see "OpenCode live
 check (2026-11-10, loopback model)"); no defect found.
 
-### 7. Grok and Pi rerun
+### 7. Pi rerun
 
-**Problem.** Grok and Pi have no idle-observation evidence at all, yet both have client quiet backoff on by default (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`).
+**Problem.** Pi had no idle-observation evidence at all, yet both have client quiet backoff on by default (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`).
 
 **Context.** Both were `needs-auth` on 2026-10-21. Their bridges have no event stream (`idleBackoffWakeup: null`, `native-agent-observation.ts:204` for Pi and `:219` for Grok), so the backend keeps every sweep (D6).
 
@@ -386,12 +386,12 @@ D21), so no login and no host `~/.pi` was involved, and the session reported
   (7540, closed 2026-11-10: reads no longer refresh the idle clock, and the
   same 630 s wait passed on 2026-11-10).
 
-Grok stays blocked: it needs a Grok login, which this change may not use, and
-no loopback model reaches it.
+The Grok rerun needs a Grok login and no loopback model reaches it; it moved
+to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 
 ### 8. Unexercised cases
 
-**Problem.** Codex sub-agents and background shells on Codex, Cursor and OpenCode have never produced evidence, because the models chose not to use the tool.
+**Problem.** Codex sub-agents and background shells on Codex and OpenCode had never produced evidence, because the models chose not to use the tool.
 
 **Context.** The separate live sub-agent card run is in 0031. Cursor reports `ask` as auto-approval, so its approval case cannot park.
 
@@ -413,9 +413,10 @@ choice is no longer the model's, so the Codex half is done: sub-agents passed
 which found 7522, fixed on 2026-11-10). The
 scripted Codex call had to name the tool's namespace: `spawn_agent` and
 `wait_agent` live in `collaboration`, and Codex answers a bare name with
-"unsupported call". Cursor and OpenCode stay open. Cursor's SDK talks to
-Cursor's own service, which has no loopback stand-in; OpenCode has no fake
-provider wired in (task 6).
+"unsupported call". OpenCode stayed open (no fake provider was wired in yet,
+task 6). The Cursor half moved to
+[7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10: Cursor's
+SDK talks to Cursor's own service, which has no loopback stand-in.
 
 **OpenCode (2026-11-10, loopback model).** OpenCode now runs on the
 loopback model (task 6), and its `background` case ran, but it recorded
@@ -749,8 +750,7 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   command card (7522) on 2026-11-10, and the discovery renewals that wake an idle
   Codex view (7530, closed 2026-11-10). These are loopback-model runs; a real model's own choices
   (and a real provider's latency) are not part of them.
-- Grok: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once a Grok
-  login is available; no loopback model reaches Grok. Pi ran on a loopback
+- Pi ran on a loopback
   model on 2026-11-06 (task 7), and OpenCode on 2026-11-10 (task 6): every
   OpenCode case passed except `subagents`, `background` (both
   not exercised: the scripted model has no call for them) and `detach`
@@ -760,9 +760,9 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   background shell ran with scripted tool calls on 2026-11-06 (task 8; the
   separate live sub-agent card run is in
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)).
-  Background shells on Cursor and OpenCode are still unexercised (each ran the
-  command in the foreground on 2026-10-21; Cursor has no loopback model, and
-  OpenCode's loopback fake from 2026-11-10 has no background call yet). Cursor's approval case ran under an `approvals: "ask"`
+  The OpenCode background shell is still unexercised (it ran the command in
+  the foreground on 2026-10-21, and OpenCode's loopback fake from 2026-11-10
+  has no background call yet). Cursor's approval case ran under an `approvals: "ask"`
   policy and still ran the command without asking, which is the documented
   Cursor mapping (it reports `ask` as the auto-approval it runs).
 - Completion with no renderer was observed for a local environment only; the
@@ -1466,6 +1466,10 @@ would widen a deliberate allowlist without a product decision.
   The step label on the event-snapshot section was dropped and the capability
   matrix now has a table in `../architecture/agent-engines.md` ("Activity
   observation"), as the 2026-10-21 drift notes asked.
+
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the
+  human-only parts of this to-do (the Grok half of task 7, the Cursor half of
+  task 8) moved there on 2026-11-10.
 
 ## Replaces
 

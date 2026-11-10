@@ -8,9 +8,9 @@ Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. Re-checke
 
 1. **Decide whether the small projection scans matter**: from part 0380, task 1. Status: done (2026-11-05): closed without a change; each scan is under 0.1% of a changed read. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
 2. **Measure what E11 saves on a changed read**: from the "Needs verification" of parts 0210, 0220, 0330 and 0350. Status: done (2026-11-05): 38–53% less CPU per changed progressive read. The legacy commit was 39% slower, which is now fixed. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); follow-ups 6860 and 6861 were done 2026-11-10 (legacy response left unspliced, preview fill check memoised; see "Response encoding" and "Incomplete previews and exact recovery" in [native-transcripts.md](../../architecture/native-transcripts.md)), with [7553](7553-transcript-splice-slower-on-large-rows.md) as their follow-up.
-3. **How often a part-trimmed head streams, and whether one second suits it**: from part 0320's "Needs verification". Status: open.
+3. **Whether one second suits a part-trimmed head while it streams**: from part 0320's "Needs verification". Count recovery reads per streaming turn and watch the view on a loopback-model `dev:test` profile with a scripted head row over 512 KiB. How often real sessions are in that state is on the manual-test checklist (7568: 6260 task 3). Status: open.
 
-### 3. How often a part-trimmed head streams, and whether one second suits it
+### 3. Whether one second suits a part-trimmed head while it streams
 
 **Problem.** Part 0320 limited exact head-row recovery to one provider read a second per view (`PROGRESSIVE_HYDRATION_SETTLE_MS`). How often a session streams with a part-trimmed head (one row larger than the 512 KiB window) is unknown, so the saving is unmeasured, and the interval has not been seen on a real streaming turn.
 
@@ -23,16 +23,16 @@ The changed-read benchmark written for tasks 1 and 2 (`scripts/benchmark-transcr
 **Decisions.**
 
 - **How to find out?**
-  - **Count recovery reads per streaming turn on a long Codex turn in an isolated `dev:test` profile, and watch the view (recommended).**
-    - Pros: shows both the rate and what a user sees.
-    - Cons: needs a real provider turn that produces a head row over 512 KiB.
+  - **Count recovery reads per streaming turn on a scripted loopback-model turn whose head row is over 512 KiB, in an isolated `dev:test` profile (the loopback-model spec of [6680](6680-conditional-reads-and-deltas-measured.md) task 1), and watch the view (recommended).**
+    - Pros: shows what a user sees through the profile's real renderer, backend and bridge, with no billed turn.
+    - Cons: shows the interval working, not how often real sessions hit it; that rate needs a real long provider turn or real use (manual-test checklist, 7568: 6260 task 3).
   - **Add a content-free counter of recovery reads and of tokens that superseded a pending one.**
     - Pros: a lasting rate on any machine; the benchmark's provider fake could drive its test.
     - Cons: a new metric for a rare path.
 
 ## Current state
 
-E11 is built, measured and profiled. Its changed progressive reads cost about half the CPU they did before. The legacy commit now fingerprints row fingerprints rather than every row's JSON, after the measurement showed it had become slower than before E11. The three small scans stay as they are. Only task 3 is left.
+E11 is built, measured and profiled. Its changed progressive reads cost about half the CPU they did before. The legacy commit now fingerprints row fingerprints rather than every row's JSON, after the measurement showed it had become slower than before E11. The three small scans stay as they are. Only task 3's loopback-model check is left here.
 
 ## Assumptions and decisions
 
@@ -54,7 +54,8 @@ The benchmark is committed as `scripts/benchmark-transcript-changed-read.ts`, be
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 3: how often a part-trimmed head streams on a real long provider turn) moved there on 2026-11-10.
 - Efficiency outcome, closing check and measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1 and 5
+- to-do 1202 efficiency follow-ups, tasks 1 and 5 (retired 2026-11-10)
 - 6860 and 6861 (done 2026-11-10, deleted): costs the measurement found that E11 left; [7553](7553-transcript-splice-slower-on-large-rows.md) followed from them
 - [5340](5340-transcript-reads-live-evidence.md): E9's live evidence, which a live run for task 3 can collect too

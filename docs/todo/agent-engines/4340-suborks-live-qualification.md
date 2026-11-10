@@ -6,13 +6,10 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 ### Tasks
 
-1. **Live six-provider sweep**: run `/subork` end to end on every provider, as a caller and as a target. Status: open.
-2. **Plain-text form**: check that models call `ask_agents` when asked in plain words. Status: open.
-3. **Container run**: repeat one sweep in a container environment. Status: open.
-4. **Backend restart with real turns**: kill the backend mid-subork and confirm delivery. Status: open.
+1. **Live six-provider sweep**: write the opt-in live spec (recommended below) that runs `/subork` end to end on every provider, as a caller and as a target, on a host or a container environment, skipped unless its switch is set. Running it on real logins is in the manual-test checklist (7568, 4340 task 1). Status: open.
+2. **Plain-text form**: if the live check (7568, 4340 task 2) shows a provider answering a plain-words request with its own sub-agents instead of `ask_agents`, sharpen the tool description. Status: blocked (waits on 7568: 4340 task 2).
+4. **Backend restart with real turns**: write the opt-in restart spec, following `goals-restart-live.spec.ts`, that kills the backend mid-subork and confirms delivery. Running it on real logins is in the manual-test checklist (7568, 4340 task 4). Status: open.
 5. **Electron agent suite on a quiet host**: rerun `test:agent:electron` for this branch where Docker is not churning the host's interfaces. Status: open.
-6. **Coordinator conversations**: run `/subork` from a main and a side coordinator conversation on real agents. Status: open.
-7. **Read-only guard on a real Grok subork**: confirm a Grok subork that writes is refused at submit and failed at consumption. Status: open.
 
 ### 1. Live six-provider sweep
 
@@ -38,16 +35,6 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 - Sharpen the tool description first (recommended). Pros: the same text on every provider, in keeping with the design. Cons: may not be enough for every model.
 - Add a line to that provider's system instructions. Pros: stronger. Cons: per-provider divergence, which the design avoids.
 
-### 3. Container run
-
-**Problem.** A container environment's path differs in the bridge connection and tool reachability, and has only been exercised with a recorded target.
-
-**Context.** `SuborkBranchHost.agentMcp` and `graphAgentBridgeConnection`.
-
-**Investigation.** Not run in a container. The local path now has real-process evidence on OpenCode (task 1).
-
-**Decisions.** No material choice: run the task 1 scenario on a `--fixture-environments local,container` profile.
-
 ### 4. Backend restart with real turns
 
 **Problem.** A restart is covered with fakes that outlive the process. A real bridge's behaviour across a backend restart, including the result credential, is unproven for suborks.
@@ -70,28 +57,6 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 - On a host with no concurrent Docker work, or on macOS with Docker Desktop (recommended). Pros: removes the 2340 cause without changing any test. Cons: needs a quiet window on a host whose desktop may be used.
 - Add headless launch to every Electron spec, as `design-canvas-electron.spec.ts` has. Pros: avoids the live desktop on beelink. Cons: unrelated test work, and it does not by itself avoid network churn.
 
-### 6. Coordinator conversations
-
-**Problem.** A coordinator conversation gets `ask_agents` from its control MCP, and its suborks run in the project home. Only provider fakes and a command-level test cover it.
-
-**Context.** `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, and `native-agent-suborks-coordinator.test.ts`. Each platform's coordinator admits control MCP tools its own way: Claude by the `mcp__orkestrator__*` allowlist, Pi and OpenCode by `COORDINATOR_CONTROL_TOOL_NAMES`, Cursor by listing the server, Codex by server-level approval, and Grok under its deny policy.
-
-**Investigation.** Not run live. The command test shows the row on the conversation's session key, the run in the project home, and the mail in the conversation's mailbox.
-
-**Decisions.** No material choice: run task 1's two examples from a Claude or Codex main conversation and from a side conversation, then confirm the answers wake the conversation and the group appears in its transcript.
-
-### 7. Read-only guard on a real Grok subork
-
-**Problem.** Grok's read-only tier is `advisory`, so a Grok subork's answer stands only while the workspace's Git state matches the call's baseline. The guard is tested with a scripted probe, not against a real Grok turn and a real worktree.
-
-**Context.** `NativeAgentSuborkService.certifyGuarded` and `guardedAttempt`, `workspace-read-only-guard.ts`, and `native-agent-suborks-guard.test.ts`.
-
-**Investigation.** Not run live. A Grok subork that never writes is the expected case; the profile already removes its write, edit and shell tools.
-
-**Decisions.** How to provoke a write:
-- Ask a Grok subork, in a fixture environment, to create a file through any tool that still runs (recommended). Pros: shows the real refusal text reaching the model and its repair. Cons: spends real turns.
-- Write the file from a terminal while the subork runs. Pros: deterministic. Cons: shows only the consumption-time failure, which the fake test already covers.
-
 ## Assumptions and decisions
 
 ### Coordinator suborks run in the project home (task 6)
@@ -110,3 +75,4 @@ A subork runs in a reviewer session, and OpenCode applies no per-turn tool map t
 
 - [`docs/architecture/suborks.md`](../../architecture/suborks.md)
 - [`docs/architecture/goals.md`](../../architecture/goals.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, task 6, task 7, and the real-agent runs of task 1, task 2 and task 4) moved there on 2026-11-10.

@@ -178,6 +178,29 @@ first read of a cold file is the worst case and was up to 150 times slower
 (the global prune query: 155 ms warm, 24 s cold). The process also runs the evidence recorder,
 which a bridge runs in production, so `ingest` stalls are an upper bound.
 
+## Rules for efficiency changes
+
+The 2026-10-27 efficiency report
+(`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) set invariants
+that every efficiency change keeps:
+
+- Live events stay incremental over authoritative snapshots, and a missed
+  event stays detectable.
+- Every new cache, ring and buffer has both a byte bound and a count bound.
+- Unmounting a view is not cancelling its work.
+- Codex's stdout loop never awaits.
+- Transcript deltas carry `revisedMessages`.
+- Metrics stay content-free.
+
+The maintainer's 2026-11-01 policy for them: a small fix whose mechanism is
+plain ships without a measurement; a structural change (a new protocol path,
+a transport, a push or long-poll channel) gets a baseline first, with this
+harness, the recurring-work A/B in
+[testing-guide.md](testing-guide.md#recurring-work-harness) or a live
+`dev:test` run on the old commit and the new one. Durability changes (SQLite
+`synchronous`, `secure_delete`) need the maintainer's sign-off; see
+[storage.md](../architecture/storage.md#durability-and-deletion).
+
 ## Limitations
 
 - Function-level only. Bridges are called in-process, not over HTTP; provider

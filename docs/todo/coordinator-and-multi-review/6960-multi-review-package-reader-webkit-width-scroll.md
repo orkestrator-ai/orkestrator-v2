@@ -1,7 +1,7 @@
 # Multi Review package reader loses its place in WebKit when validation splits the column
 
 Found on 2026-11-06 while running the stacked-bypass check of
-[0405](0405-build-pipeline-rewind-follow-ups.md) task 8 in Playwright WebKit on
+to-do 0405 (retired 2026-11-10) task 8 in Playwright WebKit on
 macOS, as a wider WebKit pass over the other flow-graph specs. It is not in the
 pipeline graph, so 0405 left it here.
 
@@ -12,13 +12,12 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 ### Tasks
 
 1. **The package reader's position is lost under WebKit when validation is published**: find a fix that keeps the reading offset across the width change, with a regression test. Status: open.
-2. **Confirm in real Safari**: check task 1 in desktop Safari and on an iPhone. Status: open (depends on 1).
 
 ### 1. The package reader's position is lost under WebKit when validation is published
 
 **Problem.** `validation preserves a package reader's position at 1600px` (`e2e/MultiReviewPackageLayout.spec.ts:94`) fails every time under `ORKESTRATOR_E2E_BROWSER=webkit`, in both projects (the test sets its own 1600 px viewport). The reader scrolls the package transcript tail to 200 px, "Publish validation" adds the validation table beside it, and the tail's `scrollTop` is then 0 where 200 is expected (`:122`). The 390 px case passes. Chromium passes both.
 
-**Context.** The tail is `TranscriptTailLog` in `apps/web/src/components/review/MultiReviewInspector.tsx:191`, a `role="log"` scroller that is itself `container-type: inline-size` and holds a second `@container` child. It already uses `useScrollOffsetAcrossHide` (`apps/web/src/hooks/useScrollOffsetAcrossHide.ts`), the fix [0860](0860-multi-review-inspector-webkit-divergences.md) made for WebKit dropping a container-query scroller's offset across `display: none`. Here nothing is hidden: the element stays mounted (the test asserts it is the same element) and only its width changes.
+**Context.** The tail is `TranscriptTailLog` in `apps/web/src/components/review/MultiReviewInspector.tsx:191`, a `role="log"` scroller that is itself `container-type: inline-size` and holds a second `@container` child. It already uses `useScrollOffsetAcrossHide` (`apps/web/src/hooks/useScrollOffsetAcrossHide.ts`), the fix to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)) made for WebKit dropping a container-query scroller's offset across `display: none`. Here nothing is hidden: the element stays mounted (the test asserts it is the same element) and only its width changes.
 
 **Investigation.** The failure is not caused by the 0405 branch: it fails the same way with that branch's one renderer change (`FlowViewport.tsx`) set back. A temporary probe (not kept) logged the tail's `scroll` and `ResizeObserver` callbacks around the publish, at 1600 px in the desktop project:
 
@@ -42,24 +41,6 @@ So WebKit resets the offset of an inline-size container scroller when its width 
     - Pros: a WebKit run goes green at once.
     - Cons: leaves a reader on Safari or an iPhone losing their place whenever validation lands; this is a real app defect, not a harness limit.
 
-### 2. Confirm in real Safari
-
-**Problem.** Playwright WebKit is Safari's engine, not Safari.
-
-**Context.** [0860](0860-multi-review-inspector-webkit-divergences.md) task 4 has the same real-Safari check open for the hide case.
-
-**Investigation.** Not run; no Safari session or phone was used.
-
-**Decisions.**
-
-- **Where to check?**
-  - **Together with 0860 task 4, in desktop Safari and on an iPhone through the remote gateway, on a `dev:test` profile with the fixture (recommended).**
-    - Pros: one session covers both WebKit scroll losses.
-    - Cons: manual; needs hardware.
-  - **Rely on Playwright WebKit alone.**
-    - Pros: repeatable, no hardware.
-    - Cons: misses Safari's own scrolling and toolbar behaviour.
-
 ## Current state
 
 Under Playwright WebKit build 2370 (Playwright 1.64.0) on macOS, run headless
@@ -69,7 +50,8 @@ against the component fixture server: `e2e/GraphRunFlow.spec.ts`,
 
 ## Outstanding work
 
-Tasks 1 and 2.
+Task 1. The real-Safari and iPhone check that follows it is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ## Needs verification
 
@@ -78,5 +60,6 @@ Tasks 1 and 2.
 
 ## Related
 
-- [0860-multi-review-inspector-webkit-divergences.md](0860-multi-review-inspector-webkit-divergences.md): the same engine behaviour on a hide, and the hook that fixed it
-- [0405-build-pipeline-rewind-follow-ups.md](0405-build-pipeline-rewind-follow-ups.md): the WebKit run that found it
+- to-do 0860 (retired 2026-11-10; see [build-pipeline-view.md](../../architecture/build-pipeline-view.md#shared-flow-graph)): the same engine behaviour on a hide, and the hook that fixed it
+- [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step): the stacked bypass whose WebKit run (to-do 0405 task 8, retired 2026-11-10) found it
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the check in desktop Safari and on an iPhone) moved there on 2026-11-10.

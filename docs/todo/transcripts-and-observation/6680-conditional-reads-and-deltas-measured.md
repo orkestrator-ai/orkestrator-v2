@@ -7,7 +7,6 @@ Analysed 2026-11-06 against `main` at `cbe0f9a5b`. The E10 batch file (efficienc
 ### Tasks
 
 1. **Take the E10 baseline on a real stack**: from the baseline tasks of parts 0160, 0180 and 0190. Status: done for Claude on an isolated `dev:test` profile (2026-11-06). Codex, Pi, a lagging viewer and windows near the 512 KiB bound remain open; see the task.
-2. **Bridge state revision sent as `knownToken`**: from part 0180 task 2. Status: open (not built on the baseline; waits on a maintainer decision).
 3. **Composer catalogue keyed by a revision**: from part 0180 task 3. Status: open (not built on the baseline; depends on 1 for a real Pi catalogue).
 4. **A v2 `delta` answer from bridges**: from part 0190 task 2. Status: open (not built on the baseline; depends on 1 for large windows).
 5. **The steer qualification probe runs on every state poll**: found while measuring. Status: open.
@@ -89,24 +88,6 @@ Not measured on the profile, each for a stated reason:
     - Pros: nothing more to build.
     - Cons: task 4's answer for large windows rests on the fake alone.
 
-### 2. Bridge state revision sent as `knownToken`
-
-**Problem.** Every state poll reads the whole session state from the bridge, even when nothing changed.
-
-**Context.** Part 0180 recommended a bridge state revision that the backend sends as `knownToken`, with an older bridge answering whole. The report's constraint was that a bridge answering "unchanged" must still reach the backend's interaction and queue reads.
-
-**Investigation.** Re-checked on `cbe0f9a5b`: `readHttpBridgeSessionState` (`apps/backend/src/core/http-bridge/progressive.ts`) still reads the state route with no condition, plus Codex `/config` and Pi `/queue`. `readProgressiveSessionState` (`native-agent-transcript-projection.ts`) still adds the interaction reads and the steer probe. In the aligned profile rerun, Claude's state body repeated on 35 of 39 streaming polls with one viewer, 76 of 80 with two, and 3 of 3 idle. A revision could therefore have answered `unchanged` on most polls, unlike the fake's prediction. What it saves is small. The body is about 1 KB, and the bridge answered it in 0.15–0.22 ms on average. The request itself, a loopback round trip, stays. So do the four other requests of each poll. Codex's and Pi's state bodies carry `messageRevision` and were not measured on the profile.
-
-**Decisions.**
-
-- **Build it?**
-  - **Not now: it saves about 1 KB and 0.2 ms per poll (recommended).**
-    - Pros: no new wire form and no per-bridge revision to keep exact. A missed bump would show stale state, and the possible saving is too small to justify that risk.
-    - Cons: Pi with a large catalogue still re-sends its composer on every poll (task 3).
-  - **Build the recommended revision.**
-    - Pros: most Claude polls would carry no state body.
-    - Cons: every bridge must move the revision on every state change, which is a new invariant in five bridges, and every request still happens.
-
 ### 3. Composer catalogue keyed by a revision
 
 **Problem.** The state token hashes `JSON.stringify` of the whole state view, `composer.models` included, on every poll.
@@ -124,7 +105,7 @@ Not measured on the profile, each for a stated reason:
   - **Build the recommended revision.**
     - Pros: removes the hash.
     - Cons: a catalogue change must always move the revision, and it leaves the 130 KB read, which is the larger cost.
-- **What would address the 130 KB?** Not decided here. A composer revision on Pi's `/status`, sending the composer only when it changed, would be a bridge wire change with the same cost as task 2. Decide it together with task 2, once there are real catalogue sizes.
+- **What would address the 130 KB?** Not decided here. A composer revision on Pi's `/status`, sending the composer only when it changed, would be a bridge wire change with the same cost as a bridge state revision (part 0180 task 2, whose build-or-not decision is on the manual-test checklist, 7568: 6680 task 2). Decide it together with that decision, once there are real catalogue sizes.
 
 ### 4. A v2 `delta` answer from bridges
 
@@ -216,7 +197,8 @@ E10's baseline is taken on an isolated `dev:test` profile for Claude, and with a
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the maintainer's decision on a bridge state revision sent as `knownToken`) moved there on 2026-11-10.
 - Efficiency outcome, closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1, 4 and 5
+- to-do 1202 efficiency follow-ups, tasks 1, 4 and 5 (retired 2026-11-10)
 - [5340](5340-transcript-reads-live-evidence.md) and [6260](6260-projection-hashing-measurements.md): the other transcript measurements; the loopback-model spec here can take theirs without a billed turn
 - Efficiency report, B (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`) (TX-1, TX-5, TX-6)

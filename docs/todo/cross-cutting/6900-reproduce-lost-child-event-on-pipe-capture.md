@@ -11,9 +11,9 @@ Analysed 2026-11-06 against `main` at `e6c3da899`.
 
 ### 1. Reproduce on the old pipe capture
 
-**Problem.** Every real loss of a child's completion event was seen on the pipe-based `runCommand` that task 3 of [to-do 4260](4260-bun-loses-child-process-events.md) replaced: on Linux a pipe EOF whose `EPOLLONESHOT` was delivered and never re-armed, on macOS a child left `Z <defunct>` for a whole 10 s with no `exit` event. On 2026-11-06 a strict probe saw no loss at all on today's file capture, so the upstream report has no current reproduction and no reduced case.
+**Problem.** Every real loss of a child's completion event was seen on the pipe-based `runCommand` that task 3 of to-do 4260 (retired 2026-11-10; its record is `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`) replaced: on Linux a pipe EOF whose `EPOLLONESHOT` was delivered and never re-armed, on macOS a child left `Z <defunct>` for a whole 10 s with no `exit` event. On 2026-11-06 a strict probe saw no loss at all on today's file capture, so the upstream report has no current reproduction and no reduced case.
 
-**Context.** The strict probe reads the child's zombie state through `waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)` with `bun:ffi`: it starts no process and reaps nothing, so it can neither wake Bun nor change the outcome. A child counts as lost only after 5 s as an unreaped zombie with no `exit`, or 5 s after `exit` with no `close`. The single `ps` look the watchdog makes counts exits Bun reports milliseconds later as losses. In 150 runs of `apps/backend/src/core/diff-base-override.integration.test.ts` on file capture (macOS, host load 35 to 60), it saw 0 losses and 3 exits delivered 22 to 30 ms after the zombie appeared, while the watchdog's own count was 10. The probe and the standalone script are in to-do 4260, [task 2's outcome](4260-bun-loses-child-process-events.md#outcome-2026-11-06). The pipe capture is in history before `51ccfb3f2`.
+**Context.** The strict probe reads the child's zombie state through `waitid(P_PID, pid, WEXITED | WNOHANG | WNOWAIT)` with `bun:ffi`: it starts no process and reaps nothing, so it can neither wake Bun nor change the outcome. A child counts as lost only after 5 s as an unreaped zombie with no `exit`, or 5 s after `exit` with no `close`. The single `ps` look the watchdog makes counts exits Bun reports milliseconds later as losses. In 150 runs of `apps/backend/src/core/diff-base-override.integration.test.ts` on file capture (macOS, host load 35 to 60), it saw 0 losses and 3 exits delivered 22 to 30 ms after the zombie appeared, while the watchdog's own count was 10. The probe and the standalone script are in to-do 4260's task 2, "Outcome (2026-11-06)", in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`. The pipe capture is in history before `51ccfb3f2`.
 
 **Investigation.** Not started. The 2026-11-04 stress table in [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#load-and-stress-runs-2026-11-03-to-2026-11-04) gives the old pipe capture 20 stalled children in 100 Linux runs and `Bun.spawn` eager pipes 121 in 150, but those used a probe "unsettled 1 s after exit, or a zombie with no exit event", which on macOS includes the delivery window. Linux's count (EOF missing a second after `exit`) is not affected by that window.
 
@@ -64,7 +64,7 @@ Nothing done. To-do 4260's task 6 reaper already removes a macOS zombie that Bun
 
 ## Related
 
-- [To-do 4260](4260-bun-loses-child-process-events.md): the defect, the draft upstream report and the reaper
+- To-do 4260 (retired 2026-11-10): the defect and the draft upstream report, in `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`; the reaper is in [backend runtime](../../architecture/backend-runtime.md#one-shot-commands), and filing the report is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 
 ## Replaces

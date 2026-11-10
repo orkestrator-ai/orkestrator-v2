@@ -65,7 +65,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`), design export into an Orkestrator container (`design-container-export.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
-| Real stack, terminal close | Included in `test:agent:docker`; any Docker fixture profile, no agent or login | Closing a container terminal ends its shell and its job in the container, and removes the shell's PID record (`container-terminal-close.spec.ts`, to-do [7081](../todo/containers-and-environments/7081-container-claude-cli-tab-leftovers.md)) |
+| Real stack, terminal close | Included in `test:agent:docker`; any Docker fixture profile, no agent or login | Closing a container terminal ends its shell and its job in the container, and removes the shell's PID record (`container-terminal-close.spec.ts`, to-do 7081, retired 2026-11-10; see [Terminal close](../architecture/container-lifecycle.md#terminal-close)) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
 | OpenCode seeded data | `container-live-data-contracts.test.ts` (also `scripts/qualify-opencode-seeded-data.sh <image>`) | Real OpenCode turns, diff, revert and unrevert with and without host seeds on both database paths. Active console accounts in SQLite must retrieve provider configuration using their bearer token and selected organization from a local console fixture. Inotify checks the omitted host paths; no external credentials or billing. |
@@ -132,7 +132,7 @@ image.
 Live suites that need free address pools, or that restart the daemon, run on
 a private daemon that one command starts and one command removes
 (`scripts/disposable-docker-daemon.ts`, to-do
-[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)).
+4730, retired 2026-11-10).
 It has two modes behind the same commands: a host rootless daemon (the
 default, below) and a nested rootful one (`--mode rootful`, see
 [Nested rootful mode](#nested-rootful-mode)).
@@ -510,7 +510,7 @@ does the budget read-back stay truthful?
 
 ## Nested rootful disposable daemon on beelink2 (2026-11-09)
 
-To-do [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+To-do 4730 (retired 2026-11-10)
 task 1: the launcher's [nested rootful mode](#nested-rootful-mode), live.
 
 - **Host:** beelink2 (Arch Linux, kernel 7.2.15, x86_64), host Engine 29.9.2.
@@ -518,7 +518,8 @@ task 1: the launcher's [nested rootful mode](#nested-rootful-mode), live.
   used nor touched. The outer daemon was the launcher's own rootless one
   (`start --name outer`, slirp4netns, 3.1 s), so the nested daemon was root
   only inside that daemon's user namespace (`start` says so). A rootful
-  host as the outer daemon is task 4 of 4730.
+  host as the outer daemon is 4730 task 4, now in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 - **Image:** `ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta`, the
   published build of `480cf0296` (no `docker/` change between it and the
   tested branch), pulled into the outer daemon without credentials (3 min 8 s).
@@ -949,7 +950,7 @@ The CLI container matrix failed the same way (2026-11-06, to-do [0014](../todo/c
 
 **Problem.** The host held 29 unattached reach-probe networks, created in clusters on 2026-10-31 (15:51–17:45 UTC), 2026-11-01 (03:40–04:33 UTC) and 2026-11-02 (04:57–05:50 UTC). 0241 task 4 recorded no new probe networks after a full run on 2026-10-31.
 
-**Context.** [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). A backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network can leak it. Failed or timed-out network creation is another unruled-out path: Docker may create the network despite the client command failing, after which `createProbeNetwork` clears `probeNetwork` and returns null when the service is not closed. The caller then has no network to remove, and later normal shutdown may leave it behind. Neither path is proven to have caused the historical clusters. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
+**Context.** To-do 0241 (retired 2026-11-10) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). A backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network can leak it. Failed or timed-out network creation is another unruled-out path: Docker may create the network despite the client command failing, after which `createProbeNetwork` clears `probeNetwork` and returns null when the service is not closed. The caller then has no network to remove, and later normal shutdown may leave it behind. Neither path is proven to have caused the historical clusters. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
 
 **Investigation.** Not traced to one teardown. What the evidence shows:
 
@@ -968,7 +969,7 @@ The CLI container matrix failed the same way (2026-11-06, to-do [0014](../todo/c
     - Run from the repository root it created one, which was destroyed.
     - `apps/backend/tests/standalone.test.ts` created three, 1–2 s apart, and all were destroyed. Its one failure was unrelated: `cursor-bridge` was not built in this worktree.
   - None of the reruns left a probe network behind.
-- **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) retains it as a candidate, without attributing the historical clusters to it.
+- **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up 7470 (retired 2026-11-10; see [disposable backends](testing-guide.md#cli-scenarios)) retains it as a candidate, without attributing the historical clusters to it.
 - **Not rerun.** The Electron specs other than the design journey need a display, which this host may not use (headless only, no Xvfb), so the specs of the 2026-10-31 and 2026-11-01 builds could not be repeated here. Their timing at the time (backends stopped while host load stalled Docker commands) cannot be recreated either.
 
 Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattached probe networks, created 2026-10-31 (13), 2026-11-01 (9) and 2026-11-02 (7), and none newer, so the leak has not recurred since 2026-11-02. They still fill both default pools (172.18–31/16 and 192.168.0.0/16 in /20s). The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
@@ -981,19 +982,19 @@ Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattac
     - Cons: the run history of those days is thin, the pools are full, and the likeliest harnesses need a display. It did not reproduce.
   - **Add an owner-to-data-directory log line when a probe network is created.**
     - Pros: makes the next leak traceable at once.
-    - Cons: new logging surface; does not explain these. Carried into [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) task 2.
+    - Cons: new logging surface; does not explain these. Carried into to-do 7470 (retired 2026-11-10) task 2.
 
 ### Trace closure and retirement (2026-11-10)
 
 The historical trace (7041 task 2) is closed as untraceable. The owners'
 temporary data directories are gone and the 29 networks predate the creator
-label shipped by [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
+label shipped by to-do 7470 (retired 2026-11-10; see [disk usage](disk-usage.md#what-you-clean-yourself))
 (#2024, `60c065c36`, checked against `main` at `04639b12b`). The label applies
 only to newly created networks; it cannot identify these historical owners.
 The candidate causes above remain unproven. A new leak carries an
 `orkestrator-creator` label and is new work for a new to-do.
 
-[3320](../todo/containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)
+To-do 3320 (retired 2026-11-10)
 task 1 is closed as a duplicate of this trace. Its task 2, removing the 29
 networks, remains the user's call; this work left them untouched.
 
@@ -1084,7 +1085,7 @@ remains unverified (7420 tasks 2 and 4).
 
 To-do [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
 task 2's last open check and
-[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+4730 (retired 2026-11-10)
 tasks 1 to 3, run in worktree `orkestrator-v2-20261106-034211-c21c9a597669`
 (branch at `c1724ab74` plus this change).
 
@@ -1243,7 +1244,7 @@ on rootful Linux Engine, x64.
   (`egress-gateway=1`, no `egress-filter`).
 - **The host daemon had no address range left.** All 31 default pools are
   held: by 29 leaked `reach-probe` networks
-  ([0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+  (to-do 0241, retired 2026-11-10),
   `docker0` and another environment's network. The first M12 run there failed
   5 of 5 in `ensureEnvironmentNetwork` with `resource-exhausted`. Those
   networks were left alone. Two workarounds were used instead:
@@ -1254,7 +1255,7 @@ on rootful Linux Engine, x64.
     `live-restore` off, and a supervisor loop that starts `dockerd` again
     when it exits. Images were streamed in with `docker save | docker load`
     (same image id). Its containers' upstream is the host's `172.17.0.1`.
-    This is the 2026-10-31 recipe; [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+    This is the 2026-10-31 recipe; 4730 (retired 2026-11-10)
     task 1 would make it a repository command.
   - **Host daemon for the five ticket cases.** A scratch script created a
     restricted and a full runtime through `createDockerContainer` after
@@ -1802,7 +1803,7 @@ one image serves both sides.
 
 **No benchmark or live-suite numbers.** The daemon's address pools were
 full: 29 unattached probe networks leaked on 2026-10-28, before #1419's fix
-(see [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+(see to-do 0241, retired 2026-11-10),
 hold all 31 default ranges. They belong to other runs and were left alone, so:
 
 - the benchmark at `cd7bbe3e`, before the change, failed its first fresh
@@ -2033,7 +2034,7 @@ built by `mise run docker:build:dev --profile todo0058` before and after the
 - **After the fix.** Every case in `container-live-replacement.test.ts` passed
   (12/12, run in three batches because the host's address pools were
   exhausted by leaked probe networks, see
-  [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md)),
+  to-do 0241, retired 2026-11-10),
   including the new case and C16's symlinked-root refusal. The live data
   contracts suite passed 2/2.
 
@@ -2142,7 +2143,7 @@ hold when the host user maps to container root?
     `environment start` through the CLI, with a restricted runtime behind its
     egress gateway (`node`'s `CapEff` 0, firewall report `applied`, policy 3).
     The daemon had no address range to give: 29 leaked probe networks
-    ([todo 0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md))
+    (to-do 0241, retired 2026-11-10)
     fill its pools, so `docker network create` fails with `all predefined address
     pools have been fully subnetted`. Those networks were left alone. Each
     environment's network was created beforehand with the expected name and

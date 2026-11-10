@@ -10,7 +10,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 ### Tasks
 
 1. **Electron 46**: adopt it once stable, with a HiDPI capture-masking live run and a macOS floor re-check. Status: blocked (on Electron 46 stable, due 2027-01-05; `alpha` is 46.0.0-alpha.2).
-2. **electron-builder 27 and electron-updater 7 with signed update manifests**: migrate the config, auto-update API and macOS feed edit, generate and wire the keys. Status: blocked (on electron-builder 27 stable; `next` is 27.0.0-alpha.13).
+2. **electron-builder 27 and electron-updater 7 with signed update manifests**: migrate the config, auto-update API and macOS feed edit, and wire the keys. Status: blocked (on electron-builder 27 stable; `next` is 27.0.0-alpha.13; the public keys also wait on 7568: 0032 task 2 update keys). Generating the key pairs and installing the private key on the release machines moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 3. **`marked` 18**: move once `@tiptap/markdown` accepts it. Status: blocked (`@tiptap/markdown` 3.32.0, still latest, depends on `marked ^17.0.1`).
 4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
@@ -136,7 +136,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Problem.** The image shipped `NODE_VERSION=24.21.0`, below the 24.22.1 security release. Fixed 2026-11-02: the image ships 24.22.2. Node 26 is still to come.
 
-**Context.** The file defers Node 26 until its LTS settles (not before December 2026). The 24 bump went out with the image-size change in [1202](1202-efficiency-review-follow-ups.md) task 14, so users pull one new image for both. `ARG NODE_VERSION` in `docker/Dockerfile` is the only pin. The tarball is checked against the release's `SHASUMS256.txt` at build time, so no digest is hard-coded, and `docker/image-manifest.ts` checks that the installed `node --version` matches the pin.
+**Context.** The file defers Node 26 until its LTS settles (not before December 2026). The 24 bump went out with the image-size change in to-do 1202 task 14 (retired 2026-11-10), so users pull one new image for both. `ARG NODE_VERSION` in `docker/Dockerfile` is the only pin. The tarball is checked against the release's `SHASUMS256.txt` at build time, so no digest is hard-coded, and `docker/image-manifest.ts` checks that the installed `node --version` matches the pin.
 
 **Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14). Fresh builds on `main` at `643ce87c4` reproduce the Node version and pass image smoke; the fresh Docker suite is blocked by exhausted Docker network address pools, so that attempt did not qualify. Round 2 subsequently passed fresh amd64 image smoke and `test:agent:docker` (20 passed, 4 live-provider skips, 0 failed, 0 flaky) using explicitly allocated subnets for its own disposable networks; see 1202 task 14 for commands and the test repairs. Node remains `v24.22.2`.
 
@@ -288,9 +288,10 @@ not claimed. See 1202 task 14 for the qualification command, setup constraints a
      `autoInstallEvent` (`"onQuit"` matches today's "Later installs on the
      next quit"), `quitAndInstall(options)`. 7.0.0-alpha.11 still ships
      `autoInstallOnAppQuit` as a deprecated shim.
-   - Generate the update keys, wire `ELECTRON_BUILDER_UPDATE_SIGN_KEY_FILE`
-     into `release:desktop` on both release machines, and embed
-     `updateManifest.publicKey: [current, next]`.
+   - Wire `ELECTRON_BUILDER_UPDATE_SIGN_KEY_FILE` into `release:desktop`, and
+     embed `updateManifest.publicKey: [current, next]` once the maintainer
+     has generated the keys and installed the current private key on both
+     release machines ([7568](../manual-test/7568-manual-test-checklist.md)).
    - `scripts/mac-update-feed.ts` adds `minimumSystemVersion` to the macOS
      feeds **after** electron-builder writes them, which would invalidate the
      signature. 27.0.0-alpha.12 signs `minimumSystemVersion` if it is present
@@ -455,6 +456,7 @@ None. The update-manifest key question is decided below.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: generating the update keys and installing them on the release machines) moved there on 2026-11-10.
 - [`releasing.md`](../../development/releasing.md): macOS floor and update feeds.
 - [`linting.md`](../../development/linting.md): severity policy for the
   React Compiler rules.

@@ -33,22 +33,18 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 ### Tasks
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux); the four PR rows need live GitHub and moved to task 5, decision W3) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, 7201; turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux); the four PR rows need live GitHub and moved to task 5, decision W3, now in 7568) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, 7201; turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
-4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
-5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown, and the four PR rows of the latency budgets as a client sees them (moved from task 2 on 2026-11-10). Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
-6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 (now in 7568) and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
+6. **Live providers**: delegated to 0049. Status: blocked (waits on 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
-8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open (needs macOS with Xcode and an iOS device or simulator; the 2026-11-06 run was on Linux).
-9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open (needs a real suspend of a host whose other work can stop; the 2026-11-06 host runs production Orkestrator and other builds, so it was not suspended).
+8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper, on the iOS simulator. Status: open (needs a macOS node with Xcode; the 2026-11-06 run was on Linux; the physical-device run moved to 7568 on 2026-11-10).
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (depends on 5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5; the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (depends on 5) (left: the `feature-planning` and `build-pipeline` rollback drivers and the switch itself, which wait for task 5's live GitHub run; `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waits for 0049) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (the two PR candidates are blocked (waits on 7568: 0048 task 5); the client-only and validation candidates can run now) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5 (now 7568: 0048 task 5); the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (waits on 7568: 0048 task 5; 0049) (left: the `feature-planning` and `build-pipeline` rollback drivers and the switch itself, which wait for task 5's live GitHub run, now in 7568; `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waits for 0049) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in 7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
-16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines and a scoped firewall rule; the 2026-11-06 run could change neither the host's firewall nor its network).
-17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials and a real PR; run it with task 5).
 18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 host runs browsers headless only, and the busy profile's hidden client is emulated, so its timers are not throttled).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
 20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
@@ -267,43 +263,6 @@ window. It found that a Build tab the backend selects in a build-only layout
 lost the selection to a seeded terminal; fixed (decision 23). See
 [Container app wiring, follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 
-### 5. Live GitHub
-
-**Problem.** PR monitoring's terminal cadence (5 min plus 30 s jitter, the one accepted slowdown), replacement and reopen discovery, admission under real `gh` latency and rate-limit cooldown are unproved live.
-
-**Context.** Batched in 0031 under "Live GitHub". The rollback is setting `terminalDiscoveryIntervalMs` to 20 s and the jitter to 0.
-
-**Investigation.** `DEFAULT_PR_MONITOR_POLICY` at `apps/backend/src/core/pr-monitor-policy.ts:68` still holds 5 min, 30 s jitter and a 2 min rate-limit cooldown. `external-pr` admission is 2 total and 1 per target (`apps/backend/src/core/work-admission.ts:85`).
-
-**Decisions.**
-
-- **What repository to use?**
-  - **A disposable test repository under the user's account, driven by `gh`, with PRs opened, closed, replaced and reopened by script (recommended).**
-    - Pros: controllable transitions; no risk to real PRs.
-    - Cons: the rate-limit cooldown is hard to trigger without real volume.
-  - **Observe this repository's real PR traffic.**
-    - Pros: realistic latency and volume.
-    - Cons: transitions are not controllable, and timing depends on maintainers.
-- **How to test the rate-limit cooldown?**
-  - **Inject a rate-limit answer at the `gh` boundary in a focused test, and record only the live cadence (recommended).**
-    - Pros: deterministic, no abuse of the API.
-    - Cons: not a live proof of the cooldown.
-  - **Exhaust a real token's limit.**
-    - Pros: genuine evidence.
-    - Cons: disrupts other work on the account.
-
-**Scope (2026-11-10).** Task 2's four PR rows moved here (decision W3): PR
-merge confirmation after merge-pending (≤ 3 s), PR created after
-create-pending (≤ 10 s), open PR state change (≤ 30 s) and terminal PR
-replacement or reopen (≤ 5 min), each timed to what a client shows.
-
-**Outcome (2026-11-06, not done).** Rechecked on `ee2cc8423`:
-`DEFAULT_PR_MONITOR_POLICY` still holds 5 min, 30 s jitter and a 2 min
-cooldown. Not run: the busy-profile run was not allowed to use GitHub
-credentials or a repository. Task 1 no longer blocks it; it is now the
-evidence tasks 2 (the PR rows), 12 (the PR candidates) and 13 (the build
-pipeline domain) wait for.
-
 ### 6. Live providers
 
 **Problem.** Provider-side observation (idle backoff, background output) is unproved for several providers.
@@ -380,32 +339,17 @@ assumptions of the probes rather than the product (decisions M1 and M2).
     - Pros: scriptable and easy to repeat.
     - Cons: lifecycle differs from a device, so a pass proves less.
 
+**Scope (2026-11-10).** This task is now the simulator run: background the
+wrapper and lock the simulated device while a `dev:test` profile changes
+state, then check reads pause while hidden and resume with exact state. The
+real-device run, which the recommended option puts first, needs a provisioned
+device and moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+
 **Outcome (2026-11-06, not done).** Not run: it needs macOS with Xcode and a
 device or simulator, and this run was on Linux. The busy profile's hidden
 client (one client, `visibilityState` emulated) resumed in p95 123 ms, which
 says nothing about iOS suspension.
-
-### 9. Real host suspend and resume
-
-**Problem.** `HostSuspendDetector` re-times every scheduler after a sleep so overdue keys run once; that is proved only with a manual clock.
-
-**Context.** Constraint: missed ticks are never replayed.
-
-**Investigation.** `HostSuspendDetector` is at `apps/backend/src/core/host-suspend-detector.ts:42` with its own test file. No live record.
-
-**Decisions.**
-
-- **How to suspend?**
-  - **A real lid-close or `pmset sleepnow` on macOS, with diagnostics read before and after (recommended).**
-    - Pros: genuine monotonic-clock behaviour.
-    - Cons: suspends the host's other work (production Orkestrator shares it).
-  - **`systemctl suspend` on a spare Linux host.**
-    - Pros: scriptable, isolated from the main host.
-    - Cons: different clock semantics from macOS.
-
-**Outcome (2026-11-06, not done).** Not run: the only host available runs
-production Orkestrator and other builds, and suspending it would stop their
-work. It needs a host that can sleep, on either option above.
 
 ### 10. Long soak and cache gauges
 
@@ -677,88 +621,6 @@ switch for the recorder itself, not a scheduling rollback".
     - Pros: clean, and many sit in code that removal deletes anyway.
     - Cons: collides with parallel work.
 
-### 16. Client reconnect over a real two-machine link drop
-
-**Problem.** Reconnect and freshness were qualified on 2026-10-31 through a
-proxy inside the test, which resets connections or goes silent. A real tailnet
-may behave differently, for example in how soon the OS gives up on a socket or
-fails a connect.
-
-**Context.** Moved from to-do 0051 (deleted 2026-11-06); its recorded run is
-summarised in
-[`agent-testing.md`](../../development/agent-testing.md#live-client-outage). The
-client backoff is `packages/protocol/src/reconnect-backoff.ts`; the gateway
-client drops a silent stream after missed keepalives (`dropSilentStreams` in
-`web-gateway.ts`), and the banner is `ConnectionStatusBanner.tsx`. Batch it with
-task 11 and the two-machine runs of 0052 (0031).
-
-**Investigation.** Steps:
-
-1. Run a `dev:test` profile on host A and serve it to host B through
-   Tailscale Serve.
-2. On B, open 3 tabs with terminals, once over HTTP/SSE and once over the
-   terminal WebSocket.
-3. Silently drop only the test connection's packets with a scoped firewall
-   rule. Keep the drop active until the banner and at least two retry attempts
-   per tab are observed. Allow up to 180 s: the silence watchdog takes 60 s
-   and the banner adds about 4 s, so restoring at 45 s cannot qualify this path.
-   If the observations are absent at 180 s, remove the rule for cleanup and
-   record a failed qualification; do not count an early restoration as a pass.
-4. Before restoring, confirm reads pause and retry times differ across tabs.
-   Then restore connectivity and check terminals recover exactly with the main
-   stream. Separately repeat with an immediate socket/interface error, such as
-   `tailscale down` on B; record its detection/retry timing independently.
-
-**Decisions.**
-
-- **How to drop the link?**
-  - **A scoped firewall rule that drops test packets (recommended).**
-    - Pros: exercises silence through the watchdog and retry observations.
-    - Cons: requires host access and guaranteed removal on failure.
-  - **`tailscale down` on the client machine.**
-    - Pros: the real interface goes away, as when a laptop leaves the network.
-    - Cons: an error rather than silence on some OSes, so it may not test the
-      silent case.
-
-**Outcome (2026-11-06, not done).** Not run: it needs a second machine and a
-firewall rule, and this run could change neither the host's firewall nor its
-network. The busy profile's cut client (the in-process outage link in `reset`
-mode, one host) converged 4.4 to 12.5 s after its link returned, the
-reconnect ladder [7120](7120-multi-client-restart-follow-ups.md) task 2
-describes; that is not the silent-drop path this task needs.
-
-### 17. View PR stale marker with a real PR
-
-**Problem.** The credential-free outage profile recorded a PR URL and the View
-PR action rendered, but no PR state ever arrived from GitHub, so only the
-absence of flicker on quiet `unchanged` reads was shown, not the stale marker
-appearing and clearing.
-
-**Context.** Moved from to-do 0051 (deleted 2026-11-06). Task 5 is the other
-live GitHub run.
-
-**Investigation.** Steps:
-
-1. Use a profile with GitHub credentials and an environment with a real open PR.
-2. Force a failed PR read, for example by blocking `api.github.com` for the
-   profile or briefly revoking the token.
-3. Check that the stale marker and last-check tooltip appear on the View PR
-   action, then clear on the next successful read, with no flicker on quiet
-   `unchanged` reads.
-
-**Decisions.**
-
-- **Run it with task 5?**
-  - **Yes, on task 5's live GitHub profile (recommended).**
-    - Pros: the same credentials and PR.
-    - Cons: blocking GitHub mid-run interrupts task 5's own cadence readings.
-  - **Alone.**
-    - Pros: independent.
-    - Cons: a second credentialed setup.
-
-**Outcome (2026-11-06, not done).** Not run: it needs GitHub credentials and
-a real PR, which this run could not use. It stays with task 5.
-
 ### 18. Reconnect timing in a real background tab
 
 **Problem.** Headless Chromium keeps a page `visible`, so the 2026-10-31 runs
@@ -910,9 +772,12 @@ supervision. It was qualified on Linux with deterministic call counts and one
 credential-free idle A/B run. The instrumentation fixes are done and a
 credential-free macOS idle A/B with freshness probes has run. Since then the
 long soak (task 10) and, on 2026-11-06, the busy live profile (task 1) have
-run. What remains is the GitHub, provider, iOS and suspend runs, the
-measured-candidate decisions those runs feed, and then removing the rest of
-the rollback drivers. On 2026-10-25 the feature-planning keyed row read landed (the one
+run. What remains here is the provider runs (0049), an iOS simulator run, a
+real background tab, the client-only measured candidates, and then removing
+the rest of the rollback drivers once live GitHub has run. The live GitHub,
+iOS device, host suspend and two-machine runs moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+2026-11-10. On 2026-10-25 the feature-planning keyed row read landed (the one
 candidate the deterministic harness could decide), keyed row reads began
 reusing a warm row cache, `stableJitterMs` moved out of the rollback-only
 file, the live A/B script gained a lifecycle soak, flake 0177 was resolved,
@@ -1791,7 +1656,7 @@ credentials or a platform CI lacks are batched in
     profile; workflow visibility was done 2026-11-10 (a review view per
     client, over budget at p95 from a backend tail,
     7557, fixed and retired 2026-11-10, [after the fix](#workflow-progress-after-the-7557-fix-2026-11-10-linux)); the PR rows go with live
-    GitHub (task 5);
+    GitHub (task 5, now in 7568);
   - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
     missing-baseline recovery fetch, an explicit refresh and the routine policy
     on a legacy record, all on a real container (see
@@ -1799,9 +1664,7 @@ credentials or a platform CI lacks are batched in
     the routine policy stays (decision 11);
   - ~~container app wiring~~. Done 2026-11-01 on Linux, including a merge
     from the UI against a stand-in `gh` (decision 20). The same merge against
-    real GitHub belongs with live GitHub below.
-- Live GitHub: terminal discovery cadence, replacement and reopen discovery,
-  admission queue delay under real `gh` latency, and rate-limit cooldown.
+    real GitHub belongs with live GitHub (task 5, now in 7568).
 - Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
 - ~~macOS: recursive `fs.watch` (`worktree-watcher.ts`) detects a save in a
   watched worktree in under 1 s (Live evidence), with Electron under
@@ -1809,9 +1672,9 @@ credentials or a platform CI lacks are batched in
   watcher's burst-overflow and failure-to-polling paths on macOS.~~ Done
   2026-11-06 (task 7; see
   [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)).
-- iOS: the `apps/ios` wrapper running the web client, checking the read
-  coordinator's hidden pause and resume across backgrounding and screen lock.
-- A real host suspend and resume against `HostSuspendDetector`.
+- iOS: the `apps/ios` wrapper running the web client on the simulator,
+  checking the read coordinator's hidden pause and resume across backgrounding
+  and screen lock (task 8; the device run is in 7568).
 - Soak: repeated add, remove, stop and restart cycles. Timer, subscriber and
   cache counts return to baseline, and profile logs hold zero
   `Unhandled promise rejection (continuing)` guard lines. The ten idle
@@ -1848,7 +1711,8 @@ feature-planning row read (decided from the deterministic harness on
 routine policy to run first, which new containers never do (see "Container
 fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
-- Settled check-rollup backoff (`pr-check-rollup`, 60 s).
+- Settled check-rollup backoff (`pr-check-rollup`, 60 s). Waits on live
+  GitHub (7568: 0048 task 5), as does the next one.
 - A container-scoped PR cooldown. It is per entry today because container
   credential scope cannot be proven from the backend.
 - ~~The container fetch failure ladder (5 to 30 min), tuned from
@@ -1901,7 +1765,8 @@ observation sharing stay.
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the remaining
   whole-store drivers (`feature-planning`, `build-pipeline`), then the switch
   with its desktop allowlist entry (`graph-run`'s rollback only turns graph
-  runs off and goes with the switch). Both drivers wait for task 5 and 0049
+  runs off and goes with the switch). Both drivers wait for task 5 (now in
+  7568) and 0049
   (decision W7).
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
 - ~~Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
@@ -2691,6 +2556,7 @@ collide with other tasks' decisions.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 5, 9, 16 and 17, and the device run of task 8) moved there on 2026-11-10.
 - [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
   task 1's busy profile found (approving from the CLI, one unexplained
   review stall).
@@ -2705,7 +2571,7 @@ collide with other tasks' decisions.
   what task 11's run left for a decision.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
-  remaining checks are tasks 16–20 here) and
+  remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
   [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the

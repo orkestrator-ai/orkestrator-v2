@@ -180,6 +180,36 @@ What gets worse is failure isolation, not authority: one renderer means one
 out-of-memory takes the whole window, which the window's tier budgets bound
 ([federation.md, Budgets](federation.md#budgets)).
 
+## iOS app
+
+The iOS app (`apps/ios/`, usage in its `README.md`) wraps the web client the
+backend serves in a `WKWebView`. What it guarantees, and must keep:
+
+- **Saved tokens.** Each is stored in the Keychain with
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and without
+  `kSecAttrSynchronizable` (`KeychainCredentialStore.swift`), so it is
+  unreadable while the device is locked and is not carried by backups. A saved
+  token never reaches JavaScript and is only ever sent to its own saved
+  address, where the app exchanges it for the gateway's session cookie. That
+  cookie keeps `HttpOnly`, `Secure` and `SameSite=Strict` in
+  `WKHTTPCookieStore` and stays out of `document.cookie` (a test pins this).
+- **Connection bridge.** `RemoteWebView.Coordinator.handleBridgeRequest`
+  answers only the main frame at the saved origin (`isTrustedBridgeOrigin`):
+  subframes, including an `allow-same-origin` frame at that origin, and a
+  CSP-sandboxed main frame (empty origin) are refused. No bridge action
+  returns a token. A main-frame navigation to another origin opens in Safari
+  (`navigationDisposition`).
+- **Privacy cover.** `PrivacyCover` (`RootView.swift`) covers the root view
+  and the connection editor whenever `scenePhase` is not `.active`, so the
+  app-switcher snapshot does not show the screen. Views WebKit presents itself
+  (a file picker, a link preview) and the keyboard are outside it.
+- **Release settings.** No entitlements file, no URL types,
+  `NSAllowsArbitraryLoads` false, and `isInspectable` never set; a signed
+  archive must keep `get-task-allow` false.
+- **Checks.** Device and release checks run the gateway side on an isolated
+  `dev:test` profile, never a production instance, and their screenshots and
+  notes must not contain the gateway token.
+
 ## Decisions
 
 - **Trusted Types: not adopted.** A report-only run over login, an environment,

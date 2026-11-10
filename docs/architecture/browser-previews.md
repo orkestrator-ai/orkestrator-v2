@@ -293,6 +293,15 @@ connection, as before. Backends serve both.
   asked for. Legacy URL tabs follow the same rule since 2026-10-25: their
   states carry `navigation` and their attaches `navigationBasis`
   (`attachUrl` in `browser-preview-manager.ts`).
+- A URL tab's attach also carries the tab's environment identity
+  (`environmentId`). A tab never changes environment, so an attach with a
+  different identity, null included, is taken for a different tab: main removes
+  the view and creates a new one, deliberately discarding its history, so the
+  new documents keep none of the old environment's access. A synthetic attach
+  in a test must therefore send the same identity the renderer sends, or Back
+  history is lost (the legacy URL tab Back case in
+  `e2e/agent-testing/service-preview-electron.spec.ts` once failed this way on
+  every platform).
 - The rule has a renderer half. A state whose count equals the basis of the
   path the tab chose still reports the page being left: main sends one as a
   load starts, before anything commits. The tab keeps its chosen path until the
@@ -866,8 +875,15 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `Sec-Purpose`, including prefetch/prerender; wildcard private DNS,
   certificates and browser traffic through `publicPort` still need deployment
   qualification. If another forwarder strips metadata, reads fall back to
-  the `Origin` check. See
-  [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
+  the `Origin` check. Keep it that way: missing metadata fails open to the
+  `Origin` check, never closed, so old browsers and non-browser clients keep
+  working. There is no per-deployment opt-out that re-allows
+  cookie-authenticated cross-service reads (a frontend and its API published
+  as two services, see **Framework configuration**). Add one only if real
+  projects report they need it; a `SameSite=Strict` preview cookie is not an
+  alternative, because it would also drop the cookie on the last hop of the
+  sign-in redirect chain and on every link from another site. Shipping Safari
+  and iOS have not been observed sending the metadata.
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Local listener attribution needs `ps` and `lsof` (or, on Linux, `ss`) on the
   backend host. Without them every loopback check is `unchecked`, and

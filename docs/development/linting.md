@@ -50,8 +50,7 @@ number-claim checks (`tests/unit/flaky-tests-index.test.ts`,
 test` runs that stage first, so review preparation hears about a broken guard
 within seconds rather than after the long groups.
 The DOM scan used to be in the slow tier, which no review runs, and seven
-offenders merged on 2026-11-05 (todo
-[7142](../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md)). A scan
+offenders merged on 2026-11-05 (to-do 7142, retired 2026-11-10). A scan
 failure is fixed with `bun scripts/rewrite-bounded-dom-assertions.ts`.
 
 The DOM scan is separate from the subprocess diagnostic canaries, which remain

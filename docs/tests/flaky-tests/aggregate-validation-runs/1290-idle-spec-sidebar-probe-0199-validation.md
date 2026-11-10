@@ -99,8 +99,8 @@ finished. Only the subsequent run counts as broad browser evidence.
   `ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final`. Both warm-ups recorded exactly
   `working`, `idle`, with no `unknown`; the missed-final cases passed too.
   Timings and run IDs are recorded in
-  [0199](../../todo/transcripts-and-observation/0199-idle-observation-spec-sidebar-probe.md#live-qualification-2026-10-28-review-follow-up)
-  and [0049](../../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#sidebar-probe-qualification-2026-10-28).
+  to-do 0199 (retired 2026-11-10)
+  and [0049](../../../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#sidebar-probe-qualification-2026-10-28).
   Profile `idleqa-0199-review` was stopped and reset.
 
 ## Diagnosis (2026-10-29)

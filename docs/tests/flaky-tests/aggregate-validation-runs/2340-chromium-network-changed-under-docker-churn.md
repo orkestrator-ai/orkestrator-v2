@@ -403,7 +403,7 @@ click rather than `goto` or `reload`. None of these failed in runs 3 to 7.
   load average 10 to 35, other builds running, 2026-11-06 01:58–02:05 UTC):
   keyboard picker test 10/10 and multi-backend test 10/10 (`--repeat-each=10`),
   the complete owner without the legacy URL tab case
-  ([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md))
+  ([to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel))
   21/21, `service-preview-seeded-electron.spec.ts` 6/6, and the tunnel case in
   10 separate invocations (10 cold launches) 10/10. No `[startup-recovery]`
   line was printed in any of them: no network change hit a startup in that

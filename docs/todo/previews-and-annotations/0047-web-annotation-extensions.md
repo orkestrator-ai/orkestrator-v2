@@ -28,13 +28,9 @@ Checked against `main` at `2459b05c` (2026-10-15).
    started; follow-ups in
    [2580](2580-shadow-root-annotation-follow-ups.md)).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
-   open (depends on [0042](0042-service-preview-rollout.md) task 3 passing,
-   per the embedding deferral recorded by
-   [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
+   blocked (waits on 7568: 0042 task 3, per the embedding deferral recorded
+   by [0046](0046-embedded-service-previews.md) task 1 on 2026-10-30; the
    embedded host remains unimplemented).
-7. **Product extensions**: code item 6 (grouping, issue export, multi-user,
-   generated summaries). Status: open (not started; split out per item when
-   wanted).
 
 The Qualification bullet applies to each extension as it lands and is covered
 inside tasks 2 to 6.
@@ -242,36 +238,12 @@ unimplemented, so no embedded host for a bridge exists.
     - Cons: a separate session without the user's login state, which must be
       disclosed and is often useless for authenticated apps.
 
-### 7. Product extensions
-
-**Problem.** Grouping, issue export, multi-user discussion and generated
-summaries are wanted but undesigned.
-
-**Context.** Each needs its own design; multi-user needs identity first;
-summaries must never replace the latest human instruction.
-
-**Investigation.** Thread summaries for another session are deterministic
-excerpts (`THREAD_SUMMARY_LIMITS`,
-`apps/backend/src/core/web-annotation-thread-summary.ts:13`). Nothing else
-exists.
-
-**Decisions.**
-
-- **Keep these here or split them out?**
-  - **Move each to its own todo file when someone wants it, and drop it from
-    this list then (recommended).**
-    - Pros: each needs separate design and rating; keeps this file about
-      capture and evidence.
-    - Cons: the list here stays as a placeholder until then.
-  - **Keep them bundled here.**
-    - Pros: one place to look.
-    - Cons: an undesigned grab-bag that keeps the file permanently unfinished.
-
 These are optional annotation capabilities that the proposal and plan put off
 until the core loop was reliable: controlled pixel diffs, automatic
 after-capture, development source hints, DOM targets inside shadow roots and
-iframes, capture outside the desktop app, and a few product extensions. None
-of them blocks the shipped workflow. Each should arrive behind its own
+iframes, capture outside the desktop app, and a few product extensions
+(whether any is wanted is in the manual-test checklist). None of them blocks
+the shipped workflow. Each should arrive behind its own
 capability flag, the way `WebAnnotationCapabilities.operations.comparison` and
 `.resultTools` gate the existing surfaces. Qualify the core loop first
 ([0044-web-annotation-qualification.md](0044-web-annotation-qualification.md)).
@@ -542,12 +514,6 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
      into arbitrary application pages.
    - Until then, web and iOS keep capture unavailable, as they do today.
      Record that in the capability matrix as a deferral, not as parity.
-6. Product extensions, each needing its own design:
-   - shared-component grouping of notes;
-   - issue-tracker export;
-   - multi-user discussion, which needs identity and permissions first;
-   - generated, attributed thread summaries, which must never replace the
-     latest human instruction.
 
 ### Qualification
 
@@ -586,6 +552,7 @@ roots (task 2) and a live desktop run (task 4). Tasks 1 and 3 were done on
   iOS `WKWebView` surfaces).
 - [web-page-annotations.md](../../architecture/web-page-annotations.md)
   §"Client capability matrix" and §"Known limitations".
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 7, choosing which product extensions are wanted) moved there on 2026-11-10.
 - The design canvas renderer is a precedent for a bounded worker only. Its
   isolated authored HTML is not the user's authenticated application session
   ([design-canvas.md](../../architecture/design-canvas.md)).

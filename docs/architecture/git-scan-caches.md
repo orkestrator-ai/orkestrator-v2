@@ -44,7 +44,7 @@ below). Measured on a live macOS stack, a watch-mode build into an ignored `dist
 adds 2 to 5 scans per 10 source saves, and back-to-back builds run one scan every
 2.1–2.4 s, as continuous editing does; an install runs one to three. That cost was
 judged too small to justify reporting ignored directories as tree-only
-([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), tasks 1 and 2).
+(to-do 5060, tasks 1 and 2, retired 2026-11-10).
 
 ## What the worktree watch leaves out
 
@@ -142,7 +142,7 @@ before and 2 after, both from the sentinel. Hints during the install: 1 before,
 18–23 ms before, 2–3 ms after. A local environment in a live `dev:test` backend
 on the same disk showed edits, new files and files in new directories in under
 0.6 s, and an install into its ignored `node_modules` started no scan
-([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 4).
+(to-do 5060, task 4, retired 2026-11-10).
 
 macOS was first run on arktech-mini on 2026-11-04, where `fseventsd` was using 100–138% of a core with
 about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
@@ -176,8 +176,7 @@ plan on macOS (`--mode=split`) removes those callbacks, but each start or close 
 a watch rebuilds the stream and loses events, not delays them, for every other watch
 in the process: a live watch written to every 10 ms lost 57–76 of about 177 writes
 while others were started and closed ten times, and none without. That is why macOS
-keeps one recursive root ([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md),
-task 3); the loss on any start or close is
+keeps one recursive root (to-do 5060, task 3, retired 2026-11-10); the loss on any start or close is
 [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md).
 `scripts/benchmark-recursive-watch-stall.ts` measures all of this.
 
@@ -193,8 +192,8 @@ change is still found, because each new watch sends a hint with unknown paths on
 establishment and the scan it starts runs after the settle. Other watches in the
 helper get no such hint ([7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md)).
 
-Linux start and close for 20 watches took 6 ms and 0 ms. The measurements are recorded in
-[5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).
+Linux start and close for 20 watches took 6 ms and 0 ms. The full measurements were recorded in
+to-do 5060 (retired 2026-11-10; its last version is in Git history).
 
 ## What one scan costs
 
@@ -509,4 +508,13 @@ migration's scoping, the daemon stop and the fallback wiring. Its real-daemon
 cases run wherever `git version --build-options` reports
 `feature: fsmonitor--daemon`, Linux included, and stop every daemon they start.
 
-Remaining work: [0735-git-fsmonitor-follow-ups.md](../todo/containers-and-environments/0735-git-fsmonitor-follow-ups.md).
+The Windows branch of the fingerprint probe (the bounded `taskkill /t /f`
+cleanup) has never run, and the blocking-hook regression in
+`review-worktree-fingerprint.test.ts` is skipped on Windows: it intercepts Git
+with a POSIX `sh` script named `git` first on `PATH`, which Node's
+`spawn("git")` on Windows does not resolve (it finds only `git.exe`/`.cmd`). A
+Windows variant needs another way to observe the calls (for example
+`GIT_TRACE` to a file) and a hook fixture without `#!` or SIGTERM. That run,
+and the per-call latency with and without fsmonitor on Windows, are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(0735 tasks 4 and 6; to-do 0735 retired 2026-11-10).

@@ -60,7 +60,7 @@ A script at the active server's origin can add, switch and forget saved servers 
 
 ## Related
 
-- [5601-ios-runtime-security-checks.md](5601-ios-runtime-security-checks.md): the same origin gate on a real device
+- To-do 5601 (retired 2026-11-10): the same origin gate on a real device, now in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md); the gate itself is in [renderer security, iOS app](../../architecture/renderer-security.md#ios-app)
 - `5602-ios-session-and-privacy-hardening.md` (deleted 2026-11-06): smaller findings from the same review
 
 ## Replaces

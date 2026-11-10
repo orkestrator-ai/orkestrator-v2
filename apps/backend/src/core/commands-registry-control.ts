@@ -8,7 +8,10 @@ import {
   rotateControlMcpTokenCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { COORDINATOR_MAIL_ORIGIN_NOTE } from "@orkestrator/protocol/agent-mail";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import {
+  isTransientDispatchRefusal,
+  nativeAgentSessionStorageKey,
+} from "./native-agent-service-shared.js";
 import { controlJobId as jobIdFor, savedControlJobAgent } from "./control-job-identity.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -283,6 +286,9 @@ async function launchNativeAgentJobInternal(
     );
   };
   let dispatchStarted = false;
+  const jobId = jobIdFor(environmentId, requestId);
+  const tabId = requestedTabId ?? `agent-job-${jobId}`;
+  const logicalSessionKey = `env-${environmentId}:${tabId}`;
 
   const completionActionResult = completionAction
     ? {
@@ -300,7 +306,6 @@ async function launchNativeAgentJobInternal(
       await rollBackCompletionAction();
       return { status: "skipped" };
     }
-    const jobId = jobIdFor(environmentId, requestId);
     if (tabReuse && completionAction) {
       const resent = await resendToOpenJobTab(context, {
         authorized,
@@ -334,8 +339,6 @@ async function launchNativeAgentJobInternal(
     }
     // A renderer chooses the id up front so the tab it shows at once is this
     // tab. Control MCP callers keep the id derived from their retry key.
-    const tabId = requestedTabId ?? `agent-job-${jobId}`;
-    const logicalSessionKey = `env-${environmentId}:${tabId}`;
     // A retry belongs to the first attempt's provenance, even if a later
     // coordinator turn has a different origin. Keep both the wire prompt and
     // presentation aligned; all other frame changes still fail validation.
@@ -447,7 +450,29 @@ async function launchNativeAgentJobInternal(
     };
   } catch (error) {
     // A thrown dispatch can have reached the provider. Retain ownership; never duplicate it.
-    if (!dispatchStarted) await rollBackCompletionAction();
+    if (!dispatchStarted) {
+      await rollBackCompletionAction();
+      // Only creation failures with no existing conversation are known-safe
+      // here. Existing sessions can still own a parked dispatch or steer.
+      if (
+        isTransientDispatchRefusal(error) &&
+        !(await context.storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+        ))
+      ) {
+        return {
+          jobId,
+          environmentId,
+          tabId,
+          agent,
+          logicalSessionKey,
+          status: "rejected",
+          transient: true,
+          error: error instanceof Error ? error.message : "Session creation failed",
+          ...completionActionResult,
+        };
+      }
+    }
     throw error;
   }
 }

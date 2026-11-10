@@ -88,6 +88,61 @@ describe("transient prompt refusals in the public API", () => {
     });
   });
 
+  test("initial create failure is retryable, replayed without another create, and recovers", async () => {
+    const { harness, stub } = await setup();
+    const original = stub.provider.createSession;
+    let creates = 0;
+    stub.provider.createSession = async () => {
+      creates++;
+      throw new ProviderUnavailableError(BUSY);
+    };
+    const input = { environmentId: "env-1", agent: "claude", prompt: "first" };
+    const refused = await harness.call("session.start", input, { requestId: "create-failure" });
+    expect(!refused.ok && refused.error).toMatchObject({
+      code: "operation-failed",
+      exitCode: 1,
+      retryable: true,
+    });
+    expect(stub.sends).toHaveLength(0);
+    const count = creates;
+    const replay = await harness.call("session.start", input, { requestId: "create-failure" });
+    expect(replay.receipt?.replayed).toBe(true);
+    expect(creates).toBe(count);
+    stub.provider.createSession = original;
+    expect((await harness.call("session.start", input, { requestId: "create-recovered" })).ok).toBe(
+      true,
+    );
+    expect(stub.sends).toHaveLength(1);
+  });
+
+  test("retry first prompt in the failed start's session without creating another tab", async () => {
+    const { harness, stub } = await setup();
+    stub.setSend(async () => {
+      throw new ProviderUnavailableError(BUSY);
+    });
+    const refused = await harness.call(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "first" },
+      { requestId: "reuse-start" },
+    );
+    expect(refused.ok).toBe(false);
+    const sessionId = refused.receipt?.resources.sessionId;
+    expect(sessionId).toBeDefined();
+    const before = await harness.storage.getPaneLayout("env-1");
+    stub.setSend(async () => undefined);
+    stub.setStatus(async () => "idle");
+    const retry = await harness.call(
+      "session.prompt",
+      { sessionId, prompt: "first" },
+      { requestId: "reuse-prompt" },
+    );
+    expect(retry.ok).toBe(true);
+    const after = await harness.storage.getPaneLayout("env-1");
+    expect(after).toEqual(before);
+    expect(stub.sends).toHaveLength(2);
+    expect(stub.sends[0]?.sessionId).toBe(stub.sends[1]?.sessionId);
+  });
+
   test("a refusal that will not change on its own carries no retryable", async () => {
     const { harness, stub } = await setup();
     stub.setSend(async () => {

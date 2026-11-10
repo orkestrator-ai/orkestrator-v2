@@ -2127,20 +2127,12 @@ export class NativeAgentService {
       // Everything before the first dispatch attempt: session creation, the
       // manual-prompt claim. A normal send has no earlier record to preserve;
       // an explicit recovery retry does, and must leave it parked on failure.
-      if (!preserveExistingPending) {
-        await this.storage
-          .clearPendingNativeAgentDispatch(
-            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-            input.requestId,
-          )
-          .catch(() => false);
-      }
+      const cleared = !preserveExistingPending && (await this.clearRefusedDispatch(input));
+      const transient = cleared && isTransientDispatchRefusal(error);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
-        ...(!preserveExistingPending && isTransientDispatchRefusal(error)
-          ? { transient: true as const }
-          : {}),
+        ...(transient ? { transient: true as const } : {}),
       };
     } finally {
       if (manualClaimSession) {
@@ -2244,19 +2236,36 @@ export class NativeAgentService {
       // A retry of an id the bridge has retired can never succeed, so the
       // parked record is resolved here too rather than left asking for one.
       const retired = error instanceof PromptRejectedError && error.requestIdRetired;
-      if (!preserveExistingPending || retired) {
-        await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
-      }
+      const cleared =
+        !preserveExistingPending || retired ? await this.clearRefusedDispatch(input) : false;
       if (retired) void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
         ...(retired ? { requestIdRetired: true as const } : {}),
         // Nothing was sent and no record stays parked: a new id may succeed.
-        ...(!preserveExistingPending && isTransientDispatchRefusal(error)
+        ...(!preserveExistingPending && cleared && isTransientDispatchRefusal(error)
           ? { transient: true as const }
           : {}),
       };
+    }
+  }
+
+  /** Reacquire the session fence before certifying cleanup; unreadable state is not retryable. */
+  private async clearRefusedDispatch(input: DispatchNativeAgentPromptInput): Promise<boolean> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    try {
+      return await this.promptQueues.withSessionWorkFence(input, async () => {
+        await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
+        const session = await this.storage.getNativeAgentSession(key);
+        return !session?.pendingDispatch && !session?.pendingSteer;
+      });
+    } catch {
+      return false;
     }
   }
 

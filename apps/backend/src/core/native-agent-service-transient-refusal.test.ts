@@ -7,7 +7,7 @@
  * never carry it, because a new id there either fails the same way or could
  * run the prompt twice.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
@@ -66,6 +66,120 @@ describe("transient prompt refusals", () => {
         await expect(
           service.dispatchIntent({ ...base, agent: "cursor", requestId: "first" }),
         ).resolves.toEqual({ outcome: "rejected", error: "Bridge is offline", transient: true });
+      },
+    );
+  });
+
+  for (const agent of ["claude", "opencode"] as const) {
+    test(`${agent}: preflight refusal respects parked dispatch state`, async () => {
+      let unavailable = false;
+      const stub = createProviderStub(agent, {
+        status: async () => {
+          if (unavailable) throw new ProviderUnavailableError(busyRefusal);
+          return "idle";
+        },
+        send: async () => {
+          throw new AmbiguousPromptDispatchError("Response lost");
+        },
+        dispatchStatus: async () => "unknown",
+      });
+      await withService(
+        { prefix: "transient-preflight-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const input = { ...base, agent };
+          const storageKey = nativeAgentSessionStorageKey(
+            base.environmentId,
+            agent,
+            base.logicalSessionKey,
+          );
+          expect((await service.dispatchIntent({ ...input, requestId: "parked" })).outcome).toBe(
+            "unknown",
+          );
+          unavailable = true;
+          const refused = await service.dispatchIntent({ ...input, requestId: "new" });
+          expect(refused.outcome).toBe("rejected");
+          expect(refused).not.toHaveProperty("transient");
+          expect(
+            (await storage.getNativeAgentSession(storageKey))?.pendingDispatch?.requestId,
+          ).toBe("parked");
+          expect(stub.send).toHaveBeenCalledTimes(1);
+        },
+      );
+    });
+
+    test(`${agent}: a clean preflight availability refusal is transient`, async () => {
+      const stub = createProviderStub(agent, {
+        createSession: async () => {
+          throw new ProviderUnavailableError(busyRefusal);
+        },
+      });
+      await withService(
+        { prefix: "transient-create-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const result = await service.dispatchIntent({ ...base, agent, requestId: "first" });
+          expect(result).toMatchObject({ outcome: "rejected", transient: true });
+          expect(stub.send).not.toHaveBeenCalled();
+        },
+      );
+    });
+  }
+
+  test("preflight failure with a parked steer is not transient", async () => {
+    let unavailable = false;
+    const stub = createProviderStub("claude", {
+      status: async () => {
+        if (unavailable) throw new ProviderUnavailableError(busyRefusal);
+        return "idle";
+      },
+    });
+    await withService(
+      { prefix: "transient-steer-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        await service.ensureSession(base);
+        await storage.dispatchNativeAgentSteerOnce(
+          key,
+          {
+            requestId: "steer",
+            text: "continue",
+            inputDigest: "a".repeat(64),
+            expectedRunId: "run-1",
+            state: "prepared",
+            createdAt: new Date(0).toISOString(),
+          },
+          async () => ({ outcome: "unknown", requestId: "steer" }),
+        );
+        unavailable = true;
+        const refused = await service.dispatchIntent({ ...base, requestId: "new" });
+        expect(refused.outcome).toBe("rejected");
+        expect(refused).not.toHaveProperty("transient");
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer?.requestId).toBe("steer");
+        expect(stub.send).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("failed pending cleanup never advertises a new-key retry", async () => {
+    const stub = createProviderStub("claude", {
+      send: async () => {
+        throw new ProviderUnavailableError(busyRefusal);
+      },
+    });
+    await withService(
+      { prefix: "transient-cleanup-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const clear = spyOn(storage, "clearPendingNativeAgentDispatch").mockRejectedValue(
+          new Error("write failed"),
+        );
+        try {
+          const refused = await service.dispatchIntent({ ...base, requestId: "first" });
+          expect(refused.outcome).toBe("rejected");
+          expect(refused).not.toHaveProperty("transient");
+          expect((await storage.getNativeAgentSession(key))?.pendingDispatch?.requestId).toBe(
+            "first",
+          );
+        } finally {
+          clear.mockRestore();
+        }
       },
     );
   });

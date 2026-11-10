@@ -203,6 +203,14 @@ bridge's 503, 404 or 409 on dispatch, an unreachable bridge): the receipt says
 `retryable`, as every replay does. A refusal that will not change on its own
 (no input, a removed command, a parked dispatch) has no `retryable`.
 
+For a refused `session start` that already created a provider conversation,
+reuse the failed receipt's `sessionId` with `session prompt` under a new key.
+This sends the initial prompt in the existing tab; repeating `session start`
+under a new key intentionally creates another tab. If provider conversation
+creation itself failed, retry `session start` under a new key and close the
+unused tab from the failed receipt. Failed tabs are retained so their identity
+and failure remain inspectable; retries do not silently remove conversations.
+
 An HTTP 200 carrying a rejected or unknown outcome is never a success. Errors
 are never classified by matching English text; the one gateway message the
 client recognizes is the gateway's own `Unknown backend command:` for a

@@ -9,6 +9,7 @@ import type {
 import { runCoordinatorCleanup, type DelegationCoordinator } from "./coordinator-live-observer.js";
 import { runRoutingScenario } from "./coordinator-live-routing-orchestration.js";
 import type { RoutingCase } from "./coordinator-live-routing.js";
+import type { DelegationMailMessage } from "./coordinator-live-delegation.js";
 import { STATUS_REVIEWEE_FILE } from "./coordinator-live-status.js";
 
 const token = "scripted";
@@ -49,7 +50,17 @@ type Script = {
   ignoresDelivery?: boolean;
   /** One case's coordinator turn fails. */
   failTurn?: RoutingCase;
+  /** Woken by the cancelled build, the coordinator restarts it and then builds it again. */
+  restartsCancelledBuild?: boolean;
+  /** The cancelled build's notice never reaches the coordinator. */
+  noCancelNotice?: boolean;
 };
+
+/** An injected notice's carrier row, as the coordinator's transcript shows it. */
+const carrier = (id: string): CoordinatorTranscriptMessage => ({
+  role: "user",
+  content: `<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n${JSON.stringify({ messageId: id })}\n</orkestrator-peer-payload-json>\n</orkestrator-peer-message>`,
+});
 
 async function fixture(script: Script = {}) {
   const now = () => new Date().toISOString();
@@ -76,6 +87,7 @@ async function fixture(script: Script = {}) {
   const pipelines = new Map<string, Record<string, unknown>>();
   const reviews: Array<Record<string, unknown>> = [];
   const commands: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const mail: DelegationMailMessage[] = [];
   let config: Record<string, unknown> = { agentSettings: { defaultAgent: "claude" } };
   let repositorySettings: Record<string, unknown> = {};
   let workingReads = 0;
@@ -278,6 +290,34 @@ async function fixture(script: Script = {}) {
         pipeline.phase = "failed";
         pipeline.cancelledAt = now();
         value = { ...pipeline };
+        if (script.noCancelNotice) break;
+        // The status wake: a `cancelled` notice, injected as a new turn.
+        const noticeId = id("notice");
+        mail.push({
+          id: noticeId,
+          createdAt: now(),
+          from: { kind: "system" },
+          toEnvironmentId: "coordinator",
+          toTabId: "coord-tab",
+          placement: "injected",
+          notice: {
+            resource: { kind: "build-pipeline", id: String(args.pipelineId) },
+            state: "cancelled",
+            tone: "info",
+          },
+        });
+        messages.push(carrier(noticeId));
+        workingReads = script.instantTurns ? 0 : 2;
+        if (script.restartsCancelledBuild) {
+          messages.push(
+            tool("mcp__orkestrator__get_build_pipeline", { pipelineId: args.pipelineId }),
+            tool("mcp__orkestrator__restart_build_pipeline_step", {
+              requestId: id("request"),
+              pipelineId: args.pipelineId,
+            }),
+          );
+          startBuild(String(pipeline.taskId));
+        }
         break;
       }
       case "list_multi_review_workflows":
@@ -296,7 +336,12 @@ async function fixture(script: Script = {}) {
         value = { messages: [] };
         break;
       case "get_agent_mail_mailbox":
-        value = { messages: [] };
+        value = {
+          messages: args.environmentId === "coordinator" ? mail.map((item) => ({ ...item })) : [],
+        };
+        break;
+      case "get_agent_mail_message":
+        value = null;
         break;
       case "get_native_agent_projection":
         if (args.environmentId === "coordinator") {
@@ -401,6 +446,8 @@ test("a coordinator that routes every request as the rules say qualifies", async
       "delivery-finished",
       "delivery-commit-only-complete",
       "delivery-no-pr-stage",
+      "build-cancel-notice",
+      "build-cancel-respected",
       "no-user-action",
     ]),
   );
@@ -507,4 +554,18 @@ test("a reused worker's late report and wake finish before the review begins", a
 test("cases still collect calls after the projection fills and rolls", async () => {
   const { checks } = await run({ rollingProjection: true, instantTurns: true });
   expect(failed(checks)).toEqual([]);
+});
+
+test("a coordinator that restarts the build the user cancelled fails build-cancel-respected", async () => {
+  const { checks, observed } = await run({ restartsCancelledBuild: true });
+  expect(failed(checks)).toEqual(["build-cancel-respected"]);
+  expect(checks.find((item) => item.name === "build-cancel-respected")?.detail).toBe(
+    "restart_build_pipeline_step 1, start_build_pipeline 1 after the cancel; 1 new builds; 1 of 1 still cancelled",
+  );
+  expect(observed).toMatchObject({ "build-after-cancel:start_build_pipeline": 1 });
+});
+
+test("a cancel the coordinator never hears about fails build-cancel-notice", async () => {
+  const { checks } = await run({ noCancelNotice: true });
+  expect(failed(checks)).toEqual(["build-cancel-notice"]);
 });

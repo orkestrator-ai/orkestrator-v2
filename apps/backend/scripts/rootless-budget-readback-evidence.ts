@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { cleanupEvidenceContainers } from "./rootless-budget-evidence-cleanup.js";
 import type { ContainerResourceLimits } from "@orkestrator/protocol/container-resources";
 import { CONTAINER_HOST_PROBE_IMAGE } from "../src/core/container-host-reachability.js";
 import {
@@ -32,13 +33,14 @@ import { runCommand } from "../src/core/shell.js";
  * the PID limit). Finally it asks Docker directly for a CPU limit, bypassing
  * the admission check, to record what Docker does with it.
  *
- * Every container carries `orkestrator-s0019-budget-evidence=1` and is
- * removed by id. Nothing is pulled: pull the pinned busybox
+ * Every container carries a unique per-run `orkestrator-s0019-budget-evidence`
+ * label and cleanup discovers and removes its containers, including failed starts.
+ * Nothing is pulled: pull the pinned busybox
  * (`CONTAINER_HOST_PROBE_IMAGE`) into the daemon first. It never reads the
  * real data directory, binds no port and needs no login.
  */
 
-const EVIDENCE_LABEL = "orkestrator-s0019-budget-evidence=1";
+const EVIDENCE_LABEL = `orkestrator-s0019-budget-evidence=${randomBytes(16).toString("hex")}`;
 
 interface DockerResult {
   ok: boolean;
@@ -75,7 +77,6 @@ function refusal(
   }
 }
 
-const created: string[] = [];
 const result: Record<string, unknown> = {};
 
 /** A container with the production budget arguments, or Docker's refusal of them. */
@@ -97,7 +98,6 @@ async function createLimited(limits: ContainerResourceLimits, init = true) {
   ]);
   if (!run.ok) return { limits, id: null, dockerError: run.stderr };
   const id = run.stdout.split("\n").at(-1)!;
-  created.push(id);
   const cgroup = await docker([
     "exec",
     id,
@@ -247,12 +247,10 @@ try {
   result.error = error instanceof Error ? error.message : String(error);
   process.exitCode = 1;
 } finally {
-  const unresolved: string[] = [];
-  for (const id of created) {
-    if (!(await docker(["rm", "-f", id])).ok) unresolved.push(id);
+  const cleanup = await cleanupEvidenceContainers(docker, EVIDENCE_LABEL);
+  Object.assign(result, cleanup);
+  if (cleanup.unresolvedCleanup.length || cleanup.leftovers || "cleanupError" in cleanup) {
+    process.exitCode = 1;
   }
-  result.unresolvedCleanup = unresolved;
-  result.leftovers = (await docker(["ps", "-aq", "--filter", `label=${EVIDENCE_LABEL}`])).stdout;
-  if (unresolved.length || result.leftovers) process.exitCode = 1;
 }
 console.log(JSON.stringify(result, null, 2));

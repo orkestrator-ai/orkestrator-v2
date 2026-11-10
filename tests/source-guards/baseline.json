@@ -191,7 +191,6 @@
     "apps/backend/tests/container-bridge-credential.test.ts": 2,
     "apps/backend/tests/container-live-replacement.test.ts": 1,
     "apps/backend/tests/opencode-mcp-reload-live.test.ts": 2,
-    "apps/backend/tests/project-git-mirror.integration.test.ts": 1,
     "apps/desktop/scripts/dev/agent-tools-port.test.ts": 1,
     "apps/desktop/scripts/dev/profile-io.test.ts": 1,
     "apps/desktop/tests/backend-process.test.ts": 1,

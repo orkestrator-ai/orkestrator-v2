@@ -511,7 +511,11 @@ describe("C20 staged portable inputs", () => {
           (mount) => mount.Type === "bind" && mount.Destination === CONTAINER_GIT_MIRROR_MOUNT,
         );
         expect(mirrorBinds.map(({ Source, RW }) => ({ Source, RW }))).toEqual([
-          { Source: path.join(dataDir, GIT_MIRRORS_DIR, "project-1", "mount"), RW: false },
+          // No container GitHub credential, so the anonymous kind's mirror.
+          {
+            Source: path.join(dataDir, GIT_MIRRORS_DIR, "project-1", "mount-anonymous"),
+            RW: false,
+          },
         ]);
         const binds = mounts.filter(
           (mount) => mount.Type === "bind" && mount.Destination !== CONTAINER_GIT_MIRROR_MOUNT,

@@ -1,6 +1,7 @@
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
 import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
 import { useEffect, useState, useRef } from "react";
+import { Loader2 } from "lucide-react";
 import type { AutoPipelineDraft, AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
@@ -177,6 +178,7 @@ export function AutoPipelineLaunch({
         }}
       >
         <DialogContent
+          aria-busy={busy}
           className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]"
           onEscapeKeyDown={(event) => {
             const editor = descriptionEditor.current;
@@ -194,8 +196,13 @@ export function AutoPipelineLaunch({
             </DialogDescription>
           </DialogHeader>
           {busy && (
-            <p role="status">
-              {draft ? "Promoting environment…" : "Drafting ticket and Build notes…"}
+            <p role="status" className="flex items-center gap-2 text-sm">
+              <Loader2
+                aria-hidden="true"
+                data-testid="auto-pipeline-spinner"
+                className="size-4 shrink-0 animate-spin text-primary"
+              />
+              <span>{draft ? "Promoting environment…" : "Drafting ticket and Build notes…"}</span>
             </p>
           )}
           {error && <p role="alert">{error}</p>}

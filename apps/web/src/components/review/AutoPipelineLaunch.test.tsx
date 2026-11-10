@@ -194,10 +194,30 @@ test("a hanging draft can be dismissed without confirmation", async () => {
   });
   fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
   await screen.findByText("Drafting ticket and Build notes…");
+  // The working state shows a spinner beside the status text, hidden from assistive tech.
+  const spinner = screen.getByRole("status").querySelector('[data-testid="auto-pipeline-spinner"]');
+  expect(spinner?.getAttribute("class")).toContain("animate-spin");
+  expect(spinner?.getAttribute("aria-hidden")).toBe("true");
+  expect(screen.getByRole("dialog").getAttribute("aria-busy")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
   await waitFor(() => expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1));
   await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+});
+test("a pending confirmation shows the spinner with the promotion status", async () => {
+  const node = client().respond("confirm_auto_pipeline", () => new Promise(() => {}));
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  expect(screen.queryByTestId("auto-pipeline-spinner") === null).toBe(true);
+  expect(screen.getByRole("dialog").getAttribute("aria-busy")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await screen.findByText("Promoting environment…");
+  expect(
+    screen.getByRole("status").querySelector('[data-testid="auto-pipeline-spinner"]'),
+  ).toBeTruthy();
 });
 test("draft failure offers retry and plain review; confirmation errors retain the draft", async () => {
   const node = client().respond("draft_auto_pipeline", () => {

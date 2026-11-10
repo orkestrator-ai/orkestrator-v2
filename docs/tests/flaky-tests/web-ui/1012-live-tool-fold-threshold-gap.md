@@ -144,3 +144,33 @@ mise run test:logged -- --name isolate-fold -- bunx playwright test --config e2e
 
 This confirms intermittence; the cause remains unconfirmed. Status stays open.
 No assertion, timeout or skip changed.
+
+## Releases page review repairs — 2026-11-10
+
+Observed 2026-11-10 on `releases-page-b2c7d73cdbc4-r1`, base commit
+`53340356c51e6bdb6f86cb6d806575218bbbc6bd`
+(`mise run flaky:recurrence -- 1012 --base 53340356c5`: open, record the
+recurrence). The branch changes only `apps/web-public` and docs; the review
+package's failure triage marked this test `undetermined` with reasons
+`known-flaky` and `not-import-traceable`.
+
+Review preparation's `mise run test:browser` (exit 1, 1,219.1 s; 1,664
+passed, 152 skipped) failed this case on mobile and desktop with gaps above
+2 px. Two complete one-worker owner reruns then also failed it:
+
+```sh
+mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+- First rerun, overlapping a `mise run test` run: 31 passed, 7 failed
+  (5.9 min). This case failed on mobile (10 px) and desktop (95 px); five
+  line-153 `preserves their place` cases timed out or missed their offset.
+- Second rerun, after `mise run test` finished: 35 passed, 3 failed
+  (3.6 min). This case failed with 5 px on mobile and 9 px on desktop; the
+  mobile line-153 `growing below ... with reduce motion` case timed out.
+
+The host load average was about 41 on 16 cores (unrelated agent work) during
+both reruns, so the one-worker owner did not get the idle host the earlier
+passing reruns had. The cause remains unconfirmed. Status stays open. No
+assertion, timeout or skip changed.
+

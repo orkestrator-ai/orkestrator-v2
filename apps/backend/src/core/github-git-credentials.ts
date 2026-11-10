@@ -14,6 +14,15 @@ const PAT_HELPER = `!f() {
   fi
 }; f`;
 
+/**
+ * Git options that answer `https://github.com` with the token in
+ * `ORKESTRATOR_GITHUB_TOKEN`, which the caller puts in the transfer's
+ * environment. Every other helper is cleared, so nothing else is asked.
+ */
+export function gitHubTokenCredentialOptions(): string[] {
+  return ["-c", "credential.helper=", "-c", `credential.https://github.com.helper=${PAT_HELPER}`];
+}
+
 /** Per-transfer PAT authentication; no secrets in argv, URLs or persisted Git config. */
 export async function gitHubGitCredentials(
   source: GitHubCliConfigSource | undefined,
@@ -28,10 +37,7 @@ export async function gitHubGitCredentials(
   return {
     env: { ...env, ORKESTRATOR_GITHUB_TOKEN: env.GH_TOKEN },
     gitOptions: [
-      "-c",
-      "credential.helper=",
-      "-c",
-      `credential.https://github.com.helper=${PAT_HELPER}`,
+      ...gitHubTokenCredentialOptions(),
       // An exact rewrite overrides broader host SSH preferences for this transfer.
       "-c",
       `url.${https}.insteadOf=${remote}`,

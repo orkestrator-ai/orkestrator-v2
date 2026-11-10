@@ -21,7 +21,9 @@ import {
   containerBridgeLauncherInput,
   containerBridgeLaunch,
   containerCredentialFile,
+  containerListenerRecordFile,
   CONTAINER_BRIDGE_LAUNCHER,
+  parseContainerBridgeLauncherSession,
   CONTAINER_TOKEN_FILES,
   launchContainerScript,
   readContainerBridgeToken,
@@ -31,6 +33,7 @@ import { OPENCODE_CREDENTIAL_PLUGIN_PATH } from "../src/core/agent-credential-fi
 import {
   startContainerClaudeServer,
   startContainerOpenCodeServer,
+  startContainerServer,
 } from "../src/core/commands-containers";
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -49,12 +52,24 @@ if [ -n "$FAKE_DOCKER_FAIL" ]; then
   case "$*" in *"$FAKE_DOCKER_FAIL"*) exit 9 ;; esac
 fi
 case "$*" in
+  *"--user root"*"cat /run/orkestrator-bridge/opencode-token"*) printf '%s' "$FAKE_ROOT_TOKEN"; exit 0 ;;
   *"--user root"*"rm -f /run/orkestrator-bridge/"*) touch "$FAKE_DOCKER_EXEC_LOG.root-removed" ;;
-  *"--user root"*"cat /run/orkestrator-bridge/"*) if [ ! -f "$FAKE_DOCKER_EXEC_LOG.root-removed" ]; then printf '%s' "$FAKE_ROOT_TOKEN"; fi ;;
+  *"--user root"*"cat /run/orkestrator-bridge/"*) if [ ! -f "$FAKE_DOCKER_EXEC_LOG.root-removed" ]; then printf '%s' "$FAKE_ROOT_TOKEN" | { IFS= read -r t; IFS= read -r k; printf '%s\n%s\n' "$t" "$k"; }; printf '%s\n' "\${FAKE_LISTENER-listener-scan-complete}"; fi ;;
+  *"--user root"*"ss -Hltne"*) printf '%s\n' "\${FAKE_LISTENER-listener-scan-complete}" ;;
   *"cat /tmp/"*) printf '%s' "$FAKE_NODE_TOKEN" ;;
+  *"orkestrator-bridge-launch"*) if [ -n "$FAKE_LAUNCH_SESSION" ]; then printf 'orkestrator-bridge-session=%s\n' "$FAKE_LAUNCH_SESSION"; fi ;;
 esac
 exit 0
 `;
+
+/** The port's listening socket as the root scan prints it, and the scan's last line. */
+function listenerScan(inode: string, cookie: string, record?: string): string {
+  return [
+    ...(record ? [`listener-record ${record}`] : []),
+    `listener-socket LISTEN 0 512 0.0.0.0:4097 0.0.0.0:* uid:1000 ino:${inode} sk:${cookie} cgroup:/ <->`,
+    "listener-scan-complete",
+  ].join("\n");
+}
 
 async function withDocker(
   env: Record<string, string>,
@@ -80,6 +95,8 @@ async function withDocker(
 
 afterEach(() => {
   delete process.env.FAKE_DOCKER_FAIL;
+  delete process.env.FAKE_LISTENER;
+  delete process.env.FAKE_LAUNCH_SESSION;
 });
 
 describe("containerBridgeLaunch", () => {
@@ -376,7 +393,7 @@ test("removing a credential runs as root and names only that bridge's file", asy
     const { argv } = await read();
     expect(argv[0]).toContain("--user root");
     expect(argv[0]!.trim()).toEndWith(
-      `rm -f ${containerCredentialFile("grok")} ${containerAuthorityKeyFile("grok")}`,
+      `rm -f ${containerCredentialFile("grok")} ${containerAuthorityKeyFile("grok")} ${containerListenerRecordFile("grok")}`,
     );
   });
 });
@@ -397,10 +414,14 @@ case "$1" in
     case " $* " in
       *" -i "*) printf 'STDIN:%s\\n' "$(cat)" >> "$FAKE_DOCKER_EXEC_LOG" ;;
     esac
+    case "$*" in
+      *"ss -Hltne"*) printf '%s\\n' "$FAKE_LISTENER" ;;
+    esac
     exit 0 ;;
 esac
 exit 0
 `;
+  process.env.FAKE_LISTENER = listenerScan("31", "4f");
   await withFakeDocker(script, async (logs) => {
     // The bridge answers once the launch has run, as a real one does.
     const arrive = setInterval(async () => {
@@ -436,6 +457,15 @@ exit 0
       expect(argv).toContain("rm -f /tmp/claude-bridge-token");
       expect(log).toContain(`STDIN:${started.authToken}`);
       expect(log).toContain(`export ORKESTRATOR_AGENT_MCP_TOKEN='${AGENT_TOOLS_TOKEN}'`);
+      // No listener is trusted from the token's write until the bridge answers,
+      // and then the socket on its port is recorded, by root.
+      const execs = log.split(/^(?=ARGV:|STDIN:)/m).filter((entry) => entry.startsWith("ARGV:"));
+      const write = execs.findIndex((entry) => entry.includes('mv "$credential_tmp"'));
+      expect(execs[write]).toContain(`'pending' > "$record_tmp"`);
+      const recorded = execs.findIndex((entry) => entry.includes("'31:4f'"));
+      expect(recorded).toBeGreaterThan(write);
+      expect(execs[recorded]).toContain("--user root");
+      expect(execs[recorded]).toContain(containerListenerRecordFile("claude"));
     } finally {
       clearInterval(arrive);
       bridge?.stop(true);
@@ -865,5 +895,200 @@ describe("readContainerBridgeToken for OpenCode", () => {
       await removeContainerBridgeCredential("container", "opencode");
       expect((await read()).argv[0]).toContain("/run/orkestrator-bridge/opencode-listener");
     });
+  });
+});
+
+/**
+ * To-do 7250: the token goes only to the socket the bridge the backend
+ * launched opened, never to whatever listens on its port now.
+ */
+describe("the listener on a bridge's port", () => {
+  test("the recorded socket gets its token, in the same root exec", async () => {
+    await withDocker(
+      { FAKE_ROOT_TOKEN: `${TOKEN}\n`, FAKE_LISTENER: listenerScan("7", "a1", "7:a1") },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "claude")).toBe(TOKEN);
+        const { argv } = await read();
+        expect(argv).toHaveLength(1);
+        expect(argv[0]).toContain("--user root");
+        expect(argv[0]).toContain("ss -Hltne 'sport = :4097'");
+        expect(argv[0]).toContain(containerListenerRecordFile("claude"));
+      },
+    );
+  });
+
+  test.each([
+    ["a different socket", listenerScan("8", "b2", "7:a1")],
+    [
+      "a socket beside the bridge's",
+      `${listenerScan("7", "a1", "7:a1")}\n${listenerScan("9", "c3")}`,
+    ],
+    ["a start that has not recorded its bridge", listenerScan("7", "a1", "pending")],
+    ["a scan that did not finish", ""],
+  ])("%s gets no token, and nothing falls back to /tmp", async (_name, listener) => {
+    await withDocker(
+      { FAKE_ROOT_TOKEN: `${TOKEN}\n`, FAKE_NODE_TOKEN: TOKEN, FAKE_LISTENER: listener },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "pi")).toBeNull();
+        expect((await read()).argv).toHaveLength(1);
+      },
+    );
+  });
+
+  test("an empty port still has its token: no process can receive it there", async () => {
+    await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n` }, async () => {
+      expect(await readContainerBridgeToken("container", "codex")).toBe(TOKEN);
+    });
+  });
+
+  test("a bridge an older backend started is recorded as it stands", async () => {
+    await withDocker(
+      { FAKE_ROOT_TOKEN: `${TOKEN}\n`, FAKE_LISTENER: listenerScan("7", "a1") },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "grok")).toBe(TOKEN);
+        const { argv } = await read();
+        expect(argv).toHaveLength(2);
+        expect(argv[1]).toContain("--user root");
+        expect(argv[1]).toContain(`'7:a1' > "$record_tmp"`);
+        expect(argv[1]).toContain(containerListenerRecordFile("grok"));
+      },
+    );
+  });
+
+  test("failed adoption refuses the token without falling back for status, reuse and peek readers", async () => {
+    await withDocker(
+      {
+        FAKE_ROOT_TOKEN: `${TOKEN}\n`,
+        FAKE_NODE_TOKEN: TOKEN,
+        FAKE_LISTENER: listenerScan("7", "a1"),
+        FAKE_DOCKER_FAIL: "record_tmp=",
+      },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "grok")).toBeNull();
+        expect((await read()).argv.some((line) => line.includes("cat /tmp/"))).toBe(false);
+      },
+    );
+  });
+
+  test("OpenCode, which has no bridge of ours, is read as before", async () => {
+    await withDocker({ FAKE_ROOT_TOKEN: "r".repeat(43), FAKE_LISTENER: "" }, async (read) => {
+      expect(await readContainerBridgeToken("container", "opencode")).toBe("r".repeat(43));
+      expect((await read()).argv[0]).not.toContain("ss -Hltne");
+    });
+  });
+
+  test("a new token marks the record pending; OpenCode's has none", async () => {
+    await withDocker({}, async (read) => {
+      await launchContainerScript("container", "echo start", {
+        rootCredential: { kind: "pi", token: TOKEN },
+      });
+      await launchContainerScript("container", "echo start", {
+        rootCredential: { kind: "opencode", token: TOKEN },
+      });
+      const roots = (await read()).argv.filter((line) => line.includes("--user root"));
+      expect(roots[0]).toContain(`'pending' > "$record_tmp"`);
+      expect(roots[0]).toContain(containerListenerRecordFile("pi"));
+      expect(roots[1]).not.toContain("listener");
+    });
+  });
+
+  test("the launcher's session report", () => {
+    expect(parseContainerBridgeLauncherSession("orkestrator-bridge-session=4242\n")).toBe(4242);
+    expect(parseContainerBridgeLauncherSession("noise\norkestrator-bridge-session=17\n")).toBe(17);
+    // An older launcher says nothing; pid 1 and garbage are not a launch.
+    expect(parseContainerBridgeLauncherSession("")).toBeUndefined();
+    expect(parseContainerBridgeLauncherSession("orkestrator-bridge-session=1")).toBeUndefined();
+    expect(parseContainerBridgeLauncherSession("orkestrator-bridge-session=1x")).toBeUndefined();
+  });
+
+  test("a launch through the launcher returns the session it reported", async () => {
+    await withDocker({ FAKE_LAUNCH_SESSION: "4242" }, async () => {
+      const launch = containerBridgeLaunch("pi", "launcher", TOKEN);
+      try {
+        expect(
+          await launchContainerScript("container", launch.start("", ""), launch.launch),
+        ).toEqual({ session: 4242 });
+      } finally {
+        forgetBridgeAuthorityKey(TOKEN);
+      }
+    });
+  });
+
+  /** A container whose bridge answers once the launcher ran, with `listener` as root's scan. */
+  async function startPi(listener: string) {
+    let ready = false;
+    const bridge = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("{}", { status: ready ? 200 : 503 }),
+    });
+    const hostPort = bridge.port;
+    const script = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' ${hostPort}; exit 0 ;;
+  exec)
+    printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case " $* " in *" -i "*) cat > /dev/null ;; esac
+    case "$*" in
+      *"orkestrator-bridge-launch"*) printf 'orkestrator-bridge-session=4242\\n' ;;
+      *"--user root"*"ss -Hltne"*) printf '%s\\n' "$FAKE_LISTENER" ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+    process.env.FAKE_LISTENER = listener;
+    let outcome: unknown;
+    let argv: string[] = [];
+    await withFakeDocker(script, async (logs) => {
+      const arrive = setInterval(async () => {
+        const log = await fs.readFile(logs.exec, "utf8").catch(() => "");
+        if (log.includes(CONTAINER_BRIDGE_LAUNCHER)) ready = true;
+      }, 50);
+      const launch = containerBridgeLaunch("pi", "launcher", TOKEN);
+      try {
+        outcome = await startContainerServer(
+          "container",
+          4101,
+          "pi",
+          launch.start("", ""),
+          launch.launch,
+        ).catch((error: unknown) => error);
+        argv = (await fs.readFile(logs.exec, "utf8"))
+          .split(/^(?=ARGV:)/m)
+          .filter((entry) => entry.startsWith("ARGV:"));
+      } finally {
+        clearInterval(arrive);
+        bridge?.stop(true);
+        forgetBridgeAuthorityKey(TOKEN);
+      }
+    });
+    return { outcome, argv };
+  }
+
+  test("a launched bridge's socket is recorded while a bridge lives in its launch session", async () => {
+    const { outcome, argv } = await startPi(`${listenerScan("31", "4f")}\nlistener-launch-alive`);
+    expect(outcome).toMatchObject({ wasRunning: false });
+    const scan = argv.find((entry) => entry.includes("ss -Hltne") && entry.includes("--user root"));
+    expect(scan).toContain("-v session=4242");
+    expect(scan).toContain("--privileged");
+    expect(argv.some((entry) => entry.includes(`'31:4f' > "$record_tmp"`))).toBe(true);
+  });
+
+  test("a socket held after the launched bridge died is stopped, and the start fails", async () => {
+    const { outcome, argv } = await startPi(listenerScan("31", "4f"));
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain("held by a process the backend did not start");
+    expect((outcome as Error).message).not.toContain(TOKEN);
+    expect((outcome as Error).message).toContain("cleanup was attempted");
+    expect((outcome as Error).message).not.toContain("it was stopped");
+    expect(argv.some((entry) => entry.includes("'31:4f'"))).toBe(false);
+    // The stop runs as node, without a login shell, against the port.
+    const stop = argv.find(
+      (entry) => entry.includes("--user node") && entry.includes("kill -TERM"),
+    );
+    expect(stop).toContain("ss -Hltne 'sport = :4101'");
+    expect(stop).toContain("--env PATH=/usr/sbin:/usr/bin:/sbin:/bin");
   });
 });

@@ -123,7 +123,7 @@ the user let run; the agent can stop the server at any time either way.
 
 - **How should the windows narrow?**
   - **Re-check the socket on a failed or unexpected response from the server, and load an instance immediately after the first health check (already done) (recommended).**
-    - Pros: small; matches the bridges' plan in [7250](7250-bridge-replaced-by-an-agent-process.md).
+    - Pros: small; matches the bridges' plan in the bridge listener check in [agent-approvals.md](../../architecture/agent-approvals.md#a-replaced-bridge-is-refused).
     - Cons: a window remains by design.
   - **Proxy OpenCode behind a small signed front of ours.**
     - Pros: the bridges' signature guarantees.
@@ -151,7 +151,7 @@ What 7252 built, and why (2026-11-09):
 
 ## Related
 
-- [`7250-bridge-replaced-by-an-agent-process.md`](7250-bridge-replaced-by-an-agent-process.md)
+- 7250 (done and deleted; see [agent-approvals.md](../../architecture/agent-approvals.md#a-replaced-bridge-is-refused))
 - [`docs/architecture/agent-approvals.md`](../../architecture/agent-approvals.md#opencode-under-the-launcher-opencode-launch1)
 
 ## Replaces

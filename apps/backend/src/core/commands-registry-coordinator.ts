@@ -42,6 +42,7 @@ import {
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
+import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import type { Environment } from "./models.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
@@ -608,6 +609,11 @@ export function registerCoordinatorCommands(
                   baseBranch: delegationBaseBranch,
                   baseCommit: delegationBaseCommit,
                   instruction: localReportInstruction(),
+                  turnOrigin: await coordinatorCallerTurnOrigin(
+                    context,
+                    { coordinatorId, conversationId },
+                    scope,
+                  ),
                 },
                 input.initialPrompt,
               )

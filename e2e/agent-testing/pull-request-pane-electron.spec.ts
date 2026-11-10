@@ -15,6 +15,7 @@ import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * A pull request link opens in the right-hand PR pane of the real desktop
@@ -270,12 +271,11 @@ test("a pull request link opens the PR pane without moving native window focus",
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;

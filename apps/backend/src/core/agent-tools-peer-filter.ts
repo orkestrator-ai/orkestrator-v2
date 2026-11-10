@@ -293,6 +293,9 @@ export async function loadOwnedDockerSubnets(
     : results.flatMap((result) => result ?? []);
 }
 
+/** A `docker info` security option naming a rootless daemon. */
+export const ROOTLESS_SECURITY_OPTION = /^(?:name=)?rootless(?:,|$)/i;
+
 /**
  * The production filter: loopback plus, on native Linux Engine, Docker
  * networks of one owner namespace (`dockerOwnerNamespace` of the data directory whose environments
@@ -338,8 +341,7 @@ export function dockerPeerFilter(
         return null;
       // Rootless networks live in another namespace just like Desktop's VM
       // networks. Their CIDRs cannot identify container peers on the host.
-      if (info.securityOptions.some((option) => /^(?:name=)?rootless(?:,|$)/i.test(option)))
-        return [];
+      if (info.securityOptions.some((option) => ROOTLESS_SECURITY_OPTION.test(option))) return [];
       return loadOwnedDockerSubnets(ownerNamespace(), run);
     },
   });

@@ -128,9 +128,12 @@ image.
 ### Disposable Docker daemon
 
 Live suites that need free address pools, or that restart the daemon, run on
-a private host rootless daemon that one command starts and one command
-removes (`scripts/disposable-docker-daemon.ts`, to-do
-[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)):
+a private daemon that one command starts and one command removes
+(`scripts/disposable-docker-daemon.ts`, to-do
+[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)).
+It has two modes behind the same commands: a host rootless daemon (the
+default, below) and a nested rootful one (`--mode rootful`, see
+[Nested rootful mode](#nested-rootful-mode)).
 
 ```bash
 mise run docker:disposable -- start --name q1 --image <image>
@@ -141,7 +144,9 @@ RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> \
 mise run docker:disposable -- stop --name q1
 ```
 
-`start` prints `DOCKER_HOST`, `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK` and
+`start` prints `DOCKER_HOST`, `ORKESTRATOR_DISPOSABLE_DOCKER_MODE`
+(`rootless` or `rootful`), `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK`,
+`ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR` (rootful only) and
 `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` as `export` lines (`--json` for a
 document); `env` prints them again for a running instance, `status` lists
 instances, and `load-image --name <n> <reference>` copies another image in.
@@ -151,8 +156,9 @@ Options: `--net slirp4netns` (default), `gvisor-tap-vsock`, `pasta` or
 (default `172.30.0.0/16` as /24s, which exists only in the daemon's own
 namespace).
 
-The disposable launcher rejects `--live-restore`: restarting its whole RootlessKit
-tree cannot preserve shim and network state safely. Restart accepts no daemon
+The rootless mode rejects `--live-restore`: restarting its whole RootlessKit
+tree cannot preserve shim and network state safely (the rootful mode accepts
+it). Restart accepts no daemon
 settings overrides; choose settings at start. Lifecycle and tool publication
 use separate interprocess `flock` locks (a host prerequisite). Exported suite
 variables clear Docker context and TLS selection so the private socket wins.
@@ -200,18 +206,325 @@ variables clear Docker context and TLS selection so the private socket wins.
   RootlessKit user namespace. Removal refuses any path outside the instance
   root or the temporary directory, and any symbolic link. `start` first
   removes instances whose daemon is no longer running, and nothing else.
-- **Not covered by it.** A rootful daemon: the nested `docker:dind` that
-  the 2026-10-31 and 2026-11-06 rootful runs used is still built by hand
-  ([4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
-  task 1).
-  C22 cases that need the outer host as their service host cannot pass on a
-  daemon that refuses host loopback; start one with `--host-loopback` for
-  those.
+- **Not covered by it.** C22 cases that need the outer host as their
+  service host cannot pass on a daemon that refuses host loopback; start
+  one with `--host-loopback` for those.
+
+#### Nested rootful mode
+
+`--mode rootful` starts the recipe the 2026-10-31 and 2026-11-06 rootful runs
+built by hand, as a repository command
+(`scripts/disposable-docker-daemon-nested.ts`):
+
+```bash
+mise run docker:disposable -- start --mode rootful --name r1 --image <image> [--ipv6] [--live-restore]
+eval "$(mise run docker:disposable -- env --name r1)"
+# run suites as above; ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND restarts the inner dockerd
+mise run docker:disposable -- stop --name r1
+```
+
+- **What it runs.** `docker:29.9.3-dind`, pinned by its multi-architecture
+  index digest, in one privileged container on the **outer daemon**:
+  `--outer-host unix://...`, else the caller's `DOCKER_HOST`, else the
+  current context's endpoint. The outer daemon must be a local Linux Engine
+  reached through a Unix socket (bind mounts are paths on this machine);
+  Docker Desktop and TCP or SSH endpoints are refused. The container joins
+  the outer default bridge, so the outer daemon needs no free address pool
+  and no network is created on it; nothing is published. A supervisor loop
+  runs `dind dockerd` and starts it again whenever it exits, writing a
+  generation number into the runtime directory each time.
+- **The inner daemon.** Its own data volume (`/var/lib/docker`), its socket in
+  the instance's `0700` runtime directory (`$TMPDIR/ork-ddd-<uid>-<name>/`,
+  bind-mounted, socket group set to the caller's gid), `bip` `10.213.0.1/24`,
+  the `--address-pool` (default `172.30.0.0/16` as /24s) and `live-restore`
+  off unless `--live-restore`. `--ipv6` adds the pool `2001:db8:100::/56` and
+  turns IPv6 on by default for new bridge networks, as the 2026-10-31 IPv6
+  case needs. Its bridges and iptables rules live in the container's network
+  namespace, never the host's.
+- **Shared directory.** `output/disposable-docker/<name>/share/` is mounted at
+  the same path inside the container and printed as
+  `ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR`. Suites that bind-mount
+  temporary files (readiness C09, C10) need `TMPDIR` there, because the inner
+  daemon resolves bind sources inside its container.
+- **What it makes on the outer daemon.** The pinned dind image when it was
+  missing (recorded as pulled), one volume and one container, each named
+  `ork-ddd-<uid>-<name>-<marker>` and labelled
+  `orkestrator-disposable-docker=<marker>`, a random marker only this
+  instance's record holds. The outer daemon is never restarted, configured
+  or pruned, and its tags are left alone.
+- **Restart.** `restart` sends SIGTERM to the inner `dockerd` through
+  `docker exec` (a pid in the container's own namespace), waits for the next
+  generation and for its socket to answer. With `live-restore` off the inner
+  containers stop, as on a host daemon restart. The outer daemon is the one
+  recorded at start, so the command works from a suite whose `DOCKER_HOST`
+  selects the inner daemon.
+- **Stop.** Nothing is removed until its marker label is read back and
+  matches. `stop` removes the container (which ends every inner process), then
+  files the user cannot delete in the runtime and shared directories through
+  a throwaway `--network none` container of the same image, then the volume,
+  then the dind image if this instance pulled it and nothing else uses it,
+  then the instance and runtime directories. If the outer daemon does not
+  answer, `stop` fails and keeps the record, and `start`'s reaping leaves
+  that instance for a later `stop` rather than guess.
+- **Images.** `--image` and `load-image` copy from the recorded outer daemon,
+  whatever `DOCKER_HOST` says at the time.
+- **Prerequisites.** Linux, `docker` and `flock` on PATH, and access to the
+  outer daemon's socket. The host's rootless prerequisites are not needed.
+- **On a rootless outer daemon.** It works, but the nested daemon is then
+  root only inside the outer daemon's user namespace; `start` says so and the
+  record keeps `outerRootless: true`. Such a run proves the launcher and
+  rootful `dockerd` behaviour, not a privileged container on a rootful host.
 
 `tests/unit/disposable-docker-daemon.test.ts` covers the arguments, the
 private paths and environment, the removal boundaries and a start, restart
 and stop of a stand-in process tree, with no Docker. The cases that spawn or
 inspect processes read `/proc`, so they run only on Linux and skip elsewhere.
+`tests/unit/disposable-docker-daemon-nested.test.ts` covers the rootful mode
+against a fake Docker CLI: the run arguments and inner configuration, outer
+daemon selection, a start, restart and stop with exactly what was made
+removed, the pulled-image rule, root-owned leftovers, a forged marker and an
+unreachable outer daemon.
+
+## Nested rootful disposable daemon on beelink2 (2026-11-09)
+
+To-do [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+task 1: the launcher's [nested rootful mode](#nested-rootful-mode), live.
+
+- **Host:** beelink2 (Arch Linux, kernel 7.2.15, x86_64), host Engine 29.9.2.
+  This user is not in the `docker` group, so the host daemon was neither
+  used nor touched. The outer daemon was the launcher's own rootless one
+  (`start --name outer`, slirp4netns, 3.1 s), so the nested daemon was root
+  only inside that daemon's user namespace (`start` says so). A rootful
+  host as the outer daemon is task 4 of 4730.
+- **Image:** `ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta`, the
+  published build of `480cf0296` (no `docker/` change between it and the
+  tested branch), pulled into the outer daemon without credentials (3 min 8 s).
+- **Start:** `start --mode rootful --image <image>` pulled
+  `docker:29.9.3-dind` (by digest) into the outer daemon, ran it, and copied
+  the 6.0 GB image in: 2 min 15 s. The inner daemon reported Engine 29.9.3
+  with no `rootless` security option; an inner container got `10.213.0.2` on
+  the inner default bridge and fetched `registry.npmjs.org` (200).
+- **Suites** (`DOCKER_HOST` and `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`
+  from the launcher, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the network
+  shim on `PATH`, JUnit reports kept under `output/qualification-4730/`):
+  - `container-live-egress-conditions.test.ts`: **3 of 3 pass** (55
+    assertions, 69 s), twice. Each run restarted the inner `dockerd` twice
+    through the launcher; the supervisor log shows generations 1 to 5. The
+    IPv6 case did one assertion: this daemon had no IPv6 default.
+  - The same suite on a `--ipv6` instance: **3 of 3 pass** (66 assertions,
+    79 s: IPv6 12, DNS rotation 25, daemon restart 29), the counts of the
+    hand-built 2026-10-31 run.
+  - The same suite on a `--live-restore` instance: 2 of 3 failed at first,
+    every gateway refusing to start. A gateway started by hand on that daemon
+    logged `curl: (22) ... 403` from `api.github.com/meta`: this host's
+    unauthenticated GitHub limit (60 an hour) was spent, the reset was about
+    40 minutes away, and its fetch is how the firewall loads GitHub's ranges.
+    Rerun after the reset: **3 of 3 pass** (63 assertions, 61 s; daemon
+    restart 37, as on 2026-10-31 with `live-restore` on). One run of this
+    suite made 7 GitHub requests.
+  - `container-live-readiness.test.ts`, C09 "restart during launch" and C10
+    only (`-t`), with `TMPDIR` on the printed shared directory: **2 pass**
+    (54 s, 38 s). On 2026-11-06 both failed on a hand-built nested daemon
+    until `TMPDIR` was moved to a directory mounted at the same path.
+- **Restart by hand:** the printed command took 12.5 s with a `sleep`
+  container running, which it stopped (exit 137, `live-restore` off), and
+  2.3 s on a `--live-restore` instance, where the container kept running.
+- **Stop:** 3.9 s and 4.6 s. Afterwards the outer daemon held no container
+  and no volume, the dind image the launcher had pulled was gone, and the
+  instance and runtime directories were removed.
+
+Created and removed: the instances `nested`, `nested6`, `nestedlr`,
+`nestedlr2` and `nestedrd` with their containers, volumes and directories; the dind image,
+pulled and removed by the launcher each time; a diagnostic gateway container
+and network (`q4730-*`) on one inner daemon; and finally the outer rootless
+daemon with the pulled environment image, removed by its own `stop` (2.5 s),
+and the launcher's downloaded tools. Another worktree's rootless instance
+running at the time was left alone.
+
+## Host loopback, rootful reach and workload firewalls on Linux Engine (2026-11-09)
+
+To-do [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md)
+tasks 2 and 3, run in worktree `orkestrator-v2-20261109-224629-a4b698fad8f5`
+(branch at `c6de4733c` plus this change).
+
+- **Host:** beelink2 (Omarchy, Arch Linux, kernel 7.2.15, x86_64, 16 cores,
+  load average 50–60 from other work during the runs). The host's rootful
+  Docker socket is not usable by the build user (not in the `docker` group,
+  no sudo) and ufw is active; neither was touched.
+- **Daemon:** `mise run docker:disposable -- start --name q5510 --host-loopback`:
+  the host's rootless Engine 29.9.2 under RootlessKit with slirp4netns,
+  `DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`, systemd cgroup
+  driver on cgroup v2, pool `172.30.0.0/16` as /24s.
+- **Image:** built inside that daemon, since the host's daemon could not be
+  read: `docker build $(bun scripts/docker-image-build-args.ts) -t orkestrator-v2:q5510-c6de4733c -f docker/Dockerfile .`,
+  id `sha256:946805d6e63ed2d9d53a9d56381206c21f903d6cf02c36d02b058a2aab931524`,
+  amd64, `2.37.3-beta`, manifest source `9ad5d2f25` (`c6de4733c` plus a
+  test-fixture fix; `docker/` identical), capabilities including
+  `egress-gateway=1`, `egress-filter=1`, `network-policy=3`. The first build
+  failed in the log-writer self-test, a test bug fixed in this change
+  ([flake 9916](../tests/flaky-tests/environments-and-containers/9916-log-writer-marker-data-split-printf.md));
+  the retry, still without the fix, passed because the failure depends on
+  timing.
+
+### Rootless with host loopback enabled (task 2)
+
+```bash
+eval "$(mise run docker:disposable -- env --name q5510)"
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6de4733c \
+  ORKESTRATOR_LIVE_REPORT=<file> [ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file>] \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/container-live-rootless-host-loopback.test.ts --parallel=1
+```
+
+- **Setup.** Three listeners on the host's loopback: the named service port
+  (the agent tools port the firewall admits, a stand-in answering 200), a
+  real `OrkestratorGateway` in agent-test mode bound to `127.0.0.1` (test
+  token, no provider), and an unnamed port. The backend's host check reported
+  `reachable` with `hostAddress` `10.0.2.2` after both `host-gateway` probes
+  were refused. Three runtimes were created and started through the
+  backend's own paths: restricted behind its egress gateway; full; and
+  restricted from a variant image whose manifest and label drop
+  `egress-gateway` and `egress-filter`, which puts the firewall in the
+  workload with `NET_ADMIN`. Both restricted firewalls reported `applied`.
+  Probes ran as `node` with `curl` (exit 7: refused or rejected).
+- **Result: passed 1/1** (28.1 s, 64 assertions), and again with the seed
+  below (31.3 s), with the same matrix.
+
+  | Target, from inside the container | Restricted, gateway | Restricted, workload firewall | Full |
+  | --- | --- | --- | --- |
+  | Named service port, by `host.docker.internal` or `10.0.2.2` (positive control) | 200 | 200 | 200 |
+  | Unnamed loopback port, by either address | Rejected | Rejected | 200 |
+  | Real gateway, by `host.docker.internal` | Rejected | Rejected | 421 (Host check) |
+  | Real gateway, by `10.0.2.2`, or by alias with `Host: 127.0.0.1:<port>` | Rejected | Rejected | 401 |
+  | Gateway's agent-test login route (loopback peers only), same two ways | Rejected | Rejected | 401, not 404 |
+  | Gateway's login-code mint, `POST`, no token | Rejected | Rejected | 401 |
+
+  Each restricted firewall's `OUTPUT` REJECT counter rose from 2 to 11, the
+  nine refused probes. Every listener saw the peer as `127.0.0.1`.
+- **Runtime root.** `docker exec -u orkroot … iptables -I OUTPUT 1 -j ACCEPT`
+  failed in the gateway runtime (`CapEff` has no `CAP_NET_ADMIN`), which then
+  still got exit 7 from the gateway. In the workload-firewall runtime it
+  succeeded, and the same probe then got the gateway's 401.
+- **What this means:**
+  - With host loopback on, the restricted firewall keeps a container to the
+    named service port, as with it off. Unlike the 2026-11-05 run, the named
+    port answered here, so the refusals are not just an unreachable host.
+  - A full container reaches every service bound to the host's loopback, and
+    arrives as `127.0.0.1`. That is the trade the rootless remediation
+    already describes ([0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)
+    decision 4). The gateway still needs its credential. Its Host check
+    refused the alias, but a client that writes its own Host header gets
+    past it, as the check's own comment says.
+  - Two gateway paths trust a loopback peer. The agent-test bootstrap
+    routes, on `dev:test` profiles only, are served to such a container, but
+    minting still needs the token. The traffic summary believes
+    `X-Forwarded-For` from a loopback peer (for Tailscale Serve), so such a
+    container can choose the source address its requests are logged under.
+    That is attribution in a log only; nothing is granted.
+  - A workload firewall holds against `node`, but not against runtime root.
+    The gateway boundary holds against both.
+- **Variant, not a historical image.** The workload-firewall runtime used the
+  current firewall scripts. An image actually built before the gateway was
+  not run.
+
+### Rootful daemon with no host firewall (task 3)
+
+A rootful-mode `dockerd` in a `docker:29-dind` container on the same
+disposable daemon (Engine 29.9.3, `--privileged` inside RootlessKit's user
+namespace, overlayfs, cgroup v2; `docker info` reports no `name=rootless`;
+pool `172.31.0.0/16`). The daemon's host namespace is that container: eth0
+`172.30.0.2`, `docker0` `172.31.0.1`, `INPUT` and `OUTPUT` policy `ACCEPT`,
+and only Docker's own `FORWARD` and NAT rules, so no host firewall stands
+between the bridges and the host. The same image was copied in (same id).
+Earlier rootful runs in this record used the same nesting on a rootful host.
+
+The suite, `apps/backend/tests/container-live-rootful-host-reach.test.ts`,
+ran inside that namespace, from a `--network host` container of the
+qualification image (`bun` as entrypoint, the worktree mounted read-only,
+the nested daemon's socket and its static `docker` CLI mounted), with
+`ORKESTRATOR_LIVE_HOST_FIREWALL=none` and a GitHub ranges seed:
+
+```bash
+# The nested daemon: socket in a directory shared with the host (reached
+# through a short symlink, as the full path exceeds the unix socket limit).
+docker run -d --name q5510-dind --privileged -e DOCKER_TLS_CERTDIR= \
+  -v "$PWD/output/q5510-dind-run:/run/dind" -v "$PWD:$PWD:ro" docker:29-dind \
+  dockerd --host=unix:///run/dind/docker.sock --default-address-pool base=172.31.0.0/16,size=24
+# The suite, in the nested daemon's host namespace.
+DOCKER_HOST=unix:///tmp/ork-q5510-dind.sock docker run --rm --network host -u root \
+  --entrypoint bun -v /run/dind/docker.sock:/var/run/docker.sock \
+  -v /usr/local/bin/docker:/usr/local/bin/docker:ro -v /run/dind:/report \
+  -v "$PWD:$PWD:ro" -w "$PWD" -e RUN_LIVE_DOCKER_TESTS=1 \
+  -e ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6de4733c \
+  -e ORKESTRATOR_LIVE_HOST_FIREWALL=none -e ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  -e ORKESTRATOR_LIVE_REPORT=/report/rootful.json \
+  -e ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=/report/github-ranges.txt \
+  orkestrator-v2:q5510-c6de4733c test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/container-live-rootful-host-reach.test.ts --parallel=1
+```
+
+- **Setup.** Host listeners: the named service port and an unnamed port on
+  `0.0.0.0`, an unnamed port on `127.0.0.1`, and two real gateways in
+  agent-test mode, one on `0.0.0.0` (standing for a LAN or Tailscale-address
+  bind) and one on `127.0.0.1`. The backend's host check reported
+  `reachable` (firewall `unknown`: the runner container cannot read the
+  host's tools). One restricted runtime behind its egress gateway and one full
+  runtime, through the backend's create and start paths.
+- **Result: passed 1/1** (9.4 s, 30 assertions).
+
+  | Target, from inside the container | Restricted, gateway | Full |
+  | --- | --- | --- |
+  | Named service port, by `host.docker.internal` (positive control) | 200 | 200 |
+  | Named service port, by the host's address `172.30.0.2` | Rejected | 200 |
+  | Unnamed port on `0.0.0.0`, by either address | Rejected | 200 |
+  | Gateway on `0.0.0.0`, by `host.docker.internal` | Rejected | 421 (Host check) |
+  | Gateway on `0.0.0.0`, by `172.30.0.2` | Rejected | 401 |
+  | Its agent-test login route, with `Host: 127.0.0.1:<port>` | Rejected | 404 |
+  | Gateway or port on `127.0.0.1`, by either address | Rejected | Refused |
+
+  The egress gateway's REJECT counter rose from 2 to 12, the ten refused
+  probes. The `0.0.0.0` listener saw the full runtime as `172.31.2.2`, its
+  address on its environment network; the loopback listener saw nothing.
+- **What this means:** with no host firewall, a full container on a rootful
+  daemon reaches a gateway bound to any host address. ufw was the only
+  barrier on 2026-11-05, so this is the result that run could not show. It
+  arrives with its own address, so the gateway's loopback-peer paths stay
+  closed (404). A gateway bound only to loopback is out of reach, which
+  rootless with host loopback (above) does not give. The restricted runtime
+  is refused everywhere but the named port through its alias, as on the
+  rootless daemon.
+- **Nested, not bare metal.** The nested daemon has the bridge, NAT and
+  `host-gateway` behaviour of a rootful host, but it runs in a user
+  namespace, and its "host" is a container. A bare-metal host with its
+  firewall off was not available (see the host above).
+
+### Cleanup and not covered
+
+- Each run removed its labelled containers, networks and volumes and the
+  variant image tag, failed runs included (the suite asserts no leftovers).
+  One diagnostic copy of the suite that skipped its cleanup left its
+  containers and network; they were removed by their owner label, one at a
+  time, and the copy was deleted. The nested daemon was removed with
+  its volume, then `docker:disposable -- stop --name q5510` removed the
+  instance, its data root and runtime directory.
+  Both stops took 4–6 s. `docker:disposable -- status` then listed no
+  daemon, and no runtime directory of either instance was left; the
+  downloaded tools cache was then deleted by hand. A second
+  daemon with host loopback off (`q5510off`) checked the refactored
+  `container-live-rootless-loopback.test.ts`: 1 passed (7 assertions), and
+  the loopback-enabled suite skipped there.
+- **GitHub's API quota.** Restricted firewalls fail closed without GitHub's
+  ranges. During the runs this host's address had spent GitHub's 60
+  unauthenticated requests an hour. Four runs stopped with the gateway's
+  firewall state `failed`; the one whose gateway log was captured shows
+  `curl: (22) The requested URL returned error: 403`. One other run hit
+  `port-conflict` when another process took an ephemeral host port first.
+  Both suites now accept `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`: a seed
+  fetched once from `api.github.com/meta`, in the backend's own format.
+- **Not covered:** a bare-metal rootful host with no firewall, an image built
+  before the gateway, arm64 (beelink2 is x86_64), and a real gateway on a
+  Tailscale address (task 1). These stay open in
+  [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
 
 ## Agent CLIs without telemetry hosts on rootful Linux Engine (2026-11-06)
 
@@ -1423,7 +1736,9 @@ hold when the host user maps to container root?
   rootless daemon with host loopback enabled, including a reachable named-port
   positive control; a rootful `full` container with no host firewall; a runtime
   with the firewall inside it (an older image's); arm64. These remaining checks
-  are tracked in [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
+  are tracked in [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md);
+  host loopback, a firewall-less rootful daemon and a workload firewall were
+  run on 2026-11-09 (above).
 
 ## Rootless Linux host (2026-10-25)
 

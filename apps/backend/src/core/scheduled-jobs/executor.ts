@@ -739,6 +739,9 @@ export class ScheduledJobExecutor {
       conversationId: conversation.id,
       mailboxIncarnationId: conversation.mailboxIncarnationId,
       capabilities: coordinatorRoleCapabilities(owner.role),
+      // The fire is framed from the turn that set the schedule, not the
+      // conversation's newest. An older schedule without it reads the newest.
+      ...(owner.turnOrigin ? { turnOrigin: owner.turnOrigin } : {}),
     };
   }
 

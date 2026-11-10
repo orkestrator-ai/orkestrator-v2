@@ -3,6 +3,8 @@
  * presentation. The complete prompt remains backend-owned; these fragments
  * only identify evidence that already has a structured UI elsewhere.
  */
+import { COORDINATOR_MAIL_ORIGIN_NOTE } from "./agent-mail.js";
+
 export interface ReviewEvidenceFrameDisplayContract {
   promptPrefix: string;
   openMarker: string;
@@ -275,11 +277,30 @@ export interface CoordinatorDelegationFrameInput {
   baseBranch?: string;
   baseCommit?: string;
   instruction: string;
+  /**
+   * `"mail"` when the coordinator's turn was not started by the user: the
+   * frame then ends with {@link COORDINATOR_MAIL_ORIGIN_NOTE}, the same note
+   * its mail carries. See `coordinatorCallTurnOrigin`.
+   */
+  turnOrigin?: "mail";
 }
 
 export interface CoordinatorDelegatedPrompt {
   source: string;
   frame: string;
+}
+
+/**
+ * A frame's instruction with the agent-mail note after it when the turn was
+ * not the user's. The note is part of the instruction text rather than a field
+ * of its own, so a node that builds the frame from an instruction it was sent
+ * (a fork on another node) writes it without knowing about it.
+ */
+export function coordinatorDelegationInstruction(
+  instruction: string,
+  turnOrigin: "mail" | undefined,
+): string {
+  return turnOrigin === "mail" ? `${instruction}\n${COORDINATOR_MAIL_ORIGIN_NOTE}` : instruction;
 }
 
 /** Serialize the one delegation grammar consumed by backend producers and transcript display. */
@@ -294,10 +315,31 @@ export function createCoordinatorDelegatedPrompt(
     `Conversation: ${input.conversationId}`,
     ...(input.baseBranch === undefined ? [] : [`Base branch: ${input.baseBranch}`]),
     ...(input.baseCommit === undefined ? [] : [`Base commit: ${input.baseCommit}`]),
-    input.instruction,
+    coordinatorDelegationInstruction(input.instruction, input.turnOrigin),
     COORDINATOR_DELEGATION_FRAME_CLOSE,
   ].join("\n");
   return { frame, source: `${frame}${COORDINATOR_DELEGATION_FRAME_SEPARATOR}${prompt}` };
+}
+
+/**
+ * A coordinator's later prompt into a worker tab (`send_prompt_to_tab`), from
+ * a turn the user did not start: the delegation frame with the agent-mail note
+ * as its only line. The worker already has its launch's frame, so the
+ * metadata and instruction are not repeated. A prompt from the user's own
+ * turn is sent unframed, as before.
+ */
+export function createCoordinatorMailOriginPrompt(prompt: string): CoordinatorDelegatedPrompt {
+  const frame = [
+    COORDINATOR_DELEGATION_FRAME_OPEN,
+    COORDINATOR_MAIL_ORIGIN_NOTE,
+    COORDINATOR_DELEGATION_FRAME_CLOSE,
+  ].join("\n");
+  return { frame, source: `${frame}${COORDINATOR_DELEGATION_FRAME_SEPARATOR}${prompt}` };
+}
+
+/** Whether a delegation frame says its request arose from agent mail. */
+export function coordinatorDelegationFromMail(frame: string): boolean {
+  return frame.split("\n").includes(COORDINATOR_MAIL_ORIGIN_NOTE);
 }
 
 /** Parse only a complete frame at offset zero, preserving every byte of the caller's prompt. */

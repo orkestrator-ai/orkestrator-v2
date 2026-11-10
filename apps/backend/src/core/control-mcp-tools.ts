@@ -19,6 +19,7 @@ import {
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_VALIDATION_RULE,
   coordinatorIdFromRuntimeId,
+  type CoordinatorTurnOrigin,
 } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorPollGuard } from "./control-mcp-poll-guard.js";
 import type { ControlMcpCaller } from "./control-mcp-caller.js";
@@ -183,6 +184,13 @@ export type CoordinatorControlScope = {
   conversationId: string;
   mailboxIncarnationId: string;
   capabilities: readonly string[];
+  /**
+   * The origin of the turn this call stands for, when that is not the
+   * conversation's newest turn: a scheduled fire carries the origin of the
+   * turn that set the schedule. Set only by the backend's own scheduler,
+   * never from a request. See `coordinatorCallTurnOrigin`.
+   */
+  turnOrigin?: CoordinatorTurnOrigin;
 };
 
 export type { CoordinatorPollGuard };

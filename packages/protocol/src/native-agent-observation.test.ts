@@ -146,6 +146,7 @@ describe("nativeSessionInvalidationNamesDiscovery", () => {
       "command-catalog",
       "discovery-deadline",
       "discovery-renewal",
+      "mcp-action",
       "model-catalog-load",
       "model-catalog-refresh",
     ]);

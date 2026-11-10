@@ -455,6 +455,43 @@ export class AgentMailStore {
     return store;
   }
 
+  /**
+   * Commits a change to a few rows without loading or reserializing the rest
+   * of the store, for a mutation computed from {@link snapshot} under
+   * {@link enqueue}: `mailboxes`, `idempotency` and `counterparts` rows to
+   * write (`undefined` deletes one), and the store's next `revision` and
+   * `pendingInject`, which live in the envelope document. Bounded as
+   * {@link save} is, except that a change that shrinks the store always
+   * commits. `false`, writing nothing, when the store must be saved whole
+   * instead (see `StorageContext.updateStoreRows`): take a copy with
+   * {@link load} and {@link save} it.
+   */
+  saveRows(change: {
+    rows: ReadonlyArray<{
+      collection: "mailboxes" | "idempotency" | "counterparts";
+      key: string;
+      value: unknown;
+    }>;
+    revision: number;
+    pendingInject: PersistedAgentMailStore["pendingInject"];
+  }): boolean {
+    if (change.pendingInject.length > AGENT_MAIL_MAX_PENDING_INJECTS) {
+      throw new AgentMailError("mailbox-backlog-full", "Too many messages are awaiting injection");
+    }
+    try {
+      return this.context.updateStoreRows(this.files.agentMailFile(), change.rows, {
+        document: (envelope) => {
+          envelope.revision = change.revision;
+          envelope.pendingInject = change.pendingInject;
+        },
+        maxBytes: AGENT_MAIL_MAX_STORE_BYTES,
+      });
+    } catch (error) {
+      if (!(error instanceof StoreTooLargeError)) throw error;
+      throw new AgentMailError("store-full", "Agent mail store has reached its size limit");
+    }
+  }
+
   async save(store: PersistedAgentMailStore): Promise<void> {
     if (store.pendingInject.length > AGENT_MAIL_MAX_PENDING_INJECTS) {
       throw new AgentMailError("mailbox-backlog-full", "Too many messages are awaiting injection");

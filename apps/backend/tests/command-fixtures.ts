@@ -618,7 +618,6 @@ export async function createCommandFixtures() {
           environments.filter((environment) => environment.projectId === projectId),
         ),
         loadEnvironments: mock(async () => environments),
-        deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         readEnvironmentsSnapshot: mock(async () =>
           structuredClone(environments).map((environment) => Object.freeze(environment)),
         ),
@@ -684,7 +683,6 @@ export async function createCommandFixtures() {
         deleteMultiReviewWorkflowsByEnvironment: mock(async () => undefined),
         deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
         deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
-        deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         deleteComposeDraftsByEnvironment: mock(async () => undefined),
         deleteFileDraftsByEnvironment: mock(async () => undefined),
         deleteAgentHandoffsByEnvironment: mock(async () => [] as string[]),

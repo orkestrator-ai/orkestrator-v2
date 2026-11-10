@@ -1165,6 +1165,8 @@ export const sendCoordinatorAgentMailCommand = defineCommand({
     deliverNow: optionalUnknown,
     projectHomeReason: optionalUnknown,
     attachments: optionalUnknown,
+    /** A scheduled fire's recorded turn origin; see `coordinatorCallTurnOrigin`. */
+    turnOrigin: optionalUnknown,
   }),
   result: CoordinatorMailResultSchema,
   critical: ["requestId", "deliverNow", "attachments"],

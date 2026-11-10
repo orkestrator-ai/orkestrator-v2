@@ -74,6 +74,7 @@ import {
 } from "./multi-node-window-support";
 import { loginUrl, repositoryRoot } from "./scope-proof-support";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 const test = mergeTests(browserTest, electronTest);
 
@@ -343,15 +344,13 @@ async function openDesktopSurface(topology: Topology): Promise<Surface> {
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, path.join(packageRoot, "dist", "electron", "main.js")],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
         ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      },
+      }),
     });
     const electronApp = app;
     dismissStartupDialogs(electronApp);

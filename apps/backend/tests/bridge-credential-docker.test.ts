@@ -3,7 +3,8 @@
  * cannot get the bridge-control credential, cannot answer an approval without
  * it, and the backend's own calls still work. On a `bridge-launch=1` image
  * (docs/architecture/agent-approvals.md) a token it catches in flight still answers nothing, and what it
- * plants in its login shell does not run inside the next bridge. OpenCode, which has no bridge of
+ * plants in its login shell does not run inside the next bridge. A bridge it starts in place of the
+ * backend's is noticed and replaced (to-do 7250). OpenCode, which has no bridge of
  * ours, is held to the same on a permission a real tool call parked, raised by a
  * fake model inside the container.
  *
@@ -32,6 +33,7 @@ import { peekContainerAgentBridge } from "../src/core/commands-servers";
 import {
   containerAuthorityKeyFile,
   containerCredentialFile,
+  containerListenerRecordFile,
   CONTAINER_TOKEN_FILES,
   readContainerBridgeToken,
   type ContainerBridgeKind,
@@ -260,6 +262,10 @@ describe("bridge credential on a real container", () => {
         started.set(bridge.kind, result);
         // The token is where the backend reads it back, with its authority key beside it.
         expect(await readContainerBridgeToken(containerId, bridge.kind)).toBe(result.authToken);
+        // And the socket the bridge listens on is recorded as its own (to-do 7250).
+        expect(await asRoot(`cat ${containerListenerRecordFile(bridge.kind)}`)).toMatch(
+          /^\d+:[0-9a-f]+$/,
+        );
         expect(
           await asRoot(`test -s ${containerAuthorityKeyFile(bridge.kind)} && echo present`),
         ).toBe("present");
@@ -419,6 +425,9 @@ IMPOSTER
         if (!caught) await new Promise((resolve) => setTimeout(resolve, 200));
       }
       expect(caught).toBe(`Bearer ${real.authToken}`);
+      // The backend no longer hands the token out: the port's socket is not
+      // the one it recorded for the bridge it started.
+      expect(await readContainerBridgeToken(containerId, "pi")).toBeNull();
 
       // The strongest next move: a real bridge from the same verifier and key,
       // started through the launcher itself, which the backend still trusts.
@@ -470,6 +479,26 @@ IMPOSTER
       const replayed = await send();
       expect(replayed.status).toBe(403);
       expect(await replayed.json()).toMatchObject({ reason: "replayed" });
+
+      // The backend tells the two apart (to-do 7250): this bridge's socket is
+      // not the one recorded for the bridge it started, so its token is not
+      // handed out, and the next start replaces the agent's bridge with a new
+      // token the agent never saw.
+      expect(await readContainerBridgeToken(containerId, "pi")).toBeNull();
+      const replaced = (await invoke("start_pi_server", { containerId })) as {
+        hostPort: number;
+        wasRunning: boolean;
+        authToken: string;
+      };
+      expect(replaced.wasRunning).toBe(false);
+      expect(replaced.authToken).not.toBe(real.authToken);
+      expect(await readContainerBridgeToken(containerId, "pi")).toBe(replaced.authToken);
+      // The caught token opens nothing now.
+      const stale = await fetch(`http://127.0.0.1:${replaced.hostPort}/global/auth-check`, {
+        headers: { authorization: caught },
+      });
+      expect(stale.status).toBe(401);
+      await stale.body?.cancel();
       await invoke("stop_pi_server", { containerId });
       await asAgent("rm -f /tmp/caught /tmp/imposter.js /tmp/imposter.log");
     },

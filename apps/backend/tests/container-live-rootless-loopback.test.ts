@@ -11,7 +11,8 @@
  * host loopback refused. Docker does not report the RootlessKit setting, so
  * the caller declares it; the test then also requires `docker info` to report
  * rootless and skips otherwise. On a rootful daemon, or a rootless one with
- * host loopback enabled, these assertions would not hold.
+ * host loopback enabled, these assertions would not hold; the enabled case is
+ * `container-live-rootless-host-loopback.test.ts`.
  * Every resource is labelled with this run's private owner namespace and
  * removed by that label afterwards.
  */
@@ -22,8 +23,8 @@ import path from "node:path";
 import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
-import type { Environment } from "../src/core/models";
-import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
+import { hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
 import { removeLabelledResources } from "./container-live-cleanup";
 
@@ -69,37 +70,6 @@ function hostListener(): number {
   return server.port!;
 }
 
-function loopbackContext(environments: Environment[], servicePort: number) {
-  const fixture = memoryLifecycleContext(environments, dataDir);
-  Object.assign(fixture.context, {
-    runtimeFlavor: "agent-test",
-    credentialSources: new Set(),
-    agentTools: {
-      connection: () => {
-        throw new Error("not used");
-      },
-      revokeEnvironment: () => undefined,
-      servicePort: () => servicePort,
-    },
-  });
-  Object.assign(fixture.context.storage, {
-    getProject: async () => ({
-      id: "project-1",
-      name: "Project",
-      gitUrl: "https://example.invalid/none.git",
-      localPath: null,
-      addedAt: new Date(0).toISOString(),
-      order: 0,
-    }),
-    loadConfig: async () => ({
-      version: "1.0.0",
-      global: { allowedDomains: ["registry.npmjs.org"], enabledAgentPlatforms: [] },
-      repositories: {},
-    }),
-  });
-  return fixture;
-}
-
 describe("rootless daemon with host loopback refused", () => {
   live(
     "host discovery reports blocked with the rootless remediation, and a gateway runtime cannot reach the host",
@@ -128,7 +98,7 @@ describe("rootless daemon with host loopback refused", () => {
         id: `env-${RUN}`,
         networkAccessMode: "restricted",
       });
-      const { context } = loopbackContext([environment], servicePort);
+      const { context } = hostServiceContext([environment], dataDir, servicePort);
       context.containerHostReachability = reachability;
       const resolved = await resolveDockerImage(IMAGE);
       if (resolved.kind !== "present") throw new Error("qualification image missing");

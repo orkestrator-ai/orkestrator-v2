@@ -56,7 +56,6 @@ export const EFFICIENCY_OPERATIONS = [
   "consolidation.oversize",
   "report.oversize",
   // Scheduling.
-  "scheduler.pass",
   "scheduler.wake",
   // Launch value.
   "launch.duplicate_reviewers",

@@ -30,12 +30,11 @@ import { StorageService } from "../src/core/storage.js";
  *
  * - `rollback`: what `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects. For
  *   feature planning and build pipelines that is the previous whole-store
- *   tick, stepped at its own interval (1 s / 1.5 s). Multi
- *   review's rollback is the adaptive `WorkflowDueScheduler`, driven on the
- *   same manual clock as the keyed mode (15 s reconciliation scan, per-workflow
- *   due passes).
+ *   tick, stepped at its own interval (1 s / 1.5 s). Multi review has no
+ *   rollback any more (its adaptive `WorkflowDueScheduler` was removed by todo
+ *   0048 task 13), so this mode does not include it.
  * - `keyed`: the keyed supervisor on a manual clock, with the 30 s safety
- *   discovery.
+ *   discovery, for all three domains.
  *
  * Storage is a real `StorageService` in a temporary directory; providers are
  * fakes that keep every active turn busy for the whole window, so the counts
@@ -78,11 +77,15 @@ export interface WorkflowDomainCounts {
 }
 
 type Domain = "feature-planning" | "build-pipeline" | "multi-review";
+/** Domains that still have a previous driver to compare against. */
+type RollbackDomain = Exclude<Domain, "multi-review">;
+const ROLLBACK_DOMAINS: readonly RollbackDomain[] = ["feature-planning", "build-pipeline"];
 const KINDS: Record<Domain, RecurringJobKind> = {
   "feature-planning": "feature-planning-tick",
   "build-pipeline": "build-supervisor-tick",
   "multi-review": "multi-review-tick",
 };
+/** The whole-store tick's interval, and the keyed settle loop's step. */
 const LEGACY_TICK_MS: Record<Domain, number> = {
   "feature-planning": 1_000,
   "build-pipeline": 1_500,
@@ -92,7 +95,7 @@ const LEGACY_TICK_MS: Record<Domain, number> = {
 export interface WorkflowBaselineResult {
   fixture: WorkflowFixture;
   modes: {
-    rollback: Record<Domain, WorkflowDomainCounts>;
+    rollback: Record<RollbackDomain, WorkflowDomainCounts>;
     keyed: Record<Domain, WorkflowDomainCounts>;
   };
 }
@@ -292,7 +295,6 @@ async function seedMultiReviews(storage: StorageService, fixture: WorkflowFixtur
   const provider = new BusyProvider("claude");
   const seeder = new MultiReviewService(storage, multiReviewInvoke, {
     autoAdvance: false,
-    keyedScheduling: false,
     provider: async () => provider as unknown as BuildPipelineProvider,
   });
   const timestamp = new Date().toISOString();
@@ -396,7 +398,6 @@ async function runDomain(
       await seedMultiReviews(storage, fixture);
       provider = new BusyProvider("claude");
       owner = new MultiReviewService(storage, multiReviewInvoke, {
-        keyedScheduling: keyed,
         ...clock,
         provider: async () => provider as unknown as BuildPipelineProvider,
       });
@@ -405,16 +406,6 @@ async function runDomain(
     await owner.init();
     if (keyed) {
       await advanceKeyedWork(time, [owner], fixture.windowMs, LEGACY_TICK_MS[domain]);
-    } else if (domain === "multi-review") {
-      // The due scheduler is not the keyed supervisor, so its own in-flight
-      // count tells the settle loop when real storage I/O has finished.
-      const scheduler = (owner as unknown as { scheduler: { inFlight: number } }).scheduler;
-      await advanceKeyedWork(
-        time,
-        [{ schedulingStatus: () => ({ inFlight: scheduler.inFlight }) }],
-        fixture.windowMs,
-        LEGACY_TICK_MS[domain],
-      );
     } else {
       const tick = (owner as unknown as { requestTick(): Promise<void> }).requestTick.bind(owner);
       for (let elapsed = 0; elapsed < fixture.windowMs; elapsed += LEGACY_TICK_MS[domain]) {
@@ -443,10 +434,11 @@ export async function runWorkflowBaseline(
   fixture: WorkflowFixture = DEFAULT_WORKFLOW_FIXTURE,
 ): Promise<WorkflowBaselineResult> {
   const modes = { rollback: {}, keyed: {} } as WorkflowBaselineResult["modes"];
-  for (const mode of ["rollback", "keyed"] as const) {
-    for (const domain of Object.keys(KINDS) as Domain[]) {
-      modes[mode][domain] = await runDomain(domain, mode, fixture);
-    }
+  for (const domain of ROLLBACK_DOMAINS) {
+    modes.rollback[domain] = await runDomain(domain, "rollback", fixture);
+  }
+  for (const domain of Object.keys(KINDS) as Domain[]) {
+    modes.keyed[domain] = await runDomain(domain, "keyed", fixture);
   }
   return { fixture, modes };
 }

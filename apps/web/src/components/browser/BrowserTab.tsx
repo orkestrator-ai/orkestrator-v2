@@ -66,6 +66,7 @@ import {
   useAddressBarShortcut,
   useBlockingOverlay,
   useDeferredPreviewHide,
+  useObservedElement,
 } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
@@ -157,12 +158,12 @@ function ManualBrowserTab({
   const [locallyPersistedUrl, setLocallyPersistedUrl] = useState<string | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
+  const [previewHost, setPreviewHost] = useObservedElement(previewHostRef);
   const nativeAttachedRef = useRef(false);
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
-  const hasBlockingOverlay = useBlockingOverlay(
-    nativeBrowserPreview && browserPreviewSupported,
-    previewHostRef,
-  );
+  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview && browserPreviewSupported, {
+    host: previewHost,
+  });
   const deferredPreviewHide = useDeferredPreviewHide();
   const [nativeAttached, setNativeAttached] = useState(false);
   const navigateRef = useRef<(address: string) => void>(() => undefined);
@@ -599,7 +600,6 @@ function ManualBrowserTab({
   const { claim: claimPreviewHide, release: releasePreviewHide } = deferredPreviewHide;
   useEffect(() => {
     if (!nativeBrowserPreview) return;
-    claimPreviewHide(tabId);
     let disposed = false;
     const hideNativePreview = (reportFailure: boolean) => {
       void setBrowserPreviewVisible(tabId, false).catch((visibilityError) => {
@@ -608,6 +608,11 @@ function ManualBrowserTab({
         setError(errorMessage(visibilityError));
       });
     };
+    // The previous run's cleanup deferred its hide so a re-run that keeps the
+    // view showing does not flash it away. A re-run that must hide it hides
+    // now rather than after the attach below comes back from main.
+    claimPreviewHide(tabId);
+    const visible = isActive && !hasBlockingOverlay && !annotations.previewHidden;
     const host = previewHostRef.current;
     if (!browserPreviewSupported || !host || !resolved) {
       hideNativePreview(true);
@@ -615,6 +620,7 @@ function ManualBrowserTab({
         disposed = true;
       };
     }
+    if (!visible) hideNativePreview(false);
 
     let frame = 0;
     const sync = () => {
@@ -633,7 +639,7 @@ function ManualBrowserTab({
           environmentId,
           ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
           bounds,
-          visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
+          visible,
           // Another node's tab in the window's tree: that node's preview runtime.
           ...previewNodeFor(previewScope),
         })
@@ -645,6 +651,9 @@ function ManualBrowserTab({
           })
           .catch((attachError) => {
             if (disposed) return;
+            // A failed attach applied no visibility: the view may still be
+            // showing from the previous run, whose hide this run claimed.
+            if (!visible) hideNativePreview(false);
             setIsLoading(false);
             setError(errorMessage(attachError));
           });
@@ -854,7 +863,7 @@ function ManualBrowserTab({
       <AnnotatedPreviewArea annotations={annotations}>
         {resolved && nativeBrowserPreview ? (
           <div
-            ref={previewHostRef}
+            ref={setPreviewHost}
             data-native-browser-preview={tabId}
             className="absolute inset-0 block h-full min-h-0 w-full min-w-0 max-w-full bg-background"
           />

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 
-import { overlayCoversHost, useBlockingOverlay, useDeferredPreviewHide } from "./browser-tab-hooks";
+import {
+  overlayCoversHost,
+  useBlockingOverlay,
+  useDeferredPreviewHide,
+  useObservedElement,
+} from "./browser-tab-hooks";
 
 const overlays: Element[] = [];
 
@@ -138,27 +143,29 @@ function previewHost(box: Box) {
   placeAt(host, box);
   document.body.append(host);
   overlays.push(host);
-  return { current: host };
+  return host;
 }
 
-describe("useBlockingOverlay with a preview host", () => {
-  const HOST = { left: 700, top: 140, width: 800, height: 900 };
+const HOST = { left: 700, top: 140, width: 800, height: 900 };
+// The chat composer's slash-command popup, in the pane to the left of the preview.
+const BESIDE_HOST = { left: 320, top: 860, width: 340, height: 160 };
+const WINDOW = { left: 0, top: 0, width: 1500, height: 1040 };
 
+describe("useBlockingOverlay with a preview host", () => {
   test("leaves the preview showing for a listbox that does not overlap it", async () => {
-    // The chat composer's slash-command popup sits in the pane beside the preview.
-    const hostRef = previewHost(HOST);
-    const { result } = renderHook(() => useBlockingOverlay(true, hostRef));
+    const host = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, { host }));
     const { overlay } = siblingOverlay("listbox");
-    placeAt(overlay, { left: 320, top: 860, width: 340, height: 160 });
+    placeAt(overlay, BESIDE_HOST);
     await act(async () => undefined);
     expect(result.current).toBe(false);
   });
 
   test("hides the preview for a listbox that overlaps it, and rechecks when it moves", async () => {
-    const hostRef = previewHost(HOST);
-    const { result } = renderHook(() => useBlockingOverlay(true, hostRef));
+    const host = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, { host }));
     const { overlay } = siblingOverlay("listbox");
-    placeAt(overlay, { left: 320, top: 860, width: 340, height: 160 });
+    placeAt(overlay, BESIDE_HOST);
     await act(async () => undefined);
     expect(result.current).toBe(false);
     // Floating UI repositions through `style`; the hook rescans on the next frame.
@@ -168,6 +175,116 @@ describe("useBlockingOverlay with a preview host", () => {
     placeAt(overlay, { left: 100, top: 860, width: 340, height: 160 });
     window.dispatchEvent(new Event("resize"));
     await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  test.each([
+    ["dialog", true],
+    ["alertdialog", true],
+    ["menu", false],
+    ["listbox", false],
+  ])("a %s beside the preview blocks: %p", async (role, blocks) => {
+    // Modal surfaces block the whole window wherever their content sits;
+    // menus and listboxes block only where they overlap the preview.
+    const host = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, { host }));
+    const { overlay } = siblingOverlay(role);
+    placeAt(overlay, BESIDE_HOST);
+    await act(async () => undefined);
+    expect(result.current).toBe(blocks);
+  });
+
+  test("an aria-modal surface beside the preview still blocks", async () => {
+    const host = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, { host }));
+    const surface = document.createElement("div");
+    surface.setAttribute("aria-modal", "true");
+    placeAt(surface, BESIDE_HOST);
+    document.body.append(surface);
+    overlays.push(surface);
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  test("a modal whose content misses the preview blocks until its backdrop finishes closing", async () => {
+    // The dialog primitive renders a full-window backdrop as a sibling of a
+    // small centred content box that sits beside a right-hand preview.
+    const host = previewHost({ left: 1100, top: 140, width: 400, height: 900 });
+    const backdrop = document.createElement("div");
+    backdrop.setAttribute("data-slot", "dialog-overlay");
+    backdrop.setAttribute("data-state", "open");
+    placeAt(backdrop, WINDOW);
+    const content = document.createElement("div");
+    content.setAttribute("role", "dialog");
+    content.setAttribute("aria-modal", "true");
+    content.setAttribute("data-state", "open");
+    placeAt(content, { left: 400, top: 300, width: 500, height: 400 });
+    document.body.append(backdrop, content);
+    overlays.push(backdrop, content);
+
+    const { result } = renderHook(() => useBlockingOverlay(true, { host }));
+    expect(result.current).toBe(true);
+
+    // Closing: the content box finishes its exit first, the backdrop is
+    // still fading out over the preview.
+    act(() => {
+      backdrop.setAttribute("data-state", "closed");
+      backdrop.style.opacity = "0.4";
+      content.remove();
+    });
+    await act(async () => undefined);
+    expect(result.current).toBe(true);
+
+    act(() => {
+      backdrop.style.opacity = "0";
+      backdrop.dispatchEvent(new Event("animationend", { bubbles: true }));
+    });
+    expect(result.current).toBe(false);
+  });
+
+  test("binds to a host that mounts after the hook, and to its replacement", async () => {
+    const observed: Element[] = [];
+    const callbacks: ResizeObserverCallback[] = [];
+    const RealResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe(target: Element) {
+        observed.push(target);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { overlay } = siblingOverlay("listbox");
+      placeAt(overlay, { left: 900, top: 860, width: 340, height: 160 });
+      const { result, rerender } = renderHook(
+        ({ host }: { host: Element | null }) => useBlockingOverlay(true, { host }),
+        { initialProps: { host: null as Element | null } },
+      );
+      // No host yet: an unknown geometry counts as covered.
+      expect(result.current).toBe(true);
+      expect(observed).toEqual([]);
+
+      // The host lands to the left of the listbox.
+      const first = previewHost({ left: 0, top: 0, width: 600, height: 900 });
+      rerender({ host: first });
+      expect(observed).toEqual([first]);
+      expect(result.current).toBe(false);
+
+      // A layout move that mutates nothing the document observer sees: only
+      // the host's ResizeObserver reports it.
+      placeAt(first, { left: 700, top: 140, width: 800, height: 900 });
+      act(() => callbacks.at(-1)!([], {} as ResizeObserver));
+      await waitFor(() => expect(result.current).toBe(true));
+
+      // A remounted host is observed in place of the detached one.
+      const second = previewHost({ left: 0, top: 0, width: 600, height: 900 });
+      rerender({ host: second });
+      expect(observed.at(-1)).toBe(second);
+      expect(result.current).toBe(false);
+    } finally {
+      globalThis.ResizeObserver = RealResizeObserver;
+    }
   });
 
   test("treats an overlay or host without layout as covering", () => {
@@ -180,6 +297,21 @@ describe("useBlockingOverlay with a preview host", () => {
     placeAt(host, { left: 0, top: 0, width: 0, height: 0 });
     expect(overlayCoversHost(overlay, host)).toBe(true);
     expect(overlayCoversHost(overlay, null)).toBe(true);
+  });
+});
+
+describe("useObservedElement", () => {
+  test("writes the element to the ref and re-renders when it changes", () => {
+    const ref: { current: HTMLDivElement | null } = { current: null };
+    const { result } = renderHook(() => useObservedElement(ref));
+    expect(result.current[0]).toBeNull();
+    const element = document.createElement("div");
+    act(() => result.current[1](element));
+    expect(result.current[0]).toBe(element);
+    expect(ref.current).toBe(element);
+    act(() => result.current[1](null));
+    expect(result.current[0]).toBeNull();
+    expect(ref.current).toBeNull();
   });
 });
 

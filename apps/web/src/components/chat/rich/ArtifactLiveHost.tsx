@@ -21,7 +21,7 @@ import {
 } from "@/lib/chat/artifact-theme";
 import { ARTIFACT_FRAME_CHANNEL } from "@orkestrator/protocol/artifact-frame-channel";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
-import { useBlockingOverlay } from "@/components/browser/browser-tab-hooks";
+import { useBlockingOverlay, useObservedElement } from "@/components/browser/browser-tab-hooks";
 import {
   artifactLiveHostOwner,
   isLiveOccurrence,
@@ -319,9 +319,10 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
   }, [capabilities, invalidate, target.scope.backendId]);
   const inline = useInlineGeometry(anchor, placement === "inline");
   const frameAreaRef = useRef<HTMLDivElement | null>(null);
+  const [frameArea, setFrameArea] = useObservedElement(frameAreaRef);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const api = getArtifactHostApi();
-  const blocked = useBlockingOverlay(api !== null, frameAreaRef);
+  const blocked = useBlockingOverlay(api !== null, { host: frameArea });
   const frameActive = ACTIVE_FRAME_PHASES.has(phase);
   const shown = placement !== "inline" || inline.rect !== null;
 
@@ -561,7 +562,7 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
         </span>
       </div>
       <div
-        ref={frameAreaRef}
+        ref={setFrameArea}
         className="relative min-h-0 flex-1"
         data-artifact-live-frame-area="true"
       >

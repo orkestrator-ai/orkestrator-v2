@@ -2544,6 +2544,92 @@ describe("BrowserTab", () => {
     }
   });
 
+  test("hides the view for a modal dialog whose content box misses it", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = renderInAppCommandScope(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const rect = (left: number, top: number, width: number, height: number) => () =>
+      ({
+        x: left,
+        y: top,
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const host = view.container.querySelector(
+      '[data-native-browser-preview="browser-1"]',
+    ) as HTMLDivElement;
+    host.getBoundingClientRect = rect(1100, 140, 400, 900);
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+    // A small centred dialog to the left of a right-hand preview: its
+    // full-window backdrop still covers the preview.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.getBoundingClientRect = rect(400, 300, 500, 400);
+    try {
+      native.browserPreview.setVisible.mockClear();
+      document.body.append(dialog);
+      await waitFor(() =>
+        expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false),
+      );
+    } finally {
+      dialog.remove();
+      view.unmount();
+    }
+  });
+
+  test("a re-run that must hide the view hides it even when its attach fails", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const element = (isActive: boolean) => (
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive={isActive}
+      />
+    );
+    const view = renderInAppCommandScope(element(true));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+    // The deactivating re-run's attach is refused by main, so it applies no
+    // visibility; the previous run's deferred hide was claimed by it.
+    native.browserPreview.attach.mockImplementation(async () => {
+      throw new Error("attach refused");
+    });
+    native.browserPreview.setVisible.mockClear();
+    view.rerender(element(false));
+    // Hidden before the attach even runs, not left to its outcome.
+    expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
+    await act(async () => undefined);
+    expect(native.browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", true);
+    expect(native.browserPreview.setVisible).toHaveBeenLastCalledWith("browser-1", false);
+    view.unmount();
+  });
+
   test("handles attach and DevTools failures and ignores a disposed attach completion", async () => {
     let resolveAttach: ((state: BrowserPreviewState) => void) | undefined;
     const attach = mock(

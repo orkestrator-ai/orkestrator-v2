@@ -3,12 +3,28 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
 
-export const BLOCKING_OVERLAY_SELECTOR = [
+/*
+ * Modal surfaces: dialogs, alert dialogs and sheets, plus the full-window
+ * backdrops our modal primitives render as siblings of their content. A
+ * modal blocks the whole window wherever its content box sits, so it hides
+ * a native view regardless of geometry.
+ */
+const MODAL_OVERLAY_SELECTOR = [
   '[role="dialog"]',
   '[role="alertdialog"]',
-  '[role="menu"]',
-  '[role="listbox"]',
+  '[aria-modal="true"]',
+  '[data-slot="dialog-overlay"]',
+  '[data-slot="alert-dialog-overlay"]',
+  '[data-slot="sheet-overlay"]',
 ].join(",");
+
+/*
+ * Non-modal popups (menus, listboxes) leave the rest of the window usable, so
+ * with a known host they hide the view only where they overlap it.
+ */
+const POSITIONED_OVERLAY_SELECTOR = ['[role="menu"]', '[role="listbox"]'].join(",");
+
+export const BLOCKING_OVERLAY_SELECTOR = `${MODAL_OVERLAY_SELECTOR},${POSITIONED_OVERLAY_SELECTOR}`;
 
 /*
  * Toolbar layout shared by service and manual browser tabs, sized against the
@@ -76,9 +92,22 @@ export function overlayCoversHost(overlay: Element, host: Element | null | undef
   );
 }
 
-function hasVisuallyBlockingOverlay(host: Element | null | undefined): boolean {
+function isModalOverlay(overlay: Element): boolean {
+  return overlay.matches(MODAL_OVERLAY_SELECTOR);
+}
+
+/**
+ * `geometry` undefined: any open overlay blocks. Otherwise modal overlays
+ * still block everywhere, and menus and listboxes block only where they
+ * overlap `geometry.host` (an absent host counts as covered).
+ */
+function hasVisuallyBlockingOverlay(geometry: { host: Element | null } | undefined): boolean {
   return Array.from(document.querySelectorAll(BLOCKING_OVERLAY_SELECTOR)).some(
-    (overlay) => isBlockingOverlay(overlay) && overlayCoversHost(overlay, host),
+    (overlay) =>
+      isBlockingOverlay(overlay) &&
+      (geometry === undefined ||
+        isModalOverlay(overlay) ||
+        overlayCoversHost(overlay, geometry.host)),
   );
 }
 
@@ -95,23 +124,27 @@ const OVERLAY_MOTION_EVENTS = [
  * A native preview view is composited above the renderer, so it must hide while
  * a dialog or menu is open over it.
  *
- * With `hostRef`, only an overlay that overlaps the host (the area the native
- * view occupies) counts: a slash-command or mention listbox open in the chat
- * pane beside the preview leaves it showing. Geometry is rechecked as overlays
- * move (Floating UI positions them through `style`), and as the host resizes
- * or anything scrolls. Without `hostRef`, any open overlay in the document
- * blocks.
+ * With `geometry`, only a menu or listbox that overlaps `geometry.host` (the
+ * area the native view occupies) counts: a slash-command or mention listbox
+ * open in the chat pane beside the preview leaves it showing. Modal dialogs,
+ * alert dialogs, sheets and their backdrops cover the whole window, so they
+ * always count. Geometry is rechecked as overlays move (Floating UI positions
+ * them through `style`), and as the host resizes or anything scrolls. Pass the
+ * host element itself (see `useObservedElement`), not a ref, so the hook
+ * re-binds when the host mounts or is replaced. Without `geometry`, any open
+ * overlay in the document blocks.
  */
-export function useBlockingOverlay(enabled: boolean, hostRef?: RefObject<Element | null>): boolean {
+export function useBlockingOverlay(enabled: boolean, geometry?: { host: Element | null }): boolean {
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
-  const tracksGeometry = hostRef !== undefined;
+  const tracksGeometry = geometry !== undefined;
+  const host = geometry?.host ?? null;
   useEffect(() => {
     if (!enabled) return;
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
       frame = 0;
-      setHasBlockingOverlay(hasVisuallyBlockingOverlay(hostRef?.current));
+      setHasBlockingOverlay(hasVisuallyBlockingOverlay(tracksGeometry ? { host } : undefined));
     };
     // Geometry changes arrive in bursts (scrolling, streaming layout); one
     // document scan per frame is enough for them.
@@ -133,19 +166,16 @@ export function useBlockingOverlay(enabled: boolean, hostRef?: RefObject<Element
     observer.observe(document.body, {
       attributes: true,
       attributeFilter: tracksGeometry
-        ? ["aria-hidden", "data-state", "hidden", "role", "style"]
-        : ["aria-hidden", "data-state", "hidden", "role"],
+        ? ["aria-hidden", "aria-modal", "data-state", "hidden", "role", "style"]
+        : ["aria-hidden", "aria-modal", "data-state", "hidden", "role"],
       childList: true,
       subtree: true,
     });
     for (const eventName of OVERLAY_MOTION_EVENTS) {
       document.addEventListener(eventName, updateAfterOverlayMotion, true);
     }
-    const host = hostRef?.current;
     const resizeObserver =
-      tracksGeometry && host && typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(scheduleUpdate)
-        : null;
+      host && typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleUpdate) : null;
     if (host) resizeObserver?.observe(host);
     if (tracksGeometry) {
       window.addEventListener("resize", scheduleUpdate);
@@ -164,8 +194,28 @@ export function useBlockingOverlay(enabled: boolean, hostRef?: RefObject<Element
         window.removeEventListener("scroll", scheduleUpdate, true);
       }
     };
-  }, [enabled, hostRef, tracksGeometry]);
+  }, [enabled, host, tracksGeometry]);
   return hasBlockingOverlay;
+}
+
+/**
+ * Mirrors the element held in `ref` into state, so hooks that must re-bind
+ * when the element mounts, unmounts or is replaced (such as
+ * `useBlockingOverlay`) see the change, while effects and handlers keep
+ * reading `ref`. Attach the returned setter as the element's `ref`.
+ */
+export function useObservedElement<T extends Element>(
+  ref: RefObject<T | null>,
+): [element: T | null, setElement: (element: T | null) => void] {
+  const [element, setElementState] = useState<T | null>(null);
+  const setElement = useCallback(
+    (next: T | null) => {
+      ref.current = next;
+      setElementState(next);
+    },
+    [ref],
+  );
+  return [element, setElement];
 }
 
 /**

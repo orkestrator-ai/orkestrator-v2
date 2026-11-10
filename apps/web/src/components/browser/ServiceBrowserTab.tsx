@@ -98,6 +98,7 @@ import {
   useAddressBarShortcut,
   useBlockingOverlay,
   useDeferredPreviewHide,
+  useObservedElement,
 } from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
@@ -245,6 +246,7 @@ function ServicePreview({
   const [iframeRevision, setIframeRevision] = useState(0);
   const locallyPersistedRequest = useRef<string | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
+  const [previewHost, setPreviewHost] = useObservedElement(previewHostRef);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const optionsTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -253,7 +255,9 @@ function ServicePreview({
   const dialogOpenerRef = useRef<HTMLElement | null>(null);
   const nativeAttachedRef = useRef(false);
   const previousRefresh = useRef(refreshRequestId);
-  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview, previewHostRef);
+  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview, {
+    host: previewHost,
+  });
   const { claim: claimPreviewHide, release: releasePreviewHide } = useDeferredPreviewHide();
   useAddressBarShortcut({
     tabId,
@@ -446,22 +450,36 @@ function ServicePreview({
   }, [mode, path, resolvePreviewUrl, service]);
 
   const compatibilityIframeUrl = compatibilityUrl?.iframeUrl ?? null;
+  // Which page the native view shows. A change replaces the page, so the old
+  // one must not stay on screen while the new attach is in flight.
+  const previewIdentity = `${mode}\u0000${serviceRef.environmentId}\u0000${serviceRef.serviceId}`;
+  const shownIdentityRef = useRef<string | null>(null);
 
   // `attachTarget` is rebuilt every render; only its identity (service and
   // path) should re-run the attach, or every render would re-attach the view.
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!nativeBrowserPreview) return;
-    claimPreviewHide(tabId);
     let disposed = false;
     const host = previewHostRef.current;
     const hide = () => void setBrowserPreviewVisible(tabId, false).catch(() => undefined);
+    const visible =
+      isActive && !hasBlockingOverlay && dialog === null && !annotations.previewHidden;
+    const identityChanged =
+      shownIdentityRef.current !== null && shownIdentityRef.current !== previewIdentity;
+    shownIdentityRef.current = previewIdentity;
+    // The previous run's cleanup deferred its hide so a re-run that keeps the
+    // view showing does not flash it away. A re-run that must hide it (an
+    // overlay, deactivation, a different service) hides now: the attach below
+    // waits for main, and for a service preview on the tunnel, which can take
+    // arbitrarily long or fail.
+    claimPreviewHide(tabId);
     const canAttach =
       host &&
       ((mode === "desktop-tunnel" && attachTarget) ||
         (mode === "compatibility" && compatibilityIframeUrl));
+    if (!canAttach || !visible || identityChanged) hide();
     if (!canAttach) {
-      hide();
       return () => {
         disposed = true;
       };
@@ -477,8 +495,6 @@ function ServicePreview({
           width: rect.width,
           height: rect.height,
         };
-        const visible =
-          isActive && !hasBlockingOverlay && dialog === null && !annotations.previewHidden;
         const attach =
           mode === "desktop-tunnel" && attachTarget
             ? attachBrowserPreview({
@@ -546,6 +562,7 @@ function ServicePreview({
     isActive,
     mode,
     nativeBrowserPreview,
+    previewIdentity,
     releasePreviewHide,
     route.basis,
     tabId,
@@ -1016,7 +1033,7 @@ function ServicePreview({
       <AnnotatedPreviewArea annotations={annotations}>
         {nativeBrowserPreview && (mode === "desktop-tunnel" || compatibilityUrl) ? (
           <div
-            ref={previewHostRef}
+            ref={setPreviewHost}
             data-native-browser-preview={tabId}
             className="absolute inset-0 block h-full w-full bg-background"
           />

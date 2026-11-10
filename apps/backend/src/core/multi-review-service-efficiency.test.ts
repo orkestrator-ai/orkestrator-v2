@@ -23,6 +23,7 @@ import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-revi
 import { parseReviewPackageReference } from "./review-package.js";
 import { StorageService } from "./storage.js";
 import { PROGRESS_TRANSCRIPT_WINDOW_MESSAGES } from "./transcript-progress.js";
+import { ManualTime, settleKeyedWork } from "./recurring-test-support.js";
 
 jest.setTimeout(30_000);
 
@@ -505,89 +506,72 @@ test("recorded measurements carry no prompt, transcript or identifier content", 
   }
 });
 
-test("lease renewal re-arms after slow work and ignores callbacks from stopped or replaced timers", async () => {
+// The keyed supervisor's critical job is the only lease renewal: the due
+// scheduler's own renewal timer went with it (todo 0048 task 13).
+test("lease renewal runs as one critical job: never overlapping, once per init, stopped by shutdown", async () => {
   const env = await setup(1);
-  const timers = new Map<object, { callback: () => void; delay: number }>();
-  const renewalTimers: Array<{ handle: object; callback: () => void }> = [];
-  const clock = {
-    now: () => 0,
-    timers: {
-      set(callback: () => void, delay: number) {
-        const handle = {};
-        timers.set(handle, { callback, delay });
-        if (delay === 17) renewalTimers.push({ handle, callback });
-        return handle;
-      },
-      clear(handle: unknown) {
-        timers.delete(handle as object);
-      },
-    },
-  };
+  const time = new ManualTime(0);
   const service = env.createService({
     autoAdvance: true,
-    keyedScheduling: false,
-    schedulerClock: clock,
-    controllerRenewMs: 17,
+    schedulerClock: { now: time.now, timers: time.timerFactory },
+    controllerRenewMs: 1_000,
+    // Keep every workflow pass out of the measured window, so each claim
+    // counted below is a renewal.
+    pollIntervalMs: 600_000,
+    observationIntervalMs: 600_000,
+    discoveryIntervalMs: 600_000,
   });
-  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
-  let release: (() => void) | undefined;
   const claim = env.storage.claimMultiReviewController.bind(env.storage);
+  let gate: Promise<void> | null = null;
+  let release: (() => void) | undefined;
+  const renew = jest
+    .spyOn(env.storage, "claimMultiReviewController")
+    .mockImplementation(async (...args) => {
+      if (gate) await gate;
+      return claim(...args);
+    });
+  const settle = (allowInFlight = 0) => settleKeyedWork(time, [service], { allowInFlight });
   try {
+    // A pass holds the lease the renewal keeps alive.
     await service.advanceNow(env.workflowId);
     await service.init();
-    const renew = jest
-      .spyOn(env.storage, "claimMultiReviewController")
-      .mockImplementation(async (...args) => {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        return claim(...args);
-      });
-    try {
-      const first = renewalTimers.at(-1)!;
-      timers.delete(first.handle);
-      first.callback();
-      await flush();
-      expect(renew).toHaveBeenCalledTimes(1);
-      expect(renewalTimers).toHaveLength(1);
-      // No timer is armed until the slow renewal completes.
-      expect(Array.from(timers.values()).filter((timer) => timer.delay === 17)).toHaveLength(0);
-      release!();
-      await flush();
-      const second = renewalTimers.at(-1)!;
-      expect(second.handle).not.toBe(first.handle);
-      expect(renewalTimers).toHaveLength(2);
-      first.callback();
-      await flush();
-      expect(renew).toHaveBeenCalledTimes(1);
-      timers.delete(second.handle);
-      second.callback();
-      await flush();
-      expect(renew).toHaveBeenCalledTimes(2);
-      // Reinitialisation replaces the identity while a renewal is in flight.
-      await service.init();
-      expect(renewalTimers).toHaveLength(3);
-      second.callback();
-      expect(renew).toHaveBeenCalledTimes(2);
-      release!();
-      await flush();
-      expect(renewalTimers).toHaveLength(3);
-      const third = renewalTimers.at(-1)!;
-      await service.shutdown();
-      third.callback();
-      await flush();
-      expect(renew).toHaveBeenCalledTimes(2);
-      expect(renewalTimers).toHaveLength(3);
-      expect(timers.size).toBe(0);
-      await service.init();
-      expect(renewalTimers).toHaveLength(4);
-      third.callback();
-      expect(renew).toHaveBeenCalledTimes(2);
-    } finally {
-      renew.mockRestore();
+    // A second init replaces the supervisor rather than adding a renewal.
+    await service.init();
+    await settle();
+    renew.mockClear();
+
+    await time.advance(1_000);
+    await settle();
+    expect(renew).toHaveBeenCalledTimes(1);
+
+    // A slow renewal is never joined by a second one, however long it takes.
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await time.advance(1_000);
+    await settle(1);
+    expect(renew).toHaveBeenCalledTimes(2);
+    for (let step = 0; step < 4; step += 1) {
+      await time.advance(1_000);
+      await settle(1);
     }
+    expect(renew).toHaveBeenCalledTimes(2);
+    gate = null;
+    release!();
+    await settle();
+    await time.advance(1_000);
+    await settle();
+    // The next renewal is due from the slow one's completion: no catch-up burst.
+    expect(renew).toHaveBeenCalledTimes(3);
+
+    // Shutdown releases the lease; nothing renews afterwards.
+    await service.shutdown();
+    const afterShutdown = renew.mock.calls.length;
+    await time.advance(10_000);
+    expect(renew).toHaveBeenCalledTimes(afterShutdown);
   } finally {
     release?.();
+    renew.mockRestore();
     await service.shutdown();
     await env.cleanup();
   }

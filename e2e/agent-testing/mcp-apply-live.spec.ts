@@ -42,8 +42,9 @@
  * provider home should not appear; one that does is skipped with that reason.
  * Codex project trust is granted only in an isolated `CODEX_HOME`.
  *
- * Fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`, Claude, Codex and
- * Pi only, local environments only) points the profile's own provider
+ * Fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`, Claude, Codex,
+ * Pi and OpenCode, local environments only; OpenCode through a custom
+ * provider, `opencode-fake-provider.ts`) points the profile's own provider
  * configuration at the scripted loopback model in `mcp-fake-model.ts` before
  * the environment starts: the real CLI, app-server or SDK, bridge, backend
  * and MCP servers run, and only the model is fake. It calls a probed tool
@@ -90,10 +91,12 @@ import {
 
 import { grantCodexProjectTrust, writeRefusal } from "./mcp-apply-live-safety";
 import {
+  FAKE_OPENCODE_PROVIDER,
   isFakeModelPlatform,
   startMcpFakeModel,
   type McpFakeModelHandle,
 } from "./mcp-fake-model-wiring";
+import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 
 type Platform = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 type Status = {
@@ -380,6 +383,8 @@ test.describe("live MCP apply", () => {
       const scratch = mkdtempSync(path.join(os.tmpdir(), `mcpq-${platform}-`));
       const sseServers: ChildProcess[] = [];
       let fake: McpFakeModelHandle | null = null;
+      /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
+      let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       let invoke: Invoke | null = null;
       let environment: Environment | null = null;
       const skip = (reason: string): never => {
@@ -400,7 +405,10 @@ test.describe("live MCP apply", () => {
           if (CONTAINER) skip("fake-model mode runs local environments only");
           if (!isFakeModelPlatform(platform)) skip(`no fake model for ${label}`);
           // Before the environment exists, so its bridge's first process reads it.
-          fake = await startMcpFakeModel(platform as "claude" | "codex" | "pi", dataDir);
+          fake = await startMcpFakeModel(
+            platform as "claude" | "codex" | "pi" | "opencode",
+            dataDir,
+          );
           summary.fakeModel = {
             origin: fake.origin,
             files: fake.files,
@@ -409,6 +417,10 @@ test.describe("live MCP apply", () => {
         }
         invoke = await signIn(page, status);
         const call = invoke;
+        if (fake && platform === "opencode") {
+          // A connected provider outside the allowlist does not count as signed in.
+          restoreOpenCodeAllowlist = await allowOpenCodeFakeProvider(call, FAKE_OPENCODE_PROVIDER);
+        }
         const config = await call<{ global?: { enabledAgentPlatforms?: string[] } }>(
           "get_config",
         ).catch(() => null);
@@ -1333,7 +1345,11 @@ test.describe("live MCP apply", () => {
           );
         }
         rmSync(scratch, { recursive: true, force: true });
-        await fake?.stop();
+        try {
+          await restoreOpenCodeAllowlist?.();
+        } finally {
+          await fake?.stop();
+        }
       }
     });
   }

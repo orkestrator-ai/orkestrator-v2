@@ -91,9 +91,9 @@ import {
  *
  * Arms: `candidate` (defaults), `rollback`
  * (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
- * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
- * activity stay keyed in both arms, their rollback drivers having been
- * removed by todo 0048 task 13) and `metrics-off`
+ * `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend
+ * activity and Multi Review stay keyed in both arms, their rollback drivers
+ * having been removed by todo 0048 task 13) and `metrics-off`
  * (`ORKESTRATOR_RECURRING_METRICS=0`, CPU/RSS only).
  *
  * The gateway token is read from the profile's mode-0600 auth file and only

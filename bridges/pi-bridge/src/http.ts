@@ -1067,6 +1067,7 @@ async function handleCompact(
     if (state.manualCompaction === compaction) state.manualCompaction = undefined;
     settle(stopped);
     state.compacting = false;
+    state.lastAccessed = Date.now();
     state.dispatching = false;
     state.revision += 1;
     schedulePersist();

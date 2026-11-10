@@ -741,7 +741,12 @@ export function reservePromptAdmission(state: SessionState, closed: boolean): nu
 /** Release a claim once its turn is terminal. A newer claim is left alone. */
 export function releasePromptClaim(state: SessionState, claim: number | undefined): void {
   if (claim === undefined) return;
-  if (state.promptClaim === claim) state.promptClaim = undefined;
+  if (state.promptClaim === claim) {
+    state.promptClaim = undefined;
+    // Idle time starts after owned work settles, including long preflight or
+    // approval waits. A stale release must not refresh a newer turn's clock.
+    state.lastAccessed = Date.now();
+  }
   if (state.cancelRequestedClaim === claim) state.cancelRequestedClaim = undefined;
   if (state.promptStartup?.claim === claim) state.promptStartup = undefined;
   const release = claimReleases.get(state);

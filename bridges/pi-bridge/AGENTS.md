@@ -206,7 +206,9 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
 - Only a person's action keeps a session attached (`liveness.ts`): a write
   route (prompt, the pre-dispatch `/attach`, config, cancel, compaction, an
   approval answer, …) or a resume refreshes `lastAccessed`; no `GET` ever
-  does, nor the backend's title write or an approval hold. An open tab keeps
+  does, nor the backend's title write or an approval hold. Releasing the
+  owning prompt claim and ending compaction also refresh the clock, so a long
+  operation gets a full idle interval after settlement. An open tab keeps
   reading (live updates, transcript pages, and every discovery section's
   30 s renewal, `/mcp` included), and while those reads counted an idle tab
   held its Pi session and MCP processes for as long as it was open (todo

@@ -63,6 +63,8 @@ export const OPENCODE_PROJECT_FILE_REFERENCE_LIMIT = 16;
 export const OPENCODE_PROJECT_INSTRUCTION_LIMIT = 16;
 /** A referenced file larger than this is dropped rather than inlined. */
 export const OPENCODE_PROJECT_FILE_REFERENCE_MAX_BYTES = 64 * 1024;
+/** Instructions have a separate bound; sixteen copies stay bounded to 16 MiB. */
+export const OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES = 1024 * 1024;
 
 const REFERENCE = /\{(env|file):([^}]*)\}/g;
 const ANY_REFERENCE = /\{(?:env|file):/;
@@ -113,6 +115,7 @@ export async function filterProjectOpenCodeConfig(
   readFile: (relative: string) => Promise<string | undefined>,
   instructionPath: (index: number) => string,
   root = OPENCODE_PROJECT_DIRECTORY,
+  readInstruction = readFile,
 ): Promise<FilteredProjectConfig> {
   const merged = mergeOpenCodeUserConfig(
     files.map((file) => ({ name: file.name, directory: root, text: file.text })),
@@ -122,6 +125,16 @@ export async function filterProjectOpenCodeConfig(
     merged.text === undefined
       ? {}
       : (JSON.parse(merged.text.replace(/^(?:\/\/[^\n]*\n)+/, "")) as JsonObject);
+  // Provider modules execute inside the credential-bearing process, just like
+  // plugins. Only the trusted host configuration may select their implementation.
+  if (isObject(document.provider)) {
+    for (const provider of Object.values(document.provider)) {
+      if (isObject(provider) && Object.hasOwn(provider, "npm")) {
+        delete provider.npm;
+        dropped.plugins = true;
+      }
+    }
+  }
   let budget = OPENCODE_PROJECT_FILE_REFERENCE_LIMIT;
 
   /** The string with its references inlined, or undefined when it must be dropped. */
@@ -195,7 +208,7 @@ export async function filterProjectOpenCodeConfig(
     if (relative && seen.has(relative)) continue;
     const content =
       relative && instructions.length < OPENCODE_PROJECT_INSTRUCTION_LIMIT
-        ? await readFile(relative)
+        ? await readInstruction(relative)
         : undefined;
     if (relative) seen.add(relative);
     // A missing AGENTS.md is not something the project asked for.
@@ -269,11 +282,28 @@ export async function readFilteredProjectOpenCodeConfig(
     }
     if (text.trim()) files.push({ name, text });
   }
+  let oversizedInstructions = 0;
   const result = await filterProjectOpenCodeConfig(
     files,
     (relative) => read(relative, OPENCODE_PROJECT_FILE_REFERENCE_MAX_BYTES),
     (index) => openCodeProjectInstructionPath(kind, index),
+    OPENCODE_PROJECT_DIRECTORY,
+    async (relative) => {
+      const output = await exec(
+        containerId,
+        boundedReadCommand(
+          path.posix.join(OPENCODE_PROJECT_DIRECTORY, relative),
+          OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES,
+        ),
+        15_000,
+      ).catch(() => undefined);
+      const content = boundedReadResult(output, OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES);
+      if (relative === "AGENTS.md" && output?.startsWith("F") && content === undefined)
+        oversizedInstructions++;
+      return content;
+    },
   );
+  result.dropped.instructions += oversizedInstructions;
   const { plugins, env, file, instructions } = result.dropped;
   if (plugins || env || file || instructions || result.rejected.length) {
     // Counts and file names only: values may be credentials.

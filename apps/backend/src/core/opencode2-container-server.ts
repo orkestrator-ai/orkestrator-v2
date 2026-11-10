@@ -197,10 +197,15 @@ export async function containerRunsOpenCode2(
  * a launched server's socket is recorded. On 2.2.6 `/api/agent` loads them;
  * `/api/session/active` does not (probed 2026-11-10).
  */
-async function warmContainerOpenCode2(client: OpenCode2Client): Promise<void> {
+async function warmContainerOpenCode2(
+  client: OpenCode2Client,
+  required = false,
+  timeoutMs = 30_000,
+): Promise<void> {
   await client
-    .api("GET", "/api/agent", "OpenCode agents", { signal: AbortSignal.timeout(30_000) })
+    .api("GET", "/api/agent", "OpenCode agents", { signal: AbortSignal.timeout(timeoutMs) })
     .catch((error: unknown) => {
+      if (required) throw error;
       log.warn("container-server.warm-incomplete", {
         error: formatLogError(error, { message: false }),
       });
@@ -243,6 +248,7 @@ export async function startContainerOpenCode2Server(
   containerId: string,
   credentialMode: () => Promise<OpenCode2ContainerMode> = () =>
     containerOpenCode2Mode(context, containerId),
+  warmTimeoutMs = 30_000,
 ): Promise<{ connection: OpenCode2RouteConnection; wasRunning: boolean }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -322,15 +328,20 @@ export async function startContainerOpenCode2Server(
       launcher: true,
     });
     const connection = openCode2ContainerConnection(containerId, hostPort, password);
-    const client = new OpenCode2Client(connection);
+    // No recorded socket exists yet. Startup probes must not trigger identity scans.
+    const client = new OpenCode2Client({ ...connection, fetch });
     try {
       await waitForContainerOpenCode2(containerId, client, password);
       // Warmed first: loading the plugins makes the server non-dumpable, so
       // the socket recorded next cannot be taken out of it.
-      await warmContainerOpenCode2(client);
+      await warmContainerOpenCode2(client, true, warmTimeoutMs);
       await recordOpenCode2Listener(containerId);
     } catch (error) {
-      await removeContainerBridgeCredential(containerId, "opencode2").catch(() => undefined);
+      try {
+        await stopOpenCode2Listeners(containerId);
+      } finally {
+        await removeContainerBridgeCredential(containerId, "opencode2");
+      }
       throw error;
     }
     return { connection, wasRunning: false };

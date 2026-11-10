@@ -316,6 +316,7 @@ describe.skipIf(process.platform !== "linux")("rebuilding the 2.x configuration 
       await writeFile(path.join(input, "plugins", "mine.ts"), "export default {};");
       await writeFile(path.join(input, "agents", "review.md"), "# Review");
       await writeFile(path.join(input, "AGENTS.md"), "user rules");
+      await writeFile(path.join(input, "p.md"), "referenced prompt");
       await writeFile(path.join(input, "node_modules", "dep", "index.js"), "x");
       await writeFile(
         path.join(input, "opencode.json"),
@@ -331,7 +332,7 @@ describe.skipIf(process.platform !== "linux")("rebuilding the 2.x configuration 
     expect(exitCode).toBe(0);
     const config = path.join(root, "opencode");
     expect((await readdir(config)).sort()).toEqual(
-      ["AGENTS.md", "agents", "opencode.jsonc", "plugins"].sort(),
+      ["AGENTS.md", "agents", "opencode.jsonc", "p.md", "plugins"].sort(),
     );
     expect((await readdir(path.join(config, "plugins"))).sort()).toEqual(
       [OPENCODE2_CREDENTIAL_PLUGIN_ID, OPENCODE2_GITHUB_ENV_PLUGIN_ID].sort(),
@@ -349,6 +350,7 @@ describe.skipIf(process.platform !== "linux")("rebuilding the 2.x configuration 
     expect(document.instructions).toEqual(["one.md", "two.md"]);
     // A relative reference resolves inside the final directory.
     expect(JSON.stringify(document.agent)).toContain(`{file:${config}/./p.md}`);
+    expect(await readFile(path.join(config, "p.md"), "utf8")).toBe("referenced prompt");
     // Readable by the server's uid, writable by no one else.
     expect((await stat(path.join(config, "opencode.jsonc"))).mode & 0o777).toBe(0o644);
     expect((await stat(config)).mode & 0o777).toBe(0o755);

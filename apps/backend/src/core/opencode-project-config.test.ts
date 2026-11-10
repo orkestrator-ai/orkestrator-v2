@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+
+// These tests own real subprocesses; bound them explicitly under aggregate load.
+setDefaultTimeout(30_000);
 import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +12,7 @@ import {
 } from "./agent-credential-files.js";
 import {
   OPENCODE_PROJECT_CONFIG_MAX_BYTES,
+  OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES,
   OPENCODE_PROJECT_FILE_REFERENCE_LIMIT,
   checkoutRelativePath,
   filterProjectOpenCodeConfig,
@@ -74,6 +78,32 @@ describe("filterProjectOpenCodeConfig", () => {
       mcp: { local: { type: "local", command: ["bun", "x"] } },
       permission: { bash: "ask" },
     });
+  });
+
+  test("removes every project provider module override while retaining provider settings", async () => {
+    for (const npm of [
+      "file:///workspace/provider.ts",
+      "./provider.ts",
+      "/workspace/provider.ts",
+      "../provider.ts",
+      "@ai-sdk/example",
+    ]) {
+      const result = await filterProjectOpenCodeConfig(
+        [
+          {
+            name: "opencode.json",
+            text: JSON.stringify({
+              provider: { fixture: { npm, options: { baseURL: "http://localhost" }, models: {} } },
+            }),
+          },
+        ],
+        noFiles,
+        copyPath,
+      );
+      expect(parse(result.text)).toEqual({
+        provider: { fixture: { options: { baseURL: "http://localhost" }, models: {} } },
+      });
+    }
   });
 
   test("drops every {env:} reference: the server's environment holds the password", async () => {
@@ -252,6 +282,30 @@ describe("filterProjectOpenCodeConfig", () => {
 });
 
 describe("readFilteredProjectOpenCodeConfig", () => {
+  test("copies 100 KiB instructions and reports oversized AGENTS.md", async () => {
+    for (const size of [100 * 1024, OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES + 1]) {
+      const result = await readFilteredProjectOpenCodeConfig("container-1", "opencode2", (async (
+        _container: string,
+        command: string,
+      ) => {
+        if (command.includes("'/workspace/AGENTS.md'")) {
+          expect(command).toContain(`head -c ${OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES + 1}`);
+          return `F${"r".repeat(size)}`;
+        }
+        return "";
+      }) as never);
+      if (size <= OPENCODE_PROJECT_INSTRUCTION_MAX_BYTES) {
+        expect(result.instructions).toEqual(["r".repeat(size)]);
+        expect(parse(result.text)).toEqual({
+          instructions: [openCodeProjectInstructionPath("opencode2", 0)],
+        });
+      } else {
+        expect(result.instructions).toEqual([]);
+        expect(result.dropped.instructions).toBe(1);
+      }
+    }
+  });
+
   test("reads the checkout's files as node, bounded, and refuses an oversized one", async () => {
     const commands: string[] = [];
     const exec = async (_container: string, command: string) => {

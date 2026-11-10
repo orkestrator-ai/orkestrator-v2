@@ -1,9 +1,10 @@
+import { openCodeProviderClient } from "./opencode-provider-helpers.js";
 import {
   HUMAN_PROMPT_OBSERVATION_ROWS,
   humanPromptObservation,
 } from "@orkestrator/protocol/human-prompts";
 import { OpenCodeSessionPolicy } from "./opencode-session-policy.js";
-import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
+import { type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
@@ -232,19 +233,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     private readonly connection: BridgeConnection,
     private readonly dependencies: OpenCodeProviderDependencies,
   ) {
-    const basic = Buffer.from(`opencode:${connection.authToken}`).toString("base64");
-    const createClient = dependencies.openCodeClientFactory ?? createOpenCodeSdkClient;
-    this.client =
-      dependencies.openCodeClient ??
-      createClient({
-        baseUrl: connection.baseUrl,
-        directory: connection.directory,
-        headers: {
-          Authorization: `Basic ${basic}`,
-          "X-Orkestrator-OpenCode-Token": connection.authToken,
-        },
-        ...(dependencies.openCodeFetch ? { fetch: dependencies.openCodeFetch } : {}),
-      });
+    this.client = openCodeProviderClient(connection, dependencies);
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
     this.researchTools = dependencies.coordinatorResearchToolIds ?? (() => []);
     this.sessionPolicy = new OpenCodeSessionPolicy(

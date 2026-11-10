@@ -221,7 +221,7 @@ const FAKE_DOCKER_LAUNCHER = FAKE_DOCKER.replace(
 );
 
 /** A 2.x stand-in that appends each request path to the exec log, after the launcher ran. */
-async function serveAfterLaunch(log: () => string) {
+async function serveAfterLaunch(log: () => string, warmStatus = 200, delayedPolls = 0) {
   let launched = false;
   const server = createHttpServer(async (request, response) => {
     if (!launched)
@@ -235,7 +235,14 @@ async function serveAfterLaunch(log: () => string) {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     await fs.appendFile(log(), `HTTP:${url.pathname}\n`);
     response.setHeader("content-type", "application/json");
-    if (url.pathname === "/api/info") return response.end(JSON.stringify({ version: "2.2.6" }));
+    if (url.pathname === "/api/info") {
+      if (delayedPolls-- > 0) {
+        request.socket.destroy();
+        return;
+      }
+      return response.end(JSON.stringify({ version: "2.2.6" }));
+    }
+    response.statusCode = warmStatus;
     if (url.pathname === "/api/agent") return response.end(JSON.stringify({ data: [] }));
     response.statusCode = 404;
     response.end("{}");
@@ -280,6 +287,52 @@ describe("startContainerOpenCode2Server on an opencode2-launch image", () => {
       const recorded = raw.indexOf(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
       expect(warmed).toBeGreaterThan(-1);
       expect(recorded).toBeGreaterThan(warmed);
+    });
+  });
+
+  for (const failure of ["http", "timeout"] as const) {
+    test(`refuses startup and cleans up after warm-up ${failure}`, async () => {
+      let logFile = "";
+      const holder = await serveAfterLaunch(() => logFile, 500);
+      held.push(holder);
+      setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+      const { context } = createContext(containerEnvironment());
+      await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+        logFile = logs.exec;
+        await expect(
+          startContainerOpenCode2Server(
+            context,
+            "container-1",
+            async () => "opencode2-launcher",
+            failure === "timeout" ? 0 : 30_000,
+          ),
+        ).rejects.toThrow();
+        const { argv } = await readLog(logs.exec);
+        const launch = argv.indexOf("orkestrator-bridge-launch opencode2");
+        expect(launch).toBeGreaterThan(-1);
+        expect(argv.indexOf("find /proc/[0-9]*/fd", launch)).toBeGreaterThan(launch);
+        expect(argv).toContain(`rm -f ${containerCredentialFile("opencode2")}`);
+        expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      });
+    });
+  }
+
+  test("delayed startup polls do not scan a listener before it is recorded", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile, 200, 3);
+    held.push(holder);
+    setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      await startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher");
+      const raw = await fs.readFile(logs.exec, "utf8");
+      const between = raw.slice(
+        raw.indexOf("orkestrator-bridge-launch opencode2"),
+        raw.indexOf("HTTP:/api/agent"),
+      );
+      expect(between.match(/HTTP:\/api\/info/g)?.length).toBeGreaterThanOrEqual(4);
+      expect(between).not.toContain("opencode2-listener");
     });
   });
 

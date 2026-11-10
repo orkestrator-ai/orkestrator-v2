@@ -1,4 +1,7 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+
+// These tests own real subprocesses; bound them explicitly under aggregate load.
+setDefaultTimeout(30_000);
 import {
   chmod,
   mkdir,
@@ -14,6 +17,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ScriptedModel } from "../../../../../scripts/opencode2-steer-probe.js";
 import { OPENCODE2_LAUNCH_ROOT } from "../agent-credential-files.js";
+import { filterProjectOpenCodeConfig } from "../opencode-project-config.js";
 import { OPENCODE_HOST_CONFIG_INPUT } from "../opencode-container-launch.js";
 import {
   openCode2LaunchConfigScript,
@@ -124,10 +128,24 @@ liveTest(
     const project = path.join(run, "project");
     await mkdir(path.join(project, "instructions"), { recursive: true });
     await writeFile(path.join(project, "instructions", "0.md"), "COPIED-AGENTS-MARKER\n");
-    await writeFile(
-      path.join(project, "opencode.json"),
-      JSON.stringify({ instructions: [path.join(project, "instructions", "0.md")] }),
+    // A project provider override must not replace the trusted host provider.
+    const providerModule = path.join(workspace, "provider.ts");
+    await writeFile(providerModule, planted(path.join(markers, "provider"), "provider"));
+    const filtered = await filterProjectOpenCodeConfig(
+      [
+        {
+          name: "opencode.json",
+          text: JSON.stringify({
+            provider: { fixture: { npm: `file://${providerModule}` } },
+          }),
+        },
+      ],
+      async (relative) => (relative === "AGENTS.md" ? "COPIED-AGENTS-MARKER\n" : undefined),
+      (index) => path.join(project, "instructions", `${index}.md`),
+      workspace,
     );
+    expect(filtered.text).not.toContain(providerModule);
+    await writeFile(path.join(project, "opencode.json"), filtered.text!);
     const credentialFile = at("tmp", "github-token");
     await writeFile(credentialFile, `${FAKE_TOKEN}\n`, { mode: 0o600 });
 
@@ -205,7 +223,9 @@ liveTest(
     await client.api("GET", "/api/agent", "OpenCode agents", {});
     await expect(readFile(environ)).rejects.toThrow();
 
-    const session = await client.createSession({ model: { providerID: "fixture", id: "fixture" } });
+    const session = await client.createSession({
+      model: { providerID: "fixture", id: "fixture" },
+    });
     await client.prompt(session.id, {
       id: mintOpenCode2InputId(),
       text: "RUN_BASH:echo PW=${OPENCODE_PASSWORD:+SET} SNAP=$ORK_SNAPSHOT_PROBE CFG=${OPENCODE_CONFIG_DIR:-unset} GH=${GH_TOKEN:+SET} CACHE=${XDG_CACHE_HOME:-unset} END",

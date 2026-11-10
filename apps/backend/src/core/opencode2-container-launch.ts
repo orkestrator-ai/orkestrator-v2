@@ -78,7 +78,6 @@ import {
   buildOpenCode2CredentialPluginSource,
 } from "./opencode2/server.js";
 import {
-  OPENCODE2_LINKED_USER_ENTRIES,
   OPENCODE2_USER_CONFIG_MIRROR_FILE,
   buildOpenCode2UserConfigMergeCommand,
 } from "./opencode2/user-config.js";
@@ -124,10 +123,9 @@ export function openCode2LaunchConfigScript(): string {
     `if [ -d "$input" ] && [ ! -L "$input" ]; then`,
     `  size=$(du -sk --exclude=node_modules "$input" 2>/dev/null | cut -f1)`,
     `  if [ "\${size:-0}" -le ${OPENCODE_HOST_CONFIG_MAX_KIB} ]; then`,
-    // Only what 2.x reads from its global directory, and the files merged below.
-    `    (cd "$input" && for entry in config.json opencode.json opencode.jsonc ${OPENCODE2_LINKED_USER_ENTRIES.join(" ")}; do if [ -e "$entry" ] && [ ! -L "$entry" ]; then printf '%s\\n' "$entry"; fi; done) > "$next/entries"`,
-    `    if [ -s "$next/entries" ]; then tar -C "$input" --exclude=node_modules -cf - -T "$next/entries" 2>/dev/null | tar -C "$next/opencode" --no-same-owner --no-same-permissions -xf - || true; fi`,
-    `    rm -f "$next/entries"`,
+    // Preserve relative file references as well as known OpenCode entries.
+    // The input is the trusted read-only host configuration, never the checkout.
+    `    tar -C "$input" --exclude=node_modules --exclude=./plugin --exclude=./plugins -cf - . 2>/dev/null | tar -C "$next/opencode" --no-same-owner --no-same-permissions -xf -`,
     `  else`,
     `    echo "OpenCode's host configuration is larger than ${OPENCODE_HOST_CONFIG_MAX_KIB} KiB; it was not copied" >&2`,
     `  fi`,

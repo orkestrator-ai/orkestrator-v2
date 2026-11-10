@@ -719,6 +719,7 @@ export class NativeAgentTranscriptProjection {
       projectionRefreshes: this.projectionRefreshes,
       stopNotices: this.stopNotices,
       progressiveTranscriptCache: this.progressiveTranscriptCache,
+      progressiveDiscoveryCache: this.progressiveDiscoveryCache,
       transcriptDeltaBases: this.transcriptDeltaBases,
       progressiveReads: this.progressiveReads,
       progressiveDirtyFollowUps: this.progressiveDirtyFollowUps,
@@ -4015,6 +4016,35 @@ export class NativeAgentTranscriptProjection {
       });
   }
 
+  private mcpActionOrdinal = 0;
+
+  /** Pin the pre-action epoch until publication, including across cache pruning. */
+  async withMcpActionFence<T>(
+    input: NativeAgentProjectionInput,
+    action: (isCurrent: () => boolean) => Promise<T>,
+  ): Promise<T> {
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    const key = this.progressiveKey(input, `mcp-action:${this.mcpActionOrdinal++}`);
+    try {
+      return await this.progressiveRead(
+        key,
+        () =>
+          action(
+            () => !this.host.isStopped() && (this.projectionEpochs.get(sessionKey) ?? 0) === epoch,
+          ),
+        sessionKey,
+      );
+    } finally {
+      this.progressiveReadEpochs.delete(key);
+      this.pruneProjectionEpoch(sessionKey);
+    }
+  }
+
   /**
    * Re-read one session's MCP list straight after an MCP server action
    * (reconnect, enable, disable, sign-in) and tell its views to read it.
@@ -4043,13 +4073,26 @@ export class NativeAgentTranscriptProjection {
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
     if (provider.mcpServers) {
       try {
-        const value = (await provider.mcpServers(providerSessionId)).slice(0, 512);
+        // Bound the action response as well as the read. A late provider result
+        // is observed by Promise.race but can never publish into the cache.
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        let value;
+        try {
+          value = await Promise.race([
+            provider.mcpServers(providerSessionId),
+            new Promise<never>((_, reject) => {
+              deadline = setTimeout(() => reject(new Error("MCP discovery timed out")), 2_000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(deadline);
+        }
         // A later identity change owns the section now; this read is not its.
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) {
           return;
         }
         this.storeProgressiveDiscovery(this.progressiveKey(input, "discovery:mcp"), {
-          value,
+          value: value.slice(0, 512),
           availability: "ready",
           expiresAt: this.host.now() + 30_000,
         });
@@ -5199,6 +5242,8 @@ export class NativeAgentTranscriptProjection {
     for (const candidate of Array.from(this.progressiveReads.keys())) {
       if (!candidate.startsWith(progressivePrefix)) continue;
       if (candidate.includes("\0progressive-v1\0discovery:")) continue;
+      // Action fences are discarded on epoch change; they never run trailing reads.
+      if (candidate.includes("\0progressive-v1\0mcp-action:")) continue;
       this.progressiveDirtyFollowUps.set(candidate, this.projectionEpochs.get(key) ?? 0);
     }
   }

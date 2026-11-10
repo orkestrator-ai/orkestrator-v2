@@ -525,20 +525,28 @@ export class NativeAgentSessionOperations {
     if (!resolved.provider.mcpServerAction) {
       throw new Error(`${input.agent} does not support MCP server actions`);
     }
-    const outcome = await resolved.provider.mcpServerAction(
-      resolved.session.providerSessionId,
-      input.serverId,
-      input.action,
-    );
-    this.host.projections.invalidateProjection(resolved.key);
-    // The invalidation alone tells no open view: it would keep the row it had
-    // until its discovery backstop (todo 7221).
-    await this.host.projections.refreshMcpAfterAction(
-      input,
-      resolved.provider,
-      resolved.session.providerSessionId,
-    );
-    return outcome;
+    return this.host.projections.withMcpActionFence(input, async (isCurrent) => {
+      const outcome = await resolved.provider.mcpServerAction!(
+        resolved.session.providerSessionId,
+        input.serverId,
+        input.action,
+      );
+      if (!isCurrent()) return outcome;
+      const current = await this.host.resolveProjectionSession(input);
+      if (
+        !isCurrent() ||
+        current?.provider !== resolved.provider ||
+        current.session.providerSessionId !== resolved.session.providerSessionId
+      )
+        return outcome;
+      this.host.projections.invalidateProjection(resolved.key);
+      await this.host.projections.refreshMcpAfterAction(
+        input,
+        resolved.provider,
+        resolved.session.providerSessionId,
+      );
+      return outcome;
+    });
   }
 
   /**

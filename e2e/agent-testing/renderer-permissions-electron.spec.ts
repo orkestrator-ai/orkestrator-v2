@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 // No backend or production profile: two isolated renderer sessions (an in-memory
 // one and a window slot's persistent partition) using the real installer.
@@ -51,6 +52,7 @@ test("real renderer sessions grant writes/fullscreen and deny other permissions 
     app = await electron.launch({
       executablePath: path.join(root, "apps/desktop/node_modules/.bin/electron"),
       args: [...ELECTRON_TEST_SWITCHES, path.join(scratch, "main.js")],
+      env: electronSpecEnvironment(process.env),
     });
     await expect.poll(() => app!.windows().length).toBe(2);
     for (const page of app.windows()) {

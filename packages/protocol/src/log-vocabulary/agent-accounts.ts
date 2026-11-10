@@ -14,6 +14,10 @@ export const AGENT_ACCOUNTS_LOG_AREAS = defineLogAreas({
         "Handing a login or account to a container failed; `step` says which part.",
       "last-usage.save-failed":
         "The last plan usage reading could not be saved; the next save retries.",
+      "shared-usage.save-failed":
+        "The shared usage readings could not be saved; they stay in memory and the next reading saves them.",
+      "shared-usage.record-failed":
+        "A fresh usage reading could not be kept for sharing with other machines; the account's own reading stands.",
       "login-cleanup.failed": "A temporary login could not be cleaned up.",
       "login-renewal.failed":
         "Renewing an idle account's sign-in to read its usage failed; it is retried after a backoff.",

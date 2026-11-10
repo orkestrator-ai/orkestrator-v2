@@ -472,6 +472,12 @@ export interface AgentAccountLoginState {
   identity: AgentAccountIdentity;
   /** Stable provider identity, used to refuse adding the same login twice. */
   identityKey?: string;
+  /**
+   * The organisation (Claude) or workspace (Codex) the login belongs to, when
+   * the provider reports one. With the email it says which allowance a usage
+   * reading belongs to across machines (`agent-account-shared-usage.ts`).
+   */
+  organizationId?: string;
 }
 
 function nonEmpty(value: unknown, max = 320): string | undefined {
@@ -531,6 +537,7 @@ export function claudeAccountLoginState(
     signedIn,
     identity,
     ...(accountUuid ? { identityKey: `claude:${accountUuid}:${organizationUuid}` } : {}),
+    ...(organizationUuid ? { organizationId: organizationUuid } : {}),
   };
 }
 
@@ -553,6 +560,7 @@ export function codexAccountLoginState(authRaw: string | undefined): AgentAccoun
         Boolean(nonEmpty(tokens.access_token, 16_384)),
       identity,
       ...(accountId || email ? { identityKey: `codex:${accountId ?? ""}:${email ?? ""}` } : {}),
+      ...(accountId ? { organizationId: accountId } : {}),
     };
   }
   const apiKey = nonEmpty(auth?.OPENAI_API_KEY, 16_384);

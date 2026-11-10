@@ -17,6 +17,8 @@ export const TMUX_LOG_AREAS = defineLogAreas({
       "cleanup.environments-load-failed":
         "Environments could not be loaded during tmux cleanup, so it stays incomplete.",
       "cleanup.kill-failed": "An environment's tmux sessions could not be killed.",
+      "cleanup.kill-incomplete":
+        "An environment's tmux sessions could not all be shown gone (a session survived, or the socket was unreachable while another tmux process might own it), so cleanup stays incomplete.",
       "hooks.uninstall-failed": "Workspace hooks could not be uninstalled.",
       "hooks.git-exclude-failed": "The git exclude for Claude's local settings could not be set.",
       "naming.prepare-failed":

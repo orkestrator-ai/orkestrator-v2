@@ -1164,19 +1164,11 @@ test.describe("MCP settings and live panel UI matrix (claude)", () => {
         expect(starts("mcpui-late"), "the late server never started").toBeGreaterThan(lateStarts);
         expect(starts("mcpui-ok"), "a probe CLI ran instead of the live control").toBe(okStarts);
         await expectSessionInventory("after-warm-reconnect", "connected");
-        // The panel's live refresh after an action is to-do 7221 (the task 8
-        // case above stays red for it). Record it here; the claim of this case
-        // is the session's list, and the panel must match it after a reload.
-        const caughtUp = await expect(panel)
-          .not.toContainText("down", { timeout: 30_000 })
-          .then(
-            () => true,
-            () => false,
-          );
-        record(
-          "panel-after-warm-reconnect",
-          caughtUp ? "matched the backend" : "still showed the row down after 30 s (7221)",
-        );
+        // The open panel follows the action without a reload: the backend
+        // re-reads the list and announces it (to-do 7221). A reload must
+        // then show the same.
+        await expect(panel).not.toContainText("down", { timeout: 30_000 });
+        await panelMatchesBackend(panel);
         await shot("after-warm-reconnect");
         await loadAppWithDevRetry(page, testInfo, () => page.reload());
         await openEnvironment(page, project!.name, environment.name);

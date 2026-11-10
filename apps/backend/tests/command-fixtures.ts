@@ -618,7 +618,6 @@ export async function createCommandFixtures() {
           environments.filter((environment) => environment.projectId === projectId),
         ),
         loadEnvironments: mock(async () => environments),
-        deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         readEnvironmentsSnapshot: mock(async () =>
           structuredClone(environments).map((environment) => Object.freeze(environment)),
         ),

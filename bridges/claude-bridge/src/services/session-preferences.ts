@@ -11,7 +11,7 @@
 // a whole-file rewrite from one bridge could drop an entry another bridge had
 // just written, while per-session files never contend.
 
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionPreferencesDir } from "./claude-home.js";
 import {
@@ -271,6 +271,67 @@ function lockMetadata(): string {
   return JSON.stringify({ token: crypto.randomUUID(), ...identity } satisfies LockMetadata);
 }
 
+/** Test-only: runs once an owned file is written, before it is published. */
+let beforeOwnedFilePublishForTesting: (() => Promise<void> | void) | null = null;
+
+/** Test-only: pause or end the process between writing a lock's owner and publishing it. */
+export function setBeforeOwnedFilePublishForTesting(
+  hook: (() => Promise<void> | void) | null,
+): void {
+  beforeOwnedFilePublishForTesting = hook;
+}
+
+/** Filesystems that cannot hard-link keep the old create-then-write order. */
+const LINK_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"]);
+
+/**
+ * Create `path` exclusively (EEXIST when it is held) with this process's owner
+ * metadata already in it, and return a handle on it.
+ *
+ * Creating the file empty and writing the owner next left an ownerless lock
+ * whenever the bridge died between the two (a SIGKILL, an OOM kill, a host
+ * shutdown). An ownerless lock is only recoverable once it is 30 s stale, so
+ * for that long every prompt claim on the session waited out the lock timeout
+ * and was refused with 503 (flakes 1305 and 1308). The owner is written to a
+ * private staging file and hard-linked into place, so the path never exists
+ * without it. The handle stays on the shared inode, so heartbeats and the
+ * release's identity check see the published file.
+ */
+async function createOwnedFile(path: string): Promise<Awaited<ReturnType<typeof open>>> {
+  const staging = `${path}.${crypto.randomUUID()}.owner`;
+  const handle = await open(staging, "wx", 0o600);
+  try {
+    await handle.writeFile(lockMetadata());
+    await beforeOwnedFilePublishForTesting?.();
+    try {
+      await link(staging, path);
+    } catch (error) {
+      if (!LINK_UNSUPPORTED_CODES.has(errorCode(error) ?? "")) throw error;
+      await handle.close().catch(() => {});
+      return await createOwnedFileInPlace(path);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  } finally {
+    await rm(staging, { force: true }).catch(() => {});
+  }
+}
+
+/** The create-then-write order, for a filesystem without hard links. */
+async function createOwnedFileInPlace(path: string): Promise<Awaited<ReturnType<typeof open>>> {
+  const handle = await open(path, "wx", 0o600);
+  try {
+    await handle.writeFile(lockMetadata());
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await rm(path, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 function parseLockMetadata(raw: string): LockMetadata | undefined {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown> | null;
@@ -358,15 +419,7 @@ async function recoverStaleLock(lockPath: string, candidate: LockSnapshot): Prom
   const recoveryPath = `${lockPath}.recover-${candidate.dev}-${candidate.ino}`;
   let recoveryHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    recoveryHandle = await open(recoveryPath, "wx", 0o600);
-    try {
-      await recoveryHandle.writeFile(lockMetadata());
-    } catch (error) {
-      await recoveryHandle.close().catch(() => {});
-      recoveryHandle = undefined;
-      await rm(recoveryPath, { force: true }).catch(() => {});
-      throw error;
-    }
+    recoveryHandle = await createOwnedFile(recoveryPath);
   } catch (error) {
     if (errorCode(error) === "EEXIST") {
       // Recovery itself can be interrupted. A marker owned by a live process
@@ -426,15 +479,7 @@ async function withPreferenceFileLock<T>(path: string, operation: () => Promise<
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   while (!handle) {
     try {
-      handle = await open(lockPath, "wx", 0o600);
-      try {
-        await handle.writeFile(lockMetadata());
-      } catch (error) {
-        await handle.close().catch(() => {});
-        handle = undefined;
-        await rm(lockPath, { force: true }).catch(() => {});
-        throw error;
-      }
+      handle = await createOwnedFile(lockPath);
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
       const lockSnapshot = await readLockSnapshot(lockPath);

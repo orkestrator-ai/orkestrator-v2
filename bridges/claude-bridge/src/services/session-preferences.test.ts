@@ -431,6 +431,42 @@ describe("session preferences", () => {
     },
   );
 
+  test("a writer killed while taking the lock leaves nothing that blocks the next writer", async () => {
+    // The bridge can die (SIGKILL, OOM) between creating its lock and naming
+    // itself in it. An ownerless lock is recoverable only once stale (30 s), so
+    // every prompt claim meanwhile waited out the lock timeout and answered
+    // 503 (flakes 1305 and 1308). The child kills itself at that point.
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    const here = import.meta.dir;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+          const { setClaudeHomeForTesting } = await import(${JSON.stringify(join(here, "claude-home.ts"))});
+          const preferences = await import(${JSON.stringify(join(here, "session-preferences.ts"))});
+          setClaudeHomeForTesting(${JSON.stringify(testHome)});
+          preferences.setBeforeOwnedFilePublishForTesting(() => process.kill(process.pid, "SIGKILL"));
+          await preferences.updateSessionPreferences(${JSON.stringify(SESSION_ID)}, { planMode: false });
+        `,
+      ],
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    expect(await child.exited).not.toBe(0);
+    expect(child.signalCode).toBe("SIGKILL");
+
+    setPreferenceLockTimeoutForTesting(1_000);
+    await updateSessionPreferences(SESSION_ID, { planMode: true });
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({ planMode: true });
+    expect(
+      (await readdir(claudeSessionPreferencesDir())).some(
+        (name) => name.endsWith(".lock") || name.includes(".recover-"),
+      ),
+    ).toBe(false);
+    // A fresh Bun process that loads the preference modules: real start-up
+    // work with nothing to await but its exit, so it gets more than Bun's 5 s.
+  }, 30_000);
+
   test("refuses with a typed timeout when a live owner keeps the lock", async () => {
     const owner = spawnLiveOwner();
     const lockPath = await seedLock({ pid: owner.pid }, { stale: false });

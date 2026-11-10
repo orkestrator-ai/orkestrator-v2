@@ -16,6 +16,7 @@ import {
   isRegisteredErrorCode,
   MAX_ERROR_DETAIL_TEXT_LENGTH,
   parseIpcError,
+  readableCodedError,
   REGISTERED_ERROR_CODE_LIST,
 } from "./ipc-error.js";
 
@@ -148,6 +149,28 @@ describe("the shared IPC error codec", () => {
     expect(errorCode(new Error("Native agent provider session was not found"))).toBeUndefined();
     expect(errorCode(null)).toBeUndefined();
     expect(errorCode("[native-job-receipt-capacity] text")).toBe("native-job-receipt-capacity");
+  });
+
+  it("turns a received prefix into the error's own code for display", () => {
+    const received = overIpc(new ConflictError("Kanban ticket requestId was reused", "ticket"));
+    const readable = readableCodedError(received) as Error & {
+      code?: unknown;
+      details?: unknown;
+    };
+    expect(readable).not.toBe(received);
+    expect(readable.message).toBe("Kanban ticket requestId was reused");
+    expect(readable.code).toBe("kanban-request-id-conflict");
+    expect(readable.details).toEqual({ record: "ticket" });
+    expect(readable.cause).toBe(received);
+    expect(errorCode(readable)).toBe("kanban-request-id-conflict");
+    // Unchanged: no registered prefix, an own code already, or not an Error.
+    const plain = new Error("[word] text");
+    expect(readableCodedError(plain)).toBe(plain);
+    const owned = Object.assign(new Error("[native-job-receipt-capacity] x"), { code: "other" });
+    expect(readableCodedError(owned)).toBe(owned);
+    expect(readableCodedError("[native-job-receipt-capacity] x")).toBe(
+      "[native-job-receipt-capacity] x",
+    );
   });
 
   it("keeps the incompatibility form byte-for-byte", () => {

@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import { hasErrorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { nativeAgentJobReceiptIsActive } from "./models.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
@@ -148,6 +149,29 @@ export const PROMPT_QUEUE_NEW_PUBLICATION_REFUSED = "Prompt queue new publicatio
 
 /** Prefix of an idempotent enqueue whose id is already used by a different body. */
 export const PROMPT_QUEUE_MESSAGE_CONFLICT = "Prompt queue message conflict:";
+
+/**
+ * An idempotent enqueue reused a message id for a different body. Code
+ * `prompt-queue-message-conflict` (`contract/ipc-error.ts`); callers read it
+ * with {@link isPromptQueueMessageConflict}, and the message keeps
+ * {@link PROMPT_QUEUE_MESSAGE_CONFLICT} for older readers.
+ */
+export class PromptQueueMessageConflictError extends Data.TaggedError(
+  "PromptQueueMessageConflictError",
+)<{ readonly message: string }> {
+  readonly code = "prompt-queue-message-conflict" as const;
+}
+
+function promptQueueMessageConflict(messageId: string): PromptQueueMessageConflictError {
+  return new PromptQueueMessageConflictError({
+    message: `${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`,
+  });
+}
+
+/** Whether `error` is a prompt queue message conflict: its code, else (an older peer) its marker. */
+export function isPromptQueueMessageConflict(error: unknown): boolean {
+  return hasErrorCode(error, "prompt-queue-message-conflict", PROMPT_QUEUE_MESSAGE_CONFLICT);
+}
 
 /** The most job receipts one native job queue keeps; past it new jobs are refused, never evicted. */
 export const NATIVE_JOB_RECEIPT_LIMIT = 256;
@@ -407,7 +431,7 @@ export class PromptsRepository {
       ].find((candidate) => isRecord(candidate) && candidate.id === messageId);
       if (held !== undefined) {
         if (canonicalPromptQueueMessageFingerprint(held) !== expected) {
-          throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+          throw promptQueueMessageConflict(messageId);
         }
         return { status: "present" as const, queue: previous ?? null };
       }
@@ -417,10 +441,10 @@ export class PromptsRepository {
       ) {
         // The rejected item is restored to `messages`, so this is reachable
         // only for a corrupt record. Never publish beside a parked twin.
-        throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+        throw promptQueueMessageConflict(messageId);
       }
       if (previous?.inFlight?.requestId === messageId) {
-        throw new Error(`${PROMPT_QUEUE_MESSAGE_CONFLICT} ${messageId}`);
+        throw promptQueueMessageConflict(messageId);
       }
 
       // A removed backend-authored item is permanently consumed: removal from

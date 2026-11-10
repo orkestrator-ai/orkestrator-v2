@@ -30,6 +30,7 @@
  * moves the command scope to it.
  */
 
+import { readableCodedError } from "@orkestrator/protocol/contract/ipc-error";
 import { isProvisionalBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type {
   NodeClient,
@@ -197,11 +198,16 @@ export function createWindowOrkestratorClient(
     const wireArgs = args as Record<string, unknown> | undefined;
     // An untyped call stays two arguments, as before; the envelope never
     // carries the arguments (plan item 1003).
-    return options?.envelope
+    const sent = options?.envelope
       ? api.invoke<T>(command, wireArgs, {
           envelope: options.envelope as unknown as Record<string, unknown>,
         })
       : api.invoke<T>(command, wireArgs);
+    // A registered code arrives as a `[code …] ` message prefix; every screen
+    // shows `error.message`, so the prefix becomes the error's own `code`.
+    return sent.catch((error: unknown) => {
+      throw readableCodedError(error);
+    });
   }
 
   watchHost();

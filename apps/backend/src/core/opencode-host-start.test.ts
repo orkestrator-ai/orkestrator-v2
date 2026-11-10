@@ -129,6 +129,33 @@ process.on("SIGTERM", () => process.exit(0));
     expect((await storage.getEnvironment(environmentId))?.localOpencodePort ?? null).toBeNull();
   });
 
+  test("shutdown wakes a start waiting to retry a locked database", async () => {
+    context.runtime.shutdown();
+    (context as { runtime: BackendRuntime }).runtime = new BackendRuntime({
+      emit: () => undefined,
+      // A wait that would outlast the test unless shutdown ends it.
+      localServers: { openCodeLockedStartRetryDelaysMs: [60_000] },
+    });
+    const environmentId = await localEnvironment("locked-shutdown");
+    await fs.writeFile(path.join(root, "locked-runs"), "-1");
+    const timers = spyOn(globalThis, "setTimeout");
+    try {
+      const outcome = startLocalServerUnlocked(environmentId, context, "opencode").catch(
+        (error: unknown) => error,
+      );
+      for (let attempt = 0; !timers.mock.calls.some((call) => call[1] === 60_000); attempt += 1) {
+        if (attempt === 1_000) throw new Error("The start never began its retry wait");
+        await Bun.sleep(5);
+      }
+      context.runtime.localServers.closeAdmission();
+      const failure = await Promise.race([outcome, Bun.sleep(5_000).then(() => "still waiting")]);
+      expect((failure as Error).message).toContain("shutting down");
+      expect((await events()).filter((event) => event.startsWith("launch"))).toHaveLength(1);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   test("any other early exit is not retried", async () => {
     const environmentId = await localEnvironment("crash");
     await fs.writeFile(path.join(root, "crash"), "");

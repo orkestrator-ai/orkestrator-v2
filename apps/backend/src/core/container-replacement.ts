@@ -129,6 +129,10 @@ const PIPE_SETTLE_GRACE_MS = 5_000;
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
 
 class ReplacementCancelled extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "operation-unknown" } as const;
+
   constructor() {
     super(formatContainerLifecycleError("operation-unknown", "The rebuild was cancelled."));
   }

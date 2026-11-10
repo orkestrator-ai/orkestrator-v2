@@ -39,6 +39,7 @@ import type {
   ProviderTabMail,
   ProviderWorkerMail,
 } from "./agent-provider-contract.js";
+import { abortableSleep } from "./abortable-timing.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -907,22 +908,13 @@ export function openCodeMessageIdScope(connection: BridgeConnection, sessionId: 
   return JSON.stringify([connection.baseUrl, connection.directory, sessionId]);
 }
 
-export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
+/**
+ * The monitor's reconnect wait. Unlike the shared {@link abortableSleep}, it
+ * rejects with the signal's reason on abort: `waitForMonitorRetry`'s contract,
+ * which the monitor loop and its tests rely on.
+ */
+export async function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (!(await abortableSleep(ms, signal))) throw signal.reason;
 }
 
 /** Keep plain prompt tool masks consistent with the session permission grant. */

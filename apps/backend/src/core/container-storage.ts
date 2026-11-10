@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import {
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   type ContainerStorageIdentity,
 } from "@orkestrator/protocol/container-lifecycle";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
@@ -45,7 +45,7 @@ export type StorageRole = (typeof STORAGE_ROLES)[number];
 export const MIN_ENGINE_FOR_VOLUME_SUBPATH = 26;
 
 function storageError(message: string): Error {
-  return new Error(formatContainerLifecycleError("needs-attention", message));
+  return new ContainerLifecycleError("needs-attention", message);
 }
 
 export function newStorageSetId(): string {
@@ -206,9 +206,7 @@ export async function ensureStorageVolumes(
     const expected = volumeLabels(owner, environmentId, storage, role);
     const existing = await inspectVolume(volume.name);
     if (existing.kind === "unreachable") {
-      throw new Error(
-        formatContainerLifecycleError("daemon-unavailable", "Docker could not be reached."),
-      );
+      throw new ContainerLifecycleError("daemon-unavailable", "Docker could not be reached.");
     }
     if (existing.kind === "present") {
       if (!labelsMatch(existing.labels, expected)) {

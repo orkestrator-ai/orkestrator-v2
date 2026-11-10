@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { spawnParentBoundCommand } from "./shell.js";
 
 /**
@@ -157,9 +157,7 @@ export class ContainerLogService {
   read(subscriptionId: string, sourceId: string, cursor: number): LogReadResult {
     const subscription = this.subscriptions.get(subscriptionId);
     if (!subscription) {
-      throw new Error(
-        formatContainerLifecycleError("operation-unknown", "The log subscription has expired."),
-      );
+      throw new ContainerLifecycleError("operation-unknown", "The log subscription has expired.");
     }
     subscription.leaseUntil = this.now() + LOG_LIMITS.leaseMs;
     const { source } = subscription;
@@ -212,7 +210,7 @@ export class ContainerLogService {
   }
 
   private exhausted(message: string): Error {
-    return new Error(formatContainerLifecycleError("resource-exhausted", message));
+    return new ContainerLifecycleError("resource-exhausted", message);
   }
 
   private startSource(containerId: string): LogSource {

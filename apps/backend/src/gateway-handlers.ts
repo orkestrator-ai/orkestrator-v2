@@ -53,6 +53,7 @@ import { backendMetricsSnapshot } from "./core/backend-metrics.js";
 import type { CommandInvocation } from "./core/commands-context.js";
 import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
 import { codedErrorWire } from "@orkestrator/protocol/contract/errors";
+import { mcpFailure } from "@orkestrator/protocol/mcp-management";
 import * as Result from "effect/Result";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
@@ -141,9 +142,17 @@ export class GatewayHandlers {
       : undefined;
     if (commandLimit !== undefined && requestBytes > commandLimit) {
       // Structured so the MCP settings UI decodes a code rather than a transport failure.
-      jsonResponse(response, 413, {
-        error: `McpManagementError:invalid-request: The change is larger than ${Math.floor(commandLimit / 1024)} KiB.`,
-      });
+      // Registered code `mcp-management` with its reason; the message keeps
+      // the `McpManagementError:invalid-request:` marker for older renderers.
+      jsonResponse(
+        response,
+        413,
+        codedErrorWire(
+          mcpFailure("invalid-request", {
+            message: `The change is larger than ${Math.floor(commandLimit / 1024)} KiB.`,
+          }),
+        ),
+      );
       return;
     }
     const safeArgs =

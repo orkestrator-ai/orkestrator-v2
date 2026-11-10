@@ -12,6 +12,7 @@ import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { boundedWait, boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   agentInteractionToolHintsFromMcpAnnotations,
@@ -551,14 +552,8 @@ async function closeConnections(
       await connection.close();
     }),
   );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), closeTimeoutMs);
-    timer.unref();
-  });
-  const outcome = await Promise.race([settled.then(() => "closed" as const), deadline]);
-  if (timer) clearTimeout(timer);
-  if (outcome === "timeout") {
+  const outcome = await boundedWait(settled, closeTimeoutMs);
+  if (!outcome.settled) {
     state.health.recordNotice({
       message: "An MCP server did not close in time; the bridge moved on without waiting",
       method: "mcp/close",
@@ -675,38 +670,21 @@ function recordConnectFailure(
  * Connect one server, and close the connection if it arrives after the
  * deadline.
  *
- * `withTimeout` alone discards a late success, which leaves an unowned child
- * process and an open transport. Racing a rejecting deadline and closing the
- * loser on arrival is what makes the fail-open path leak nothing.
+ * Discarding a late success would leave an unowned child process and an open
+ * transport. Closing the late connection on arrival (`onLate`) is what makes
+ * the fail-open path leak nothing.
  */
 async function connectWithTimeout(
   transport: PiMcpTransport,
   server: ResolvedMcpServer,
   context: PiMcpConnectContext,
 ): Promise<PiMcpConnection> {
-  const attempt = transport.connect(server, context);
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      reject(new Error(`MCP server ${server.id} timed out`));
-    }, connectTimeoutMs);
-    timer.unref();
-  });
-  try {
-    return await Promise.race([attempt, deadline]);
-  } catch (error) {
-    if (timedOut) {
-      void attempt.then(
-        (late) => late.close().catch(() => undefined),
-        () => undefined,
-      );
-    }
-    throw error;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  return await boundedWaitOrThrow(
+    transport.connect(server, context),
+    connectTimeoutMs,
+    () => new Error(`MCP server ${server.id} timed out`),
+    { onLate: (late) => late.close() },
+  );
 }
 
 function registerListedTool(

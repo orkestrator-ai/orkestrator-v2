@@ -1,4 +1,7 @@
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import {
+  ContainerLifecycleError,
+  formatContainerLifecycleError,
+} from "@orkestrator/protocol/container-lifecycle";
 import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
 import { COPY_REFUSED_REMEDY } from "./docker-copy-refusal.js";
 import type { EnvironmentOperations } from "./environment-operations.js";
@@ -230,6 +233,10 @@ export async function observeContainerBoot(
 }
 
 export class ContainerInitializationError extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "not-ready" } as const;
+
   constructor(
     readonly reason: "failed" | "timed-out",
     readonly failureCode: string | null,
@@ -339,11 +346,9 @@ export async function ensureCurrentBootReady(
 const drainingContainers = new Set<string>();
 
 function drainingError(): Error {
-  return new Error(
-    formatContainerLifecycleError(
-      "operation-in-progress",
-      "The environment is stopping. New work is refused until it has stopped.",
-    ),
+  return new ContainerLifecycleError(
+    "operation-in-progress",
+    "The environment is stopping. New work is refused until it has stopped.",
   );
 }
 

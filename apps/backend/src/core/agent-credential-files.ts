@@ -128,10 +128,11 @@ async function markNonDumpable() {
 }
 
 export const OrkestratorCredentialPlugin = async () => {
-  delete process.env.OPENCODE_SERVER_PASSWORD;${
+  delete process.env.OPENCODE_SERVER_PASSWORD;
+  const hardened = await markNonDumpable();${
     options.applyLaunchEnvironment ? "\n  applyLaunchEnvironment();" : ""
   }
-  if (await markNonDumpable()) return {};
+  if (hardened) return {};
   process.stderr.write("Orkestrator could not protect the OpenCode server password from this server's tools.\\n");
   return ${
     onUnhardened === "refuse-tools"
@@ -172,7 +173,7 @@ const NOT_APPLIED = new Set(["PWD", "OLDPWD", "SHLVL", "_", "NODE_PATH"]);
 function readSnapshot(file) {
   let fd;
   try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
@@ -187,6 +188,8 @@ function readSnapshot(file) {
       offset += read;
     }
     return buffer.subarray(0, offset);
+  } catch {
+    return null;
   } finally {
     closeSync(fd);
   }

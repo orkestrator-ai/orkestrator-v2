@@ -1,3 +1,8 @@
+import { createServer } from "node:http";
+import { listenEphemeral } from "@orkestrator/protocol/testing/ports";
+import * as serverHealth from "../src/core/commands-server-health";
+import { recordOpenCodeListener } from "../src/core/opencode-container-launch";
+import { OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT } from "../src/core/agent-credential-files";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   BRIDGE_AUTHORITY_HEADER,
@@ -554,7 +559,18 @@ describe("startContainerOpenCodeServer on an opencode-launch image", () => {
       argv: string[],
     ) => void,
   ): Promise<void> {
-    const port = await reserveFreePort();
+    let expected: string | undefined;
+    const listener = await listenEphemeral(
+      createServer((request, response) => {
+        if (!expected) {
+          request.destroy();
+          return;
+        }
+        response.writeHead(request.headers.authorization === expected ? 200 : 401);
+        response.end("{}");
+      }),
+    );
+    const port = listener.port;
     const script = `#!/bin/sh
 printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 case " $* " in
@@ -572,7 +588,6 @@ exit 0
 `;
     process.env.FAKE_DOCKER_PORT = String(port);
     process.env.FAKE_OPENCODE_ROOT = rootRead;
-    let server: ReturnType<typeof Bun.serve> | undefined;
     let arrive: ReturnType<typeof setInterval> | undefined;
     try {
       await withFakeDocker(script, async (logs) => {
@@ -580,16 +595,8 @@ exit 0
           const log = await fs.readFile(logs.exec, "utf8").catch(() => "");
           // The launcher's stdin is logged after its argv.
           const password = log.match(/OPENCODE_SERVER_PASSWORD=(okb_[A-Za-z0-9_-]{43})/)?.[1];
-          if (!server && log.includes(`${CONTAINER_BRIDGE_LAUNCHER} opencode `) && password) {
-            const expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
-            server = Bun.serve({
-              port,
-              hostname: "127.0.0.1",
-              fetch: (request) =>
-                request.headers.get("authorization") === expected
-                  ? Response.json({})
-                  : new Response("", { status: 401 }),
-            });
+          if (log.includes(`${CONTAINER_BRIDGE_LAUNCHER} opencode `) && password) {
+            expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
           }
         }, 25);
         const started = await startContainerOpenCodeServer("container", "opencode-launcher");
@@ -602,7 +609,7 @@ exit 0
       });
     } finally {
       clearInterval(arrive);
-      server?.stop(true);
+      await listener.close();
       delete process.env.FAKE_DOCKER_PORT;
       delete process.env.FAKE_OPENCODE_ROOT;
     }
@@ -622,7 +629,9 @@ exit 0
         const prepare = argv.findIndex(
           (line) => line.startsWith("exec container bash -lc ") && line.includes("env -0 >"),
         );
-        const launch = argv.findIndex((line) => line.includes(CONTAINER_BRIDGE_LAUNCHER));
+        const launch = argv.findIndex((line) =>
+          line.includes(`${CONTAINER_BRIDGE_LAUNCHER} opencode `),
+        );
         const record = argv.findIndex((line) => line.includes("echo recorded"));
         expect(configure).toBeGreaterThanOrEqual(0);
         expect(prepare).toBeGreaterThan(configure);
@@ -671,7 +680,7 @@ exit 0
           );
           expect(stop).toBeGreaterThanOrEqual(0);
           expect(
-            argv.findIndex((line) => line.includes(CONTAINER_BRIDGE_LAUNCHER)),
+            argv.findIndex((line) => line.includes(`${CONTAINER_BRIDGE_LAUNCHER} opencode `)),
           ).toBeGreaterThan(stop);
         },
       );
@@ -693,6 +702,116 @@ exit 0
   );
 });
 
+describe("OpenCode launch failure paths", () => {
+  test.each(["refused", "", "socket 11\nsocket 12"])(
+    "record refusal %s stops listeners",
+    async (answer) => {
+      await withDocker({ FAKE_ROOT_TOKEN: answer }, async (read) => {
+        await expect(recordOpenCodeListener("container")).rejects.toThrow(
+          "could not be identified",
+        );
+        expect((await read()).argv.some((line) => line.includes('kill "$pid"'))).toBe(true);
+      });
+    },
+  );
+
+  test.each(["health", "record"])(
+    "%s failure removes the root password and record",
+    async (failure) => {
+      const listener = await listenEphemeral(createServer((request) => request.destroy()));
+      const port = listener.port;
+      const script = `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+case " $* " in *" -i "*) cat >/dev/null ;; esac
+case "$1" in
+inspect) echo running ;;
+port) echo 127.0.0.1:${port} ;;
+esac
+exit 0
+`;
+      const health = spyOn(serverHealth, "waitForHealth").mockImplementation(async () => {
+        if (failure === "health") throw new Error("injected health failure");
+      });
+      const warm = spyOn(serverHealth, "warmOpenCodeInstance").mockResolvedValue(true);
+      try {
+        await withFakeDocker(script, async (logs) => {
+          await expect(
+            startContainerOpenCodeServer("container", "opencode-launcher"),
+          ).rejects.toThrow(
+            failure === "health" ? "injected health failure" : "could not be identified",
+          );
+          const log = await fs.readFile(logs.exec, "utf8");
+          expect(log).toContain(
+            "rm -f /run/orkestrator-bridge/opencode-token /run/orkestrator-bridge/opencode-authority /run/orkestrator-bridge/opencode-listener",
+          );
+          if (failure === "record") expect(log).toContain('kill "$pid"');
+        });
+      } finally {
+        health.mockRestore();
+        warm.mockRestore();
+        await listener.close();
+      }
+    },
+  );
+
+  test("listener stop failure prevents replacement from launching", async () => {
+    const listener = await listenEphemeral(createServer((request) => request.destroy()));
+    const port = listener.port;
+    const script = `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+case "$1" in inspect) echo running ;; port) echo 127.0.0.1:${port} ;; esac
+case "$*" in
+*"cat /run/orkestrator-bridge/opencode-token"*) printf '${TOKEN}\\n\\nrecord 11\\nsocket 12\\n' ;;
+*'kill "$pid"'*) exit 9 ;;
+esac
+`;
+    try {
+      await withFakeDocker(script, async (logs) => {
+        await expect(
+          startContainerOpenCodeServer("container", "opencode-launcher"),
+        ).rejects.toThrow();
+        const log = await fs.readFile(logs.exec, "utf8");
+        expect(log).toContain('kill "$pid"');
+        expect(log).not.toContain(`${CONTAINER_BRIDGE_LAUNCHER} opencode `);
+      });
+    } finally {
+      await listener.close();
+    }
+  });
+
+  test("unreadable image still permits authenticated legacy reuse", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => {
+        expect(request.headers.get("authorization")).toBe(
+          `Basic ${Buffer.from(`opencode:${TOKEN}`).toString("base64")}`,
+        );
+        return Response.json({});
+      },
+    });
+    const script = `#!/bin/sh
+printf 'ARGV:%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+case "$1" in inspect) echo running ;; port) echo 127.0.0.1:${server.port} ;; esac
+case "$*" in
+*"cat /run/orkestrator-bridge/opencode-token"*) printf '${TOKEN}\\n\\n' ;;
+*"cat /tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint"*) printf '${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT}' ;;
+esac
+`;
+    try {
+      await withFakeDocker(script, async (logs) => {
+        const result = await startContainerOpenCodeServer("container", async () => {
+          throw new Error("image unreadable");
+        });
+        expect(result).toMatchObject({ wasRunning: true, authToken: TOKEN });
+        expect(await fs.readFile(logs.exec, "utf8")).not.toContain("kill");
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
 describe("readContainerBridgeToken for OpenCode", () => {
   test.each([
     ["the recorded socket", "socket 4242", true],
@@ -702,6 +821,32 @@ describe("readContainerBridgeToken for OpenCode", () => {
     await withDocker({ FAKE_ROOT_TOKEN: `${TOKEN}\n\nrecord 4242\n${listing}\n` }, async () => {
       expect(await readContainerBridgeToken("container", "opencode")).toBe(given ? TOKEN : null);
     });
+  });
+
+  test.each([TOKEN, ""])(
+    "launcher image refuses unrecorded root token %s and node fallback",
+    async (root) => {
+      await withDocker(
+        { FAKE_ROOT_TOKEN: `${root}\n\nlaunch-required\n`, FAKE_NODE_TOKEN: TOKEN },
+        async (read) => {
+          expect(await readContainerBridgeToken("container", "opencode")).toBeNull();
+          expect((await read()).argv).toHaveLength(1);
+        },
+      );
+    },
+  );
+
+  test("launcher image with a recorded listener but missing root token never falls back", async () => {
+    await withDocker(
+      {
+        FAKE_ROOT_TOKEN: "\n\nrecord 4242\nsocket 4242\nlaunch-required\n",
+        FAKE_NODE_TOKEN: TOKEN,
+      },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "opencode")).toBeNull();
+        expect((await read()).argv).toHaveLength(1);
+      },
+    );
   });
 
   test("lists listeners only when a record exists, in the same root exec", async () => {

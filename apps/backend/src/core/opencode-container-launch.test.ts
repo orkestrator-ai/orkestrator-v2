@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   lstat,
@@ -34,6 +34,9 @@ import { OPENCODE_CONTAINER_BINARY } from "./opencode-listener-identity.js";
 const repository = path.resolve(import.meta.dir, "../../../..");
 const launcher = readFileSync(path.join(repository, "docker/orkestrator-bridge-launch.sh"), "utf8");
 const dockerfile = readFileSync(path.join(repository, "docker/Dockerfile"), "utf8");
+
+// These tests run real shells and socket processes; allow aggregate host load.
+setDefaultTimeout(30_000);
 
 describe("the launcher and the backend agree", () => {
   test("on where OpenCode reads its configuration and home, and what it runs", () => {

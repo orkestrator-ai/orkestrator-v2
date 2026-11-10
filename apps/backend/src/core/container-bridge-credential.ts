@@ -282,6 +282,7 @@ export async function removeContainerBridgeCredential(
 
 /** OpenCode's password in root's file, and whether the port's listener is the server it was given to. */
 export interface ContainerOpenCodeCredential {
+  requiresRecordedListener: boolean;
   token: string | null;
   listener: OpenCodeListenerJudgement;
 }
@@ -304,6 +305,7 @@ export async function readContainerOpenCodeCredential(
     `printf 'record %s\n' "$(cat ${OPENCODE_LISTENER_RECORD})"`,
     listOpenCodeListenersScript(OPENCODE_SERVER_PORT),
     "fi",
+    `if grep -q '^# ORKESTRATOR_CAPABILITY opencode-launch=1$' ${CONTAINER_BRIDGE_LAUNCHER} 2>/dev/null; then echo launch-required; fi`,
   ].join("\n");
   const { stdout } = await runCommand(
     "docker",
@@ -312,7 +314,11 @@ export async function readContainerOpenCodeCredential(
   );
   const [token = "", , ...rest] = stdout.split("\n");
   const listener = judgeOpenCodeListener(parseOpenCodeListeners(rest.join("\n")));
-  return { token: BRIDGE_TOKEN_PATTERN.test(token.trim()) ? token.trim() : null, listener };
+  return {
+    token: BRIDGE_TOKEN_PATTERN.test(token.trim()) ? token.trim() : null,
+    listener,
+    requiresRecordedListener: rest.includes("launch-required"),
+  };
 }
 
 /** The token and, on a second line, the authority key, in one root exec. */
@@ -352,6 +358,9 @@ export async function readContainerBridgeToken(
   const timeoutMs = options.timeoutMs ?? 120_000;
   if (kind === "opencode") {
     const opencode = await readContainerOpenCodeCredential(containerId, options);
+    // The root-owned launcher is image-local evidence even when image metadata is unavailable.
+    // Incomplete launches must never expose either root or node credentials.
+    if (opencode.requiresRecordedListener && opencode.listener !== "ours") return null;
     if (opencode.token) {
       // The password would go to whatever answers the port now.
       if (opencode.listener === "replaced") {
@@ -360,6 +369,7 @@ export async function readContainerBridgeToken(
       }
       return opencode.token;
     }
+    if (opencode.requiresRecordedListener) return null;
   }
   const root =
     kind === "opencode"

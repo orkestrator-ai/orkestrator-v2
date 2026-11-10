@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ import {
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
 } from "./opencode-listener-identity.js";
+
+// These tests run real shells and socket processes; allow aggregate host load.
+setDefaultTimeout(30_000);
 
 describe("judgeOpenCodeListener", () => {
   test("the recorded socket, alone on the port, is ours", () => {
@@ -96,6 +99,19 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     expect(
       sh(recordOpenCodeListenerScript(port).replaceAll(OPENCODE_LISTENER_RECORD, record)).trim(),
     ).toBe("refused");
+    expect(await readFile(record, "utf8").catch(() => null)).toBeNull();
+  });
+
+  test("refuses multiple listening sockets and removes an earlier record", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ork-opencode-listener-"));
+    directories.push(directory);
+    const record = path.join(directory, "opencode-listener");
+    await writeFile(record, "123");
+    // Substitute the proc listing, while running the real record publication shell.
+    const script = recordOpenCodeListenerScript(4096)
+      .replaceAll(OPENCODE_LISTENER_RECORD, record)
+      .replace(/inodes=\$\(awk[^\n]+/, "inodes='123 456'");
+    expect(sh(script).trim()).toBe("refused");
     expect(await readFile(record, "utf8").catch(() => null)).toBeNull();
   });
 

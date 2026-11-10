@@ -228,6 +228,68 @@ console.log(JSON.stringify({ project: process.env.PROJECT_SETTING ?? null, dumpa
     expect(JSON.parse(result.stdout.toString())).toEqual({ project: null, dumpable: 0 });
   });
 
+  test.each(["fifo", "missing", "read-error"])(
+    "%s snapshot cannot block or bypass hardening",
+    async (kind) => {
+      const directory = await temporaryDirectory();
+      const snapshot = path.join(directory, "snapshot");
+      if (kind === "fifo") {
+        expect(Bun.spawnSync(["mkfifo", snapshot]).exitCode).toBe(0);
+      } else if (kind === "read-error") {
+        await writeFile(snapshot, "PROJECT_SETTING=must not apply\0");
+      }
+      let source = buildOpenCodeCredentialPluginSource("refuse-tools", {
+        applyLaunchEnvironment: true,
+      });
+      // Assert the flag at the first untrusted access, not just after the plugin returns.
+      source = source.replace(
+        "function readSnapshot(file) {",
+        `function readSnapshot(file) {
+        const { dlopen, FFIType } = globalThis.testFFI;
+        const libc = dlopen("libc.so.6", { prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+        try { if (libc.symbols.prctl(3, 0n, 0n, 0n, 0n) !== 0) throw new Error("snapshot accessed before hardening"); }
+        finally { libc.close(); }
+      `,
+      );
+      if (kind === "read-error")
+        source = source.replace(
+          "const read = readSync(",
+          "const read = (() => { throw new Error('injected read failure'); })(",
+        );
+      const plugin = path.join(directory, "plugin.js");
+      await writeFile(plugin, source);
+      const runner = path.join(directory, "runner.js");
+      await writeFile(
+        runner,
+        `
+        globalThis.testFFI = await import("bun:ffi");
+        const { OrkestratorCredentialPlugin } = await import(${JSON.stringify(plugin)});
+        const hooks = await OrkestratorCredentialPlugin();
+        if (process.env.PROJECT_SETTING || process.env.OPENCODE_SERVER_PASSWORD) throw new Error("snapshot consumed or password retained");
+        console.log(JSON.stringify(Object.keys(hooks)));
+      `,
+      );
+      const child = Bun.spawn([process.execPath, runner], {
+        env: {
+          PATH: process.env.PATH,
+          OPENCODE_SERVER_PASSWORD: FAKE_PASSWORD,
+          ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT: snapshot,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const deadline = setTimeout(() => child.kill(), 3000);
+      try {
+        expect(await child.exited).toBe(0);
+        expect(await new Response(child.stdout).text()).toBe("[]\n");
+      } finally {
+        clearTimeout(deadline);
+        if (child.exitCode === null) child.kill();
+        await child.exited;
+      }
+    },
+  );
+
   test("a server the launcher did not start has nothing to apply", () => {
     expect(buildOpenCodeCredentialPluginSource("refuse-tools")).not.toContain(
       "applyLaunchEnvironment",

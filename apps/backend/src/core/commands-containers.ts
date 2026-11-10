@@ -825,7 +825,11 @@ export async function startContainerOpenCodeServer(
   // still the recorded listener, on an `opencode-launch=1` image; from node's
   // login shell on an older one.
   const reusable = async (password: string): Promise<boolean> => {
-    if (persisted.listener === "replaced") return false;
+    if (
+      persisted.listener === "replaced" ||
+      (persisted.requiresRecordedListener && persisted.listener !== "ours")
+    )
+      return false;
     const fingerprint = await startedFingerprint();
     if (persisted.listener === "ours") {
       if (fingerprint !== OPENCODE_LAUNCH_FINGERPRINT) return false;
@@ -862,11 +866,15 @@ export async function startContainerOpenCodeServer(
       provider: "opencode",
       containerPort: OPENCODE_SERVER_PORT,
     });
-    await waitForOpenCodeHealth(containerId, hostPort, password);
-    // Warmed first: loading the plugins makes the server non-dumpable, so the
-    // socket recorded next cannot be taken out of it.
-    await warmContainerOpenCode(containerId, hostPort, password);
-    await recordOpenCodeListener(containerId);
+    try {
+      await waitForOpenCodeHealth(containerId, hostPort, password);
+      // Warmed first: loading the plugins makes the server non-dumpable.
+      await warmContainerOpenCode(containerId, hostPort, password);
+      await recordOpenCodeListener(containerId);
+    } catch (error) {
+      await removeContainerBridgeCredential(containerId, "opencode");
+      throw error;
+    }
     return { hostPort, wasRunning: false, authToken: password };
   }
   const authToken = mintBridgeToken();

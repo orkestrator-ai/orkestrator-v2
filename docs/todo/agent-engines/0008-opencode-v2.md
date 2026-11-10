@@ -14,7 +14,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: done for the start, rechecked 2026-11-10 against `main` at `04639b12b`; making 2.x the default is task 7 (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. The 2.x provider was then built with the mitigations under "Task 2: owner decision" and merged as an opt-in preview in #2009 on 2026-11-09, so the start decision is settled; no explicit owner acceptance of those mitigations is recorded, and it belongs to the decision to make 2.x the default (task 7, phase 6)).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done for the opt-in preview (keep existing sessions on a pinned 1.x binary with its own database; the persisted marker and per-session routing are built under task 5, phase 3). Qualification and the default switch remain task 7.
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done for the opt-in preview (share dropped with 1.19.1; the remaining rebuilds and capability gates are recorded under task 5, phases 4 and 5, including session features). Live qualification remains task 7.
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; open: a live-model run of the coordinator suite on 2.x, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; on 2026-11-10 archive from the resume picker for 2.x conversations, see "Task 5: archive from the resume picker (2026-11-10)"; open: a live-model run of the coordinator suite on 2.x, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store; moving the live tests off `--pure` moved to task 7).
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
 8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
@@ -788,9 +788,10 @@ users until phase 3 routes new sessions to it.
      the 2.x model catalogue with variants as effort, attachments, slash
      commands, Plan/Build, compact, undo/redo by staged revert, fork, the
      resume list, titles and the to-do count. A 2.x tab now offers all of
-     them. Open: archiving from the resume picker (OpenCode's platform table
-     has no `archive` action), a command's dispatch evidence (2.x records no
-     metadata for a command), and the container server.
+     them. Archiving from the resume picker followed on 2026-11-10 (see
+     "Task 5: archive from the resume picker (2026-11-10)"). Open: a
+     command's dispatch evidence (2.x records no metadata for a command); the
+     container server followed on 2026-11-09.
 6. **Qualification and default.** Task 7, then make 2.x the default for new
    sessions, documented in agent-engines.md.
 
@@ -1929,8 +1930,9 @@ Decisions:
   profiles. A first switch compares the session's own agent, so a resumed
   session does not gain a needless `agent-switched` row.
 
-Not done: archiving from the resume picker (OpenCode's platform table has no
-`archive` action; the provider implements it for `opencode2:` ids), compact
+Not done: archiving from the resume picker (OpenCode's platform table had no
+`archive` action; the provider implemented it for `opencode2:` ids; done on
+2026-11-10, see "Task 5: archive from the resume picker (2026-11-10)"), compact
 with another model or instructions (2.x has neither), a container 2.x
 server, and command dispatch evidence (an ambiguous command reads `unknown`
 and is never re-sent).
@@ -2480,6 +2482,66 @@ the 2.2.6 recheck, and contradicted the task list and the index row. Chosen:
 rewrite those sentences to the merged state (opt-in preview, 1.x default,
 `1.19.5` pinned, 2.2.6 recheck) and leave the dated notes below them as
 history. Leaving them would keep the file saying two things at once.
+
+### Task 5: archive from the resume picker (2026-11-10)
+
+Built against `main` at `c98b20e6f`. The 2.x provider already archived and
+restored `opencode2:` ids (`PATCH /api/session/:id` with `archived`) and
+listed archived rows on request, but OpenCode's platform table had no
+`archive` action, so the backend refused the command and the picker offered
+no remove and no "Show archived". Now:
+
+- OpenCode's platform table reports `actions.archive`
+  (`packages/protocol/src/native-agent.ts`), so the picker asks for archived
+  rows and the backend admits the archive command.
+- The resume entry has a new optional `archivable` field
+  (`NativeAgentResumeEntry`, `ResumeEntrySchema`, contract manifest
+  regenerated). The 1.x provider marks each of its rows `archivable: false`
+  (`listOpenCodeResumableSessions`), and the picker
+  (`NativeResumeSessionDialog`) shows no remove/restore control on such a
+  row; the router still refuses a 1.x id.
+- The 2.x provider refuses to archive a conversation it still holds for a
+  tab or a run ("This conversation is open in a tab"), as the Codex and
+  Cursor bridges answer 409; restoring is always allowed. Closing the tab
+  releases it.
+- `docs/architecture/agent-engines.md` ("Removing a conversation from the
+  resume list") describes OpenCode's behaviour.
+
+Tests: the dialog (a mixed list offers remove only on the archivable row),
+the native tab (an OpenCode picker archives the 2.x row with
+`includeArchived` asked), the session operations (OpenCode passes
+`includeArchived` and keeps the marker; archive reaches the provider), the
+router against the fake 2.x server (held conversation refused, archive after
+close, the archived row listed only on request and not resumable, restore,
+1.x id refused, 1.x never asked for archived rows), the 2.x features test,
+the 1.x provider's rows, and the platform table.
+
+Decisions:
+
+- **How the picker learns that a 1.x row cannot be archived.**
+  - **A per-row `archivable: false` from the provider, with the platform
+    table offering `archive` (implemented).** Pros: one generic field any
+    mixed list can use; the platform table keeps meaning "this platform may
+    offer it", as it already does for `steer`; works when the 2.x router is
+    absent, because the 1.x provider sets it. Cons: a new optional field in
+    the contract; a renderer talking to an older backend shows remove on 1.x
+    rows, and the backend's refusal is shown as a toast.
+  - **Recognise 2.x rows in the renderer by their `opencode2:` prefix.**
+    Pros: no contract change. Cons: puts a provider's id format into the
+    shared picker.
+  - Recommendation: the per-row field.
+- **Refuse archiving a conversation a tab holds.**
+  - **Refuse in the 2.x provider while it holds the session (implemented).**
+    Pros: same behaviour as Codex and Cursor; a tab never keeps sending to a
+    conversation the picker reports archived. Cons: a fork the provider
+    registered but no tab opened is refused until the backend releases it.
+  - **Archive regardless.** Pros: simpler. Cons: the holding tab would keep
+    working on an archived conversation while another tab's list hides it.
+  - Recommendation: refuse.
+
+Not done: no live run of the picker against a real 2.x server; the fake
+server (`fake-server.test-support.ts`) models the archive the 2.2.6 records
+above describe. It belongs with task 7's qualification.
 
 ## Related
 

@@ -179,6 +179,9 @@ describe("native agent capability table", () => {
     // `agent` name, not a Claude/Codex permission mode.
     expect(nativeAgentCapabilities("opencode").composer.mode).toBe(false);
     expect(nativeAgentCapabilities("opencode").composer.executionProfile).toBe(true);
+    // `archive` is the resume picker's remove/restore for 2.x conversations;
+    // 1.x rows opt out per row (`archivable: false`).
+    expect(nativeAgentCapabilities("opencode").actions?.archive).toBe(true);
 
     expect(nativeAgentCapabilities("pi")).toMatchObject({
       attachments: { files: true, images: true },

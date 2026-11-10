@@ -4280,6 +4280,35 @@ describe("AgentNativeTab", () => {
     },
   );
 
+  test("the OpenCode picker archives 2.x rows and offers no remove on 1.x rows", async () => {
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          { sessionId: "ses_legacy", title: "Legacy request", archivable: false },
+          { sessionId: "opencode2:ses_new", title: "New request" },
+        ] as never,
+    );
+    seedUnassignedResumeTab("tab-opencode-archive");
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-opencode-archive" />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /OpenCode/ }));
+    const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+    expect(await within(picker).findByText("Legacy request")).toBeTruthy();
+    expect(listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "opencode",
+      includeArchived: true,
+    });
+    const removes = within(picker).getAllByRole("button", { name: /Remove.*list/ });
+    expect(removes).toHaveLength(1);
+    fireEvent.click(removes[0]!);
+    await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
+    expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "opencode",
+      resumableSessionId: "opencode2:ses_new",
+      archived: true,
+    });
+  });
+
   test("a tab opened only to resume creates no session before the choice", async () => {
     const calls: string[] = [];
     ensureNativeAgentSessionMock.mockImplementation(async (input) => {

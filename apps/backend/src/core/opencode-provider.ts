@@ -9,7 +9,9 @@ import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import {
   createOpenCodeMonitorBackoff,
+  isOpenCodeHeartbeat,
   OpenCodeObservationStream,
+  OpenCodeStreamSilenceWatchdog,
   readOpenCodeActivityBatch,
 } from "./opencode-observation-stream.js";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
@@ -458,14 +460,28 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           startupError = error;
           if (this.activeStreamController === streamController) streamController.abort();
         });
-        for await (const raw of response.stream as AsyncIterable<unknown>) {
-          if (this.disposed) return;
-          if (!receivedFrame) {
-            receivedFrame = true;
-            this.monitorBackoff.connected();
-            this.observation.connected();
+        // Open but silent is a loss too: replace the stream (task 1 of to-do 7200).
+        const watchdog = new OpenCodeStreamSilenceWatchdog(
+          (silenceMs) => {
+            log.warn("monitor.silent", { silenceMs });
+            streamController.abort();
+          },
+          { silenceMs: this.dependencies.monitorSilenceMs },
+        );
+        try {
+          for await (const raw of response.stream as AsyncIterable<unknown>) {
+            if (this.disposed) return;
+            if (!receivedFrame) {
+              receivedFrame = true;
+              this.monitorBackoff.connected();
+              this.observation.connected();
+            }
+            const heartbeat = isOpenCodeHeartbeat(raw);
+            watchdog.frame(heartbeat);
+            if (!heartbeat) this.dispatchRequest(raw);
           }
-          this.dispatchRequest(raw);
+        } finally {
+          watchdog.stop();
         }
         await startup;
         if (startupError) throw startupError;

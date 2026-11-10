@@ -20,6 +20,7 @@ import {
   type PublicInteraction,
   type PublicInteractionAnswerInput,
 } from "@orkestrator/protocol/public-api-resources";
+import { assertRewindPrompt } from "./actions-transcript.js";
 import { loadOperation } from "./actions-runs.js";
 import { assertReadyForAgents } from "./actions-sessions.js";
 import { PublicActionError } from "./errors.js";
@@ -614,6 +615,7 @@ const sessionRewind: MutationActionHandler<TargetInput & { messageId: string }> 
         tabId: session.tab.tabId,
       },
       async execute(operation) {
+        await assertRewindPrompt(context, session.sessionId, input.messageId);
         await operation.update({ stage: "rewinding" });
         // The bridge cuts before the prompt: Codex reverts its turn and every
         // later one, Pi moves its leaf (keeping the turns as a branch), Cursor

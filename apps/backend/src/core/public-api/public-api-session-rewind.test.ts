@@ -28,6 +28,13 @@ async function adoptedSession(
   const context = await setup(agent);
   const { harness, service, stub } = context;
   Object.assign(stub.provider, provider);
+  stub.messages.push({
+    id: "prompt-2",
+    role: "user",
+    createdAt: new Date(0).toISOString(),
+    content: "prompt",
+    parts: [],
+  });
   stub.setStatus(async () => (activity === "idle" ? "idle" : "running"));
   await harness.storage.ensureNativeAgentJobTab({
     environmentId: "env-1",
@@ -82,6 +89,100 @@ describe("session.rewind", () => {
     },
   );
 
+  test.each(["pi", "codex", "cursor"] as const)(
+    "%s refuses response and tool IDs without changing history",
+    async (agent) => {
+      const { actions, performSessionAction } = recordingActions();
+      const { harness, sessionId, stub } = await adoptedSession(agent, { performSessionAction });
+      stub.messages.push(
+        {
+          id: "answer",
+          role: "assistant",
+          createdAt: new Date(0).toISOString(),
+          content: "response",
+          parts: [],
+        },
+        {
+          id: "tool-result",
+          role: "assistant",
+          createdAt: new Date(0).toISOString(),
+          content: "result",
+          parts: [],
+        },
+      );
+      const original = structuredClone(stub.messages);
+      for (const messageId of ["answer", "tool-result", "missing"]) {
+        const refused = await harness.call(
+          "session.rewind",
+          { sessionId, messageId },
+          { requestId: `refuse-${messageId}` },
+        );
+        expect(refused.ok).toBe(false);
+        if (!refused.ok) expect(refused.error.code).toBe("invalid-input");
+        expect(actions).toEqual([]);
+        expect(stub.messages).toEqual(original);
+      }
+    },
+  );
+
+  test("a prompt outside the live transcript window is validated through history paging", async () => {
+    const { actions, performSessionAction } = recordingActions();
+    const { harness, sessionId, stub } = await adoptedSession("pi", { performSessionAction });
+    harness.commands.set("get_native_agent_transcript_update", async () => ({
+      status: "snapshot",
+      token: "tail",
+      value: {
+        messages: [
+          {
+            id: "last-response",
+            role: "assistant",
+            content: "response",
+            parts: [],
+            createdAt: null,
+          },
+        ],
+        freshness: "current",
+        historyEpoch: "epoch",
+        historyComplete: false,
+        historyCursor: "older",
+      },
+    }));
+    harness.commands.set("get_native_agent_message_page", async () => ({
+      messages: stub.messages,
+      historyEpoch: "epoch",
+      complete: true,
+    }));
+    const result = await harness.call(
+      "session.rewind",
+      { sessionId, messageId: "prompt-2" },
+      { requestId: "old-prompt" },
+    );
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+    expect(result.ok).toBe(true);
+    expect(actions).toEqual([{ kind: "rewind-messages", messageId: "prompt-2" }]);
+  });
+
+  test("a cached transcript cannot authorize rewind", async () => {
+    const { actions, performSessionAction } = recordingActions();
+    const { harness, sessionId, stub } = await adoptedSession("pi", { performSessionAction });
+    harness.commands.set("get_native_agent_transcript_update", async () => ({
+      status: "snapshot",
+      value: {
+        messages: stub.messages,
+        freshness: "cached",
+        historyEpoch: "epoch",
+        historyComplete: true,
+      },
+    }));
+    const refused = await harness.call(
+      "session.rewind",
+      { sessionId, messageId: "prompt-2" },
+      { requestId: "cached" },
+    );
+    expect(refused.ok).toBe(false);
+    expect(actions).toEqual([]);
+  });
+
   test("a platform without message rewind is refused before admission", async () => {
     const { actions, performSessionAction } = recordingActions();
     const { harness, sessionId } = await adoptedSession("claude", { performSessionAction });
@@ -127,7 +228,7 @@ describe("session.rewind", () => {
     const { harness, sessionId } = await adoptedSession("pi", { performSessionAction });
     const failed = await harness.call(
       "session.rewind",
-      { sessionId, messageId: "not-a-prompt" },
+      { sessionId, messageId: "prompt-2" },
       { requestId: "rewind-refused" },
     );
     expect(failed.ok).toBe(false);

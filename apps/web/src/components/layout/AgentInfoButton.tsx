@@ -1313,6 +1313,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     currentSessionId &&
                     sessionActions?.branches ? (
                       <SessionBranchPicker
+                        key={`${nodeScope.nodeId}:${sessionIdentity}`}
                         agentLabel={AGENT_PROVIDER_LABELS[activeSession.provider]}
                         disabled={busyAction !== null || currentSessionLoading}
                         listBranches={() =>

@@ -962,6 +962,8 @@ export class OrkestratorBackend {
         this.nodeCoordination.queueNotice(controllerId as BackendId, item),
     });
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
+    // Coordinators refused this node while it was down hear that it is back.
+    this.nodeCoordination.onNodeConnected((nodeId) => void this.coordinators.nodeConnected(nodeId));
     bridgeRemoteAutoSwitchNotices({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       nodeName: async (nodeId) =>

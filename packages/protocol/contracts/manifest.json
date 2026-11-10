@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1017,
-    "defined": 1017,
+    "commands": 1018,
+    "defined": 1018,
     "untyped": 0,
     "events": 45
   },
@@ -3235,7 +3235,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b0b5f7fd4242e725c9eec3d77e86de66f36d939b56e687dcacda2757e4f7d6cb"
+      "resultDigest": "sha256:ab757b7afbc066aaa3f2f2c1d77e669a2a952b680be2c0691dd798085a7e95ae"
     },
     "get_docker_system_stats": {
       "domain": "docker",
@@ -5689,6 +5689,15 @@
       "critical": [],
       "argsDigest": "sha256:06610c9e417111b3d66f0ad12bdc75acfeb126711cc207c03cc9768edd5e9770",
       "resultDigest": "sha256:eef3198599fb5e29764d83044fa54b50098929ddc9865e69a2fd6f8dfea0cb63"
+    },
+    "note_coordinator_node_unavailable": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f52a78094e93a4b0db02143a5b888c7e35be3068ea12b5eeaf90e0af012d1e6e",
+      "resultDigest": "sha256:f800bd7461dd77ac49bf74b0c680e39bd2bce575d79e03c00bc8c2f361e3e241"
     },
     "open_agent_sign_in_terminal": {
       "domain": "accounts",

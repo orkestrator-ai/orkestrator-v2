@@ -210,9 +210,20 @@ export class NodeCoordination {
   private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
   private coordinatorNotices: NodeCoordinatorNotices | null = null;
   private takingBack: Promise<void> | null = null;
+  private readonly connectListeners = new Set<(nodeId: string) => void>();
 
   setCoordinatorNotices(notices: NodeCoordinatorNotices): void {
     this.coordinatorNotices = notices;
+  }
+
+  /**
+   * A node this one controls connected, or reconnected after a drop: the
+   * same transition that collects its mail and syncs its tickets. Listeners
+   * must not throw; the returned function removes the listener.
+   */
+  onNodeConnected(listener: (nodeId: string) => void): () => void {
+    this.connectListeners.add(listener);
+    return () => this.connectListeners.delete(listener);
   }
 
   /**
@@ -322,6 +333,7 @@ export class NodeCoordination {
     this.collector.dispose();
     this.ticketSync.dispose();
     this.ticketImages.dispose();
+    this.connectListeners.clear();
   }
 
   constructor(
@@ -480,6 +492,13 @@ export class NodeCoordination {
               void this.collector.collect(nodeId);
               void this.ticketSync.sync(nodeId);
               this.resumeActions();
+              for (const listener of this.connectListeners) {
+                try {
+                  listener(nodeId);
+                } catch {
+                  // A listener's failure never affects collection or sync.
+                }
+              }
             }
           connected = now;
         })

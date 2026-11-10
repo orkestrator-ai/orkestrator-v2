@@ -1,5 +1,5 @@
 /**
- * The controller part of the `coordinator` domain (plan item 7009): its 35
+ * The controller part of the `coordinator` domain (plan item 7009): its 36
  * definitions classify reads as the routing classifier does, declare the
  * access and critical keys recorded in the item, keep model records open,
  * and the domain client sends typed, enveloped calls to a node with the
@@ -77,10 +77,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("coordinator controller definitions", () => {
-  it("defines 35 commands once each, at version 1, all in the domain's list", () => {
+  it("defines 36 commands once each, at version 1, all in the domain's list", () => {
     const names = COORDINATOR_CONTROLLER_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(35);
-    expect(new Set(names).size).toBe(35);
+    expect(names).toHaveLength(36);
+    expect(new Set(names).size).toBe(36);
     expect(coordinatorDomain).toMatchObject({ name: "coordinator", version: 1, min: 1 });
     for (const def of COORDINATOR_CONTROLLER_COMMANDS) {
       expect(def.domain).toBe(coordinatorDomain);

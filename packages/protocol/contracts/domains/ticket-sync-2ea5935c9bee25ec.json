@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "domain": "ticket-sync",
+  "version": 1,
+  "min": 1,
+  "commands": {
+    "ack_ticket_sync_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:70b5065abe4a2361b551c88a52219926b38766c8bc9ba8088b40e04b2269966f",
+      "resultDigest": "sha256:6a3ef05aa407237fd680e097e8035b004f08af83af86a298f1185dc400666c7f"
+    },
+    "apply_ticket_sync": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": ["liveIds", "reset"],
+      "argsDigest": "sha256:20b586a7940fc8a1ff56fe55e6c4e7527357a26eb6815b57bae44771705056de",
+      "resultDigest": "sha256:8a62babc0519cc8dc63a8493a1025d0e86913952348111019aab4e16dc0748da"
+    },
+    "collect_ticket_sync_outbox": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:e0a4a83105a09e198dd65969104edc57595cbbae6a16160da695687ef2156d1c",
+      "resultDigest": "sha256:6ab49d052941d328bdbcafd3b45c7a948820f70afded1209e22efb9435470f60"
+    },
+    "coordinator_node_ticket": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:c3b58ad40364e0acbbb0e4b1b585ad53c31bf0199064aee9e06035d6b68c574e",
+      "resultDigest": "sha256:2715d376dfaa55be3f538ef2e1527d3f2a689c3d9bcd54824c48fd695171dd73"
+    },
+    "dismiss_ticket_sync_conflicts": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:16d03cb4785ab379bacb08c972c1b6a3a77a16e0378f96448e89575bb510a4bb",
+      "resultDigest": "sha256:a262e4981bb5061fc55f737e2c95e3b41f486ec58fdc887ce8a3761519384bba"
+    },
+    "get_ticket_sync_cursor": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:eed485fb1202008a5928b06d200efdbe447d75ba13fa6c3571b2304310db4868",
+      "resultDigest": "sha256:1112b3b3289793c369b899a78855583de75e0d052116ffadf2b03162a82d4ee9"
+    },
+    "get_ticket_sync_leaf_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:6148d1eca008c1f633d2ad082b2c880e3e42d07dab451898ccd2af814215b333"
+    },
+    "get_ticket_sync_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:9f82f31ee897e9a8ad489fbf11a5375fd1780b3fee6cea7abbcc87c5fea34cdd"
+    },
+    "put_ticket_image": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d60bc9ca0aaa7b1123fc67e80a7d117e372c42a43ef3c84b7ba00de26154425",
+      "resultDigest": "sha256:39ff58fcafb899bde40ae9b87218a9aff9e0eeba5ee5b890efb256c9c82f56d3"
+    },
+    "read_ticket_image": {
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a64ad72c2db9e100844e0b462dd860ec7605907a84f9be5e769cbacadba67370",
+      "resultDigest": "sha256:1e4894c7e2cf56ec43abef62930ad6c3e7bcd18a61adbff9cc38bcecfc44c75d"
+    },
+    "share_tickets_with_command_node": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2690bffcb81d0b6bb700267c523fdf79c0592eae97c0bd51b030fe31467ef9e5",
+      "resultDigest": "sha256:e7626249a5561cafac276b0d973a72feda9699aaaefbc769d280870d79e21bb9"
+    },
+    "sync_node_tickets": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a2705767c2f751f084f53c07e3e1db9ecfc15b7b59936221d92beb6fd3cd38e3",
+      "resultDigest": "sha256:9a0482ace141f84f24637318e6b5f05bd3381e2e972d60685b85e5dd7fefcad7"
+    }
+  }
+}

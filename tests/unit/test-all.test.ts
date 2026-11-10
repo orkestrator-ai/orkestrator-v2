@@ -14,9 +14,16 @@ import {
   FAILURE_REPORT_CONTEXT_LINES,
   FailureReportCollector,
   finalizeTestLogs,
+  GUARD_STAGE,
+  GUARD_STAGE_TEST_FILES,
   INCLUDE_IOS_TESTS_ENV,
   IOS_GROUP_TIMEOUT_MS,
   main,
+  MAX_RERUN_FILES,
+  RERUN_FILE_TIMEOUT_MS,
+  RERUN_TIME_BUDGET_MS,
+  packageRerunTargets,
+  rerunFlags,
   MAX_AGGREGATE_TEST_WORKERS,
   MAX_BACKEND_TEST_WORKERS,
   MAX_SLOW_BACKEND_TEST_WORKERS,
@@ -36,11 +43,14 @@ import {
   TEST_LEASE_DIRECTORY_ENV,
   TEST_MAX_OUTPUT_BYTES_ENV,
   TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
+  TEST_RERUN_FAILED_ENV,
+  TEST_SKIP_GUARDS_ENV,
   TEST_TIMINGS_DIRECTORY_ENV,
   terminateActiveGroups,
   TURBO_GROUP_OUTPUT_FLAGS,
   WORKSPACE_WORKERS_ENV,
   type CommandResult,
+  type FailingFile,
   type TestAllDependencies,
   type TestGroup,
 } from "../../scripts/test-all";
@@ -176,6 +186,7 @@ interface Invocation {
   args: string[];
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  deadline?: number;
 }
 
 function createDependencies(
@@ -186,6 +197,9 @@ function createDependencies(
     statusByName?: Record<string, number | null>;
     outputByName?: Record<string, string>;
     failureReportsByName?: Record<string, { reports: string[]; omitted?: number }>;
+    failingFilesByName?: Record<string, FailingFile[]>;
+    /** Groups that end as infrastructure failures (no verdict), keyed by name. */
+    infrastructureErrorByName?: Record<string, string>;
     environment?: NodeJS.ProcessEnv;
     cores?: number;
     /** Blocks the named group until released, to observe concurrency. */
@@ -222,6 +236,7 @@ function createDependencies(
           args: group.args,
           env,
           timeoutMs: group.timeoutMs,
+          deadline: group.deadline,
         });
         if (options.gate && options.gate.name === group.name) {
           await options.gate.release;
@@ -236,6 +251,10 @@ function createDependencies(
           output: options.outputByName?.[group.name],
           failureReports: options.failureReportsByName?.[group.name]?.reports,
           omittedFailureReports: options.failureReportsByName?.[group.name]?.omitted,
+          failingFiles: options.failingFilesByName?.[group.name],
+          ...(options.infrastructureErrorByName && group.name in options.infrastructureErrorByName
+            ? { infrastructureError: true, output: options.infrastructureErrorByName[group.name] }
+            : {}),
         };
       },
     },
@@ -406,6 +425,87 @@ describe("scripts/test-all.ts", () => {
     for (const pattern of SLOW_TESTS["."]!)
       expect(rootArgs).toContain(`--path-ignore-patterns=${pattern}`);
     expect(logs.some((line) => line.includes("mise run test:slow"))).toBe(true);
+  });
+
+  describe("the guard stage", () => {
+    /** Dependencies whose guard stage records when it ran and returns `status`. */
+    function withGuards(status: number, environment: NodeJS.ProcessEnv = {}) {
+      const created = createDependencies({
+        environment: { TEST_ALL_MARKER: "preserved", ...environment },
+      });
+      const guardRuns: { group: TestGroup; startedGroups: number }[] = [];
+      created.dependencies.runGuards = async (group) => {
+        guardRuns.push({ group, startedGroups: created.started.length });
+        return {
+          status,
+          output: status === 0 ? "" : "FAIL dom-absence\nGuards failed: dom-absence",
+        };
+      };
+      return { ...created, guardRuns };
+    }
+
+    test("runs first, before any group, and the root group then skips the files it ran", async () => {
+      const { dependencies, guardRuns, invocations } = withGuards(0);
+
+      expect(await runAllTests(dependencies)).toBe(0);
+      expect(guardRuns).toEqual([{ group: GUARD_STAGE, startedGroups: 0 }]);
+      expect(GUARD_STAGE.args).toEqual(["scripts/guards.ts"]);
+      expect(invocations.map((entry) => entry.name).sort()).toEqual(
+        [WORKSPACE, ROOT, BRIDGES, PROTOCOL].sort(),
+      );
+      const rootArgs = invocations.find((entry) => entry.name === ROOT)!.args;
+      for (const file of GUARD_STAGE_TEST_FILES)
+        expect(rootArgs).toContain(`--path-ignore-patterns=${file}`);
+    });
+
+    test("a failure stops the run before any group is admitted and says how to skip it", async () => {
+      const { dependencies, guardRuns, invocations, logs } = withGuards(1);
+
+      expect(await runAllTests(dependencies)).toBe(1);
+      expect(guardRuns).toHaveLength(1);
+      expect(invocations).toHaveLength(0);
+      const output = logs.join("\n");
+      expect(output).toContain("FAIL guards");
+      expect(output).toContain("Guards failed: dom-absence");
+      expect(output).toContain("no test group was started");
+      expect(output).toContain(`${TEST_SKIP_GUARDS_ENV}=1`);
+    });
+
+    test(`${TEST_SKIP_GUARDS_ENV}=1 skips it and keeps its files in the root group`, async () => {
+      const { dependencies, guardRuns, invocations } = withGuards(1, {
+        [TEST_SKIP_GUARDS_ENV]: "1",
+      });
+
+      expect(await runAllTests(dependencies)).toBe(0);
+      expect(guardRuns).toHaveLength(0);
+      const rootArgs = invocations.find((entry) => entry.name === ROOT)!.args;
+      for (const file of GUARD_STAGE_TEST_FILES)
+        expect(rootArgs).not.toContain(`--path-ignore-patterns=${file}`);
+    });
+
+    test("runs only with the root group, and not in the slow tier", async () => {
+      for (const environment of [
+        { [TEST_GROUPS_ENV]: "backend" },
+        { [TEST_GROUPS_ENV]: "workspace,bridges,codex-protocol" },
+        { [TEST_TIER_ENV]: "slow" },
+      ]) {
+        const { dependencies, guardRuns } = withGuards(1, environment);
+        expect(await runAllTests(dependencies)).toBe(0);
+        expect(guardRuns).toHaveLength(0);
+      }
+      const { dependencies, guardRuns } = withGuards(0, {
+        [TEST_GROUPS_ENV]: "root,bridges,codex-protocol",
+        [TEST_TIER_ENV]: "all",
+      });
+      expect(await runAllTests(dependencies)).toBe(0);
+      expect(guardRuns).toHaveLength(1);
+    });
+
+    test("a substituted group runner without a guard runner runs no guard stage", async () => {
+      const { dependencies, invocations } = createDependencies();
+      expect(await runAllTests(dependencies)).toBe(0);
+      expect(invocations.map((entry) => entry.name)).not.toContain(GUARD_STAGE.name);
+    });
   });
 
   test("the slow tier runs only slow root files and skips the protocol check", () => {
@@ -1492,6 +1592,160 @@ describe("scripts/test-all.ts", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("rerunning failing test files alone", () => {
+  const WEB = "@orkestrator/web:test:workspace: ";
+  const resolveRerun = (taskPrefix: string) =>
+    taskPrefix === ""
+      ? { directory: ".", flags: ["--parallel=1"] }
+      : taskPrefix === WEB
+        ? { directory: "apps/web", flags: ["--only-failures", "--parallel=1"] }
+        : undefined;
+
+  test("the collector names each failing file once, with the task that ran it", () => {
+    const collector = new FailureReportCollector();
+    collector.push(
+      Buffer.from(
+        [
+          "tests/unit/a.test.ts:",
+          "error: expect(received).toBe(expected)",
+          "(fail) a > one [1.00ms]",
+          "(fail) a > two [1.00ms]",
+          `${WEB}src/b.test.tsx:`,
+          "tests/unit/c.test.ts:",
+          `${WEB}(fail) b > one [2.00ms]`,
+          "(fail) c > one [1.00ms]",
+          "./tests/unit/d.spec.ts:",
+          "(fail) d > one",
+          "",
+        ].join("\n"),
+      ),
+    );
+    collector.finish();
+    expect(collector.failingFiles).toEqual([
+      { taskPrefix: "", file: "tests/unit/a.test.ts" },
+      { taskPrefix: WEB, file: "src/b.test.tsx" },
+      { taskPrefix: "", file: "tests/unit/c.test.ts" },
+      { taskPrefix: "", file: "tests/unit/d.spec.ts" },
+    ]);
+  });
+
+  test("a package's flags keep its preloads and drop worker counts and timings", () => {
+    expect(
+      rerunFlags(
+        "bun --no-env-file ../../scripts/bun-test-tier.ts apps/backend src tests -- --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/backend.json --update-timings} --parallel=${ORKESTRATOR_BACKEND_TEST_WORKERS:-2}",
+      ),
+    ).toEqual(["--preload", "../../tests/setup-node.ts", "--only-failures", "--parallel=1"]);
+    const resolve = packageRerunTargets(path.resolve(import.meta.dir, "../.."));
+    expect(resolve("")).toEqual({ directory: ".", flags: ["--parallel=1"] });
+    expect(resolve("@orkestrator/backend:test:workspace: ")).toEqual({
+      directory: "apps/backend",
+      flags: ["--preload", "../../tests/setup-node.ts", "--only-failures", "--parallel=1"],
+    });
+    expect(resolve("claude-bridge:test:bridge: ")?.directory).toBe("bridges/claude-bridge");
+    expect(resolve("@orkestrator/web:build: ")).toBeUndefined();
+  });
+
+  test("classifies each failing file by a lone rerun and keeps the run failing", async () => {
+    const { dependencies, invocations, logs } = createDependencies({
+      statusByName: {
+        [ROOT]: 1,
+        [WORKSPACE]: 1,
+        "rerun tests/unit/flaky.test.ts": 0,
+        "rerun apps/web/src/broken.test.tsx": 1,
+      },
+      failingFilesByName: {
+        [ROOT]: [{ taskPrefix: "", file: "tests/unit/flaky.test.ts" }],
+        [WORKSPACE]: [
+          { taskPrefix: WEB, file: "src/broken.test.tsx" },
+          { taskPrefix: "@orkestrator/web:build: ", file: "src/odd.test.ts" },
+        ],
+      },
+    });
+    dependencies.rerunFailedFiles = true;
+    dependencies.resolveRerun = resolveRerun;
+
+    expect(await runAllTests(dependencies)).toBe(1);
+    const reruns = invocations.filter((entry) => entry.name.startsWith("rerun "));
+    expect(reruns.map((entry) => [entry.name, entry.args])).toEqual([
+      [
+        "rerun apps/web/src/broken.test.tsx",
+        ["test", "./src/broken.test.tsx", "--only-failures", "--parallel=1"],
+      ],
+      ["rerun tests/unit/flaky.test.ts", ["test", "./tests/unit/flaky.test.ts", "--parallel=1"]],
+    ]);
+    const output = logs.join("\n");
+    expect(output).toContain("PASSED ALONE  tests/unit/flaky.test.ts");
+    expect(output).toContain("docs/tests/flaky-tests");
+    expect(output).toContain("FAILED ALONE  apps/web/src/broken.test.tsx");
+    expect(output).toContain(
+      'Cannot rerun src/odd.test.ts alone: no suite for "@orkestrator/web:build:"',
+    );
+    expect(output).toContain("The run still fails");
+  });
+
+  test("every rerun carries the budget's absolute deadline, and one that never ran keeps the run failing", async () => {
+    const queued = "Group deadline passed while waiting for host capacity; tests did not run";
+    const { dependencies, invocations, logs } = createDependencies({
+      statusByName: { [ROOT]: 1, "rerun tests/unit/queued.test.ts": 75 },
+      failingFilesByName: {
+        [ROOT]: [
+          { taskPrefix: "", file: "tests/unit/queued.test.ts" },
+          { taskPrefix: "", file: "tests/unit/next.test.ts" },
+        ],
+      },
+      infrastructureErrorByName: { "rerun tests/unit/queued.test.ts": queued },
+    });
+    dependencies.rerunFailedFiles = true;
+    dependencies.resolveRerun = resolveRerun;
+
+    const before = Date.now();
+    expect(await runAllTests(dependencies)).toBe(1);
+    const after = Date.now();
+    const reruns = invocations.filter((entry) => entry.name.startsWith("rerun "));
+    expect(reruns).toHaveLength(2);
+    // One deadline for the whole budget, not a fresh one per file, so a
+    // queue wait for one file is charged against every later one.
+    expect(new Set(reruns.map((entry) => entry.deadline)).size).toBe(1);
+    const deadline = reruns[0]!.deadline!;
+    expect(deadline).toBeGreaterThanOrEqual(before + RERUN_TIME_BUDGET_MS);
+    expect(deadline).toBeLessThanOrEqual(after + RERUN_TIME_BUDGET_MS);
+    for (const entry of reruns) expect(entry.timeoutMs).toBeLessThanOrEqual(RERUN_FILE_TIMEOUT_MS);
+    const output = logs.join("\n");
+    expect(output).toContain("INCOMPLETE    tests/unit/queued.test.ts");
+    expect(output).toContain("The run still fails");
+  });
+
+  test(`reruns at most ${MAX_RERUN_FILES} files, and none with ${TEST_RERUN_FAILED_ENV}=0`, async () => {
+    const failingFiles = Array.from({ length: MAX_RERUN_FILES + 3 }, (_, index) => ({
+      taskPrefix: "",
+      file: `tests/unit/f${index}.test.ts`,
+    }));
+    const capped = createDependencies({
+      statusByName: { [ROOT]: 1 },
+      failingFilesByName: { [ROOT]: failingFiles },
+    });
+    capped.dependencies.rerunFailedFiles = true;
+    capped.dependencies.resolveRerun = resolveRerun;
+    expect(await runAllTests(capped.dependencies)).toBe(1);
+    expect(capped.invocations.filter((entry) => entry.name.startsWith("rerun "))).toHaveLength(
+      MAX_RERUN_FILES,
+    );
+    expect(capped.logs.join("\n")).toContain(
+      `(${MAX_RERUN_FILES} of ${MAX_RERUN_FILES + 3}; at most`,
+    );
+
+    const off = createDependencies({
+      environment: { [TEST_RERUN_FAILED_ENV]: "0" },
+      statusByName: { [ROOT]: 1 },
+      failingFilesByName: { [ROOT]: failingFiles },
+    });
+    off.dependencies.rerunFailedFiles = true;
+    off.dependencies.resolveRerun = resolveRerun;
+    expect(await runAllTests(off.dependencies)).toBe(1);
+    expect(off.invocations.some((entry) => entry.name.startsWith("rerun "))).toBe(false);
   });
 });
 

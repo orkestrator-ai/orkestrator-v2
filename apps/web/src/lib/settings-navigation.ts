@@ -26,6 +26,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "mcp-servers",
   "messaging",
   "schedules",
+  "self-improvement",
   "permissions",
   "sounds",
   "docker",

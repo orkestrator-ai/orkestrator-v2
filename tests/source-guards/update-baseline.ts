@@ -11,7 +11,8 @@
  * that counts per subject (`lib-backend-command-default`, per `lib/backend`
  * file) also prints each subject's total.
  *
- * The output is deterministic (guards in declaration order, files sorted), so
+ * It scans what `mise run guards` scans: the files `git ls-files -co
+ * --exclude-standard` lists. The output is deterministic (guards in declaration order, files sorted), so
  * running it twice on the same tree writes the same bytes. A baseline entry
  * should only ever go down; review any increase as a new offender.
  */
@@ -25,6 +26,7 @@ import {
   type Baseline,
 } from "./baseline";
 import { GUARD_IDS, type GuardId } from "./guard";
+import { RepositoryIndex } from "./repository-index";
 import { SOURCE_GUARDS, scanRepository } from "./scan";
 
 /** The guards named by `--guard <id>` arguments, or `null` for all of them. */
@@ -70,7 +72,7 @@ if (import.meta.main) {
     ? SOURCE_GUARDS.filter((guard) => selected.includes(guard.id))
     : SOURCE_GUARDS;
   const started = performance.now();
-  const scanned = baselineFromFindings(scanRepository(root, guards));
+  const scanned = baselineFromFindings(scanRepository(RepositoryIndex.fromGit(root), guards));
   const elapsed = performance.now() - started;
   const baseline = selected
     ? mergeBaseline(

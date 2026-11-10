@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { elapseFakeTime } from "@/test/fake-clock-frames";
 import { useVirtuosoScrollState } from "./useVirtuosoScrollState";
 import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  jest.useRealTimers();
+});
 
 /**
  * The real hook around a fake Virtuoso handle and a scroller with controllable
@@ -138,6 +142,7 @@ describe("transcript scroll ownership", () => {
 
   test("a row navigation settling 20-40 px above the tail leaves the reader detached", async () => {
     let view: ReturnType<typeof mountScrollHarness> | undefined;
+    jest.useFakeTimers();
     try {
       view = mountScrollHarness({ scrollTop: 0, height: 4000, viewport: 600 });
       act(() => {
@@ -147,7 +152,7 @@ describe("transcript scroll ownership", () => {
       view.setBrowserScrollTop(4000 - 600 - 30);
       act(() => view!.element.dispatchEvent(new Event("scroll")));
       // Let any bounded reconciliation and the old settle deadline expire.
-      await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+      await elapseFakeTime(900);
       await frames();
       expect(view.hook.result.current.scrollProps.followOutput(true)).toBe(false);
       // Growth does not drag the reader to the tail.

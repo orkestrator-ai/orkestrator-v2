@@ -129,7 +129,6 @@ mock.module("@/lib/backend", () => ({
     agent: "claude",
   }),
   adoptNativeAgentSession: async () => ({}),
-  getNativeAgentProjection: async () => null,
 }));
 
 const { useNativeAgentSession, resetNativeAgentSyncCapabilityForTests } =

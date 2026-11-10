@@ -22,6 +22,11 @@
  * - once the server answers the fresh password only it was given, a root exec
  *   records which process it is (`opencode-listener-identity.ts`), and every
  *   later read of the password checks the port's listener against it.
+ *
+ * On an `opencode2-launch=1` image the launcher also points the server's
+ * package cache at root-owned `/run/orkestrator-opencode/cache`, which root
+ * fills first (`opencode-package-cache.ts`), and passes the checkout's
+ * configuration as the backend filtered it (`opencode-project-config.ts`).
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
@@ -50,6 +55,11 @@ import {
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
 } from "./opencode-listener-identity.js";
+import {
+  openCodePackageCacheScript,
+  OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
+} from "./opencode-package-cache.js";
+import { stageProjectOpenCodeConfig } from "./opencode-project-config.js";
 import { runCommand } from "./shell.js";
 
 /** The credential plugin of a launched server, which also applies the start environment. */
@@ -203,6 +213,14 @@ export async function recordOpenCodeListener(containerId: string): Promise<void>
  */
 export async function startOpenCodeWithLauncher(containerId: string): Promise<string> {
   await asRoot(containerId, openCodeLaunchConfigScript());
+  // On an `opencode2-launch=1` image the launcher reads both of these; on an
+  // older one the cache script does nothing and the project file is ignored.
+  await asRoot(
+    containerId,
+    openCodePackageCacheScript("opencode"),
+    OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
+  );
+  await stageProjectOpenCodeConfig(containerId, "opencode");
   const persistentDatabase =
     (
       await dockerExec(

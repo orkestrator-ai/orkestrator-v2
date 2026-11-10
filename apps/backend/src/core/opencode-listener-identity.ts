@@ -24,14 +24,30 @@
  * holds a socket. `/proc/net/tcp` is readable by anyone and lists each socket's
  * inode. A start replaces whatever listens with a new server and a new password,
  * which the old listener never sees. What remains is the race between the
- * check and the requests that follow it; see docs/architecture/agent-approvals.md.
+ * check and the requests that follow it, narrowed by a re-check after a
+ * refused connection or an unexpected answer (`opencode-listener-recheck.ts`);
+ * see docs/architecture/agent-approvals.md.
+ *
+ * The 2.x server on an `opencode2-launch=1` image has its own record
+ * (`opencode2-listener`) on its own port, by the same rules.
  */
 
 /** The root-owned binary `orkestrator-bridge-launch opencode` runs. */
 export const OPENCODE_CONTAINER_BINARY = "/opt/opencode/bin/opencode";
+/** The root-owned 2.x binary `orkestrator-bridge-launch opencode2` runs. */
+export const OPENCODE2_CONTAINER_BINARY = "/opt/opencode/bin/opencode2";
 
 /** The record of the socket the backend's server listens on; root-only, beside the password. */
 export const OPENCODE_LISTENER_RECORD = "/run/orkestrator-bridge/opencode-listener";
+/** The same record for the 2.x server on an `opencode2-launch=1` image. */
+export const OPENCODE2_LISTENER_RECORD = "/run/orkestrator-bridge/opencode2-listener";
+
+/** Which of the container's two OpenCode servers a record, a port and a password belong to. */
+export type OpenCodeServerKind = "opencode" | "opencode2";
+
+export function openCodeListenerRecord(kind: OpenCodeServerKind): string {
+  return kind === "opencode2" ? OPENCODE2_LISTENER_RECORD : OPENCODE_LISTENER_RECORD;
+}
 
 export interface OpenCodeListenerSnapshot {
   /** The recorded socket inode, or null when nothing was recorded. */
@@ -43,7 +59,9 @@ export interface OpenCodeListenerSnapshot {
 export type OpenCodeListenerJudgement =
   /** The recorded socket is the only one listening. */
   | "ours"
-  /** Another socket listens, nothing does, or the recorded one is gone. */
+  /** No socket currently listens on the recorded port. */
+  | "stopped"
+  /** Another socket listens, or more than one shares the port. */
   | "replaced"
   /** No record: an older image, or a server an older backend started. */
   | "unrecorded";
@@ -83,6 +101,7 @@ export function judgeOpenCodeListener(
   snapshot: OpenCodeListenerSnapshot,
 ): OpenCodeListenerJudgement {
   if (!snapshot.record) return "unrecorded";
+  if (snapshot.sockets.length === 0) return "stopped";
   return snapshot.sockets.length === 1 && snapshot.sockets[0] === snapshot.record
     ? "ours"
     : "replaced";
@@ -93,17 +112,20 @@ export function judgeOpenCodeListener(
  * `recorded`. No socket, or more than one, prints `refused` and leaves no
  * record, so the start fails rather than trust it.
  */
-export function recordOpenCodeListenerScript(port: number): string {
+export function recordOpenCodeListenerScript(
+  port: number,
+  record: string = OPENCODE_LISTENER_RECORD,
+): string {
   return [
     "set -eu",
     "umask 077",
-    `rm -f ${OPENCODE_LISTENER_RECORD}`,
+    `rm -f ${record}`,
     listeningInodesScript(port),
     "set -- $inodes",
     `if [ "$#" -ne 1 ]; then echo refused; exit 0; fi`,
-    `tmp=$(mktemp ${OPENCODE_LISTENER_RECORD}.XXXXXX)`,
+    `tmp=$(mktemp ${record}.XXXXXX)`,
     `printf '%s\\n' "$1" > "$tmp"`,
-    `mv "$tmp" ${OPENCODE_LISTENER_RECORD}`,
+    `mv "$tmp" ${record}`,
     "echo recorded",
   ].join("\n");
 }

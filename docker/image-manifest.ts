@@ -72,7 +72,9 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
   },
 ];
 
-const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;
+// Names may hold digits (`opencode2-launch`); a narrower class skipped such a
+// marker silently and left the capability out of the image.
+const MARKER = /ORKESTRATOR_CAPABILITY ([a-z0-9-]+)=(\d+)/g;
 
 export function probeCapabilities(
   read: (file: { installed: string; source: string }) => string | null,

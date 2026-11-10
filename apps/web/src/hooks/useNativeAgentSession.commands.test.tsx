@@ -128,7 +128,6 @@ mock.module("@/lib/backend", () => ({
     agent: "codex",
   }),
   adoptNativeAgentSession: async () => ({}),
-  getNativeAgentProjection: async () => null,
   refreshNativeAgentCommands: refreshNativeAgentCommandsMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,

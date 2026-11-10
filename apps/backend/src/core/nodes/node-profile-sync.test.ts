@@ -58,6 +58,9 @@ async function setup() {
   const portal = new NodePortal({
     nodes: command.service,
     fetchImpl: network.fetch,
+    // A test emits a second change soon after setup's; production's one-second
+    // floor between a node's announcements would make every such test wait it out.
+    changeMinIntervalMs: 0,
     emit: eventSink((event, payload) => {
       command.events.push({ event, payload });
       if (event === NODE_SUMMARY_CHANGED_EVENT) reads.push(portal.summaries());

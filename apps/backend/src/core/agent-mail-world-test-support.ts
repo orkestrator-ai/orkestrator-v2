@@ -22,7 +22,7 @@ import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js"
 import type { PipelineWorkerMailPort } from "./build-pipeline-worker-mail.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
-import { runCommand } from "./shell.js";
+import { copyCommittedCheckout } from "./git-checkout-template-test-support.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 
@@ -173,14 +173,8 @@ export class MailWorld {
 
   static async create(options: MailWorldOptions = {}): Promise<MailWorld> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-mail-world-"));
-    const checkout = path.join(root, "checkout");
-    await fs.mkdir(checkout);
-    await runCommand("git", ["init", "-b", "main"], { cwd: checkout });
-    await runCommand("git", ["config", "user.email", "test@example.invalid"], { cwd: checkout });
-    await runCommand("git", ["config", "user.name", "Mail World"], { cwd: checkout });
-    await fs.writeFile(path.join(checkout, "README.md"), "initial\n");
-    await runCommand("git", ["add", "README.md"], { cwd: checkout });
-    await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
+    // A copy of the file's one committed checkout, not five Git spawns per world.
+    const checkout = await copyCommittedCheckout(path.join(root, "checkout"));
     const storage = new StorageService(path.join(root, "data"));
     await storage.init();
     const config = await storage.loadConfig();

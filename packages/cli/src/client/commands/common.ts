@@ -12,7 +12,7 @@ import {
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, OptionSpec } from "../spec.js";
-import { observe, ObservationStopped, signalName } from "../wait.js";
+import { observe, ObservationStopped, signalName, observationClock } from "../wait.js";
 
 export const REQUEST_ID_OPTION: OptionSpec = {
   name: "request-id",
@@ -155,7 +155,11 @@ export async function submitForWait<T>(
             throw lookup;
           }
         },
-        { timeoutMs: Math.max(0, deadline - Date.now()), signal: context.signal },
+        {
+          timeoutMs: Math.max(0, deadline - Date.now()),
+          signal: context.signal,
+          ...observationClock(context.io),
+        },
       );
     } catch (lookup) {
       const stopped = context.signal?.aborted
@@ -288,7 +292,7 @@ export async function waitForOperation(
         }
         return { done: false };
       },
-      { timeoutMs, signal: context.signal },
+      { timeoutMs, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     if (error instanceof ObservationStopped) {
@@ -385,7 +389,7 @@ export async function waitForEnvironment(
         }
         return { done: false };
       },
-      { timeoutMs, signal: context.signal },
+      { timeoutMs, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     const stopped = context.signal?.aborted

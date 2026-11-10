@@ -46,3 +46,8 @@ The file spends its time on real processes, which is what `scripts/test-tiers.ts
 - **Why triage linked it to the branch:** the branch changes `apps/backend/src/core/storage.ts` only by adding a one-line facade forwarder, `ensureBuildPipelineNotesTab`. This file reaches `storage.ts` only through the `backend-runtime.ts` import chain of `tests/container-lifecycle-fixtures.ts`, as on the environment deletion branch above, and never calls the new method. The fixtures use their own in-memory storage.
 - **Isolated rerun:** at `3e87668f4` (branch head, test and entrypoint unchanged), `mise run test:logged -- --name stamps-owner -- bun --cwd=apps/backend test tests/portable-inputs-stamps.test.ts --parallel=2 --only-failures` passed (exit 0) in 157.4 s between 02:07:40 and 02:10:18 GMT. Spawning `/usr/bin/true`, sampled every 30 s, took 2.1–3.5 ms. The 1-minute load average fell from 24.7 to 15.1, and the 15-minute average from 43.8 to 39.3.
 - **Conclusion:** the same deadline against host spawn time. No code or test change.
+
+
+## Owner moved to the slow tier and consolidated (2026-11-10)
+
+`apps/backend/tests/portable-inputs-stamps.test.ts` now runs only in the slow tier (`scripts/test-tiers.ts`; `mise run test:slow`, and CI's `test:full` on every pull request), so the default `mise run test` no longer runs it. The file was also consolidated: one fixture build per file restored per test, the per-provider `logins` tests merged into two scenarios covering all five providers, and the `import ownership failures` matrix reduced from 15 tests to 5. Entrypoint boots went from 129 to 59 and the file alone from about 115 s to about 55 s. Some test names cited above no longer exist; search the file for the scenario rather than the old name.

@@ -4,7 +4,7 @@
  * fixture home, with each mount rewritten to the staged directory it binds.
  * Fixture homes only; never the real provider directories.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { IMAGE_CAPABILITIES } from "@orkestrator/protocol/image-manifest";
@@ -45,14 +45,6 @@ const MOUNTS = [
   "/grok-home",
 ];
 
-const cleanup: string[] = [];
-afterEach(async () => {
-  for (const dir of cleanup.splice(0)) {
-    await fs.chmod(dir, 0o700).catch(() => undefined);
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
 async function write(file: string, content: string) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, content);
@@ -60,9 +52,12 @@ async function write(file: string, content: string) {
 
 const ENVIRONMENT = "env-stamps";
 
-async function fixture() {
-  const root = await fs.realpath(await tempDir("ork-input-stamps-"));
-  cleanup.push(root);
+/**
+ * Builds the fixture in `root`: a host home staged into a revision, an empty
+ * container home and the setup script's helpers. Stamps and staged mounts hold
+ * absolute paths, so a copy of this tree is only valid at the same `root`.
+ */
+async function buildFixture(root: string) {
   const hostHome = path.join(root, "host");
   const dataDir = path.join(root, "data");
   const files: Record<string, string> = {
@@ -202,6 +197,64 @@ async function fixture() {
   };
 }
 
+type Fixture = Awaited<ReturnType<typeof buildFixture>>;
+type Boot = Awaited<ReturnType<Fixture["boot"]>>;
+
+/**
+ * Every test works in the same `root`, restored before it from one of two
+ * snapshots taken once per file: `fresh` (staged, never started) and `seeded`
+ * (after the first, full-copy start). The seed start is the costliest boot,
+ * and most tests begin with it. The path never changes because stamps are
+ * keyed by absolute home paths and the staged mounts are absolute too.
+ */
+const shared: {
+  root: string;
+  fixture: Fixture;
+  fresh: string;
+  seeded: string;
+  seed: Boot;
+} = {} as never;
+
+function copyTree(from: string, to: string) {
+  // `cp -a` keeps modes and links exactly as the fixture made them.
+  const copied = Bun.spawnSync({ cmd: ["cp", "-a", from, to], stderr: "pipe" });
+  if (copied.exitCode !== 0) throw new Error(`cp failed: ${copied.stderr.toString()}`);
+}
+
+async function removeTree(dir: string) {
+  await fs.chmod(dir, 0o700).catch(() => undefined);
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+beforeAll(async () => {
+  shared.root = await fs.realpath(await tempDir("ork-input-stamps-"));
+  const snapshots = await fs.realpath(await tempDir("ork-input-stamps-snapshots-"));
+  shared.fresh = path.join(snapshots, "fresh");
+  shared.seeded = path.join(snapshots, "seeded");
+  shared.fixture = await buildFixture(shared.root);
+  copyTree(shared.root, shared.fresh);
+  shared.seed = await shared.fixture.boot();
+  copyTree(shared.root, shared.seeded);
+}, 120_000);
+
+afterAll(async () => {
+  if (!shared.root) return;
+  await removeTree(shared.root);
+  await removeTree(path.dirname(shared.fresh));
+});
+
+/** The fixture restored to a snapshot: `seeded` has had its first start. */
+async function fixture(state: "fresh" | "seeded" = "fresh") {
+  await removeTree(shared.root);
+  copyTree(state === "seeded" ? shared.seeded : shared.fresh, shared.root);
+  return shared.fixture;
+}
+
+/** The fixture after its first start, and that start's counts. */
+async function seeded() {
+  return { f: await fixture("seeded"), first: shared.seed };
+}
+
 const STAMPED_FILES = [
   ".claude/CLAUDE.md",
   ".codex/config.toml",
@@ -225,8 +278,7 @@ const STAMPED_TREES = [
 
 describe("a restart with unchanged inputs", () => {
   test("copies nothing, and what the first start imported is still there", async () => {
-    const f = await fixture();
-    const first = await f.boot();
+    const { f, first } = await seeded();
     expect(first.unchanged).toBe(0);
     expect(first.copied).toBeGreaterThanOrEqual(STAMPED_FILES.length + STAMPED_TREES.length);
     const before: Record<string, string> = {};
@@ -250,8 +302,7 @@ describe("a restart with unchanged inputs", () => {
   test("a staged file rewritten with the same bytes is still unchanged", async () => {
     // The backend rewrites a revision's files in place before a start, so a
     // new inode and time on the mount say nothing about the content.
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     expect(await f.replace("opencode-config/opencode.json", '{"model":"one"}\n')).toBe(true);
     expect((await f.boot()).copied).toBe(0);
   }, 60_000);
@@ -283,8 +334,7 @@ describe("a restart with unchanged inputs", () => {
 
 describe("a changed input is reflected at the next start", () => {
   test("changing one file in a tree copies that tree alone", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     const unrelated = await f.identities(".codex/skills");
     await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill\n");
 
@@ -296,8 +346,7 @@ describe("a changed input is reflected at the next start", () => {
   }, 60_000);
 
   test("changing one single-file input", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     expect(await f.replace("codex-home/config.toml", "model = 'two'\n")).toBe(true);
     const next = await f.boot();
     expect(next.copied).toBe(1);
@@ -305,8 +354,7 @@ describe("a changed input is reflected at the next start", () => {
   }, 60_000);
 
   test("adding one input, to a tree and as a file that was absent", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     expect(await f.exists(".claude/skills/added")).toBe(false);
     await write(f.stage("claude-config/skills/added/SKILL.md"), "added skill\n");
     await write(f.stage("codex-home/hooks.json"), "{}\n");
@@ -316,8 +364,7 @@ describe("a changed input is reflected at the next start", () => {
   }, 60_000);
 
   test("removing one input takes only that input out of the home", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     // The container's own state beside the imports is not an input.
     await write(f.inHome(".claude/skills/review/own-notes.md"), "mine\n");
     await write(f.inHome(".claude/skills/made-here/SKILL.md"), "made here\n");
@@ -352,8 +399,7 @@ describe("a changed input is reflected at the next start", () => {
   }, 60_000);
 
   test("a revocation's scrub empties the home of that provider's inputs", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     expect(await scrubStagedProvider(f.dataDir, ENVIRONMENT, f.staged.revision, "pi")).toBe(true);
     await expect(fs.stat(f.stage("pi-config/agent"))).rejects.toThrow();
     await f.boot();
@@ -363,8 +409,7 @@ describe("a changed input is reflected at the next start", () => {
   }, 60_000);
 
   test("the container's own state beside an input does not stop the skip", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     // OpenCode's own Linux install, with the links a package manager makes.
     await write(f.inHome(".config/opencode/node_modules/pkg/cli.js"), "cli\n");
     await fs.mkdir(f.inHome(".config/opencode/node_modules/.bin"));
@@ -377,8 +422,7 @@ describe("a changed input is reflected at the next start", () => {
 
   test("a mount node cannot open is not a removal", async () => {
     if (process.getuid?.() === 0) return;
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     await fs.chmod(f.stage("codex-home"), 0o000);
     try {
       await f.boot();
@@ -394,8 +438,7 @@ describe("a changed input is reflected at the next start", () => {
 
 describe("what the home holds decides as much as what the stamp says", () => {
   test("an edited or deleted import comes back, as a full copy would bring it", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     await fs.writeFile(f.inHome(".claude/skills/review/SKILL.md"), "tampered\n");
     await fs.rm(f.inHome(".codex/rules/default.rules"));
     await fs.rm(f.inHome(".pi/agent/settings.json"));
@@ -410,8 +453,7 @@ describe("what the home holds decides as much as what the stamp says", () => {
   }, 60_000);
 
   test("a stamp forged to match new inputs cannot keep the old input", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     await write(f.stage("claude-config/skills/review/SKILL.md"), "the new skill\n");
     const stampDir = f.inHome(".orkestrator-inputs");
     const stamp = path.join(stampDir, `${f.inHome(".claude/skills")}`.replaceAll("/", "%2F"));
@@ -432,8 +474,7 @@ describe("what the home holds decides as much as what the stamp says", () => {
   }, 60_000);
 
   test("a damaged stamp falls back to the copy", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     const stampDir = f.inHome(".orkestrator-inputs");
     for (const name of await fs.readdir(stampDir)) {
       const stamp = path.join(stampDir, name);
@@ -498,54 +539,88 @@ const LOGINS = [
   },
 ] as const;
 
-describe("logins", () => {
-  for (const login of LOGINS) {
-    test(`${login.name}: a rotation and then a sign-out reach the home`, async () => {
-      const f = await fixture();
-      expect(await f.replace(login.staged, login.one)).toBe(true);
-      await f.boot();
-      const imported = await f.read(login.home);
-      expect(imported).toContain("token-one");
-      // Credential filtering is unchanged: the host's refresh token stays out.
-      expect(imported).not.toContain("host-refresh");
+/**
+ * Each provider's login lives in its own home tree and its own stamp, so one
+ * sequence of starts rotates or signs out every login at once. Results are
+ * keyed by provider so a failure names the one that broke.
+ */
+type Login = (typeof LOGINS)[number];
+async function perLogin<T>(logins: readonly Login[], check: (login: Login) => Promise<T>) {
+  const results: Record<string, T> = {};
+  for (const login of logins) results[login.name] = await check(login);
+  return results;
+}
+const forEveryLogin = <T>(logins: readonly Login[], value: T) =>
+  Object.fromEntries(logins.map((login) => [login.name, value]));
 
-      // Nothing else changed, and the login is still imported, not skipped.
-      await f.boot();
-      expect(await f.read(login.home)).toContain("token-one");
-      expect(await f.read(login.home)).not.toContain("host-refresh");
+async function replaceLogins(
+  f: Fixture,
+  logins: readonly Login[],
+  contents: (login: Login) => string | undefined,
+) {
+  expect(await perLogin(logins, (login) => f.replace(login.staged, contents(login)))).toEqual(
+    forEveryLogin(logins, true),
+  );
+}
 
-      expect(await f.replace(login.staged, login.two)).toBe(true);
-      expect((await f.boot()).copied).toBe(0);
-      expect(await f.read(login.home)).toContain("token-two");
-      expect(await f.read(login.home)).not.toContain("token-one");
-
-      expect(await f.replace(login.staged, undefined)).toBe(true);
-      await f.boot();
-      expect(await f.exists(login.home)).toBe(false);
-
-      // Nothing about a login goes into the stamps but a digest.
-      for (const name of await fs.readdir(f.inHome(".orkestrator-inputs"))) {
-        const info = await fs.stat(path.join(f.inHome(".orkestrator-inputs"), name));
-        if (info.isFile()) {
-          const stamp = await fs.readFile(path.join(f.inHome(".orkestrator-inputs"), name), "utf8");
-          expect(stamp).not.toContain("token-");
-        }
-      }
-    }, 60_000);
-
-    test(`${login.name}: a sign-out leaves a login made or pushed since the import`, async () => {
-      const f = await fixture();
-      expect(await f.replace(login.staged, login.one)).toBe(true);
-      await f.boot();
-      // The backend's push, or a sign-in inside the container, wrote this. The
-      // backend's own paths own it, and they race this script.
-      const later = login.two.replace("host-refresh", "");
-      await fs.writeFile(f.inHome(login.home), later);
-      expect(await f.replace(login.staged, undefined)).toBe(true);
-      await f.boot();
-      expect(await f.read(login.home)).toContain("token-two");
-    }, 60_000);
+/** Nothing about a login goes into the stamps but a digest. */
+async function expectNoLoginInStamps(f: Fixture) {
+  for (const name of await fs.readdir(f.inHome(".orkestrator-inputs"))) {
+    const info = await fs.stat(path.join(f.inHome(".orkestrator-inputs"), name));
+    if (info.isFile()) {
+      const stamp = await fs.readFile(path.join(f.inHome(".orkestrator-inputs"), name), "utf8");
+      expect(stamp).not.toContain("token-");
+    }
   }
+}
+
+describe("logins", () => {
+  test("every provider: a rotation and then a sign-out reach the home", async () => {
+    const f = await fixture();
+    const holds = (token: string) => (login: Login) =>
+      f.read(login.home).then((text) => text.includes(token));
+    await replaceLogins(f, LOGINS, (login) => login.one);
+    await f.boot();
+    expect(await perLogin(LOGINS, holds("token-one"))).toEqual(forEveryLogin(LOGINS, true));
+    // Credential filtering is unchanged: the host's refresh token stays out.
+    expect(await perLogin(LOGINS, holds("host-refresh"))).toEqual(forEveryLogin(LOGINS, false));
+
+    // Nothing else changed, and each login is still imported, not skipped.
+    await f.boot();
+    expect(await perLogin(LOGINS, holds("token-one"))).toEqual(forEveryLogin(LOGINS, true));
+    expect(await perLogin(LOGINS, holds("host-refresh"))).toEqual(forEveryLogin(LOGINS, false));
+
+    await replaceLogins(f, LOGINS, (login) => login.two);
+    expect((await f.boot()).copied).toBe(0);
+    expect(await perLogin(LOGINS, holds("token-two"))).toEqual(forEveryLogin(LOGINS, true));
+    expect(await perLogin(LOGINS, holds("token-one"))).toEqual(forEveryLogin(LOGINS, false));
+    await expectNoLoginInStamps(f);
+
+    await replaceLogins(f, LOGINS, () => undefined);
+    await f.boot();
+    expect(await perLogin(LOGINS, (login) => f.exists(login.home))).toEqual(
+      forEveryLogin(LOGINS, false),
+    );
+    await expectNoLoginInStamps(f);
+  }, 60_000);
+
+  test("every provider: a sign-out leaves a login made or pushed since the import", async () => {
+    const f = await fixture();
+    await replaceLogins(f, LOGINS, (login) => login.one);
+    await f.boot();
+    // The backend's push, or a sign-in inside the container, wrote these. The
+    // backend's own paths own them, and they race this script.
+    for (const login of LOGINS) {
+      await fs.writeFile(f.inHome(login.home), login.two.replace("host-refresh", ""));
+    }
+    await replaceLogins(f, LOGINS, () => undefined);
+    await f.boot();
+    expect(
+      await perLogin(LOGINS, (login) =>
+        f.read(login.home).then((text) => text.includes("token-two")),
+      ),
+    ).toEqual(forEveryLogin(LOGINS, true));
+  }, 60_000);
 
   test("a login is never planted through a link at its destination", async () => {
     const f = await fixture();
@@ -562,8 +637,7 @@ describe("logins", () => {
 
 describe("link safety", () => {
   test("a link planted at an imported path stays out of the skip and is not written through", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     const outside = path.join(f.root, "outside.md");
     await fs.writeFile(outside, "the same bytes\n");
     await write(f.stage("claude-config/skills/review/SKILL.md"), "the same bytes\n");
@@ -580,8 +654,7 @@ describe("link safety", () => {
   }, 60_000);
 
   test("a linked parent of an import is caught too", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     const moved = path.join(f.root, "moved-skills");
     await fs.cp(f.inHome(".codex/rules"), moved, { recursive: true });
     await fs.rm(f.inHome(".codex/rules"), { recursive: true });
@@ -603,8 +676,7 @@ describe("link safety", () => {
   }, 60_000);
 
   test("a stamp listing a path outside the home removes nothing outside it", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     const outside = path.join(f.root, "outside.txt");
     await fs.writeFile(outside, "keep\n");
     const stamp = path.join(
@@ -669,77 +741,108 @@ describe("import ownership failures", () => {
     expect(await f.read(".codex/AGENTS.md")).toBe("local agents");
   }, 60_000);
 
-  for (const login of LOGINS.filter((entry) => entry.name !== "Claude")) {
-    for (const failure of ["cp", "oversized"]) {
-      test(`${login.name}: ${failure} login imports never own a local credential`, async () => {
-        const f = await fixture();
-        await f.replace(login.staged, login.one);
-        const local = login.two.replace("host-refresh", "");
-        await write(f.inHome(login.home), local);
-        const prelude =
-          failure === "cp"
-            ? `cp() { case "$1" in */auth.json) return 1;; *) command cp "$@";; esac; }`
-            : "AGENT_COPY_MAX_FILE_BYTES=1";
-        const stamp = f.inHome(
+  // Claude's login is merged, not copied, so it has no copy to fail. The other
+  // logins live in separate trees, and each failure mode refuses all of them
+  // at once, so one sequence of starts covers every provider.
+  const COPIED_LOGINS = LOGINS.filter((entry) => entry.name !== "Claude");
+  for (const failure of ["cp", "oversized"]) {
+    test(`every copied login: ${failure} login imports never own a local credential`, async () => {
+      const f = await fixture();
+      await replaceLogins(f, COPIED_LOGINS, (login) => login.one);
+      const local = (login: Login) => JSON.parse(login.two.replace("host-refresh", ""));
+      for (const login of COPIED_LOGINS) {
+        await write(f.inHome(login.home), JSON.stringify(local(login)));
+      }
+      const prelude =
+        failure === "cp"
+          ? `cp() { case "$1" in */auth.json) return 1;; *) command cp "$@";; esac; }`
+          : "AGENT_COPY_MAX_FILE_BYTES=1";
+      const stampOf = (login: Login) =>
+        f.inHome(
           `.orkestrator-inputs/${f.inHome(login.home).replaceAll("%", "%25").replaceAll("/", "%2F")}`,
         );
-        for (let boot = 0; boot < 2; boot++) {
-          await f.boot({ prelude });
-          const actual = JSON.parse(await f.read(login.home));
+      const inHome = (login: Login) =>
+        f.read(login.home).then((text) => {
+          const actual = JSON.parse(text);
           delete actual.last_refresh;
-          expect(actual).toEqual(JSON.parse(local));
-          expect(
-            await fs.access(stamp).then(
+          return actual;
+        });
+      const expected = Object.fromEntries(COPIED_LOGINS.map((login) => [login.name, local(login)]));
+      for (let boot = 0; boot < 2; boot++) {
+        await f.boot({ prelude });
+        expect(await perLogin(COPIED_LOGINS, inHome)).toEqual(expected);
+        expect(
+          await perLogin(COPIED_LOGINS, (login) =>
+            fs.access(stampOf(login)).then(
               () => true,
               () => false,
             ),
-          ).toBe(false);
-        }
-        await f.replace(login.staged, undefined);
-        await f.boot();
-        const actual = JSON.parse(await f.read(login.home));
-        delete actual.last_refresh;
-        expect(actual).toEqual(JSON.parse(local));
-      }, 60_000);
-    }
+          ),
+        ).toEqual(forEveryLogin(COPIED_LOGINS, false));
+      }
+      await replaceLogins(f, COPIED_LOGINS, () => undefined);
+      await f.boot();
+      expect(await perLogin(COPIED_LOGINS, inHome)).toEqual(expected);
+    }, 60_000);
   }
 
-  for (const leaf of ["paths", "sums"]) {
-    test(`linked ${leaf} stamp cannot block changed tree import`, async () => {
-      const f = await fixture();
-      await f.boot();
-      const stamp = f.inHome(
-        `.orkestrator-inputs/${f.inHome(".claude/skills").replaceAll("%", "%25").replaceAll("/", "%2F")}`,
-      );
+  // Each tree has its own stamp, and Claude's and Codex's skills go through the
+  // same import helper, so one start checks a damaged `paths` and `sums` apiece.
+  const stampOfTree = (f: Fixture, relative: string) =>
+    f.inHome(
+      `.orkestrator-inputs/${f.inHome(relative).replaceAll("%", "%25").replaceAll("/", "%2F")}`,
+    );
+  const DAMAGED_STAMPS = [
+    {
+      leaf: "paths",
+      tree: ".claude/skills",
+      staged: "claude-config/skills/review/SKILL.md",
+      home: ".claude/skills/review/SKILL.md",
+    },
+    {
+      leaf: "sums",
+      tree: ".codex/skills",
+      staged: "codex-home/skills/lint/SKILL.md",
+      home: ".codex/skills/lint/SKILL.md",
+    },
+  ] as const;
+  const changedImports = async (f: Fixture) => {
+    const imported: Record<string, string> = {};
+    for (const { leaf, home } of DAMAGED_STAMPS) imported[leaf] = await f.read(home);
+    return imported;
+  };
+  const allChanged = Object.fromEntries(DAMAGED_STAMPS.map(({ leaf }) => [leaf, "changed skill"]));
+
+  test("linked paths and sums stamps cannot block changed tree imports", async () => {
+    const { f } = await seeded();
+    for (const { leaf, tree, staged } of DAMAGED_STAMPS) {
+      const stamp = stampOfTree(f, tree);
       await fs.rm(path.join(stamp, leaf));
       await fs.symlink(path.join(f.root, "unreadable-missing"), path.join(stamp, leaf));
-      await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
-      await f.boot();
-      expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
-    }, 60_000);
-  }
+      await write(f.stage(staged), "changed skill");
+    }
+    await f.boot();
+    expect(await changedImports(f)).toEqual(allChanged);
+  }, 60_000);
 
-  for (const leaf of ["paths", "sums"]) {
-    test(`unreadable ${leaf} stamp cannot block changed tree import`, async () => {
-      const f = await fixture();
-      await f.boot();
-      const stamp = f.inHome(
-        `.orkestrator-inputs/${f.inHome(".claude/skills").replaceAll("%", "%25").replaceAll("/", "%2F")}`,
-      );
-      await fs.chmod(path.join(stamp, leaf), 0);
-      await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
-      await f.boot();
-      expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
-      // Clear damaged metadata as the owner, then prove a later boot retries.
-      await fs.rm(stamp, { recursive: true, force: true });
-      await f.boot();
-      expect((await f.boot()).copied).toBe(0);
-    }, 60_000);
-  }
+  test("unreadable paths and sums stamps cannot block changed tree imports", async () => {
+    const { f } = await seeded();
+    for (const { leaf, tree, staged } of DAMAGED_STAMPS) {
+      await fs.chmod(path.join(stampOfTree(f, tree), leaf), 0);
+      await write(f.stage(staged), "changed skill");
+    }
+    await f.boot();
+    expect(await changedImports(f)).toEqual(allChanged);
+    // Clear damaged metadata as the owner, then prove a later boot retries.
+    for (const { tree } of DAMAGED_STAMPS) {
+      await fs.rm(stampOfTree(f, tree), { recursive: true, force: true });
+    }
+    await f.boot();
+    expect((await f.boot()).copied).toBe(0);
+  }, 60_000);
 
   test("unreadable ownership bookkeeping is retried without blocking boot", async () => {
-    const f = await fixture();
-    await f.boot();
+    const { f } = await seeded();
     await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
     // Force a read failure even when the suite runs as root.
     const prelude = `comm() { return 1; }`;
@@ -749,35 +852,39 @@ describe("import ownership failures", () => {
     expect((await f.boot()).copied).toBe(0);
   }, 60_000);
 
-  test("failed single-file removal keeps its stamp for retry", async () => {
-    const f = await fixture();
-    await f.boot();
+  test("failed removals keep their stamps for retry: a file, a tree entry, a whole missing tree", async () => {
+    const { f } = await seeded();
+    // Each removal is a different input with its own stamp: a single file, one
+    // entry gone from a tree, and a tree whose whole mount directory is gone.
+    const REMOVALS = [
+      { home: ".codex/AGENTS.md", warning: "AGENTS.md" },
+      { home: ".claude/skills/review/SKILL.md", warning: "skills/review/SKILL.md" },
+      { home: ".codex/skills/lint/SKILL.md", warning: "skills/lint/SKILL.md" },
+    ];
     await f.replace("codex-home/AGENTS.md", undefined);
-    const prelude = `rm() { case "$*" in *'.codex/AGENTS.md'*) return 1;; *) command rm "$@";; esac; }`;
-    expect((await f.boot({ prelude })).progress).toContain("will retry");
-    expect(await f.exists(".codex/AGENTS.md")).toBe(true);
+    await fs.rm(f.stage("claude-config/skills/review/SKILL.md"));
+    await fs.rm(f.stage("codex-home/skills"), { recursive: true });
+    // A deterministic failed rm, independent of whether the runner is root.
+    const failing = REMOVALS.map(({ home }) => `*'${home}'*`).join("|");
+    const prelude = `rm() { case "$*" in ${failing}) return 1;; *) command rm "$@";; esac; }`;
+    const failed = await f.boot({ prelude });
+    const retried = (warning: string) =>
+      failed.progress.includes(`Failed to remove imported input; will retry: ${warning}`);
+    expect(Object.fromEntries(REMOVALS.map(({ warning }) => [warning, retried(warning)]))).toEqual(
+      Object.fromEntries(REMOVALS.map(({ warning }) => [warning, true])),
+    );
+    const present = async () => {
+      const out: Record<string, boolean> = {};
+      for (const { home } of REMOVALS) out[home] = await f.exists(home);
+      return out;
+    };
+    expect(await present()).toEqual(Object.fromEntries(REMOVALS.map(({ home }) => [home, true])));
     await f.boot();
-    expect(await f.exists(".codex/AGENTS.md")).toBe(false);
+    expect(await present()).toEqual(Object.fromEntries(REMOVALS.map(({ home }) => [home, false])));
+    // Inputs beside the failed removals are untouched.
+    expect(await f.read(".claude/CLAUDE.md")).toBe("memory one\n");
+    expect(await f.read(".codex/config.toml")).toBe("model = 'one'\n");
   }, 60_000);
-
-  for (const missingTree of [false, true]) {
-    test(`failed removal retries (whole tree missing=${missingTree})`, async () => {
-      const f = await fixture();
-      await f.boot();
-      const removed = ".claude/skills/review/SKILL.md";
-      await fs.rm(
-        f.stage(missingTree ? "claude-config/skills" : "claude-config/skills/review/SKILL.md"),
-        { recursive: true },
-      );
-      // A deterministic failed rm, independent of whether the runner is root.
-      const prelude = `rm() { case "$*" in *${removed}*) return 1;; *) command rm "$@";; esac; }`;
-      expect((await f.boot({ prelude })).progress).toContain("will retry");
-      expect(await f.exists(removed)).toBe(true);
-      await f.boot();
-      expect(await f.exists(removed)).toBe(false);
-      expect(await f.read(".codex/AGENTS.md")).toContain("agents one");
-    }, 60_000);
-  }
 
   test("backend publication waits for cleanup and is never attributed to the import", async () => {
     const f = await fixture();

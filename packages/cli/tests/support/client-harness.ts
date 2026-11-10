@@ -57,6 +57,21 @@ export function captureIo(
   return io;
 }
 
+/**
+ * Runs `io`'s `--wait` polls on a virtual clock: each sleep advances `now` by
+ * its length and returns at once, so a wait costs only its requests. Each
+ * sleep's length is appended to `sleeps`.
+ */
+export function useVirtualClock(io: ClientIo, sleeps: number[] = []): number[] {
+  let time = io.now();
+  io.now = () => time;
+  io.sleep = async (ms) => {
+    sleeps.push(ms);
+    time += ms;
+  };
+  return sleeps;
+}
+
 export function capabilities(overrides: Partial<PublicCapabilities> = {}): PublicCapabilities {
   return {
     schemaVersion: 1,
@@ -163,6 +178,8 @@ export interface ClientSandbox {
   root: string;
   configDir: string;
   env: Record<string, string | undefined>;
+  /** With `virtualClock`, every poll sleep of every run, in order. */
+  sleeps: number[];
   run(
     argv: string[],
     io?: CapturedIo,
@@ -175,7 +192,12 @@ export interface ClientSandbox {
   cleanup(): Promise<void>;
 }
 
-export async function createSandbox(): Promise<ClientSandbox> {
+export async function createSandbox(
+  options: {
+    /** Run `--wait` polls on a virtual clock (`useVirtualClock`). */
+    virtualClock?: boolean;
+  } = {},
+): Promise<ClientSandbox> {
   const root = await mkdtemp(path.join(os.tmpdir(), "ork-cli-client-"));
   const configDir = path.join(root, "cli-config");
   const env = {
@@ -183,11 +205,14 @@ export async function createSandbox(): Promise<ClientSandbox> {
     ORKESTRATOR_DEV_ROOT: path.join(root, "dev-root"),
     HOME: root,
   };
+  const sleeps: number[] = [];
   return {
     root,
     configDir,
     env,
+    sleeps,
     async run(argv, io = captureIo(env, root)) {
+      if (options.virtualClock) useVirtualClock(io, sleeps);
       const code = await runClient(argv, { io, version: "9.9.9" });
       return { code, out: io.out.join(""), err: io.err.join(""), io };
     },

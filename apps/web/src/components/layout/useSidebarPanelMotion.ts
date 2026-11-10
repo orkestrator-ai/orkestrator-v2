@@ -10,8 +10,11 @@ import {
 } from "@/lib/sidebar-width";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 
-/** A little past the transition, so its last frame has landed before content is released. */
-const SETTLE_MS = SIDEBAR_WIDTH_TRANSITION_MS + 40;
+/**
+ * A little past the transition, so its last frame has landed before content
+ * is released. Exported for tests.
+ */
+export const SIDEBAR_SETTLE_MS = SIDEBAR_WIDTH_TRANSITION_MS + 40;
 
 export interface SidebarMotionPins {
   sidebar: number;
@@ -115,7 +118,7 @@ export function useSidebarPanelMotion(input: {
               : 0,
         }),
       );
-      settleTimer.current = setTimeout(settle, SETTLE_MS);
+      settleTimer.current = setTimeout(settle, SIDEBAR_SETTLE_MS);
     } else {
       setPins(null);
       if (mode === "hidden") setContentShown(false);

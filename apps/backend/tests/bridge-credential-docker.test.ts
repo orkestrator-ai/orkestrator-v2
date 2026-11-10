@@ -12,8 +12,13 @@
  * configuration, so plugins the agent plants never load, and a process the agent puts
  * on its port gets no password and is replaced.
  *
+ * On an `opencode2-launch=1` image the same holds for the OpenCode 2.x server, both
+ * servers' package caches are root's, and the checkout's configuration reaches them
+ * only as root's filtered copy (to-do 7550).
+ *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
- * with `bridge-credential=1`, `bridge-launch=1` and `opencode-launch=1`. No credential is delivered (an agent-test context
+ * with `bridge-credential=1`, `bridge-launch=1`, `opencode-launch=1` and
+ * `opencode2-launch=1`. No credential is delivered (an agent-test context
  * with no sources) and no agent turn runs, so nothing is billed. Tokens reach
  * the container only on stdin, so this suite adds none to any argv.
  */
@@ -38,7 +43,13 @@ import {
   readContainerBridgeToken,
   type ContainerBridgeKind,
 } from "../src/core/container-bridge-credential";
-import { CODEX_MAX_CONCURRENT_THREADS_ENV, OPENCODE_SERVER_PORT } from "../src/core/constants";
+import {
+  CODEX_MAX_CONCURRENT_THREADS_ENV,
+  OPENCODE2_SERVER_PORT,
+  OPENCODE_SERVER_PORT,
+} from "../src/core/constants";
+import type { CommandContext } from "../src/core/commands-context";
+import { startContainerOpenCode2Server } from "../src/core/opencode2-container-server";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { runCommand } from "../src/core/shell";
@@ -104,6 +115,7 @@ let openCodeHostConfig = "";
 let containerId = "";
 let homeDirectory: ReturnType<typeof spyOn> | undefined;
 let invoke: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+let fixtureContext: CommandContext;
 const started = new Map<ContainerBridgeKind, { hostPort: number; authToken: string }>();
 
 async function docker(args: string[], stdin?: string): Promise<string> {
@@ -166,6 +178,8 @@ async function startFixture(image: string, name: string) {
     ...BRIDGES.flatMap((bridge) => ["-p", `127.0.0.1::${bridge.port}`]),
     "-p",
     `127.0.0.1::${OPENCODE_SERVER_PORT}`,
+    "-p",
+    `127.0.0.1::${OPENCODE2_SERVER_PORT}`,
     "-v",
     `${openCodeHostConfig}:/opencode-config:ro`,
     image,
@@ -193,6 +207,7 @@ async function startFixture(image: string, name: string) {
   const commands = createCommandRegistry();
   return {
     id,
+    context,
     invoke: async (command: string, args: Record<string, unknown>) =>
       commands.get(command)?.(args, context),
   };
@@ -234,6 +249,7 @@ export const UserPlugin = async () => { writeFileSync("/tmp/user-host-plugin-loa
   const fixture = await startFixture(IMAGE, "capable");
   containerId = fixture.id;
   invoke = fixture.invoke;
+  fixtureContext = fixture.context;
 }, LIVE_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -1150,3 +1166,131 @@ live(
   },
   LIVE_TIMEOUT_MS,
 );
+
+/** Plugins in every place node can write that a 2.x server would read. */
+const PLANT_OPENCODE2_PLUGINS = `set -e
+plugin() { mkdir -p "$1"; printf 'import { writeFileSync } from "node:fs";\\nexport default { id: "%s", async setup() { writeFileSync("/tmp/planted2-marker-%s", "1"); } };\\n' "$2" "$2" > "$1/index.ts"; }
+plugin ~/.config/opencode/plugins/p-global global-dir
+plugin ~/.config/orkestrator-opencode2/plugins/p-old-config old-config-dir
+plugin ~/.opencode/plugins/p-home home-dir
+plugin /workspace/.opencode/plugins/p-project project-dir
+printf '{"plugins":["file:///tmp/p.ts"],"plugin":["opencode-planted"],"agent":{"probe":{"description":"kept","prompt":"{file:./AGENTS.md}"}}}' > /workspace/opencode.json
+rm -f /workspace/AGENTS.md
+ln -s /proc/self/environ /workspace/AGENTS.md
+# node's own path to OpenCode 2, which the server no longer starts from.
+rm -f ~/.opencode/bin/opencode2
+printf '#!/bin/sh\\ntouch /tmp/planted2-marker-binary\\nexec /opt/opencode/bin/opencode2 "$@"\\n' > ~/.opencode/bin/opencode2
+chmod 755 ~/.opencode/bin/opencode2
+rm -f /tmp/planted2-marker-*`;
+
+describe("OpenCode 2 and the package caches on an opencode2-launch image", () => {
+  /** The inode of the socket listening on the 2.x port, from /proc/net/tcp. */
+  const listeningInode = () =>
+    asAgent(
+      `awk 'FNR > 1 && $4 == "0A" && substr($2, length($2) - 4) == ":1006" { print $10 }' /proc/net/tcp /proc/net/tcp6`,
+    );
+
+  live(
+    "the 2.x server runs root's binary and configuration, and its socket is recorded",
+    async () => {
+      await asAgent(PLANT_OPENCODE2_PLUGINS);
+      const first = await startContainerOpenCode2Server(fixtureContext, containerId);
+      expect(first.wasRunning).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(await asAgent("ls /tmp | grep '^planted2-marker-' || true")).toBe("");
+      const pids = (await asAgent("pgrep -f '[o]pencode2 serve' || true"))
+        .split("\n")
+        .filter(Boolean);
+      expect(pids).toHaveLength(1);
+      expect(await asAgent(`tr '\\0' ' ' < /proc/${pids[0]}/cmdline`)).toBe(
+        `/opt/opencode/bin/opencode2 serve --port ${OPENCODE2_SERVER_PORT} --hostname 0.0.0.0`,
+      );
+      // Non-dumpable once warmed: its environment is closed to the agent's uid.
+      expect(await asAgent(`head -c 16 /proc/${pids[0]}/environ 2>&1 || true`)).toContain(
+        "Permission denied",
+      );
+      expect(await asRoot("stat -c '%u %a' /opt/opencode/bin/opencode2")).toBe("0 755");
+      expect(
+        await asAgent(
+          `for path in /opt/opencode/bin/opencode2 /run/orkestrator-opencode2/opencode /run/orkestrator-opencode2/opencode/plugins /run/orkestrator-opencode2/home /run/orkestrator-opencode2/cache /run/orkestrator-opencode2/project; do
+            if [ -w "$path" ]; then echo "writable $path"; fi
+          done`,
+        ),
+      ).toBe("");
+      expect(await asRoot("ls /run/orkestrator-opencode2/opencode/plugins | sort")).toBe(
+        "orkestrator-credential\norkestrator-github-env",
+      );
+      // The checkout's configuration as root filtered it: no plugin keys, the
+      // reference to a link out of the checkout inlined as the agent's own read.
+      const project = await asRoot("cat /run/orkestrator-opencode2/project/opencode.json");
+      expect(project).not.toContain("plugin");
+      expect(project).toContain('"description": "kept"');
+      expect(project).not.toContain(first.connection.password);
+      expect(await asRoot("cat /run/orkestrator-bridge/opencode2-listener")).toBe(
+        await listeningInode(),
+      );
+      expect(await readContainerBridgeToken(containerId, "opencode2")).toBe(
+        first.connection.password,
+      );
+      const again = await startContainerOpenCode2Server(fixtureContext, containerId);
+      expect(again).toMatchObject({ wasRunning: true });
+      expect(again.connection.password).toBe(first.connection.password);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "a listener the agent puts on the 2.x port gets no password and is replaced",
+    async () => {
+      const current = await startContainerOpenCode2Server(fixtureContext, containerId);
+      await asAgent(`cat > /tmp/imposter2.js <<'IMPOSTER'
+import { appendFileSync } from "node:fs";
+Bun.serve({
+  hostname: "0.0.0.0",
+  port: ${OPENCODE2_SERVER_PORT},
+  fetch(request) {
+    appendFileSync("/tmp/imposter2-seen", (request.headers.get("authorization") ?? "none") + "\\n");
+    return Response.json({ version: "2.2.6" });
+  },
+});
+IMPOSTER
+      rm -f /tmp/imposter2-seen
+      pkill -f '[o]pencode2 serve' || true
+      for i in $(seq 1 50); do curl -s -o /dev/null -m 1 http://127.0.0.1:${OPENCODE2_SERVER_PORT}/ || break; sleep 0.2; done
+      setsid bun --config=/dev/null /tmp/imposter2.js > /tmp/imposter2.log 2>&1 < /dev/null &
+      for i in $(seq 1 100); do curl -s -o /dev/null -m 1 http://127.0.0.1:${OPENCODE2_SERVER_PORT}/ && break; sleep 0.2; done`);
+      expect(await readContainerBridgeToken(containerId, "opencode2")).toBeNull();
+      const replaced = await startContainerOpenCode2Server(fixtureContext, containerId);
+      expect(replaced.wasRunning).toBe(false);
+      expect(replaced.connection.password).not.toBe(current.connection.password);
+      expect(await asAgent("pgrep -f '[i]mposter2.js' || true")).toBe("");
+      expect(await asAgent("grep -c Basic /tmp/imposter2-seen 2>/dev/null || true")).toBe("0");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "the 1.x server's package cache and project file are root's",
+    async () => {
+      await invoke("stop_opencode_server", { containerId });
+      await invoke("start_opencode_server", { containerId });
+      expect(
+        await asRoot(
+          "stat -c '%u %a' /run/orkestrator-opencode/cache /run/orkestrator-opencode/cache/opencode/bin",
+        ),
+      ).toBe("0 755\n0 755");
+      expect(
+        await asAgent(
+          "touch /run/orkestrator-opencode/cache/opencode/x 2>/dev/null && echo planted || true",
+        ),
+      ).toBe("");
+      // The AGENTS.md link points at /proc/self/environ; root's copy holds the
+      // reading process's environment as the agent's uid saw it, never a password.
+      const copy = await asRoot(
+        "cat /run/orkestrator-opencode/project/instructions/0.md 2>/dev/null || true",
+      );
+      expect(copy).not.toContain("okb_");
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});

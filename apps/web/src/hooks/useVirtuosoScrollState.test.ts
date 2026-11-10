@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { StateSnapshot } from "react-virtuoso";
+import { elapseFakeTime } from "@/test/fake-clock-frames";
 import { isRestorableStateSnapshot, useVirtuosoScrollState } from "./useVirtuosoScrollState";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  jest.useRealTimers();
+});
 
 function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
@@ -174,22 +178,25 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
   }
 
   test("an unresolved target re-issues index navigation a bounded number of times, then stops", async () => {
+    jest.useFakeTimers();
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const handle = fakeHandle();
     result.current.virtuosoRef.current = handle as never;
     mountScroller(result);
     result.current.scrollToIndex(3);
-    // 30 frames or 750 ms, whichever first; let both pass.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    // 30 frames or 750 ms, whichever first; let both pass. 900 fake ms
+    // deliver 91 animation frames, one per 10 ms step.
+    await elapseFakeTime(900);
     const calls = handle.scrollToIndex.mock.calls.length;
     expect(calls).toBeGreaterThanOrEqual(1);
     expect(calls).toBeLessThanOrEqual(3);
-    await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+    await elapseFakeTime(200);
     expect(handle.scrollToIndex.mock.calls.length).toBe(calls);
     expect(result.current.getScrollDiagnostics().lastOutcome).toBe("unresolved");
   });
 
   test("a jump that lands at the tail leaves the reader detached until they arrive themselves", async () => {
+    jest.useFakeTimers();
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const el = mountScroller(result);
     const handle = fakeHandle();
@@ -200,7 +207,7 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
       el.dispatchEvent(new Event("scroll"));
       result.current.scrollProps.atBottomStateChange(true);
     });
-    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    await elapseFakeTime(900);
     // Neither a measurement landing at the end nor an at-bottom report is intent.
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
     expect(result.current.scrollProps.followEnabled).toBe(false);
@@ -219,6 +226,7 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
   });
 
   test("a user scroll retires the navigation: no later index writes, follow stays released", async () => {
+    jest.useFakeTimers();
     const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
     const el = mountScroller(result);
     const handle = fakeHandle();
@@ -231,7 +239,7 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     expect(handle.cancelPendingNavigation).toHaveBeenCalled();
     // Bottom geometry later changes without a new arrival transition.
     el.scrollTop = 1500;
-    await act(() => new Promise((resolve) => setTimeout(resolve, 900)));
+    await elapseFakeTime(900);
     expect(handle.scrollToIndex).toHaveBeenCalledTimes(1);
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
     expect(result.current.getScrollDiagnostics().lastOutcome).toBe("cancelled");

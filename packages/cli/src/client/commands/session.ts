@@ -15,7 +15,7 @@ import { CliError } from "../errors.js";
 import { keyValues, receiptLines, sessionLines, sessionRows, table } from "../format.js";
 import { readBinaryFile, readPrompt, readTextSource } from "../inputs.js";
 import type { CommandContext, CommandOutcome, CommandSpec, ParsedCommand } from "../spec.js";
-import { observe, ObservationStopped } from "../wait.js";
+import { observe, ObservationStopped, observationClock } from "../wait.js";
 import {
   DEFAULT_WAIT_MS,
   oneOf,
@@ -1216,6 +1216,7 @@ export const sessionCommands: CommandSpec[] = [
           {
             timeoutMs: (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
             signal: context.signal,
+            ...observationClock(context.io),
           },
         );
       } catch (error) {

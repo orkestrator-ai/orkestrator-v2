@@ -98,6 +98,8 @@ export class NodePortal {
       outcomes?: { load(): Promise<unknown>; save(value: unknown): Promise<void> };
       fetchImpl?: typeof fetch;
       now?: () => number;
+      /** Test seam for the read model's minimum interval between a node's change events. */
+      changeMinIntervalMs?: number;
     },
   ) {
     this.readModel = new NodeReadModel({
@@ -108,6 +110,9 @@ export class NodePortal {
       ...(options.selfHello ? { selfHello: options.selfHello } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.changeMinIntervalMs !== undefined
+        ? { changeMinIntervalMs: options.changeMinIntervalMs }
+        : {}),
     });
     const selfHello = options.selfHello;
     this.fleetUpdates = new FleetUpdatePolicyRunner({

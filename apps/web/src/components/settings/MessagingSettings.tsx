@@ -18,7 +18,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("web.settings");
 
 // One write after a burst of edits, matching the shared settings form.
-const MESSAGING_AUTO_SAVE_DEBOUNCE_MS = 400;
+export const MESSAGING_AUTO_SAVE_DEBOUNCE_MS = 400;
 
 export function MessagingSettings() {
   const [settings, setSettings] = useState<AgentMessagingSettings>({

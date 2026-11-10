@@ -564,6 +564,13 @@ export interface NativeAgentServiceOptions {
    * coordinator gets no research tools.
    */
   openCodeCoordinatorResearch?: NativeAgentProviderEnvironment["openCodeCoordinatorResearch"];
+  /**
+   * The environment's container OpenCode listener against its record
+   * (`recheckContainerOpenCodeListener`); undefined for a local environment.
+   */
+  openCodeListenerRecheck?: (
+    environmentId: string,
+  ) => ReturnType<NonNullable<NativeAgentProviderEnvironment["openCodeListenerRecheck"]>>;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */

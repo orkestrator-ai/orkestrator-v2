@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.37.3-beta",
+  "version": "2.37.4-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -35,6 +35,7 @@
     "./node/bridge-authority": "./src/node/bridge-authority.ts",
     "./node/bridge-launch-environment": "./src/node/bridge-launch-environment.ts",
     "./environment-hydration": "./src/environment-hydration.ts",
+    "./log-essential": "./src/log-essential.ts",
     "./logger": "./src/logger.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./contract": "./src/contract/index.ts",
@@ -296,6 +297,7 @@
     "./recurring-work": "./src/recurring-work.ts",
     "./schedule-time": "./src/schedule-time.ts",
     "./scheduled-jobs": "./src/scheduled-jobs.ts",
+    "./self-improvement": "./src/self-improvement.ts",
     "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",
     "./review-evidence-frames": "./src/review-evidence-frames.ts",

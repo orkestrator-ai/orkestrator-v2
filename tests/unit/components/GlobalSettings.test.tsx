@@ -2972,6 +2972,22 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("saves the experimental self-improvement switch, off by default", async () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable self-improvement" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalSelfImprovement: true }),
+        SAVE_OPTIONS,
+      );
+    });
+  });
+
   test("offers the direct transport only in a local desktop window, off by default", async () => {
     const name = "Use the direct transport for new windows";
     const original = window.orkestrator;

@@ -37,6 +37,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -65,6 +66,8 @@ export interface CommandResult {
   failureReports?: string[];
   /** Failures beyond {@link MAX_FAILURE_REPORTS}, counted but not kept. */
   omittedFailureReports?: number;
+  /** Each test file Bun reported a failure in, with the Turbo task that ran it. */
+  failingFiles?: FailingFile[];
   /** Complete output up to the explicit safety limit. */
   logPath?: string;
   outputBytes?: number;
@@ -74,6 +77,8 @@ export interface CommandResult {
 
 export interface TestGroup {
   name: string;
+  /** Repository-relative working directory; the repository root when absent. */
+  cwd?: string;
   workers?: number;
   exclusive?: boolean;
   onSpawn?: (pid: number) => void;
@@ -83,6 +88,13 @@ export interface TestGroup {
   env?: Record<string, string>;
   /** Absolute watchdog budget when this group is slower than a Bun suite. */
   timeoutMs?: number;
+  /**
+   * Wall-clock time (`Date.now()` milliseconds) by which the group must have
+   * finished, queue wait included. Admission gives up queuing at this time
+   * without starting the child, and once admitted shortens `timeoutMs` to
+   * what is left, so a budget set before queuing still holds after it.
+   */
+  deadline?: number;
 }
 
 export interface TestAllDependencies {
@@ -95,6 +107,18 @@ export interface TestAllDependencies {
   /** Logical cores, used to size the per-group worker pools. */
   cores: number;
   log: (message: string) => void;
+  /**
+   * Runs the guard stage. Defaults to the real runner only with the real
+   * group runner, so a substituted `runGroup` sees exactly the test groups.
+   */
+  runGuards?: (group: TestGroup, env: NodeJS.ProcessEnv) => Promise<CommandResult>;
+  /**
+   * Whether a failed run reruns each failing test file alone. Defaults to on
+   * with the real group runner; `ORKESTRATOR_TEST_RERUN_FAILED=0` turns it off.
+   */
+  rerunFailedFiles?: boolean;
+  /** Where and how a failing file of the task with this prefix reruns alone. */
+  resolveRerun?: (taskPrefix: string) => RerunTarget | undefined;
 }
 
 export const TEST_LOG_DIRECTORY_ENV = "ORKESTRATOR_TEST_LOG_DIR";
@@ -106,6 +130,8 @@ export const TEST_LEASE_DIRECTORY_ENV = "ORKESTRATOR_TEST_LEASE_DIRECTORY";
 export const TEST_AFFECTED_ENV = "ORKESTRATOR_TEST_AFFECTED";
 export const TEST_TIMINGS_DIRECTORY_ENV = "ORKESTRATOR_TEST_TIMINGS_DIR";
 export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
+/** `1` skips the guard stage (`scripts/guards.ts`), for a rerun after it already passed. */
+export const TEST_SKIP_GUARDS_ENV = "ORKESTRATOR_TEST_SKIP_GUARDS";
 export const MAX_GROUP_OUTPUT_BYTES = 64 * 1024 * 1024;
 export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
 export const MAX_FAILURE_REPORTS = 25;
@@ -130,9 +156,23 @@ const MAX_TASK_PREFIXES = 64;
  * failing task's preceding lines plus that line. Turbo interleaves streamed
  * tasks, so context comes only from lines with the failing line's task prefix.
  */
+/** A test file Bun reported a failure in: its path as Bun printed it, and the Turbo task prefix. */
+export interface FailingFile {
+  /** The Turbo task prefix (`@orkestrator/web:test:workspace: `), or `""` for a plain Bun group. */
+  taskPrefix: string;
+  /** Relative to the directory Bun ran in. */
+  file: string;
+}
+
+/** Bun's per-file header, printed before that file's failures: `src/a.test.ts:`. */
+const BUN_FILE_HEADER = /^(\S(?:.*\S)?\.(?:test|spec)\.[cm]?[jt]sx?):$/;
+
 export class FailureReportCollector {
   readonly reports: string[] = [];
   omitted = 0;
+  /** Every file a `(fail)` line was reported under, in first-failure order, each once. */
+  readonly failingFiles: FailingFile[] = [];
+  private readonly currentFile = new Map<string, string>();
   private readonly decoder = new StringDecoder("utf8");
   private readonly recent = new Map<string, string[]>();
   private lastReport: { prefix: string; index: number } | undefined;
@@ -166,7 +206,15 @@ export class FailureReportCollector {
     // A line that only looks like a task prefix must not grow the map forever.
     const bucket = this.recent.has(prefix) || this.recent.size < MAX_TASK_PREFIXES ? prefix : "";
     const context = this.recent.get(bucket) ?? [];
+    const header = BUN_FILE_HEADER.exec(body.trim());
+    if (header) this.currentFile.set(bucket, header[1]!.replace(/^\.\//, ""));
     if (body.startsWith("(fail) ")) {
+      const file = this.currentFile.get(bucket);
+      if (
+        file &&
+        !this.failingFiles.some((entry) => entry.taskPrefix === prefix && entry.file === file)
+      )
+        this.failingFiles.push({ taskPrefix: prefix, file });
       if (this.reports.length < MAX_FAILURE_REPORTS) {
         this.lastReport = { prefix, index: this.reports.length };
         this.reports.push([...context, line].join("\n"));
@@ -448,7 +496,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       group.timeoutMs ?? DEFAULT_TEST_GROUP_TIMEOUT_MS,
     );
     const child = spawn(group.command, group.args, {
-      cwd: root,
+      cwd: group.cwd ? path.join(root, group.cwd) : root,
       env,
       // Captured rather than inherited so concurrent groups do not interleave.
       stdio: ["ignore", "pipe", "pipe"],
@@ -560,6 +608,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
           `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
         ),
         failureReports: failures.reports,
+        failingFiles: failures.failingFiles,
         omittedFailureReports: failures.omitted,
         logPath,
         outputBytes,
@@ -864,6 +913,41 @@ export function planWorkers(cores: number, tier: TestTier = "default"): WorkerPl
 }
 
 /**
+ * The guard stage: the repository-wide guards (`mise run guards`). It runs
+ * before any test group is admitted, so a broken guard fails a run in seconds
+ * instead of after the long groups. It needs no host admission: one process,
+ * a few seconds, like `mise run lint`, and queueing it behind another
+ * worktree's suite would defeat the point of running it first.
+ */
+export const GUARD_STAGE: TestGroup = {
+  name: "guards",
+  workers: 1,
+  command: "bun",
+  args: ["scripts/guards.ts"],
+  // A healthy run takes seconds; this only catches a wedged one.
+  timeoutMs: 5 * 60 * 1_000,
+};
+
+/**
+ * Bun test files the guard stage runs whole (the documentation registers).
+ * The root group leaves them out once the stage has passed in the same run.
+ */
+export const GUARD_STAGE_TEST_FILES = [
+  "tests/unit/flaky-tests-index.test.ts",
+  "tests/unit/todo-index.test.ts",
+  "tests/unit/number-claims.test.ts",
+] as const;
+
+/** Whether this run starts with the guard stage: it stands in for root-group checks. */
+export function runsGuardStage(
+  env: NodeJS.ProcessEnv,
+  tier: TestTier,
+  selection: ReadonlySet<TestGroupKey>,
+): boolean {
+  return env[TEST_SKIP_GUARDS_ENV] !== "1" && tier !== "slow" && selection.has("root");
+}
+
+/**
  * Root test discovery. A bare `tests` is a Bun substring filter and also
  * matches packages/*\/tests. Explicit relative paths confine discovery to the
  * repository's root tests and prevent package build/test races.
@@ -907,6 +991,8 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/container-fake-claude-api.test.ts",
   "./e2e/agent-testing/container-fake-claude-install.test.ts",
   "./e2e/agent-testing/container-fake-claude-review-api.test.ts",
+  "./e2e/agent-testing/claude-warm-runtime-support.test.ts",
+  "./e2e/agent-testing/opencode-fake-provider.test.ts",
   "./e2e/agent-testing/mcp-probe-server.integration.test.ts",
   "./scripts/opencode-live-compatibility-probe.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
@@ -919,6 +1005,8 @@ export function buildConcurrentGroups(
   /** Which test files run; package scripts read the same tier from the environment. */
   tier: TestTier = "default",
   selection: ReadonlySet<TestGroupKey> = new Set(TEST_GROUP_KEYS),
+  /** The guard stage runs first, so the root group leaves out the files it ran. */
+  afterGuardStage = false,
 ): TestGroup[] {
   const workers = planWorkers(cores, tier);
   // Groups may queue on tiny hosts, but no individual child may exceed the
@@ -987,6 +1075,9 @@ export function buildConcurrentGroups(
         args: [
           "test",
           ...rootSelection,
+          ...(afterGuardStage
+            ? GUARD_STAGE_TEST_FILES.map((file) => `--path-ignore-patterns=${file}`)
+            : []),
           "--only-failures",
           ...changedArguments,
           ...(timingsDirectory
@@ -1039,6 +1130,159 @@ export function buildConcurrentGroups(
 
 function formatDuration(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+/** `0` turns off rerunning failing test files alone after a failed run. */
+export const TEST_RERUN_FAILED_ENV = "ORKESTRATOR_TEST_RERUN_FAILED";
+/** At most this many failing files are rerun; a broken change fails many more. */
+export const MAX_RERUN_FILES = 10;
+/** All reruns together stop starting new files after this long. */
+export const RERUN_TIME_BUDGET_MS = 10 * 60 * 1_000;
+/** One rerun file's own deadline. */
+export const RERUN_FILE_TIMEOUT_MS = 5 * 60 * 1_000;
+
+/** The directory a failing file reruns from and the Bun flags its suite passes. */
+export interface RerunTarget {
+  /** Repository-relative package directory, `.` for the root group. */
+  directory: string;
+  flags: string[];
+}
+
+/**
+ * The Bun flags of a package's test script (`bun-test-tier.ts <dir> <paths>
+ * -- <flags>`), for one file on one worker: shell expansions (timings, worker
+ * counts) are dropped and `--parallel=1` added, so preloads stay as the suite
+ * has them.
+ */
+export function rerunFlags(script: string): string[] {
+  const tokens = script.trim().split(/\s+/);
+  const separator = tokens.indexOf("--");
+  const flags = (separator === -1 ? [] : tokens.slice(separator + 1)).filter(
+    (token) => !/[${}]/.test(token) && !token.startsWith("--parallel"),
+  );
+  return [...flags, "--parallel=1"];
+}
+
+/** Resolves Turbo task prefixes to workspace and bridge packages of `repositoryRoot`. */
+export function packageRerunTargets(
+  repositoryRoot: string,
+): (taskPrefix: string) => RerunTarget | undefined {
+  let packages: Map<string, { directory: string; scripts: Record<string, string> }> | undefined;
+  const load = () => {
+    packages = new Map();
+    for (const parent of ["apps", "packages", "bridges"]) {
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(path.join(repositoryRoot, parent));
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        try {
+          const manifest = JSON.parse(
+            readFileSync(path.join(repositoryRoot, parent, entry, "package.json"), "utf8"),
+          ) as { name?: string; scripts?: Record<string, string> };
+          if (manifest.name)
+            packages.set(manifest.name, {
+              directory: `${parent}/${entry}`,
+              scripts: manifest.scripts ?? {},
+            });
+        } catch {
+          // Not a package.
+        }
+      }
+    }
+    return packages;
+  };
+  return (taskPrefix) => {
+    if (taskPrefix === "") return { directory: ".", flags: ["--parallel=1"] };
+    const task = /^(.+):(test:workspace|test:bridge): $/.exec(taskPrefix);
+    if (!task) return undefined;
+    const found = (packages ?? load()).get(task[1]!);
+    const script = found?.scripts[task[2]!];
+    return found && script ? { directory: found.directory, flags: rerunFlags(script) } : undefined;
+  };
+}
+
+/**
+ * After a failed run, reruns each failing test file alone, once, and says
+ * which passed alone (a load flake to record) and which failed alone (a real
+ * failure). Bounded by {@link MAX_RERUN_FILES} and {@link RERUN_TIME_BUDGET_MS},
+ * which also bounds any wait for host capacity (see {@link TestGroup.deadline}).
+ * It only classifies: the run's exit status stays the failure.
+ */
+async function rerunFailingFiles(
+  failedGroups: readonly CompletedGroup[],
+  resolve: (taskPrefix: string) => RerunTarget | undefined,
+  run: (group: TestGroup) => Promise<CommandResult>,
+  log: (message: string) => void,
+): Promise<CompletedGroup[]> {
+  const targets: { file: string; group: TestGroup }[] = [];
+  for (const { group, result } of failedGroups) {
+    const files = result.failingFiles ?? [];
+    if (files.length === 0) {
+      log(`No failing test file identified in ${group.name}; nothing to rerun there.`);
+      continue;
+    }
+    for (const { taskPrefix, file } of files) {
+      const target = resolve(taskPrefix);
+      const repositoryFile = path.posix.normalize(
+        target ? path.posix.join(target.directory, file) : file,
+      );
+      if (!target) {
+        log(`Cannot rerun ${repositoryFile} alone: no suite for "${taskPrefix.trim()}".`);
+        continue;
+      }
+      targets.push({
+        file: repositoryFile,
+        group: {
+          name: `rerun ${repositoryFile}`,
+          workers: 1,
+          cwd: target.directory === "." ? undefined : target.directory,
+          command: "bun",
+          args: ["test", `./${file.replace(/^\.\//, "")}`, ...target.flags],
+        },
+      });
+    }
+  }
+  if (targets.length === 0) return [];
+  const chosen = targets.slice(0, MAX_RERUN_FILES);
+  log(
+    `\n--- Rerunning each failing test file alone, once (${chosen.length} of ${targets.length}${targets.length > chosen.length ? `; at most ${MAX_RERUN_FILES}` : ""}) ---`,
+  );
+  // One absolute deadline covers every rerun, including any wait for host
+  // capacity: admission stops queuing at it and trims the child's watchdog to
+  // what is left once admitted, so the budget is never exceeded by a queue.
+  const budgetDeadline = Date.now() + RERUN_TIME_BUDGET_MS;
+  const completed: CompletedGroup[] = [];
+  for (const { file, group } of chosen) {
+    const remaining = budgetDeadline - Date.now();
+    if (remaining <= 0) {
+      log(
+        `NOT RERUN     ${file}: the ${formatDuration(RERUN_TIME_BUDGET_MS)} rerun budget is spent`,
+      );
+      continue;
+    }
+    const fileStartedAt = Date.now();
+    const result = await run({
+      ...group,
+      timeoutMs: Math.min(RERUN_FILE_TIMEOUT_MS, remaining),
+      deadline: budgetDeadline,
+    });
+    const elapsedMs = Date.now() - fileStartedAt;
+    completed.push({ group, result, elapsedMs });
+    const incomplete =
+      result.infrastructureError || result.timeoutReason || result.outputLimitExceeded;
+    log(
+      incomplete
+        ? `INCOMPLETE    ${file} (${formatDuration(elapsedMs)}): the rerun did not finish; no verdict`
+        : result.status === 0
+          ? `PASSED ALONE  ${file} (${formatDuration(elapsedMs)}): likely a load flake. Record it in docs/tests/flaky-tests (search the group indexes for it first); never skip or loosen it`
+          : `FAILED ALONE  ${file} (${formatDuration(elapsedMs)}): a real failure; fix it`,
+    );
+  }
+  log("The run still fails: passing alone classifies a failure, it does not excuse it.");
+  return completed;
 }
 
 export async function runAllTests(overrides: Partial<TestAllDependencies> = {}): Promise<number> {
@@ -1120,12 +1364,15 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const timingsDirectory =
       dependencies.env[TEST_TIMINGS_DIRECTORY_ENV] ||
       (usesDefaultRunner ? createTestTimingsDirectory(dependencies.root) : undefined);
+    const runGuards = dependencies.runGuards ?? (usesDefaultRunner ? defaultRunGroup : undefined);
+    const guardStage = runGuards !== undefined && runsGuardStage(dependencies.env, tier, selection);
     const groups = buildConcurrentGroups(
       admission?.capacity.workers ?? dependencies.cores,
       affected,
       timingsDirectory,
       tier,
       selection,
+      guardStage,
     );
     if (groups.length === 0) {
       dependencies.log(
@@ -1168,6 +1415,39 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     // root group's argument list.
     if (timingsDirectory) runEnvironment[TEST_TIMINGS_DIRECTORY_ENV] = timingsDirectory;
 
+    const guardResults: CompletedGroup[] = [];
+    if (guardStage && runGuards) {
+      dependencies.log(
+        `Running the guard stage first (\`mise run guards\`; ${TEST_SKIP_GUARDS_ENV}=1 skips it)…`,
+      );
+      const guardStartedAt = Date.now();
+      running.set(GUARD_STAGE.name, guardStartedAt);
+      const result = await runGuards(GUARD_STAGE, runEnvironment).finally(() =>
+        running.delete(GUARD_STAGE.name),
+      );
+      const completed = { group: GUARD_STAGE, result, elapsedMs: Date.now() - guardStartedAt };
+      guardResults.push(completed);
+      const status = result.status ?? 1;
+      const incomplete =
+        result.infrastructureError || result.timeoutReason || result.outputLimitExceeded;
+      dependencies.log(
+        `${incomplete ? "INCOMPLETE" : status === 0 ? "PASS" : "FAIL"} ${GUARD_STAGE.name} (${formatDuration(completed.elapsedMs)})`,
+      );
+      if (status !== 0) {
+        if (result.output) dependencies.log(result.output.trimEnd());
+        if (result.timeoutReason)
+          dependencies.log(`Guard stage watchdog fired (${result.timeoutReason}).`);
+        dependencies.log(
+          `\nThe guard stage failed, so no test group was started. Fix the failures above ` +
+            `(\`mise run guards\` reruns only them in seconds), or set ${TEST_SKIP_GUARDS_ENV}=1 ` +
+            "to run the test groups anyway.",
+        );
+        const artifacts = await finalizeTestLogs(logDirectory, guardResults, false);
+        if (artifacts) dependencies.log(`Failure artifacts: ${artifacts}`);
+        return status;
+      }
+    }
+
     dependencies.log(
       `Running ${groups.length} ${affected ? "affected " : ""}${tier}-tier test groups concurrently…`,
     );
@@ -1179,7 +1459,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const startedAt = Date.now();
     let completedCount = 0;
 
-    const results: CompletedGroup[] = await Promise.all(
+    const groupResults: CompletedGroup[] = await Promise.all(
       groups.map(async (group) => {
         const groupStartedAt = Date.now();
         running.set(group.name, groupStartedAt);
@@ -1195,11 +1475,13 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
         return completed;
       }),
     );
+    // The guard stage's log is retained or deleted with the groups'.
+    const results = [...guardResults, ...groupResults];
 
     // Detailed output stays in declaration order even though completion is
     // reported live above.
     let firstFailure = 0;
-    for (const { group, result, elapsedMs } of results) {
+    for (const { group, result, elapsedMs } of groupResults) {
       const status = result.status ?? 1;
       const banner = "=".repeat(72);
       dependencies.log(
@@ -1219,10 +1501,25 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     dependencies.log(`\nTest groups finished in ${formatDuration(Date.now() - startedAt)}`);
 
     if (firstFailure !== 0) {
-      const failed = results
+      const failed = groupResults
         .filter(({ result }) => (result.status ?? 1) !== 0)
         .map(({ group }) => group.name);
       dependencies.log(`Failing groups: ${failed.join(", ")}`);
+      if (
+        (dependencies.rerunFailedFiles ?? usesDefaultRunner) &&
+        dependencies.env[TEST_RERUN_FAILED_ENV] !== "0"
+      ) {
+        const reruns = await rerunFailingFiles(
+          groupResults.filter(({ result }) => (result.status ?? 1) !== 0),
+          dependencies.resolveRerun ?? packageRerunTargets(dependencies.root),
+          (group) => {
+            running.set(group.name, Date.now());
+            return runGroup(group, runEnvironment).finally(() => running.delete(group.name));
+          },
+          dependencies.log,
+        );
+        results.push(...reruns);
+      }
       const artifacts = await finalizeTestLogs(logDirectory, results, false);
       if (artifacts) dependencies.log(`Failure artifacts: ${artifacts}`);
       return firstFailure;

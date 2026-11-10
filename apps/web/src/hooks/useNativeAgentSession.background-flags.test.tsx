@@ -89,7 +89,6 @@ mock.module("@/lib/backend", () => ({
     agent: "codex",
   }),
   adoptNativeAgentSession: async () => ({}),
-  getNativeAgentProjection: async () => null,
   getNativeAgentProjectionUpdate: async () => {
     throw new Error("Unexpected joined projection request");
   },

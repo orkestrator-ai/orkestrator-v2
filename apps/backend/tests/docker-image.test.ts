@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -145,6 +146,17 @@ describe("image manifest contract", () => {
           `# ORKESTRATOR_CAPABILITY workspace-prepare=${IMAGE_CAPABILITIES["workspace-prepare"] + 1}\n`,
       ),
     ).toThrow("newer than the contract");
+    // A name with a digit is read, not skipped.
+    expect(probeCapabilities(() => "# ORKESTRATOR_CAPABILITY opencode2-launch=1\n")).toEqual({
+      "opencode2-launch": 1,
+    });
+    // Every marker in the repository's own contract scripts is picked up.
+    const repository = new URL("../../../", import.meta.url).pathname;
+    const declared = probeCapabilities((file) => {
+      const source = `${repository}${file.source}`;
+      return existsSync(source) ? readFileSync(source, "utf8") : null;
+    });
+    expect(declared["opencode2-launch"]).toBe(1);
     // Every contract source path exists in the repository or is reserved for
     // a later step; none point outside docker/.
     for (const file of CONTRACT_FILES) expect(file.source.startsWith("docker/")).toBe(true);

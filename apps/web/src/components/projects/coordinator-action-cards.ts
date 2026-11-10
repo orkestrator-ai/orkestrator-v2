@@ -10,6 +10,8 @@ export interface CoordinatorActionCard {
   state?: string;
   done: boolean;
   completeOnUser?: boolean;
+  /** When the action was raised, where the transcript records it. */
+  createdAt?: string | number;
 }
 
 /** Provider spellings of this server only; foreign MCP tools cannot create marks. */
@@ -42,7 +44,7 @@ export function coordinatorActionCards(
 ): CoordinatorActionCard[] {
   const cards: CoordinatorActionCard[] = [];
   const prs = new Map<string, CoordinatorActionCard>();
-  let user: { id: string; index: number } | undefined;
+  let user: { id: string; index: number; createdAt?: string } | undefined;
   let topicMarked = false;
   for (const [index, message] of messages.entries()) {
     if (
@@ -52,7 +54,7 @@ export function coordinatorActionCards(
       !message.promptPresentation
     ) {
       for (const card of cards) if (card.completeOnUser) card.done = true;
-      user = { id: message.id, index };
+      user = { id: message.id, index, createdAt: message.createdAt };
       topicMarked = false;
     }
     const mail = message.peerMail;
@@ -103,6 +105,7 @@ export function coordinatorActionCards(
           title,
           state,
           done,
+          createdAt: message.createdAt,
         };
         cards.push(card);
         prs.set(key, card);
@@ -117,6 +120,7 @@ export function coordinatorActionCards(
           kind: "question",
           title: part.asyncQuestion.questions.map((q) => q.title).join(" · "),
           done: answeredQuestionIds.has(part.asyncQuestion.itemId),
+          createdAt: message.createdAt,
         });
       }
       const tool = coordinatorToolName(part.toolName);
@@ -134,6 +138,7 @@ export function coordinatorActionCards(
           kind: "question",
           title: typeof title === "string" ? title : "Question for you",
           done: part.toolState === "success",
+          createdAt: message.createdAt,
         });
       }
 
@@ -156,6 +161,7 @@ export function coordinatorActionCards(
         anchorId: kind === "topic" ? user!.id : message.id,
         index: kind === "topic" ? user!.index : index,
         done: false,
+        createdAt: kind === "topic" ? user!.createdAt : message.createdAt,
       });
     }
   }
@@ -182,6 +188,7 @@ export function coordinatorActionCards(
         interaction.presentation.questions.map((question) => question.prompt).join(" · ") ||
         interaction.presentation.title,
       done,
+      createdAt: interaction.createdAt,
     });
   }
   return cards.sort((a, b) => a.index - b.index);

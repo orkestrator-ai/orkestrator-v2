@@ -127,6 +127,11 @@ function unsent(group: UsageLimitNoticeGroup): UsageLimitStop[] {
 export class CoordinatorUsageLimitNotices {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly flushes = new Map<string, Promise<void>>();
+  /** Each armed flush timer's wall-clock due time, and when it fired (or was cleared). */
+  private readonly flushTimers = new Map<
+    string,
+    { dueAt: number; fired: Promise<void>; release: () => void }
+  >();
   private stopped = false;
 
   constructor(private readonly deps: UsageLimitNoticeDeps) {}
@@ -157,11 +162,29 @@ export class CoordinatorUsageLimitNotices {
     this.stopped = true;
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+    for (const timer of this.flushTimers.values()) timer.release();
+    this.flushTimers.clear();
   }
 
-  /** Resolves once every flush due so far has finished. Tests use it. */
-  async settled(): Promise<void> {
-    await Promise.all(this.flushes.values());
+  /**
+   * Resolves once every flush due so far has finished. Tests use it. With
+   * `dueWithinMs`, it first waits for flush timers due within that many
+   * milliseconds to fire, and for any flush they schedule in turn, instead of a
+   * test sleeping through the coalescing window.
+   */
+  async settled(dueWithinMs?: number): Promise<void> {
+    if (dueWithinMs === undefined) {
+      await Promise.all(this.flushes.values());
+      return;
+    }
+    for (;;) {
+      const horizon = Date.now() + dueWithinMs;
+      const due = Array.from(this.flushTimers.values())
+        .filter((timer) => timer.dueAt <= horizon)
+        .map((timer) => timer.fired);
+      if (due.length === 0 && this.flushes.size === 0) return;
+      await Promise.all([...due, ...this.flushes.values()]);
+    }
   }
 
   /** The machine where the session stopped: raise it once, and route it. */
@@ -332,31 +355,36 @@ export class CoordinatorUsageLimitNotices {
 
   private schedule(id: string, at: number): void {
     if (this.stopped || this.timers.has(id) || this.flushes.has(id)) return;
-    const timer = setTimeout(
-      () => {
-        this.timers.delete(id);
-        let failed = false;
-        const flush = this.flush(id)
-          .catch((error: unknown) => {
-            // It stays in the ledger and goes again under the same request id,
-            // while the window it is about still matters, and on the next start.
-            log.warn("limit-stop.notice-failed", { error: formatLogError(error) });
-            failed = true;
-          })
-          .finally(() => {
-            if (this.flushes.get(id) === flush) this.flushes.delete(id);
-            if (failed) this.retry(id);
-            else {
-              const next = this.update(id, (group) =>
-                unsent(group).length ? group.flushAt : undefined,
-              );
-              if (next !== undefined) this.schedule(id, next);
-            }
-          });
-        this.flushes.set(id, flush);
-      },
-      Math.max(0, at - this.now()),
-    );
+    const delay = Math.max(0, at - this.now());
+    let release!: () => void;
+    const fired = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.flushTimers.set(id, { dueAt: Date.now() + delay, fired, release });
+    const timer = setTimeout(() => {
+      this.timers.delete(id);
+      this.flushTimers.delete(id);
+      let failed = false;
+      const flush = this.flush(id)
+        .catch((error: unknown) => {
+          // It stays in the ledger and goes again under the same request id,
+          // while the window it is about still matters, and on the next start.
+          log.warn("limit-stop.notice-failed", { error: formatLogError(error) });
+          failed = true;
+        })
+        .finally(() => {
+          if (this.flushes.get(id) === flush) this.flushes.delete(id);
+          if (failed) this.retry(id);
+          else {
+            const next = this.update(id, (group) =>
+              unsent(group).length ? group.flushAt : undefined,
+            );
+            if (next !== undefined) this.schedule(id, next);
+          }
+        });
+      this.flushes.set(id, flush);
+      release();
+    }, delay);
     timer.unref?.();
     this.timers.set(id, timer);
   }

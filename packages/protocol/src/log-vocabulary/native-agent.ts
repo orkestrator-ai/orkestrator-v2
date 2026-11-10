@@ -137,6 +137,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "The start script of a container environment's 2.x server was run. Container port only.",
       "container-server.ready":
         "A container environment's 2.x server this backend started answered `/api/info` as 2.x. Environment id only.",
+      "container-server.cleanup-failed":
+        "Cleanup after OpenCode startup failed; step names only, while the original startup error is preserved.",
       "container-server.warm-incomplete":
         "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
       "resume-list.unavailable":

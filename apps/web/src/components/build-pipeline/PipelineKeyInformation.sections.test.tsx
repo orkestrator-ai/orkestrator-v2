@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { KeyInformationBody } from "./PipelineKeyInformation";
 import { keyInformation } from "./key-information-test-fixture";
+import { JUMP_SETTLE_FALLBACK_MS } from "./key-information-section-nav";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 /**
  * The header panel's list of section headings: it sits outside the scrolling
@@ -202,20 +204,28 @@ describe("Key information panel section list", () => {
   });
 
   test("releases the jump lock after one second without scrollend", async () => {
-    const { nav, scroller } = renderBody();
-    fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
-    await act(async () => {
-      scroller.scrollTop = 5 * SECTION_HEIGHT;
-      fireEvent.scroll(scroller);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    const fallback = installControlledTimeout(JUMP_SETTLE_FALLBACK_MS, {
+      label: "jump settle fallback",
     });
-    expect(current(nav)).toBe("Tests");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1050));
-      fireEvent.scroll(scroller);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-    expect(current(nav)).toBe("Decisions");
+    try {
+      const { nav, scroller } = renderBody();
+      fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
+      await act(async () => {
+        scroller.scrollTop = 5 * SECTION_HEIGHT;
+        fireEvent.scroll(scroller);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(current(nav)).toBe("Tests");
+      await act(async () => {
+        // The second passes with no scrollend.
+        expect(fallback.advance()).toBe(1);
+        fireEvent.scroll(scroller);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(current(nav)).toBe("Decisions");
+    } finally {
+      fallback.restore();
+    }
   });
 
   test("shows no section list before anything is recorded", () => {

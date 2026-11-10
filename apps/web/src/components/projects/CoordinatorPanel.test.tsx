@@ -11,6 +11,7 @@ import {
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
@@ -52,6 +53,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import * as nodeEvents from "@/lib/federation/node-events";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 
 /** Outside a node scope provider, components act for the app's command node. */
 const commandNodeId = () => getWindowScope().commandScope().nodeId;
@@ -283,6 +285,10 @@ let workerPromptsForTest: HumanPromptEntry[] = [];
 const listHumanPrompts = mock(async (_ids: readonly string[]) => ({
   prompts: workerPromptsForTest,
 }));
+// The conversation's session as the fake backend holds it.
+const sessionBackend = createNativeAgentSessionBackend({
+  readProjection: () => getAgentProjection(),
+});
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -305,14 +311,13 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
   listHumanPrompts,
   assignCoordinatorConversationAgent: assignAgent,
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
     input: Parameters<typeof realBackend.ensureNativeAgentSession>[0],
   ) => ({
     ...input,
     providerSessionId: "claude-session",
   }),
-  getNativeAgentProjection: getAgentProjection,
+  ...sessionBackend.api,
   dismissNativeAgentSuggestedPrompt: async () => ({
     ...(await getAgentProjection()),
     suggestedPrompt: undefined,
@@ -1698,6 +1703,41 @@ describe("CoordinatorPanel", () => {
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(/2 tracked/)).toBeTruthy();
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
+  });
+
+  test("missing checkout opens this node's Repository settings", () => {
+    appCommandStore(projectStore).setState((state) => ({
+      projects: state.projects.map((project) => ({ ...project, localPath: null })),
+    }));
+    useAppDialogStore.setState({ request: null });
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "repository-settings",
+      nodeId: commandNodeId(),
+      projectId: "project-1",
+    });
+    useAppDialogStore.setState({ request: null });
+  });
+
+  test("a project this node does not have is not reported as a missing checkout", async () => {
+    // Ids are per node: another node's project id shown under this scope.
+    appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: true });
+    const loading = renderInAppCommandScope(<CoordinatorPanel projectId="other-node-project" />);
+    expect(screen.getByRole("status").textContent).toContain("Loading project");
+    loading.unmount();
+
+    appCommandStore(projectStore).setState({ hasLoaded: true, isLoading: false });
+    try {
+      renderInAppCommandScope(<CoordinatorPanel projectId="other-node-project" />);
+      expect(screen.getByText("Project not found on this machine")).toBeTruthy();
+      expect(screen.queryByText("Connect a local checkout") === null).toBe(true);
+      // Repository settings could not find the project and would close at once.
+      expect(screen.queryByRole("button", { name: "Repository settings" }) === null).toBe(true);
+      expect(screen.getByRole("button", { name: "Reload projects" })).toBeTruthy();
+    } finally {
+      appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false });
+    }
   });
 
   test("rehydrates from the backend after remount and shows load failures", async () => {

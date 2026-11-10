@@ -135,6 +135,17 @@ export const IMAGE_CAPABILITIES = {
    * start from node's own binary and configuration.
    */
   "opencode-launch": 1,
+  /**
+   * `orkestrator-bridge-launch opencode2` starts the container's OpenCode 2.x
+   * server the same way, from the root-owned `/opt/opencode/bin/opencode2`,
+   * with its configuration, home and package cache in root-owned
+   * `/run/orkestrator-opencode2`, and the backend records its listening
+   * socket. The same launcher points the 1.x server's package cache at
+   * root-owned `/run/orkestrator-opencode/cache` and reads a project
+   * configuration the backend filtered (`OPENCODE_CONFIG`). An older image
+   * keeps the 2.x login-shell start from node's own binary and configuration.
+   */
+  "opencode2-launch": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

@@ -4,6 +4,11 @@ export const WEB_SETTINGS_LOG_AREAS = defineLogAreas({
   "web.settings": {
     description: "The settings screens.",
     events: {
+      "self-improvement.status-failed": "Settings → Self-improvement could not read the status.",
+      "self-improvement.projects-failed":
+        "Settings → Self-improvement could not list the projects.",
+      "self-improvement.save-failed": "Settings → Self-improvement could not save a setting.",
+      "self-improvement.run-failed": "Settings → Self-improvement could not start a run.",
       "config.save-failed": "Global settings could not be saved.",
       "config.load-failed": "The settings page could not load the config.",
       "config.reload-failed": "Re-reading the workspace config after a save failed.",

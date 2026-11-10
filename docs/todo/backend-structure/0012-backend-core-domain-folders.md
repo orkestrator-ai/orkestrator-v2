@@ -102,7 +102,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** The file asks for a re-measured type-level cycle across `core/` (112 files on 2026-10-14) recorded here.
 
-**Context.** Runtime cycles are already blocked by `import/no-cycle` and `tests/unit/module-import-cycles.test.ts`, whose `KNOWN_CYCLES` is empty (`:39`).
+**Context.** Runtime cycles are already blocked by oxlint's `import/no-cycle` rule (`.oxlintrc.json`, set to `error`; type-only imports are exempt). It is the only runtime-cycle guard: `tests/unit/module-import-cycles.test.ts`, which duplicated it with an empty `KNOWN_CYCLES`, was removed on 2026-11-10.
 
 **Investigation.** No script in the repository computes the type-level cycle; the 2026-10-14 number was measured ad hoc. No newer measurement is recorded.
 
@@ -112,9 +112,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **A one-off measurement recorded here at the start of wave 1, repeated at the end (recommended).**
     - Pros: gives a baseline and a result for the plan; no tooling to maintain.
     - Cons: the method lives in prose.
-  - **Extend `module-import-cycles.test.ts` to report type-only cycles too.**
-    - Pros: repeatable and visible in CI.
-    - Cons: the file says the number is not expected to reach zero, so a test would need a moving threshold; more test machinery for a measurement.
+  - **Add a type-only cycle report to the guard stage (`scripts/guards.ts`), beside `import/no-cycle`.**
+    - Pros: repeatable and visible in CI; `import/no-cycle` cannot do it, because it exempts type-only imports by design.
+    - Cons: the file says the number is not expected to reach zero, so a guard would need a moving threshold; more machinery for a measurement.
 
 ### 6. Folders created since the plan
 
@@ -308,7 +308,8 @@ before the busy ones move.
    finish. It is not
    expected to reach zero, but cross-domain type cycles should run through
    `index.ts` files, where they are visible. Runtime cycles are already
-   blocked by `import/no-cycle` and `tests/unit/module-import-cycles.test.ts`.
+   blocked by `import/no-cycle` (`.oxlintrc.json`), the only runtime-cycle
+   guard.
 
 Procedure for one slice, one domain per PR, pure moves only (no behaviour
 change, no edits beyond paths, the new `index.ts` and the lint patterns):
@@ -447,7 +448,9 @@ left open on purpose: they move many files that other work in flight touches.
   `control-mcp-caller.ts` (through `scheduled-jobs/executor.ts` and
   `control-mcp-tools.ts`) and `scheduled-jobs/executor.ts` (through
   `actions-schedules.ts`). Found with a throwaway reachability script over the
-  same value-edge graph `tests/unit/module-import-cycles.test.ts` builds.
+  same value-edge graph `tests/unit/module-import-cycles.test.ts` built
+  (that test was removed on 2026-11-10; `import/no-cycle` enforces the same
+  graph).
   `mcp-management/index.ts` reaches neither of its two importers, so it has
   no exceptions.
 - Options: (a) name the leaf modules those six files import as exceptions in
@@ -515,7 +518,8 @@ left open on purpose: they move many files that other work in flight touches.
 ### Task 6: named exceptions where an `index.ts` would close a runtime cycle
 
 - Problem found: routing every importer through `index.ts` added 91
-  `import/no-cycle` errors and failed `tests/unit/module-import-cycles.test.ts`.
+  `import/no-cycle` errors and failed `tests/unit/module-import-cycles.test.ts`
+  (since removed; `import/no-cycle` alone guards runtime cycles now).
   The storage layer (`storage-stores.ts`, `storage-nodes.ts`,
   `storage-scheduled-jobs.ts`) imports each domain's store layout, migration or
   store, and each domain's services import storage, so through a barrel

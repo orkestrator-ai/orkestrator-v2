@@ -57,7 +57,17 @@ on how busy the host is. Test files that wait on something outside the test
 process — real Git, tmux, Chromium, agent CLIs, servers, sockets, or
 wall-clock sleeps and long timeouts — form the slow tier, declared in
 `scripts/test-tiers.ts`. `*-live.test.ts`, `*.live.test.ts`, and
-`*.integration.test.ts` files are slow by name.
+`*.integration.test.ts` files are slow by name in the root group and in every
+package that has such files (backend, desktop, protocol, and the Claude, Codex
+and Pi bridges). A unit test of a `scripts/*-live.ts` benchmark is named
+`*-live-script.test.ts` so that it stays in the default tier.
+
+When a file mixes cheap checks with real processes, split it rather than
+moving the cheap checks too: for example `firewall-egress-filter-names` and
+`workspace-setup-script-contract` stay in the default tier beside their
+slow-tier siblings. Before moving a file, consolidate repeated expensive setup
+(build a fixture once and copy it per test, or evaluate many cases in one
+shell) so the slow tier stays fast as well.
 
 - `mise run test` runs the default tier and prints how to run the rest.
 - `mise run test:slow` runs only the slow tier. Run it on demand, for example
@@ -300,7 +310,9 @@ or start a production backend.
 
 ## What the aggregate runner does
 
-`mise run test` submits four independent groups to the host capacity queue:
+`mise run test` first runs the guard stage (below) and stops, before admitting
+any group, if it fails. It then submits four independent groups to the host
+capacity queue:
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
@@ -338,9 +350,32 @@ paired Claude AppArmor qualification. The `Unit and integration tests` job passe
 only when every shard passed, so it stays the suite's single status.
 `tests/unit/ci-workflows.test.ts` checks that the shards cover every group once.
 
+GitHub Actions runs on the organisation's Free plan: at most 20 jobs at once,
+5 of them on macOS. When every merge kept its own full run and the packaged
+build validation ran on almost every change, demand passed that cap and jobs
+queued for over an hour (2026-11-10: 218 queued, 14 running). So:
+
+- A newer push to a pull request, or a newer commit on `main`, cancels the
+  older run of CI. A regression on `main` shows on the next completed run.
+- Draft pull requests run no jobs; marking one ready for review starts them.
+- `validate-bun-runtime.yml` (packaged desktop app and container image, on
+  four platforms including two macOS runners) runs on pull requests and merges
+  only when Bun, dependencies, Docker or packaging inputs change, and nightly
+  on `main` for everything else.
+
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure
 does not hide failures in groups that were already running.
+
+After a failed run it reruns each failing test file alone, once, from the
+directory and with the preloads of the suite that ran it (one worker, at most
+ten files, ten minutes in all, five per file), and prints a verdict per file:
+`PASSED ALONE` (likely a load flake: record it in the flaky-test register, never
+skip it) or `FAILED ALONE` (a real failure). The files come from Bun's
+`<file>:` header before each `(fail)` line, per Turbo task; a group that failed
+without one (a crash, a build error) is named as having nothing to rerun. The
+exit status stays the failure. `ORKESTRATOR_TEST_RERUN_FAILED=0` turns the
+reruns off.
 
 `mise run test:all` runs the same four groups first. If they pass and the host is
 macOS with Xcode available, it runs the iOS suite last and by itself because the
@@ -351,6 +386,31 @@ The Playwright component suite and the real-stack agent suites are deliberately
 not part of `mise run test`; they require different fixtures and, for agent
 testing, an isolated running application profile. Select them using the table
 above and [agent-testing.md](agent-testing.md).
+
+### Guards
+
+`mise run guards` (`scripts/guards.ts`) runs the repository-wide checks in one
+process, in about four seconds: the source-guard ratchet against
+`tests/source-guards/baseline.json` and the checks that each production-source
+guard still reaches its files, the DOM absence scan, project-class inheritance
+chains, test suite ownership, the raw-console directive scan, and the flaky-test,
+to-do and number-claim register tests (one `bun test` child alongside). They
+share one `git ls-files -co --exclude-standard` listing, one read per file and,
+for the source guards, one parse per file. On failure each guard prints its
+problems and what to do, and the command exits non-zero. `--only <id>`
+(repeatable) narrows it.
+
+These checks of the real repository run only there. The guards' fixture tests
+stay in the unit suite (`tests/unit/source-guards.test.ts`,
+`dom-absence-scan.test.ts`, `inheritance-chains.test.ts`, `raw-console.test.ts`,
+`test-suite-ownership.test.ts` and the guard-specific ones), and the root group
+leaves the three register test files out once the stage has passed in the same
+run. The stage runs whenever the root group is selected, outside the slow tier,
+without host admission: it is one short process, like lint, and queueing it
+behind another worktree's suite would defeat running it first. Set
+`ORKESTRATOR_TEST_SKIP_GUARDS=1` to skip it, for a rerun after it passed or
+when only the test groups' result matters. `mise run check` runs it between
+lint and typecheck.
 
 ## Where tests live
 
@@ -459,6 +519,35 @@ expect(client.calls("list_environments")).toHaveLength(2);
   command scope, so the component reads a provider as it does in the app
   while the suite's seeds and mocks still apply. It disposes nothing; the
   suite resets the app's scope with `resetWindowScopeForTests()` as before.
+
+### A native agent session as one projection
+
+`useNativeAgentSession` reads a session only through the progressive views
+(transcript, session state and discovery, each with its own token); a backend
+without them is reported as too old, never read another way. A suite about
+the tab's behaviour (composer, approvals, steering, coordinator panes) feeds
+it through `createNativeAgentSessionBackend`
+(`apps/web/src/test/native-agent-session-backend.ts`): describe the session
+as one `NativeAgentSessionProjection` (or `null`), and spread the returned
+`api` into the suite's `@/lib/backend` mock. It splits the projection the way
+the backend does, answers `unchanged` while a domain's content is the same,
+shares one projection read between the requests of one refresh, and pages
+the rows `readHistory` returns behind "Load earlier messages". Its `api`
+entries are mocks, so a suite can assert on the reads.
+
+- A store write is not a backend update: the next read installs what the fake
+  backend holds. To change the session mid-test, change what `readProjection`
+  answers (`AgentNativeTab.test.tsx`'s `publishProjection` does both).
+- A view whose provider session is not the tab's (`initialProviderSessionId`)
+  is ignored, so give a test's projection the session id its tab names.
+- Transcript and session state land separately; assert a combined outcome with
+  `waitFor`, not right after one of them.
+- Poll cadence runs on the read coordinator: install
+  `installFakeReadCoordinator()` and `clock.advance(…)` rather than waiting
+  for a real 500 ms or 1.5 s poll.
+- Bun 1.4's `toMatchObject` writes its asymmetric matchers
+  (`expect.objectContaining`, …) into the received object. Never point it at
+  live store state the component is still rendering; read the field instead.
 
 ### Agent CLIs on `PATH`
 

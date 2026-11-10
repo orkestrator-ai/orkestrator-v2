@@ -4,6 +4,11 @@
  * Pure: the start script, the plugins it writes and what decides whether an
  * image runs 2.x. `opencode2-container-server.ts` drives Docker with them.
  *
+ * This is the login-shell start of an image without `opencode2-launch=1`. On
+ * a newer image the root-owned launcher starts 2.x instead
+ * (`opencode2-container-launch.ts`), because this start runs node's own
+ * binary and loads configuration node can write (to-do 7550).
+ *
  * - **Only images that carry it.** `opencode2` is in the image manifest
  *   (`agents.opencode2`) of every image built since the 2.x pin; an older
  *   image, or a container created before {@link OPENCODE2_SERVER_PORT} was

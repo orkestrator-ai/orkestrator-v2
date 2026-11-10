@@ -1,10 +1,10 @@
 /**
  * Progressive-view coverage for the native-agent session hook.
  *
- * The sync-v1 suite still exercises the legacy joined projection. This file
- * advertises `progressiveViewVersions: [1]` and drives the three independent
- * domain reads: transcript can settle before session state, and discovery is
- * never on the text barrier.
+ * Progressive views are the renderer's only read path (a backend without them
+ * is reported as incompatible). This file drives the three independent domain
+ * reads: transcript can settle before session state, and discovery is never on
+ * the text barrier.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, waitFor } from "@testing-library/react";
@@ -33,6 +33,8 @@ function windowHistoryBytes(): number {
 }
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { appCommandStore } from "@/test/app-command-store";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 
 interface TestMessage {
   id: string;
@@ -390,6 +392,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   appCommandStore(nativeAgentProjectionStore).getState().reset();
+});
+
+describe("a backend without progressive views", () => {
+  /*
+   * The full-projection and sync-v1-only reads are gone (every release since
+   * v2.21.0 speaks progressive views). Such a backend is reported as too old
+   * on the connection-error surface and is never read another way.
+   */
+  test.each([
+    [
+      "advertises sync v1 only",
+      async () => ({
+        projectionSyncVersions: [1],
+        historyPagingVersions: [1],
+        progressiveViewVersions: [] as number[],
+        transcriptPatchVersions: [] as number[],
+      }),
+    ],
+    [
+      "predates the capability command",
+      async (): Promise<never> => {
+        throw new Error("Unknown backend command: get_native_agent_sync_capabilities");
+      },
+    ],
+  ] as const)("is reported as incompatible when it %s", async (_label, answer) => {
+    getNativeAgentSyncCapabilitiesMock.mockImplementationOnce(answer);
+
+    const { result } = renderSession();
+
+    await waitFor(() => expect(result.current.runtimeError).toMatch(/predates.*Update it\./));
+    expect(result.current.projection).toBeNull();
+    expect(result.current.hasCompletedRead).toBe(true);
+    expect(getNativeAgentTranscriptUpdateMock).not.toHaveBeenCalled();
+    expect(getNativeAgentSessionStateUpdateMock).not.toHaveBeenCalled();
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+    expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("useNativeAgentSession progressive view", () => {
@@ -945,29 +984,45 @@ describe("useNativeAgentSession progressive view", () => {
   });
 
   test("background polls do not oscillate transcriptRefreshing while unavailable", async () => {
-    transcriptUpdates = [() => ({ viewVersion: 1, status: "missing" })];
-    stateUpdates = [() => stateSnapshot("state-1")];
+    // The idle poll runs on the read coordinator's fake clock, not wall time.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      transcriptUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+      stateUpdates = [() => stateSnapshot("state-1")];
 
-    const { result } = renderSession();
-    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
-    expect(result.current.projection).toBeTruthy();
-    expect(result.current.transcriptAvailability).toBe("unavailable");
-    expect(result.current.transcriptRefreshing).toBe(false);
+      const { result } = renderSession();
+      await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+      expect(result.current.projection).toBeTruthy();
+      expect(result.current.transcriptAvailability).toBe("unavailable");
+      expect(result.current.transcriptRefreshing).toBe(false);
 
-    const seen: boolean[] = [];
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, IDLE_PROJECTION_REFRESH_MS + 100));
-    });
-    seen.push(result.current.transcriptRefreshing);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, IDLE_PROJECTION_REFRESH_MS + 100));
-    });
-    seen.push(result.current.transcriptRefreshing);
-    expect(seen).toEqual([false, false]);
-    expect(result.current.transcriptAvailability).toBe("unavailable");
+      const seen: boolean[] = [];
+      for (let poll = 0; poll < 2; poll += 1) {
+        const reads = getNativeAgentTranscriptUpdateMock.mock.calls.length;
+        await act(() => clock.advance(IDLE_PROJECTION_REFRESH_MS + 100));
+        // The poll really ran; it just must not raise the flag.
+        expect(getNativeAgentTranscriptUpdateMock.mock.calls.length).toBeGreaterThan(reads);
+        seen.push(result.current.transcriptRefreshing);
+      }
+      expect(seen).toEqual([false, false]);
+      expect(result.current.transcriptAvailability).toBe("unavailable");
+    } finally {
+      cleanup();
+      resetReadCoordinatorForTests();
+    }
   });
 
   test("a background poll whose delta falls back to a snapshot never raises transcriptRefreshing", async () => {
+    const { clock } = installFakeReadCoordinator();
+    try {
+      await backgroundDeltaFallsBackToSnapshot(clock);
+    } finally {
+      cleanup();
+      resetReadCoordinatorForTests();
+    }
+  });
+
+  async function backgroundDeltaFallsBackToSnapshot(clock: { advance(ms: number): Promise<void> }) {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [() => stateSnapshot("state-1")];
 
@@ -1005,14 +1060,15 @@ describe("useNativeAgentSession progressive view", () => {
       () => transcriptSnapshot("transcript-2", [message("m1"), message("m2")]),
     ];
     seen.length = 0;
-    await waitFor(
-      () => expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
-      { timeout: IDLE_PROJECTION_REFRESH_MS * 3 },
+    // One idle poll: its delta no longer applies, so it falls back to a snapshot.
+    await act(() => clock.advance(IDLE_PROJECTION_REFRESH_MS));
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
     );
     expect(transcriptCalls[1]?.forceSnapshot).toBe(true);
     expect(seen).not.toContain(true);
     expect(result.current.transcriptAvailability).toBe("current");
-  });
+  }
 
   test("clears transcriptRefreshing when the transcript read fails", async () => {
     transcriptUpdates = [

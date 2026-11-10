@@ -79,4 +79,4 @@ tmux process is followed by one more exec, an `sh` probe of `/proc`
 
 ## Replaces
 
-- Number 7530, renumbered on 2026-11-06. [7530](../transcripts-and-observation/7530-codex-idle-discovery-renewals.md) (#1960) merged first and kept it.
+- Number 7530, renumbered on 2026-11-06. 7530 (#1960, closed and deleted 2026-11-10) merged first and kept it.

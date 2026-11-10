@@ -1,5 +1,9 @@
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
+  NATIVE_AGENT_DISCOVERY_SECTIONS,
+  type NativeAgentDiscoverySection,
+} from "@orkestrator/protocol/native-agent";
+import {
   isNativeSessionInvalidationCause,
   type NativeSessionInvalidationCause,
   type NativeSessionInvalidationScope,
@@ -8,6 +12,15 @@ import {
 import { recurringMetricsEnabled } from "./recurring-work-metrics.js";
 
 const AGENT_PLATFORM_SET: ReadonlySet<string> = new Set(AGENT_PLATFORMS);
+const DISCOVERY_SECTION_SET: ReadonlySet<string> = new Set(NATIVE_AGENT_DISCOVERY_SECTIONS);
+/** Distinct changed paths kept per scope and section; later ones count as `other`. */
+export const DISCOVERY_RENEWAL_PATH_LIMIT = 64;
+const DISCOVERY_RENEWAL_PATH = /^[A-Za-z0-9_.[\]-]{1,160}$/;
+
+interface DiscoveryRenewalCounter {
+  count: number;
+  changed: Map<string, number>;
+}
 
 export interface NativeSessionInvalidationMetricsOptions {
   enabled?: boolean;
@@ -18,7 +31,9 @@ export interface NativeSessionInvalidationMetricsOptions {
 /**
  * Counts every native session invalidation the backend emits, by cause and by
  * the platform it was scoped to (todo 0049 task 4): which code path keeps
- * waking an idle view.
+ * waking an idle view. Discovery announcements are also counted by section
+ * and changed value path (todo 7530), which names the field that keeps
+ * moving.
  *
  * Both labels are fixed vocabularies. The agent is kept only when it is a
  * known platform; a session key, environment id or anything else never
@@ -33,6 +48,11 @@ export class NativeSessionInvalidationMetrics {
   private readonly byScope = new Map<
     NativeSessionInvalidationScope,
     Map<NativeSessionInvalidationCause, number>
+  >();
+  /** Todo 7530: which section a discovery announcement was about. */
+  private readonly discoveryRenewals = new Map<
+    NativeSessionInvalidationScope,
+    Map<NativeAgentDiscoverySection, DiscoveryRenewalCounter>
   >();
   private readonly now: () => number;
   private enabledFlag: boolean;
@@ -85,9 +105,72 @@ export class NativeSessionInvalidationMetrics {
     }
   }
 
+  /**
+   * Which discovery section an announced renewal (or deadline) was about, and
+   * the content-free paths of its value that changed
+   * (`discoveryChangedPaths`). Counted beside the cause, which `record` has
+   * already counted when the announcement went out. A section or agent
+   * outside the vocabulary, or a path that is not a structural name, is
+   * dropped and counted in `droppedLabels`.
+   */
+  recordDiscoveryRenewal(
+    section: NativeAgentDiscoverySection,
+    agent: string | undefined,
+    changedPaths: readonly string[],
+  ): void {
+    if (!this.enabledFlag) return;
+    try {
+      if (!DISCOVERY_SECTION_SET.has(section)) {
+        this.droppedLabels += 1;
+        return;
+      }
+      let scope: NativeSessionInvalidationScope;
+      if (agent === undefined) scope = "environment";
+      else if (AGENT_PLATFORM_SET.has(agent)) scope = agent as NativeSessionInvalidationScope;
+      else {
+        this.droppedLabels += 1;
+        return;
+      }
+      let sections = this.discoveryRenewals.get(scope);
+      if (!sections) {
+        sections = new Map();
+        this.discoveryRenewals.set(scope, sections);
+      }
+      let counter = sections.get(section);
+      if (!counter) {
+        counter = { count: 0, changed: new Map() };
+        sections.set(section, counter);
+      }
+      counter.count += 1;
+      for (const candidate of changedPaths.slice(0, 16)) {
+        if (typeof candidate !== "string" || !DISCOVERY_RENEWAL_PATH.test(candidate)) {
+          this.droppedLabels += 1;
+          continue;
+        }
+        const path =
+          counter.changed.has(candidate) || counter.changed.size < DISCOVERY_RENEWAL_PATH_LIMIT
+            ? candidate
+            : "other";
+        counter.changed.set(path, (counter.changed.get(path) ?? 0) + 1);
+      }
+    } catch {
+      // Observation must never fail the announcement it observes.
+    }
+  }
+
   snapshot(): NativeSessionInvalidationSnapshot {
     const byScope: NativeSessionInvalidationSnapshot["byScope"] = {};
     for (const [scope, causes] of this.byScope) byScope[scope] = Object.fromEntries(causes);
+    const discoveryRenewals: NonNullable<NativeSessionInvalidationSnapshot["discoveryRenewals"]> =
+      {};
+    for (const [scope, sections] of this.discoveryRenewals) {
+      discoveryRenewals[scope] = Object.fromEntries(
+        Array.from(sections, ([section, counter]) => [
+          section,
+          { count: counter.count, changed: Object.fromEntries(counter.changed) },
+        ]),
+      );
+    }
     return {
       enabled: this.enabledFlag,
       windowMs: Math.max(0, Math.round(this.safeNow() - this.createdAt)),
@@ -95,12 +178,14 @@ export class NativeSessionInvalidationMetrics {
       byCause: Object.fromEntries(this.byCause),
       byScope,
       droppedLabels: this.droppedLabels,
+      discoveryRenewals,
     };
   }
 
   reset(): void {
     this.byCause.clear();
     this.byScope.clear();
+    this.discoveryRenewals.clear();
     this.total = 0;
     this.droppedLabels = 0;
     this.createdAt = this.safeNow();

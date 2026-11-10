@@ -172,11 +172,12 @@ describe("parsing: tolerant arguments and must-understand fields", () => {
     expect(commands.contracts.has("update_port_mappings")).toBe(true);
     await expect(mutate(0)).rejects.toMatchObject({
       name: "ContainerLifecycleError",
-      code: "runtime-changed",
+      code: "container-lifecycle",
+      reason: "runtime-changed",
     });
     expect(updates).toEqual([]);
     for (const invalid of [null, "1", -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
-      await expect(mutate(invalid)).rejects.toMatchObject({ code: "invalid-request" });
+      await expect(mutate(invalid)).rejects.toMatchObject({ reason: "invalid-request" });
     }
     expect(updates).toEqual([]);
     await mutate(1);

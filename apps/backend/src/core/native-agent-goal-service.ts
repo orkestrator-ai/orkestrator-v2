@@ -22,7 +22,7 @@ import {
 } from "@orkestrator/protocol/native-agent-goal";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
-import { PROMPT_QUEUE_MESSAGE_CONFLICT } from "./storage-prompts.js";
+import { isPromptQueueMessageConflict } from "./storage-prompts.js";
 import type {
   AgentActivityState,
   PersistedNativeAgentSession,
@@ -471,7 +471,7 @@ export class NativeAgentGoalService {
       ));
     } catch (error) {
       // The id is the identity: a resend whose text differs is still this turn.
-      if (!errorMessage(error).startsWith(PROMPT_QUEUE_MESSAGE_CONFLICT)) throw error;
+      if (!isPromptQueueMessageConflict(error)) throw error;
       status = "present";
     }
     if (status === "consumed") {

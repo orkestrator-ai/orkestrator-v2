@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   commandEventStreamConnection,
@@ -71,6 +74,41 @@ describe("createWindowOrkestratorClient", () => {
     host.emit("resource-changed", { kind: "ignored" });
     expect(received).toEqual([{ kind: "project" }]);
     expect(client.nodeId).toBe(NODE);
+  });
+
+  test("shows a registered-code IPC error without its prefix, keeping the code", async () => {
+    const host = fakeHost();
+    const client = createWindowOrkestratorClient(NODE, () => host.api);
+    // What crosses Electron IPC and the context bridge: the message only.
+    host.raw.invoke.mockImplementationOnce(() =>
+      Promise.reject(
+        new Error(
+          "[container-lifecycle reason=operation-in-progress] ContainerLifecycleError:operation-in-progress: Busy.",
+        ),
+      ),
+    );
+    const failure = await client.invokeRaw("rebuild_environment").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("ContainerLifecycleError:operation-in-progress: Busy.");
+    expect(errorCode(failure)).toBe("container-lifecycle");
+    expect(parseContainerLifecycleError(failure)).toEqual({
+      code: "operation-in-progress",
+      message: "Busy.",
+    });
+    // An incompatibility keeps its details for `incompatibility()`.
+    host.raw.invoke.mockImplementationOnce(() =>
+      Promise.reject(new Error("[unknown-command command=get_x] Unknown backend command: get_x")),
+    );
+    const unknown = await client.invokeRaw("get_x").catch((error: unknown) => error);
+    expect((unknown as Error).message).toBe("Unknown backend command: get_x");
+    expect(incompatibility(unknown, "get_x")).toEqual({
+      code: "unknown-command",
+      command: "get_x",
+    });
+    // Anything without a registered prefix is passed through untouched.
+    const plain = new Error("[not-registered] text");
+    host.raw.invoke.mockImplementationOnce(() => Promise.reject(plain));
+    await expect(client.invokeRaw("get_config")).rejects.toBe(plain);
   });
 
   test("routes terminal output and readiness to the per-session event", async () => {

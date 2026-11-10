@@ -20,6 +20,7 @@
  * Desktop main keeps `NodeRefusal` as its `Data.TaggedError` (`node-ipc.ts`).
  * No Effect import here: the sandboxed preload bundle uses this module.
  */
+import { errorCode } from "./ipc-error.js";
 
 /**
  * - `unknown-node`: the window's command node does not know this node.
@@ -54,11 +55,15 @@ export function messageCode(message: string): string | null {
 /**
  * The code of a refusal that crossed the context bridge: `error.code` when the
  * preload set one in the code form, otherwise the `[code] ` message prefix.
+ *
+ * The four {@link DESKTOP_NODE_REFUSAL_CODES} are registered error codes
+ * (`./ipc-error.ts`), so `errorCode()` reads them from any transport; the
+ * plain prefix read stays for a code main sends that is not registered.
  */
 export function nodeRefusalCode(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === "string" && messageCode(codedMessage(code, "")) === code) return code;
+  const code = errorCode(error);
+  if (code !== undefined) return code;
   const message = (error as { message?: unknown }).message;
   return typeof message === "string" ? messageCode(message) : null;
 }

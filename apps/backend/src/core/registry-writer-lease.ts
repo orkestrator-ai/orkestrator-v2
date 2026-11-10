@@ -41,6 +41,10 @@ interface LeaseDocument {
 }
 
 export class RegistryWriterLeaseBusyError extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "operation-in-progress" } as const;
+
   constructor() {
     super(
       formatContainerLifecycleError(
@@ -313,6 +317,10 @@ export async function checkRegistrySchemaMarker(
 }
 
 export class RegistrySchemaBlockedError extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "unsupported-format" } as const;
+
   constructor() {
     super(
       formatContainerLifecycleError(

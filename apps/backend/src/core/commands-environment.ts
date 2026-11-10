@@ -16,7 +16,7 @@ import {
 } from "./worktree-locations.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   isContainerLifecycleErrorCode,
   parseContainerLifecycle,
   setupCompletionIsCurrent,
@@ -297,18 +297,14 @@ export async function assertDockerContainerOwned(
   if (ownership.verdict === "owned" || ownership.verdict === "missing") return;
   if (ownership.verdict === "unknown") {
     // An unreachable daemon or unreadable answer is not evidence of ownership.
-    throw new Error(
-      formatContainerLifecycleError(
-        "daemon-unavailable",
-        "Docker could not confirm who owns this container. Retry once Docker is reachable.",
-      ),
+    throw new ContainerLifecycleError(
+      "daemon-unavailable",
+      "Docker could not confirm who owns this container. Retry once Docker is reachable.",
     );
   }
-  throw new Error(
-    formatContainerLifecycleError(
-      "not-owned",
-      "Refusing Docker operation on a container not owned by this development profile",
-    ),
+  throw new ContainerLifecycleError(
+    "not-owned",
+    "Refusing Docker operation on a container not owned by this development profile",
   );
 }
 
@@ -1247,9 +1243,7 @@ async function verifyRuntimeStorage(
   if (!imageId) return;
   const verified = await verifyStorageSet(context, imageId, environment.id, parsed.record.storage);
   if (!verified.ok) {
-    throw new Error(
-      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(verified)),
-    );
+    throw new ContainerLifecycleError("needs-attention", storageHelperFailureMessage(verified));
   }
 }
 
@@ -1323,19 +1317,15 @@ async function prepareRuntimeStorage(
     });
   }
   if (!imageId) {
-    throw new Error(
-      formatContainerLifecycleError(
-        "capability-unavailable",
-        "The environment image could not be identified, so its persistent storage cannot be checked.",
-      ),
+    throw new ContainerLifecycleError(
+      "capability-unavailable",
+      "The environment image could not be identified, so its persistent storage cannot be checked.",
     );
   }
   await ensureStorageVolumes(context, environment.id, storage);
   const initialized = await initializeStorageSet(context, imageId, environment.id, storage);
   if (!initialized.ok) {
-    throw new Error(
-      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(initialized)),
-    );
+    throw new ContainerLifecycleError("needs-attention", storageHelperFailureMessage(initialized));
   }
   return storage;
 }
@@ -1974,7 +1964,7 @@ export async function removeContainerConfirmingAbsence(
 }
 
 function containerLifecycleError(code: ContainerLifecycleErrorCode, message: string): Error {
-  return new Error(formatContainerLifecycleError(code, message));
+  return new ContainerLifecycleError(code, message);
 }
 
 export async function recreateEnvironmentOnce(

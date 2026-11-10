@@ -15,9 +15,9 @@ import {
   isPositiveInteger,
   isRecord,
   nowIso,
-  paneLayoutRevisionConflictMessage,
   path,
 } from "./storage-shared.js";
+import { paneLayoutRevisionConflict } from "./pane-layout-conflict.js";
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -781,7 +781,7 @@ export class DraftsRepository {
       );
       const currentRevision = layouts[environmentId]?.revision ?? 0;
       if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
-        throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
+        throw paneLayoutRevisionConflict(expectedRevision, currentRevision);
       }
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];

@@ -6,6 +6,7 @@ import {
   messageCode,
   nodeRefusalCode,
 } from "./node-refusal";
+import { errorCode, formatIpcError, ipcErrorText, isRegisteredErrorCode } from "./ipc-error";
 
 describe("node refusal message form", () => {
   test("encodes and reads back every desktop refusal code", () => {
@@ -33,8 +34,21 @@ describe("node refusal message form", () => {
     expect(nodeRefusalCode(Object.assign(new Error("x"), { code: "ECONNRESET" }))).toBeNull();
   });
 
-  test("imports nothing, so the sandboxed preload can bundle it", () => {
+  test("is a registered error code, read from every transport's form", () => {
+    for (const code of DESKTOP_NODE_REFUSAL_CODES) {
+      expect(isRegisteredErrorCode(code)).toBe(true);
+      // Main's message form is the registered form, byte for byte.
+      expect(codedMessage(code, "text")).toBe(formatIpcError(code, {}, "text"));
+      expect(errorCode(new Error(codedMessage(code, "text")))).toBe(code);
+      expect(ipcErrorText(codedMessage(code, "text"))).toBe("text");
+    }
+  });
+
+  test("imports only the Effect-free codec, so the sandboxed preload can bundle it", () => {
     const source = readFileSync(new URL("./node-refusal.ts", import.meta.url), "utf8");
-    expect(source).not.toMatch(/^import\s/m);
+    const imports = source.match(/^import\s.*$/gm) ?? [];
+    expect(imports).toEqual(['import { errorCode } from "./ipc-error.js";']);
+    const codec = readFileSync(new URL("./ipc-error.ts", import.meta.url), "utf8");
+    expect(codec).not.toMatch(/^import\s/m);
   });
 });

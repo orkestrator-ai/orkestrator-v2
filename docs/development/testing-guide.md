@@ -1252,6 +1252,48 @@ with the switches in `HEADLESS_ELECTRON_SWITCHES`
 (`bun install.js` in its `electron` package first if `dist/` is missing).
 Run `dev:stop` and `dev:reset` for such a profile from its own checkout.
 
+`container-tmux-tab-live.ts` also records each container change signal's
+state and rings (`tmux-hook-signal` is the claude-tmux doorbell) either side
+of every window. To see the doorbell confirmed on a Linux host whose own
+Docker cannot reach the host, run the same profile on a disposable rootless
+daemon with host loopback: its containers reach the backend through
+`10.0.2.2`, and the app's on-demand reachability check names that address
+on the first container create even with the boot check off.
+
+```bash
+mise run docker:build:dev --profile ctab        # with the qualification shim, as above
+mise run docker:disposable -- start --name ctab --host-loopback \
+  --image orkestrator-v2:dev-<hash>             # the tag docker:build:dev printed
+eval "$(mise run docker:disposable -- env --name ctab)"
+# then the same dev:test, container-tmux-tab-live.ts, dev:stop and dev:reset
+# commands as above, in this shell, so the profile and the driver use that daemon
+mise run docker:disposable -- stop --name ctab
+```
+
+`scripts/human-prompt-reads-live.ts` measures BG-9: one native Claude
+session started through the profile's CLI (`--checkout` for an older
+commit's), the profile's isolated Claude directory pointed at the loopback
+fake Anthropic model, no browser, then 60 s idle and 180 s with a turn held
+at the model. The human-prompt monitor's bridge reads are the unattributed
+`provider-request` counter; the artifact also has each kind's provider
+requests a minute.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile bg9 --fixture \
+  --fixture-environments local --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/human-prompt-reads-live.ts --profile bg9 \
+  --out output/benchmarks/bg9.json
+```
+
+A launch with a cold toolchain page cache needs no root on Linux: with the
+profile stopped, `find <dataDir>/toolchains -type f -exec dd if={} iflag=nocache count=0 status=none \;`
+evicts the toolchain's pages, and `fincore -b` on the same files confirms
+nothing is resident. Delete `<dataDir>/toolchains/.verified-stamps.json` as
+well for a full check. Time the `dev:test` start to its `Live` line (the
+launcher runs the toolchain step before Electron) and read Electron's
+`[toolchain] prepare.ready durationMs` from the profile's `logs/electron.log`,
+which is rewritten on every start.
+
 #### Image and layer sizes
 
 `scripts/docker-image-layers.ts` measures an image on whatever Docker the host

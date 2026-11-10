@@ -23,9 +23,9 @@ any row's status.
 | [CLI and slash commands](cli-and-slash-commands/0000-index.md) | 3 | 0 | 2 | 0 | 5 | The public `orkestrator` CLI and the slash-command catalogue: missing features, catalogue cleanup and live qualification. |
 | [Containers and environments](containers-and-environments/0000-index.md) | 24 | 3 | 10 | 2 | 39 | Docker environment containers: platform qualification, rebuild state, network and credential isolation, resource budgets, state observation and cleanup. |
 | [Coordinator and Multi Review](coordinator-and-multi-review/0000-index.md) | 23 | 1 | 24 | 0 | 48 | The two multi-agent features: the Coordinator (read-only enforcement, async delegation, agent mail) and Multi Review (reviewer panels, consolidation, the flow graph). |
-| [Cross-cutting](cross-cutting/0000-index.md) | 31 | 9 | 27 | 2 | 69 | Work that spans the product: CI and test health, live provider and platform qualification, mixed-version support, dependency upgrades, remote host upgrades and mobile layout. |
+| [Cross-cutting](cross-cutting/0000-index.md) | 31 | 9 | 28 | 2 | 70 | Work that spans the product: CI and test health, live provider and platform qualification, mixed-version support, dependency upgrades, remote host upgrades and mobile layout. |
 | [Design canvas](design-canvas/0000-index.md) | 3 | 0 | 0 | 0 | 3 | The design canvas and its agent tools: qualification evidence, operation recovery edges, design-to-agent conversation links and accessibility findings. |
 | [MCP](mcp/0000-index.md) | 3 | 0 | 1 | 0 | 4 | MCP server management across providers, MCP delivery into environments, and the Control MCP voice surface. |
 | [Service previews and web annotations](previews-and-annotations/0000-index.md) | 5 | 2 | 5 | 1 | 13 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
-| [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 15 | 4 | 6 | 1 | 26 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
-| **Total** | 121 | 22 | 89 | 6 | 238 | |
+| [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 16 | 4 | 6 | 1 | 27 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
+| **Total** | 122 | 22 | 90 | 6 | 240 | |

@@ -28,19 +28,19 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop, and WEB-3's per-transition RPC counts on a native loopback turn; Linux done 2026-11-10: a claude-tmux tab in a container on a container-local fake model, counted by Docker (idle tab 297–471 → 124.5–128.5 execs a minute for the container; BG-1, BG-2, BG-7), and tasks 2 and 10's per-pass counts on the 0048 busy profile, populated and with its environments stopped (activity sweep 13.7 → 5.9 KB fetched a pass, BG-3's presence reads 7 → 7 on base against 9 → 3 on after). Still open: the BG-2 doorbell rate live, which needs a host whose containers reach the backend (beelink's cannot; agent-doable on macOS); BG-9 live, which needs a working Claude or Codex session on a loopback model (agent-doable); BG-11 live, which needs a build pipeline; and the user's: `gh-spawn` per hour needs a real PR and a `gh` login, a cold-cache launch needs root, BG-12 needs a real Claude login handed to a container; see the table in task 1).
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (requires the user for what is left: `gh-spawn` per hour needs a real PR and a `gh` login, BG-12 a real Claude login handed to a container. macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop, and WEB-3's per-transition RPC counts on a native loopback turn; Linux done 2026-11-10: a claude-tmux tab in a container on a container-local fake model, counted by Docker (idle tab 297–471 → 124.5–128.5 execs a minute for the container; BG-1, BG-2, BG-7), tasks 2 and 10's per-pass counts on the 0048 busy profile, populated and with its environments stopped (activity sweep 13.7 → 5.9 KB fetched a pass, BG-3's presence reads 7 → 7 on base against 9 → 3 on after), BG-2's doorbell live on a rootless daemon whose containers reach the backend (doorbell confirmed; idle bound tab loop 0.44–0.45 execs a second, the container 32–33.5 a minute), BG-9 live on a native Claude session with a held turn (the monitor's bridge reads 11.7–12 → 2 a minute), and DK-3's cold page cache (a launch on stamps is no slower with the 1.5 GB toolchain evicted; a full check adds about 2.1 s cold, median). BG-11's live count needs a scripted fake-model build pipeline and moved to [7563](7563-bg11-review-fanout-live-count.md); see the table in task 1).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md); live per-pass counts on the 0048 busy profile 2026-11-10 in task 1: the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the closing check of E12 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open, waiting on the maintainer's choice of push or long-poll (decided 2026-11-01 to choose only if the numbers still justify it; the numbers are in task 4 and nothing else is left to build) (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: done 2026-11-06, every item done or measured, live evidence left in 5340 and 6680 (TX-1 and TX-2 done 2026-11-04, focused tests only; TX-1 measured in E10: on a `dev:test` profile every streaming answer was a delta for one viewer and for each of two, and with a fake bridge the ring disabled gave 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s; see [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the closing check of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); TX-17 profiled and closed without a change, and E11's savings measured with a provider fake, 2026-11-05 in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md), figures in the measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, tests for BR-1 added 2026-11-05 by E20; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: done (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-19 done 2026-11-05, `activeTurns()` seeks the lifecycle index, and the ledger retention that decides what becomes of the rows is built, live sizing in [5821](5821-ledger-retention-live-evidence.md); ST-21 done 2026-11-05 by batch E-0580, its leftovers in [5800](5800-file-read-streaming-leftovers.md); ST-13 done 2026-11-06, the snapshot check's free-page release moved to a child process, its stall from 140 ms p50 (up to 2.4 s) to 6–7 ms on a 512 MiB database, and the deletion scrub and pre-migration copy left in-process in [7210](7210-storage-work-left-on-the-event-loop.md)).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, and seen live the same day on a real claude-tmux tab with a loopback fake model, 27 storage reads per delivery to 25, task 1; BG-1, BG-2 and BG-7 seen live 2026-11-10 with a claude-tmux tab in a container, counted by Docker: the idle tab's loop 3.8–6.7 → 0.94–0.99 execs a second on the one-exec poll, the doorbell rate itself not yet live, task 1).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, and seen live the same day on a real claude-tmux tab with a loopback fake model, 27 storage reads per delivery to 25, task 1; BG-1, BG-2 and BG-7 seen live 2026-11-10 with a claude-tmux tab in a container, counted by Docker: the idle tab's loop 3.8–6.7 → 0.94–0.99 execs a second on the one-exec poll; the doorbell itself seen live the same day on a rootless daemon whose containers reach the backend, confirmed with no demotion, an idle bound tab's loop 0.44–0.45 execs a second and its container 32–33.5 a minute, task 1).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live numbers not measurable on an isolated profile, which has no PR and no `gh` login; see task 1).
-10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; an idle `dev:test` profile shows no difference on 2026-11-06, because it has none of the items these skip; BG-3 seen live 2026-11-10 on 0048's busy profile, presence reads per pass 7 → 7 on base and 9 → 3 on after with both mailboxes' environments stopped; BG-9, BG-11 and BG-12 live stay with task 1).
+10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; an idle `dev:test` profile shows no difference on 2026-11-06, because it has none of the items these skip; BG-3 seen live 2026-11-10 on 0048's busy profile, presence reads per pass 7 → 7 on base and 9 → 3 on after with both mailboxes' environments stopped; BG-9 seen live 2026-11-10 on a native Claude session with a held turn, the monitor's bridge reads 11.7–12 → 2 a minute; BG-11's live count is [7563](7563-bg11-review-fanout-live-count.md); BG-12 live stays with task 1 and needs a real Claude login).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
-13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
+13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; cold page cache measured on Linux 2026-11-10 in task 1: a launch on current stamps was no slower with the toolchain evicted, while a full check added about 2.1 s cold, median).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open, waiting on the maintainer's decision on DK-10 in [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md) (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision, now [6780](../containers-and-environments/6780-second-claude-binary-in-the-image.md)).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; its follow-ups done 2026-11-05).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
@@ -372,8 +372,8 @@ What makes up the idle rows, per minute, from Docker's labels:
   rate (0.42/s): the tab never went quieter than one snapshot a second,
   which is what an unconfirmed doorbell does. Task 8 records that this host's
   containers cannot reach the backend; the doorbell's state was not read
-  here. The doorbell rate live still needs a host whose containers reach the
-  backend (open in task 1).
+  here. The doorbell on a host whose containers do reach the backend is the
+  next section.
 - **BG-7.** With no tab, base polled the container's Claude state every
   second (60 a minute) and after twice a minute. On macOS the same base made
   2 a minute, presumably because its state signal could ring there; on this
@@ -446,22 +446,129 @@ after 10.
   idle on macOS); neither was traced (7562 task 2).
 - **Diff scans.** Base rescanned every environment, stopped or not; after
   scanned a third as often and halved again once they stopped.
-- **Not exercised:** BG-9 needs a working Claude or Codex session (Pi
+- **Not exercised here:** BG-9 needs a working Claude or Codex session (Pi
   reports no content revision, so the monitor reads it every pass on both
-  commits); BG-11 needs a build pipeline; BG-12 needs a container Claude
-  login. See the table below.
+  commits); it is measured in the next section. BG-11 needs a build
+  pipeline ([7563](7563-bg11-review-fanout-live-count.md)); BG-12 needs a
+  container Claude login. See the table below.
+
+#### The doorbell, BG-9 and a cold page cache on Linux (2026-11-10, second round)
+
+Measured on beelink the same afternoon. After is this branch: for the
+doorbell and BG-9, `main` at `c98b20e6f` plus benchmark scripts only; for
+the cold page cache, the branch rebased onto `main` at `4dc220f7b`. Base is
+the same `0bd214ee` checkout. The same rules as above applied: isolated credential-free
+profiles, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, loopback fake models
+only, every profile stopped and reset, the image tag this round built and
+the disposable daemon removed, and the base worktree deleted. Three more
+Electron core dumps from headless `dev:stop` (to-do
+[7554](7554-headless-dev-electron-core-dumps-in-checkout.md)) were kept out
+of the commit. How to repeat each is in
+[the testing guide](../../development/testing-guide.md#a-claude-tmux-tab-in-a-container-and-per-item-counts-on-a-busy-profile).
+
+**BG-2's doorbell, live (after only).** Beelink's own Docker cannot reach
+the host, so this ran on a disposable rootless daemon started with host
+loopback (`mise run docker:disposable -- start --host-loopback`), whose
+containers reach the host's loopback through `10.0.2.2`; nothing on the host
+changed. After's image (`docker:build:dev`, `tmux-hook-signal=1`,
+`claude-state-signal=3`) was loaded into it, the profile ran with that
+daemon's `DOCKER_HOST`, and its first container create ran the app's own
+on-demand reachability check, which named the host loopback address.
+`scripts/container-tmux-tab-live.ts`, unchanged except that it now records
+each change signal's state and rings either side of every window, made two
+passes. The doorbell (`tmux-hook-signal`) was `confirmed` in every window
+with a tab, with no demotion; it rang once when armed, twice per turn and
+once more in the bound idle window. The Claude state signal and the
+worktree signal were confirmed too.
+
+| Container `docker exec` per minute, after `c98b20e6f` | Doorbell confirmed (rootless, host loopback), passes 1 / 2 | Doorbell unconfirmed (beelink's rootful Docker, above) |
+| --- | --- | --- |
+| No tab open | 8 / 8 | 11 / 14 |
+| Idle tab before its first prompt | 33 / 32 | 124.5 / 125.0 |
+| Idle tab, transcript bound | 33.5 / 32 | 128.5 / 128.5 |
+| From an outside `docker stop`, 60 s | 0 / 0 | 0 / 0 |
+| `docker stop` to stored status `stopped` | 317 / 529 ms | 300 / 318 ms |
+
+- **The tab loop.** Bound and idle, the snapshot ran 53–54 times in 120 s:
+  0.44–0.45 execs a second, the 2.5 s safety read plus the reads the rings
+  woke, against task 8's estimate of 0.42/s and against 0.94–0.99/s while
+  the doorbell is unconfirmed. Before the first prompt the loop made 45–47
+  snapshots and 11 transcript searches in 120 s (0.47–0.48 a second).
+  Base's loop, which has no doorbell and so does not depend on reaching the
+  host, made 3.8–6.7 a second on beelink (above); base was not rerun on the
+  rootless daemon.
+- **No tab.** The confirmed Claude state signal left its poll at 2 a minute,
+  as on macOS; the other 6 a minute are tab cleanup (7531).
+- **Counters.** The backend charged 4–4.5 `docker exec` a minute to its
+  kinds in the idle windows while Docker counted 32–33.5: the tab loop is
+  still uncounted ([7562](../transcripts-and-observation/7562-tmux-tab-loop-recurring-kind.md)).
+- **Turns.** The tab went busy 0.7–1.5 s after a queued prompt and idle
+  3.8–5.0 s after it, every turn of both passes.
+
+**BG-9 live.** `scripts/human-prompt-reads-live.ts` on a profile with
+`--fixture-environments local --agent-platforms claude`, one per side: one
+native Claude session started through the profile's own CLI (base's CLI for
+base), its model the loopback fake Anthropic endpoint named in the profile's
+isolated Claude directory, and no browser. Windows: the session idle for
+60 s, then a turn held at the fake model for 180 s (both sides reported
+`working` throughout). The human-prompt monitor is not a recurring job, so
+each `/human-prompts` read it makes is charged to the unattributed
+`provider-request` counter; with no browser and no CLI call in flight
+nothing else was charged there (0 in every idle window). Two runs per side:
+
+| Per minute | Base `0bd214ee` | After |
+| --- | --- | --- |
+| Monitor's bridge reads, session idle | 0 / 0 | 0 / 0 |
+| Monitor's bridge reads, turn held (content unchanged) | 12 / 11.67 | 2 / 2 |
+| `native-activity-sweep` provider requests, idle | 12 / 13 | 36 / 36 |
+| `native-activity-sweep` provider requests, turn held | 30 / 30 | 89 / 90 |
+
+Base read the session's observation on every 5 s pass; after reused it
+while the revision stayed the same and read again when the 30 s reuse
+limit ran out, exactly task 10's rule. The activity sweep's own provider
+requests per session were three times base's on after, idle and working.
+That is not BG-9 and was not traced; it is task 3 of
+[7562](../transcripts-and-observation/7562-tmux-tab-loop-recurring-kind.md).
+
+**DK-3 with a cold page cache (after only).** Dropping the whole page cache
+needs root, but an unprivileged user can evict one file's pages:
+`dd if=<file> iflag=nocache count=0` for every file under the profile's
+toolchain directory (1.59 GB, six seeded agents plus `gh`; `fincore`
+reported 0 bytes resident afterwards and all of it resident in the warm
+runs). One `dev:test --headless` profile with no fixture, launched 12 times
+in turns: on its current stamps or with `.verified-stamps.json` deleted (a
+full check, which reads every byte as the old code did; the old code read
+them four times a launch), each warm and cold. In this repository's
+`dev:test` the launcher runs the toolchain step before Electron, so a full
+check's cost shows in the launcher's start to its `Live` line, and
+Electron's own `prepare.ready` then finds fresh stamps.
+
+| Three launches each | Start to `Live` | Electron `prepare.ready` |
+| --- | --- | --- |
+| Stamps, warm | 4.13, 4.56 s (the first run's time was not read) | 162–172 ms |
+| Stamps, cold | 4.39–4.54 s | 134–152 ms |
+| Full check, warm | 5.97–6.42 s | 210–234 ms |
+| Full check, cold | 6.40–7.07 s | 245–280 ms |
+
+So on stamps a cold page cache costs a launch nothing measurable: DK-3
+reads no toolchain bytes when nothing changed. A full check, once a week or
+after a repair, adds about 1.8 s warm and 2.1 s cold to a stamped launch
+here (medians: 6.19 against 4.35 s warm, 6.63 against 4.54 s cold). `0bd214ee` itself was not launched for this: its pins are older
+than this profile's toolchain, so its launch would have downloaded rather
+than verified. The runner was a git-ignored shell script; the commands are
+in the testing guide.
 
 **What else the report asked for, and where it stands.**
 
 | Measurement | Items | Status |
 | --- | --- | --- |
 | `storage-read` bytes for `mail-presence` and `activity` | ST-7 | Measured idle (macOS) and on a populated busy profile (Linux, 2026-11-10, above): idle windows fetch no bytes on either side even with stores full; during the busy phase the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB. After's presence pass reads 2 more cached rows than base's (7562 task 2). Done. |
-| `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Measured on Linux 2026-11-10 (above) with a claude-tmux tab in the container on a container-local fake model, counted by Docker: idle tab 297–471 → 124.5–128.5 execs a minute for the whole container, the tab's own loop 3.8–6.7 → 0.94–0.99 a second. Open: the doorbell rate (BG-2's 0.42/s in task 8) on a host whose containers reach the backend, which beelink's do not. BG-8 showed no difference on an outside `docker stop` (both commits stop within 0.5 s). |
+| `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Measured on Linux 2026-11-10 (above) with a claude-tmux tab in the container on a container-local fake model, counted by Docker: idle tab 297–471 → 124.5–128.5 execs a minute for the whole container, the tab's own loop 3.8–6.7 → 0.94–0.99 a second. The doorbell measured live the same day on a rootless daemon whose containers reach the backend (above): confirmed, the idle bound tab's loop 0.44–0.45 execs a second and the container 32–33.5 a minute. BG-8 showed no difference on an outside `docker stop` (both commits stop within 0.5 s). Done. |
 | `gh-spawn` per hour | BG-6, BG-13 (task 9) | Not measurable on an isolated profile: the fixture has no GitHub remote or PR, and the profile's `gh` configuration is isolated by design. It needs a real PR and a `gh` login, whose requests go to GitHub on the user's account. |
-| Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | BG-3 measured on Linux 2026-11-10 (above): with both mailboxes' environments stopped, presence reads per pass 9 → 3 on after, 7 → 7 on base. Open: BG-9 needs a working Claude or Codex session on a loopback model (the busy driver's Pi reports no revision; agent-doable); BG-11 a build pipeline (it needs Codex or a ticket-driven pipeline); BG-12 a real Claude login handed to a container (the user's). Their unit counts in task 10 stand. |
+| Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | BG-3 measured on Linux 2026-11-10 (above): with both mailboxes' environments stopped, presence reads per pass 9 → 3 on after, 7 → 7 on base. BG-9 measured on Linux 2026-11-10 (above): the monitor's bridge reads for a held native Claude turn 11.7–12 → 2 a minute. Open: BG-11, which needs a scripted build pipeline on a fake model, is [7563](7563-bg11-review-fanout-live-count.md); BG-12 needs a real Claude login handed to a container (the user's). Their unit counts in task 10 stand. |
 | React Profiler, two tabs idle and streaming | WEB-2, WEB-5, WEB-7 | Answered 2026-11-05 by E12 (see Needs verification); production React not measured. |
 | Backend RPCs per environment activity transition | WEB-3 | Measured on macOS 2026-11-06 (above): one environment, two native loopback turns per side. `list_prompt_queues` plus `list_multi_review_workflows`: idle → working 4 → 0 RPCs; working → idle 14 → 0, identical in both cycles. Gateway browser client, pinned `0bd214ee` against `ee2cc8423`; counts include repeated snapshots within each transition window. |
-| Launch to ready, warm and cold page cache | DK-3 (task 13) | Warm measured 2026-11-03 (task 13). Cold not possible here: dropping the page cache on macOS needs `sudo purge`, and this session has no root. |
+| Launch to ready, warm and cold page cache | DK-3 (task 13) | Warm measured 2026-11-03 (task 13). Cold measured on Linux 2026-11-10 (above) by evicting the toolchain's pages without root: a launch on stamps no slower cold; a full check adds about 2.1 s cold (median). Done. |
 | `docker history` and `du` in the image | DK-7 to DK-9 (task 14) | Measured 2026-11-02 on linux/amd64 (task 14) and 2026-11-06 on macOS, linux/arm64 under Docker Desktop (above): −15% on both, re-pull 883 → 24.2 MB on arm64. |
 | Gateway SSE and WebSocket bytes | GW-2, GW-6, GW-7 | Owned by [0052](../transcripts-and-observation/0052-remote-client-bandwidth.md). |
 | Snapshot rate and bytes per send | TX-1, TX-2 (task 5) | TX-1 measured live in E10 ([6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md)); TX-2 with a provider fake in E9, live bytes per send in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 1. |
@@ -1824,7 +1931,7 @@ Whole Electron launch to ready, measured the same day on an isolated `dev:test` 
 | Unchanged toolchain (repeat launches) | 10.2, 13.8, 12.6 s | 1.6, 1.9, 1.8, 1.7 s | 449, 390, 492, 214 ms |
 | First launch on the new code (no stamp file, so a full check) | n/a | 4.7 s | 3,339 ms |
 
-Not measured: a cold page cache (`purge` needs root).
+Not measured here: a cold page cache (`purge` needs root). Measured on Linux on 2026-11-10 instead, without root (task 1): on stamps a cold launch was no slower, and a full check added about 2.1 s (median).
 
 **Decisions.**
 
@@ -3063,6 +3170,8 @@ cold page cache), or a
 busy profile with stores, mailboxes, sessions and
 pipelines in use, which 0048 already plans. Closing task 1 would drop those
 from view, so it stays open with them listed in its last table.
+(2026-11-10: the busy-profile counts, the container tab, the doorbell, BG-9
+and a cold toolchain page cache were measured on Linux; see task 1.)
 
 ### Task 5: closed on measurements, not live evidence (2026-11-06)
 
@@ -3185,18 +3294,80 @@ left it. Stopping the nine `busy-*` environments through `environment.stop`
 gives BG-3 its stopped environments with mailboxes, on both commits through
 the same public action.
 
-### Task 1: what stays open, and why (2026-11-10)
+### Task 1: what stays open, and why (2026-11-10, updated in the second round)
 
-- **BG-2's doorbell rate live**: needs a host whose containers reach the
-  backend's agent tools port. Beelink's do not and its firewall may not be
-  changed; macOS Docker Desktop's do (agent-doable there).
-- **BG-9 live**: needs a working Claude or Codex native session, because
-  only those report the content revision BG-9 keys on; the busy driver's Pi
-  sessions do not. A native Claude tab on the loopback model, as WEB-3's
-  driver opens, would do it (agent-doable; not run in this round).
-- **BG-11 live**: needs a build pipeline's review fan-out, which needs Codex
-  or a ticket-driven pipeline on a fake model (0048 task 1 left it out for
-  the same reason).
-- **BG-12 live, `gh-spawn` per hour, cold-cache launch**: the user's; they
-  need a real Claude login handed to a container, a real PR with a `gh`
-  login, and root to drop the page cache.
+- **`gh-spawn` per hour and BG-12 live**: the user's. They need a real PR
+  with a `gh` login, and a real Claude login handed to a container; both
+  would send requests on the user's accounts.
+- **BG-11 live**: moved to [7563](7563-bg11-review-fanout-live-count.md).
+  It needs a build pipeline to dispatch its review fan-out on a fake model.
+  0048's fake model scripts only Multi Review's result tools, and the
+  Auto-pipeline fake model that does reach a build pipeline's review is a
+  Playwright spec newer than `0bd214ee`, so a live count needs a driver
+  built for it. The saving is a few cached reads per review dispatch, so
+  that work belongs in its own to-do rather than holding task 1 open.
+- Done this round, so no longer open: BG-2's doorbell (on a rootless
+  daemon with host loopback), BG-9 (a native Claude session with a held
+  turn) and DK-3's cold page cache (evicting the toolchain's pages without
+  root).
+
+Task 1 stays open with only the user's two measurements, and the file's
+index row is `requires user input`: tasks 4 and 14 also wait on the
+maintainer.
+
+### Task 1: the doorbell measured on a disposable rootless daemon (2026-11-10)
+
+**Choice.** BG-2's doorbell ran on `mise run docker:disposable -- start
+--host-loopback`, a rootless daemon inside RootlessKit whose containers reach
+the host's loopback through `10.0.2.2`, with after's image loaded into it.
+
+- **Rootless daemon with host loopback (chosen).**
+  - Pros: the doorbell reaches the real backend on this host; RootlessKit's
+    network namespace keeps the host's firewall, routes and Docker daemon
+    untouched, which the ticket requires; the same app code picks the
+    address through its on-demand reachability check.
+  - Cons: rootless, not the rootful Engine of the earlier pass, so the two
+    after rows differ in daemon as well as in the doorbell's state; base was
+    not rerun there.
+- **Change the host firewall so beelink's rootful containers reach the
+  backend.** Refused by the ticket and by the node rules.
+- **Leave it for macOS.** Possible, but the rootless path makes it doable on
+  a headless Linux node now (`docs/README.md`, choosing a status).
+
+Base was not rerun on the rootless daemon because its tab loop has no
+doorbell: its rate does not depend on reaching the host, and its rootful
+figures stand.
+
+### Task 1: BG-9 counted as unattributed provider requests (2026-11-10)
+
+**Choice.** `scripts/human-prompt-reads-live.ts` reads the unattributed
+`provider-request` counter across a held turn with no browser open, rather
+than counting `/human-prompts` requests at the bridge.
+
+- **Unattributed `provider-request` (chosen).**
+  - Pros: present on both commits; needs no change to either commit's
+    bridge or backend; the activity sweep, queue scan and interaction
+    observer charge their own kinds, and an idle control window read 0.
+  - Cons: anything else unattributed during the window would be counted
+    too; the control window and a browser-free run are what keep it clean.
+- **Count requests at the Claude bridge.** Exact, but no bridge counts
+  requests per route, and adding one would change both commits.
+
+The session was started and prompted through each commit's own CLI, so no
+renderer polled the transcript during the window.
+
+### Task 1: a cold page cache without root (2026-11-10)
+
+**Choice.** Each file under the profile's toolchain directory was evicted
+with `dd iflag=nocache count=0` and checked with `fincore`, and a full check
+(no stamp file) stood in for the old code's reads.
+
+- **Evict the toolchain's own pages (chosen).**
+  - Pros: no root; exactly the bytes DK-3 stopped reading; residency
+    checked before each launch.
+  - Cons: other files a launch reads (Electron, the bundle) stayed warm, so
+    this is a cold toolchain rather than a cold machine.
+- **Launch `0bd214ee` for the before side.** Its pins are older than the
+  seeded toolchain, so its launch would download rather than verify; the
+  full check reads every byte once as the old code did (it read them four
+  times, all but the first from the page cache).

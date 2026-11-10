@@ -12,6 +12,7 @@ backend's `recurringWork` counters.
 
 1. **Give the claude-tmux tab loop a recurring kind**: open.
 2. **Explain the presence pass's extra reads and revision check**: open.
+3. **Explain the activity sweep's extra provider requests per Claude session**: open.
 
 ### 1. Give the claude-tmux tab loop a recurring kind
 
@@ -41,6 +42,10 @@ only interactive captures. Task 8 of 1202 counted the loop with
 Docker labels the tab loop's idle execs `sh -c echo` (the snapshot) and
 `sh -c find` (the transcript search); the state poll's are `sh -c if`. Not
 checked: whether the loop's storage reads are counted under another kind.
+The same day, on a rootless daemon whose containers reach the backend (so
+the doorbell was confirmed), an idle bound tab's container made 32–33.5
+execs a minute while the counters charged 4–4.5: the snapshot alone was
+26.5–27 a minute, still uncounted.
 
 **Decisions.**
 
@@ -89,6 +94,41 @@ running environments.
     - Pros: no work.
     - Cons: leaves an unexplained difference in the one pass that runs
       every 2 s for every mailbox.
+
+### 3. Explain the activity sweep's extra provider requests per Claude session
+
+**Problem.** In 1202 task 1's BG-9 run (2026-11-10, beelink), one native
+Claude session on a loopback fake model cost `main`'s
+`native-activity-sweep` 36 provider requests a minute idle and 89–90 with a
+turn held, where `0bd214ee` made 12–13 and 30: three times as many bridge
+requests per session, every pass. Each is a loopback request answered
+from the bridge's memory, so the cost is small, but it scales with
+sessions and nothing explains it.
+
+**Context.** The sweep is `NativeAgentService.reconcileAgentActivity`,
+run every 2 s as the `native-activity-sweep` job in
+`apps/backend/src/core/index.ts`; every bridge request goes through
+`bridgeFetch` (`http-bridge/transport.ts`), which charges one
+`provider-request` to the job that issued it. Measured with
+`scripts/human-prompt-reads-live.ts` (its `byKindPerMinute`), one session
+per profile, no browser.
+
+**Investigation.** Not traced. Base made 1 request a pass while working and
+fewer idle (12–13 a minute against 30 passes); `main` made about 3 a pass
+working and 1.2 idle. Candidates to check first: the batch activity route
+alongside a per-session read, and the command or MCP inventory reads a
+session projection makes.
+
+**Decisions.**
+
+- **What to do with the difference?**
+  - **Trace which bridge routes one sweep pass calls per session on `main`, then drop any that repeat what the pass already read (recommended).**
+    - Pros: the counters show the result directly; the sweep runs every
+      2 s for every session.
+    - Cons: the requests are loopback and cheap, so the saving is small.
+  - **Record it as the cost of the newer reads and close the task.**
+    - Pros: no work.
+    - Cons: leaves a per-session tripling unexplained in the busiest job.
 
 ## Related
 

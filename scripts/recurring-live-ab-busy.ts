@@ -399,6 +399,42 @@ export function clientProgressSample(
 }
 
 /** An error's first line: Playwright appends a call log that may name page content. */
+/**
+ * A pane layout's tree without the tabs of one Multi Review (its root,
+ * reviewer and Address Findings tabs), and how many it removed. Leaves whose
+ * active tab went select their first remaining tab. The renderer owns the
+ * tree's shape: leaves carry `tabs` and `activeTabId`, splits `children`.
+ */
+export function withoutReviewTabs(
+  root: unknown,
+  workflowId: string,
+): { root: unknown; removed: number } {
+  let removed = 0;
+  const isReviewTab = (tab: unknown) => {
+    if (!tab || typeof tab !== "object") return false;
+    const record = tab as { id?: unknown; multiReviewTabData?: { workflowId?: unknown } };
+    return (
+      record.multiReviewTabData?.workflowId === workflowId ||
+      record.id === `multi-review:${workflowId}` ||
+      (typeof record.id === "string" && record.id.startsWith(`multi-review:${workflowId}:`)) ||
+      record.id === `multi-review-fix:${workflowId}`
+    );
+  };
+  const walk = (node: unknown): unknown => {
+    if (!node || typeof node !== "object") return node;
+    const record = node as { tabs?: unknown; activeTabId?: unknown; children?: unknown };
+    if (Array.isArray(record.children)) return { ...record, children: record.children.map(walk) };
+    if (!Array.isArray(record.tabs)) return node;
+    const tabs = record.tabs.filter((tab) => !isReviewTab(tab));
+    removed += record.tabs.length - tabs.length;
+    const active = tabs.some((tab) => (tab as { id?: unknown }).id === record.activeTabId)
+      ? record.activeTabId
+      : ((tabs[0] as { id?: unknown } | undefined)?.id ?? null);
+    return { ...record, tabs, activeTabId: active };
+  };
+  return { root: walk(root), removed };
+}
+
 function firstLine(error: unknown): string {
   return error instanceof Error ? (error.message.split("\n", 1)[0] ?? "") : String(error);
 }
@@ -553,6 +589,30 @@ export async function measureBusy(
       ...(mutation ? { request: { requestId: `busy-${randomUUID()}` } } : {}),
     })) as { ok?: unknown; result?: unknown } | null;
     return { ok: response?.ok === true, result: response?.result };
+  };
+
+  const closeReviewTabs = async (environmentId: string, workflowId: string) => {
+    const layout = (await gateway.invoke("get_pane_layout", { environmentId })) as {
+      version?: unknown;
+      containerId?: unknown;
+      activePaneId?: unknown;
+      root?: unknown;
+    } | null;
+    if (!layout) return;
+    const next = withoutReviewTabs(layout.root, workflowId);
+    if (next.removed === 0) return;
+    // The merge takes exactly these four fields and refuses any other.
+    const base = {
+      version: layout.version,
+      containerId: layout.containerId,
+      activePaneId: layout.activePaneId,
+      root: layout.root,
+    };
+    await gateway.invoke("apply_pane_layout_intent", {
+      environmentId,
+      baseLayout: base,
+      desiredLayout: { ...base, root: next.root },
+    });
   };
 
   const fakeModel = runtime.startFakeModel();
@@ -965,7 +1025,17 @@ export async function measureBusy(
           if (fakeModel.marker(held)) result.obligations.turns += 1;
 
           // 6. A Multi Review to completion, every slot on the fake model.
-          if (reviewId) await step(["review", "cancel", reviewId]);
+          if (reviewId) {
+            await step(["review", "cancel", reviewId]);
+            // Each review opens tabs in its environment, which holds at most
+            // nine; close the last one's as a user would, or every launch
+            // after the ninth is refused (todo 4960's soak).
+            try {
+              await closeReviewTabs(reviewEnvironment.id, reviewId);
+            } catch (error) {
+              fail("workflow-tabs", firstLine(error));
+            }
+          }
           // Every client whose link is up watches it from a review view of
           // its own (a hidden client's view is a separate, visible document).
           const viewers = (

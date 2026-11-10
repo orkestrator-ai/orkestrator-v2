@@ -12,6 +12,7 @@ import {
   burstBadgeLines,
   busyRowSummary,
   UNTRACKED_COUNTED_FILES,
+  withoutReviewTabs,
   busySummaryLines,
   measureBusy,
   parseBusyClients,
@@ -51,6 +52,8 @@ type Scenario = {
   emptyView?: boolean;
   /** Opening a review view throws. */
   failPrepare?: boolean;
+  /** Pane layout writes are ignored, so review tabs pile up. */
+  keepReviewTabs?: boolean;
 };
 
 /**
@@ -81,6 +84,17 @@ function busyHarness(scenario: Scenario = {}) {
   let commits = 0;
   let reads = 0;
   let reviewLaunches = 0;
+  /** The review environment's pane layout: one leaf. */
+  let reviewLayout: Record<string, unknown> & { revision: number; root: unknown } = {
+    version: 1,
+    environmentId: "env-busy-2",
+    containerId: null,
+    activePaneId: "default",
+    updatedAt: "2026-11-10T00:00:00.000Z",
+    revision: 1,
+    root: { kind: "leaf", id: "default", tabs: [{ id: "terminal-1" }], activeTabId: "terminal-1" },
+  };
+  const layoutWrites: unknown[] = [];
   let replies = 0;
   /** What the review views show, shared by every view of the one review. */
   let sightings: ReviewSighting[] = [];
@@ -203,6 +217,11 @@ function busyHarness(scenario: Scenario = {}) {
       return json({ messageId: "m1" });
     }
     if (verb === "review launch") {
+      // The review environment holds at most nine tabs, as the backend refuses.
+      const tabs = (reviewLayout.root as { tabs: Array<{ id: string }> }).tabs;
+      if (tabs.length >= 9)
+        return { status: 1, stdout: JSON.stringify({ error: { code: "operation-failed" } }) };
+      tabs.push({ id: `multi-review:wf-${now}` });
       reviewReads = 0;
       reviewLaunches += 1;
       sightings = [];
@@ -265,6 +284,27 @@ function busyHarness(scenario: Scenario = {}) {
       };
     },
     invoke: async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_pane_layout") return structuredClone(reviewLayout);
+      if (command === "apply_pane_layout_intent") {
+        // The backend refuses any field but these four (a live run's HTTP 500).
+        for (const side of [args.baseLayout, args.desiredLayout])
+          expect(Object.keys(side as object).sort()).toEqual([
+            "activePaneId",
+            "containerId",
+            "root",
+            "version",
+          ]);
+        layoutWrites.push(args.desiredLayout);
+        if (!scenario.keepReviewTabs) {
+          const desired = args.desiredLayout as { root: unknown };
+          reviewLayout = {
+            ...reviewLayout,
+            revision: reviewLayout.revision + 1,
+            root: desired.root,
+          };
+        }
+        return structuredClone(reviewLayout);
+      }
       if (command === "create_environment") {
         environments.push({ id: "env-busy-ask", name: String(args.name), projectId: "p1" });
         return { id: "env-busy-ask" };
@@ -401,6 +441,9 @@ function busyHarness(scenario: Scenario = {}) {
     watched,
     turnFiles,
     turnFilesRemoved,
+    layoutWrites,
+    reviewTabs: () =>
+      (reviewLayout.root as { tabs: Array<{ id: string }> }).tabs.map((tab) => tab.id),
     commits: () => commits,
   };
 }
@@ -566,6 +609,77 @@ describe("busy phase", () => {
     );
     expect(result.timeouts).toEqual({});
     expect(result.samples["burst-badge"]).toHaveLength(4);
+  });
+  test("each review's tabs are closed, so rounds past the ninth still launch reviews", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 12 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.obligations.workflows).toBe(12);
+    // Only the last review's tab is left, beside the terminal.
+    expect(h.reviewTabs()).toHaveLength(2);
+    expect(h.reviewTabs().filter((id) => id.startsWith("multi-review:"))).toHaveLength(1);
+    expect(h.layoutWrites).toHaveLength(11);
+  });
+  test("without the tab close a long run's reviews stop launching (the soak's failure)", async () => {
+    const h = busyHarness({ keepReviewTabs: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 11 }),
+      undefined,
+      h.runtime,
+    );
+    // One terminal tab and eight reviews fill the nine.
+    expect(result.obligations.workflows).toBe(8);
+    expect(result.failures.map((entry) => [entry.round, entry.step])).toEqual([
+      [9, "workflow"],
+      [10, "workflow"],
+      [11, "workflow"],
+    ]);
+  });
+  test("a pane layout tree loses only one review's tabs", () => {
+    const root = {
+      kind: "split",
+      children: [
+        {
+          kind: "leaf",
+          tabs: [
+            {
+              id: "multi-review:wf-1",
+              type: "multi-review",
+              multiReviewTabData: { workflowId: "wf-1" },
+            },
+            { id: "terminal-1" },
+          ],
+          activeTabId: "multi-review:wf-1",
+        },
+        {
+          kind: "leaf",
+          tabs: [
+            { id: "multi-review:wf-1:reviewer:r1" },
+            { id: "multi-review-fix:wf-1" },
+            { id: "multi-review:wf-2" },
+          ],
+          activeTabId: "multi-review:wf-2",
+        },
+      ],
+    };
+    const next = withoutReviewTabs(root, "wf-1");
+    expect(next.removed).toBe(3);
+    expect(next.root).toEqual({
+      kind: "split",
+      children: [
+        { kind: "leaf", tabs: [{ id: "terminal-1" }], activeTabId: "terminal-1" },
+        { kind: "leaf", tabs: [{ id: "multi-review:wf-2" }], activeTabId: "multi-review:wf-2" },
+      ],
+    });
+    expect(withoutReviewTabs(root, "wf-9").removed).toBe(0);
   });
   test("without turn files no turn directory is touched", async () => {
     const h = busyHarness();

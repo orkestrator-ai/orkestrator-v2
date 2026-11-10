@@ -359,3 +359,35 @@ test("a backend that offers no container logs shows no choice", async () => {
   expect(within(dialog).queryByText("Container server logs (optional)")).toBeNull();
   expect(within(dialog).queryByRole("checkbox")).toBeNull();
 });
+
+test("a failed rebuild keeps the old manifest and selection available for retry", async () => {
+  const offered = {
+    ...PLAN,
+    containerLogs: [
+      { environmentId: "env-a", name: "Alpha", status: "running" as const, included: false },
+    ],
+  };
+  const plan = spyOn(backend, "planDiagnosticsBundle")
+    .mockResolvedValueOnce(offered)
+    .mockRejectedValueOnce(new Error("Rebuild unavailable"))
+    .mockResolvedValueOnce({
+      ...offered,
+      planId: "retry-plan",
+      containerLogs: [{ ...offered.containerLogs[0]!, included: true }],
+    });
+  mount(<DiagnosticsExportCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "Alpha" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /Rebuild/ }));
+  await within(dialog).findByText("Rebuild unavailable");
+  expect(within(dialog).getByText("metrics.json")).toBeTruthy();
+  expect(within(dialog).getByRole("checkbox", { name: "Alpha" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  const retry = within(dialog).getByRole("button", { name: /Rebuild/ }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(false);
+  fireEvent.click(retry);
+  await waitFor(() => expect(plan).toHaveBeenCalledTimes(3));
+  expect(plan.mock.calls[2]).toEqual(["other", { containerLogs: ["env-a"] }]);
+});

@@ -45,7 +45,7 @@ async function planDiagnostics(context: CommandContext, containerLogs: string[])
   if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
   const plan = await context.diagnostics.bundles.plan(
     () => diagnosticsSources(context, { containerLogs }),
-    containerLogs.join(","),
+    JSON.stringify(containerLogs),
   );
   const environments = await context.storage.loadEnvironments().catch(() => []);
   return { ...plan, containerLogs: containerLogOptions(environments, containerLogs) };

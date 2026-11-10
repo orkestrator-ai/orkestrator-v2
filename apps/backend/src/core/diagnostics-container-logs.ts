@@ -7,7 +7,6 @@ import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
 import { containerServerLogFile } from "./commands-containers.js";
 import {
   boundDiagnosticTail,
-  boundedTailCommand,
   DIAGNOSTIC_TAIL_MAX_BYTES,
   DIAGNOSTIC_TAIL_MAX_LINES,
   previousContainerLogFile,
@@ -23,9 +22,9 @@ import type { Environment } from "./models.js";
  *
  * Each read is a `docker exec` per server, so the cost is the user's choice:
  * nothing here runs for a bundle that chose none. Each file is bounded at the
- * source like every other container log tail ({@link boundedTailCommand}: the
- * newest {@link DIAGNOSTIC_TAIL_MAX_BYTES} bytes and
- * {@link DIAGNOSTIC_TAIL_MAX_LINES} lines), scrubbed by
+ * source with one extra byte to detect a cut, then limited on the host to
+ * {@link DIAGNOSTIC_TAIL_MAX_BYTES} bytes and {@link DIAGNOSTIC_TAIL_MAX_LINES}
+ * lines, scrubbed by
  * {@link boundDiagnosticTail} as any tail the backend returns, and then goes
  * through the bundle's own redaction and credential check like a log file.
  * The lines are raw provider output, the riskiest content a bundle can hold,
@@ -171,9 +170,23 @@ async function collectOne(
   for (const server of found) {
     const path = `${name}/${server.file.slice(server.file.lastIndexOf("/") + 1)}`;
     try {
-      const tail = boundDiagnosticTail(
-        await reader.exec(containerId, boundedTailCommand(server.file)),
+      // One extra byte preserves evidence of a source cut. Do not line-limit
+      // in the container: that would hide whether the first line was cut.
+      const raw = await reader.exec(
+        containerId,
+        `tail -c ${DIAGNOSTIC_TAIL_MAX_BYTES + 1} ${server.file} 2>/dev/null || true`,
       );
+      const bytes = Buffer.from(raw);
+      const cut = bytes.length > DIAGNOSTIC_TAIL_MAX_BYTES;
+      const suffix = cut ? bytes.subarray(-DIAGNOSTIC_TAIL_MAX_BYTES) : bytes;
+      const newline = suffix.indexOf(10);
+      // A cut line may have lost the label that identifies a credential.
+      const complete = cut
+        ? newline < 0
+          ? ""
+          : suffix.subarray(newline + 1).toString("utf8")
+        : raw;
+      const tail = boundDiagnosticTail(complete);
       result.texts.push({ path, description: describe(server), text: tail });
     } catch {
       result.absent.push({ name: path, reason: "The log could not be read from its container." });

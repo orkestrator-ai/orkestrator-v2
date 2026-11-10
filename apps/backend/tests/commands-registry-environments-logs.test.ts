@@ -1,3 +1,4 @@
+import type { DiagnosticsContainerLogOption } from "@orkestrator/protocol/backend-diagnostics";
 import { describe, expect, test } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -182,7 +183,7 @@ describe("database and diagnostics commands", () => {
       const chosen = (await commands.get("plan_diagnostics_bundle_with_container_logs")?.(
         { containerLogs: ["env-local"] },
         context,
-      )) as { containerLogs: Array<{ included: boolean }> };
+      )) as { containerLogs: DiagnosticsContainerLogOption[] };
       expect(chosen.containerLogs).toEqual([
         { environmentId: "env-box", name: "Box", status: "running", included: false },
       ]);
@@ -192,6 +193,26 @@ describe("database and diagnostics commands", () => {
       expect(built[1]!.notCollected.map((item) => item.name)).not.toContain(
         "container server logs",
       );
+
+      const before = built.length;
+      const choices = [["a,b"], ["a", "b"]];
+      await Promise.all(
+        choices.map((containerLogs) =>
+          commands.get("plan_diagnostics_bundle_with_container_logs")?.({ containerLogs }, context),
+        ),
+      );
+      expect(built).toHaveLength(before + 2);
+      const collectedNames = built
+        .slice(before)
+        .map((item) => item.notCollected.map((entry) => entry.name));
+      expect(collectedNames.some((names) => names.includes("logs/containers/environment-1"))).toBe(
+        true,
+      );
+      expect(
+        collectedNames.some(
+          (names) => names.includes("logs/containers/a") && names.includes("logs/containers/b"),
+        ),
+      ).toBe(true);
 
       await expect(
         Promise.resolve(

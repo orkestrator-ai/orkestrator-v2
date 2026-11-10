@@ -8,6 +8,7 @@ import { DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS } from "@orkestrator/protoco
 import { buildDiagnosticsBundle, type DiagnosticsSources } from "./diagnostics-bundle.js";
 import {
   collectContainerLogs,
+  dockerContainerLogReader,
   containerLogOptions,
   containerServerLogFiles,
   normaliseContainerLogChoice,
@@ -175,7 +176,7 @@ describe("reading the chosen environments' server logs", () => {
     expect(docker.execs).toHaveLength(3);
     expect(docker.execs[0]!.command).toContain("/tmp/pi-bridge.log");
     // Bounded at the source like every container tail.
-    expect(docker.execs[1]!.command).toMatch(/^tail -c \d+ \/tmp\/codex-bridge\.log /);
+    expect(docker.execs[1]!.command).toMatch(/^tail -c 65537 \/tmp\/codex-bridge\.log /);
   });
 
   test("every server's current and previous log is a candidate", () => {
@@ -242,4 +243,62 @@ describe("container logs in the written bundle", () => {
     expect(entry.redactions).toBeGreaterThan(0);
     expect(entry.description).toContain("riskiest content");
   });
+});
+
+test("production Docker reader exports only complete lines across byte boundaries", async () => {
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-docker-script-"));
+  const oldPath = process.env.PATH;
+  try {
+    // A scripted Docker executable exercises the real inspect/exec argument
+    // transport and executes the generated shell against isolated fixture files.
+    const executable = path.join(directory, "docker");
+    await fs.writeFile(
+      executable,
+      `#!${process.execPath}
+const { execFileSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] === "inspect") process.stdout.write("running");
+else if (args[0] === "exec") {
+  if (args.slice(2, 4).join(" ") !== "bash -lc") process.exit(2);
+  const command = args[4].replaceAll("/tmp/", ${JSON.stringify(directory + "/")});
+  const output = execFileSync("bash", ["-c", command]).toString();
+  process.stdout.write(args[4].startsWith("for f in") ? output.replaceAll(${JSON.stringify(directory + "/")}, "/tmp/") : output);
+} else process.exit(3);
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${directory}:${oldPath}`;
+    const reader = dockerContainerLogReader(async () => environment({}));
+    const password = "Example" + "Password!42";
+    const token = "ghp_" + "aB1cD2eF".repeat(5);
+    const padding = (length: number) =>
+      ("ordinary log output ".repeat(30) + "\n").repeat(120).slice(0, length);
+    for (const [prefix, secret] of [
+      ["password: ", password],
+      ["ghp_", token.slice(4)],
+    ] as const) {
+      const leading = prefix + secret + "\n";
+      // tail -c 65536 begins at the complete credential, without its label.
+      const raw = leading + padding(65536 - secret.length - 2) + "\n";
+      await fs.writeFile(path.join(directory, "codex-bridge.log"), raw);
+      await fs.writeFile(path.join(directory, "codex-bridge.prev.log"), "short-first-line\n");
+      const collected = await collectContainerLogs(["env-a"], reader);
+      expect(collected.absent).toEqual([]);
+      const files = await untar((await bundleWith(collected.texts)).archive);
+      const log = files.get("logs/containers/env-a/codex-bridge.log")!;
+      expect(log.includes(secret!)).toBe(false);
+      expect(files.get("logs/containers/env-a/codex-bridge.prev.log")).toBe("short-first-line\n");
+    }
+    // A source that ignores its cap must also lose its cut first line on the host.
+    const raw = "password: " + password + "\n" + padding(65536 - password.length - 2) + "\n";
+    const oversized = fakeDocker([environment({})], {
+      "container-a": { "/tmp/codex-bridge.log": raw },
+    });
+    const collected = await collectContainerLogs(["env-a"], oversized.reader);
+    const files = await untar((await bundleWith(collected.texts)).archive);
+    expect(files.get("logs/containers/env-a/codex-bridge.log")!.includes(password)).toBe(false);
+  } finally {
+    process.env.PATH = oldPath;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

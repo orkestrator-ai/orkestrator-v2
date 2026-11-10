@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { Database } from "bun:sqlite";
+import * as childProcess from "node:child_process";
 import { spawn, execFileSync, type SpawnOptions } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -760,6 +761,43 @@ describe("top tables from the backup child", () => {
     const older = run(true);
     expect(older).toEqual(modern);
     expect(older.find((store) => store.family === "web-annotations")).toMatchObject({ rows: 1 });
+  });
+
+  test("without dbstat the copy still publishes store families to the top-tables file", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1" }]);
+    const realSpawn = childProcess.spawn;
+    const refuseDbstat = `
+const { Database: SqliteDatabase } = require("bun:sqlite");
+const originalQuery = SqliteDatabase.prototype.query;
+SqliteDatabase.prototype.query = function(sql) {
+  if (sql.includes("FROM dbstat")) throw new Error("no such table: dbstat");
+  return originalQuery.call(this, sql);
+};
+`;
+    const hook = spyOn(childProcess, "spawn").mockImplementation(((
+      ...args: Parameters<typeof spawn>
+    ) => {
+      const [command, argv, options] = args;
+      const modified = (argv as string[]).map((arg) =>
+        arg === DATABASE_COPY_HELPER ? refuseDbstat + arg : arg,
+      );
+      return realSpawn(command, modified, options);
+    }) as typeof spawn);
+    try {
+      expect(await takeHourlySnapshotIfDue(database, directory)).not.toBeNull();
+      const { main } = readTopTables(directory);
+      expect(main!.tables).toEqual([]);
+      expect(main!.stores).toContainEqual({ family: "kanban", bytes: expect.any(Number), rows: 1 });
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(directory, BACKUP_DIRECTORY, ".top-tables.json"), "utf8"),
+      );
+      expect(persisted.main).toEqual(main);
+      expect(Date.parse(persisted.main.takenAt)).toBeGreaterThan(0);
+    } finally {
+      hook.mockRestore();
+    }
   });
 
   test("a database without store_rows reports tables and no store families", async () => {

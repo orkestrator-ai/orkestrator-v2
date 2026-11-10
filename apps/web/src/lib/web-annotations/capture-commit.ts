@@ -20,6 +20,7 @@ import {
   type WebAnnotationOperationReceipt,
   type WebAnnotationResultCaptureMetadata,
 } from "@orkestrator/protocol/web-annotations";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { getWebAnnotationCache } from "@/stores/webAnnotationStore";
 import { captureIntent, type CaptureIntent } from "./capture-intents";
 import { captureOperationIds, pngBase64FromDataUrl, webAnnotationCommand } from "./client";
@@ -116,8 +117,8 @@ export function withAdvertisedSourceHints(
   return { ...capture, evidence };
 }
 
-function sourceHintsAdvertised(environmentId: string): boolean {
-  return getWebAnnotationCache(environmentId).capabilities?.operations.sourceHints === true;
+function sourceHintsAdvertised(environmentId: string, scope?: NodeScope): boolean {
+  return getWebAnnotationCache(environmentId, scope).capabilities?.operations.sourceHints === true;
 }
 
 /**
@@ -142,8 +143,10 @@ export function withAdvertisedShadowScope(
   return capture;
 }
 
-function shadowTargetsAdvertised(environmentId: string): boolean {
-  return getWebAnnotationCache(environmentId).capabilities?.operations.shadowTargets === true;
+function shadowTargetsAdvertised(environmentId: string, scope?: NodeScope): boolean {
+  return (
+    getWebAnnotationCache(environmentId, scope).capabilities?.operations.shadowTargets === true
+  );
 }
 
 /** Durably note the receipt, then clear the spool record (both idempotent). */
@@ -167,11 +170,15 @@ export async function existingCaptureReceipt(
   environmentId: string,
   captureId: string,
   kind: CaptureCommitKind,
+  /** The node that owns the environment; this view's backend when omitted. */
+  scope?: NodeScope,
 ): Promise<WebAnnotationOperationReceipt | null> {
-  const { receipt } = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.receipt, {
-    environmentId,
-    operationId: operationFor(captureId, kind),
-  });
+  const { receipt } = await webAnnotationCommand(
+    WEB_ANNOTATION_COMMANDS.receipt,
+    { environmentId, operationId: operationFor(captureId, kind) },
+    undefined,
+    scope,
+  );
   return receipt ?? null;
 }
 
@@ -182,6 +189,7 @@ export async function commitPendingCapture({
   record,
   input,
   localRedaction,
+  scope,
 }: {
   api: BrowserPreviewCaptureApi;
   environmentId: string;
@@ -189,6 +197,12 @@ export async function commitPendingCapture({
   record: BrowserPreviewPendingCapture;
   input: CaptureCommitInput;
   localRedaction?: { manualRegions: number; imageExcluded: boolean };
+  /**
+   * The node that owns the environment. An environment on another machine
+   * keeps its annotations on that machine's backend, so the commit goes
+   * there; this view's backend when omitted.
+   */
+  scope?: NodeScope;
 }): Promise<CaptureCommitResult> {
   const descriptor = record.descriptor;
   const intent = captureIntent(captureId);
@@ -197,7 +211,9 @@ export async function commitPendingCapture({
   const operationId = operationFor(captureId, kind);
 
   // A previous attempt may have committed and lost its response.
-  const existing = await existingCaptureReceipt(environmentId, captureId, kind);
+  const command: typeof webAnnotationCommand = (name, args) =>
+    webAnnotationCommand(name, args, undefined, scope);
+  const existing = await existingCaptureReceipt(environmentId, captureId, kind, scope);
   let annotationId: string;
   let backendCaptureId: string;
   if (existing) {
@@ -207,7 +223,7 @@ export async function commitPendingCapture({
   } else {
     const assetIds: string[] = [];
     if (record.imageDataUrl) {
-      const staged = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.assetStage, {
+      const staged = await command(WEB_ANNOTATION_COMMANDS.assetStage, {
         environmentId,
         operationId: ops.asset,
         mediaType: "image/png",
@@ -219,7 +235,7 @@ export async function commitPendingCapture({
       // already-redacted spool image.
       const crop = record.regionCrop;
       if (crop?.imageDataUrl && record.capture.target.kind === "region") {
-        const cropped = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.assetStage, {
+        const cropped = await command(WEB_ANNOTATION_COMMANDS.assetStage, {
           environmentId,
           operationId: ops.cropAsset,
           mediaType: "image/png",
@@ -229,8 +245,8 @@ export async function commitPendingCapture({
       }
     }
     const advertised = withAdvertisedShadowScope(
-      withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId)),
-      shadowTargetsAdvertised(environmentId),
+      withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId, scope)),
+      shadowTargetsAdvertised(environmentId, scope),
     );
     const target =
       advertised.target.kind === "region" && record.regionCrop
@@ -247,7 +263,7 @@ export async function commitPendingCapture({
       if (!requestId) throw new Error("This result capture lost its request. Capture it again.");
       const resultAnnotationId =
         intent?.kind === "result" ? intent.annotationId : (descriptor.annotationId ?? "");
-      const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.resultCapture, {
+      const result = await command(WEB_ANNOTATION_COMMANDS.resultCapture, {
         environmentId,
         operationId,
         requestId,
@@ -267,12 +283,12 @@ export async function commitPendingCapture({
         const expectedContentRevision =
           input.expectedContentRevision ??
           (
-            await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.get, {
+            await command(WEB_ANNOTATION_COMMANDS.get, {
               environmentId,
               annotationId: targetAnnotationId,
             })
           ).annotation.contentRevision;
-        receipt = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.captureReplace, {
+        receipt = await command(WEB_ANNOTATION_COMMANDS.captureReplace, {
           environmentId,
           operationId,
           annotationId: targetAnnotationId,
@@ -281,7 +297,7 @@ export async function commitPendingCapture({
           ...(input.body.trim() ? { body: input.body } : {}),
         });
       } else {
-        receipt = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.create, {
+        receipt = await command(WEB_ANNOTATION_COMMANDS.create, {
           environmentId,
           operationId,
           capture: captureInput,

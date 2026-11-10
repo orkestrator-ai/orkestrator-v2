@@ -1,7 +1,6 @@
 /**
  * The container's OpenCode 2.x server on an `opencode2-launch=1` image
- * (docs/todo/containers-and-environments/7550-opencode-launch-follow-ups.md,
- * task 1): the 2.x twin of `opencode-container-launch.ts`.
+ * (to-do 7550, task 1; docs/architecture/agent-approvals.md): the 2.x twin of `opencode-container-launch.ts`.
  *
  * Started from `node`'s login shell, 2.x ran node's own
  * `~/.opencode/bin/opencode2` with `OPENCODE_CONFIG_DIR` in node's home, read
@@ -15,7 +14,8 @@
  *   plugins and the user's configuration copied from the read-only host input
  *   `/opencode-config` and merged without plugins (`opencode2/user-config.ts`);
  *   `config/` (`XDG_CONFIG_HOME`) and `home/` (`OPENCODE_TEST_HOME`) are empty;
- *   `cache/` is the root-owned package cache (`opencode-package-cache.ts`);
+ *   `cache/` is the root-owned package cache, which root fills with the
+ *   provider packages the user's configuration names (`opencode-package-cache.ts`);
  * - the node login shell only prepares and records its environment;
  * - `orkestrator-bridge-launch opencode2` starts the root-owned
  *   `/opt/opencode/bin/opencode2` under `env -i` with project configuration
@@ -63,7 +63,10 @@ import {
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
 } from "./opencode-listener-identity.js";
-import { openCodePackageCacheScript } from "./opencode-package-cache.js";
+import {
+  openCodePackageCacheScript,
+  OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
+} from "./opencode-package-cache.js";
 import { stageProjectOpenCodeConfig } from "./opencode-project-config.js";
 import {
   OPENCODE2_CONTAINER_LOG,
@@ -259,7 +262,11 @@ export async function recordOpenCode2Listener(containerId: string): Promise<void
  */
 export async function startOpenCode2WithLauncher(containerId: string): Promise<string> {
   await asRoot(containerId, openCode2LaunchConfigScript());
-  await asRoot(containerId, openCodePackageCacheScript("opencode2"));
+  await asRoot(
+    containerId,
+    openCodePackageCacheScript("opencode2"),
+    OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
+  );
   await stageProjectOpenCodeConfig(containerId, "opencode2");
   const persistentDatabase =
     (

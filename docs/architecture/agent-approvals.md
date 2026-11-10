@@ -125,7 +125,7 @@ environment alone on a `bridge-credential=1` image.
 
 ### OpenCode 2.x, the package cache and project configuration (`opencode2-launch=1`)
 
-To-do 7550 extended the same start to the rest of what a container's OpenCode
+To-do 7550 (done 2026-11-10) extended the same start to the rest of what a container's OpenCode
 servers load. On an `opencode2-launch=1` image:
 
 - **The 2.x server starts the same way** (`opencode2-container-launch.ts`):
@@ -160,11 +160,25 @@ servers load. On an `opencode2-launch=1` image:
   1.x, root installs what the user's own configuration names before each start
   (the image's Bun, `--ignore-scripts`, into the directory 1.19.5 imports from)
   and keeps it across starts (`opencode-package-cache.ts`); 1.19.5 imported a
-  package installed that way and ran with the cache read-only. 2.2.6 names its
-  install directories with dist-tags of its own choosing, so its cache stays
-  empty and a provider 2.x does not bundle does not load in a container. A
-  provider package named only by the project's configuration is never
-  installed.
+  package installed that way and ran with the cache read-only. For 2.x, root
+  installs the providers the user's configuration names the same way, into the
+  directory 2.2.6 imports from, `npm/<name>@<tag>/1`: the tag is the configured
+  version or `latest`, except that 2.2.6 always asks for a bare
+  `@ai-sdk/<name>` as its `ai-v6` dist-tag (read from 2.2.6's npm service,
+  2026-11-10). That rule belongs to the binary, not the configuration, so it is
+  pinned to `OPENCODE2_PACKAGE_LAYOUT_VERSION` and a unit test fails when the
+  pinned `opencode2` moves; `opencode2-package-cache.live.test.ts` re-checks it
+  against the binary (2.2.6 imported both kinds of package from a read-only
+  cache, and did not import an `@ai-sdk` package placed under `@latest`), and a
+  real `bun add` of `ollama-ai-provider-v2` loaded there and reached its
+  (dead) loopback endpoint. Installs run with `--ignore-scripts`, at most 16
+  packages per start and 120 seconds each; a failure is reported on stderr,
+  never fails the start and leaves that provider unavailable. Only plain
+  registry specs from root's copy of the user's configuration are installed.
+  A provider package named only by the project's configuration never is, and
+  neither is the package of a provider the user signed in to without naming it
+  in their configuration (OpenCode would install that one at the first prompt,
+  and cannot in a read-only cache).
 - **A filtered project configuration.** Before each start the backend reads
   the checkout's `opencode.json` and `opencode.jsonc` as `node` (bounded),
   removes `plugin`/`plugins`, every `{env:}` reference (the server's own
@@ -188,6 +202,34 @@ servers load. On an `opencode2-launch=1` image:
   After a refused connection, a 401 or a 403 from either server, the backend
   asks root which socket listens; once it is not the recorded one, the
   connection sends nothing more until a fresh start records its own server.
+
+Why it is built this way (decisions recorded when 7252 and 7550 were done):
+
+- **1.x moves its global directory with `XDG_CONFIG_HOME`, 2.x with
+  `OPENCODE_CONFIG_DIR`.** 1.19.5 adds `OPENCODE_CONFIG_DIR` to the
+  directories it reads rather than replacing `~/.config/opencode` (a plugin
+  planted there still loaded); 2.2.6 replaces its global directory with it.
+  `OPENCODE_TEST_HOME` moves the home whose `.opencode` either reads.
+- **A new capability name, not `opencode-launch=2`.** The backend matches
+  `opencode-launch=1` exactly and the 1.x mode check asks for version 1, so
+  `opencode2-launch=1` names what is checked before the 2.x launch and before
+  filling either cache.
+- **The 2.x warm request is `/api/agent`.** 2.2.6 loads its plugins for
+  `/api/agent`, `/api/command`, `/api/config` and `/api/provider`, not for
+  `/api/session/active` or `/api/session` (probed 2026-11-10). The socket is
+  recorded only after it, so the server is non-dumpable by then.
+- **`XDG_CACHE_HOME` is resolved once.** Both binaries read it when their
+  global paths load, so the credential plugin can drop it from the tools'
+  environment without moving the cache.
+- **The re-check covers refused connections, 401 and 403 only.** A 404 or 5xx
+  is ordinary server behaviour and would cost a root exec each; a replacement
+  that accepts any password is caught at the next start, status or peek read
+  instead, and a fresh start's own server is reached again after at most five
+  seconds.
+- **An `opencode-launch=1` image without `opencode2-launch=1`** keeps the
+  checkout's `AGENTS.md` by path, node's package cache and the 2.x login-shell
+  start until it is rebuilt; the backend writes the root caches and project
+  file there too, and that launcher ignores them.
 
 ### Code a bridge loads itself
 
@@ -278,7 +320,7 @@ between a check and the next request still gets that request, until the next
 refresh or start. The agent's uid can still kill the bridge, which it could
 already do. OpenCode has its own socket check on `opencode-launch=1` images
 ([above](#opencode-under-the-launcher-opencode-launch1)); its remaining windows
-are described [above](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1) and in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
+are described [above](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1).
 
 ## Where an approval is a boundary
 
@@ -321,8 +363,8 @@ need its own uid, and then its tools would too.
   to a replacement that answers like OpenCode), and the server's first seconds
   before the warm request loads the plugin that makes it non-dumpable. An
   `opencode-launch=1` image without it keeps node's package cache, the
-  checkout's `AGENTS.md` by path and the 2.x login-shell start. To-do
-  [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
+  checkout's `AGENTS.md` by path and the 2.x login-shell start
+  ([above](#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1)).
 - **Stop being asked.** Through the provider rule files above.
 
 Each needs a process or a tool the user already let run. Qualified on a real

@@ -57,15 +57,10 @@ import {
 } from "./opencode-listener-identity.js";
 import {
   openCodePackageCacheScript,
-  OPENCODE_PACKAGE_INSTALL_LIMIT,
-  OPENCODE_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+  OPENCODE_PACKAGE_CACHE_TIMEOUT_MS,
 } from "./opencode-package-cache.js";
 import { stageProjectOpenCodeConfig } from "./opencode-project-config.js";
 import { runCommand } from "./shell.js";
-
-/** Every package install may run to its own limit, plus the rest of the script. */
-const OPENCODE_PACKAGE_CACHE_TIMEOUT_MS =
-  (OPENCODE_PACKAGE_INSTALL_LIMIT * OPENCODE_PACKAGE_INSTALL_TIMEOUT_SECONDS + 60) * 1000;
 
 /** The credential plugin of a launched server, which also applies the start environment. */
 export const OPENCODE_LAUNCH_CREDENTIAL_PLUGIN_SOURCE = buildOpenCodeCredentialPluginSource(

@@ -5,13 +5,16 @@ setDefaultTimeout(30_000);
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 import {
   OPENCODE2_LAUNCH_CACHE_HOME,
+  OPENCODE2_LAUNCH_CONFIG_DIR,
   OPENCODE_LAUNCH_CACHE_HOME,
   OPENCODE_LAUNCH_CONFIG_DIR,
 } from "./agent-credential-files.js";
 import { CONTAINER_BRIDGE_LAUNCHER } from "./container-bridge-credential.js";
 import {
+  OPENCODE2_PACKAGE_LAYOUT_VERSION,
   OPENCODE_PACKAGE_INSTALL_LIMIT,
   openCodeLaunchCacheHome,
   openCodePackageCacheScript,
@@ -67,6 +70,66 @@ describe("openCodePackageInstalls", () => {
   });
 });
 
+describe("openCodePackageInstalls for 2.x", () => {
+  test("provider packages only, where 2.2.6 looks for them", () => {
+    expect(
+      openCodePackageInstalls(
+        [
+          JSON.stringify({
+            provider: {
+              ollama: { npm: "ollama-ai-provider-v2" },
+              pinned: { npm: "pinned-provider@1.2.3" },
+              scoped: { npm: "@scope/provider" },
+              taggedScoped: { npm: "@scope/provider@next" },
+              // A bare `@ai-sdk/<name>` is 2.2.6's `ai-v6` tag; a versioned one is not.
+              elevenlabs: { npm: "@ai-sdk/elevenlabs" },
+              versioned: { npm: "@ai-sdk/openai@2.0.0" },
+              none: { options: {} },
+            },
+            // 2.x is never given a plugin key; nothing here is installed.
+            plugin: ["is-number"],
+          }),
+          '// comment\n{"provider":{"again":{"npm":"@ai-sdk/elevenlabs"}}}',
+        ],
+        "opencode2",
+      ),
+    ).toEqual([
+      { spec: "ollama-ai-provider-v2", directory: "ollama-ai-provider-v2@latest/1" },
+      { spec: "pinned-provider@1.2.3", directory: "pinned-provider@1.2.3/1" },
+      { spec: "@scope/provider", directory: "@scope/provider@latest/1" },
+      { spec: "@scope/provider@next", directory: "@scope/provider@next/1" },
+      { spec: "@ai-sdk/elevenlabs@ai-v6", directory: "@ai-sdk/elevenlabs@ai-v6/1" },
+      { spec: "@ai-sdk/openai@2.0.0", directory: "@ai-sdk/openai@2.0.0/1" },
+    ]);
+  });
+
+  test("never a path, URL or git spec", () => {
+    expect(
+      openCodePackageInstalls(
+        [
+          JSON.stringify({
+            provider: {
+              a: { npm: "file:///workspace/provider.ts" },
+              b: { npm: "git+https://example.test/x.git" },
+              c: { npm: "../escape" },
+              d: { npm: "@ai-sdk/../x" },
+            },
+          }),
+        ],
+        "opencode2",
+      ),
+    ).toEqual([]);
+  });
+
+  test("the layout is the pinned 2.x's", () => {
+    // The `ai-v6` tag and the `npm/<name>@<tag>/<generation>` directories are
+    // read from the 2.2.6 binary, not from its configuration. When the pin
+    // moves, run opencode2-package-cache.live.test.ts against the new binary
+    // (and read its npm service) before moving OPENCODE2_PACKAGE_LAYOUT_VERSION.
+    expect(PINNED_TOOLCHAIN_VERSIONS.opencode2).toBe(OPENCODE2_PACKAGE_LAYOUT_VERSION);
+  });
+});
+
 test("each server has its own root-owned cache", () => {
   expect(openCodeLaunchCacheHome("opencode")).toBe(OPENCODE_LAUNCH_CACHE_HOME);
   expect(openCodeLaunchCacheHome("opencode2")).toBe(OPENCODE2_LAUNCH_CACHE_HOME);
@@ -86,7 +149,12 @@ describe.skipIf(process.platform !== "linux")("filling the cache as root", () =>
    */
   async function fill(
     kind: "opencode" | "opencode2",
-    options: { launcherMarker?: boolean; config?: string; failing?: string } = {},
+    options: {
+      launcherMarker?: boolean;
+      config?: string;
+      configFile?: [string, string];
+      failing?: string;
+    } = {},
   ) {
     const directory = await mkdtemp(path.join(tmpdir(), "ork-opencode-cache-"));
     directories.push(directory);
@@ -102,6 +170,9 @@ describe.skipIf(process.platform !== "linux")("filling the cache as root", () =>
         : "#!/bin/sh\n# ORKESTRATOR_CAPABILITY opencode2-launch=1\n",
     );
     if (options.config) await writeFile(path.join(config, "opencode.json"), options.config);
+    if (options.configFile) {
+      await writeFile(path.join(config, options.configFile[0]), options.configFile[1]);
+    }
     const bun = path.join(directory, "bun");
     await writeFile(
       bun,
@@ -121,6 +192,7 @@ mkdir -p "node_modules/$name"; printf '{"name":"%s"}' "$name" > "node_modules/$n
     const script = openCodePackageCacheScript(kind)
       .replaceAll(openCodeLaunchCacheHome(kind), cache)
       .replaceAll(OPENCODE_LAUNCH_CONFIG_DIR, config)
+      .replaceAll(OPENCODE2_LAUNCH_CONFIG_DIR, config)
       .replaceAll(CONTAINER_BRIDGE_LAUNCHER, launcher)
       .replaceAll("/usr/local/bin/bun", bun)
       .replace('chown -R 0:0 "$cache"', "true")
@@ -201,16 +273,55 @@ mkdir -p "node_modules/$name"; printf '{"name":"%s"}' "$name" > "node_modules/$n
     expect(filled.installs).toHaveLength(OPENCODE_PACKAGE_INSTALL_LIMIT);
   });
 
-  test("2.x gets an empty root-owned cache and no installs", async () => {
+  test("2.x installs the user's providers where 2.2.6 imports them, and keeps them", async () => {
+    // What 2.x's merged configuration looks like: `opencode.jsonc`, no plugin key.
     const filled = await fill("opencode2", {
-      config: JSON.stringify({ provider: { o: { npm: "ollama-ai-provider-v2" } } }),
+      config: undefined,
+      configFile: [
+        "opencode.jsonc",
+        JSON.stringify({
+          provider: {
+            o: { npm: "ollama-ai-provider-v2" },
+            e: { npm: "@ai-sdk/elevenlabs" },
+            p: { npm: "file:///workspace/planted.ts" },
+          },
+        }),
+      ],
     });
     expect(filled.exitCode).toBe(0);
-    expect(filled.installs).toEqual([]);
-    expect((await readdir(path.join(filled.cache, "opencode"))).sort()).toEqual([
-      "bin",
-      "packages",
+    expect(filled.installs.map((line) => line.split("|")[0])).toEqual([
+      "ollama-ai-provider-v2",
+      "@ai-sdk/elevenlabs@ai-v6",
     ]);
+    for (const line of filled.installs) {
+      expect(line).toContain("add --exact --ignore-scripts");
+    }
+    const npm = path.join(filled.cache, "opencode", "npm");
+    for (const [directory, name] of [
+      ["ollama-ai-provider-v2@latest", "ollama-ai-provider-v2"],
+      ["@ai-sdk/elevenlabs@ai-v6", "@ai-sdk/elevenlabs"],
+    ] as const) {
+      // One numeric generation holding node_modules/<name>: what 2.2.6 imports.
+      expect(await readdir(path.join(npm, directory))).toEqual(["1"]);
+      expect(
+        await readFile(
+          path.join(npm, directory, "1", "node_modules", name, "package.json"),
+          "utf8",
+        ),
+      ).toContain(name);
+      expect((await stat(path.join(npm, directory, "1"))).mode & 0o777).toBe(0o755);
+    }
+    expect((await readdir(path.join(filled.cache, "opencode"))).sort()).toEqual(["bin", "npm"]);
+    // Present packages are not installed again.
+    expect(filled.run().exitCode).toBe(0);
+    expect((await filled.installLog()).split("\n").filter(Boolean)).toHaveLength(2);
+  });
+
+  test("2.x with no providers gets an empty root-owned cache", async () => {
+    const filled = await fill("opencode2", {});
+    expect(filled.exitCode).toBe(0);
+    expect(filled.installs).toEqual([]);
+    expect((await readdir(path.join(filled.cache, "opencode"))).sort()).toEqual(["bin", "npm"]);
   });
 
   test("does nothing on an image whose launcher does not use it", async () => {

@@ -1,7 +1,6 @@
 /**
  * The checkout's OpenCode configuration, filtered, for a server the launcher
- * starts (docs/todo/containers-and-environments/7550-opencode-launch-follow-ups.md,
- * task 3).
+ * starts (to-do 7550, task 3; docs/architecture/agent-approvals.md).
  *
  * On an `opencode-launch=1` image the server runs with project configuration
  * off, because the checkout's `opencode.json` is the agent's to write and its

@@ -2,16 +2,19 @@
 
 ## Task analysis
 
-Analysed 2026-11-09 against `main` at `c6de4733c`. Found by
+Analysed 2026-11-09 against `main` at `c6de4733c`; tasks 1 and 3 acted on
+2026-11-10 against `main` at `04639b12b`
+([evidence](../../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10)).
+Found by
 [0109](0109-rootless-linux-runtime-gaps.md) task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
 
 ### Tasks
 
-1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: open.
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open.
-3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: open.
+1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: open. The classification is done (2026-11-10); only the upstream report to Moby is left, an outward-facing action that needs the user's approval.
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10); the delivery change waits for a host that fails.
+3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries).
 
 ### 1. `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`
 
@@ -55,6 +58,39 @@ network" got `container-exited` instead of `firewall-missing` and
 `firewall-failed`, and both passed with `TMPDIR` on the home filesystem.
 `bindMountRefusedError` (`container-start.ts`) would match this message
 (`remount` plus "operation not permitted") but only the start path calls it.
+
+On 2026-11-10 on beelink (kernel 7.1.8, disposable rootless Engine 29.9.2)
+the refusal reproduced on the containerd image store and on overlay2
+(`remount-ro <data-root>/overlay2/<id>/merged/ro, …`). The CLI hides it for
+a copy into a directory: the seed files' tar stream into `/` reports
+`destination "<id>:/" must be a directory`, and a copy into `/tmp/` reports
+`no such directory`, so a message match alone misses the creation-time
+copies. A copy out of a path that cannot exist repeats the remount refusal
+on an affected container and answers `Could not find the file` on a healthy
+one.
+
+What was built (see "Assumptions and decisions"): every copy path above now
+classifies the refusal. `docker-copy-refusal.ts` matches the daemon's
+message and, when the CLI hid it, asks the daemon once with that probe.
+Project seed files and configured project files fail creation with
+`unsupported-topology` and the remedy; a rebuild's copy step reports
+`unsupported-topology` (`source-copy-refused`); the exited-boot read
+reports `boot-record-copy-refused` instead of `container-exited`; the
+GitHub seed logs `refusal=read-only-bind-remount`. The opt-in live test
+`apps/backend/tests/docker-copy-refusal-docker.test.ts` drives all of them
+at a real container and passed on both stores.
+
+The upstream report was not filed: it is an outward-facing action, which
+this repository's rules leave to the user. A draft, from the evidence above:
+"Rootless dockerd 29.9.2 (runc 1.5.2, RootlessKit 3.3.0): `docker cp` into or
+out of a container with a read-only bind whose source filesystem is mounted
+`nosuid` or `nodev` fails with `remount-ro <rootfs>/<target>, flags: 0x1021:
+operation not permitted`, on the containerd snapshotter and on overlay2,
+running or stopped. Starting the container and `docker exec` work, since
+runc keeps the locked flags. Reproduce: `d=$(mktemp -d /tmp/x.XXXX)` on a
+`nosuid,nodev` tmpfs, `docker run -d -v $d:/ro:ro busybox sleep 300`, then
+`docker cp <id>:/etc/hostname -`. Expected: the archive path keeps the
+source mount's locked flags as runc does."
 
 **Decisions.**
 
@@ -129,10 +165,20 @@ Steps:
 1. On disposable daemons, run the probe above (`docker create` of the
    environment image, then `docker cp` of a file into it) on rootless
    containerd store (reproduced), rootless `overlay2`, and rootful containerd
-   store; record which fail. The disposable launcher has no storage-driver
-   option yet; add one or start the comparison daemon by hand.
+   store; record which fail. Partly done 2026-11-10: the launcher now takes
+   `--storage containerd|overlay2`; on beelink (kernel 7.1.8) the probe
+   passed on rootless containerd store and rootless overlay2 alike (busybox,
+   `oven/bun:1.4.4` and the 78-layer `orkestrator-v2:dev-8bff8877f7f8`, three
+   copies each, the tar-stream form, after a start and stop, and with the
+   runtime's two named volumes and a read-only bind). So on this host neither
+   store fails, and the rootful comparison could not separate them and was
+   not run. beelink2 failed on kernel 7.2.15; repeat the probe there (or on
+   any host that fails) on both stores, with
+   `mise run docker:disposable -- start --storage overlay2` for the second.
 2. Pick the fix below for the affected set and add a live case that creates a
-   runtime with a project seed file on a rootless daemon.
+   runtime with a project seed file on a rootless daemon. Not started: the
+   recommended fix is an image contract change, and with no failing host
+   available it could not be shown to fix anything.
 
 **Decisions.**
 
@@ -189,6 +235,14 @@ neighbourhood.
 
 **Decisions.**
 
+Done 2026-11-10: `startDockerContainer` retries up to
+`PORT_COLLISION_RETRIES` (3) times, reconnecting the network before each
+retry and stopping a started container that still has none; a collision past
+the retries is the existing `port-conflict`. Unit tests cover three collisions
+then a start, and four collisions; the live start-recovery suite
+(`container-start-docker.test.ts`) passed 3/3 on a disposable rootless daemon
+with its fault injection raised past the retries.
+
 - **How many times should a start retry an automatic-port collision?**
   - **A bounded few (for example three), each still reconnecting the network first, as the single retry does now (recommended).**
     - Pros: a small change in `startDockerContainer`; each retry draws a new
@@ -207,11 +261,66 @@ neighbourhood.
 ## Current state
 
 - Start, `exec`, copies into a running container and copies out of any
-  container work on the rootless daemon above unless a read-only bind source
-  is `nosuid`/`nodev` (task 1).
-- The live readiness suite on a rootless daemon needs `TMPDIR` on a
-  filesystem mounted without `nosuid`/`nodev`, or its two firewall-failure
-  cases report `container-exited` (task 1).
+  container work on a rootless daemon unless a read-only bind source is
+  `nosuid`/`nodev` (task 1). When it is, every copy the backend runs is
+  reported as that refusal with its remedy, but the features still fail
+  until the data directory moves or the daemon is fixed.
+- The live readiness suite on a rootless daemon still needs `TMPDIR` on a
+  filesystem mounted without `nosuid`/`nodev`; from `/tmp` its two
+  firewall-failure cases now report `boot-record-copy-refused` instead of
+  `container-exited` (task 1).
+- Copies into a created container work on beelink (kernel 7.1.8) on both
+  image stores; beelink2 (kernel 7.2.15, containerd store) refused them
+  (task 2).
+
+## Outstanding work
+
+- Task 1: file the upstream report to Moby (draft in task 1), once the user
+  approves.
+- Task 2: reproduce `device or resource busy` on a host that fails, on both
+  image stores, then build the delivery fix and its live case.
+
+## Assumptions and decisions
+
+### Classify by asking the daemon when the CLI hides the refusal (task 1)
+
+Chose: match the daemon's `remount-ro … operation not permitted` in the
+copy's own error, and when it is not there (and the failure is not a
+timeout or an outage), run one `docker cp <id>:/.orkestrator-copy-probe-absent -`
+and match its answer. Why: the seed files' tar stream and the directory
+copies surface only `must be a directory` or `no such directory`, which a
+message match cannot tell from a real path problem; the probe costs one
+mount and stat, only on a copy that already failed. Alternative: classify on
+the message alone, which would have missed exactly the creation-time copies
+this task names.
+
+### A refused boot record is its own failure code, not a topology error (task 1)
+
+Chose: `boot-record-copy-refused`, still `not-ready`, with the remedy in the
+message. Why: the boot failed for some other reason the record would name;
+calling the whole boot an unsupported topology would misstate it, and
+`container-exited` read as "no record".
+
+### The GitHub seed stays best effort (task 1)
+
+Chose: log `refusal=read-only-bind-remount` and carry on. Why: the
+firewall's own fetch still covers it; failing the runtime or gateway would
+turn a slower boot into no boot.
+
+### Three retries (task 3)
+
+Chose `PORT_COLLISION_RETRIES = 3`, per the recommendation. Why: each retry
+draws the next sequential port, and the observed holders were short-lived;
+three keeps a pathological host to a few more Docker calls.
+
+### `--storage` in the disposable launcher (task 2, step 1)
+
+Chose a `--storage containerd|overlay2` start option (in both modes) and an
+image identity check that accepts a different id when the layer digests,
+creation time and architecture match. Why: step 1 needs the comparison
+daemon, and overlay2's image id is the config digest while the containerd
+store's is the manifest digest, so the old id check refused every image
+copied into an overlay2 instance.
 
 ## Related
 

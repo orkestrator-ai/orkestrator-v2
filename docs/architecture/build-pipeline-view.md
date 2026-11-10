@@ -197,7 +197,7 @@ a transcript.
   between never leaves `reviewing` with nothing to drive it.
 - **Address Findings → Verify.** Address Findings submits a typed `fix-result` and Verify reads
   it as an evidence frame, not the Address Findings session's last assistant text
-  ([review preparation](review-preparation.md#the-address--verify-handoff)). The
+  ([review preparation](review-preparation.md#the-address-findings--verify-handoff)). The
   accepted result is kept, bounded, on the Address Findings session (`fixResult`, marked
   by `addressReportKind`), and the Address Findings inspector shows it above the
   transcript as a collapsed "Address Findings report": complete or incomplete, files,

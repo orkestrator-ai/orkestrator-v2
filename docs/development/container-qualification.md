@@ -2255,8 +2255,8 @@ pass on rootless. That qualified `volume-v1` there, and
 `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
 this run found were tracked in todo 0109, retired on 2026-11-10 once all four
 were fixed and requalified (the 2026-11-09 re-run above); the rootless gaps
-left are [7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
-and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md):
+left were 7548 (fixed and retired on 2026-11-10; see
+[its run](#gvisor-tap-vsock-host-loopback-7548)) and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md):
 
 - **Staged inputs are unreadable (C20).** The staged revision is owned by the
   host user and is owner-only (`0700`/`0600`). Under rootless the host user

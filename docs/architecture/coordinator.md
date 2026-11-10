@@ -3798,8 +3798,14 @@ the new objects. Nothing merges.
 **The section.** `mergeOrkestratorSection` copies everything outside the
 section byte for byte (CRLF kept, a byte-order mark kept, invalid UTF-8
 refused). A missing section is created at the end of the file, opening with a
-note that it holds coordinator-approved operating decisions every agent must
-follow; a missing file is created with just the section. Entries are compared
+note (`ORKESTRATOR_SECTION_NOTE`) that it holds coordinator-approved operating
+decisions every agent must follow, changed only through a proposal except to
+update a reference or description the agent's own change makes stale; a
+missing file is created with just the section. When a proposal changes an
+existing section whose preamble line is exactly an earlier wording of that
+note (`PREVIOUS_ORKESTRATOR_SECTION_NOTES`), the line becomes the current note
+in the same pull request, so the diff the user approves shows it; any other
+preamble is the user's text and is kept. Entries are compared
 ignoring case, spacing and a final full stop, stay de-duplicated (existing
 duplicates collapse to the first when the section changes), keep their order,
 and new ones go after the last entry. ATX and Setext level-one and level-two

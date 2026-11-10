@@ -1,9 +1,11 @@
 # Graphs
 
 Status: Living. Describes the composable-graphs feature as built: Phases 0–2 of
-the composable-graphs plan and Phase 4 items 401–405. The plan
-(`plans/composable-graphs.md`, decisions D1–D21) and its work items
-(`plans/graphs/`) were removed in #1979; git history keeps it.
+the composable-graphs plan and Phase 4 items 401–405. The plan holds the
+decisions (D1–D21) and its work items hold the record of the work; both were
+retired on 2026-11-07 when the plans were consolidated, so read them at the
+commit before that (`git show 2b876486b:plans/composable-graphs.md`,
+`git show 2b876486b:plans/graphs/000-index.md`).
 The user-facing walkthrough is [graphs-user-guide.md](graphs-user-guide.md).
 
 ## Overview
@@ -147,8 +149,9 @@ end.
 ### Items fan-out
 
 `replicate: {over: "items", input, maxBranches, truncate?}` runs one branch per
-item of a list input (report §4.4, §5.8; D9, D10). The design note was
-`plans/graphs/401-items-fanout.md` (removed in #1979; git history keeps it).
+item of a list input (report §4.4, §5.8; D9, D10). The design note is in
+the retired plan item 401
+(`git show 2b876486b:plans/graphs/401-items-fanout.md`).
 
 - **Input.** The port must be `list<T>` (one item per element artifact) or of a
   named type that declares `items` (one item per entry of its item list);
@@ -565,7 +568,8 @@ alone. A built-in cannot be saved, launched or mock-run as a graph
 (`engine-template`); duplicating it drops `engine`, and the copy runs on the
 graph runtime. What the templates cannot express (engine-only behaviours such
 as conflict handling and mergeability waits) is listed in
-`plans/graphs/108-builtin-templates.md` (removed in #1979; git history keeps it).
+the retired plan item 108
+(`git show 2b876486b:plans/graphs/108-builtin-templates.md`).
 
 ## Library, trust and sharing
 
@@ -1148,7 +1152,9 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
 
 A way for several branches to write at once, each in a workspace of its own
 ("three competing implementations, a judge picks one", report §6.7, §9.3).
-Design note: `plans/graphs/403-isolated-branch-worktrees.md` (removed in #1979; git history keeps it).
+Design note:
+the retired plan item 403
+(`git show 2b876486b:plans/graphs/403-isolated-branch-worktrees.md`).
 
 - **Opting in.** `isolation: "worktree"` on a replicated writer with exactly
   one single `workspace@1` input and at most 8 branches (`isolation-*` codes).
@@ -1893,5 +1899,5 @@ environment is away, and a wait surviving a backend restart).
   host; a live `open-pull-request`, which opens a real pull request and needs
   the user's approval; a backend restart mid fan-out on a real stack (the
   seeded interleavings cover it with fakes); and the coordinator's graph
-  wakes with a live coordinator. The Phase 2 exit criteria in the
-  retired `plans/graphs/000-index.md` (removed in #1979; git history keeps it) tracked them.
+  wakes with a live coordinator. The Phase 2 exit criteria in the retired
+  plan index (`git show 2b876486b:plans/graphs/000-index.md`) track them.

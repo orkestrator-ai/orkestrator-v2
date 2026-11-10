@@ -598,3 +598,58 @@ ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions
 No assertion, timeout or skip changed. Evidence:
 `orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
 temporary directory.
+
+
+## Notes delivery context teardown — 2026-11-10
+
+- **Base:** `c98b20e6f6332895320b84b8edfd1f3cc9542ba0`.
+- **Observed head:** `13f709bc787ee6118c0cfca44369f3c48e562916`.
+- **Recurrence check:** `mise run flaky:recurrence -- 0382 --base c98b20e6f6332895320b84b8edfd1f3cc9542ba0`
+  reports this aggregate case open.
+- **Broad command:** `mise run test:logged -- --name delivery-browser -- mise run test:browser`,
+  nine component workers, exit 1 in 1,245.2 s: 1,665 passed, 152 skipped,
+  one failed. The public-site stage did not run in that command.
+- **Case:** desktop `native: history pages in without a click, opening with a page and paging near the top`,
+  `e2e/TranscriptPaging.spec.ts:430`.
+- **Exact error:** `Tearing down "context" exceeded the test timeout of 30000ms.`
+  This is a cleanup failure, distinct from the paging-assertion failures in
+  [1602](../native-agents-and-transcripts/1602-automatic-paging-reaches-first-row-timing.md).
+- **Trace:** the first-row paging poll completed successfully in 21,696 ms,
+  and the final Load earlier messages count assertion passed. `Close context`
+  did not settle before the context fixture failed after 30,002 ms. Worker
+  browser cleanup then completed in 36 ms. The runner reported no failed UI
+  assertion; failed intermediate attempts inside the successful poll are not
+  final assertion failures.
+- **Evidence:** bounded log `orkestrator-test-run.N3WSzA/delivery-browser.log.gz`
+  under the host temporary directory. The 16 KiB trace/context directory was
+  moved, without duplicating the trace, to
+  `output/agent-testing/delivery-validation/transcript-paging-original/`.
+
+The complete unchanged owner passed alone (39 passed, one skipped, no flaky
+count reported; exit 0, 196.2 s):
+
+```sh
+mise run test:logged -- --name delivery-paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/agent-testing/delivery-validation/paging-owner
+```
+
+The implicated case also passed three repeats in both viewport projects with
+three workers (exit 0, 52.3 s; passing counts were not retained):
+
+```sh
+mise run test:logged -- --name paging-cleanup-stress-selected -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --grep 'native: history pages in without a click' --repeat-each=3 --workers=3 --output output/agent-testing/delivery-paging-cleanup-stress
+```
+
+The initial diagnostic used an anchored selector that matched no tests and
+exited 1 in 0.7 s; it ran no cases. The command above corrected that selector.
+The separate public-site portion passed all eight cases in 9.9 s:
+
+```sh
+mise run test:logged -- --name delivery-public-browser -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+**Assessment:** the owner and repeated checks establish intermittence, not a
+cause or branch attribution. No paging implementation, UI assertion, timeout,
+retry or skip changed. The broad command on the observed head remains failed;
+focused passes do not replace it. Context teardown needs its own reproducer
+before changing the runner or its deadline. This record does not classify the
+failure as environmental or excuse it from qualification.

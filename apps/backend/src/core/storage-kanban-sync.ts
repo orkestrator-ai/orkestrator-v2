@@ -576,6 +576,20 @@ function pruneTombstones(store: KanbanSyncStore): void {
  * The command node's side.
  */
 
+/** Bounds legacy image metadata without letting one old row block board sync. */
+function snapshotImages(task: KanbanTask, selfId: string): TicketSyncImageRef[] {
+  const images: TicketSyncImageRef[] = [];
+  for (const image of task.images ?? []) {
+    try {
+      images.push(parseTicketSyncImageRef(imageRef(image, selfId)));
+    } catch {
+      continue;
+    }
+    if (images.length === TICKET_SYNC_LIMITS.maxImageRefs) break;
+  }
+  return images;
+}
+
 /**
  * One ticket as sent to a leaf. With `selfId`, its images go too, each naming
  * the machine with its bytes (this one, unless it is a leaf's reference).
@@ -589,20 +603,7 @@ export function ticketSnapshot(task: KanbanTask, selfId?: string): TicketSnapsho
     status: task.status,
     ...(task.prMergeDoneUrl ? { prMergeDoneUrl: task.prMergeDoneUrl } : {}),
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
-    ...(selfId
-      ? {
-          images: (task.images ?? [])
-            .flatMap((image) => {
-              // Legacy metadata must never prevent the rest of the board from syncing.
-              try {
-                return [parseTicketSyncImageRef(imageRef(image, selfId))];
-              } catch {
-                return [];
-              }
-            })
-            .slice(0, TICKET_SYNC_LIMITS.maxImageRefs),
-        }
-      : {}),
+    ...(selfId ? { images: snapshotImages(task, selfId) } : {}),
     createdAt: task.createdAt,
     ...ticketContentValue(task),
     ...(task.sync?.work ? { work: task.sync.work } : {}),

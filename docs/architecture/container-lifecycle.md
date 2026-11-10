@@ -1084,11 +1084,29 @@ to remount (`remount-ro … operation not permitted`) becomes an
 picks an automatic host port inside RootlessKit's namespace, which cannot see
 host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
-start is retried once. Docker 29.9 detaches the container from its network
-on that failed start, and a bare retry ran it with no network and no published
-ports, so the helper connects the container's own network again first and
-stops it if the retry still has none. A second collision, or one on a fixed
-port, is the existing `port-conflict`.
+start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
+dockerd hands out automatic ports in sequence, and short-lived outbound
+sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+container from its network on each failed start, and a bare retry ran it
+with no network and no published ports, so the helper connects the
+container's own network again before every retry and stops it if the
+started container still has none. A collision past the retries, or one on
+a fixed port, is the existing `port-conflict`.
+
+The same rootless daemon refuses every `docker cp` into or out of a
+container with a read-only bind whose source filesystem is mounted
+`nosuid`/`nodev`, running or stopped, while start and `exec` work: the
+daemon's archive path remounts the bind without the locked flags
+(`remount-ro … flags: 0x1021: operation not permitted`). A refused copy is
+classified (`docker-copy-refusal.ts`) rather than reported as a generic
+failure: configured project files and project seed files fail creation
+with `unsupported-topology` and the remedy (move Orkestrator's data
+directory or run Docker rootful), a rebuild's copy step likewise, the
+boot record read reports `boot-record-copy-refused` instead of
+`container-exited`, and the best-effort GitHub seed logs
+`refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
+copy into a directory (`must be a directory`), so a failed copy asks once
+more with a copy out of a path that cannot exist.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
@@ -1385,17 +1403,23 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 On a rootless daemon (`dockerRootless`) `host-gateway` names a bridge inside
 RootlessKit's network namespace, where nothing of the host listens. When
 those probes do not all answer, the check probes again through RootlessKit's
-host loopback address (`10.0.2.2`, `ROOTLESSKIT_HOST_LOOPBACK_ADDRESS`), which
-the daemon refuses unless it runs with
-`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. If that answers,
-the snapshot's `hostAddress` is set and new containers and gateways get
-`--add-host host.docker.internal:10.0.2.2` (creation waits up to 45 s for the
+host loopback addresses (`ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES`): slirp4netns's
+`10.0.2.2`, then gvisor-tap-vsock's `10.0.2.1`, which `dockerd-rootless.sh`
+falls back to on a host without slirp4netns, pasta or vpnkit. The daemon
+refuses both unless it runs with
+`DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false`. The first address
+that answers on every probe network becomes the snapshot's `hostAddress`, and
+new containers and gateways get `--add-host host.docker.internal:<address>`
+(creation waits up to 45 s for the
 first check, `resolveContainerHostAddress`), so the firewall's host-service
 rule names it; the in-container alias repair before a bridge start uses it
-too. If not, the verdict is `blocked` with a rootless remediation (a systemd
-drop-in for the user's Docker service and its cost: a Docker restart, and
-every container of that daemon reaching the host's loopback services)
-instead of firewall rules, which cannot help. The environment settings
+too; an existing container whose alias already names either address keeps it
+while no check has answered. If none answers, the verdict is `blocked` with a
+rootless remediation instead of firewall rules, which cannot help: a systemd
+drop-in for the user's Docker service and its cost (a Docker restart, and
+every container of that daemon reaching the host's loopback services). It
+names no address, since that depends on the network driver; the reachable
+verdict's summary shows the one in use. The environment settings
 network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
@@ -1479,8 +1503,9 @@ addresses and cannot identify container peers on the host. Missing or malformed
 security options on a non-Desktop daemon revoke subnet permissions. Changing
 from rootful Engine to Desktop or rootless therefore clears any previous list.
 A rootless peer arriving outside loopback stays refused. None has been seen:
-through RootlessKit's host loopback (slirp4netns) every container arrives as
-`127.0.0.1` (todo 6820, 2026-11-09), so rootless needs no topology-specific
+through RootlessKit's host loopback (slirp4netns and gvisor-tap-vsock) every
+container arrives as `127.0.0.1` (todos 6820 and 7548, 2026-11-09 and
+2026-11-10), so rootless needs no topology-specific
 permission.
 
 The native Engine subnet list is read with `docker network ls --filter
@@ -1512,7 +1537,8 @@ The peer address a container's call arrives from, by topology:
 | Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
 | Linux Engine (rootful) | The container's own address on its network (no NAT for traffic to a host address): `172.30.0.2` on the environment network, `10.213.0.2` on the default bridge; an unowned network's `172.30.1.2` is refused | The network's subnet | Run twice 2026-11-10 on beelink with the same script, inside the network namespace of `docker:disposable`'s nested rootful daemon (Engine 29.9.3, linux/amd64) on the host's rootful Engine 29.9.2; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 1 |
 | Rootless, slirp4netns, host loopback on (`10.0.2.2`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-09 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, slirp4netns 1.3.3, linux/amd64) with the same script; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 2 |
-| Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same run; the host check then switches to `10.0.2.2` |
+| Rootless, gvisor-tap-vsock, host loopback on (`10.0.2.1`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike; `10.0.2.2` is unreachable | Loopback | Run 2026-11-10 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, linux/amd64) with the same script; todo 7548, [evidence](../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10) |
+| Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same runs; the host check then switches to whichever host loopback address answers |
 
 On Docker Desktop no VM subnet grants admission. This means every container
 on the daemon, owned or not, and every local process can still reach the port, as before; the token remains

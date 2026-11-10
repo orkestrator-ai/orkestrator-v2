@@ -24,6 +24,7 @@ import {
   inspectOuter,
   isNestedRunning,
   nestedDaemonConfig,
+  storageConfig,
   nestedNames,
   nestedRunningState,
   outerDocker,
@@ -100,6 +101,13 @@ export const SHARED_DIR_ENV = "ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR";
 export const NETWORK_DRIVERS = ["slirp4netns", "gvisor-tap-vsock", "pasta", "vpnkit"] as const;
 export type NetworkDriver = (typeof NETWORK_DRIVERS)[number];
 export const DAEMON_MODES = ["rootless", "rootful"] as const;
+/**
+ * The image store: `containerd` (Engine 29's default for a new data root, the
+ * containerd snapshotter) or `overlay2` (the classic graph driver), so a
+ * daemon behaviour can be compared across both (to-do 7549 task 2).
+ */
+export const STORAGE_KINDS = ["containerd", "overlay2"] as const;
+export type StorageKind = (typeof STORAGE_KINDS)[number];
 /** `rootless`: host rootless dockerd under RootlessKit. `rootful`: nested privileged docker:dind. */
 export type DaemonMode = (typeof DAEMON_MODES)[number];
 const RUNTIME_PREFIX = "ork-ddd-";
@@ -117,6 +125,7 @@ export type InstanceSettings = {
   poolSize: number;
   /** Rootful only: an IPv6 pool and IPv6 on by default for new bridge networks. */
   ipv6: boolean;
+  storage: StorageKind;
 };
 
 export type InstancePaths = {
@@ -172,6 +181,7 @@ export const DEFAULT_SETTINGS: InstanceSettings = {
   addressPool: "172.30.0.0/16",
   poolSize: 24,
   ipv6: false,
+  storage: "containerd",
 };
 
 export function validateName(name: string): string {
@@ -212,11 +222,14 @@ export function instancePaths(root: string, runtimeBase: string, name: string): 
 
 /** The daemon's own configuration: its pools exist only in RootlessKit's namespace. */
 export function daemonConfig(settings: InstanceSettings): Record<string, unknown> {
-  if (settings.mode === "rootful") return nestedDaemonConfig(settings);
-  return {
-    "default-address-pools": [{ base: settings.addressPool, size: settings.poolSize }],
-    "live-restore": settings.liveRestore,
-  };
+  const config =
+    settings.mode === "rootful"
+      ? nestedDaemonConfig(settings)
+      : {
+          "default-address-pools": [{ base: settings.addressPool, size: settings.poolSize }],
+          "live-restore": settings.liveRestore,
+        };
+  return settings.mode === "rootful" ? config : { ...config, ...storageConfig(settings.storage) };
 }
 
 export function dockerdArguments(paths: InstancePaths): string[] {
@@ -439,7 +452,8 @@ export function readRecord(root: string, name: string): InstanceRecord | null {
   const file = path.join(path.resolve(root), validateName(name), INSTANCE_FILE);
   if (!existsSync(file)) return null;
   const parsed = JSON.parse(readFileSync(file, "utf8")) as InstanceRecord;
-  // Records from before the rootful mode carry no mode or ipv6 setting.
+  // Records from before the rootful mode carry no mode or ipv6 setting, and
+  // records from before --storage none: those daemons used the default.
   if (
     parsed &&
     typeof parsed === "object" &&
@@ -838,6 +852,9 @@ export function validateSettings(
   if (!NETWORK_DRIVERS.includes(settings.network)) {
     throw new Error(`--net must be one of ${NETWORK_DRIVERS.join(", ")}`);
   }
+  if (!STORAGE_KINDS.includes(settings.storage)) {
+    throw new Error(`--storage must be one of ${STORAGE_KINDS.join(", ")}`);
+  }
   if (settings.mode === "rootless") {
     if (settings.liveRestore) {
       throw new Error("--live-restore is unsupported by the rootless mode; use --mode rootful");
@@ -993,6 +1010,64 @@ async function stopInstanceUnlocked(name: string, options: LauncherOptions): Pro
   return true;
 }
 
+/** An image's id, then what identifies its content under either image store. */
+export const IMAGE_IDENTITY_FORMAT =
+  "{{.Id}}\t{{json .RootFS.Layers}}\t{{.Created}}\t{{.Architecture}}\t{{json .Config}}";
+
+/**
+ * Whether two `IMAGE_IDENTITY_FORMAT` lines name the same image. The same id
+ * does; otherwise the layers' content digests, creation time, architecture and
+ * complete execution configuration must all agree, because the containerd image
+ * store's id is the manifest
+ * digest while the overlay2 graph driver's is the config digest (`--storage
+ * overlay2`).
+ */
+export function sameImage(source: string, copied: string): boolean {
+  const [sourceId = "", ...sourceContent] = source.split("\t");
+  const [copiedId = "", ...copiedContent] = copied.split("\t");
+  if (!sourceId || !copiedId) return false;
+  if (sourceId === copiedId) return true;
+  const layers = sourceContent[0] ?? "";
+  return (
+    sourceContent.length === 4 &&
+    copiedContent.length === 4 &&
+    layers.startsWith('["sha256:') &&
+    sourceContent.slice(0, 3).join("\t") === copiedContent.slice(0, 3).join("\t") &&
+    sameImageConfig(sourceContent[3]!, copiedContent[3] ?? "")
+  );
+}
+
+/** Compare JSON objects independently of Docker's property serialization order. */
+function sameImageConfig(source: string, copied: string): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, canonical(item)]),
+      );
+    }
+    return value;
+  };
+  try {
+    const a: unknown = JSON.parse(source);
+    const b: unknown = JSON.parse(copied);
+    if (
+      !a ||
+      !b ||
+      typeof a !== "object" ||
+      typeof b !== "object" ||
+      Array.isArray(a) ||
+      Array.isArray(b)
+    )
+      return false;
+    return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Copies an image from the caller's daemon into the instance by `docker save`
  * and `docker load`, keeping its reference and checking the id. The caller's
@@ -1013,10 +1088,11 @@ export async function transferImage(
       "DOCKER_HOST already selects the disposable daemon; unset it to copy from the host",
     );
   }
-  const inspect = ["image", "inspect", "--format", "{{.Id}}", reference];
+  const inspect = ["image", "inspect", "--format", IMAGE_IDENTITY_FORMAT, reference];
   const source = outer ? outerDocker(outer, inspect) : docker(null, inspect);
   if (source.status !== 0) throw new Error(`The host daemon has no image ${reference}`);
-  const id = source.stdout.trim();
+  const sourceIdentity = source.stdout.trim();
+  const id = sourceIdentity.split("\t")[0]!;
   const save = spawn("docker", [...(outer ? ["--host", outer] : []), "save", reference], {
     env: outer ? outerEnvironment() : process.env,
     stdio: ["ignore", "pipe", "inherit"],
@@ -1045,15 +1121,19 @@ export async function transferImage(
     await Promise.all([savedClosed, loadedClosed]);
     throw new Error(`Copying ${reference} failed`, { cause: error });
   }
-  const copied = docker(record, [
+  const copiedIdentity = docker(record, [
     "image",
     "inspect",
     "--format",
-    "{{.Id}}",
+    IMAGE_IDENTITY_FORMAT,
     reference,
   ]).stdout.trim();
-  if (copied !== id) throw new Error(`${reference} arrived as ${copied}, expected ${id}`);
-  const entry = { reference, id };
+  // Re-inspection checks the loaded reference against the pre-save snapshot,
+  // including configuration: a tag changed during save must not pass on layers alone.
+  if (!sameImage(sourceIdentity, copiedIdentity)) {
+    throw new Error(`${reference} arrived as ${copiedIdentity.split("\t")[0]}, expected ${id}`);
+  }
+  const entry = { reference, id: copiedIdentity.split("\t")[0]! };
   record.images = [...record.images.filter((image) => image.reference !== reference), entry];
   writeRecord(record);
   return entry;
@@ -1115,6 +1195,14 @@ export function parseArguments(argv: string[], root = defaultInstanceRoot()): Pa
       case "--host-loopback":
         parsed.settings.hostLoopback = true;
         break;
+      case "--storage": {
+        const storage = value(flag) as StorageKind;
+        if (!STORAGE_KINDS.includes(storage)) {
+          throw new Error(`--storage must be one of ${STORAGE_KINDS.join(", ")}`);
+        }
+        parsed.settings.storage = storage;
+        break;
+      }
       case "--mode": {
         const mode = value(flag) as DaemonMode;
         if (!DAEMON_MODES.includes(mode)) {
@@ -1177,6 +1265,8 @@ Options:
   --mode <mode>         rootless (default): host dockerd under RootlessKit
                         rootful: nested privileged docker:dind on the outer daemon
   --address-pool <cidr> Bridge pool inside the daemon's namespace (default 172.30.0.0/16, as /24s)
+  --storage <kind>      containerd (default, Engine 29's containerd image store) or overlay2
+                        (the classic graph driver)
 
 Rootless only:
   --net <driver>        slirp4netns (default), gvisor-tap-vsock, pasta or vpnkit

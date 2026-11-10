@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { classifyDockerCopyFailure, isDockerCopyRefusedError } from "./docker-copy-refusal.js";
 import { runCommand } from "./shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -142,9 +143,16 @@ export async function copyGithubRangesSeed(
     );
     return true;
   } catch (error) {
+    // A refused copy (a read-only bind on a nosuid/nodev filesystem under
+    // rootless Docker) is named, not left unclassified: every boot of such
+    // a container then fetches GitHub's ranges itself.
+    const refused = isDockerCopyRefusedError(
+      await classifyDockerCopyFailure(containerId, error, "the GitHub ranges seed", run),
+    );
     log.warn("github-ranges.seed-not-copied", {
       containerId: containerId.slice(0, 12),
       ...classifyCommandFailure(error, { tools: ["docker"] }),
+      ...(refused ? { refusal: "read-only-bind-remount" } : {}),
       error: formatLogError(error),
     });
     return false;

@@ -6,6 +6,7 @@ import {
   collidingHostPort,
   parsePortBindings,
   parseStartInspection,
+  PORT_COLLISION_RETRIES,
   shouldRetryPortCollision,
   startDockerContainer,
 } from "./container-start.js";
@@ -117,7 +118,7 @@ function scriptedRun(
 }
 
 describe("startDockerContainer", () => {
-  test("retries once with fresh ports after an automatic port collided", async () => {
+  test("retries with fresh ports after an automatic port collided", async () => {
     const { run, calls } = scriptedRun(
       [new CommandFailedError(ROOTLESSKIT_IN_USE.replace("38917", "33169")), "abc"],
       fixedAndAutomatic,
@@ -167,15 +168,41 @@ describe("startDockerContainer", () => {
     expect(fixture.calls.some((args) => args[0] === "stop")).toBe(false);
   });
 
-  test("a second collision, or one on a fixed port, is returned unchanged", async () => {
-    const twice = scriptedRun(
-      [new CommandFailedError(ROOTLESSKIT_IN_USE), new CommandFailedError(ROOTLESSKIT_IN_USE)],
+  test("collisions in a row are retried, each after reconnecting the network", async () => {
+    const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
+    const fixture = scriptedRun(
+      [...Array.from({ length: PORT_COLLISION_RETRIES }, collision), "ok"],
       automaticOnly,
     );
-    await expect(startDockerContainer("abc", { run: twice.run })).rejects.toThrow(
+    const logs = captureLogs();
+    await startDockerContainer("abc", { run: fixture.run }).finally(() => logs.restore());
+    expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(
+      PORT_COLLISION_RETRIES + 1,
+    );
+    expect(fixture.calls.filter((args) => args[0] === "network")).toHaveLength(
+      PORT_COLLISION_RETRIES,
+    );
+    expect(fixture.attached()).toBe(true);
+    expect(fixture.published()).toBe(true);
+    expect(logs.records().map((record) => record.fields?.retry)).toEqual(
+      Array.from({ length: PORT_COLLISION_RETRIES }, (_, index) => index + 1),
+    );
+  });
+
+  test("a collision past the retries, or one on a fixed port, is returned unchanged", async () => {
+    const collision = () => new CommandFailedError(ROOTLESSKIT_IN_USE);
+    const exhausted = scriptedRun(
+      Array.from({ length: PORT_COLLISION_RETRIES + 1 }, collision),
+      automaticOnly,
+    );
+    await expect(startDockerContainer("abc", { run: exhausted.run })).rejects.toThrow(
       "address already in use",
     );
-    expect(twice.calls.filter((args) => args[0] === "start")).toHaveLength(2);
+    expect(exhausted.calls.filter((args) => args[0] === "start")).toHaveLength(
+      PORT_COLLISION_RETRIES + 1,
+    );
+    // The last failed start is reconnected too, so a later start publishes.
+    expect(exhausted.attached()).toBe(true);
 
     const fixed = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE)], fixedAndAutomatic);
     await expect(startDockerContainer("abc", { run: fixed.run })).rejects.toThrow(
@@ -185,14 +212,15 @@ describe("startDockerContainer", () => {
   });
 
   for (const fixed of [false, true]) {
-    test(`a later start restores ports after ${fixed ? "a fixed-port collision" : "both automatic attempts collide"}`, async () => {
+    test(`a later start restores ports after ${fixed ? "a fixed-port collision" : "every automatic attempt collides"}`, async () => {
       const collision = new CommandFailedError(ROOTLESSKIT_IN_USE);
+      const attempts = fixed ? 1 : PORT_COLLISION_RETRIES + 1;
       const fixture = scriptedRun(
-        fixed ? [collision, "ok"] : [collision, collision, "ok"],
+        [...Array.from({ length: attempts }, () => collision), "ok"],
         fixed ? fixedAndAutomatic : automaticOnly,
       );
       await expect(startDockerContainer("abc", { run: fixture.run })).rejects.toBe(collision);
-      expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(fixed ? 1 : 2);
+      expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(attempts);
       expect(fixture.attached()).toBe(true);
       // The port is now free. Docker only publishes it with a network endpoint.
       await startDockerContainer("abc", { run: fixture.run });

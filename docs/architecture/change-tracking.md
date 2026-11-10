@@ -470,9 +470,10 @@ checkpoint that does not publish refuses the apply with
 checkpoint is what makes an apply recoverable, and the user is already
 waiting on an explicit action, so both now get the larger of the turn
 finalization deadline (30 s) and the preview's plan-scaled deadline
-(`restoreCaptureDeadlineMs`). The apply itself writes each file through its
-own conditional-write helper process after its own destination check, so it
-costs about 40 ms per file under load.
+(`restoreCaptureDeadlineMs`). The apply writes through one conditional-write
+helper process per batch of up to 500 groups (a file, or both ends of a
+rename) and 32 MiB of content (`RESTORE_WRITE_BATCH_GROUPS`,
+`RESTORE_WRITE_BATCH_BYTES`); see [Batched apply](#batched-apply) below.
 
 `bun scripts/benchmark-change-tracking.ts --only=restore-apply` runs one turn
 that writes `--restore-files` new files through the whole service on a real
@@ -518,7 +519,7 @@ Every checkpoint and result capture published, warm, in under a second, and
 no restored file was left behind in the worktree. The restore-result capture
 took 0.1 to 0.16 s. The gateway held the 305 s apply request open and
 answered it; whether the restore dialog or the desktop IPC path waits as long
-is [todo 7555](../todo/cross-cutting/7555-restore-apply-throughput.md) task 2.
+was todo 7555 task 2, answered under [Batched apply](#batched-apply).
 At a load of 1 to 10 the apply still cost 11 to 14 ms per file, so most of
 the busy-host 30 to 40 ms is the per-file helper process, not only load.
 
@@ -532,8 +533,89 @@ final one, which restores. The restore dialog is gated by the projection's
 `restore` action instead. [Todo 7556](../todo/cross-cutting/7556-history-names-provisional-measurement-after-finalize.md)
 owns the gap.
 
-Apply throughput at bulk sizes is
-[todo 7555](../todo/cross-cutting/7555-restore-apply-throughput.md).
+Those apply times are from before the batched apply below.
+
+### Batched apply
+
+Until todo 7555 (retired 2026-11-10) the apply started one helper process per
+file, which cost 11 to 14 ms per file on a quiet host and 30 to 40 ms under
+load. The helper now reads a batch and answers one line per action, in order,
+written synchronously as each action finishes. Nothing about a single write
+changed: each action pins the root and every ancestor directory, re-checks
+the destination's content and mode immediately before it renames a temporary
+sibling over it, and a group stops at its first write that is not applied, so
+a rename's second end is never touched when the first failed. Around the
+helper:
+
+- Every endpoint of every group in a batch is described before any write in
+  the batch; a group whose destination moved since the preview is skipped
+  whole, as before. Host destination reads run one path at a time and discard
+  file bodies before retaining precondition metadata, bounding destination-body
+  retention independently of the 500-group write batch. Container destination
+  checks remain batched because they return metadata only.
+- The owner fence is asserted before each helper call, so an owner replaced
+  mid-apply stops at the next batch instead of the next file.
+- A helper that dies part-way has already reported every write it finished;
+  an action without a result line counts as failed, and the result capture
+  records what is really on disk (`restore-apply-batch.test.ts` kills the
+  helper before its third delete and checks the outcome names exactly the
+  first two).
+
+`bun scripts/benchmark-change-tracking.ts --only=restore-apply --restore-cold`
+on the same 16-core Linux host on 2026-11-10, worktree on disk, the stat cache
+dropped before the apply (`checkpointStatCache: cold`, as after an idle owner
+was swept). Each row restored every file:
+
+| Files | Code | Load (at apply → after) | Turn end capture | Preview | Cold checkpoint (deadline) | Apply | Writes per file |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | one helper per file | 1.8 → 3.6 | 3.3 s | 0.49 s | 1.25 s (50 s) | 121.0 s | 12.0 ms |
+| 20,000 | one helper per file | 3.3 → 4.7 | 7.3 s | 1.0 s | 2.1 s (100 s) | 252.1 s | 12.5 ms |
+| 10,000 | batched | 11.9 → 17.1 | 7.2 s | 1.6 s | 2.2 s (50 s) | 8.2 s | 0.54 ms |
+| 20,000 | batched | 36.6 → 39.2 | 22.6 s | 4.2 s | 4.8 s (100 s) | 14.6 s | 0.48 ms |
+
+The first two rows are the quiet-host cold checkpoint 7310 left open: 1.25 s
+and 2.1 s, well inside the 50 s and 100 s deadlines. The batched rows ran
+while other work, this change's own lint run included, filled the host, and
+still wrote 22 to 26 times faster per file than the quiet per-file run.
+
+Driven through the app the same day: an isolated `dev:test` profile
+(`--fixture --no-agent-credentials --agent-platforms claude --headless`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), a real Claude CLI and bridge
+answered by the loopback model, N files written under `generated/` while the
+model held the turn, then the turn's restore button under "Turn changes",
+the preview dialog and its Restore button in Chromium, timed from the click
+until the dialog reported the outcome
+(`e2e/agent-testing/restore-apply-bulk-live.spec.ts`, opt-in with
+`ORKESTRATOR_AGENT_TEST_LIVE_BULK_RESTORE=1`). Capture times come from the
+profile's `change_capture_attempts` rows:
+
+| Files | Load at apply | Turn end capture | Preview (dialog shown) | Checkpoint | Apply (outcome shown) | Restored |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 52.5 | published, 4.0 s | 2.1 s | 0.20 s | 3.7 s | 10,000 of 10,000 |
+| 20,000 | 54.2 | published, 8.7 s | 4.0 s | 0.43 s | 6.8 s | 20,000 of 20,000 |
+| 60,000 | 55.9 | timed out (`capture-timeout`); background recovery published in 6.8 s | 11.5 s | 1.75 s (300 s) | 22.5 s | 60,000 of 60,000 |
+
+The 60,000-file turn is a live end-capture timeout that recovered: its turn
+is recorded `end-unavailable` with reason `end-captured-later`, the restore
+was offered once the recovery published (about 49 s after the answer appeared),
+and the restore from the recovered measurement removed every file. The
+preview dialog lists every planned file (60,000 rows) and stayed usable.
+
+Client waits. `changes_apply_restore` is still one request that answers when
+the apply is done. The browser gateway has no request timeout of its own and
+held a 305 s apply open under 7310. On the desktop, the renderer's
+`orkestrator:invoke` reaches the backend through the main process's built-in
+`fetch` with no signal (`BackendProcess.request` in
+`apps/desktop/electron/backend-process.ts`), so undici's default 300 s headers
+timeout applies: a loopback request whose response took 310 s failed after
+301.7 s with `UND_ERR_HEADERS_TIMEOUT` (Node 26.13, undici 8.12; Electron's
+own runtime and window were not driven, since this host runs headless). With
+the batched apply that limit is far away: 60,000 files took 22.5 s at a load
+of 56. A dialog whose request fails says the result is unknown and keeps the
+preview, and pressing Restore again sends the same idempotency key, which
+answers `changes.restore.in-progress` while the apply runs and the recorded
+outcome after it. Returning an operation id at once and polling it was
+therefore not built.
 
 ## Retention and backup
 

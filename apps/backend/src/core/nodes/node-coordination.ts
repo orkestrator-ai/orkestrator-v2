@@ -46,6 +46,7 @@ import {
 import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
+import { LeafTicketImageWants } from "./node-ticket-images.js";
 import { NodeTicketSync } from "./node-ticket-sync.js";
 import {
   coordinatorContactKey,
@@ -192,6 +193,8 @@ export class NodeCoordination {
   readonly collector: NodeMailCollector;
   /** Kanban sync with the leaves (command node) and the outbox announcements (leaf). */
   readonly ticketSync: NodeTicketSync;
+  /** Leaf: images on synced tickets that this machine waits for its command node to deliver. */
+  readonly ticketImages: LeafTicketImageWants;
   readonly actions: NodeActionRequests;
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
@@ -318,6 +321,7 @@ export class NodeCoordination {
     this.unsubscribeKanban?.();
     this.collector.dispose();
     this.ticketSync.dispose();
+    this.ticketImages.dispose();
   }
 
   constructor(
@@ -423,12 +427,17 @@ export class NodeCoordination {
           available: node.available,
           projects: node.projects.map((project) => ({
             projectId: project.ref.projectId,
+            name: project.name,
             ...(project.repositoryHint ? { repositoryHint: project.repositoryHint } : {}),
           })),
         })),
       localProjects: () => storage.loadProjects(),
-      kanban: storage.kanban,
+      ticketSync: storage.ticketSync,
+      localImage: (imageId) => storage.kanban.getKanbanImageData(imageId).catch(() => null),
       emit: options.emit,
+    });
+    this.ticketImages = new LeafTicketImageWants({
+      announce: (controllerId) => options.emit(ticketSyncOutboxReadyEvent, { controllerId }),
     });
     portal.readModel.onNodeEvent((event, payload, nodeId) => {
       this.collector.handleNodeEvent(event, payload, nodeId);
@@ -441,7 +450,7 @@ export class NodeCoordination {
       if (change.resource !== "kanban") return;
       if (nodes.mode?.() === "command") this.ticketSync.noteLocalChange(change.id);
       if (!nodes.listControllers?.().length) return;
-      void storage.kanban
+      void storage.ticketSync
         .ticketSyncOutboxControllers()
         .then((controllers) => {
           for (const controllerId of controllers) {
@@ -451,7 +460,7 @@ export class NodeCoordination {
         .catch(() => undefined);
     });
     nodes.onControllerDetached?.((controllerId) => {
-      void storage.kanban.forgetTicketSyncController(controllerId).catch(() => {
+      void storage.ticketSync.forgetTicketSyncController(controllerId).catch(() => {
         log.warn("ticket-sync.forget-failed");
       });
     });

@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 import type { Environment } from "../src/core/models";
@@ -605,6 +606,47 @@ describe("Electron tmux environment teardown", () => {
           context,
         ),
       ).rejects.toThrow("interactive terminal session not found");
+    });
+  });
+
+  test("incomplete orphan killing warns and still rejects cleanup", async () => {
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, alive }) => {
+      // No resident session: exercise the backend sweep's incomplete result.
+      await fs.mkdir(alive, { recursive: true });
+      await fs.mkdir(runtimeRoot, { recursive: true });
+      const orphan = path.join(alive, tmuxSessionName(environment.id, "orphan"));
+      await fs.writeFile(orphan, "");
+      const context = harnessContext({
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      });
+      const originalFailKill = process.env.FAKE_TMUX_FAIL_KILL;
+      const logs = captureLogs();
+      process.env.FAKE_TMUX_FAIL_KILL = "1";
+      try {
+        await expect(cleanupEnvironmentTmux(environment.id, context)).rejects.toThrow(
+          "cleanup incomplete",
+        );
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            area: "tmux",
+            level: "warn",
+            event: "cleanup.kill-incomplete",
+            fields: { killed: 0 },
+          }),
+        );
+        expect(existsSync(orphan)).toBe(true);
+        expect(existsSync(runtimeRoot)).toBe(true);
+      } finally {
+        logs.restore();
+        if (originalFailKill === undefined) delete process.env.FAKE_TMUX_FAIL_KILL;
+        else process.env.FAKE_TMUX_FAIL_KILL = originalFailKill;
+      }
     });
   });
 

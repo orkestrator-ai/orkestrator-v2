@@ -238,3 +238,24 @@ test("multiple sources permit explicit selection and preserve it across refresh"
   });
   expect((picker as HTMLSelectElement).value).toBe("other");
 });
+
+test("the Build transcript dropdown shares the reviewer Focus dropdown's theme", async () => {
+  renderInNodeScope(
+    <MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      onConfirm={() => undefined}
+      defaultAgent="codex"
+      catalog={{ claude: [], codex: [], opencode: [] }}
+      autoPipelineEnvironmentId="env"
+    />,
+    { client: client() },
+  );
+  const transcript = await screen.findByRole("combobox", { name: "Build transcript" });
+  const focus = screen.getByRole("combobox", { name: "Reviewer 1 focus" });
+  for (const select of [transcript, focus]) {
+    expect(select.getAttribute("data-slot")).toBe("native-select");
+    expect(select.className).toContain("bg-input-surface");
+  }
+  expect(transcript.className).toBe(focus.className);
+});

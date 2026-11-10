@@ -1,14 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  TICKET_SYNC_FEATURES,
   TICKET_SYNC_LIMITS,
   parseTicketSyncOp,
+  parseTicketSyncImageRef,
   ticketSyncConflictPreview,
   type TicketContentValue,
   type TicketSnapshot,
   type TicketSyncConflict,
   type TicketSyncField,
+  type TicketSyncImageRef,
   type TicketSyncMeta,
   type TicketSyncOp,
   type TicketSyncOutboxItem,
@@ -16,7 +19,7 @@ import {
   type TicketWorkLocation,
 } from "@orkestrator/protocol/ticket-sync";
 
-import type { KanbanTask } from "./storage-shared.js";
+import type { KanbanImage, KanbanTask } from "./storage-shared.js";
 
 /**
  * The pure half of Kanban sync (docs/architecture/tickets.md, "Sync across
@@ -74,6 +77,11 @@ export interface KanbanSyncStore {
   /** Command node: per leaf node. */
   peers: Record<string, KanbanSyncPeer>;
   conflicts: TicketSyncConflict[];
+  /**
+   * Leaf: what each command node declared it can apply when it last
+   * collected (`TICKET_SYNC_FEATURES`). Changes it cannot read are not queued.
+   */
+  features: Record<string, string[]>;
 }
 
 export function emptyKanbanSyncStore(): KanbanSyncStore {
@@ -87,6 +95,7 @@ export function emptyKanbanSyncStore(): KanbanSyncStore {
     replicas: {},
     peers: {},
     conflicts: [],
+    features: {},
   };
 }
 
@@ -112,7 +121,18 @@ export function parseKanbanSyncStore(value: unknown): KanbanSyncStore | null {
     replicas: record("replicas"),
     peers: record("peers"),
     conflicts: Array.isArray(value.conflicts) ? (value.conflicts as TicketSyncConflict[]) : [],
+    features: record("features"),
   };
+}
+
+/** Whether a command node declared `feature` when it last collected this leaf's outbox. */
+export function controllerHasFeature(
+  store: KanbanSyncStore,
+  controllerId: string,
+  feature: string,
+): boolean {
+  const features = store.features[controllerId];
+  return Array.isArray(features) && features.includes(feature);
 }
 
 export function replicaLinkKey(controllerId: string, projectId: string): string {
@@ -220,12 +240,17 @@ interface TicketDiff {
   status: boolean;
   addedComments: KanbanTask["comments"];
   removedComments: string[];
+  /** Images by id: a reference gaining its bytes or a sync mark is not a change. */
+  addedImages: KanbanImage[];
+  removedImages: string[];
   work: boolean;
 }
 
 export function diffTickets(before: KanbanTask, after: KanbanTask): TicketDiff {
   const beforeComments = new Set(before.comments.map((comment) => comment.id));
   const afterComments = new Set(after.comments.map((comment) => comment.id));
+  const beforeImages = new Set((before.images ?? []).map((image) => image.id));
+  const afterImages = new Set((after.images ?? []).map((image) => image.id));
   return {
     title: before.title !== after.title,
     content: contentKey(before) !== contentKey(after),
@@ -235,6 +260,10 @@ export function diffTickets(before: KanbanTask, after: KanbanTask): TicketDiff {
     removedComments: before.comments
       .filter((comment) => !afterComments.has(comment.id))
       .map((comment) => comment.id),
+    addedImages: (after.images ?? []).filter((image) => !beforeImages.has(image.id)),
+    removedImages: (before.images ?? [])
+      .filter((image) => !afterImages.has(image.id))
+      .map((image) => image.id),
     work: !isDeepStrictEqual(localWork(before), localWork(after)),
   };
 }
@@ -246,8 +275,27 @@ function syncedChange(diff: TicketDiff): boolean {
     diff.checks ||
     diff.status ||
     diff.addedComments.length > 0 ||
-    diff.removedComments.length > 0
+    diff.removedComments.length > 0 ||
+    diff.addedImages.length > 0 ||
+    diff.removedImages.length > 0
   );
+}
+
+/** An image as a synced reference; `nodeId` is set by whoever knows where its bytes are. */
+export function imageRef(image: KanbanImage, nodeId?: string): TicketSyncImageRef {
+  const holder = image.nodeId ?? nodeId;
+  return {
+    id: image.id,
+    filename: image.filename,
+    createdAt: image.createdAt,
+    ...(holder ? { nodeId: holder } : {}),
+    ...(image.nodeId && image.nodeName ? { nodeName: image.nodeName } : {}),
+  };
+}
+
+/** The images whose bytes are on this machine. */
+function ownImages(task: KanbanTask): KanbanImage[] {
+  return (task.images ?? []).filter((image) => !image.nodeId);
 }
 
 function nextSeq(store: KanbanSyncStore): number {
@@ -318,12 +366,16 @@ export function pendingTicketFields(
   fields: Set<TicketSyncField>;
   addedComments: Set<string>;
   removedComments: Set<string>;
+  addedImages: Set<string>;
+  removedImages: Set<string>;
   deleted: boolean;
   created: boolean;
 } {
   const fields = new Set<TicketSyncField>();
   const addedComments = new Set<string>();
   const removedComments = new Set<string>();
+  const addedImages = new Set<string>();
+  const removedImages = new Set<string>();
   let deleted = false;
   let created = false;
   for (const item of store.outbox[controllerId]?.items ?? []) {
@@ -334,10 +386,15 @@ export function pendingTicketFields(
     else if (op.kind === "set-status") fields.add("status");
     else if (op.kind === "add-comment") addedComments.add(op.comment.id);
     else if (op.kind === "delete-comment") removedComments.add(op.commentId);
+    else if (op.kind === "add-image") addedImages.add(op.image.id);
+    else if (op.kind === "delete-image") removedImages.add(op.imageId);
     else if (op.kind === "delete") deleted = true;
-    else if (op.kind === "create") created = true;
+    else if (op.kind === "create") {
+      created = true;
+      for (const image of op.ticket.images ?? []) addedImages.add(image.id);
+    }
   }
-  return { fields, addedComments, removedComments, deleted, created };
+  return { fields, addedComments, removedComments, addedImages, removedImages, deleted, created };
 }
 
 /*
@@ -387,35 +444,9 @@ export function stampTicketChange(
       seq,
       revs: { title: seq, content: seq, status: seq },
     };
-    const link = replicaLinkForProject(store, after.projectId);
-    if (link) {
-      meta.replica = {
-        controllerId: link.controllerId,
-        sourceProjectId: link.sourceProjectId,
-        seq: 0,
-        revs: {},
-        pendingCreate: true,
-      };
-      journalTicketOp(
-        store,
-        link.controllerId,
-        after.id,
-        link.sourceProjectId,
-        {
-          kind: "create",
-          ticket: {
-            ...ticketContentValue(after),
-            title: after.title,
-            status: after.status,
-            ...(after.prMergeDoneUrl ? { prMergeDoneUrl: after.prMergeDoneUrl } : {}),
-            comments: after.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
-            createdAt: after.createdAt,
-          },
-        },
-        now,
-      );
-    }
     stored.sync = meta;
+    const link = replicaLinkForProject(store, after.projectId);
+    if (link) shareTicket(store, link, after, stored, now);
     return link ? [link.controllerId] : [];
   }
   const diff = diffTickets(before, after);
@@ -440,6 +471,7 @@ export function stampTicketChange(
   if (!replica) return [];
   const queue = (op: TicketSyncOp) =>
     journalTicketOp(store, replica.controllerId, after.id, replica.sourceProjectId, op, now);
+  const images = controllerHasFeature(store, replica.controllerId, TICKET_SYNC_FEATURES.images);
   if (diff.title)
     queue({ kind: "set-title", value: after.title, baseRev: replica.revs.title ?? 0 });
   if (diff.content) {
@@ -466,8 +498,62 @@ export function stampTicketChange(
     });
   }
   for (const commentId of diff.removedComments) queue({ kind: "delete-comment", commentId });
+  if (images) {
+    // Only this machine's own images go up: a reference came from the board.
+    for (const image of diff.addedImages) {
+      if (!image.nodeId) queue({ kind: "add-image", image: imageRef(image) });
+    }
+    for (const imageId of diff.removedImages) queue({ kind: "delete-image", imageId });
+  }
   if (diff.work) queue({ kind: "work", work: localWork(after) });
   return [replica.controllerId];
+}
+
+/**
+ * Makes a ticket on this leaf the command node's: marks it a copy waiting for
+ * confirmation and queues its creation, with its own images when the command
+ * node reads them. A new leaf ticket does this as it is created; an older one
+ * when the user shares it. `after` is normalized, `stored` the row to save.
+ */
+export function shareTicket(
+  store: KanbanSyncStore,
+  link: KanbanSyncReplicaLink,
+  after: KanbanTask,
+  stored: KanbanTask,
+  now: string,
+): void {
+  const images = controllerHasFeature(store, link.controllerId, TICKET_SYNC_FEATURES.images)
+    ? ownImages(after).map((image) => imageRef(image))
+    : [];
+  journalTicketOp(
+    store,
+    link.controllerId,
+    after.id,
+    link.sourceProjectId,
+    {
+      kind: "create",
+      ticket: {
+        ...ticketContentValue(after),
+        title: after.title,
+        status: after.status,
+        ...(after.prMergeDoneUrl ? { prMergeDoneUrl: after.prMergeDoneUrl } : {}),
+        comments: after.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
+        ...(images.length ? { images } : {}),
+        createdAt: after.createdAt,
+      },
+    },
+    now,
+  );
+  stored.sync = {
+    ...(stored.sync ?? { seq: 0, revs: {} }),
+    replica: {
+      controllerId: link.controllerId,
+      sourceProjectId: link.sourceProjectId,
+      seq: 0,
+      revs: {},
+      pendingCreate: true,
+    },
+  };
 }
 
 function pruneTombstones(store: KanbanSyncStore): void {
@@ -490,7 +576,25 @@ function pruneTombstones(store: KanbanSyncStore): void {
  * The command node's side.
  */
 
-export function ticketSnapshot(task: KanbanTask): TicketSnapshot {
+/** Bounds legacy image metadata without letting one old row block board sync. */
+function snapshotImages(task: KanbanTask, selfId: string): TicketSyncImageRef[] {
+  const images: TicketSyncImageRef[] = [];
+  for (const image of task.images ?? []) {
+    try {
+      images.push(parseTicketSyncImageRef(imageRef(image, selfId)));
+    } catch {
+      continue;
+    }
+    if (images.length === TICKET_SYNC_LIMITS.maxImageRefs) break;
+  }
+  return images;
+}
+
+/**
+ * One ticket as sent to a leaf. With `selfId`, its images go too, each naming
+ * the machine with its bytes (this one, unless it is a leaf's reference).
+ */
+export function ticketSnapshot(task: KanbanTask, selfId?: string): TicketSnapshot {
   return {
     id: task.id,
     seq: task.sync?.seq ?? 0,
@@ -499,6 +603,7 @@ export function ticketSnapshot(task: KanbanTask): TicketSnapshot {
     status: task.status,
     ...(task.prMergeDoneUrl ? { prMergeDoneUrl: task.prMergeDoneUrl } : {}),
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
+    ...(selfId ? { images: snapshotImages(task, selfId) } : {}),
     createdAt: task.createdAt,
     ...ticketContentValue(task),
     ...(task.sync?.work ? { work: task.sync.work } : {}),
@@ -545,8 +650,74 @@ export function recordConflict(
 ): TicketSyncConflict {
   const recorded: TicketSyncConflict = {
     ...conflict,
+    id: randomUUID(),
     value: ticketSyncConflictPreview(conflict.value),
   };
   store.conflicts = [...store.conflicts, recorded].slice(-TICKET_SYNC_LIMITS.maxConflicts);
   return recorded;
+}
+
+/** A conflict's id; records written before ids existed get a stable one from their content. */
+export function ticketSyncConflictId(conflict: TicketSyncConflict): string {
+  if (conflict.id) return conflict.id;
+  const hex = createHash("sha256")
+    .update(
+      JSON.stringify([
+        conflict.at,
+        conflict.ticketId,
+        conflict.projectId,
+        conflict.fromNodeId,
+        conflict.field,
+        conflict.reason,
+        conflict.value,
+      ]),
+    )
+    .digest("hex");
+  return `legacy-${hex.slice(0, 32)}`;
+}
+
+/**
+ * A leaf's images after a command node's snapshot. `incoming` absent (an older
+ * command node) keeps the row's. Otherwise each reference is kept, a
+ * reference to an image whose bytes are here stays this machine's own, and an
+ * own image the board does not list is kept while its upload is queued or if
+ * it never reached the board, and removed once the board had it and dropped
+ * it. Returns the images and the ids whose local copies to delete.
+ */
+export function mergeSnapshotImages(
+  current: readonly KanbanImage[],
+  incoming: readonly TicketSyncImageRef[] | undefined,
+  pending: { addedImages: ReadonlySet<string>; removedImages: ReadonlySet<string> },
+  controllerId: string,
+): { images: KanbanImage[]; removed: string[] } {
+  if (!incoming) return { images: [...current], removed: [] };
+  const byId = new Map(current.map((image) => [image.id, image]));
+  const listed = new Set(incoming.map((image) => image.id));
+  const images: KanbanImage[] = [];
+  for (const ref of incoming) {
+    if (pending.removedImages.has(ref.id)) continue;
+    const local = byId.get(ref.id);
+    if (local && !local.nodeId) {
+      images.push({ ...local, synced: true });
+      continue;
+    }
+    const nodeId = ref.nodeId ?? controllerId;
+    images.push({
+      id: ref.id,
+      filename: ref.filename,
+      createdAt: ref.createdAt,
+      nodeId,
+      ...(ref.nodeName ? { nodeName: ref.nodeName } : {}),
+    });
+  }
+  const removed: string[] = [];
+  for (const image of current) {
+    if (listed.has(image.id)) continue;
+    if (!image.nodeId && (pending.addedImages.has(image.id) || !image.synced)) {
+      images.push(image);
+      continue;
+    }
+    removed.push(image.id);
+  }
+  return { images, removed };
 }

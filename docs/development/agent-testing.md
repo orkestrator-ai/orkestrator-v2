@@ -155,8 +155,13 @@ through the command scope's client. It is off by default.
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host
 interface change can reach Chromium. A host that cannot create the namespace
-(no unprivileged user namespaces, or no `ip`) runs them on the host network and
-prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
+runs them on the host network and prints one `[loopback-network]` line naming
+the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
+host refused the namespace, with the kernel's own message (for example Ubuntu
+24.04's AppArmor restriction or a container's seccomp profile).
+`ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
+`test:browser` fails on a Linux host other than the one it was qualified on
+(to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so

@@ -40,9 +40,11 @@ test("backend shutdown settles a blocked mirror writer before another backend ta
     await first.init();
     const storage = new StorageService(dataDir);
     const project = { id: "mirror-shutdown", gitUrl: "file:///unused" };
+    const access = { kind: "anonymous", localRemote: true } as const;
     const pending = refreshProjectGitMirror(
       { storage, environmentLifecycleTasks: tasks },
       project,
+      access,
       {
         force: true,
         freeBytes: async () => 10 * 1024 ** 3,
@@ -75,7 +77,7 @@ test("backend shutdown settles a blocked mirror writer before another backend ta
     await stopping;
     expect(settled).toBe(true);
     expect(
-      await refreshProjectGitMirror({ storage, environmentLifecycleTasks: tasks }, project),
+      await refreshProjectGitMirror({ storage, environmentLifecycleTasks: tasks }, project, access),
     ).toBe("skipped-shutdown");
     second = new OrkestratorBackend({
       ...options,

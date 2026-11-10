@@ -14,7 +14,7 @@ import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-p
 import type { CommandContext } from "./commands-context.js";
 import { retainedContainerIds, storageVolumeNames } from "./environment-cleanup.js";
 import type { Environment } from "./models.js";
-import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR } from "./project-git-mirror.js";
+import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR, gitMirrorMountNames } from "./project-git-mirror.js";
 import { containerSize, volumeSizes } from "./recovery-copies.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 
@@ -443,9 +443,18 @@ export async function listProjectGitMirrorUsage(
 }
 
 async function holdsGitMirror(directory: string): Promise<boolean> {
-  if (await pathExists(path.join(directory, "mount", GIT_MIRROR_NAME))) return true;
+  for (const mount of gitMirrorMountNames(await readdir(directory).catch(() => []))) {
+    if (await pathExists(path.join(directory, mount, GIT_MIRROR_NAME))) return true;
+  }
   const names = await readdir(directory).catch(() => [] as string[]);
-  return names.some((name) => name.startsWith(".building-"));
+  for (const name of names) {
+    if (
+      name.startsWith(".building-") &&
+      (await pathExists(path.join(directory, name, GIT_MIRROR_NAME)))
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Every environment, for the disk usage overview; sizes are asked per environment. */

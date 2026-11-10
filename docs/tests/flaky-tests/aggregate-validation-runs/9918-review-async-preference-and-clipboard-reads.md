@@ -1,6 +1,6 @@
 # Review assertions race asynchronous preference and clipboard completion
 
-- **ID:** 9916
+- **ID:** 9918
 - **Status:** resolved
 - **Date observed:** 2026-11-10
 - **Base commit:** `60c065c366e65ffc7d7cc1fb32e4c4517fc661ac`

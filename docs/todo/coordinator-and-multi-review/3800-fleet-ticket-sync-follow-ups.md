@@ -4,17 +4,19 @@
 
 Analysed 2026-11-03 against main at 7b48c23fb, on the branch that added
 Kanban sync between a command node and its leaves
-([tickets.md](../../architecture/tickets.md#sync-across-machines)).
+([tickets.md](../../architecture/tickets.md#sync-across-machines)). Tasks 2
+to 7 were done on 2026-11-09 against main at c6de4733c (see
+[Assumptions and decisions](#assumptions-and-decisions)).
 
 ### Tasks
 
 1. **Live qualification over two real backends**: open.
-2. **Adopt a leaf's tickets from before sync**: open.
-3. **Images on synced tickets**: open.
-4. **A view of sync conflicts, and a "synced from" mark on leaf boards**: open.
-5. **A second copy of a repository on one leaf**: open.
-6. **Column order across machines**: open.
-7. **Split the sync methods out of `KanbanRepository`**: open.
+2. **Adopt a leaf's tickets from before sync**: done.
+3. **Images on synced tickets**: done (live check over a real link with task 1).
+4. **A view of sync conflicts, and a "synced from" mark on leaf boards**: done.
+5. **A second copy of a repository on one leaf**: done.
+6. **Column order across machines**: done.
+7. **Split the sync methods out of `KanbanRepository`**: done.
 8. **Launches that wait for a disconnected node (opt-in)**: open (depends on 1).
 
 ### 1. Live qualification over two real backends
@@ -194,16 +196,110 @@ workflow changes; a reconnect could wake it too.
     - Pros: hands-off.
     - Cons: stale bases, duplicate risk, and a visible queue state to build.
 
+## Assumptions and decisions
+
+### Task 2: sharing a leaf's older tickets
+
+- **Chosen:** the recommended explicit action. The leaf board's sync line
+  offers "Share N older tickets with <command node>" and each such card's
+  menu "Share with <command node>"; both call
+  `share_tickets_with_command_node` (`taskIds`, or all), which queues the
+  same `create` a new leaf ticket queues (`shareTicket` in
+  `storage-kanban-sync.ts`) and marks the row a pending copy. Nothing is
+  adopted on first sync.
+- **Eligible tickets** are the board's rows with no `sync.replica` (made
+  before sync, or kept when a command node detached). A board no command node
+  syncs refuses with a message. Sharing again sends nothing twice.
+- **Leaf status** (`get_ticket_sync_leaf_status`, `workspace` access) gives
+  the board what it needs: the command nodes, their names from the leaf's
+  attachments, the changes waiting and how many tickets Share would send.
+
+### Task 3: images on synced tickets
+
+- **Chosen:** the recommended references with bytes over the link, with one
+  addition the link's direction forced: a leaf never reaches its command
+  node, so it cannot read an image on demand. It records a want
+  (`LeafTicketImageWants`, in memory, bounded, 20 s timeout), announces it with
+  `ticket-sync-outbox-ready`, and the command node delivers it on that
+  collection (`wantedImages` in the collect result, then
+  `put_ticket_image`). A command node reads a leaf's image with
+  `read_ticket_image`. Both sides keep the copy, so an image crosses a link
+  once. Bytes never travel in sync batches or the outbox.
+- **Older peers:** a leaf queues `add-image`/`delete-image` (and images on a
+  creation) only for a command node that declared the `images` feature in
+  `collect_ticket_sync_outbox` (`features`, recorded in the sync store). An
+  older command node's parser would refuse those operations and wedge the
+  outbox. A snapshot without `images` leaves a leaf's list alone. Images
+  attached on a leaf before its command node declared the feature stay on the
+  leaf until a later change; no catch-up runs.
+- **Removal:** a leaf's own image the board never listed is kept (it may
+  predate image sync); one the board listed (`synced`) and then dropped is
+  removed. A reference the board drops is removed with any kept copy.
+- **No new domain version:** five new commands and optional fields; the
+  contract manifest and argument schemas were regenerated.
+
+### Task 4: the conflict list and the synced-from mark
+
+- **Chosen:** a list opened from the sync line's conflict count, each entry
+  opening its ticket or being dismissed, plus Dismiss all. It is a dialog,
+  not a popover: the web app has no popover primitive, and adding
+  `@radix-ui/react-popover` would change the lockfiles for one list.
+- **Conflict ids:** new records get an id; records written before have one
+  derived from their content (`ticketSyncConflictId`), so they can be
+  dismissed too. `dismiss_ticket_sync_conflicts` removes records from the list
+  only; the comment on the ticket stays. Status now also returns the total
+  (`conflictCount`), since it lists only the latest 20.
+- **Mark:** a confirmed copy's card shows a link icon with the command node's
+  name (from the leaf status); a pending copy shows none until confirmed.
+
+### Task 5: a second copy of a repository on one leaf
+
+- **Chosen:** the recommended "keep one copy per leaf and say which syncs".
+  The command node's node tooltip names the leaf project that syncs and how
+  many other copies keep their own boards (`projectName`, `otherCopies` on
+  `TicketSyncNodeState`). On the leaf, the second copy's sync line says it is
+  not synced and names the copy that is (`syncedCopy` in the leaf status).
+
+### Task 6: column order
+
+- **Chosen:** the recommended "leave it per machine". No code change was
+  needed; a test pins that a drag on either machine queues and sends nothing
+  and that a later change keeps the leaf's own order. Documented in
+  [tickets.md](../../architecture/tickets.md#sync-across-machines).
+
+### Task 7: splitting the sync methods out
+
+- **Chosen:** the recommended collaborator. `KanbanBoardStore`
+  (`storage-kanban-board.ts`) holds the Kanban lease, its reads and the commit
+  that stamps changes for sync; `KanbanRepository` and the new
+  `KanbanSyncRepository` (`storage-kanban-sync-repository.ts`) share one
+  instance. Callers reach sync as `storage.ticketSync` (a `Pick` area, like
+  `storage.kanban`), and both classes are in the writer-guard analysis's
+  repository list. `storage-kanban.ts` went from 2,022 to about 1,370 lines.
+
 ## Current state
 
 Built: the sync core (both directions, conflicts, tombstones, cursors,
 epochs, outbox bounds), coordinator ticket tools and `start_build_pipeline`
 with `nodeId`, the board's sync line and "runs on" chip, the `ticket-sync`
-capability with the older-leaf messages, and the docs.
+capability with the older-leaf messages, and the docs. Since 2026-11-09 also:
+Share for a leaf's older tickets, image references with bytes read over the
+link, the conflict list with dismissal, the leaf's sync line and synced-from
+mark, the second-copy messages, and `KanbanSyncRepository`. Tasks 2 to 7 are
+covered by `nodes/node-ticket-sync-followups.test.ts` (two real stores over the
+in-process link), `nodes/node-ticket-images.test.ts`, `ticket-sync.test.ts`
+and `TicketSyncStrip.test.tsx`.
+
+## Outstanding work
+
+- Task 1 (live qualification over two real backends), which should now also
+  exercise Share, an image read in each direction and the conflict list.
+- Task 8.
 
 ## Needs verification
 
-Task 1: nothing here has run over a real node link.
+Task 1: nothing here has run over a real node link, including the image reads
+and deliveries of task 3.
 
 ## Related
 

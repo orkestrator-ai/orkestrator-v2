@@ -314,7 +314,12 @@ every fire:
   in-process. Project, environment and project-home checks, the denied
   command list and node routing are the tool's own; coordinator read-only
   rules therefore still apply. A side agent can schedule only what it can
-  call: mail and reminders.
+  call: mail and reminders. The owner also records the origin of the turn
+  that created the schedule (`turnOrigin`, made `mail` by any update or
+  resume from a turn the user did not start). The fire's scope carries it,
+  so its mail and delegated prompts say they arose from agent mail when the
+  schedule did, whichever turn the conversation ran last
+  ([coordinator.md](coordinator.md#delegated-prompts-from-a-turn-the-user-did-not-start)).
 
 At creation the executor refuses what the owner could not run directly
 (`ScheduleAuthorityError`): a tool the owner's server does not list, a read,

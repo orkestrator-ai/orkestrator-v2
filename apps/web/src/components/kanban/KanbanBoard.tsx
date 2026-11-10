@@ -13,6 +13,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useConfigStore, useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
 import {
@@ -22,7 +24,7 @@ import {
 } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
-import { TicketSyncStrip, useTicketSyncStatus } from "./TicketSyncStrip";
+import { TicketSyncStrip, useTicketSyncLeafStatus, useTicketSyncStatus } from "./TicketSyncStrip";
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
@@ -66,6 +68,9 @@ function DroppableColumn({
   onRunGraph,
   buildPhaseByTaskId,
   environmentNameByTaskId,
+  syncedFromByControllerId,
+  shareWith,
+  onShareTask,
 }: {
   column: (typeof COLUMNS)[number];
   tasks: KanbanTask[];
@@ -75,6 +80,10 @@ function DroppableColumn({
   onRunGraph?: (task: KanbanTask) => void;
   buildPhaseByTaskId: Map<string, BuildPhase>;
   environmentNameByTaskId: Map<string, string>;
+  /** On a leaf board: each command node's name, for the cards copied from it. */
+  syncedFromByControllerId: ReadonlyMap<string, string>;
+  shareWith?: string;
+  onShareTask?: (task: KanbanTask) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
 
@@ -122,6 +131,14 @@ function DroppableColumn({
                 canClearStatus={canClearTaskBuildStatus(task, buildPhase)}
                 onClearStatus={onClearTaskStatus}
                 onRunGraph={onRunGraph}
+                syncedFrom={
+                  task.sync?.replica
+                    ? (syncedFromByControllerId.get(task.sync.replica.controllerId) ??
+                      "the command node")
+                    : undefined
+                }
+                shareWith={shareWith}
+                onShare={onShareTask}
               />
             );
           })}
@@ -214,8 +231,51 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     () => tasks.filter((t) => t.projectId === projectId),
     [tasks, projectId],
   );
-  // Any change to the board can move another machine's sync state (behind, in sync).
-  const ticketSync = useTicketSyncStatus(projectId, projectTasks);
+  // Any change to the board can move another machine's sync state (behind, in
+  // sync); a dismissal changes only the conflict list, so it re-reads too.
+  const [syncReads, setSyncReads] = useState(0);
+  const syncRevision = useMemo(() => ({ projectTasks, syncReads }), [projectTasks, syncReads]);
+  const ticketSync = useTicketSyncStatus(projectId, syncRevision);
+  const leafSync = useTicketSyncLeafStatus(projectId, syncRevision);
+  const nodeBackend = useScopeBackend();
+  const syncedFromByControllerId = useMemo(
+    () =>
+      new Map((leafSync?.controllers ?? []).map((entry) => [entry.controllerId, entry.nodeName])),
+    [leafSync],
+  );
+  const shareWith = leafSync?.controllers[0]?.nodeName;
+  const ticketTitles = useMemo(
+    () => new Map(projectTasks.map((task) => [task.id, task.title])),
+    [projectTasks],
+  );
+  const shareTickets = useCallback(
+    async (taskIds?: string[]) => {
+      try {
+        const { shared } = await nodeBackend.shareTicketsWithCommandNode(projectId, taskIds);
+        if (shared > 0) {
+          toast.success(
+            `Shared ${shared} ticket${shared === 1 ? "" : "s"} with ${shareWith ?? "the command node"}.`,
+          );
+        }
+        await loadTasks(projectId);
+        setSyncReads((count) => count + 1);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Sharing tickets failed.");
+      }
+    },
+    [nodeBackend, projectId, shareWith, loadTasks],
+  );
+  const dismissConflicts = useCallback(
+    async (ids?: string[]) => {
+      try {
+        await nodeBackend.dismissTicketSyncConflicts(projectId, ids);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Dismissing conflicts failed.");
+      }
+      setSyncReads((count) => count + 1);
+    },
+    [nodeBackend, projectId],
+  );
 
   const tasksByColumn = useMemo(() => {
     const grouped: Record<KanbanStatus, KanbanTask[]> = {
@@ -284,6 +344,16 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     setDialogOpen(true);
   }, []);
 
+  const openTicket = useCallback(
+    (ticketId: string) => {
+      const task = projectTasks.find((candidate) => candidate.id === ticketId);
+      if (task) handleClickTask(task);
+    },
+    [projectTasks, handleClickTask],
+  );
+
+  const shareTask = useCallback((task: KanbanTask) => void shareTickets([task.id]), [shareTickets]);
+
   const handleClearTaskStatus = useCallback(
     (task: KanbanTask) => {
       void clearTaskBuildStatus(task.id);
@@ -302,7 +372,14 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
           value="kanban"
           className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
         >
-          <TicketSyncStrip status={ticketSync} />
+          <TicketSyncStrip
+            status={ticketSync}
+            leafStatus={leafSync}
+            ticketTitles={ticketTitles}
+            onOpenTicket={openTicket}
+            onDismissConflicts={dismissConflicts}
+            onShareAll={() => shareTickets()}
+          />
           {/* Columns */}
           <div className="flex-1 snap-x snap-mandatory overflow-x-auto p-3 sm:p-6">
             <DndContext
@@ -325,6 +402,9 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     onRunGraph={graphsEnabled ? setRunGraphTask : undefined}
                     buildPhaseByTaskId={buildPhaseByTaskId}
                     environmentNameByTaskId={environmentNameByTaskId}
+                    syncedFromByControllerId={syncedFromByControllerId}
+                    shareWith={leafSync?.unshared ? shareWith : undefined}
+                    onShareTask={shareTask}
                   />
                 ))}
               </div>

@@ -9,6 +9,7 @@ import type { Environment } from "./models.js";
 import type { JsonRecord } from "./storage.js";
 import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
 import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
+import { noProcessServesTmuxSocket, tmuxSocketPathFromMessage } from "./tmux-socket-owner.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -190,13 +191,17 @@ export function isMissingTmuxSessionError(value: unknown): boolean {
 /**
  * An unreachable socket cannot distinguish reboot from unlinking a live
  * server's socket. Without a saved server identity, any tmux process in the
- * backend's process namespace makes absence ambiguous. Never signal it: the
- * shared server may host unrelated work. Keep the runtime roots for a retry
- * after the socket is restored or the server exits.
+ * backend's process namespace that might serve the socket makes absence
+ * ambiguous. Never signal it: the shared server may host unrelated work. Keep
+ * the runtime roots for a retry after the socket is restored or the server
+ * exits.
  *
  * `comm` excludes command arguments (which may contain user content). Both
  * macOS and Linux expose tmux servers as `tmux: server` or a tmux executable
- * path. A failed, empty or malformed census is not evidence of absence.
+ * path. A failed, empty or malformed census is not evidence of absence. On
+ * Linux, `noProcessServesTmuxSocket` rules out tmux processes that provably
+ * serve a different socket (another worktree's private server, a container's
+ * tmux), which otherwise failed every local move while one ran (to-do 7020).
  */
 export async function confirmTmuxSessionGone(
   value: unknown,
@@ -204,17 +209,22 @@ export async function confirmTmuxSessionGone(
 ): Promise<boolean> {
   if (isMissingTmuxSessionError(value)) return true;
   if (!isTmuxNoServerMessage(value)) return false;
+  const tmuxPids: string[] = [];
   try {
     const result = await exec(["ps", "-A", "-o", "pid=,comm="]);
     if (result.status !== 0 || !result.stdout.trim()) return false;
     for (const line of result.stdout.trim().split("\n")) {
-      const match = /^\s*\d+\s+(\S.*)$/.exec(line);
-      if (!match || /(?:^|\/)tmux(?:$|[\s:])/.test(match[1]!)) return false;
+      const match = /^\s*(\d+)\s+(\S.*)$/.exec(line);
+      if (!match) return false;
+      if (/(?:^|\/)tmux(?:$|[\s:])/.test(match[2]!)) tmuxPids.push(match[1]!);
     }
-    return true;
   } catch {
     return false;
   }
+  if (tmuxPids.length === 0) return true;
+  const socketPath = tmuxSocketPathFromMessage(value);
+  if (!socketPath) return false;
+  return noProcessServesTmuxSocket(socketPath, tmuxPids, exec);
 }
 
 /**

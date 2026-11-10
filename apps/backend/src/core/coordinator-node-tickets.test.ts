@@ -129,7 +129,8 @@ async function setup(
         })),
       })),
     localProjects: () => world.storage.loadProjects(),
-    kanban: world.storage.kanban,
+    ticketSync: world.storage.ticketSync,
+    localImage: (imageId) => world.storage.kanban.getKanbanImageData(imageId).catch(() => null),
     emit: () => undefined,
     debounceMs: 1,
     retryDelayMs: 60_000,
@@ -447,7 +448,7 @@ test("remote admission uses completed sync and leaf copy despite unrelated behin
 test("a started build returns a warning if work location cannot be persisted", async () => {
   const f = await setup();
   const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
-  f.world.storage.kanban.recordTicketRemoteWork = async () => {
+  f.world.storage.ticketSync.recordTicketRemoteWork = async () => {
     throw new Error("disk failure");
   };
   const result = await f.build("work-write-failed", task.id);

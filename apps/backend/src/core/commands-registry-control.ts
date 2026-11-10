@@ -7,6 +7,8 @@ import {
   rotateControlMcpCredentialCommand,
   rotateControlMcpTokenCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
+import { COORDINATOR_MAIL_ORIGIN_NOTE } from "@orkestrator/protocol/agent-mail";
+import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { controlJobId as jobIdFor, savedControlJobAgent } from "./control-job-identity.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -18,6 +20,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import { asNonBlankString, asOptionalString } from "./commands-helpers.js";
 import {
+  type TrustedUserPromptPresentation,
   isTrustedUserPromptPresentation,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
@@ -40,6 +43,21 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
 
+function validatedJobPresentation(
+  args: Record<string, unknown>,
+): TrustedUserPromptPresentation | undefined {
+  const presentation = coordinatorDelegationPresentationFrom(args);
+  if (presentation === undefined) return undefined;
+  if (
+    !isTrustedUserPromptPresentation(presentation) ||
+    typeof args.prompt !== "string" ||
+    parseCoordinatorDelegatedPrompt(args.prompt)?.frame !== presentation.frame
+  ) {
+    throw new Error("initialPromptPresentation does not match the prompt");
+  }
+  return presentation;
+}
+
 async function launchNativeAgentJob(
   args: Record<string, unknown>,
   context: CommandContext,
@@ -49,7 +67,10 @@ async function launchNativeAgentJob(
     allowCompletionAction: boolean;
   },
 ): Promise<Record<string, unknown>> {
-  if (args.tabReuse && options.allowCompletionAction) {
+  if (
+    (!options.allowCompletionAction && validatedJobPresentation(args)) ||
+    (args.tabReuse && options.allowCompletionAction)
+  ) {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     return context.storage.withNativeAgentJobLaunch(environmentId, () =>
       launchNativeAgentJobInternal(args, context, dependencies, options),
@@ -72,18 +93,9 @@ async function launchNativeAgentJobInternal(
     : undefined;
   const autoMergeEnabledAt = asOptionalString(args.autoMergeEnabledAt);
   if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
-  const prompt = asNonBlankString(args.prompt, "prompt");
+  let prompt = asNonBlankString(args.prompt, "prompt");
   if (prompt.length > 100_000) throw new Error("prompt must be at most 100000 characters");
-  const initialPromptPresentation = coordinatorDelegationPresentationFrom(args);
-  if (initialPromptPresentation !== undefined) {
-    const parsed = parseCoordinatorDelegatedPrompt(prompt);
-    if (
-      !isTrustedUserPromptPresentation(initialPromptPresentation) ||
-      parsed?.frame !== initialPromptPresentation.frame
-    ) {
-      throw new Error("initialPromptPresentation does not match the prompt");
-    }
-  }
+  let initialPromptPresentation = validatedJobPresentation(args);
   const title = asOptionalString(args.title)?.trim();
   if (title && title.length > 200) throw new Error("title must be at most 200 characters");
   let agent = args.agent;
@@ -324,6 +336,22 @@ async function launchNativeAgentJobInternal(
     // tab. Control MCP callers keep the id derived from their retry key.
     const tabId = requestedTabId ?? `agent-job-${jobId}`;
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
+    // A retry belongs to the first attempt's provenance, even if a later
+    // coordinator turn has a different origin. Keep both the wire prompt and
+    // presentation aligned; all other frame changes still fail validation.
+    if (initialPromptPresentation && !options.allowCompletionAction) {
+      const existing = await context.storage.getNativeAgentSession(
+        nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+      );
+      const saved = existing?.initialPromptPresentation;
+      const withoutOrigin = (frame: string) =>
+        frame.replace(`\n${COORDINATOR_MAIL_ORIGIN_NOTE}`, "");
+      if (saved && withoutOrigin(saved.frame) === withoutOrigin(initialPromptPresentation.frame)) {
+        const parsed = parseCoordinatorDelegatedPrompt(prompt)!;
+        prompt = saved.frame + "\n\n" + parsed.source;
+        initialPromptPresentation = saved;
+      }
+    }
     await context.storage.ensureNativeAgentJobTab({
       environmentId,
       tabId,

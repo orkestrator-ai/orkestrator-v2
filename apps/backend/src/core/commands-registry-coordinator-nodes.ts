@@ -25,6 +25,7 @@ import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   COORDINATOR_MAIL_ADDRESS,
+  coordinatorCallTurnOrigin,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   normalizeCoordinatorDelegationRequest,
@@ -76,6 +77,7 @@ import {
   sendToNodeCoordinator,
 } from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
+import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import {
   assertCoordinatorMayActOnEnvironment,
@@ -474,6 +476,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
                   baseBranch,
                   baseCommit,
                   instruction: remoteReportInstruction(target.nodeName),
+                  turnOrigin: await coordinatorCallerTurnOrigin(context, caller, scope),
                 },
                 input.initialPrompt,
               )
@@ -692,7 +695,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     // The node-mail client leaves it out for a pre-contract leaf that does not
     // advertise `node-mail-turn-origin` (it would refuse the unknown key).
     const turnOrigin =
-      conversation?.lastTurnOrigin !== "user" ? { turnOrigin: "mail" as const } : {};
+      coordinatorCallTurnOrigin(
+        conversation?.lastTurnOrigin,
+        record(args.scope) ? args.scope.turnOrigin : undefined,
+      ) === "mail"
+        ? { turnOrigin: "mail" as const }
+        : {};
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
     // Checked before anything happens, then copied to the node before the
     // message exists; a failure on either side means there is no message.
@@ -1111,7 +1119,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         );
         if (boardTicket) {
           // Shown at once; the node then reports the build's own progress.
-          await context.storage.kanban
+          await context.storage.ticketSync
             .recordTicketRemoteWork(String(input.taskId).trim(), {
               nodeId: target.nodeId,
               nodeName: target.nodeName,

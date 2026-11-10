@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8a11561719a66eb6de7ea9195bdbfd02889ad28d6c9739026e88a0758947b4e8",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "attachments": {},
+        "body": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "coordinatorId": {
+          "type": "string"
+        },
+        "deliverNow": {},
+        "projectHomeReason": {},
+        "projectId": {
+          "type": "string"
+        },
+        "replyToMessageId": {},
+        "requestId": {
+          "type": "string"
+        },
+        "subject": {},
+        "toEnvironmentId": {
+          "type": "string"
+        },
+        "toTabId": {},
+        "turnOrigin": {}
+      },
+      "required": [
+        "body",
+        "conversationId",
+        "coordinatorId",
+        "projectId",
+        "requestId",
+        "toEnvironmentId"
+      ],
+      "type": "object"
+    }
+  }
+}

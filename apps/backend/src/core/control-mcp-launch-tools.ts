@@ -51,6 +51,7 @@ import {
   asyncDelegationResult,
   tryOpenNodeDelegation,
   tryOpenCoordinatorDelegation,
+  coordinatorScopeTurnOrigin,
   type ControlMcpToolContext,
 } from "./control-mcp-tools-shared.js";
 
@@ -721,6 +722,7 @@ export function registerLaunchTools(
               coordinatorId: coordinatorScope.coordinatorId,
               conversationId: coordinatorScope.conversationId,
               instruction: `${COORDINATOR_JOB_DELEGATION_INSTRUCTION}\n` + workerAsyncContract(),
+              turnOrigin: await coordinatorScopeTurnOrigin(invoke, coordinatorScope),
             },
             input.prompt,
           )

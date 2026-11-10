@@ -50,4 +50,4 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 ## Related
 
 - `3930-bridge-credential-out-of-agent-uid.md` (deleted 2026-11-06)
-- `4980-agent-uid-process-control.md` (deleted 2026-11-06); its follow-ups are [7250](7250-bridge-replaced-by-an-agent-process.md), `7251-pi-project-extensions-in-the-bridge-process.md` (deleted 2026-11-09, done; see [agent-approvals.md](../../architecture/agent-approvals.md#code-a-bridge-loads-itself)) and [7252](7252-opencode-server-loads-agent-writable-code.md)
+- `4980-agent-uid-process-control.md` (deleted 2026-11-06); its follow-ups are 7250 (deleted 2026-11-09, done; see [agent-approvals.md](../../architecture/agent-approvals.md#a-replaced-bridge-is-refused)), `7251-pi-project-extensions-in-the-bridge-process.md` (deleted 2026-11-09, done; see [agent-approvals.md](../../architecture/agent-approvals.md#code-a-bridge-loads-itself)) and [7252](7252-opencode-server-loads-agent-writable-code.md)

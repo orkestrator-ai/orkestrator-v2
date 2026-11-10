@@ -159,6 +159,25 @@ export type CoordinatorConversationRole = "main" | "side";
 export type CoordinatorTurnOrigin = "user" | "mail";
 
 /**
+ * Whether what one coordinator call sends (mail, a delegated prompt, a
+ * launch's prompt) says that it arose from agent mail: `"mail"`, or
+ * `undefined` when the user's own turn issued it.
+ *
+ * `recorded` is the origin a call carries itself: a scheduled fire carries
+ * the origin of the turn that set the schedule, not whichever turn the
+ * conversation ran last. Without one, the conversation's newest turn
+ * decides. Anything but a turn the user started counts as mail, so a
+ * missing or unreadable origin marks rather than clears.
+ */
+export function coordinatorCallTurnOrigin(
+  lastTurnOrigin: unknown,
+  recorded?: unknown,
+): "mail" | undefined {
+  const origin = recorded === "user" || recorded === "mail" ? recorded : lastTurnOrigin;
+  return origin === "user" ? undefined : "mail";
+}
+
+/**
  * The per-project setting's name, as Project Settings shows it. The refusal
  * below repeats it, so what a coordinator tells the user is what they will find.
  */

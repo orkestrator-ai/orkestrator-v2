@@ -8,7 +8,8 @@ item, the open questions and the verification items worked through on
 ## Task analysis
 
 Analysed 2026-11-06 against `main` at `e6c3da89` for tasks 2 and 7, and
-against `main` at `c1724ab7` for task 9; the other tasks as analysed
+against `main` at `c1724ab7` for task 9's macOS half; 2026-11-10 against
+`main` at `c98b20e6f` for task 9's Linux half; the other tasks as analysed
 2026-10-27 against `main` at `863b5782`.
 
 Code items 1 to 5, 7, 8, 10, 11 and 13 are done on `main` and are not
@@ -25,7 +26,7 @@ repeated as tasks; their live checks are. The open questions and the
 6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
-9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: macOS half done (2026-11-06, `mise run verify:claude:sandbox-live`, no defect found); Linux (bubblewrap) half open.
+9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented and its Agent Info note is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md)).
 
 ### 1. Grok project resources off
 
@@ -252,7 +253,21 @@ macOS half done on 2026-11-06 on this Mac (Darwin 27.2.0, arm64), against pinned
 
 The controls are what make the refusals mean something. The same commands work unsandboxed, and a sandboxed command can still write its workspace. With `strictAllowlist` off, the same proxied request is granted unseen under auto-approve, or raises a `SandboxNetworkAccess` card under `ask`, which is the behaviour the option exists to prevent. No defect was found, so no production bridge code changed. The review follow-up added accepted and declined ask-policy escape turns, proving the write waits for approval. The expanded 14-turn check passed on 2026-11-06 in 23.1 s. It is opt-in: `mise run verify:claude:sandbox-live`, and the slow tier (`*.live.test.ts`). It skips on every platform but macOS. `docs/development/upgrade-agents.md` now runs it on a Claude bump.
 
-Still open: the Linux (bubblewrap) half. It needs a Linux host whose bubblewrap can nest the CLI's user namespace (see "Claude's sandbox on Linux" in `docs/architecture/coordinator.md`). The probe should carry over: lift the platform gate when `claudeLinuxSandboxStatus()` reports the sandbox available, and loosen the refusal-text assertions, which quote Seatbelt and may read differently under bubblewrap.
+Linux half done on 2026-11-10 on `beelink2` (Arch/Omarchy, kernel 7.2.15, x86_64, bubblewrap 0.13.1, socat present, no AppArmor or SELinux in `/sys/kernel/security/lsm`), against pinned CLI `2.1.319` (the SDK's bundled binary at Agent SDK `0.3.319`, equal to the managed toolchain pin). The host probe answered `{"available":true}` in 5.6 ms. The same probe and test ran unchanged apart from the gate and two platform expectations: the test now runs on Linux when the uncached `probeClaudeLinuxSandbox()` says the sandbox works (the test preload pins the cached answer), and `PLATFORM_SANDBOX_EXPECTATIONS` holds what differs per OS. Same temporary HOME, fixture key and scripted loopback model; nothing billed, no port bound by the bridge, no backend or app started. Results, all asserted by the test:
+
+| Turn | What the command did on Linux | Approval cards | Same as macOS? |
+| --- | --- | --- | --- |
+| `write-outside`, `write-outside-escape` | `printf > outside/…` failed: `Read-only file system`; no file | none | Yes; the shell's message differs (Seatbelt: `operation not permitted`) |
+| `write-outside-escape-ask-accept` / `-decline` | no file before answering; accept wrote it, decline returned `The user denied this tool call.` and no file | Bash | Yes |
+| `network-direct` (and `-escape`) | `curl` to the loopback server: `Could not connect to server` (the command's own empty network namespace); 0 requests | none | Yes |
+| `network-proxy` (and `-escape`) | through the proxy: 403, `deny network-outbound 127.0.0.1:… (host is not on the allow list)`; 0 requests | none | Yes |
+| `network-proxy-ask` | the Bash card approved, then refused as above; 0 requests | the Bash card only | Yes |
+| `control-unsandboxed`, `control-workspace-write` | wrote outside / inside, reached the server unsandboxed | none | Yes |
+| `control-proxy-full` | reached the server through the proxy | none | Yes |
+| `control-proxy-full-ask` | reached the server after a second card | Bash, then `SandboxNetworkAccess` | Yes |
+| `control-direct-full` | **refused**: `Could not connect to server`; 0 requests | none | **No**: macOS reaches it |
+
+So `allowUnsandboxedCommands: false` and `strictAllowlist` hold under bubblewrap exactly as under Seatbelt, and the controls show both refusals are the options' doing. The one difference is a documented vendor limit, not a bridge defect: `allowLocalBinding` is "macOS only" in the SDK's types, and the CLI runs each Linux command in its own network namespace, so with full network a sandboxed command reaches loopback only through the proxy, and a plain `curl localhost:…` (which `NO_PROXY` sends direct) fails. Agent Info still says "full network" for such a session; whether it should add a note is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md). The 14-turn check passed three times on 2026-11-10 (15.1 s, 14.7 s, 27.5 s). A Linux host whose bubblewrap cannot nest the namespace (Ubuntu's AppArmor profile) skips it with the probe's reason; there the bridge would refuse every turn with 422, which 0145's CI pair already covers.
 
 **Decisions.**
 
@@ -263,7 +278,7 @@ Still open: the Linux (bubblewrap) half. It needs a Linux host whose bubblewrap 
   - **macOS only.**
     - Pros: one run.
     - Cons: the Linux sandbox, which has more failure modes, stays unproven.
-  - The macOS half was done first (2026-11-06); the recommended option still stands, with the Linux half open.
+  - Chosen: both. The macOS half was done on 2026-11-06 and the Linux half on 2026-11-10, on a host with bubblewrap 0.13.1 and no AppArmor.
 - **What counts as a pass?**
   - **A command that writes outside the workspace fails, and a request to a domain off the allowlist fails, with no approval card (recommended).**
     - Pros: covers both options directly.
@@ -727,10 +742,12 @@ or a person.
 - Live Claude question preview (item 3): ask a Claude session to "use
   AskUserQuestion with a preview for each option" and confirm the previews
   appear verbatim in monospace on the card.
-- On a real Claude CLI, confirm that a provider-sandboxed auto-approve session
+- ~~On a real Claude CLI, confirm that a provider-sandboxed auto-approve session
   can neither leave the sandbox (`allowUnsandboxedCommands: false`) nor reach a
   domain off its allowlist when the network is restricted (`strictAllowlist`).
-  The conformance suite proves the options; only the CLI proves the behaviour.
+  The conformance suite proves the options; only the CLI proves the behaviour.~~
+  Done (task 9): macOS on 2026-11-06, Linux (bubblewrap) on 2026-11-10, with
+  `mise run verify:claude:sandbox-live`.
 
 ### Live pause record (2026-10-21)
 
@@ -1105,6 +1122,14 @@ that unattended requests cannot escape.
 
 Task 9. Chose the CLI the SDK bundles, the one a bridge runs when `CLAUDE_CLI_PATH` is unset, over the managed toolchain under the real data directory, which test fixtures must not use. At SDK `0.3.314` it is `2.1.314`, the pinned toolchain version. The test fails if the two drift apart. `ORKESTRATOR_POLICY_CLAUDE_PATH` names another binary.
 
+### Task 9: the Linux half reuses the macOS check (2026-11-10)
+
+Task 9. Chose to lift the macOS-only gate of `claude-provider-sandbox.live.test.ts` and keep one check for both systems, rather than write a separate Linux test. The gate (`providerSandboxLiveGate`) runs on Linux only when the uncached `probeClaudeLinuxSandbox()` reports the sandbox available, because the node test preload pins the cached `claudeLinuxSandboxStatus()` to `available`, which would run the check on a host where the bridge then refuses every turn. Pros: the same 14 turns and controls prove the same two options on both systems, and an SDK bump re-runs both through one task. Cons: the platform differences live in a table (`PLATFORM_SANDBOX_EXPECTATIONS`) that a CLI change on one system has to update; `claude-provider-sandbox-live-gate.test.ts` pins the gate and the table in the default tier.
+
+### Task 9: assert Linux's direct-loopback refusal rather than drop the control (2026-11-10)
+
+Task 9. `control-direct-full` was a macOS control (full network reaches loopback directly). On Linux it is refused. Options were dropping the control on Linux, or asserting the refusal as the platform's behaviour. Chose to assert it: the SDK documents `allowLocalBinding` as macOS-only, so a later CLI that starts reaching loopback on Linux is a network-model change an upgrade should notice. `control-proxy-full` still shows that a full-network command reaches the server, so the restricted turns' refusals keep their meaning. Whether users should be told is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md); no production code changed for it here.
+
 ### Task 2: keep a skill written during a running turn as residual risk
 
 Chose to record it rather than reload a running thread. The turn-boundary
@@ -1175,6 +1200,9 @@ server as loaded; the address is never contacted.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Docker and provider runs.
 - [agent-engines.md](../../architecture/agent-engines.md) "Execution policy".
+- [7561-claude-linux-sandbox-loopback-under-full-network.md](7561-claude-linux-sandbox-loopback-under-full-network.md)
+  (task 9's Linux finding: a full-network provider sandbox does not reach
+  loopback directly).
 
 ## Replaces
 

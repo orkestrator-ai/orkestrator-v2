@@ -965,7 +965,25 @@ sandbox (a `provider` sandbox, or a coordinator qualified on it) when
 bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
 Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
 probe's reason instead of every Bash call failing; see
-[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux). Inside a
+container environment the probe answers `missing-programs` (the image ships
+neither `bwrap` nor `socat`, and Docker's default seccomp profile and masked
+`/proc` would refuse bubblewrap anyway), so a container session overridden to
+`provider` is refused the same way; the container is its sandbox.
+
+Where Claude's provider sandbox runs, it holds the same two options on macOS
+(Seatbelt) and Linux (bubblewrap): under auto-approval a command cannot write
+outside its writable paths or escape with `dangerouslyDisableSandbox`
+(`allowUnsandboxedCommands: false`), and a restricted network refuses an
+unlisted host at the sandbox proxy without a card (`strictAllowlist`). One
+difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
+and on Linux each command gets its own network namespace whose only way out
+is the proxy, which `NO_PROXY` skips for loopback. So with full network a
+sandboxed command on Linux cannot reach a service on the machine's loopback
+directly (a dev server, a local database); on macOS it can. Agent Info does
+not say so yet ([7561](../todo/agent-engines/7561-claude-linux-sandbox-loopback-under-full-network.md)).
+`mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
+either system (to-do 0001 task 9).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the

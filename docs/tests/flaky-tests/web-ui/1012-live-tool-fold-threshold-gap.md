@@ -144,3 +144,23 @@ mise run test:logged -- --name isolate-fold -- bunx playwright test --config e2e
 
 This confirms intermittence; the cause remains unconfirmed. Status stays open.
 No assertion, timeout or skip changed.
+
+## Mixed-version CI repair review — 2026-11-10
+
+At `df39c7db3` (base `53340356c`), review preparation's `mise run test:browser`
+reported 1,665 passed, 152 skipped and one failed. The desktop no-preference
+case had a maximum gap of 8 px at line 122, then 9 px at line 147 on retry,
+against the 2 px limit. The branch changes no renderer code, and neither the
+spec nor the tool-group implementation changed.
+
+The complete unchanged owner, rerun alone with one worker while a full
+`mise run test:full` loaded the host, failed again: gaps of 46 px and 17 px
+(desktop and mobile), plus two `scrollend` timeouts. Rerun alone on a quiet
+host at `645183531`, it passed (exit 0, 102.6 s):
+
+```sh
+NODE_ENV= mise run test:logged -- --name toolgroupfold-alone-quiet -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+This points again to sensitivity to host load. The cause remains unconfirmed,
+and the status stays open. No assertion, timeout or skip changed.

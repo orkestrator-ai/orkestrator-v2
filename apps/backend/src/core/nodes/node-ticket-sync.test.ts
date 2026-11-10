@@ -62,6 +62,24 @@ describe("command node to leaf", () => {
     expect(status.nodes).toEqual([expect.objectContaining({ nodeId: LEAF_ID, state: "in-sync" })]);
   });
 
+  test("a leaf just attached, its projects not read yet, syncs as soon as they are", async () => {
+    // Live over two dev:test profiles the first sync after attach waited for
+    // the 60 s reconcile: the read found no projects, so nothing paired and
+    // nothing retried (to-do 3800 task 1).
+    let pending = true;
+    const f = await fleet({ summaryPending: () => pending, retryDelayMs: 5 });
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Early", "");
+    const first = await f.sync.sync(LEAF_ID);
+    expect(first).toMatchObject({ state: "in-sync", waiting: true, sent: 0 });
+    expect(f.received).toEqual([]);
+    pending = false;
+    const deadline = Date.now() + 2_000;
+    while (!(await f.leafTicket(ticket.id)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect((await f.leafTicket(ticket.id))?.title).toBe("Early");
+  });
+
   test("a leaf that reconnects after a gap catches up from its cursor, not the whole board", async () => {
     const f = await fleet();
     for (let index = 0; index < 5; index += 1) {

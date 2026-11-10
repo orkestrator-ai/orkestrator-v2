@@ -2,6 +2,41 @@ import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { parseAutoPipelineTicket } from "../packages/protocol/src/auto-pipeline";
 
+test("reopening a cancelled draft shows cancellable drafting progress", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline");
+  const launch = page.getByRole("button", { name: "Auto-pipeline", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Review Auto-pipeline draft" });
+  await launch.click();
+  await expect(page.getByLabel("Title", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.evaluate(() => {
+    const original = window.orkestrator!.invoke;
+    window.orkestrator!.invoke = async (command, args) => {
+      if (command === "draft_auto_pipeline") return new Promise(() => {});
+      return original(command, args);
+    };
+  });
+  await launch.click();
+  await expect(dialog.getByRole("status")).toHaveText("Drafting ticket and Build notes…");
+  await expect(dialog).toHaveAttribute("aria-busy", "true");
+  await expect(dialog.getByTestId("auto-pipeline-spinner")).toBeVisible();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Confirm Auto-pipeline" })).toHaveCount(0);
+  const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+  await expect(cancel).toBeEnabled();
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await page.screenshot({
+    path: path.resolve(`output/visual-previews/auto-pipeline-redraft-${testInfo.project.name}.png`),
+    fullPage: true,
+  });
+  await cancel.press("Enter");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("criterion Enter and multiline paste submit a valid single-line ticket", async ({
   page,
 }, testInfo) => {

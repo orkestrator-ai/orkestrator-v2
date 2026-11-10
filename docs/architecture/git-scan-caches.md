@@ -40,7 +40,11 @@ gapped here because their signal already spaces hints by the same 2 s
 (`CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS`). The gap limits how often git runs
 while a burst lasts. A hint from an ignored `dist` or `.turbo` still counts, because
 the tree view shows those directories; a `node_modules` is left out altogether (see
-below).
+below). Measured on a live macOS stack, a watch-mode build into an ignored `dist`
+adds 2 to 5 scans per 10 source saves, and back-to-back builds run one scan every
+2.1–2.4 s, as continuous editing does; an install runs one to three. That cost was
+judged too small to justify reporting ignored directories as tree-only
+([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), tasks 1 and 2).
 
 ## What the worktree watch leaves out
 
@@ -68,7 +72,7 @@ What leaving out means depends on what a watch costs on the platform:
 | | Linux | macOS and other platforms |
 | --- | --- | --- |
 | A recursive watch | One inotify watch per directory, and Bun walks all of `node_modules` to place them | One FSEvents path, no per-directory cost |
-| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocks whichever thread starts or closes a watch (below), so they run in a helper process (`watch-host.ts`) |
+| An extra recursive watch | No measurable cost | Makes the shared FSEvents stream rebuild, which blocked whichever thread starts or closes a watch on a saturated `fseventsd` (below), so they run in a helper process (`watch-host.ts`); every rebuild also loses about 30 ms of events for every watch in that process |
 | What runs | A non-recursive watch on the root and on each ancestor of a left-out subtree, and a recursive watch on every other child of those | One recursive root |
 | A left-out subtree | Not watched | Watched by the OS; its events are dropped on arrival, before they count towards a burst |
 | A new directory | The non-recursive watch sees it, and a watch is added | Covered by the root |
@@ -114,7 +118,7 @@ on the same disk showed edits, new files and files in new directories in under
 0.6 s, and an install into its ignored `node_modules` started no scan
 ([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md), task 4).
 
-macOS was run on arktech-mini, where `fseventsd` was using 100–138% of a core with
+macOS was first run on arktech-mini on 2026-11-04, where `fseventsd` was using 100–138% of a core with
 about 11 GB resident after seven days, and the first event took 3 to 35 s to arrive. Its
 callback counts are not usable: before was 54 and 6, after was 6 and 12. What holds
 there is the behaviour: `worktree-watcher-real.test.ts` shows the same write under
@@ -128,8 +132,8 @@ same 6 of 12 writes, up to 61 s late and the rest not at all
 ([flake 5061](../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md)).
 A change whose event is lost is picked up by the next event or the safety scan, so on
 macOS these tests repeat a change until it is shown rather than expecting one write's
-event. The stall per extra recursive watch, in the same conditions, is why macOS keeps
-one watch:
+event. The stall per extra recursive watch, in the same conditions, was first why macOS
+kept one watch:
 
 | Recursive watches started and closed in one process | Start, total (longest) | Close, total |
 | --- | --- | --- |
@@ -137,14 +141,33 @@ one watch:
 | 5 | 2,882 ms (1,453 ms) | 1,075 ms |
 | 20 | 19,836 ms (4,424 ms) | 994 ms; 15,415 ms in another run |
 
+On a healthy `fseventsd` (the same host on 2026-11-10, at 5–8% of a core and about
+20 MB) the stall is gone: 20 recursive watches start in 5–10 ms in total and close
+in 2–4 ms, and 50 in 19–63 ms. One write reaches the watcher 10–35 ms after it is
+made, and an install of 500 package directories delivers about 2,550 callbacks,
+which cost the backend's thread under 1 ms through the helper. Forcing the Linux
+plan on macOS (`--mode=split`) removes those callbacks, but each start or close of
+a watch rebuilds the stream and loses events, not delays them, for every other watch
+in the process: a live watch written to every 10 ms lost 57–76 of about 177 writes
+while others were started and closed ten times, and none without. That is why macOS
+keeps one recursive root ([5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md),
+task 3); the loss on any start or close is
+[7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md).
+`scripts/benchmark-recursive-watch-stall.ts` measures all of this.
+
 Those numbers are for watches held in the calling process. The backend's now run in
 a helper, so the wait no longer reaches its event loop
 ([environment-deletion.md](environment-deletion.md#watches-and-the-event-loop)); the
-rebuild still costs the helper, which is why macOS keeps one watch. Because a start
+rebuild still costs the helper, and still loses events there. Because a start
 returns before the watch exists, a macOS watcher reports `qualified` only once the
-helper says it is established.
+helper says it is established. That is when the helper's `fs.watch` returned, which
+can be before the rebuilt stream delivers: through the helper, a write straight
+after `qualified` was not named by any event in every round. The watcher's own
+change is still found, because each new watch sends a hint with unknown paths on
+establishment and the scan it starts runs after the settle. Other watches in the
+helper get no such hint ([7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md)).
 
-Linux start and close for 20 watches took 6 ms and 0 ms. What is left is in
+Linux start and close for 20 watches took 6 ms and 0 ms. The measurements are recorded in
 [5060](../todo/cross-cutting/5060-worktree-watch-leftovers.md).
 
 ## What one scan costs

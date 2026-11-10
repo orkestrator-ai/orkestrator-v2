@@ -400,7 +400,7 @@ Took the recommended host, during todo
 
 - [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)
   (the source; its arm64 item)
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md) (staged-input relay, gateway seed copy)
+- Todo 0109 (retired on 2026-11-10): the staged-input relay and the gateway seed copy, described in [container lifecycle](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs) and [environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2)
 - [0728-container-ci-c14-assumes-uid-1000.md](0728-container-ci-c14-assumes-uid-1000.md) (the same uid difference on CI)
 - [0870-container-start-poll-quantisation.md](0870-container-start-poll-quantisation.md) (the start-time fix split from task 3)
 - [Benchmark harness and regression targets](../../development/container-qualification.md#benchmarks)

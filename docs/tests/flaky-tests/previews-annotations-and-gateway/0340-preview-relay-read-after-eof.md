@@ -44,3 +44,19 @@ under the same temporary root.
 - **Observation:** The relay/EOF case expected close code 1000, received 1001 (7839.11 ms). This differs from the earlier read-count assertion.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-tunnel-owner -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed (exit 0, 1.0 s).
 - **Assessment:** Reopened after this aggregate-only recurrence; the current cause is unconfirmed. Earlier fix history remains valid for its documented failure. No implementation, assertion, deadline or skip changed.
+
+## Investigation — 2026-11-10
+
+Still open. Close code 1001 comes only from `PreviewTunnelServer.close()`,
+which in this test runs from `afterEach`; so on 2026-10-26 the relay case was
+still waiting at `await controlled.closed` after `source.end()` when Bun's
+5-second deadline passed, and the 1001 is the teardown, not the cause. All
+earlier waits had passed (every byte delivered, `_read` called). It did not
+reproduce: the tcp and relay cases passed 200 of 200 under 12 unpinned
+burners at host load about 47
+(`mise run test:logged -- --name b39-0340-relay-100 -- bun scripts/test-under-contention.ts --burners 12 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --rerun-each=100 -t "upstream preserves unshifted"`),
+each in under 0.25 s. The case 0959 fix (production hello timeout, a
+`nextControl` that fails on close) does not touch this path, which builds
+its own server through `controlledTunnel`. Next step: on a recurrence, log
+whether the upstream ever emitted `end` (a paused upstream waiting on a
+`drain` that never comes would hold EOF in its readable queue).

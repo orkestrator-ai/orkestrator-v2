@@ -1708,25 +1708,35 @@ describe("NativeAgentService", () => {
   // The keyed launch/queue driver is the only one: the rollback 2 s timer
   // (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=native-queues) was removed by
   // todo 0048 task 13, so a rollback value no longer arms any timer.
-  test("runs launch scans from the keyed driver at the launch cadence", async () => {
+  test("runs launch scans and drains queued prompts despite a retired rollback value", async () => {
     const previous = process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK;
     process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK = "native-queues,backend-activity";
+    const { provider, send } = createProviderStub("codex");
     try {
       await withService(
         {
           prefix: "orkestrator-native-launch-keyed-body-",
           launchReconcileIntervalMs: 40,
+          provider: async () => provider,
         },
-        async ({ service }) => {
+        async ({ service, storage }) => {
           // Replace the scan on the collaborator that owns it.
           const launchScans = collaborators(service).launches as unknown as {
             reconcilePendingLaunches(): Promise<number>;
           };
           const launches = mock(async () => 1);
           launchScans.reconcilePendingLaunches = launches;
+          const queueKey = "codex\u0000env-env-1:tab-1";
+          await storage.savePromptQueue(queueKey, "env-1", [
+            { id: "row-1", requestId: "request-1", text: "Queued prompt" },
+          ]);
           await service.init();
           expect(queueInternals(service).queueScheduling()).not.toBeNull();
-          await waitForCondition(() => launches.mock.calls.length >= 3);
+          await waitForCondition(
+            () => launches.mock.calls.length >= 3 && send.mock.calls.length === 1,
+          );
+          expect(send.mock.calls[0]?.[1]).toBe("Queued prompt");
+          expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
         },
       );
     } finally {

@@ -24,7 +24,6 @@
     "apps/backend/src/core/index.test.ts": 1,
     "apps/backend/src/core/mcp-management/source-store.test.ts": 1,
     "apps/backend/src/core/multi-review-service.test.ts": 1,
-    "apps/backend/src/core/native-agent-launch-activity-reconciler.test.ts": 1,
     "apps/backend/src/core/native-agent-live-update.test.ts": 1,
     "apps/backend/src/core/native-agent-provider-registry.test.ts": 4,
     "apps/backend/src/core/native-agent-service-dispatch.test.ts": 1,

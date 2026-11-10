@@ -1036,7 +1036,7 @@ export async function measureBusy(
             )) {
               result.reviewViews.watched += 1;
               let sightings: ReviewSighting[] = [];
-              await until(
+              const visible = await until(
                 null,
                 settledAt,
                 async () => {
@@ -1045,6 +1045,11 @@ export async function measureBusy(
                 },
                 CLIENT_WAIT_MS,
               );
+              if (visible === null)
+                fail(
+                  "workflow-visible",
+                  `${client.label}: review did not show terminal phase ${phase}`,
+                );
               for (const entry of progress) {
                 const sample = clientProgressSample(sightings, entry.at, entry.target);
                 if (sample.kind === "sample") {

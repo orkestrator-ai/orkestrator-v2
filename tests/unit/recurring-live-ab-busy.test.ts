@@ -44,6 +44,8 @@ type Scenario = {
   lateView?: boolean;
   /** Review views never show anything past `preparing`. */
   stuckView?: boolean;
+  /** Tab selection succeeds but the review header never renders. */
+  emptyView?: boolean;
   /** Opening a review view throws. */
   failPrepare?: boolean;
 };
@@ -83,6 +85,7 @@ function busyHarness(scenario: Scenario = {}) {
   const prepared: string[] = [];
   const watched: string[] = [];
   const show = (phase: string) => {
+    if (scenario.emptyView) return;
     if (scenario.stuckView && phase !== "preparing") return;
     if (scenario.lateView && (phase === "preparing" || phase === "reviewing")) return;
     if (viewPhase === phase) return;
@@ -613,6 +616,31 @@ describe("busy phase", () => {
     // The review itself still ran and was timed at the backend.
     expect(refusedResult.obligations.workflows).toBe(1);
     expect(refusedResult.reviewViews.watched).toBe(0);
+  });
+
+  test("a selected review view that never renders fails qualification", async () => {
+    const h = busyHarness({ emptyView: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      h.runtime,
+    );
+    expect(h.prepared).toHaveLength(1);
+    expect(h.watched).toHaveLength(1);
+    expect(result.reviewViews).toEqual({ watched: 1, sampled: 0, unobserved: 2 });
+    expect(result.samples["workflow-progress-visible"]).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        clients: 1,
+        round: 1,
+        step: "workflow-visible",
+        detail: "c1: review did not show terminal phase ready",
+      },
+    ]);
+    expect(result.obligations.workflows).toBe(1);
+    expect(busyFailed(result)).toBe(true);
   });
 
   test("client progress is the first sighting of the phase or a later one, after its result", () => {

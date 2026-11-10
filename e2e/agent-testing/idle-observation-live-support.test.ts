@@ -45,12 +45,14 @@ describe("idle observation live support", () => {
           { type: "text", content: "IDLEQA-BG-1" },
           { type: "tool-invocation", toolName: "bash", toolState: "pending", toolOutput: "secret" },
           { type: "subagent", toolState: "success", subagentPrompt: "secret" },
+          { type: "tool-invocation", toolName: "bash", toolLeftRunning: true },
         ],
       },
     ];
     expect(freshToolStates(messages, new Set(["old"]))).toEqual([
       "bash:pending",
       "subagent:success",
+      "bash:left-running",
     ]);
     expect(selectedCases("async-question")).toEqual(["async-question"]);
   });

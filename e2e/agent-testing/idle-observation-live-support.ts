@@ -230,7 +230,9 @@ export function freshToolStates(
     for (const part of message.parts as Array<Record<string, unknown>>) {
       if (part?.type === "subagent") states.push(`subagent:${String(part.toolState ?? "?")}`);
       if (part?.type !== "tool-invocation") continue;
-      states.push(`${String(part.toolName ?? "?")}:${String(part.toolState ?? "?")}`);
+      // A command its turn ended around has no state, only the flag (to-do 7522).
+      const state = part.toolLeftRunning === true ? "left-running" : (part.toolState ?? "?");
+      states.push(`${String(part.toolName ?? "?")}:${String(state)}`);
     }
   }
   return states;

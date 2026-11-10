@@ -1612,9 +1612,16 @@ test.describe("live idle observation", () => {
             // 20 s command has surely ended, with no further turn.
             const endedBy = sentAt + 30_000 - Date.now();
             if (endedBy > 0) await sleep(endedBy);
+            const afterEnd = freshToolStates((await projection())?.messages ?? [], before);
             record.notes.push(
-              `tool calls after the command ended: ${freshToolStates((await projection())?.messages ?? [], before).join(", ") || "none"}`,
+              `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
+            // Nothing reports the end of a command the turn left running, so its
+            // card must not keep claiming to run on an idle thread (to-do 7522).
+            expect(
+              afterEnd.filter((state) => state.endsWith(":pending")),
+              "a tool call still reads running on the idle thread",
+            ).toEqual([]);
             record.notes.push(
               `late output in a tool result: ${await freshToolOutputContains(before, marker)}`,
             );

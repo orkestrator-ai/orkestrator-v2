@@ -2784,7 +2784,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           dispatches,
         ),
       advance: async (pass) => {
-        this.passTriggers.set(pass.key, pass.trigger);
+        // Automatic observations can run at the 250 ms settle cadence.
+        // Give them the same elapsed deadline spacing as event wakes.
+        this.passTriggers.set(pass.key, pass.trigger === "periodic" ? "wake" : pass.trigger);
         try {
           await this.runLocked(pass.key);
         } finally {
@@ -2868,7 +2870,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     return recurringWorkMetrics.observe("multi-review-tick", (span) => {
       span.work("record-selected");
-      return this.runLocked(workflowId);
+      this.passTriggers.set(workflowId, "wake");
+      return this.runLocked(workflowId).finally(() => {
+        this.passTriggers.delete(workflowId);
+      });
     });
   }
 

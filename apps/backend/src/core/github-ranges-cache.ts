@@ -63,6 +63,11 @@ export function parseGithubMeta(text: string): string[] | null {
   return unique.length > 0 ? unique : null;
 }
 
+/** A seed file's contents: a dated header line, then one range per line. */
+export function formatGithubRangesSeed(ranges: readonly string[], fetchedAt: number): string {
+  return `# github-ranges ${new Date(fetchedAt).toISOString()}\n${ranges.join("\n")}\n`;
+}
+
 type Fetcher = (url: string, init: { signal: AbortSignal }) => Promise<Response>;
 
 /**
@@ -98,11 +103,7 @@ export async function githubRangesSeed(
     if (!ranges) throw new Error("malformed");
     await mkdir(dataDir, { recursive: true });
     const temporary = `${file}.${process.pid}.tmp`;
-    await writeFile(
-      temporary,
-      `# github-ranges ${new Date(now()).toISOString()}\n${ranges.join("\n")}\n`,
-      { mode: 0o644 },
-    );
+    await writeFile(temporary, formatGithubRangesSeed(ranges, now()), { mode: 0o644 });
     await rename(temporary, file);
     return file;
   } catch {

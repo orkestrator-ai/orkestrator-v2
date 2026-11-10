@@ -25,3 +25,17 @@ The unchanged complete owner passed with
 (exit 0, 2.1 s). Passing output was removed; no isolated total is claimed.
 The cause is unconfirmed. No fixture implementation, assertion or timeout was
 changed, and the isolated pass does not replace the aggregate failure.
+
+## Investigation — 2026-11-10
+
+Not fixed, still open. The seeding under test runs Git synchronously
+(`runGit` in `apps/desktop/scripts/dev/fixture.ts` uses `spawnSync`, eight
+calls for a fresh repository), so Bun cannot report the timeout until the
+current Git call returns; the late `git push` error fits the test body
+carrying on after its budget while `afterEach` removed the temporary
+directories. A JUnit-timed run of the unchanged owner alone at host load
+about 34 took 2.79 s for this case (the slowest case took 3.72 s) against
+the five-second default. `mise run test:logged -- --name repro-9912 -- bun scripts/test-under-contention.ts --burners 18 -- bun test --cwd apps/desktop ./scripts/dev/fixture.test.ts --preload ../../tests/setup-node.ts --rerun-each=5`
+passed (exit 0, 68.8 s), so the failure was not reproduced. No race was
+found; the margin is thin for real Git work, and the owner is not in the
+slow tier even though it waits on real Git.

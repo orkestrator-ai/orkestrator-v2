@@ -4,7 +4,7 @@
 
 Analysed 2026-11-06 against main at `c1724ab74`; re-analysed and both tasks
 done 2026-11-09 against main at `c6de4733c`. Found while working on
-[7041](7041-manual-docker-profiles-on-exhausted-pools.md) task 2.
+[7041](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06) task 2.
 
 ### Tasks
 
@@ -191,6 +191,6 @@ The unit tests assert the exact Docker arguments.
 
 ## Related
 
-- [7041-manual-docker-profiles-on-exhausted-pools.md](7041-manual-docker-profiles-on-exhausted-pools.md), where this was found.
+- [Exhausted-pool and probe-network evidence](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06), where this was found.
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md), the earlier leak and its fixes.
 - [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md), clearing the current networks.

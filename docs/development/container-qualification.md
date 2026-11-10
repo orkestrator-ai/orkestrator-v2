@@ -621,6 +621,97 @@ DOCKER_HOST=unix:///tmp/ork-q5510-dind.sock docker run --rm --network host -u ro
   Tailscale address (task 1). These stay open in
   [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
 
+## Exhausted Docker pools and historical probe-network trace (2026-11-06)
+
+Evidence migrated from retired to-do 7041 on 2026-11-10. These are historical
+observations on beelink at `c1724ab74`, not new qualification runs. Present-tense
+statements below describe the state observed during that investigation.
+
+### Manual container profiles on an exhausted pool
+
+**Problem.** On beelink on 2026-11-05 a manual `dev:test` with a container fixture failed at startup with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. The documented manual workflow for `mise run test:agent:docker` is therefore unusable on that host until networks are freed, which agents may not do.
+
+**Context.** `test:agent:docker:isolated` puts `apps/desktop/scripts/dev/docker-qualification-bin` on PATH with `ORKESTRATOR_QUALIFICATION_DOCKER` (`apps/desktop/scripts/dev/isolated-browser.ts`). That shim retries only labelled `network create` calls on unrouted /29s in 172.16.240.0/22. The manual workflow in `docs/development/agent-testing.md` did not mention it.
+
+**Investigation.** Starting the same profile with the shim on PATH (`ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" mise run dev:test …`) succeeded, and the fixture network was created on a /29.
+
+Done 2026-11-06: `agent-testing.md` now has a section, "Container profiles on an exhausted Docker address pool", after the manual container fixture commands, and the manual `test:agent:docker` example points at it. The documented command was then run on beelink:
+
+- A labelled `docker network create` without a subnet failed with `all predefined address pools have been fully subnetted`, so the pools were exhausted at the time.
+- `ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" mise run dev:test --profile qa-7041-shim --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex --headless` reached `ready`.
+- The fixture container and its egress gateway were `Up`, and the environment network `ork-<owner>-<hash>-net` had subnet `172.16.240.0/29`, a range only the shim's fallback hands out.
+- `dev:stop` and `dev:reset` then removed the profile's 2 containers, 2 volumes and 1 network.
+
+The CLI container matrix failed the same way (2026-11-06, to-do [0014](../todo/cli-and-slash-commands/0014-cli-qualification.md) task 5): `mise run test:cli:scenarios -- --environment-type container` passed 3/8, with every scenario that starts an environment failing with `resource-exhausted`. With the same two variables it passed 8/8 and left nothing behind. The invocation is now documented beside that command in `docs/development/testing-guide.md`; the manual `dev:test` workflow is documented in `agent-testing.md` as recorded above.
+
+**Decisions.**
+
+- **How should a manual profile get the fallback?**
+  - **Document the shim invocation next to the manual `test:agent:docker` workflow (recommended, done).**
+    - Pros: no code change; the same scoped behaviour the isolated task already relies on.
+    - Cons: a manual step people can miss.
+  - **Have `dev:test` put the shim on PATH whenever `--fixture-environments` includes `container`.**
+    - Pros: automatic.
+    - Cons: widens a test-only shim to every container profile; needs its own tests.
+
+### Historical probe-network trace
+
+**Problem.** The host held 29 unattached reach-probe networks, created in clusters on 2026-10-31 (15:51–17:45 UTC), 2026-11-01 (03:40–04:33 UTC) and 2026-11-02 (04:57–05:50 UTC). 0241 task 4 recorded no new probe networks after a full run on 2026-10-31.
+
+**Context.** [0241](../todo/containers-and-environments/0241-leaked-reach-probe-networks.md) found and fixed the earlier sources, and `mise run disk:report --fix probe-networks` removes unattached probe networks older than a day. Removing them is the user's call; this work did not. A backend removes its own probe network when the check ends and when it gets SIGTERM or SIGINT (`ContainerHostReachabilityService.dispose`). A backend that dies without its shutdown (SIGKILL, or a killed process group) while a check holds the network can leak it. Failed or timed-out network creation is another unruled-out path: Docker may create the network despite the client command failing, after which `createProbeNetwork` clears `probeNetwork` and returns null when the service is not closed. The caller then has no network to remove, and later normal shutdown may leave it behind. Neither path is proven to have caused the historical clusters. The check holds it for about 6 s on beelink, whose ufw drops Docker traffic, so each probe waits out its 5 s connect timeout. Each disposable data directory is a new owner that no reaper revisits.
+
+**Investigation.** Not traced to one teardown. What the evidence shows:
+
+- **The networks.** All 29 are still present, labelled `orkestrator-resource-role=host-reachability-probe`, one per owner, each on a /16 of the default pool, none attached. Within the clusters several come in runs of three, 3.9 s apart: 2026-10-31 16:18:00/04/08, 16:50:03/07/11 and 17:45:07/11/15; 2026-11-01 04:33:06/10/14; and a pair at 2026-11-02 04:57:12/16. That spacing points to one harness that starts backends one after another, each on a new data directory.
+- **Owners against data directories.** No owner matches `dockerOwnerNamespace` of any of the 176 profile directories under `~/.config/orkestrator-v2-dev/profiles/` (as `<profile>` or `<profile>/data`), of the production data directory, or of the development root. Persistent `dev:test` profiles are therefore ruled out. The owners belong to temporary data directories that no longer exist, so they cannot be named.
+- **Run history.** The production backend's service log has no timestamps between 2026-11-01 02:00 and 11:00 UTC, and the Kanban store keeps no comments from those windows. Pull requests opened in and just after the windows place them in concurrent pipeline builds:
+  - 2026-10-31: about fifteen merges, among them #1501 (native menu qualification on Linux, its Electron spec) and #1500 (the 0241 sweep).
+  - 2026-11-01: #1537 (service-preview Electron flakes, opened 04:35 UTC, right after the window), #1539 (Linux design-canvas Electron qualification) and #1542 (Electron focus checks). #1537's commit records, on beelink, that the spec's "probe network outlived each disposable profile". Until that commit (merged 11:12 UTC that day) agent-test backends dropped `ORKESTRATOR_HOST_REACHABILITY_CHECK` from their environment, so every agent-test Electron spec backend ran the boot probe even when the spec set the variable to `off`.
+  - 2026-11-02: #1594 (the design journey against the packaged Linux app), #1601 (container stop drain) and #1603 (federated sidebar). The packaged and design-canvas Electron specs still do not set the variable.
+- **Likeliest source.** Agent-test Electron spec backends: windows 1 and 2 fall in Electron spec qualification builds while the switch was being dropped, and window 3 in the packaged Electron journey's build, whose specs still run the probe.
+- **Reruns.** Each was diffed against the probe-network list from before it, with `docker events --filter type=network` recording every create and destroy:
+  - The automatic pools are exhausted, so a plain rerun cannot create a probe network at all. `design-canvas-electron.spec.ts` (headless, probe on) passed in 18.5 s and created none.
+  - With the shim on PATH, a labelled probe network goes onto a /29, so the leak could happen again. Reruns with the shim and the probe on:
+    - The same spec failed at a known flake ([4250](../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md) and [1131](../tests/flaky-tests/design-canvas-and-artifacts/1131-design-electron-graceful-quit-deadline.md)). Its probe network was created, connected, disconnected and destroyed within 6 s.
+    - `apps/desktop/tests/backend-process.test.ts`, run from `apps/desktop`, passed. It created no probe network, because each backend was stopped before its check reached the network.
+    - Run from the repository root it created one, which was destroyed.
+    - `apps/backend/tests/standalone.test.ts` created three, 1–2 s apart, and all were destroyed. Its one failure was unrelated: `cursor-bridge` was not built in this worktree.
+  - None of the reruns left a probe network behind.
+- **Still unruled out.** A failed or timed-out Docker network-create command may leave a daemon-side network even when the backend later shuts down normally. The successful create/destroy pairs in these reruns do not exercise that failure path. Follow-up [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) retains it as a candidate, without attributing the historical clusters to it.
+- **Not rerun.** The Electron specs other than the design journey need a display, which this host may not use (headless only, no Xvfb), so the specs of the 2026-10-31 and 2026-11-01 builds could not be repeated here. Their timing at the time (backends stopped while host load stalled Docker commands) cannot be recreated either.
+
+Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattached probe networks, created 2026-10-31 (13), 2026-11-01 (9) and 2026-11-02 (7), and none newer, so the leak has not recurred since 2026-11-02. They still fill both default pools (172.18–31/16 and 192.168.0.0/16 in /20s). The owner namespaces are one-off (one network each), which fits backends started on temporary data directories, as in 0241 task 1.
+
+**Decisions.**
+
+- **How to find the source?**
+  - **Match the cluster times against build and test runs on beelink in those windows, then rerun the likeliest harness and diff the probe-network list (recommended, done).**
+    - Pros: the method 0241 used; decisive when the leak reproduces.
+    - Cons: the run history of those days is thin, the pools are full, and the likeliest harnesses need a display. It did not reproduce.
+  - **Add an owner-to-data-directory log line when a probe network is created.**
+    - Pros: makes the next leak traceable at once.
+    - Cons: new logging surface; does not explain these. Carried into [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md) task 2.
+
+### Trace closure and retirement (2026-11-10)
+
+The historical trace (7041 task 2) is closed as untraceable. The owners'
+temporary data directories are gone and the 29 networks predate the creator
+label shipped by [7470](../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
+(#2024, `60c065c36`, checked against `main` at `04639b12b`). The label applies
+only to newly created networks; it cannot identify these historical owners.
+The candidate causes above remain unproven. A new leak carries an
+`orkestrator-creator` label and is new work for a new to-do.
+
+[3320](../todo/containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)
+task 1 is closed as a duplicate of this trace. Its task 2, removing the 29
+networks, remains the user's call; this work left them untouched.
+
+The manual-profile workaround and its live proof were complete, so no work
+remained in 7041. Its file and index row were removed under the to-do retirement
+rule; the evidence lives here instead of in a finished task file. Keeping 7041
+would preserve old links but conflict with that rule. Repointing the links
+preserves navigation without introducing a repository-wide exception.
+
 ## Agent CLIs without telemetry hosts on rootful Linux Engine (2026-11-06)
 
 To-do 6100 (security finding M12, task 3 of S-0100): do the agent CLIs need
@@ -633,7 +724,7 @@ was deleted.
   29.9.2 rootful. The default address pools were full, so the run used the
   test-only network shim (`apps/desktop/scripts/dev/docker-qualification-bin`
   with `ORKESTRATOR_QUALIFICATION_DOCKER`, as in
-  [7041](../todo/containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md)).
+  [7041](container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)).
   The daemon, the host firewall and other owners' resources were not
   touched; every container and network the run made carried its private
   owner label and was removed by it.

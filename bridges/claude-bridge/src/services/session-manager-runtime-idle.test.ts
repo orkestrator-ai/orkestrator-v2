@@ -19,6 +19,8 @@ import {
   PERSISTED_SDK_ID,
   pendingCalls,
   queryControlOverrides,
+  getPendingInteractions,
+  respondToInteraction,
   releaseWithBackgroundWork,
   sendPrompt,
   track,
@@ -37,6 +39,7 @@ import {
 } from "./session-manager-runtime-idle.js";
 import { admitPrompt, applyPromptPlanMode } from "./session-manager-prompt-admission.js";
 import { assertClaudeRuntimeStaticAccepts } from "./session-manager-runtime.js";
+import { sessionRuntimeHealthBody } from "../routes/runtime-health-body.js";
 
 // The session's CLI stays open after a turn that leaves nothing owed, so the
 // next prompt is written into it, and releases itself once it has been idle
@@ -655,6 +658,117 @@ describe("a root turn the warm CLI starts on its own", () => {
     await waitFor(() => session.claudeRuntime === undefined);
     expect(session.status).toBe("idle");
     expect(session.abortController).toBeUndefined();
+  });
+});
+
+/** What `/session/:id/runtime-health` reports about the session's CLI. */
+function healthOf(session: { id: string }) {
+  return sessionRuntimeHealthBody(getSession(session.id) ?? undefined).summary as {
+    state?: string;
+    runtimeGeneration?: number;
+  };
+}
+
+// 0005 task 8: the generation is how the app path proves "the same process"
+// without reading a PID, so it must stay put for everything a warm CLI takes
+// in place and advance for everything that launches one.
+describe("the warm CLI's runtime generation in health", () => {
+  test("is absent before the first launch", () => {
+    const session = createSession("no CLI yet");
+    track(session.id);
+    expect(healthOf(session)).toEqual({ state: "detached" });
+  });
+
+  test("stays put across a follow-up, live setting changes and a parked approval", async () => {
+    controlIdleWindow();
+    const setPermissionMode = mock(async (_mode: string) => {});
+    const setModel = mock(async (_model?: string) => {});
+    queryControlOverrides.setPermissionMode = setPermissionMode;
+    queryControlOverrides.setModel = setModel;
+    const { session, call, input } = await idleAfterOneTurn("one warm CLI", {
+      approvalMode: "default",
+    });
+    const first = healthOf(session);
+    expect(first.state).toBe("attached");
+    expect(first.runtimeGeneration).toBeGreaterThan(0);
+    expect(session.claudeRuntime?.generation).toBe(first.runtimeGeneration);
+
+    // A follow-up, then a turn that switches to plan mode and another model:
+    // both are written into the open process and restated on it.
+    for (const options of [
+      { approvalMode: "default" as const },
+      { approvalMode: "default" as const, permissionMode: "plan" as const, model: "haiku" },
+    ]) {
+      const turn = sendPrompt(session.id, "next", options);
+      expect((await input.next()).done).toBe(false);
+      call.push({ type: "result", subtype: "success" });
+      await turn;
+      expect(healthOf(session)).toEqual(first);
+    }
+    expect(pendingCalls).toHaveLength(0);
+    expect(setPermissionMode).toHaveBeenCalledWith("plan");
+    expect(setModel).toHaveBeenCalledWith("haiku");
+
+    // A command approval parked mid-turn and answered later.
+    const turn = sendPrompt(session.id, "run it", { approvalMode: "default" });
+    expect((await input.next()).done).toBe(false);
+    const decision = call.options.canUseTool!("Bash", { command: "touch reviewed" }, {
+      signal: new AbortController().signal,
+      requestId: "bash-parked",
+      toolUseID: "bash-parked",
+    } as never);
+    await waitFor(() => getPendingInteractions(session.id).length === 1);
+    expect(healthOf(session)).toEqual(first);
+    respondToInteraction(getPendingInteractions(session.id)[0]!.id, { action: "accept" });
+    expect(await decision).toMatchObject({ behavior: "allow" });
+    call.push({ type: "result", subtype: "success" });
+    await turn;
+    expect(healthOf(session)).toEqual(first);
+    expect(pendingCalls).toHaveLength(0);
+    call.finish();
+    await waitFor(() => session.claudeRuntime === undefined);
+  });
+
+  test("names the released CLI while detached and advances on the next launch", async () => {
+    const window = controlIdleWindow();
+    const { session, call } = await idleAfterOneTurn("released then relaunched");
+    const first = healthOf(session).runtimeGeneration!;
+    window.elapse();
+    call.finish();
+    await waitFor(() => session.claudeRuntime === undefined);
+    expect(healthOf(session)).toEqual({ state: "detached", runtimeGeneration: first });
+
+    const next = sendPrompt(session.id, "back again");
+    const relaunch = await nextQueryCall();
+    relaunch.push({ type: "result", subtype: "success" });
+    await next;
+    const second = healthOf(session);
+    expect(second.state).toBe("attached");
+    expect(second.runtimeGeneration).toBeGreaterThan(first);
+    relaunch.finish();
+  });
+
+  test("advances when a launch-only change replaces an idle CLI", async () => {
+    controlIdleWindow();
+    const { session, call, input } = await idleAfterOneTurn("replaced CLI");
+    const first = healthOf(session).runtimeGeneration!;
+    const replaced = sendPrompt(session.id, "with suggestions", { promptSuggestions: true });
+    expect(await input.next()).toEqual({ done: true, value: undefined });
+    call.finish();
+    const relaunch = await nextQueryCall();
+    relaunch.push({ type: "result", subtype: "success" });
+    await replaced;
+    expect(healthOf(session).runtimeGeneration).toBeGreaterThan(first);
+    relaunch.finish();
+  });
+
+  test("is never reused by another session on the same bridge", async () => {
+    controlIdleWindow();
+    const a = await idleAfterOneTurn("generation a");
+    const b = await idleAfterOneTurn("generation b");
+    expect(healthOf(b.session).runtimeGeneration).not.toBe(healthOf(a.session).runtimeGeneration);
+    a.call.finish();
+    b.call.finish();
   });
 });
 

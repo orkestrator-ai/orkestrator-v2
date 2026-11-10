@@ -831,6 +831,13 @@ export interface SessionState {
    */
   claudeRuntime?: import("../services/session-manager-runtime.js").ClaudeRuntime;
   /**
+   * The generation of the newest CLI this bridge process launched for the
+   * session (`ClaudeRuntime.generation`), kept after that CLI ends. Absent
+   * until the first launch. Runtime-only: a restarted bridge has launched
+   * nothing yet. Served by `/session/:id/runtime-health`.
+   */
+  claudeRuntimeGeneration?: number;
+  /**
    * The session CLI's control once its input is closed and it is shutting down
    * (`drainClaudeRuntime`).
    *

@@ -393,6 +393,11 @@ export function normalizeProviderRuntimeSummary(
   // Counts and limits only; the protocol normalizer copies no other field.
   const steer = normalizeNativeAgentRuntimeSteerJournal(raw.steer);
   if (steer) summary.steer = steer;
+  // A positive counter only; it is compared for equality, so it is never clamped.
+  const generation = raw.runtimeGeneration;
+  if (typeof generation === "number" && Number.isSafeInteger(generation) && generation > 0) {
+    summary.runtimeGeneration = generation;
+  }
   const notices = normalizeProviderRuntimeNotices(raw.notices);
   if (notices.length > 0) summary.notices = notices;
   return Object.keys(summary).length > 0 ? summary : undefined;

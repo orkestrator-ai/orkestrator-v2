@@ -1837,6 +1837,13 @@ export interface NativeAgentRuntimeSummary {
   mcp?: NativeAgentMcpServer[];
   /** Steer-history occupancy, counts and limits only (Cursor today). */
   steer?: NativeAgentRuntimeSteerJournal;
+  /**
+   * Which agent process the bridge runs for the session (Claude today): the
+   * same number while turns, setting changes and approvals go to one warm
+   * process, a higher one after the bridge starts another. A counter, not a
+   * PID; it restarts with the bridge. Absent before the first launch.
+   */
+  runtimeGeneration?: number;
 }
 
 export type NativeAgentMcpServerAction = "reconnect" | "enable" | "disable" | "sign-in";

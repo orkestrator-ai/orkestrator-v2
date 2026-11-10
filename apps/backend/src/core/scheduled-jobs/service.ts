@@ -459,7 +459,7 @@ export class ScheduledJobService {
           `The schedule changed (revision ${current.revision}); reload it and try again`,
         );
       }
-      const next = cloneJob(current);
+      const next = markedByActor(cloneJob(current), actor);
       if (input.name !== undefined) {
         const name = input.name.trim();
         if (!name) throw new ScheduleInputError("name must not be empty");
@@ -513,7 +513,7 @@ export class ScheduledJobService {
     const job = this.options.store.mutate(scheduleId, (current) => {
       if (!current) throw new ScheduleNotFoundError("Schedule not found");
       if (current.state === "active") return { result: current };
-      const next = resumeJob(current, this.now());
+      const next = markedByActor(resumeJob(current, this.now()), actor);
       return { result: next, value: next };
     });
     this.wake();
@@ -629,6 +629,24 @@ export class ScheduledJobService {
 }
 
 // ---------------------------------------------------------------------------
+/**
+ * A coordinator turn the user did not start that changes or resumes a
+ * schedule makes its fires arise from agent mail, whatever started the turn
+ * that created it. Nothing clears the mark: a later user turn may leave the
+ * content that mail put there.
+ */
+function markedByActor(job: ScheduledJob, actor: ScheduleActor): ScheduledJob {
+  if (
+    actor.kind !== "coordinator" ||
+    actor.turnOrigin !== "mail" ||
+    job.owner.kind !== "coordinator" ||
+    job.owner.turnOrigin === "mail"
+  ) {
+    return job;
+  }
+  return { ...job, owner: { ...job.owner, turnOrigin: "mail" } };
+}
+
 // Visibility: the operator sees and manages everything; every other owner only
 // its own schedules. A main coordinator also manages its side agents'.
 

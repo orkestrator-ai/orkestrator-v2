@@ -7,6 +7,10 @@ import { registrarFrom } from "./commands-registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { incompatibility, unsupportedField } from "@orkestrator/protocol/contract/errors";
 
+import {
+  coordinatorDelegationFromMail,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
@@ -229,6 +233,44 @@ describe("launch_coordinator_node_environment", () => {
     );
     expect(replay.replayed).toBe(true);
     expect(await associations()).toHaveLength(1);
+  });
+
+  test("the frame sent to the node says when the turn arose from agent mail", async () => {
+    let created = 0;
+    const { run, routed, scope, world } = await setup({
+      answers: {
+        // A worker per launch, so each opens its own delegation.
+        create_controller_environment: () => ({ id: `leaf-env-${++created}`, status: "stopped" }),
+      },
+    });
+    const setOrigin = (origin: "user" | "mail") =>
+      world.storage.coordinators.mutateCoordinatorWorkspace(world.projectId, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((item) =>
+          item.id === scope.conversationId ? { ...item, lastTurnOrigin: origin } : item,
+        ),
+      }));
+    const launched = async (requestId: string, turnOrigin?: "user" | "mail") => {
+      await run("launch_coordinator_node_environment", {
+        scope: { ...scope, ...(turnOrigin ? { turnOrigin } : {}) },
+        requestId,
+        nodeId: "bk_leaf",
+        input: launchInput(scope.projectId),
+      });
+      const create = routed.filter((entry) => entry.command === "create_controller_environment");
+      const args = create.at(-1)!.args;
+      const parsed = parseCoordinatorDelegatedPrompt(
+        String((args.input as { initialPrompt: string }).initialPrompt),
+      );
+      expect(parsed?.source).toBe("Fix the parser");
+      expect((args.presentation as { frame?: string }).frame).toBe(parsed!.frame);
+      return coordinatorDelegationFromMail(parsed!.frame);
+    };
+    await setOrigin("mail");
+    expect(await launched("from-mail")).toBe(true);
+    await setOrigin("user");
+    expect(await launched("from-user")).toBe(false);
+    expect(await launched("scheduled-from-mail", "mail")).toBe(true);
   });
 
   test("a lost answer leaves the receipt pending and says the outcome is unknown", async () => {
@@ -627,6 +669,30 @@ describe("node-mail domain client (plan item 1010)", () => {
     expect(result).toMatchObject({ deliverNow: "steered", coordinatorDelegationOpened: true });
     // Version 1 is the current version: nothing is counted.
     expect(legacyCount()).toBe(before);
+  });
+
+  test("a scheduled fire's mail carries the origin of the turn that set it", async () => {
+    const context = await setup({
+      capabilities: { "node-attachment": 1 },
+      domains: { "node-mail": { min: 1, max: 1 } },
+    });
+    await context.world.storage.coordinators.mutateCoordinatorWorkspace(
+      context.world.projectId,
+      (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((item) =>
+          item.id === context.scope.conversationId ? { ...item, lastTurnOrigin: "mail" } : item,
+        ),
+      }),
+    );
+    await context.run("send_coordinator_node_mail", {
+      scope: { ...context.scope, turnOrigin: "user" },
+      nodeId: "bk_leaf",
+      requestId: "scheduled-from-user",
+      toEnvironmentId: "leaf-env",
+      body: "Nightly status?",
+    });
+    expect(delivery(context).args).not.toHaveProperty("turnOrigin");
   });
 
   test("current to pre-contract: today's capability gating, no envelope, counted", async () => {

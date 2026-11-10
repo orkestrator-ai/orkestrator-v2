@@ -2049,8 +2049,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 
 What the agent's uid can still do is in
 [agent-approvals.md](agent-approvals.md#what-the-agents-uid-can-still-do):
-replace the bridge with one it runs
-([7250](../todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md)),
+kill the bridge, or replace it between two of the backend's checks of the
+socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
 next start. OpenCode has no bridge and takes the plain password, in
 `opencode-token` in the same directory

@@ -1,7 +1,7 @@
 /**
  * A bulk restore driven through the restore dialog of a real `dev:test`
- * profile (todo 7555 task 2,
- * docs/todo/cross-cutting/7555-restore-apply-throughput.md).
+ * profile (todo 7555 task 2, retired; results in
+ * docs/architecture/change-tracking.md, "Restore").
  *
  * One Claude turn on the profile's real CLI and bridge, answered by the
  * loopback model (`fake-anthropic-model.ts`, no billed turn), is held while

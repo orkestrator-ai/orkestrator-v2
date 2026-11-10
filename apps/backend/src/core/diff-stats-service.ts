@@ -168,6 +168,7 @@ export interface DiffStatsWarning {
   event:
     | "scan.watcher-failed"
     | "scan.failed"
+    | "scan.target-missing"
     | "scan.freshness-read-failed"
     | "scan.listener-failed"
     | "emit.diff-stats-failed"
@@ -178,6 +179,14 @@ export interface DiffStatsWarning {
 export interface DiffStatsServiceOptions {
   /** Runs the real git scan. Injected so the service is testable without git. */
   scan: (target: DiffStatsTarget, request?: ScanRequest) => Promise<DiffScanResult>;
+  /**
+   * Whether the target can be scanned at all (a local worktree folder that
+   * exists). Checked before every scan; a target that is not there is
+   * {@link DiffTargetUnavailableError}, never a scan attempt. Defaults to
+   * always present. A check that throws counts as present, so the scan
+   * reports the real error.
+   */
+  targetPresent?: (target: DiffStatsTarget) => Promise<boolean>;
   emit: BackendEmit;
   /**
    * Reads a file list for an identity no tracked entry covers. Defaults to
@@ -298,6 +307,24 @@ export const FILE_LIST_MAX_AGE_MS = 3_000;
  * it at all.
  */
 export const CONTAINER_TREE_MAX_AGE_MS = 10_000;
+/**
+ * The target is not there to scan: a local worktree folder that was deleted or
+ * moved, or sits on a drive that is not mounted. No scan ran, so it is not a
+ * failed `diff-scan` attempt; the last counts stay, marked stale, and the
+ * target is checked again on the failure backoff until the folder returns.
+ */
+export class DiffTargetUnavailableError extends Error {
+  /** `recurringErrorCategory` reads this. */
+  readonly category = "unavailable";
+
+  constructor() {
+    super(
+      "The environment's worktree folder is missing. Its drive may be disconnected, or the folder was moved or deleted.",
+    );
+    this.name = "DiffTargetUnavailableError";
+  }
+}
+
 export const DEFAULT_FAILURE_RETRY: RetryPolicy = { baseMs: 5_000, maxMs: 60_000, maxAttempts: 5 };
 export const DEFAULT_WATCHER_RETRY: RetryPolicy = {
   baseMs: 30_000,
@@ -466,6 +493,7 @@ export class DiffStatsService {
     remoteFreshness?: DiffStatsServiceOptions["remoteFreshness"];
     onScanEvent?: DiffStatsServiceOptions["onScanEvent"];
     startContainerWatcher?: DiffStatsServiceOptions["startContainerWatcher"];
+    targetPresent?: DiffStatsServiceOptions["targetPresent"];
     containerSafetyNetIntervalMs: number;
     localScanMinGapMs: number;
   };
@@ -513,6 +541,7 @@ export class DiffStatsService {
       onWarning: options.onWarning,
       remoteFreshness: options.remoteFreshness,
       onScanEvent: options.onScanEvent,
+      targetPresent: options.targetPresent,
     };
     this.generation = options.generation ?? randomUUID();
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -1333,6 +1362,16 @@ export class DiffStatsService {
     attempt: ScanAttempt,
     priority: Exclude<RecurringPriorityClass, "critical">,
   ): Promise<void> {
+    // No check configured: no await, so a scan still starts synchronously.
+    const presence = this.options.targetPresent;
+    if (presence && !(await targetPresentOrUnknown(presence, attempt.target))) {
+      if (!this.isLive(entry, attempt)) return;
+      // Nothing ran: refused before admission, so it is neither started nor
+      // failed. The owner keeps the obligation through the failure backoff.
+      this.metrics.rejected("diff-scan");
+      this.recordFailure(entry, attempt, new DiffTargetUnavailableError());
+      return;
+    }
     let result: DiffScanResult;
     try {
       const work = () =>
@@ -1457,6 +1496,9 @@ export class DiffStatsService {
 
   /** Last good results stay; freshness says they are stale; retries are capped. */
   private recordFailure(entry: DiffStatsEntry, attempt: ScanAttempt, error: unknown): void {
+    const missing = error instanceof DiffTargetUnavailableError;
+    // A missing worktree is reported once per streak, not on every check.
+    const alreadyMissing = entry.failure?.error instanceof DiffTargetUnavailableError;
     entry.failures += 1;
     const delayMs = backoff(this.failureRetry, entry.failures);
     entry.failure = {
@@ -1464,7 +1506,8 @@ export class DiffStatsService {
       epoch: attempt.epoch,
       retryAt: this.options.monotonicNow() + delayMs,
     };
-    this.warn("scan.failed", attempt.target.environmentId, error);
+    if (!missing) this.warn("scan.failed", attempt.target.environmentId, error);
+    else if (!alreadyMissing) this.warn("scan.target-missing", attempt.target.environmentId, error);
     this.notify({ kind: "failed", target: attempt.target, at: this.options.now() });
     if (entry.retryTimer !== undefined) this.options.cancelDelay(entry.retryTimer);
     entry.retryTimer = undefined;
@@ -1710,6 +1753,18 @@ export class DiffStatsService {
       // Warning reporters are observational. A broken logger must never break
       // the background scan lifecycle it is supposed to describe.
     }
+  }
+}
+
+/** A presence check that throws answers "present", so the scan reports the real error. */
+async function targetPresentOrUnknown(
+  check: (target: DiffStatsTarget) => Promise<boolean>,
+  target: DiffStatsTarget,
+): Promise<boolean> {
+  try {
+    return await check(target);
+  } catch {
+    return true;
   }
 }
 

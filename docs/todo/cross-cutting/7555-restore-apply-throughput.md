@@ -78,7 +78,7 @@ Not run: the service benchmark's cold checkpoint (`--restore-cold`) on a quiet h
 ## Related
 
 - [Change tracking: restore](../../architecture/change-tracking.md#restore) and [turn and thread boundaries](../../architecture/change-tracking.md#turn-and-thread-boundaries).
-- [4960-measurement-rows-live-soak.md](4960-measurement-rows-live-soak.md): the preview measurements this follows.
+- 4960 (retired 2026-11-10): the preview measurements this follows, summarised in [Change tracking: restore](../../architecture/change-tracking.md#restore).
 
 ## Assumptions and decisions
 

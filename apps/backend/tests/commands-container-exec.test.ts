@@ -473,6 +473,7 @@ case "$1" in
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
       *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"ss -Hltne"*) exit 0 ;; # the listener stop (to-do 7250): nothing of the agent's listens
       *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
     esac
     case "$*" in

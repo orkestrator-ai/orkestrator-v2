@@ -304,7 +304,8 @@ invariants keep it honest:
 
 ## Goals stay with the backend
 
-Orkestrator's goal loop runs in the backend (`plans/goals.md`, D1 and D2), so
+Orkestrator's goal loop runs in the backend (decisions D1 and D2 of the retired
+goal plan, `git show 2b876486b:plans/goals.md`), so
 `ProposeGoal` is in `disallowedTools` on every turn, and the catalogue's `/goal`
 row is replaced by the backend's session action. Two loops must never stack on
 one session.

@@ -264,8 +264,9 @@ fix, the run waits for the next release before judging it.
 - **Windows differ by source.** The essential log reaches back as far as its
   4 MiB holds, the health rows seven days, database counters only this
   backend's run.
-- **Container bridges are missing** from the bundle
-  ([6143](../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md)).
+- **Container bridges are missing** from the bundle a run reads. Only the
+  Export dialog adds container server logs, per environment, when the user
+  opts in ([logging.md](logging.md)).
 - **A model only sees what was said.** UI friction you never mention to an
   agent does not reach it. Themes are judgements: delete a wrong one's
   ticket.

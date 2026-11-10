@@ -67,7 +67,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [browser-previews.md](architecture/browser-previews.md) | Service previews: registry, local-environment discovery and listener ownership, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. Rollout: [0042-service-preview-rollout.md](todo/previews-and-annotations/0042-service-preview-rollout.md). |
 | [build-pipeline-view.md](architecture/build-pipeline-view.md) | The terms build pipeline, pipeline environment and prompt environment; the build pipeline tab's flow graph and inspector, and the flow-graph components it shares with Multi Review: the projection of the record (passes unrolled to the right, faded definite steps, the reviewer fan-out, Ticket and PR nodes), node actions including retrying one reviewer, restarts that rewind to a step's round with the superseded run kept as a previous attempt (Address rerunning on its round's kept report, a package-only restart), the confirmed "Rewind code to here" reset, the header toolbar and key information panel with its agent tools, and the read and view-state constraints. |
 | [goals.md](architecture/goals.md) | The `/goal` loop as built: statuses, delivery, limits, `report_goal`, attention, and how to write a goal. |
-| [graphs.md](architecture/graphs.md) | Composable graphs as built (Phases 0–2, Phase 4 items 401–405): the template model, types and schema subset, predicates, prompt templates and the locked system contract, capability profiles and enforcement tiers, the compiler and plan digest, storage, trust and sharing, the runtime (supervisor, scheduling, executors, result slots, human and system nodes, guards, isolated worktrees, restart and rewind, mock runs), launch surfaces, the designer and the run view, a table of every bound, the invariants and known gaps. Plan and work items: [composable-graphs.md](../plans/composable-graphs.md), [plans/graphs/](../plans/graphs/000-index.md). |
+| [graphs.md](architecture/graphs.md) | Composable graphs as built (Phases 0–2, Phase 4 items 401–405): the template model, types and schema subset, predicates, prompt templates and the locked system contract, capability profiles and enforcement tiers, the compiler and plan digest, storage, trust and sharing, the runtime (supervisor, scheduling, executors, result slots, human and system nodes, guards, isolated worktrees, restart and rewind, mock runs), launch surfaces, the designer and the run view, a table of every bound, the invariants and known gaps. Plan and work items: retired on 2026-11-07 (`git show 2b876486b:plans/composable-graphs.md`, `git show 2b876486b:plans/graphs/000-index.md`). |
 | [graphs-user-guide.md](architecture/graphs-user-guide.md) | User guide to Graphs: designing in the library and canvas (duplicating a built-in, prompts, types, capabilities, sub-graphs), testing with mock runs and pins, launching (dialog, Kanban, CLI, coordinator, schedules), watching runs and answering human nodes, restarting and rewinding, sharing and trusting project templates. |
 | [tickets.md](architecture/tickets.md) | Kanban tickets: kinds (feature ticket, work brief), typed optional sections stored as JSON, the markdown form and its round-trip rules, criteria ids and Verify results, text mirrors and on-read migration, the tool inputs, the Verify contract, how a merged pull request moves its ticket to done, and the tiled views. |
 | [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Auto-fix and auto-PR ordering and recovery. Fan-out budgets and the efficiency benchmark. |
@@ -303,22 +303,22 @@ can act), just as its rating is, and keep the counts in
 - When the last open task in a file is done, or every remaining one moved to
   the manual-test checklist, retire the file in the same change: move any
   durable behaviour into `architecture/` or `development/`, delete the file,
-  remove its row from the folder index, point links that named it at the
-  durable doc, renumber the remaining ranks to `1..n` in row order and update
+  remove its row from the folder index, point links and paths that named it
+  at the durable doc in every file, `AGENTS.md` included (the root
+  `AGENTS.md`, "Keep references current": a ticket that bars edits to a file
+  never covers this), renumber the remaining ranks to `1..n` in row order and update
   the counts. Checklist items whose source is retired cite it as
   `NNNN (retired)`. Its todo number is not reused.
 - To add work, create a new file with the next number and the same headings
   in the folder that fits, and add a rated row with its Status and Needs you to
   that folder's index, then update the counts. A new folder also needs its own
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
-  The layout example the repository instructions name, to-do 0241, was
-  retired on 2026-11-10 (read it with
-  `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`).
-  Until those instructions are repointed, copy the layout of a live one-task
-  to-do in the same format instead:
+  The layout example the repository instructions name is a live one-task
+  to-do in that format:
   [`7500-agent-tools-port-auto-choice.md`](todo/containers-and-environments/7500-agent-tools-port-auto-choice.md).
-  Repointing the line in `AGENTS.md` is a follow-up for the coordinator's
-  `AGENTS.md` proposal, which owns edits to that file.
+  The example they named before it, to-do 0241, was retired on 2026-11-10
+  (read it with
+  `git show 53340356c:docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md`).
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans

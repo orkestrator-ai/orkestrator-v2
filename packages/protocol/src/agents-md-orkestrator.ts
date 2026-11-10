@@ -31,9 +31,15 @@ export const AGENTS_MD_FILE = "AGENTS.md";
 export const ORKESTRATOR_SECTION_TITLE = "Orkestrator";
 export const ORKESTRATOR_SECTION_HEADING = `## ${ORKESTRATOR_SECTION_TITLE}`;
 
-/** Written at the top of the section when the backend creates it. */
+/**
+ * Written at the top of the section when the backend creates it.
+ *
+ * The exception for references exists because the bare rule read as a ban:
+ * workers that deleted a to-do left the section naming it, and tickets were
+ * marked incomplete for it (root `AGENTS.md`, "Keep references current").
+ */
 export const ORKESTRATOR_SECTION_NOTE =
-  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.";
+  "Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update a reference to a file their change deletes, moves or renames.";
 
 export const MAX_AGENTS_MD_CHANGES = 20;
 export const MAX_AGENTS_MD_ENTRY_CHARS = 500;

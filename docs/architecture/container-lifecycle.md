@@ -193,9 +193,9 @@ Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
 4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
 Rootless daemons are supported with gated features and were qualified on a
 Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
-2026-11-09 with an image built from `main`; the gaps those runs left are
-[7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
-(host loopback on the gvisor-tap-vsock driver) and
+2026-11-09 with an image built from `main`; the gaps those runs left were
+7548 (host loopback on the gvisor-tap-vsock driver, fixed and retired on
+2026-11-10; [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)) and
 [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
 (`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
 refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
@@ -1442,9 +1442,9 @@ trade only the user can make. Publishing the service back through a
 container's forwarded port would need a multiplexing relay in every
 container for one path, and the host's LAN address was tried live and
 refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
-gvisor-tap-vsock driver host loopback is `10.0.2.1` and the check still
-reports `blocked`
-([7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)),
+gvisor-tap-vsock driver host loopback is `10.0.2.1`, which the check probes
+and reports `reachable` (to-do 7548, retired 2026-11-10;
+[evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)),
 and other drivers stay `blocked` with the same remediation.
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)

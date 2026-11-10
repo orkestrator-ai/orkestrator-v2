@@ -1027,7 +1027,10 @@ credential, login or provider: every turn goes to the fake model.
   N rounds of: `--busy-burst-files` (default 200) files written into every
   environment at once and removed; a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
-  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  --enqueue`), with `--busy-turn-files` (default 0) files written into
+  `busy-1` while that turn is held and removed when the round ends, so the
+  turn and thread-segment owners get file lists past the 2,000-row
+  measurement cap (todo 4960); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
   which Pi parks as an approval, and agent mail to that tab; with two
   clients the second one's link cut (the outage link of
   `client-outage-support.ts`), with one its document hidden; the approval

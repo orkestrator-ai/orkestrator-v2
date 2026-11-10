@@ -219,6 +219,8 @@ export function parseOptions(argv: string[]): Options {
       options.busyClients = parseBusyClients(value(index++, name));
     else if (name === "--busy-burst-files")
       options.busyBurstFiles = positive(value(index++, name), name);
+    else if (name === "--busy-turn-files")
+      options.busyTurnFiles = positive(value(index++, name), name);
     else if (name === "--agent-platforms") {
       const platforms = value(index++, name);
       if (!/^[a-z]+(,[a-z]+)*$/.test(platforms))
@@ -257,6 +259,8 @@ export function parseOptions(argv: string[]): Options {
     throw new Error("--busy-environments must be an integer from 3 to 20");
   if (!Number.isInteger(options.busyBurstFiles) || options.busyBurstFiles < 1)
     throw new Error("--busy-burst-files must be a positive integer");
+  if (!Number.isInteger(options.busyTurnFiles))
+    throw new Error("--busy-turn-files must be an integer");
   if (options.busyRounds > 0 && !options.fixtureEnvironments.split(",").includes("local"))
     throw new Error(
       "--busy-rounds needs a local fixture environment (--fixture-environments local)",

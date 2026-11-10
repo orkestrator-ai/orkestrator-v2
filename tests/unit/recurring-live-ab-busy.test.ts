@@ -3,12 +3,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { UNTRACKED_SCAN_MAX_FILES } from "../../apps/backend/src/core/commands-validation";
 import { __testing, parseOptions } from "../../scripts/recurring-live-ab";
 import {
   BUSY_ROWS,
   busyFailed,
   busyRuntime,
+  burstBadgeLines,
   busyRowSummary,
+  UNTRACKED_COUNTED_FILES,
   busySummaryLines,
   measureBusy,
   parseBusyClients,
@@ -96,6 +99,8 @@ function busyHarness(scenario: Scenario = {}) {
   const hiddenCalls: boolean[] = [];
   const closed: string[] = [];
   const calls: string[][] = [];
+  const turnFiles: Array<{ relative: string; count: number; heldAtModel: boolean }> = [];
+  const turnFilesRemoved: string[] = [];
   const note = (id: string) => {
     const existing = markers.get(id);
     if (existing) {
@@ -310,7 +315,9 @@ function busyHarness(scenario: Scenario = {}) {
       if (name === "busy-ask") return approval && !approval.answered ? "waiting" : "idle";
       return "idle";
     },
-    badges: async () => Object.fromEntries(environmentNames().map((name) => [name, burst || null])),
+    // The environment scan counts lines for at most 2,000 untracked files.
+    badges: async () =>
+      Object.fromEntries(environmentNames().map((name) => [name, Math.min(burst, 2_000) || null])),
     approvalVisible: async () => Boolean(approval && !approval.answered),
     replyCount: async () => replies,
     mailCount: async () => mails,
@@ -344,12 +351,24 @@ function busyHarness(scenario: Scenario = {}) {
       return Array.from({ length: count }, (_, index) => client(`c${index + 1}`, index === 1));
     },
     writeBurst: (worktrees, relative, count) => {
+      if (relative.startsWith("busy-turn/")) {
+        // Turn files go into the turn environment only, while its turn is held.
+        expect(worktrees).toEqual(["/worktrees/busy-1"]);
+        const tag = relative.slice("busy-turn/".length);
+        turnFiles.push({ relative, count, heldAtModel: markers.has(`t-${tag}`) });
+        return;
+      }
       expect(worktrees).toHaveLength(environments.length);
       expect(relative.startsWith("busy-burst/")).toBe(true);
       burst = count;
       changed += environments.length;
     },
-    removeBurst: () => {
+    removeBurst: (worktrees, relative) => {
+      if (relative.startsWith("busy-turn/")) {
+        expect(worktrees).toEqual(["/worktrees/busy-1"]);
+        turnFilesRemoved.push(relative);
+        return;
+      }
       burst = 0;
     },
     commitFixture: () => {
@@ -380,6 +399,8 @@ function busyHarness(scenario: Scenario = {}) {
     closed,
     prepared,
     watched,
+    turnFiles,
+    turnFilesRemoved,
     commits: () => commits,
   };
 }
@@ -395,6 +416,7 @@ const options = (overrides: Partial<Parameters<typeof measureBusy>[2]> = {}) => 
   busyEnvironments: 4,
   busyClients: [0, 1, 2],
   busyBurstFiles: 5,
+  busyTurnFiles: 0,
   dataDir: "/profile/data",
   ...overrides,
 });
@@ -410,6 +432,8 @@ describe("busy phase options", () => {
       "0,2,2",
       "--busy-burst-files",
       "100",
+      "--busy-turn-files",
+      "2500",
       "--fixture-environments",
       "local",
     ]);
@@ -418,8 +442,12 @@ describe("busy phase options", () => {
       busyEnvironments: 10,
       busyClients: [0, 2],
       busyBurstFiles: 100,
+      busyTurnFiles: 2500,
     });
     expect(parseOptions([]).busyRounds).toBe(0);
+    expect(parseOptions([]).busyTurnFiles).toBe(0);
+    expect(() => parseOptions(["--busy-turn-files", "1.5"])).toThrow();
+    expect(() => parseOptions(["--busy-turn-files", "-1"])).toThrow();
     expect(parseBusyClients("1")).toEqual([1]);
     expect(() => parseBusyClients("3")).toThrow();
     expect(() => parseBusyClients("")).toThrow();
@@ -492,6 +520,65 @@ describe("busy phase", () => {
     );
     expect(result.rounds.map((item) => item.failed)).toEqual([true, false]);
     expect(h.calls.filter((call) => call[0] === "session" && call[1] === "stop")).toHaveLength(2);
+  });
+  test("turn files are written while the held turn runs and removed each round", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0, 1], busyTurnFiles: 2_500 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.turnFileRounds).toBe(2);
+    expect(h.turnFiles).toEqual([
+      { relative: path.join("busy-turn", "r1"), count: 2_500, heldAtModel: true },
+      { relative: path.join("busy-turn", "r2"), count: 2_500, heldAtModel: true },
+    ]);
+    expect(h.turnFilesRemoved).toEqual([
+      path.join("busy-turn", "r1"),
+      path.join("busy-turn", "r2"),
+    ]);
+    expect(busySummaryLines("turn files", result).join("\n")).toContain("2 held turns wrote files");
+  });
+  test("a CLI that cannot list environments is named, not reported as a missing fixture", async () => {
+    const h = busyHarness();
+    const broken: AsyncCli = async (args, signal) =>
+      args[0] === "environment" && args[1] === "list"
+        ? { status: 1, stdout: "" }
+        : h.cli(args, signal);
+    await expect(
+      measureBusy(h.gateway, broken, options({ busyClients: [0] }), undefined, h.runtime),
+    ).rejects.toThrow(/environment list failed \(exit 1\).*build:cli/);
+  });
+  test("a burst past the untracked count limit waits only for the lines a badge can show", async () => {
+    expect(UNTRACKED_COUNTED_FILES).toBe(UNTRACKED_SCAN_MAX_FILES);
+    expect(burstBadgeLines(200)).toBe(200);
+    expect(burstBadgeLines(2_500)).toBe(2_000);
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1], busyBurstFiles: 2_500 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.samples["burst-badge"]).toHaveLength(4);
+  });
+  test("without turn files no turn directory is touched", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.turnFileRounds).toBe(0);
+    expect(h.turnFiles).toEqual([]);
+    expect(h.turnFilesRemoved).toEqual([]);
   });
   test("runs every step for 0, 1 and 2 clients and keeps every obligation", async () => {
     const h = busyHarness();
@@ -712,6 +799,7 @@ describe("busy phase", () => {
       samples: { ...(samples as object), "approval-visible": [100, 2_500] } as never,
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+      turnFileRounds: 0,
       failures: [],
       windowSamples: [],
       admission: {},
@@ -733,6 +821,7 @@ describe("busy phase", () => {
       samples: {} as never,
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+      turnFileRounds: 0,
       failures: [],
       windowSamples: [],
       admission: {},

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
 import { MultiReviewLaunchDialog } from "./MultiReviewLaunchDialog";
@@ -199,6 +199,64 @@ test("a hanging draft can be dismissed without confirmation", async () => {
   await waitFor(() => expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1));
   await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
 });
+
+test("reopening a cancelled draft shows drafting and can cancel the new pending request", async () => {
+  const node = client();
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await screen.findByLabelText("Title");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  const pending = Promise.withResolvers<typeof draft>();
+  node.respond("draft_auto_pipeline", () => pending.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Auto-pipeline" }));
+  expect(screen.getByRole("status").textContent).toContain("Drafting ticket and Build notes");
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  expect(cancel.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(cancel);
+  expect(node.calls("cancel_auto_pipeline_draft")).toHaveLength(1);
+  expect(node.calls("cancel_auto_pipeline_draft")[0]!.args).toEqual({
+    environmentId: "env",
+    tabId: "original",
+  });
+  await act(async () => {
+    pending.resolve(draft);
+    await pending.promise;
+  });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(node.calls("draft_auto_pipeline")).toHaveLength(2);
+  expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+});
+
+for (const invalid of [
+  { name: "blank title", title: " " },
+  { name: "blank description", description: "\n " },
+  { name: "empty criteria", acceptanceCriteria: [] },
+  { name: "blank criterion", acceptanceCriteria: ["Valid", " "] },
+]) {
+  test(`confirmation handler refuses ${invalid.name} independently of the disabled button`, async () => {
+    const node = client().respond("draft_auto_pipeline", { ...draft, ...invalid });
+    renderInNodeScope(<AutoPipelineLaunch environmentId="env" onPromoted={() => undefined} />, {
+      client: node,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+    const confirm = await screen.findByRole("button", { name: "Confirm Auto-pipeline" });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    // Call the actual React handler directly: DOM clicks on a disabled button
+    // cannot exercise the submission guard and would pass without that guard.
+    const propsKey = Object.getOwnPropertyNames(confirm).find((key) =>
+      key.startsWith("__reactProps$"),
+    );
+    expect(propsKey).toBeDefined();
+    const props = Reflect.get(confirm, propsKey!) as { onClick: () => void };
+    await act(async () => props.onClick());
+    expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+}
 test("draft failure offers retry and plain review; confirmation errors retain the draft", async () => {
   const node = client().respond("draft_auto_pipeline", () => {
     throw new Error("draft unavailable");

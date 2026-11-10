@@ -86,10 +86,17 @@ export function AutoPipelineLaunch({
     };
   }, [backend, environmentId]);
   const selected = sources?.sources.find((source) => source.tabId === tabId);
+  const confirmBlocked =
+    !draft ||
+    !draft.title.trim() ||
+    !draft.description.trim() ||
+    !draft.acceptanceCriteria.length ||
+    draft.acceptanceCriteria.some((value) => !value.trim());
   async function generate() {
     if (busy || !selected || selected.disabledReason) return;
     const request = ++generation.current;
     draftingTab.current = tabId;
+    setDraft(null);
     setBusy(true);
     setOpen(true);
     setError(null);
@@ -110,7 +117,7 @@ export function AutoPipelineLaunch({
     }
   }
   async function confirm() {
-    if (!draft || busy) return;
+    if (!draft || busy || confirmBlocked) return;
     setBusy(true);
     setError(null);
     try {
@@ -139,17 +146,12 @@ export function AutoPipelineLaunch({
       draftingTab.current = null;
     }
     generation.current++;
+    setDraft(null);
     setOpen(false);
     setBusy(false);
   }
   if (!sources?.available || !sources.sources.length) return null;
   const promoting = busy && !!draft;
-  const confirmBlocked =
-    !draft ||
-    !draft.title.trim() ||
-    !draft.description.trim() ||
-    !draft.acceptanceCriteria.length ||
-    draft.acceptanceCriteria.some((value) => !value.trim());
   return (
     <section className="mx-5 my-4 rounded-lg border border-divider p-4">
       <h3 className="font-semibold">Auto-pipeline</h3>

@@ -16,6 +16,7 @@ import { expect, test } from "./electron-fixtures";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment, startElectronSpecBackend } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The desktop half of client freshness
@@ -177,10 +178,13 @@ test("a remote connection shows the banner, pauses reads and recovers, on a rest
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
       }),
     });
+    const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
     const window = await app.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // Reloads only a start that lost its modules to ERR_NETWORK_CHANGED (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
 
     // The token stays in this test and the renderer's secure connection store.
     const connectionId = await window.evaluate(

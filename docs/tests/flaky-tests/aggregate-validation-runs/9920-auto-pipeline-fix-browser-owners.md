@@ -1,6 +1,6 @@
 # Auto-pipeline fix validation: intermittent browser owners and incomplete broad checks
 
-- **ID:** 9919
+- **ID:** 9920
 - **Status:** open
 - **Date observed:** 2026-11-10
 - **Branch:** `autopipeline-text-boxes-7182fc46ef5e-r1`, fix commit `944b37af1` after reviewed commit `02f72782c`.
@@ -262,3 +262,9 @@ was started. Real-stack agent qualification and unrelated scenario suites were
 not run: this resolution changes the Auto-pipeline presentation and its tests,
 plus registry metadata and links. The focused owner passes do not establish a
 passing complete default or browser suite.
+
+## Number collision resolution, 2026-11-10
+
+The next main merge retained main’s claim 9919 and moved this case to 9920,
+updating its index and incoming links. Earlier commands and number references
+in the validation history above retain the IDs used when they were run.

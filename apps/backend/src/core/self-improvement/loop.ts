@@ -3,14 +3,21 @@
  * it a diagnostics bundle, a board and (optionally) a model runner.
  *
  *   1. Read the board: a tracked signal whose ticket is done becomes `fixed`
- *      (every newer app version carries the fix); a reopened ticket goes back
- *      to `tracking`; a deleted ticket becomes `ignored`.
+ *      (every newer app version carries the fix); a reopened ticket, fixed or
+ *      verified, goes back to `tracking`; a deleted ticket becomes `ignored`.
+ *      Each ticket is read on its own project's board (the entry records it),
+ *      so choosing another project for new tickets leaves older ones alone.
  *   2. Review conversations (when on) and turn themes into signals.
  *   3. Digest the bundle and judge every fix.
  *   4. Act on verdicts: `improved` becomes `verified` with a comment;
  *      `unchanged` or `regressed` moves the ticket back to the backlog.
  *   5. File tickets for new signals above the bar, under daily limits.
- *   6. Save the digest and the ledger.
+ *   6. Save the digest.
+ *
+ * The ledger is saved after the board is read and after every board change,
+ * so a run that fails part-way keeps the record of what it already did: the
+ * next run neither files a ticket twice nor bypasses the daily limit. Verdict
+ * comments carry a request id that stays the same across runs.
  *
  * A dry run reads and reports but changes nothing: no tickets, no ledger, no
  * saved digest, no model calls.
@@ -34,6 +41,7 @@ import {
   type DigestSignal,
   IMPROVED_RATIO,
   type Judgement,
+  type LedgerChange,
   type LedgerEntry,
   listDigests,
   loadLedger,
@@ -63,10 +71,13 @@ export interface BoardTicket {
   prUrl?: string | null;
 }
 
-/** The project board a run files on. The service implements it over Kanban storage. */
+/** One project's board. The service implements it over Kanban storage. */
 export interface Board {
-  /** The ticket, or null when it no longer exists. */
+  readonly projectId: string;
+  /** The ticket, or null when it is not on this project's board. */
   get(ticketId: string): Promise<BoardTicket | null>;
+  /** The project any ticket is on, or null when it no longer exists anywhere. */
+  locate?(ticketId: string): Promise<string | null>;
   list(): Promise<BoardTicket[]>;
   create(input: {
     title: string;
@@ -75,7 +86,8 @@ export interface Board {
     label: string;
     requestId: string;
   }): Promise<string>;
-  comment(ticketId: string, text: string): Promise<void>;
+  /** Posts once per `requestId`: a retry with the same id posts nothing. */
+  comment(ticketId: string, text: string, requestId: string): Promise<void>;
   moveToBacklog(ticketId: string): Promise<void>;
   /** Creates each label the project does not have yet. */
   ensureLabels(
@@ -91,7 +103,13 @@ export type LoopSummary = Omit<
 export interface LoopOptions {
   stateDir: string;
   data: BundleData;
+  /** The board new tickets are filed on. */
   board: Board;
+  /**
+   * Another project's board, for tickets filed while that project was chosen.
+   * Without it, those tickets are left as they are until it is chosen again.
+   */
+  boardFor?: (projectId: string) => Board;
   dryRun?: boolean;
   now?: () => Date;
   onStep?: (step: SelfImprovementStep) => void;
@@ -188,9 +206,35 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   step("board");
   const ledger = loadLedger(stateDir);
   const digests = listDigests(stateDir);
+  const persist = () => {
+    if (!dryRun) saveLedger(stateDir, ledger);
+  };
+  const boards = new Map<string, Board>([[board.projectId, board]]);
+  const boardOf = (projectId: string): Board | null => {
+    const known = boards.get(projectId);
+    if (known) return known;
+    const other = options.boardFor?.(projectId) ?? null;
+    if (other) boards.set(projectId, other);
+    return other;
+  };
+  /** The board an entry's ticket is on, or null when that board cannot be reached this run. */
+  const ownerOf = (entry: LedgerEntry): Board | null =>
+    entry.projectId ? boardOf(entry.projectId) : board;
+
+  let reconciled = false;
   for (const entry of Object.values(ledger.entries)) {
-    if (!entry.ticket || (entry.status !== "tracking" && entry.status !== "fixed")) continue;
-    const ticket = await board.get(entry.ticket);
+    if (!entry.ticket || entry.status === "ignored") continue;
+    if (!entry.projectId) {
+      // Saved before the project was recorded: find where the ticket is.
+      const located = board.locate ? await board.locate(entry.ticket) : null;
+      if (located) {
+        entry.projectId = located;
+        reconciled = true;
+      }
+    }
+    const owner = ownerOf(entry);
+    if (!owner) continue;
+    const ticket = await owner.get(entry.ticket);
     const ref = { ticket: entry.ticket, signature: entry.signature };
     if (!ticket) {
       applyLedgerChange(
@@ -201,7 +245,14 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         now(),
       );
       summary.ignoredDeleted.push(ref);
-    } else if (entry.status === "tracking" && ticket.status === "done") {
+      reconciled = true;
+      continue;
+    }
+    if (!entry.projectId) {
+      entry.projectId = owner.projectId;
+      reconciled = true;
+    }
+    if (entry.status === "tracking" && ticket.status === "done") {
       applyLedgerChange(
         ledger,
         entry.signature,
@@ -214,7 +265,12 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         now(),
       );
       summary.markedFixed.push(ref);
-    } else if (entry.status === "fixed" && ticket.status !== "done") {
+      reconciled = true;
+    } else if (
+      (entry.status === "fixed" || entry.status === "verified") &&
+      ticket.status !== "done"
+    ) {
+      // Someone reopened it: the fix is no longer claimed, whether or not it was verified.
       applyLedgerChange(
         ledger,
         entry.signature,
@@ -223,8 +279,10 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         now(),
       );
       summary.reopenedFromBoard.push(ref);
+      reconciled = true;
     }
   }
+  if (reconciled) persist();
 
   // 2. Conversations.
   const extracted = extractSignals(data);
@@ -244,7 +302,9 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
         onThemes: () => step("grouping-themes"),
       });
       extracted.signals.push(...insightRun.signals);
-      extracted.observedHours.insights = insightRun.readByVersion;
+      // Saved notes not yet grouped would make every theme look rarer than it
+      // is, so with grouping pending no insight fix is judged this run.
+      if (!insightRun.groupingPending) extracted.observedHours.insights = insightRun.readByVersion;
       Object.assign(summary.conversations, {
         read: insightRun.read,
         waiting: insightRun.waiting,
@@ -266,37 +326,55 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   const digest = buildDigest(data, extracted, previous, ledger, now());
   summary.digestId = digest.id;
 
-  // 4. Verdicts.
-  const comments: Array<{ ticket: string; text: string; reopen: boolean }> = [];
+  // 4. Verdicts. The ledger changes once the board has been told (step 5).
+  const verdicts: Array<{
+    signature: string;
+    owner: Board;
+    ticket: string;
+    text: string;
+    requestId: string;
+    reopen: boolean;
+    change: LedgerChange;
+  }> = [];
   for (const judgement of digest.judgements) {
     const entry: LedgerEntry | undefined = ledger.entries[judgement.signature];
     if (!entry?.ticket) continue;
+    const owner = ownerOf(entry);
+    if (!owner) continue;
     const ref = { ticket: entry.ticket, signature: entry.signature };
+    // The same verdict on the same fix keeps the same id, so a retried run posts it once.
+    const requestId = `self-improvement-verdict-${shortHash(
+      [entry.signature, entry.ticket, judgement.verdict, entry.updatedAt].join("\n"),
+    )}`;
     if (judgement.verdict === "improved") {
-      applyLedgerChange(ledger, entry.signature, { status: "verified" }, digests, now());
       summary.verified.push(ref);
-      comments.push({
+      verdicts.push({
+        signature: entry.signature,
+        owner,
         ticket: entry.ticket,
         text: verdictComment(judgement, "the fix is verified"),
+        requestId,
         reopen: false,
+        change: { status: "verified" },
       });
     } else if (judgement.verdict === "unchanged" || judgement.verdict === "regressed") {
       const outcome =
         judgement.verdict === "regressed"
           ? "the problem has come back"
           : "the fix did not change the rate";
-      applyLedgerChange(
-        ledger,
-        entry.signature,
-        { status: "tracking", clearFix: true, note: `${judgement.verdict} in digest ${digest.id}` },
-        digests,
-        now(),
-      );
       summary.fixFailed.push({ ...ref, verdict: judgement.verdict });
-      comments.push({
+      verdicts.push({
+        signature: entry.signature,
+        owner,
         ticket: entry.ticket,
         text: verdictComment(judgement, outcome),
+        requestId,
         reopen: true,
+        change: {
+          status: "tracking",
+          clearFix: true,
+          note: `${judgement.verdict} in digest ${digest.id}`,
+        },
       });
     } else if (judgement.verdict === "partly-improved") {
       summary.partly.push(ref);
@@ -352,9 +430,11 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
   }
 
   step("filing");
-  for (const comment of comments) {
-    await board.comment(comment.ticket, comment.text);
-    if (comment.reopen) await board.moveToBacklog(comment.ticket);
+  for (const verdict of verdicts) {
+    await verdict.owner.comment(verdict.ticket, verdict.text, verdict.requestId);
+    if (verdict.reopen) await verdict.owner.moveToBacklog(verdict.ticket);
+    applyLedgerChange(ledger, verdict.signature, verdict.change, digests, now());
+    persist();
   }
 
   const openTitles = new Map<string, string>();
@@ -365,11 +445,19 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
     await board.ensureLabels(LABELS);
   }
   const allDigests = [...digests, digest];
+  const filedOn = { projectId: board.projectId };
   for (const signal of chosen) {
     const text = textFor(signal);
     const existing = openTitles.get(text.title);
     if (existing) {
-      applyLedgerChange(ledger, signal.signature, { ticket: existing }, allDigests, now());
+      applyLedgerChange(
+        ledger,
+        signal.signature,
+        { ticket: existing, ...filedOn },
+        allDigests,
+        now(),
+      );
+      persist();
       summary.linked.push({ ticket: existing, signature: signal.signature });
       continue;
     }
@@ -378,13 +466,15 @@ export async function runLoop(options: LoopOptions): Promise<LoopSummary> {
       label: isInsight(signal) ? INSIGHT_LABEL : IMPROVEMENT_LABEL,
       requestId: `self-improvement-${digest.id}-${shortHash(signal.signature)}`,
     });
-    applyLedgerChange(ledger, signal.signature, { ticket }, allDigests, now());
+    // Recorded at once, so a later failure in this run cannot file it again.
+    applyLedgerChange(ledger, signal.signature, { ticket, ...filedOn }, allDigests, now());
+    persist();
     summary.created.push({ ticket, signature: signal.signature, title: text.title });
   }
 
   // 6. Save.
   saveDigest(stateDir, digest, renderDigest(digest));
-  saveLedger(stateDir, ledger);
+  persist();
   return summary;
 }
 

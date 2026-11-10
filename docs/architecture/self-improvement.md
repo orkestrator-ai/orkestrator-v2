@@ -45,9 +45,13 @@ Your controls are on the board:
 | On the board | The next run |
 | --- | --- |
 | Move a ticket to Done | Marks it fixed, and checks the app versions released after that point |
-| Move a Done ticket back out | Treats it as open again |
-| Delete a ticket | Ignores that problem from now on (for noise you accept) |
+| Move a Done ticket back out, even a confirmed one | Treats it as open again |
+| Delete a ticket, even a confirmed one | Ignores that problem from now on (for noise you accept) |
 | Nothing | Keeps watching. Nothing is filed twice |
+
+A ticket stays on the project it was filed on. Choosing another project
+sends new tickets there; the older ones are still read, commented on and
+moved on their own board.
 
 Once a newer version has been used long enough (a day for diagnostics, 10
 conversations for an insight), a run judges each fix. A fix that worked is
@@ -76,9 +80,10 @@ service around it is in `service.ts`. Its steps are those the page shows:
 
 1. **Exporting.** Builds this backend's diagnostics bundle in memory
    (`buildDiagnosticsBundle`, redaction included) and reads it.
-2. **Board.** For each tracked problem with a ticket, reads the ticket and
-   applies the table above. Done records "fixed in any version newer than the
-   one running now" (`fixedAfter`).
+2. **Board.** For each tracked problem with a ticket, reads the ticket on
+   the project it was filed on (the ledger entry's `projectId`) and applies
+   the table above. Done records "fixed in any version newer than the one
+   running now" (`fixedAfter`).
 3. **Reading conversations** and **grouping themes**, when the review is on
    (see [Conversation review](#conversation-review)).
 4. **Digesting.** Ranks every signal from the bundle and the themes, and
@@ -93,7 +98,13 @@ service around it is in `service.ts`. Its steps are those the page shows:
    An open ticket with the same title is linked rather than duplicated. The
    `improvement` and `insight` labels are created the first time they are
    needed.
-6. Saves the digest, the ledger and the run's summary.
+6. Saves the digest and the run's summary.
+
+The ledger is saved after the board is read and after every board change, so
+a run that fails part-way keeps the tickets it filed and the verdicts it
+posted: the next run neither files them again nor bypasses the daily limit.
+A verdict comment carries a request id that stays the same across runs, so a
+retry posts it once.
 
 One run happens at a time. A run that fails records a fixed reason for the
 step it was on ("Could not export this machine's diagnostics."), never the
@@ -108,7 +119,9 @@ error text.
    - Codex: `${CODEX_HOME:-~/.codex}/sessions`.
 
    Every project is read. A conversation is read once it has been quiet for
-   an hour, and only its new part, so nothing is analysed twice. The first run
+   an hour, and only its new part, so nothing is analysed twice. Where the
+   last run stopped is a byte offset in the history file, so a history over
+   24 MiB, read from its end, resumes correctly as it grows. The first run
    looks back 14 days. A run reads at most 30 parts; the rest wait for the
    next run. Conversations whose working directory is inside the data
    directory are never read.
@@ -125,9 +138,14 @@ error text.
    (`AGENTS.md`, a skill or a prompt), or in the model itself. Bugs in the code
    being worked on are the task, not friction.
 4. **Themes, with Opus 5.5.** The last 30 days of notes are grouped into
-   themes, reusing a theme's name when it comes up again.
+   themes, reusing a theme's name when it comes up again. Notes are saved
+   before grouping; if grouping fails, the next run groups them again
+   (`pendingGrouping` in `themes.json`) without reading the conversations
+   again, and no insight fix is judged until it succeeds.
 5. **Verification.** A theme's measure is **the share of conversations read
    that show it**, per app version, so a quiet week cannot pass for a fix.
+   Only conversations a model actually reviewed count. One with nothing but
+   system messages is skipped, and is no evidence either way.
 
 **How it runs.** Through Claude Code in print mode, using the Claude binary
 Orkestrator resolves and the account it has active, so it uses that plan's
@@ -221,6 +239,10 @@ fix, the run waits for the next release before judging it.
   stops a run, and reopening it shows where the run is.
 - **One run at a time.** A second start is refused (`already-running`, or
   `busy` for the public action).
+- **One backend per data directory.** Runs need the registry writer lease,
+  as scheduled jobs do: a second backend sharing the data directory never
+  starts one, daily or manual (`not-writer`), because the ledger, notes and
+  read positions are shared files.
 - **Stop is explicit** (invariant 15). `stop()` clears the daily timer, aborts
   model calls in flight, waits up to 5 seconds for the run, and refuses new
   runs. The backend calls it during shutdown.
@@ -228,7 +250,8 @@ fix, the run waits for the next release before judging it.
   project and a running run before its request key is admitted, so a refused
   run leaves no record. Its receipt says only whether it started.
 - **Content-free logs.** The `self-improvement` log area holds triggers,
-  steps, counts and fixed labels. Notes and themes (paraphrases and short
+  steps, counts and fixed labels. Errors are logged by name and code without
+  their message, which can quote a path. Notes and themes (paraphrases and short
   quotes of your own words) stay in the state directory and the tickets you
   asked for.
 
@@ -257,10 +280,13 @@ fix, the run waits for the next release before judging it.
   `bundle-contract.test.ts` builds a bundle with the backend's own builder
   and fails when its layout changes under the reader.
 - `loop.test.ts` and `insights/analyze.test.ts` drive whole runs against a
-  fake board (`testing/fake-board.ts`) and a fake model. `service.test.ts`
-  covers the gate, the background run, the daily run and stop.
+  fake board (`testing/fake-board.ts`, which can fail a chosen call) and a
+  fake model. `service.test.ts` covers the gate, the writer lease, the
+  background run, the daily run and stop.
   `commands-registry-self-improvement.test.ts` covers the board over real
-  Kanban storage.
+  Kanban storage, `public-api/public-api-self-improvement.test.ts` the public
+  actions and `packages/cli/tests/self-improvement-command.test.ts` the CLI's
+  `--wait`.
 - When you change a prompt or schema in `insights/analyze.ts`, also run one
   real call: real models can refuse a schema a fake accepts.
 - A signature format change orphans existing ledger entries. Avoid it, or

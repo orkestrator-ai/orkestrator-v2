@@ -74,9 +74,13 @@ const selfImprovementRun: MutationActionHandler<{ dryRun: boolean }> = {
           trigger: input.dryRun ? "dry-run" : "manual",
         });
         if (!started.started) {
+          // Something changed between the checks above and the start (a run began,
+          // the switch went off, another backend took the data directory).
           throw new PublicActionError(
             started.refusal === "already-running" ? "busy" : "not-ready",
-            "The self-improvement run could not start",
+            started.refusal === "not-writer"
+              ? "Another backend is using this data directory; runs happen there"
+              : "The self-improvement run could not start",
           );
         }
         return {

@@ -136,8 +136,13 @@ export interface SelfImprovementStatus {
   limits: typeof SELF_IMPROVEMENT_LIMITS;
 }
 
-/** Refusals a run start can answer with, as stable codes the renderer explains. */
-export type SelfImprovementRunRefusal = "disabled" | "no-project" | "already-running";
+/**
+ * Refusals a run start can answer with, as stable codes the renderer explains.
+ * `not-writer`: another backend holds this data directory's writer lease, so
+ * runs (which write the shared ledger and file tickets) happen there.
+ */
+export type SelfImprovementRunRefusal =
+  "disabled" | "no-project" | "already-running" | "not-writer";
 
 export interface SelfImprovementRunStart {
   started: boolean;

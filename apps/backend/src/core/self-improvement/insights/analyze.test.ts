@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import path from "node:path";
 import { runLoop } from "../loop.js";
-import { type Note, notesFor, type ThemeStore, themeSignals, updateThemes } from "./analyze.js";
+import {
+  insightsDir,
+  loadThemes,
+  type Note,
+  notesFor,
+  readConversationsByVersion,
+  type ThemeStore,
+  themeSignals,
+  updateThemes,
+} from "./analyze.js";
 import {
   claudeArgs,
   type ModelCall,
@@ -10,7 +19,7 @@ import {
   parseClaudeResult,
   THEMES_MODEL,
 } from "./model.js";
-import type { Segment } from "./prepare.js";
+import { cursorAfter, type InsightCursor, type Segment } from "./prepare.js";
 import { loadLedger } from "../ledger.js";
 import { FakeBoard } from "../testing/fake-board.js";
 import {
@@ -83,6 +92,8 @@ const SEGMENT: Segment = {
   lastAt: NOW - HOUR,
   from: 0,
   to: 6,
+  file: "/x/abc.jsonl",
+  key: "0-6",
   text: "conversation text",
   typedMessages: 2,
 };
@@ -399,16 +410,176 @@ describe("a run with the conversation review", () => {
       fixedAfter: "2.30.0",
     });
     const later = start + 6 * DAY;
-    for (let index = 0; index < 10; index += 1) {
-      conversation(`later-${index}`, later + index * 6 * HOUR, `Please tidy file ${index}.`);
-    }
     bundle = {
       createdAt: NOW,
       appVersion: "2.31.0",
       essential: [starting(start, "2.30.0"), starting(later - HOUR, "2.31.0")],
     };
+    // Ten conversations with nothing but system messages are skipped, not
+    // reviewed: they are no evidence the fix worked.
+    for (let index = 0; index < 10; index += 1) {
+      const at = later + index * 6 * HOUR;
+      writeTranscript(
+        path.join(claudeDir, `system-${index}.jsonl`),
+        claudeJsonl(`system-${index}`, CWD, [
+          { user: "Background task finished", at, origin: "task-notification" },
+        ]),
+        at + 2000,
+      );
+    }
+    const systemOnly = await loop(NOW - DAY);
+    expect(systemOnly.verified).toEqual([]);
+    expect(
+      loadLedger(path.join(dir, "state")).entries["insight:use-mise-not-npm"]!.observations.at(-1)
+        ?.verdict,
+    ).toBe("awaiting-deploy");
+
+    for (let index = 0; index < 10; index += 1) {
+      conversation(`later-${index}`, later + index * 6 * HOUR, `Please tidy file ${index}.`);
+    }
     const judged = await loop(NOW);
     expect(judged.verified.map((item) => item.signature)).toContain("insight:use-mise-not-npm");
     expect(ticket.comments.at(-1)).toContain("the fix is verified");
+  });
+});
+
+describe("what counts as a reviewed conversation", () => {
+  const part = (lastAt: number) => ({
+    conversationId: "claude:c",
+    to: 4,
+    file: "/x/c.jsonl",
+    lastEntryOffset: 900,
+    lastAt,
+    project: "p",
+  });
+
+  test("only conversations a model reviewed count, and a skipped system-only tail keeps that", () => {
+    const versionAt = (at: number) => (at < NOW - DAY ? "2.30.0" : "2.31.0");
+    const reviewed = cursorAfter(
+      { ...part(NOW - 2 * DAY), provider: "claude", project: "p" } as unknown as Segment,
+      true,
+      undefined,
+      NOW,
+    );
+    const skippedAfterReview = cursorAfter(part(NOW - HOUR), false, reviewed, NOW);
+    expect(skippedAfterReview).toMatchObject({ lastAt: NOW - HOUR, reviewedAt: NOW - 2 * DAY });
+    const cursor: InsightCursor = {
+      schemaVersion: 1,
+      conversations: {
+        "claude:c": skippedAfterReview,
+        "claude:system": cursorAfter(part(NOW - HOUR), false, undefined, NOW),
+      },
+    };
+    expect(cursor.conversations["claude:system"]!.reviewedAt).toBeUndefined();
+    // The reviewed one counts on the version it was reviewed on; the system-only one not at all.
+    expect(readConversationsByVersion(cursor, versionAt, NOW)).toEqual({ "2.30.0": 1 });
+  });
+});
+
+describe("a theme grouping that fails", () => {
+  test("is retried on the next run from the saved notes, without reading the conversations again", async () => {
+    const { dir, remove } = temporaryDirectory("improvement-themes-retry-");
+    cleanups.push(remove);
+    const stateDir = path.join(dir, "state");
+    const claudeDir = path.join(dir, "claude", "projects", "-p");
+    const sources = {
+      claudeProjectDirs: [path.join(dir, "claude", "projects")],
+      codexSessionDirs: [],
+    };
+    for (const [id, at, text] of [
+      ["a", NOW - 3 * DAY, "Use mise, not npm."],
+      ["b", NOW - 2 * DAY, "Not npm, again."],
+    ] as const) {
+      writeTranscript(
+        path.join(claudeDir, `${id}.jsonl`),
+        claudeJsonl(id, CWD, [
+          { user: text, at },
+          { assistant: "OK.", at: at + 1000 },
+        ]),
+        at + 2000,
+      );
+    }
+    let themesFailures = 1;
+    const calls: ModelCall[] = [];
+    const runner = (async (call: ModelCall) => {
+      if (call.model === THEMES_MODEL && themesFailures > 0) {
+        themesFailures -= 1;
+        calls.push(call);
+        throw new Error("Claude Code exited with code 1");
+      }
+      calls.push(call);
+      const ids = call.prompt
+        .split("\n")
+        .filter((line) => line.includes("package manager"))
+        .map((line) => line.split(" | ")[0]!);
+      return call.model === NOTES_MODEL
+        ? {
+            output: {
+              notes: [
+                {
+                  kind: "repeated-instruction",
+                  area: "package manager",
+                  summary: "Had to say use mise.",
+                  quote: "not npm",
+                  severity: 2,
+                  fixWhere: "instructions",
+                },
+              ],
+            },
+            costUsd: 0.05,
+          }
+        : {
+            output: {
+              themes: [
+                {
+                  slug: "use-mise-not-npm",
+                  title: "Agents keep reaching for npm",
+                  kind: "repeated-instruction",
+                  fixWhere: "instructions",
+                  summary: "s",
+                  suggestion: "s",
+                  acceptance: "a",
+                  severity: 2,
+                  noteIds: ids,
+                },
+              ],
+            },
+            costUsd: 0.5,
+          };
+    }) as ModelRunner;
+    const board = new FakeBoard();
+    const loop = (now: number) =>
+      runLoop({
+        stateDir,
+        data: bundleData({ createdAt: now, appVersion: "2.30.0" }),
+        board,
+        now: () => new Date(now),
+        insights: { runner, sources, excludeDirs: [] },
+      });
+
+    const failed = await loop(NOW);
+    expect(calls.map((call) => call.model)).toEqual([NOTES_MODEL, NOTES_MODEL, THEMES_MODEL]);
+    expect(failed.conversations.errors).toEqual([
+      "themes: Claude Code exited with code 1 (grouped again next run)",
+    ]);
+    expect(failed.created).toEqual([]);
+    expect(loadThemes(insightsDir(stateDir)).pendingGrouping).toBe(true);
+
+    calls.length = 0;
+    const retried = await loop(NOW + HOUR);
+    expect(calls.map((call) => call.model)).toEqual([THEMES_MODEL]);
+    expect(retried.conversations.errors).toEqual([]);
+    expect(retried.created.map((item) => item.signature)).toEqual(["insight:use-mise-not-npm"]);
+    const store = loadThemes(insightsDir(stateDir));
+    expect(store.pendingGrouping).toBeUndefined();
+    expect(Object.keys(store.themes["use-mise-not-npm"]!.conversations).sort()).toEqual([
+      "claude:a",
+      "claude:b",
+    ]);
+
+    // Grouped: nothing left to retry.
+    calls.length = 0;
+    await loop(NOW + 2 * HOUR);
+    expect(calls).toEqual([]);
   });
 });

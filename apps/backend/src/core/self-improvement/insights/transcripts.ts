@@ -63,6 +63,12 @@ export interface Conversation {
   startedAt: number;
   lastAt: number;
   entries: TranscriptEntry[];
+  /**
+   * The byte offset in the file of each entry's first line, parallel to
+   * `entries`. Unlike an entry's index, it does not move when a file too large
+   * to read whole is read from a later tail, so it is where a later run resumes.
+   */
+  entryOffsets?: number[];
 }
 
 export interface TranscriptSources {
@@ -173,18 +179,30 @@ export function listTranscriptFiles(sources: TranscriptSources): TranscriptFile[
   return result;
 }
 
-function readTail(file: string): string {
+/** The file, or its last `maxBytes` from the first whole line, and the byte offset that text starts at. */
+function readTail(file: string, maxBytes: number): { text: string; baseOffset: number } {
   const size = statSync(file).size;
-  if (size <= MAX_TRANSCRIPT_BYTES) return readFileSync(file, "utf8");
-  const buffer = Buffer.alloc(MAX_TRANSCRIPT_BYTES);
+  if (size <= maxBytes) return { text: readFileSync(file, "utf8"), baseOffset: 0 };
+  const buffer = Buffer.alloc(maxBytes);
   const fd = openSync(file, "r");
   try {
-    readSync(fd, buffer, 0, MAX_TRANSCRIPT_BYTES, size - MAX_TRANSCRIPT_BYTES);
+    readSync(fd, buffer, 0, maxBytes, size - maxBytes);
   } finally {
     closeSync(fd);
   }
-  const text = buffer.toString("utf8");
-  return text.slice(text.indexOf("\n") + 1);
+  // Cut at a byte, not a character, so the offset stays exact past a split one.
+  const newline = buffer.indexOf(0x0a);
+  const start = newline < 0 ? maxBytes : newline + 1;
+  return { text: buffer.subarray(start).toString("utf8"), baseOffset: size - maxBytes + start };
+}
+
+/** Each non-blank line of `text` with its byte offset in the file. */
+function* linesOf(text: string, baseOffset: number): Generator<[string, number]> {
+  let offset = baseOffset;
+  for (const line of text.split("\n")) {
+    if (line.trim()) yield [line, offset];
+    offset += Buffer.byteLength(line, "utf8") + 1;
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -211,22 +229,30 @@ function isContextBlock(text: string): boolean {
 
 class EntryBuilder {
   readonly entries: TranscriptEntry[] = [];
+  readonly offsets: number[] = [];
+  /** The byte offset of the line being read; a new entry starts there. */
+  lineOffset = 0;
   private reply: AgentReply | null = null;
+
+  private push(entry: TranscriptEntry): void {
+    this.entries.push(entry);
+    this.offsets.push(this.lineOffset);
+  }
 
   user(at: number, origin: Origin, text: string): void {
     this.reply = null;
-    this.entries.push({ role: "user", at, origin, text });
+    this.push({ role: "user", at, origin, text });
   }
 
   interrupt(at: number): void {
     this.reply = null;
-    this.entries.push({ role: "interrupt", at });
+    this.push({ role: "interrupt", at });
   }
 
   private current(at: number): AgentReply {
     if (!this.reply) {
       this.reply = { role: "assistant", at, text: "", tools: {}, toolErrors: 0 };
-      this.entries.push(this.reply);
+      this.push(this.reply);
     }
     return this.reply;
   }
@@ -249,14 +275,14 @@ class EntryBuilder {
 
 const INTERRUPTED = /^\[Request interrupted by user/;
 
-export function parseClaude(file: string, text: string): Conversation | null {
+export function parseClaude(file: string, text: string, baseOffset = 0): Conversation | null {
   const builder = new EntryBuilder();
   let sessionId = path.basename(file, ".jsonl");
   let cwd = "";
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
+  for (const [line, offset] of linesOf(text, baseOffset)) {
+    builder.lineOffset = offset;
     let row: Record<string, unknown> | null;
     try {
       row = record(JSON.parse(line));
@@ -326,17 +352,18 @@ export function parseClaude(file: string, text: string): Conversation | null {
     startedAt: first,
     lastAt: last,
     entries: builder.entries,
+    entryOffsets: builder.offsets,
   };
 }
 
-export function parseCodex(file: string, text: string): Conversation | null {
+export function parseCodex(file: string, text: string, baseOffset = 0): Conversation | null {
   const builder = new EntryBuilder();
   let threadId = path.basename(file, ".jsonl");
   let cwd = "";
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
+  for (const [line, offset] of linesOf(text, baseOffset)) {
+    builder.lineOffset = offset;
     let row: Record<string, unknown> | null;
     try {
       row = record(JSON.parse(line));
@@ -402,15 +429,21 @@ export function parseCodex(file: string, text: string): Conversation | null {
     startedAt: first,
     lastAt: last,
     entries: builder.entries,
+    entryOffsets: builder.offsets,
   };
 }
 
-export function readConversation(file: TranscriptFile): Conversation | null {
-  let text: string;
+export function readConversation(
+  file: TranscriptFile,
+  maxBytes: number = MAX_TRANSCRIPT_BYTES,
+): Conversation | null {
+  let read: { text: string; baseOffset: number };
   try {
-    text = readTail(file.file);
+    read = readTail(file.file, maxBytes);
   } catch {
     return null;
   }
-  return file.provider === "claude" ? parseClaude(file.file, text) : parseCodex(file.file, text);
+  return file.provider === "claude"
+    ? parseClaude(file.file, read.text, read.baseOffset)
+    : parseCodex(file.file, read.text, read.baseOffset);
 }

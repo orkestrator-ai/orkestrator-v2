@@ -16,6 +16,7 @@ import { writeAtomic } from "../ledger.js";
 import { scoreSignal, type Signal, UNKNOWN_VERSION, versionTimeline } from "../signals.js";
 import { type ModelRunner, NOTES_MODEL, THEMES_MODEL } from "./model.js";
 import {
+  cursorAfter,
   type InsightCursor,
   loadCursor,
   saveCursor,
@@ -85,6 +86,12 @@ export interface Theme {
 export interface ThemeStore {
   schemaVersion: 1;
   themes: Record<string, Theme>;
+  /**
+   * Set when saved notes have not been grouped yet: a part's notes are saved
+   * before grouping runs, so a failed grouping is retried from this marker on
+   * the next run even when no new notes arrive.
+   */
+  pendingGrouping?: boolean;
 }
 
 const NOTES_SYSTEM = `You review one conversation between a person and an AI coding agent working inside Orkestrator, a desktop app that runs coding agents (Claude Code, Codex and others) in worktrees and containers, with build pipelines, reviews, a Kanban board, a coordinator agent and more.
@@ -260,7 +267,7 @@ export async function notesFor(
       if (!NOTE_KINDS.includes(note.kind) || !FIX_WHERE.includes(note.fixWhere)) return [];
       return [
         {
-          id: `${segment.conversationId}#${segment.from}-${segment.to}#${index}`,
+          id: `${segment.conversationId}#${segment.key}#${index}`,
           conversationId: segment.conversationId,
           provider: segment.provider,
           project: segment.project,
@@ -366,7 +373,11 @@ export async function updateThemes(
   return { changed, costUsd };
 }
 
-/** Conversations read per app version within the window: the denominator of a theme's share. */
+/**
+ * Conversations a model reviewed per app version within the window: the
+ * denominator of a theme's share and the evidence a fix is judged on.
+ * Conversations skipped for holding only system messages do not count.
+ */
 export function readConversationsByVersion(
   cursor: InsightCursor,
   versionAt: (at: number) => string,
@@ -374,8 +385,9 @@ export function readConversationsByVersion(
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const entry of Object.values(cursor.conversations)) {
-    if (now - entry.lastAt > THEME_WINDOW_MS) continue;
-    const version = versionAt(entry.lastAt);
+    const reviewedAt = entry.reviewedAt;
+    if (reviewedAt === undefined || now - reviewedAt > THEME_WINDOW_MS) continue;
+    const version = versionAt(reviewedAt);
     counts[version] = (counts[version] ?? 0) + 1;
   }
   return counts;
@@ -448,6 +460,11 @@ export interface InsightRun {
   waiting: number;
   notesAdded: number;
   themesChanged: number;
+  /**
+   * Saved notes are still waiting to be grouped (grouping failed or did not
+   * run): the themes undercount, so no fix may be judged from them this run.
+   */
+  groupingPending: boolean;
   costUsd: number;
   errors: string[];
 }
@@ -483,6 +500,7 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
     waiting: 0,
     notesAdded: 0,
     themesChanged: 0,
+    groupingPending: false,
     costUsd: 0,
     errors: [],
   };
@@ -500,12 +518,12 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
   } else {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     for (const skipped of selection.skipped) {
-      cursor.conversations[skipped.conversationId] = {
-        analyzedEntries: skipped.to,
-        lastAt: skipped.lastAt,
-        project: skipped.project,
-        analyzedAt: options.now,
-      };
+      cursor.conversations[skipped.conversationId] = cursorAfter(
+        skipped,
+        false,
+        cursor.conversations[skipped.conversationId],
+        options.now,
+      );
     }
     const queue = [...selection.segments];
     // One line per distinct problem, with how many parts it hit.
@@ -520,12 +538,17 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
           run.notesAdded += result.notes.length;
           run.costUsd += result.costUsd;
           run.read += 1;
-          cursor.conversations[segment.conversationId] = {
-            analyzedEntries: segment.to,
-            lastAt: segment.lastAt,
-            project: segment.project,
-            analyzedAt: options.now,
-          };
+          cursor.conversations[segment.conversationId] = cursorAfter(
+            segment,
+            true,
+            cursor.conversations[segment.conversationId],
+            options.now,
+          );
+          // Marked before the notes are saved, so no saved note can miss grouping.
+          if (result.notes.length > 0 && !store.pendingGrouping) {
+            store.pendingGrouping = true;
+            saveThemes(dir, store);
+          }
           // Saved after every part, so an interrupted run loses nothing it paid for.
           saveNotes(dir, notes, options.now);
           saveCursor(dir, cursor, options.now);
@@ -547,7 +570,8 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
       );
     }
 
-    if (run.notesAdded > 0) {
+    // Also when an earlier run saved notes and then failed to group them.
+    if (store.pendingGrouping) {
       options.onThemes?.();
       try {
         const themes = await updateThemes(
@@ -559,12 +583,14 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
         );
         run.themesChanged = themes.changed.length;
         run.costUsd += themes.costUsd;
+        delete store.pendingGrouping;
         saveThemes(dir, store);
       } catch (error) {
-        run.errors.push(`themes: ${(error as Error).message}`);
+        run.errors.push(`themes: ${(error as Error).message} (grouped again next run)`);
       }
     }
   }
+  run.groupingPending = store.pendingGrouping === true;
 
   run.readByVersion = readConversationsByVersion(cursor, timeline.versionAt, options.now);
   run.signals = themeSignals(store, run.readByVersion, timeline.versionAt, options.now);

@@ -5,6 +5,9 @@
  *
  * A conversation is read once it has been quiet for an hour, from where the
  * last run stopped, so a long conversation is read in parts and none twice.
+ * Where it stopped is a byte offset in the history file, not an entry count:
+ * a file too large to read whole is read from a tail that slides forward as
+ * the file grows, so an entry's index moves while its offset does not.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -13,6 +16,7 @@ import { writeAtomic } from "../ledger.js";
 import {
   type Conversation,
   listTranscriptFiles,
+  MAX_TRANSCRIPT_BYTES,
   readConversation,
   type TranscriptEntry,
   type TranscriptSources,
@@ -34,12 +38,25 @@ const CONTEXT_ENTRIES = 2;
 const CURSOR_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface CursorEntry {
-  /** Entries of the conversation already read. */
+  /**
+   * Entries of the conversation already read. Only a fallback now: used when
+   * `lastEntryOffset` is absent or names another file.
+   */
   analyzedEntries: number;
+  /** The history file the offset below is in. */
+  file?: string;
+  /** The byte offset of the last entry already read; reading resumes after it. */
+  lastEntryOffset?: number;
   lastAt: number;
   project: string;
-  /** When the last part was read, and whether any of it was worth reading. */
+  /** When the last part was read. */
   analyzedAt: number;
+  /**
+   * When the newest part a model reviewed ended. Absent while only system
+   * messages were ever seen: such a conversation was skipped, not reviewed,
+   * and does not count as evidence (`readConversationsByVersion`).
+   */
+  reviewedAt?: number;
 }
 
 export interface InsightCursor {
@@ -53,11 +70,49 @@ export interface Segment {
   project: string;
   startedAt: number;
   lastAt: number;
-  /** Entry range read, [from, to). */
+  /** Entry range read, [from, to): indexes into this run's read of the file. */
   from: number;
   to: number;
+  /** The history file, and the byte offset of the part's last entry. */
+  file: string;
+  lastEntryOffset?: number;
+  /** Names the part across runs (its byte range when known), for note ids. */
+  key: string;
   text: string;
   typedMessages: number;
+}
+
+/** A conversation read up to date with nothing worth sending (only system messages). */
+export interface SkippedPart {
+  conversationId: string;
+  to: number;
+  file: string;
+  lastEntryOffset?: number;
+  lastAt: number;
+  project: string;
+}
+
+/**
+ * The cursor entry after `part` was handled. A reviewed part moves
+ * `reviewedAt`; a skipped one keeps the earlier value, so a conversation that
+ * was reviewed once stays evidence when a later system-only tail is skipped.
+ */
+export function cursorAfter(
+  part: Segment | SkippedPart,
+  reviewed: boolean,
+  previous: CursorEntry | undefined,
+  now: number,
+): CursorEntry {
+  const reviewedAt = reviewed ? part.lastAt : previous?.reviewedAt;
+  return {
+    analyzedEntries: part.to,
+    file: part.file,
+    ...(part.lastEntryOffset !== undefined ? { lastEntryOffset: part.lastEntryOffset } : {}),
+    lastAt: part.lastAt,
+    project: part.project,
+    analyzedAt: now,
+    ...(reviewedAt !== undefined ? { reviewedAt } : {}),
+  };
 }
 
 function cursorPath(dir: string): string {
@@ -152,18 +207,32 @@ export interface SelectOptions {
   /** Working directories whose conversations are never read (the app's data, the state directory). */
   excludeDirs: string[];
   maxSegments?: number;
+  /** A history file larger than this is read from its end only (tests lower it). */
+  maxTranscriptBytes?: number;
 }
 
 export interface Selection {
   segments: Segment[];
   /** Conversations read up to date with nothing worth sending (only system messages). */
-  skipped: Array<{ conversationId: string; to: number; lastAt: number; project: string }>;
+  skipped: SkippedPart[];
   /** Parts ready to read but over this run's limit. */
   waiting: number;
 }
 
 function excluded(cwd: string, dirs: readonly string[]): boolean {
   return dirs.some((dir) => cwd === dir || cwd.startsWith(`${dir}${path.sep}`));
+}
+
+/** The index of the first entry not read yet. */
+export function resumeIndex(conversation: Conversation, known: CursorEntry | undefined): number {
+  if (!known) return 0;
+  const offsets = conversation.entryOffsets;
+  if (offsets && known.lastEntryOffset !== undefined && known.file === conversation.file) {
+    const after = known.lastEntryOffset;
+    const index = offsets.findIndex((offset) => offset > after);
+    return index < 0 ? conversation.entries.length : index;
+  }
+  return Math.min(known.analyzedEntries, conversation.entries.length);
 }
 
 /** The unread parts of settled conversations, newest first, up to the run's limit. */
@@ -178,19 +247,25 @@ export function selectSegments(options: SelectOptions): Selection {
   const selection: Selection = { segments: [], skipped: [], waiting: 0 };
   const seen = new Set<string>();
   for (const file of files) {
-    const conversation = readConversation(file);
+    const conversation = readConversation(file, options.maxTranscriptBytes ?? MAX_TRANSCRIPT_BYTES);
     if (!conversation || seen.has(conversation.id)) continue;
     seen.add(conversation.id);
     if (excluded(conversation.cwd, options.excludeDirs)) continue;
-    const known = cursor.conversations[conversation.id];
-    const from = Math.min(known?.analyzedEntries ?? 0, conversation.entries.length);
+    const from = resumeIndex(conversation, cursor.conversations[conversation.id]);
     if (from >= conversation.entries.length) continue;
+    const to = conversation.entries.length;
+    const lastEntryOffset = conversation.entryOffsets?.[to - 1];
+    const position = {
+      file: conversation.file,
+      ...(lastEntryOffset !== undefined ? { lastEntryOffset } : {}),
+    };
     const fresh = conversation.entries.slice(from);
     const people = fresh.filter((entry) => entry.role === "user" && entry.origin !== "system");
     if (people.length === 0) {
       selection.skipped.push({
         conversationId: conversation.id,
-        to: conversation.entries.length,
+        to,
+        ...position,
         lastAt: conversation.lastAt,
         project: conversation.project,
       });
@@ -207,7 +282,12 @@ export function selectSegments(options: SelectOptions): Selection {
       startedAt: conversation.startedAt,
       lastAt: conversation.lastAt,
       from,
-      to: conversation.entries.length,
+      to,
+      ...position,
+      key:
+        lastEntryOffset !== undefined
+          ? `@${conversation.entryOffsets![from]}-${lastEntryOffset}`
+          : `${from}-${to}`,
       text: renderSegment(conversation, from),
       typedMessages: fresh.filter((entry) => entry.role === "user" && entry.origin === "typed")
         .length,

@@ -6,7 +6,9 @@
  * (`loop.ts`). State lives in `<data dir>/self-improvement/`.
  *
  * Experimental: nothing runs while `global.experimentalSelfImprovement` is off,
- * the daily check included. The owner calls {@link SelfImprovementService.stop}
+ * the daily check included. Nothing runs either while another backend holds
+ * the data directory's writer lease (`isWriter`): the ledger, notes and cursor
+ * are shared files, and the run-at-a-time guard is only this process's. The owner calls {@link SelfImprovementService.stop}
  * at shutdown; it clears the timer and aborts model calls in flight.
  */
 import { mkdirSync, readFileSync } from "node:fs";
@@ -59,6 +61,11 @@ export interface SelfImprovementDeps {
   /** A diagnostics bundle archive of this backend, as `buildDiagnosticsBundle` builds it. */
   exportBundle(): Promise<Buffer>;
   board(projectId: string): Board;
+  /**
+   * Whether this backend holds the data directory's writer lease. A backend
+   * that does not never starts a run, daily or manual. Absent means it does.
+   */
+  isWriter?: () => boolean;
   /** The Claude Code to run the conversation review with, on the active account. */
   claudeLaunch(): Promise<{ executable: string; env: NodeJS.ProcessEnv }>;
   transcriptSources?: () => TranscriptSources;
@@ -102,7 +109,10 @@ export class SelfImprovementService {
     this.timer = set(() => {
       this.timer = null;
       void this.checkDaily()
-        .catch((error: unknown) => log.warn("daily.check-failed", { error: formatLogError(error) }))
+        .catch((error: unknown) =>
+          // The message can quote a state-file path; the name and code are enough.
+          log.warn("daily.check-failed", { error: formatLogError(error, { message: false }) }),
+        )
         .finally(() => this.schedule(DAILY_CHECK_INTERVAL_MS));
     }, ms);
   }
@@ -161,8 +171,12 @@ export class SelfImprovementService {
     return new Date(Math.max(due, this.now().getTime())).toISOString();
   }
 
+  private isWriter(): boolean {
+    return this.deps.isWriter?.() ?? true;
+  }
+
   async checkDaily(): Promise<void> {
-    if (this.stopped || this.running) return;
+    if (this.stopped || this.running || !this.isWriter()) return;
     const { enabled, settings } = await this.deps.config();
     const next = this.nextDailyRunAt(settings, enabled);
     if (next && Date.parse(next) <= this.now().getTime()) {
@@ -233,6 +247,7 @@ export class SelfImprovementService {
     if (!settings.projectId || !(await this.deps.projectName(settings.projectId)))
       return refuse("no-project");
     if (this.running) return refuse("already-running");
+    if (!this.isWriter()) return refuse("not-writer");
 
     const startedAt = this.now().toISOString();
     const running: Running = {
@@ -246,7 +261,10 @@ export class SelfImprovementService {
     running.done = this.execute(running, settings, settings.projectId)
       .catch((error: unknown) => {
         // `execute` records its own failures; this is the last guard against a fatal rejection.
-        log.error("run.failed", { reason: "unexpected", error: formatLogError(error) });
+        log.error("run.failed", {
+          reason: "unexpected",
+          error: formatLogError(error, { message: false }),
+        });
       })
       .finally(() => {
         if (this.running === running) this.running = null;
@@ -283,6 +301,7 @@ export class SelfImprovementService {
         stateDir: this.ensureStateDir(),
         data,
         board: this.deps.board(projectId),
+        boardFor: (other) => this.deps.board(other),
         dryRun,
         now: () => this.now(),
         onStep,
@@ -302,7 +321,11 @@ export class SelfImprovementService {
         parts: result.conversations.read,
       });
     } catch (error) {
-      log.warn("run.failed", { reason: running.step, error: formatLogError(error) });
+      // Content-free: a message can quote a path, a ticket id or provider text.
+      log.warn("run.failed", {
+        reason: running.step,
+        error: formatLogError(error, { message: false }),
+      });
       summary = {
         ...emptyFailure(running.trigger, running.startedAt, this.now().toISOString()),
         error: FAILURE_REASONS[running.step],

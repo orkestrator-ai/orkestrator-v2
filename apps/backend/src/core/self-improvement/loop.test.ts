@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { loadLedger } from "./ledger.js";
+import { loadLedger, saveLedger } from "./ledger.js";
 import { MAX_NEW_TICKETS, runLoop } from "./loop.js";
 import { FakeBoard } from "./testing/fake-board.js";
 import {
@@ -199,5 +199,219 @@ describe("a self-improvement run", () => {
     expect(summary.wouldCreate.map((item) => item.signature)).toEqual([KILLS, DISK]);
     expect(board.tickets.size).toBe(0);
     expect(existsSync(path.join(stateDir, "ledger.json"))).toBe(false);
+  });
+});
+
+/** Two days of 2.31.0 after the kills stopped: KILLS verified, DISK sent back. */
+const FIXED_RELEASE: FixtureBundle = {
+  createdAt: NOW,
+  appVersion: "2.31.0",
+  essential: [
+    ...BEFORE.essential!,
+    starting(NOW - 3 * DAY, "2.31.0"),
+    ...diskFull(NOW - 3 * DAY + HOUR, 6),
+  ],
+};
+
+/** The kills are back on 2.31.0, more often than half the baseline. */
+const KILLS_BACK: FixtureBundle = {
+  createdAt: NOW + 3 * DAY,
+  appVersion: "2.31.0",
+  essential: [
+    ...FIXED_RELEASE.essential!,
+    ...repeat(NOW + HOUR, 30, DAY / 12, {
+      level: "warn",
+      area: "local-server",
+      event: "bridge.exited",
+      fields: { key: `codex:${ENV}`, signal: "SIGKILL", requested: false },
+    }),
+  ],
+};
+
+/** Files on `board`, marks both done and runs the release: KILLS ends verified. */
+async function verifyKills(board: FakeBoard, stateDir: string, boardFor?: LoopBoards) {
+  const run = (bundle: FixtureBundle, now: number) =>
+    runLoop({
+      stateDir,
+      data: bundleData(bundle),
+      board,
+      boardFor,
+      now: () => new Date(now),
+      insights: false,
+    });
+  await run(BEFORE, NOW - 6 * DAY);
+  board.ticketFor(KILLS).status = "done";
+  board.ticketFor(DISK).status = "done";
+  await run({ ...BEFORE, createdAt: NOW - 5 * DAY }, NOW - 5 * DAY);
+  await run(FIXED_RELEASE, NOW);
+  expect(loadLedger(stateDir).entries[KILLS]!.status).toBe("verified");
+}
+
+type LoopBoards = (projectId: string) => FakeBoard;
+
+describe("tickets on another project's board", () => {
+  function twoProjects() {
+    const { dir, remove } = temporaryDirectory("self-improvement-projects-");
+    cleanups.push(remove);
+    const stateDir = path.join(dir, "state");
+    const a = new FakeBoard("pA", 100);
+    const b = new FakeBoard("pB", 500);
+    const boards: LoopBoards = (projectId) => (projectId === "pA" ? a : b);
+    const loop = (
+      board: FakeBoard,
+      bundle: FixtureBundle,
+      now: number,
+      reachable: "all-boards" | "this-board-only" = "all-boards",
+    ) =>
+      runLoop({
+        stateDir,
+        data: bundleData(bundle),
+        board,
+        boardFor: reachable === "all-boards" ? boards : undefined,
+        now: () => new Date(now),
+        insights: false,
+      });
+    return { stateDir, a, b, boards, loop };
+  }
+
+  test("switching the project keeps the old tickets tracked on their own board", async () => {
+    const { stateDir, a, b, loop } = twoProjects();
+    await loop(a, BEFORE, NOW - 6 * DAY);
+    expect(loadLedger(stateDir).entries[KILLS]).toMatchObject({
+      status: "tracking",
+      projectId: "pA",
+    });
+
+    // New tickets go to B now; A's are neither ignored nor filed again.
+    const switched = await loop(b, BEFORE, NOW - 6 * DAY + HOUR);
+    expect(switched.ignoredDeleted).toEqual([]);
+    expect(switched.created).toEqual([]);
+    expect(b.tickets.size).toBe(0);
+    expect(loadLedger(stateDir).entries[KILLS]!.status).toBe("tracking");
+
+    // A ticket done on A is still seen while B is chosen.
+    a.ticketFor(KILLS).status = "done";
+    const marked = await loop(b, BEFORE, NOW - 6 * DAY + 2 * HOUR);
+    expect(marked.markedFixed.map((item) => item.signature)).toEqual([KILLS]);
+
+    // Back on A, nothing became ignored.
+    await loop(a, BEFORE, NOW - 6 * DAY + 3 * HOUR);
+    const statuses = Object.values(loadLedger(stateDir).entries).map((entry) => entry.status);
+    expect(statuses).not.toContain("ignored");
+  });
+
+  test("without a way to reach the old board, its tickets are left as they are", async () => {
+    const { stateDir, a, b, loop } = twoProjects();
+    await loop(a, BEFORE, NOW - 6 * DAY);
+    a.tickets.clear();
+    const summary = await loop(b, BEFORE, NOW - 6 * DAY + HOUR, "this-board-only");
+    expect(summary.ignoredDeleted).toEqual([]);
+    expect(loadLedger(stateDir).entries[DISK]!.status).toBe("tracking");
+  });
+
+  test("a regression on a ticket from the old project is reported on that project", async () => {
+    const { stateDir, a, b, boards, loop } = twoProjects();
+    await verifyKills(a, stateDir, boards);
+    const regressed = await loop(b, KILLS_BACK, NOW + 3 * DAY);
+    expect(regressed.fixFailed).toContainEqual({
+      ticket: a.ticketFor(KILLS).id,
+      signature: KILLS,
+      verdict: "regressed",
+    });
+    expect(a.ticketFor(KILLS).comments.at(-1)).toContain("the problem has come back");
+    expect(a.ticketFor(KILLS).status).toBe("backlog");
+    expect(loadLedger(stateDir).entries[KILLS]!.status).toBe("tracking");
+  });
+
+  test("an entry saved without a project is placed by where its ticket is", async () => {
+    const { stateDir, a, b, loop } = twoProjects();
+    await loop(a, BEFORE, NOW - 6 * DAY);
+    const ledger = loadLedger(stateDir);
+    for (const entry of Object.values(ledger.entries)) delete entry.projectId;
+    saveLedger(stateDir, ledger);
+    const ids = new Set(a.tickets.keys());
+    b.locate = async (ticketId: string) => (ids.has(ticketId) ? "pA" : null);
+    const summary = await loop(b, BEFORE, NOW - 6 * DAY + HOUR);
+    expect(summary.ignoredDeleted).toEqual([]);
+    expect(loadLedger(stateDir).entries[KILLS]).toMatchObject({
+      status: "tracking",
+      projectId: "pA",
+    });
+  });
+});
+
+describe("a verified fix on the board", () => {
+  test("reopening its ticket by hand sends it back to tracking", async () => {
+    const { board, loop, stateDir } = setup();
+    await verifyKills(board, stateDir);
+    board.ticketFor(KILLS).status = "in-progress";
+    const summary = await loop(FIXED_RELEASE, NOW + HOUR);
+    expect(summary.reopenedFromBoard.map((item) => item.signature)).toContain(KILLS);
+    const entry = loadLedger(stateDir).entries[KILLS]!;
+    expect(entry.status).toBe("tracking");
+    expect(entry.fixedAfter).toBeUndefined();
+    expect(entry.fixedIn).toBeUndefined();
+  });
+
+  test("deleting its ticket ignores the signal, and a later regression touches nothing", async () => {
+    const { board, loop, stateDir } = setup();
+    await verifyKills(board, stateDir);
+    const deleted = board.ticketFor(KILLS).id;
+    board.tickets.delete(deleted);
+    const summary = await loop(KILLS_BACK, NOW + 3 * DAY);
+    expect(summary.ignoredDeleted).toContainEqual({ ticket: deleted, signature: KILLS });
+    expect(summary.fixFailed.map((item) => item.signature)).not.toContain(KILLS);
+    expect(loadLedger(stateDir).entries[KILLS]!.status).toBe("ignored");
+  });
+
+  test("a verified fix that regresses goes back to the backlog", async () => {
+    const { board, loop, stateDir } = setup();
+    await verifyKills(board, stateDir);
+    const summary = await loop(KILLS_BACK, NOW + 3 * DAY);
+    expect(summary.fixFailed).toContainEqual({
+      ticket: board.ticketFor(KILLS).id,
+      signature: KILLS,
+      verdict: "regressed",
+    });
+    expect(board.ticketFor(KILLS).status).toBe("backlog");
+  });
+});
+
+describe("a run that fails part-way through filing", () => {
+  test("keeps the tickets it filed, and the rerun files only the rest", async () => {
+    const { board, loop, stateDir } = setup();
+    board.failures.create = 2;
+    await expect(loop(BEFORE, NOW - 6 * DAY)).rejects.toThrow("create failed");
+    expect(board.tickets.size).toBe(1);
+    const saved = loadLedger(stateDir).entries[KILLS]!;
+    expect(saved.ticket).toBe(board.ticketFor(KILLS).id);
+    expect(loadLedger(stateDir).entries[DISK]).toBeUndefined();
+
+    const rerun = await loop(BEFORE, NOW - 6 * DAY + HOUR);
+    expect(rerun.created.map((item) => item.signature)).toEqual([DISK]);
+    expect(board.tickets.size).toBe(2);
+    // Both count towards the day's limit.
+    expect((await loop(BEFORE, NOW - 6 * DAY + 2 * HOUR)).created).toEqual([]);
+  });
+
+  test("does not post a verdict comment twice when the rerun repeats it", async () => {
+    const { board, loop, stateDir } = setup();
+    await loop(BEFORE, NOW - 6 * DAY);
+    board.ticketFor(KILLS).status = "done";
+    board.ticketFor(DISK).status = "done";
+    await loop({ ...BEFORE, createdAt: NOW - 5 * DAY }, NOW - 5 * DAY);
+
+    // DISK's verdict is commented, then moving its ticket fails.
+    board.failures.moveToBacklog = 1;
+    await expect(loop(FIXED_RELEASE, NOW)).rejects.toThrow("moveToBacklog failed");
+    expect(board.ticketFor(DISK).comments).toHaveLength(1);
+    expect(loadLedger(stateDir).entries[DISK]!.status).toBe("fixed");
+
+    const rerun = await loop(FIXED_RELEASE, NOW);
+    expect(rerun.fixFailed.map((item) => item.signature)).toEqual([DISK]);
+    expect(board.ticketFor(DISK).comments).toHaveLength(1);
+    expect(board.ticketFor(DISK).status).toBe("backlog");
+    expect(board.ticketFor(KILLS).comments).toHaveLength(1);
+    expect(loadLedger(stateDir).entries[DISK]!.status).toBe("tracking");
   });
 });

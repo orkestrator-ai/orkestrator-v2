@@ -85,6 +85,12 @@ export interface LedgerEntry {
   createdAt: string;
   updatedAt: string;
   ticket?: string;
+  /**
+   * The project whose board holds `ticket`. The ticket is always read,
+   * commented on and moved there, whichever project new tickets go to now.
+   * Absent on entries saved before it was recorded; a run fills it in.
+   */
+  projectId?: string;
   pr?: string;
   /** The first app version that carries the fix. */
   fixedIn?: string;
@@ -437,6 +443,7 @@ function round(value: number): number {
 export interface LedgerChange {
   status?: LedgerStatus;
   ticket?: string;
+  projectId?: string;
   pr?: string;
   fixedIn?: string;
   fixedAfter?: string;
@@ -524,6 +531,7 @@ export function applyLedgerChange(
     };
   }
   if (change.ticket !== undefined) entry.ticket = change.ticket;
+  if (change.projectId !== undefined) entry.projectId = change.projectId;
   if (change.pr !== undefined) entry.pr = change.pr;
   if (change.clearFix) {
     delete entry.fixedIn;

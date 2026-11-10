@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ResolvedSelfImprovementSettings } from "@orkestrator/protocol/self-improvement";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   DAILY_RUN_INTERVAL_MS,
   type SelfImprovementDeps,
@@ -161,6 +162,36 @@ describe("starting a run", () => {
       error: "Could not export this machine's diagnostics.",
     });
     expect(JSON.stringify(lastRun)).not.toContain("secret path");
+  });
+
+  test("the failure log names the step and the error type, never its text", async () => {
+    const capture = captureLogs();
+    cleanups.push(() => capture.restore());
+    const h = harness();
+    h.failExport = true;
+    await h.service.run({ trigger: "manual" });
+    await settle(h.service);
+    const failed = capture.records().find((record) => record.event === "run.failed");
+    expect(failed?.fields).toMatchObject({ reason: "exporting" });
+    expect(capture.lines.join("\n")).not.toContain("secret path");
+  });
+
+  test("a backend without the data directory's writer lease never runs", async () => {
+    let writer = false;
+    const h = harness({ isWriter: () => writer });
+    h.config.settings = { ...h.config.settings, dailyRun: true };
+    expect(await h.service.run({ trigger: "manual" })).toMatchObject({
+      started: false,
+      refusal: "not-writer",
+    });
+    await h.service.checkDaily();
+    expect(h.exportCalls).toBe(0);
+    expect((await h.service.status()).running).toBeNull();
+
+    writer = true;
+    await h.service.checkDaily();
+    await settle(h.service);
+    expect(h.exportCalls).toBe(1);
   });
 });
 

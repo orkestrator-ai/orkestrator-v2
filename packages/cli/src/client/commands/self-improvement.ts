@@ -9,7 +9,9 @@ import { optionalBoolean, REQUEST_ID_OPTION, submit } from "./common.js";
 /**
  * `self-improvement …`: the experimental feature in Settings → Self-improvement.
  * `run --wait` follows the run until it finishes, as the Settings page does, by
- * reading the status; the backend owns the run either way.
+ * reading the status; the backend owns the run either way. It follows only the
+ * run this request started (matched by its start time, which a replayed
+ * receipt repeats), and exits as failed when that run failed.
  */
 
 const POLL_MS = 3000;
@@ -118,9 +120,11 @@ export const selfImprovementCommands: CommandSpec[] = [
           ],
         };
       }
+      const startedAt = typeof result.startedAt === "string" ? result.startedAt : null;
+      const ours = (startedAtOfRun: string) => startedAt === null || startedAtOfRun === startedAt;
       const deadline = Date.now() + WAIT_LIMIT_MS;
       let status = await session.read<SelfImprovementStatus>("self-improvement.status", {});
-      while (status.running) {
+      while (status.running && ours(status.running.startedAt)) {
         if (Date.now() > deadline) {
           throw new CliError(
             "deadline-exceeded",
@@ -130,13 +134,34 @@ export const selfImprovementCommands: CommandSpec[] = [
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
         status = await session.read<SelfImprovementStatus>("self-improvement.status", {});
       }
+      const lastRun = status.lastRun && ours(status.lastRun.startedAt) ? status.lastRun : null;
+      if (!lastRun) {
+        // A replayed request whose run has since been followed by another one.
+        return {
+          action: "self-improvement.run",
+          result: { ...result, lastRun: null },
+          receipt,
+          warnings,
+          connection: session.identity,
+          human: [
+            "This request's run is no longer the last one; see `orkestrator self-improvement status`.",
+          ],
+        };
+      }
+      if (lastRun.outcome === "failed") {
+        throw new CliError(
+          "run-failed",
+          `The self-improvement run failed: ${lastRun.error ?? "see self-improvement status"}`,
+          { receipt, details: { startedAt: lastRun.startedAt } },
+        );
+      }
       return {
         action: "self-improvement.run",
-        result: { ...result, lastRun: status.lastRun },
+        result: { ...result, lastRun },
         receipt,
         warnings,
         connection: session.identity,
-        human: status.lastRun ? runLines(status.lastRun) : ["The run finished."],
+        human: runLines(lastRun),
       };
     },
   },

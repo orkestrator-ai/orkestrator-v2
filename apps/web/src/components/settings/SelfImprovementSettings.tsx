@@ -46,6 +46,7 @@ const REFUSAL_TEXT: Record<SelfImprovementRunRefusal, string> = {
   disabled: "Self-improvement is off. Turn it on in Settings → Experimental.",
   "no-project": "Choose the project that should receive tickets first.",
   "already-running": "A run is already in progress.",
+  "not-writer": "Another Orkestrator is using this data folder; runs happen there.",
 };
 
 const MODEL_NAMES: Record<string, string> = {

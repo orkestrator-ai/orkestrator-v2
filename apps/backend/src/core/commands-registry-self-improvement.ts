@@ -8,6 +8,7 @@ import {
   getSelfImprovementStatusCommand,
   runSelfImprovementCommand,
 } from "@orkestrator/protocol/contract/domains/system";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { resolveSelfImprovementSettings } from "@orkestrator/protocol/self-improvement";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
@@ -38,9 +39,13 @@ export function kanbanBoard(context: CommandContext, projectId: string): Board {
     prUrl: task.prUrl ?? null,
   });
   return {
+    projectId,
     async get(ticketId) {
       const task = await kanban.getKanbanTask(ticketId);
       return task && task.projectId === projectId ? ticket(task) : null;
+    },
+    async locate(ticketId) {
+      return (await kanban.getKanbanTask(ticketId))?.projectId ?? null;
     },
     async list() {
       return (await kanban.getKanbanTasks(projectId)).map(ticket);
@@ -54,8 +59,13 @@ export function kanbanBoard(context: CommandContext, projectId: string): Board {
       });
       return task.id;
     },
-    async comment(ticketId, text) {
-      await kanban.addKanbanComment(ticketId, text, projectId);
+    async comment(ticketId, text, requestId) {
+      try {
+        await kanban.addKanbanComment(ticketId, text, projectId, requestId);
+      } catch (error) {
+        // The id was used with other numbers: an earlier attempt already posted this verdict.
+        if (errorCode(error) !== "kanban-request-id-conflict") throw error;
+      }
     },
     async moveToBacklog(ticketId) {
       await kanban.updateKanbanTask(ticketId, { status: "backlog" }, projectId);
@@ -87,6 +97,8 @@ export function createSelfImprovementService(context: CommandContext): SelfImpro
       return (await buildDiagnosticsBundle(await diagnosticsSources(context))).archive;
     },
     board: (projectId) => kanbanBoard(context, projectId),
+    // The data directory's single-writer guard, as scheduled jobs use it.
+    isWriter: () => context.registryWriterLease?.isHeld() ?? true,
     async claudeLaunch() {
       const env: NodeJS.ProcessEnv = { ...process.env };
       for (const key of STRIPPED_ENV) delete env[key];

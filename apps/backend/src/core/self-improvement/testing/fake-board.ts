@@ -11,10 +11,34 @@ export interface FakeTicket extends BoardTicket {
   labels: string[];
 }
 
+/** Board calls a test makes fail: the operation throws on its Nth call (1-based). */
+type FailingOperation = "create" | "comment" | "moveToBacklog";
+export type FakeBoardFailures = Partial<Record<FailingOperation, number>>;
+
 export class FakeBoard implements Board {
   readonly tickets = new Map<string, FakeTicket>();
   readonly labels = new Set<string>();
-  private nextId = 100;
+  /** Comment request ids already posted, as Kanban storage keeps them. */
+  readonly commentRequests = new Set<string>();
+  readonly failures: FakeBoardFailures = {};
+  /** Where a ticket on any project is; a test sets it to model other boards. */
+  locate?: (ticketId: string) => Promise<string | null>;
+  private readonly calls = { create: 0, comment: 0, moveToBacklog: 0 };
+  private nextId: number;
+
+  constructor(
+    readonly projectId = "p1",
+    firstId = 100,
+  ) {
+    this.nextId = firstId;
+  }
+
+  private call(operation: FailingOperation): void {
+    this.calls[operation] += 1;
+    if (this.failures[operation] === this.calls[operation]) {
+      throw new Error(`${operation} failed`);
+    }
+  }
 
   async get(ticketId: string): Promise<BoardTicket | null> {
     return this.tickets.get(ticketId) ?? null;
@@ -25,6 +49,7 @@ export class FakeBoard implements Board {
   }
 
   async create(input: Parameters<Board["create"]>[0]): Promise<string> {
+    this.call("create");
     const id = String(this.nextId++);
     this.tickets.set(id, {
       id,
@@ -38,12 +63,20 @@ export class FakeBoard implements Board {
     return id;
   }
 
-  async comment(ticketId: string, text: string): Promise<void> {
-    this.tickets.get(ticketId)!.comments.push(text);
+  async comment(ticketId: string, text: string, requestId: string): Promise<void> {
+    this.call("comment");
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) throw new Error(`Kanban task not found: ${ticketId}`);
+    if (this.commentRequests.has(requestId)) return;
+    this.commentRequests.add(requestId);
+    ticket.comments.push(text);
   }
 
   async moveToBacklog(ticketId: string): Promise<void> {
-    this.tickets.get(ticketId)!.status = "backlog";
+    this.call("moveToBacklog");
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) throw new Error(`Kanban task not found: ${ticketId}`);
+    ticket.status = "backlog";
   }
 
   async ensureLabels(labels: ReadonlyArray<{ name: string }>): Promise<void> {

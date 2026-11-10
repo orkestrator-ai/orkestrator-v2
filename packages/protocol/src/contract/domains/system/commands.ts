@@ -679,7 +679,6 @@ export const getScopedResourceSnapshotsCommand = defineCommand({
   critical: [],
 });
 
-/** Every defined `system` command. */
 // --- Self-improvement ---------------------------------------------------------
 
 /**
@@ -710,6 +709,7 @@ export const runSelfImprovementCommand = defineCommand({
   critical: ["dryRun"],
 });
 
+/** Every defined `system` command. */
 export const SYSTEM_COMMANDS = [
   recordDomainAdapterUsageCommand,
   getSelfImprovementStatusCommand,

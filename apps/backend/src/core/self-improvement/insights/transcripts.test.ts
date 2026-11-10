@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import path from "node:path";
 import {
+  cursorAfter,
   type InsightCursor,
   MAX_SEGMENT_CHARS,
   renderSegment,
   selectSegments,
   SETTLE_MS,
 } from "./prepare.js";
-import { parseClaude, parseCodex, projectOf, type TranscriptSources } from "./transcripts.js";
+import {
+  parseClaude,
+  parseCodex,
+  projectOf,
+  readConversation,
+  type TranscriptSources,
+} from "./transcripts.js";
 import { DAY, HOUR, temporaryDirectory } from "../testing/fixtures.js";
 import {
   claudeJsonl,
@@ -214,6 +221,49 @@ describe("choosing what to read", () => {
     expect(selection.segments).toHaveLength(2);
     expect(selection.waiting).toBe(2);
     expect(selection.skipped.map((skip) => skip.conversationId)).toEqual(["claude:system"]);
+  });
+});
+
+describe("a history too large to read whole", () => {
+  test("resumes after the last entry read even when the tail it reads slides forward", () => {
+    const root = scratch();
+    const file = path.join(root, "claude", "projects", "-p", "long.jsonl");
+    const sources: TranscriptSources = {
+      claudeProjectDirs: [path.join(root, "claude", "projects")],
+      codexSessionDirs: [],
+    };
+    const maxTranscriptBytes = 20_000;
+    const turn = (index: number, at: number): FixtureTurn =>
+      index % 2 === 0
+        ? { user: `message ${String(index).padStart(3, "0")} ${"u".repeat(1000)}`, at }
+        : { assistant: `reply ${String(index).padStart(3, "0")} ${"a".repeat(1000)}`, at };
+    const turns = Array.from({ length: 60 }, (_, index) => turn(index, NOW - 5 * HOUR + index));
+    writeTranscript(file, claudeJsonl("long", CWD, turns), NOW - 3 * HOUR);
+    const select = (cursor: InsightCursor) =>
+      selectSegments({ sources, cursor, now: NOW, excludeDirs: [], maxTranscriptBytes });
+
+    const cursor: InsightCursor = { schemaVersion: 1, conversations: {} };
+    const first = select(cursor);
+    expect(first.segments).toHaveLength(1);
+    const read = first.segments[0]!;
+    cursor.conversations[read.conversationId] = cursorAfter(read, true, undefined, NOW);
+    expect(select(cursor).segments).toEqual([]);
+
+    // Two more turns of the same size: the tail drops as many entries as it gains.
+    const grown = [...turns, turn(60, NOW - 2 * HOUR), turn(61, NOW - 2 * HOUR + 1)];
+    writeTranscript(file, claudeJsonl("long", CWD, grown), NOW - 90 * 60 * 1000);
+    const conversation = readConversation(
+      { provider: "claude", file, mtimeMs: 0, size: 0 },
+      maxTranscriptBytes,
+    )!;
+    expect(conversation.entries).toHaveLength(read.to);
+
+    const next = select(cursor).segments;
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatchObject({ from: read.to - 2, to: read.to });
+    expect(next[0]!.text).toContain("message 060");
+    expect(next[0]!.text).toContain("reply 061");
+    expect(next[0]!.key).not.toBe(read.key);
   });
 });
 

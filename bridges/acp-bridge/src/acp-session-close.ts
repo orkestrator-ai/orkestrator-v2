@@ -1,3 +1,4 @@
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import type { AcpProcess, SessionState } from "./acp-context.js";
 import {
   CLOSE_ATTACH_WAIT_MS,
@@ -19,22 +20,6 @@ const closesInFlight = new Map<string, Promise<RetainingCloseOutcome>>();
 
 function exited(process: AcpProcess): boolean {
   return process.child.exitCode !== null || process.child.signalCode !== null;
-}
-
-/** Wait for `promise` for at most `timeoutMs`; `"timeout"` when it did not settle. */
-async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 /**
@@ -114,21 +99,21 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
 
   const children = new Set<AcpProcess>();
   if (state.attaching) {
-    const late = await within(
+    const late = await boundedWait(
       state.attaching.then(
         (child) => child,
         () => null,
       ),
       CLOSE_ATTACH_WAIT_MS,
     );
-    if (late === "timeout") return "pending";
-    if (late) children.add(late);
+    if (!late.settled) return "pending";
+    if (late.value) children.add(late.value);
   }
 
   // `session/cancel` is a notification; its acknowledgement is the running
   // `session/prompt` answering (normally `stopReason: "cancelled"`).
   const settlement = state.status === "running" ? state.turnSettlement : undefined;
-  if (settlement) await within(settlement, CLOSE_CANCEL_WAIT_MS);
+  if (settlement) await boundedWait(settlement, CLOSE_CANCEL_WAIT_MS);
 
   const live = state.child;
   if (live?.sessionCloseSupported && !exited(live)) {

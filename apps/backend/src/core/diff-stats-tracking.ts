@@ -79,7 +79,6 @@ const log = createLogger("diff-stats");
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
 
-/** The worktree fetch scheduler as the backend runs it: real `git fetch`, shared per repository. */
 /**
  * Whether a target's worktree is there to scan. A local environment whose
  * folder was deleted or moved, or whose drive is unmounted, would otherwise
@@ -96,6 +95,7 @@ export async function diffTargetPresent(target: DiffStatsTarget): Promise<boolea
   }
 }
 
+/** The worktree fetch scheduler as the backend runs it: real `git fetch`, shared per repository. */
 export function createGitFetchScheduler(): GitFetchScheduler {
   return new GitFetchScheduler({
     run: (args, timeoutMs) =>

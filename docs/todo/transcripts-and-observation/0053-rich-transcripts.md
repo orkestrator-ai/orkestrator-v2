@@ -11,9 +11,11 @@ Analysed 2026-10-27 against `main` at `863b5782`; re-checked 2026-11-09 against 
 
 ### 1. Publish the preview worker image
 
+Historical analysis: this task was dropped on 2026-11-02. [2681](2681-remove-preview-worker-pull-route.md) removed the pull route, `publish.sh` and `published-image.json` on 2026-11-03. The problem, investigation and options below describe the former implementation, not current work or available tooling.
+
 **Problem.** Packaged installs have no published worker image, so `transcript_artifact_prepare_worker` must build the shipped context locally on every machine (a Playwright base pull plus `npm ci`, bounded at 10 minutes) before interactive previews can use container isolation. Users of packaged builds who want container isolation pay that build, and the result is pinned only on that host.
 
-**Context.** The only unticked item in the file. `docker/artifact-preview-worker/publish.sh <repository> [tag]` builds `linux/amd64` and `linux/arm64`, pushes, reads the manifest-list digest back and rewrites the checked-in `published-image.json`, which packaged builds ship. It needs `docker login` and buildx, so an agent cannot run it.
+**Context.** At the original analysis, this was the only unticked item in the file. `docker/artifact-preview-worker/publish.sh <repository> [tag]` builds `linux/amd64` and `linux/arm64`, pushes, reads the manifest-list digest back and rewrites the checked-in `published-image.json`, which packaged builds ship. It needs `docker login` and buildx, so an agent cannot run it.
 
 **Investigation.** `docker/artifact-preview-worker/published-image.json` still holds `null` for image, tag, digest and `publishedAt`, unchanged since #1103 (`97af3d45`). `publish.sh` matches the file's description. `apps/backend/src/core/transcript-artifacts/preview-worker-prepare.ts:75` reads the pin and validates the repository and digest (`:81`-`:87`); `:174` pulls `<image>@<digest>` and falls back to the build route on failure. Newly found: nothing ties a published digest to the context the backend ships. A digest published once would be pulled by every later release, even after the worker bundle, the pinned renderer bundles or the `playwright-core` pin (kept in step with the backend by `tests/unit/version-drift.test.ts:1053`) change. A stale pin would run an old worker against a newer backend. No CI workflow publishes the image.
 
@@ -189,3 +191,7 @@ credentials), Google Chrome, macOS, Docker 29.8:
     - Choice: (b). Task 2's recommended deletion was conditional on task 1 being done and on first moving the durable content into the architecture guides; task 1 was dropped rather than done, and the 2026-10-20 live-cycle evidence has not been copied into `transcript-artifacts-runtime.md`. The file is also linked from a handoff note, flake case 1190 and to-do 2681, which would need updating. This ticket was scoped to the checklist wording.
     - What changed: task 2 is done; phase 8 reads Done (its limits are all closed) as well as phase 9; task 1's status names 2681's removal of the pull route; the folder index row is Finished Yes and rated Low, since nothing is left.
     - Left for whoever retires the file: copy the live-cycle evidence into the runtime guide's qualification sections, repoint the three links, then delete the file and its index row.
+
+### 11. Mark task 1 analysis as historical (tasks 1 and 2, 2026-11-10)
+
+Chose to retain the original analysis with an explicit historical notice naming the dropped task and deleted tooling. Deleting the analysis would remove context for the publishing decisions below; retaining it without a notice would imply current work. The notice preserves that context while making clear that the old implementation and options no longer apply.

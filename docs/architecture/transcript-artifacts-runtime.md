@@ -189,7 +189,9 @@ Isolation (`ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION`):
   lifetime, except that preparing the worker re-selects it; status reports
   `isolationSelection: "auto"`.
 - `container`: the pinned worker image (`docker/artifact-preview-worker/`,
-  Playwright 1.64.0 base pinned by digest) runs with `--network none
+  on the Playwright base image whose tag matches the backend's
+  `playwright-core` pin, pinned by digest; `tests/unit/version-drift.test.ts`
+  keeps the two in step) runs with `--network none
   --read-only --tmpfs /tmp --memory 1g --cpus 2 --pids-limit 128 --user
   pwuser --cap-drop ALL --security-opt no-new-privileges`, a seccomp profile
   that adds only `chroot` to Playwright's published profile so Chromium's

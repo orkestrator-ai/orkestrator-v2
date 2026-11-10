@@ -352,7 +352,7 @@ RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
 # namespaces (the default seccomp profile blocks them), so an explicit
 # `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
 # is the isolation boundary.
-ARG PLAYWRIGHT_VERSION=1.64.0
+ARG PLAYWRIGHT_VERSION=1.65.0
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

@@ -11,10 +11,13 @@ section "The whole browser suite under churn, 2026-11-06".
 Analysed 2026-11-09 against `main` at `c6de4733c`, on beelink, for tasks 1
 and 2 (see [Assumptions and decisions](#assumptions-and-decisions)).
 
+Analysed 2026-11-10 against `main` at `c6de4733c` (branch head `10d5c9b31`),
+on beelink, for the failed whole-suite `test:browser` run of task 2.
+
 ### Tasks
 
 1. **An environment move failed with `claude-tmux cleanup incomplete`**: `local environment move survives inactive navigation and reload` failed once because the move command answered 500. Status: done (2026-11-09): cause reproduced on the real stack and fixed.
-2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); a host with another kernel or hardening, and macOS, remain.
+2. **Qualify the loopback-only namespace for `test:browser` beyond beelink**: review validation and other Linux hosts have not run the suites through `scripts/loopback-network.ts`. Status: open: Ubuntu 24.04 and Debian 13 userlands qualified on beelink's kernel (2026-11-09); a host with another kernel or hardening, and macOS, remain; and a whole-suite `test:browser` pass on beelink has not been observed since: the 2026-11-10 run failed 131 cases at a load average above 100 and was stopped with 1,542 unrun.
 3. **`agent-accounts.spec.ts:229` (390px) with credentials**: the one failure recorded on 2026-11-05 has not been rerun on a profile with Claude credentials. Status: open.
 
 ### 1. An environment move failed with `claude-tmux cleanup incomplete`
@@ -126,6 +129,40 @@ a host setting. The Docker seccomp refusal exercises the same fallback path.
 The evidence files are under `output/agent-testing/c25a-7020-loopback/` in the
 worktree that ran them (not committed).
 
+2026-11-10, the whole suite on beelink at `10d5c9b31`: one `mise run
+test:browser` run (default 8 workers, no review-validation retry) printed that
+it ran in the namespace, then had 131 failures, 67 passes, 58 skips and 6
+interrupted when it was stopped after 856 s with 1,542 of 1,804 component cases
+not run; the public-site suite did not start. The host's load average was 106
+to 125 on 16 cores at the time. Of the failures, 62 were `page.goto` or
+`page.reload` hitting the test timeout (30 s, or 60 s in two), most of the rest other 30 s action
+timeouts and `toBeVisible` misses; none was `net::ERR_NETWORK_CHANGED` and one
+was `ERR_ABORTED`. To attribute them, five of the failing spec files
+(`AgentUsage`, `BackgroundTaskOutcome`, `ChatColumnShift`,
+`EnvironmentStatusMarker`, `FocusVisibility`; 76 cases) were run alone:
+
+| Network | Workers | Load average at start | Failed | Passed |
+| --- | --- | --- | --- | --- |
+| namespace | 8 | 102 | 28 | 42 |
+| host (`ORKESTRATOR_E2E_HOST_NETWORK=1`, own port) | 8 | 95 | 12 | 58 |
+| namespace | 8 | 98 | 31 | 39 |
+| namespace | 2 | 36 | 0 | 70 |
+| namespace | 2 | 36 | 0 | 70 |
+| namespace | 8 | 29 | 0 | 70 |
+| host (`ORKESTRATOR_E2E_HOST_NETWORK=1`, own port) | 8 | 42 | 24 | 46 |
+
+Six cases skip in every run. On both networks the failures came and went with
+the host's load: the same tests, the same timeouts, and no network-change abort
+in any run; the 8-worker namespace run at the lowest load was clean, and the
+host-network run at load 42 failed 24. That points to load-sensitive cases on
+an oversubscribed host rather than to the namespace. It does not settle it: at
+a load near 100 the two namespace runs failed more than the one host-network
+run (28 and 31 against 12), and one run per point cannot say whether that is
+load drift between runs or a cost the namespace adds under heavy load. It is
+also a sample of five files, not the whole suite. A whole-suite pass inside
+the namespace on beelink, which component runs B and C nearly were
+(2026-11-06), has not been repeated on this branch.
+
 **Decisions.**
 
 - **How to qualify it?**
@@ -142,6 +179,16 @@ worktree that ran them (not committed).
   - **Leave it to the first review-validation runs elsewhere.**
     - Pros: no work now.
     - Cons: the fallback line did not say why, so a failure there would need a rerun to diagnose.
+- **How to close the whole-suite gap on beelink?**
+  - **Run `mise run test:browser` once when the host's load average is below about half its cores, and compare a failing set, if any, with the same files under `ORKESTRATOR_E2E_HOST_NETWORK=1` run straight after (recommended).**
+    - Pros: tests the whole suite under the condition the sample passed in; an immediate host-network rerun of the same files separates the namespace from load.
+    - Cons: needs a quiet window on a shared build host, which this build could not wait for.
+  - **Rely on review validation's run, which grants workers and retries a failed case once.**
+    - Pros: no extra run; it is the run that gates the change.
+    - Cons: under the same load, retries hide rather than explain a namespace effect, and the last captured review package did not run `test:browser` at all.
+  - **Lower the component suite's worker count or raise its 30 s test timeout.**
+    - Pros: fewer load misses.
+    - Cons: changes every run, idle hosts included, to cover a busy one; the scheduler already passes `ORKESTRATOR_VALIDATION_GRANTED_WORKERS` for this.
 
 ### 3. `agent-accounts.spec.ts:229` (390px) with credentials
 
@@ -199,6 +246,15 @@ userlands were run with `--network none` so the qualification created no
 Docker network on a host that has exhausted its pool before. What remains is
 recorded under Outstanding work.
 
+### Task 2: attribute the failed whole-suite run with a sample, not a second whole run
+
+The 2026-11-10 `test:browser` run failed 131 cases while beelink's load average
+was above 100, with no network-change abort. Rather than rerun all 1,804 cases
+on the same busy host, five of the failing files were run alone in the
+namespace and on the host network at different loads (table under task 2's
+Investigation). That separates load from the namespace for those files; it does
+not stand in for a whole-suite pass, so the task stays open for one.
+
 ## Outstanding work
 
 - Task 2: read the `[loopback-network]` line in the first `test:browser` review
@@ -206,6 +262,20 @@ recorded under Outstanding work.
   default AppArmor restriction) and on macOS, where no line is printed, and
   confirm the result matches an `ORKESTRATOR_E2E_HOST_NETWORK=1` run. This
   needs those hosts; beelink's kernel cannot show another kernel's behaviour.
+- Task 2: a whole-suite `mise run test:browser` pass inside the namespace on
+  beelink is not established on this branch. The only whole run (2026-11-10,
+  `10d5c9b31`) failed 131 cases (62 navigation timeouts, none a network-change
+  abort), interrupted 6 and left 1,542 component cases and the whole
+  public-site suite unrun when it was stopped at a load average above 100.
+  A five-file sample points to host load on both networks rather than the
+  namespace (table under task 2), though near load 100 the namespace runs
+  failed more than the one host-network run; the other files and the
+  public-site suite have not run. Remaining: run `test:browser` once when the load average is below about
+  8 on beelink, and if anything fails, rerun those files straight after with
+  `ORKESTRATOR_E2E_HOST_NETWORK=1` and a free `ORKESTRATOR_E2E_PORT`; a failure
+  only inside the namespace is a defect of the wrapper. Not done here because
+  the host stayed oversubscribed by other builds for the whole of this work,
+  and the build may not stop them.
 - Task 3: unchanged; needs a host where using the Claude login is allowed.
 
 ## Related

@@ -10,6 +10,7 @@ import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { summarizeToolGroup } from "@/lib/chat/tool-group-summary";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { toPipelineTranscript } from "../build-pipeline/pipeline-transcript";
 import { NativeMessage } from "./NativeMessage";
 
 afterEach(() => {
@@ -65,6 +66,30 @@ describe("a command left running", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /bun run dev/ }));
     expect(screen.getByText("listening on :3000")).toBeTruthy();
+  });
+
+  test("pipeline conversion retains and renders the left-running badge", () => {
+    const converted = toPipelineTranscript(
+      [
+        {
+          id: "pipeline-background",
+          role: "assistant",
+          content: "",
+          parts: [leftRunning("pipeline-bg", "bun run dev")],
+        },
+      ],
+      "codex",
+      "2026-11-06T10:00:00.000Z",
+    );
+    expect(converted).toHaveLength(1);
+    const parts = converted[0]!.parts.flatMap((part) =>
+      part.type === "tool-group" ? part.parts : [part],
+    );
+    expect(parts[0]!.toolLeftRunning).toBe(true);
+    expect(parts[0]!.toolState).toBeUndefined();
+    const { container } = renderParts("pipeline-background", parts);
+    expect(screen.getByText("left running")).toBeTruthy();
+    expect(container.textContent).not.toContain("running...");
   });
 
   test("a folded group holding it does not read running", () => {

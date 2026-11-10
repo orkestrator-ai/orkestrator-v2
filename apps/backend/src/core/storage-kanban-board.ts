@@ -8,6 +8,7 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import {
   emptyKanbanSyncStore,
+  imageRef,
   parseKanbanSyncStore,
   stampTicketChange,
   ticketSnapshot,
@@ -96,7 +97,12 @@ export class KanbanBoardStore {
         now,
       });
       // Reject values that peers cannot read before either store is committed.
-      if (change.stored) parseTicketSyncItem(ticketSnapshot(normalizeKanbanTask(change.stored)));
+      if (change.stored) {
+        parseTicketSyncItem({
+          ...ticketSnapshot(normalizeKanbanTask(change.stored)),
+          images: (change.stored.images ?? []).map((image) => imageRef(image)),
+        });
+      }
       if (controllers.length) queued = true;
     }
     const syncChanged = fresh || queued || store.nextSeq !== sequence || loaded !== undefined;

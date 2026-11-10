@@ -1,3 +1,4 @@
+import { TICKET_SYNC_LIMITS, parseTicketSyncImageRef } from "@orkestrator/protocol/ticket-sync";
 import * as shared from "./storage-shared.js";
 import { createHash } from "node:crypto";
 import { Data } from "effect";
@@ -615,6 +616,10 @@ export class KanbanRepository {
         }
         return { task: normalizeKanbanTask(task), image: existing };
       }
+      if (task.images.length >= TICKET_SYNC_LIMITS.maxImageRefs) {
+        throw new Error("This ticket has reached the image limit.");
+      }
+      parseTicketSyncImageRef({ id: imageId, filename, createdAt: nowIso() });
       const rawBytes = Buffer.from(data, "base64");
       const webpBytes = normalized ? rawBytes : await resizeKanbanImage(rawBytes);
       await fs.mkdir(this.files.kanbanImagesDir(), { recursive: true });

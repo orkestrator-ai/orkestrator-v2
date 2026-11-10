@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { parseTicketSyncItem } from "@orkestrator/protocol/ticket-sync";
+
 import type {
   TicketSyncLeafStatus,
   TicketSyncImageRef,
@@ -9,7 +11,7 @@ import type {
 import { mergeSnapshotImages } from "../storage-kanban-sync.js";
 import { readStoredValue, seedStore } from "../storage-test-support.js";
 import { createProject } from "../storage.js";
-import type { KanbanImage } from "../storage-shared.js";
+import type { KanbanImage, KanbanTask } from "../storage-shared.js";
 import { readKanbanImageData } from "../ticket-sync-images.js";
 import {
   cleanupFleets,
@@ -433,3 +435,98 @@ describe("column order (task 6)", () => {
     expect((await f.commandTicket(second.id))?.order).not.toBe(-1);
   });
 });
+
+describe("image metadata remains readable by peers", () => {
+  test("oversized filenames and image counts are refused before attachment", async () => {
+    const f = await fleet();
+    const task = await f.command.kanban.addKanbanTask(f.commandProject.id, "Images", "");
+    await expect(
+      f.command.kanban.addNormalizedKanbanImageForRequest(
+        task.id,
+        "x".repeat(1001),
+        IMAGE_BYTES,
+        "long",
+      ),
+    ).rejects.toThrow();
+    expect((await f.commandTicket(task.id))?.images).toEqual([]);
+    const images = Array.from({ length: 200 }, (_, n) => ({
+      id: `image-${n}`,
+      filename: "image.png",
+      createdAt: task.createdAt,
+    }));
+    seedStore(f.command.getDataDir(), "kanban.json", [{ ...task, images }]);
+    await expect(attachImage(f.command, task.id)).rejects.toThrow("image limit");
+    expect((await f.commandTicket(task.id))?.images).toHaveLength(200);
+  });
+
+  test("commit validates image refs while legacy oversized rows still sync", async () => {
+    const f = await fleet();
+    const task = await f.command.kanban.addKanbanTask(f.commandProject.id, "Legacy", "");
+    for (const images of [
+      [{ id: "long", filename: "x".repeat(1001), createdAt: task.createdAt }],
+      Array.from({ length: 201 }, (_, n) => ({
+        id: `image-${n}`,
+        filename: "ok.png",
+        createdAt: task.createdAt,
+      })),
+    ]) {
+      seedStore(f.command.getDataDir(), "kanban.json", [{ ...task, images }]);
+      await expect(
+        f.command.kanban.updateKanbanTask(task.id, { title: "Refused" }),
+      ).rejects.toThrow();
+      expect((await f.commandTicket(task.id))?.title).toBe("Legacy");
+      const batch = await f.command.ticketSync.ticketSyncChangesSince(
+        f.commandProject.id,
+        0,
+        undefined,
+        100,
+        COMMAND_ID,
+      );
+      expect(() => batch.items.map(parseTicketSyncItem)).not.toThrow();
+      expect((batch.items[0] as { images: unknown[] }).images).toHaveLength(
+        images.length > 200 ? 200 : 0,
+      );
+      expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+      expect((await f.leafTicket(task.id))?.images.length).toBeLessThanOrEqual(200);
+    }
+    // Later valid board changes must not get stuck behind the legacy row.
+    seedStore(f.command.getDataDir(), "kanban.json", [
+      { ...task, images: [] } satisfies KanbanTask,
+    ]);
+    const later = await f.command.kanban.addKanbanTask(f.commandProject.id, "Later", "");
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+    expect((await f.leafTicket(later.id))?.title).toBe("Later");
+  });
+});
+
+for (const failure of ["unknown-project", "unreadable"] as const) {
+  test(`image wants survive ${failure} outbox errors and complete after recovery`, async () => {
+    const f = await fleet();
+    const task = await f.command.kanban.addKanbanTask(f.commandProject.id, "Picture", "");
+    const image = await attachImage(f.command, task.id);
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.updateKanbanTask(task.id, { title: "Leaf edit" });
+    const invoke = f.link.invoke.bind(f.link);
+    f.link.invoke = async <T>(name: string, args?: Record<string, unknown>): Promise<T> => {
+      const result = await invoke<any>(name, args);
+      if (name === "collect_ticket_sync_outbox" && result.items[0]) {
+        if (failure === "unknown-project") result.items[0].sourceProjectId = "missing";
+        else result.items[0].op = { kind: "future-op" };
+      }
+      return result;
+    };
+    const delivered = f.leafImages.want(COMMAND_ID, image.id, "unavailable");
+    const outcome = delivered.then(
+      () => "delivered",
+      () => "unavailable",
+    );
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
+    expect(f.leafImages.wanted(COMMAND_ID)).toEqual([image.id]);
+    expect(f.received).not.toContain("put_ticket_image");
+    f.link.invoke = invoke;
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+    expect(await outcome).toBe("delivered");
+    expect(f.leafImages.wanted(COMMAND_ID)).toEqual([]);
+    expect(await f.leaf.kanban.getKanbanImageData(image.id)).toBe(IMAGE_BYTES);
+  });
+}

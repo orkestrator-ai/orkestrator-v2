@@ -272,7 +272,7 @@ export function TicketSyncStrip({
         <button
           type="button"
           data-testid="ticket-sync-conflicts"
-          className="inline-flex items-center gap-1 rounded text-amber-500 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex items-center gap-1 rounded text-amber-500 underline-offset-2 hover:underline focus-hairline focus-hairline-outset"
           title={`Latest: ${conflictSummary(latest)} Open the list to review or dismiss them.`}
           onClick={() => setConflictsOpen(true)}
         >
@@ -281,7 +281,7 @@ export function TicketSyncStrip({
         </button>
       )}
       <Dialog open={conflictsOpen && conflicts.length > 0} onOpenChange={setConflictsOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent size="lg">
           <DialogHeader>
             <DialogTitle>Sync conflicts</DialogTitle>
             <DialogDescription>

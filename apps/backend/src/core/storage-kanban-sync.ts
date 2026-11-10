@@ -5,6 +5,7 @@ import {
   TICKET_SYNC_FEATURES,
   TICKET_SYNC_LIMITS,
   parseTicketSyncOp,
+  parseTicketSyncImageRef,
   ticketSyncConflictPreview,
   type TicketContentValue,
   type TicketSnapshot,
@@ -588,7 +589,20 @@ export function ticketSnapshot(task: KanbanTask, selfId?: string): TicketSnapsho
     status: task.status,
     ...(task.prMergeDoneUrl ? { prMergeDoneUrl: task.prMergeDoneUrl } : {}),
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
-    ...(selfId ? { images: (task.images ?? []).map((image) => imageRef(image, selfId)) } : {}),
+    ...(selfId
+      ? {
+          images: (task.images ?? [])
+            .flatMap((image) => {
+              // Legacy metadata must never prevent the rest of the board from syncing.
+              try {
+                return [parseTicketSyncImageRef(imageRef(image, selfId))];
+              } catch {
+                return [];
+              }
+            })
+            .slice(0, TICKET_SYNC_LIMITS.maxImageRefs),
+        }
+      : {}),
     createdAt: task.createdAt,
     ...ticketContentValue(task),
     ...(task.sync?.work ? { work: task.sync.work } : {}),

@@ -271,9 +271,9 @@ export class AgentMailInjects {
    * Closing the main tombstones its mailbox, which marks what was waiting there
    * undeliverable — including a worker's report held for a delegation. When a
    * new main starts it collects that mail: a report its delegation still owes
-   * goes back to being held for that delegation (which moved with it),
-   * anything else waits for delivery. Acknowledged, discarded and expired mail
-   * stays where it was.
+   * goes back to being held for that delegation (which moved with it), mail
+   * held by the loop budget or hourly limit stays held, anything else waits
+   * for delivery. Acknowledged, discarded and expired mail stays where it was.
    */
   async moveClosedCoordinatorMail(
     coordinatorId: string,
@@ -319,7 +319,11 @@ export class AgentMailInjects {
           message.toEnvironmentId = target.environmentId;
           message.toTabId = target.tabId;
           message.toIncarnationId = target.incarnationId;
-          if (message.placement !== "stored") {
+          // Mail a budget held stays held: only the user's Resume (or the
+          // drain, for the hourly limit) releases it, whichever main it is on.
+          // Replacing the main is not a Resume, and releasing it here let two
+          // coordinators' loop restart in the new main (to-do 2900).
+          if (message.placement !== "stored" && !isAgentMailBudgetHeld(message)) {
             const owed =
               message.coordinatorDelegationId !== undefined &&
               owedDelegations.has(message.coordinatorDelegationId);

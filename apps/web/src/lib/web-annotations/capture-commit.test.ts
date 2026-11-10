@@ -16,6 +16,9 @@ import {
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
 import { appCommandStore } from "@/test/app-command-store";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 let backend: FakeWebAnnotationBackend;
 
@@ -238,4 +241,57 @@ describe("shadow-root targets follow the backend's advertisement", () => {
       expect(args.capture.target.anchor.scope).toEqual(expected);
     });
   }
+});
+
+describe("capture commit on another machine's environment", () => {
+  let windowScope: WindowScope;
+  let local: FakeWebAnnotationBackend;
+
+  beforeEach(() => {
+    // This window's own backend does not know the environment.
+    local = new FakeWebAnnotationBackend("env-local").install();
+    windowScope = new WindowScope();
+  });
+  afterEach(() => {
+    windowScope.dispose();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  test("stages, creates and reads the receipt on the environment's own node", async () => {
+    const remote = new FakeWebAnnotationBackend("env-remote");
+    const client = new FakeNodeClient({ nodeId: "bk_remote-node" as BackendId });
+    for (const command of [
+      "web_annotation_operation_receipt",
+      "web_annotation_asset_stage",
+      "web_annotation_create",
+    ]) {
+      client.respond(command, (args: Readonly<Record<string, unknown>>) =>
+        remote.handle(command, { ...args }),
+      );
+    }
+    const scope = windowScope.open({ role: "leaf", client });
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, {
+      captureId: "cap-remote",
+      environmentId: "env-remote",
+    });
+
+    const committed = await commitPendingCapture({
+      api: fake.api,
+      environmentId: "env-remote",
+      captureId: "cap-remote",
+      record,
+      input: { body: "These should be in pills" },
+      scope,
+    });
+
+    expect(committed.annotationId).toBeTruthy();
+    expect(client.calls("web_annotation_operation_receipt")).toHaveLength(1);
+    expect(client.calls("web_annotation_asset_stage")).toHaveLength(1);
+    expect(client.calls("web_annotation_create")[0]!.args).toMatchObject({
+      environmentId: "env-remote",
+      body: "These should be in pills",
+    });
+    expect(local.calls).toEqual([]);
+  });
 });

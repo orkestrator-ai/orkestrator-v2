@@ -205,6 +205,16 @@ archived in Cursor's own UI. Both vendors refuse to continue an archived
 conversation, so choosing one restores it first; a refused restore does not
 resume.
 
+OpenCode offers it for 2.x conversations only. Its platform table reports
+`actions.archive`, and the backend's OpenCode router sends an `opencode2:` id to
+the session's 2.x server, which sets `archived` with `PATCH /api/session/:id`
+and lists archived rows on request (`opencode2/sessions.ts`). The same picker
+also lists 1.x conversations, which the 1.x wire cannot archive: the 1.x
+provider marks each of its rows `archivable: false`, the dialog offers no
+remove on those rows, and the router refuses a 1.x id. As on Codex and Cursor,
+a 2.x conversation the server still holds for a tab or a run is refused
+("This conversation is open in a tab"); restoring is always allowed.
+
 ### Rewinding a conversation and Pi branches
 
 Codex, Pi and Cursor report `actions.rewindMessages`. The native tab offers

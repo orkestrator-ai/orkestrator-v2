@@ -73,6 +73,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
 import { OpenCode2SessionFeatures, type OpenCode2PreparedSend } from "./features.js";
+import { openCode2ResumeSessionId } from "./sessions.js";
 import { openCode2TurnConnections, type OpenCode2WorkerMailbox } from "./turn-connections.js";
 import {
   OPENCODE2_COORDINATOR_AGENT,
@@ -537,8 +538,18 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.features.listResumable(options);
   }
 
-  setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
-    return this.features.setArchived(resumableSessionId, archived);
+  /**
+   * The resume picker's remove/restore. A conversation this server still holds
+   * for a tab or a run is refused, as Codex and Cursor refuse one (409): 2.x
+   * would go on accepting turns for it while the picker reports it archived.
+   * Restoring is always allowed.
+   */
+  async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    const sessionId = openCode2ResumeSessionId(resumableSessionId) ?? resumableSessionId;
+    if (archived && this.sessions.has(sessionId)) {
+      throw new PromptRejectedError("This conversation is open in a tab");
+    }
+    await this.features.setArchived(resumableSessionId, archived);
   }
 
   /**

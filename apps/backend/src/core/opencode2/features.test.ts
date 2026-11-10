@@ -266,6 +266,12 @@ describe("OpenCode 2.x session actions", () => {
       `opencode2:${fork.sessionId}`,
       `opencode2:${id}`,
     ]);
+    // A conversation the server still holds for a tab is not archived.
+    await expect(
+      provider.setResumableSessionArchived(`opencode2:${fork.sessionId}`, true),
+    ).rejects.toThrow("open in a tab");
+    expect(server.sessions.get(fork.sessionId)?.archived).toBeFalsy();
+    provider.releaseSession(fork.sessionId);
     await provider.setResumableSessionArchived(`opencode2:${fork.sessionId}`, true);
     expect((await provider.listResumableSessions()).map((entry) => entry.sessionId)).toEqual([
       `opencode2:${id}`,

@@ -1253,9 +1253,12 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
       // `steer` is what the platform *may* offer: only an OpenCode 2.x session
       // steers (its inbox `delivery: "steer"`), and the per-session
       // `steerSupported()` answers false for every 1.x session, which clears
-      // the action from that session's projection. Compact, undo and redo are
-      // 1.x actions a 2.x session narrows away (`capabilityLimits`).
-      actions: { compact: true, undo: true, redo: true, steer: true },
+      // the action from that session's projection. Compact, undo and redo
+      // work on both lines. `archive` is the resume picker's remove/restore,
+      // also what the platform *may* offer: 2.x conversations archive through
+      // `PATCH /api/session/:id`, while every 1.x row in the same list carries
+      // `archivable: false` and the router refuses a 1.x id.
+      actions: { compact: true, undo: true, redo: true, steer: true, archive: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses. Every OpenCode
       // permission, a bash or edit approval included, is mapped as
@@ -2263,6 +2266,12 @@ export interface NativeAgentResumeEntry {
    * is restored.
    */
   archived?: boolean;
+  /**
+   * `false` when this row cannot be archived although its platform offers
+   * `archive`: an OpenCode list mixes 1.x conversations, which cannot, with
+   * 2.x ones, which can. Absent means the platform's `archive` action decides.
+   */
+  archivable?: boolean;
 }
 
 export interface NativeAgentForkOutcome {

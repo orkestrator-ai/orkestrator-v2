@@ -2686,6 +2686,7 @@ export function SharedNativeAgentController({
           ...(entry.parentId ? { parentId: entry.parentId } : {}),
           ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
           ...(entry.archived ? { archived: true } : {}),
+          ...(entry.archivable === false ? { archivable: false } : {}),
         }),
       ),
     [canArchiveResumable, listResumable],

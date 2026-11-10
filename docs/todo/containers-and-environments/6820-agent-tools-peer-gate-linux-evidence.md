@@ -35,8 +35,8 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; 
 members, and `docker.service` is inactive behind its socket unit, so every
 call (the qualification shim included) answers `permission denied`. Starting,
 reconfiguring or joining that daemon was out of scope. The disposable daemon
-already on main ([4730](4730-disposable-docker-daemon-for-live-suites.md)
-task 1) is rootless only, and on a rootless daemon the filter grants no
+already on main (to-do 4730 task 1, retired 2026-11-10; see
+[container qualification](../../development/container-qualification.md#disposable-docker-daemon)) is rootless only, and on a rootless daemon the filter grants no
 subnets, so a run there is not Linux Engine evidence. What remains: run
 `mise exec -- bun apps/backend/scripts/agent-tools-peer-evidence.ts` once
 against a rootful Linux daemon whose bridges live in the script's own network
@@ -47,8 +47,8 @@ that namespace; then fill in the Linux Engine row of
 
 **Result (2026-11-10).** Done. The build ran on beelink (Omarchy, kernel
 7.1.8, x86_64), where this account can use the host's rootful Engine 29.9.2
-(`SecurityOptions` without `rootless`). [4730](4730-disposable-docker-daemon-for-live-suites.md)'s
-nested rootful mode gave the rootful daemon, so the script never created a
+(`SecurityOptions` without `rootless`). The nested rootful mode of the [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon)
+(to-do 4730, retired 2026-11-10) gave the rootful daemon, so the script never created a
 network on the shared host daemon:
 
 ```bash
@@ -351,7 +351,7 @@ disposable daemon, and it keeps the script's networks off a daemon other
 builds share. The outer daemon was the host's rootful Engine
 (`outerRootless: false`), so the nested daemon is root in the initial user
 namespace, unlike 5510's run inside a rootless outer daemon; that makes this
-a privileged dind on a rootful host, the topology 4730 task 4 asks about, but
+a privileged dind on a rootful host, the topology 4730 task 4 (now in the manual-test checklist, 7568) asks about, but
 only the launcher's start and stop were observed for that task.
 
 ### Task 1: no code change (2026-11-10)

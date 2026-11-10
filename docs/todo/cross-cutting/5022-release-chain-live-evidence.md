@@ -8,30 +8,9 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`; re-checked 2026-11-05 against
 
 ### Tasks
 
-1. **Prove the pinned installer on the live site**: the site serves a pin and the pin moves after a Stable release. Status: open (needs the deploy and the next Stable release; nothing here can show either).
 2. **Prove a published release installs from its lockfile**: a real update on a standalone Linux host (a disposable systemd container, as in 0033). Status: blocked (needs two published releases that carry `resources/release-runtime/`). The macOS half, which needs a spare Mac account, moved to the manual-test checklist (7568: 5022 task 2).
 3. **Pin the Bun that `install.sh` downloads**: it still fetches Bun's own installer with `curl | bash`. Status: done (2026-11-05): the script downloads Bun's release archive and checks it against stated SHA-256s.
-4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (task 1).
-
-### 1. Prove the pinned installer on the live site
-
-**Problem.** Nothing has shown that the site deploys the pin, so a user could still be served the old unpinned script after this work merges.
-
-**Context.** `apps/web-public/public/install.sh` states `PINNED_RELEASE`, and `mise run release:pin-installer` moves it after a Stable release (`docs/development/releasing.md`, step 5). `docs/architecture/version-compatibility.md` says the hosted client follows `main`. The repository has a `vercel.json` and no deploy workflow, so the deploy itself is outside what a change here can observe.
-
-**Investigation.** Running the script from the worktree with a temporary `HOME` and Bun cache printed `orkestrator 2.36.1`, the pinned version, from the real registry. Nothing was deployed.
-
-Re-checked 2026-11-05: `PINNED_RELEASE` is still `apps/web-public/public/install.sh:6`, `apps/web-public/vercel.json` is the deploy configuration and there is still no deploy workflow. Since task 4 the live check has one more thing to see: once the pin reaches a Stable release with `resources/release-runtime/`, a first run prints `Installing the dependencies orkestrator@<pin> was published with…` instead of going through `bun x`.
-
-**Decisions.**
-
-- **How to check it?**
-  - **After this merges, and again after the next Stable release, run the check in the release steps and one real install in a disposable VM (recommended).**
-    - Pros: covers the deploy and the pin moving; the same command the docs give.
-    - Cons: waits for the next Stable release.
-  - **Fetch the script and compare it with `main` in CI.**
-    - Pros: catches a stale deploy on every run.
-    - Cons: a scheduled check against production for a file that changes a few times a month; fails between a merge and the deploy.
+4. **Lock the first run through `bunx`**: `bunx` resolves transitive dependencies afresh before the service install takes over. Status: done (2026-11-05) for releases that publish `resources/release-runtime/`; the current pin, 2.36.1, predates it and still runs through `bun x` until the pin moves (proving that on the live site is 5022 task 1 in the manual-test checklist, 7568).
 
 ### 2. Prove a published release installs from its lockfile
 
@@ -102,7 +81,7 @@ Re-checked 2026-11-05: `installRelease` is now `packages/protocol/src/node/stand
 ## Current state
 
 - `install.sh` pins the release (task 2 of the report), the Bun it downloads (task 3) and, for releases that publish one, the dependency lockfile of its first run (task 4). Users who saved an older copy of the script keep running it unchanged: it still runs `bunx orkestrator@<its pin>`, and a host it set up updates through `installRelease` like any other.
-- Tasks 1 and 2 need the site deployed from `main`, and published releases; they stay open.
+- Task 2 needs two published releases that carry `resources/release-runtime/`; it stays blocked until then. Task 1 (the live-site proof after a deploy and a Stable release) is in the manual-test checklist (7568).
 
 ## Constraints and rationale
 
@@ -140,7 +119,7 @@ Releases older than the lockfile still install with a plain `bun install`. The p
 ### Task 4: releases without a lockfile
 
 - **Chosen:** run them through `bun x`, as the script always did, after the fetch shows no `resources/release-runtime/`.
-- **Why:** keeps those releases running exactly as before (the ticket requires older installs to keep working) and matches `installRelease`, which installs them afresh. The current pin, 2.36.1, is one of them, so the locked first run starts when the pin moves (task 1).
+- **Why:** keeps those releases running exactly as before (the ticket requires older installs to keep working) and matches `installRelease`, which installs them afresh. The current pin, 2.36.1, is one of them, so the locked first run starts when the pin moves (5022 task 1, now in 7568).
 - **Cons:** until then the fetch is extra work on every first run.
 
 ### Task 4: what `ORKESTRATOR_INSTALL_VERSION` may hold
@@ -156,4 +135,4 @@ Releases older than the lockfile still install with a plain `bun install`. The p
 - [Releasing the desktop app](../../development/releasing.md)
 - [Host updates](../../architecture/host-updates.md)
 - Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the macOS half of task 2) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the live-site proof after the deploy and next Stable release, and the macOS half of task 2) moved there on 2026-11-10.

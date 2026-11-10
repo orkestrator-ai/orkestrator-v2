@@ -132,7 +132,7 @@ image.
 Live suites that need free address pools, or that restart the daemon, run on
 a private daemon that one command starts and one command removes
 (`scripts/disposable-docker-daemon.ts`, to-do
-[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)).
+4730, retired 2026-11-10).
 It has two modes behind the same commands: a host rootless daemon (the
 default, below) and a nested rootful one (`--mode rootful`, see
 [Nested rootful mode](#nested-rootful-mode)).
@@ -510,7 +510,7 @@ does the budget read-back stay truthful?
 
 ## Nested rootful disposable daemon on beelink2 (2026-11-09)
 
-To-do [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+To-do 4730 (retired 2026-11-10)
 task 1: the launcher's [nested rootful mode](#nested-rootful-mode), live.
 
 - **Host:** beelink2 (Arch Linux, kernel 7.2.15, x86_64), host Engine 29.9.2.
@@ -518,7 +518,8 @@ task 1: the launcher's [nested rootful mode](#nested-rootful-mode), live.
   used nor touched. The outer daemon was the launcher's own rootless one
   (`start --name outer`, slirp4netns, 3.1 s), so the nested daemon was root
   only inside that daemon's user namespace (`start` says so). A rootful
-  host as the outer daemon is task 4 of 4730.
+  host as the outer daemon is 4730 task 4, now in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 - **Image:** `ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta`, the
   published build of `480cf0296` (no `docker/` change between it and the
   tested branch), pulled into the outer daemon without credentials (3 min 8 s).
@@ -1084,7 +1085,7 @@ remains unverified (7420 tasks 2 and 4).
 
 To-do [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
 task 2's last open check and
-[4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+4730 (retired 2026-11-10)
 tasks 1 to 3, run in worktree `orkestrator-v2-20261106-034211-c21c9a597669`
 (branch at `c1724ab74` plus this change).
 
@@ -1254,7 +1255,7 @@ on rootful Linux Engine, x64.
     `live-restore` off, and a supervisor loop that starts `dockerd` again
     when it exits. Images were streamed in with `docker save | docker load`
     (same image id). Its containers' upstream is the host's `172.17.0.1`.
-    This is the 2026-10-31 recipe; [4730](../todo/containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md)
+    This is the 2026-10-31 recipe; 4730 (retired 2026-11-10)
     task 1 would make it a repository command.
   - **Host daemon for the five ticket cases.** A scratch script created a
     restricted and a full runtime through `createDockerContainer` after

@@ -129,5 +129,5 @@ count in `/proc/<pid>/fdinfo`.
 
 - to-do 5060 (retired 2026-11-10) task 2: other ignored directories and
   scan rate, now in [git-scan-caches.md](../../architecture/git-scan-caches.md#minimum-gap-between-local-scans).
-- [4730](../containers-and-environments/4730-disposable-docker-daemon-for-live-suites.md):
+- 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)):
   the disposable daemon.

@@ -17,7 +17,7 @@ against `main` at `931e5541` (2026-10-31); task 1 against `main` at
 ### Tasks
 
 1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; amd64 run on a self-managed host 2026-11-06, see the result below; arm64 stays open on CI evidence alone, pending the decision below).
-2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: done 2026-11-06 (tamper, gateway restart and default-loopback checks passed 2026-11-04; the rootless daemon restart passed 2026-11-06 on a disposable daemon from [4730](4730-disposable-docker-daemon-for-live-suites.md); `live-restore` on and other RootlessKit drivers are [7390](7390-rootless-restart-remaining-settings.md)).
+2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: done 2026-11-06 (tamper, gateway restart and default-loopback checks passed 2026-11-04; the rootless daemon restart passed 2026-11-06 on a disposable daemon from the [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon) (to-do 4730, retired 2026-11-10); `live-restore` on and other RootlessKit drivers are [7390](7390-rootless-restart-remaining-settings.md)).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
 5. **Claude host refresh trigger re-check**: re-check the `refreshHostClaudeLogin` trigger against the current Claude Code pin with a fake login. Status: done 2026-11-06 (the credential-free fake-login probe passed on Claude Code 2.1.314, see the result under task 5). The live run with a spare Claude account moved to the manual-test checklist (7568).
@@ -1252,7 +1252,7 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).
-- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md):
+- To-do 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)):
   the repo-owned disposable daemon task 2's rootless restart ran on.
 - [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md):
   the rootless restart settings task 2 did not run.

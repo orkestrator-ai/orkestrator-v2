@@ -80,7 +80,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [container-lifecycle.md](architecture/container-lifecycle.md) | Container authority: durable operations, ownership, writer lease, schema floor, recovery; images and readiness; persistent storage, preserving rebuilds, recovery copies and reviewed cleanup; staged inputs, networks, budgets and bounded logs. |
 | [environment-deletion.md](architecture/environment-deletion.md) | What deleting an environment removes and in what order, the cleanup ledger and its retries, the branch rules, and the sweeps that remove leftovers. |
 | [local-start-git-remote-failures.md](architecture/local-start-git-remote-failures.md) | Why a local environment's start could not reach the git remote, as the user sees it: the SSH connect, SSH authentication and timeout messages, and the checked "Use HTTPS for this project" remedy (`lifecycleRemedy`, `use_https_git_remote`). |
-| [git-scan-caches.md](architecture/git-scan-caches.md) | Git scan caches for environment worktrees: the untracked cache, what one diff scan costs (one combined diff, per-worktree untracked line counts), why fsmonitor is off (latency, hangs, leaked daemons), removing the legacy setting, stopping daemons before removal, and timed-out reads retried without the daemon. Follow-ups: [0735-git-fsmonitor-follow-ups.md](todo/containers-and-environments/0735-git-fsmonitor-follow-ups.md). |
+| [git-scan-caches.md](architecture/git-scan-caches.md) | Git scan caches for environment worktrees: the untracked cache, what one diff scan costs (one combined diff, per-worktree untracked line counts), why fsmonitor is off (latency, hangs, leaked daemons), removing the legacy setting, stopping daemons before removal, and timed-out reads retried without the daemon. The Windows checks still open are in the [manual-test checklist](todo/manual-test/7568-manual-test-checklist.md) (0735 tasks 4 and 6). |
 | [agent-accounts.md](architecture/agent-accounts.md) | Multiple Claude/Codex logins: account directories and shared links, global switching, backend-driven login and signing in again, plan usage, containers, coordinators, terminals, and Claude Keychain naming. |
 | [bug-report.md](architecture/bug-report.md) | The sidebar Bug button's Report a bug sheet: the `bug-report:<id>` synthetic runtime, its sandboxed ask-first policy, the shared `--fix` instructions, draft and filing (gh, else prefilled URL), machine routing through node scopes, and the context it collects. |
 | [github-cli.md](architecture/github-cli.md) | Which `gh` the backend runs (managed copy, then PATH), the status command, device-flow sign-in through the account login driver, the startup reminder and its opt-out, and the container GitHub credential source. |
@@ -222,9 +222,15 @@ profiles, the iOS simulator or two dev profiles on one host. Typical reasons:
   machines or a tailnet;
 - a decision the file reserves to the user or maintainer ("user's decision",
   "product call", "scope call", "needs approval", "maintainer action");
-- an outward action (GitHub settings or rulesets, publishing, filing an
-  upstream report, firewall or network changes or destructive cleanup on
-  nodes).
+- an outward action (GitHub settings or rulesets, publishing, deploying the
+  site or cutting a release, filing an upstream report, firewall or network
+  changes or destructive cleanup on nodes).
+
+A task whose own text says it needs one of these (for example "needs a
+Windows host", "needs a host where the user may use the rootful daemon",
+"needs the deploy and the next Stable release") is human-only, whatever its
+status line says. A task that only waits for a release or a CI run to happen,
+with agent work to do afterwards, is `blocked`.
 
 Human-only work never goes into an area to-do. It is a `- [ ]` item in the
 [manual-test checklist](todo/manual-test/7568-manual-test-checklist.md),

@@ -44,7 +44,7 @@ against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 
 **Problem.** Rootless Docker puts the container network inside RootlessKit's namespace (slirp4netns or pasta). Whether `SO_MARK`, the `nat` DNAT to the namespace's own address and `SO_ORIGINAL_DST` behave the same there is unproven.
 
-**Context.** The [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) (from the retired to-do 0109) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
+**Context.** The [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) (from the retired to-do 0109) and the [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon) (to-do 4730, retired 2026-11-10) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
 
 **Investigation.** Not run before 2026-11-10. No rootless daemon was available on the build host. Not run on 2026-11-06 either: that run on beelink was scoped to its rootful Engine, and no rootless daemon was started.
 
@@ -186,7 +186,7 @@ accept CI's), and rootless with pasta (task 4).
 - [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
 - [0018](0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
 - [7000](7000-name-checks-hold-newline-less-first-writes.md): a newline-less first write is held, found by task 1
-- [4730](4730-disposable-docker-daemon-for-live-suites.md): the disposable daemon task 1 had to build by hand, and task 2 used
+- 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
 - [7390](7390-rootless-restart-remaining-settings.md): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`
 - To-do 0241 (retired 2026-11-10): the leaked networks that fill the host's pools; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)

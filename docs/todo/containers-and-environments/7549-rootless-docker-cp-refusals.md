@@ -325,7 +325,7 @@ copied into an overlay2 instance.
 - The retired to-do 0109 (task 3 classified the start refusal; task 4 added
   the single retry; task 5 found these): its evidence is the
   [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
-- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md)
+- To-do 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon))
   (the launcher used, which has no storage-driver option).
 - [Container lifecycle](../../architecture/container-lifecycle.md)
   ("Portable inputs").

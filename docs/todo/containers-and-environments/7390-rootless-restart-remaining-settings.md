@@ -4,7 +4,7 @@
 
 Analysed 2026-11-06 against main at `c1724ab74`. Found while closing
 [0018](0018-container-network-and-credential-isolation.md) task 2 with
-[4730](4730-disposable-docker-daemon-for-live-suites.md) task 3.
+to-do 4730 task 3 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)).
 
 ### Tasks
 
@@ -73,7 +73,7 @@ qualified.
 ## Related
 
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: the rootless restart result these settings extend.
-- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md): the launcher.
+- To-do 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the launcher.
 - [Container qualification](../../development/container-qualification.md#rootless-daemon-restart-on-a-disposable-daemon-2026-11-06): the 2026-11-06 run.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the arm64 host run; the user part of task 2: installing `passt` and `vpnkit` on a host) moved there on 2026-11-10.
 

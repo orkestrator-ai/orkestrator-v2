@@ -508,4 +508,13 @@ migration's scoping, the daemon stop and the fallback wiring. Its real-daemon
 cases run wherever `git version --build-options` reports
 `feature: fsmonitor--daemon`, Linux included, and stop every daemon they start.
 
-Remaining work: [0735-git-fsmonitor-follow-ups.md](../todo/containers-and-environments/0735-git-fsmonitor-follow-ups.md).
+The Windows branch of the fingerprint probe (the bounded `taskkill /t /f`
+cleanup) has never run, and the blocking-hook regression in
+`review-worktree-fingerprint.test.ts` is skipped on Windows: it intercepts Git
+with a POSIX `sh` script named `git` first on `PATH`, which Node's
+`spawn("git")` on Windows does not resolve (it finds only `git.exe`/`.cmd`). A
+Windows variant needs another way to observe the calls (for example
+`GIT_TRACE` to a file) and a hook fixture without `#!` or SIGTERM. That run,
+and the per-call latency with and without fsmonitor on Windows, are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(0735 tasks 4 and 6; to-do 0735 retired 2026-11-10).

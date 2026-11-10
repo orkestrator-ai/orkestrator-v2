@@ -200,13 +200,12 @@ describe("resource-only command read (SDK pin)", () => {
             .map((command) => ({ ...command, invocationName: command.name })) as never,
       },
     });
-    // The attach path loaded both extensions (Pi's pre-trust pass may import a
-    // user one twice, depending on its module cache); the preview loaded neither.
-    expect(new Set(globals.__orkPreviewLoaded)).toEqual(new Set(["project-probe", "user-probe"]));
+    // Both preview and attach exclude user and project extensions.
+    expect(globals.__orkPreviewLoaded).toBeUndefined();
     expect(attached.commands.filter((command) => command.source !== "extension")).toEqual(
       preview.commands,
     );
-    expect(names(attached.commands)).toContain("/project-probe");
+    expect(names(attached.commands)).not.toContain("/project-probe");
   });
 });
 
@@ -239,14 +238,14 @@ function deferred<T>() {
 }
 
 describe("command preview lifecycle", () => {
-  test("publishes a never-read session's list as stale and attach-pending", async () => {
+  test("publishes a never-read session's complete list as ready", async () => {
     const state = freshState();
     state.lastAccessed = 1;
     const revision = state.revision;
     await awaitCommandPreview(state, 1_000, async () => rows("alpha"));
 
     expect(names(state.slashCommands)).toEqual(["/alpha"]);
-    expect(state.commandCatalogue).toEqual({ status: "stale", revision: 1, attachPending: true });
+    expect(state.commandCatalogue).toEqual({ status: "ready", revision: 1 });
     expect(state.revision).toBe(revision + 1);
     // Metadata: never attached, never touched.
     expect(state.session).toBeNull();
@@ -319,7 +318,7 @@ describe("command preview lifecycle", () => {
     state.commandCatalogue = { status: "stale", revision: 0, attachPending: true };
     await awaitCommandPreview(state, 1_000, async () => rows("new"));
     expect(names(state.slashCommands)).toEqual(["/new"]);
-    expect(state.commandCatalogue).toEqual({ status: "stale", revision: 1, attachPending: true });
+    expect(state.commandCatalogue).toEqual({ status: "ready", revision: 1 });
   });
 
   test("an attach that lands first wins over a late preview", async () => {
@@ -384,9 +383,8 @@ describe("command preview lifecycle", () => {
       if (outcome === "success") {
         expect(names(state.slashCommands)).toEqual(["/retried"]);
         expect(state.commandCatalogue).toEqual({
-          status: "stale",
+          status: "ready",
           revision: 1,
-          attachPending: true,
         });
       } else {
         expect(state.health.snapshot().notices).toContainEqual(
@@ -413,7 +411,7 @@ describe("command preview lifecycle", () => {
 
     await awaitCommandPreview(state, 1_000, async () => rows("retried"));
     expect(names(state.slashCommands)).toEqual(["/retried"]);
-    expect(state.commandCatalogue).toMatchObject({ status: "stale", attachPending: true });
+    expect(state.commandCatalogue).toMatchObject({ status: "ready" });
   });
 
   test.each(["success", "failure"])(

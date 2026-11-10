@@ -235,6 +235,7 @@ export const getAgentAccountUsageCommand = defineCommand({
     platform: Schema.String,
     accountId: Schema.String,
     force: optionalBoolean,
+    cacheOnly: optionalBoolean,
   }),
   result: PlanUsageSnapshotSchema,
   critical: [],
@@ -302,6 +303,51 @@ export const cancelAgentAccountLoginCommand = defineCommand({
 });
 
 // ---------------------------------------------------------------------------
+// Shared usage readings (docs/architecture/agent-accounts.md, "Shared readings")
+
+/**
+ * Leaf side, called by an attached command node over its link only (never
+ * routed, granted or relayed; `node-routing.ts`): this machine's matchable
+ * logins and its newest reading of each. Identities and readings are parsed
+ * by the caller (`parseUsageIdentities`, `parseSharedUsageReadings`), which
+ * keeps usage fields only. A machine that predates the command answers
+ * `unknown-command` and simply takes no part.
+ */
+export const collectSharedUsageReadingsCommand = defineCommand({
+  domain: accountsDomain,
+  name: "collect_shared_usage_readings",
+  since: 1,
+  access: "internal",
+  // Classified as the routing classifier does (`isNodeReadCommand`), like
+  // `collect_ticket_sync_outbox`; it is never routed in any case.
+  read: false,
+  args: Schema.Struct({ controllerId: optionalUnknown }),
+  result: Schema.Struct({
+    identities: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+    readings: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  }),
+  critical: [],
+});
+
+/**
+ * Leaf side, as above: the command node's newest readings of logins this
+ * machine has. Each is kept only when it is newer than what this machine
+ * already has for that login, and only for a login it has.
+ */
+export const applySharedUsageReadingsCommand = defineCommand({
+  domain: accountsDomain,
+  name: "apply_shared_usage_readings",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({ controllerId: optionalUnknown, readings: optionalUnknown }),
+  result: Schema.Struct({
+    applied: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  }),
+  critical: [],
+});
+
+// ---------------------------------------------------------------------------
 // Plan usage and usage history
 
 export const getPlanUsageCommand = defineCommand({
@@ -310,7 +356,11 @@ export const getPlanUsageCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ platform: Schema.String, force: optionalBoolean }),
+  args: Schema.Struct({
+    platform: Schema.String,
+    force: optionalBoolean,
+    cacheOnly: optionalBoolean,
+  }),
   result: PlanUsageSnapshotSchema,
   critical: [],
 });
@@ -482,6 +532,8 @@ export const ACCOUNTS_COMMANDS = [
   removeAgentAccountCommand,
   getProjectUsageLimitsCommand,
   getAgentAccountUsageCommand,
+  collectSharedUsageReadingsCommand,
+  applySharedUsageReadingsCommand,
   startAgentAccountLoginCommand,
   reauthenticateAgentAccountCommand,
   getAgentAccountLoginCommand,

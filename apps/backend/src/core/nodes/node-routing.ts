@@ -68,6 +68,9 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "read_ticket_image",
   "put_ticket_image",
   "sync_node_tickets",
+  // Shared usage readings move over the link between a command node and its leaf only.
+  "collect_shared_usage_readings",
+  "apply_shared_usage_readings",
   "create_node_action_request",
   "list_node_action_requests",
   // Each machine's standing permission is for its own coordinators only.

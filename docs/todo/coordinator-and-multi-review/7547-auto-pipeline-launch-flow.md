@@ -2,14 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-09 against main at `30bce689555ce4f62e473d19e196d912535d3d04`.
+Analysed 2026-11-09 against main at `c6de4733c5beb87a578f82a8548725305e1ff254`.
 
 ### Tasks
 
 1. Implement durable read-only drafting and typed commands. Status: done.
 2. Implement the manual launch and draft-review dialogs. Status: done.
 3. Implement confirmed ticket creation and promotion. Status: done.
-4. Qualify the complete fake-model flow and document the shipped UI. Status: open (depends on 2 and 3).
+4. Qualify the complete fake-model flow and document the shipped UI. Status: done.
 
 ### 1. Implement durable read-only drafting and typed commands
 
@@ -43,9 +43,9 @@ Analysed 2026-11-09 against main at `30bce689555ce4f62e473d19e196d912535d3d04`.
 
 ### 4. Qualify the complete fake-model flow and document the shipped UI
 
-**Problem.** Service tests cover model drafting, promotion and simulated delivery; complete real-backend browser qualification remains outstanding.
+**Problem.** Service tests covered model drafting, promotion and simulated delivery; complete real-backend browser qualification was outstanding.
 
-**Context.** The new backend tests cover adoption, transcript retention, simulated Review/Verify/PR completion, Build restart, replay, input bounds and concurrent admissions. They are not the requested fake-model end-to-end test.
+**Context.** The backend tests cover adoption, transcript retention, simulated Review/Verify/PR completion, Build restart, replay, input bounds and concurrent admissions. `mise run test:agent:auto-pipeline` (`e2e/agent-testing/auto-pipeline-live.spec.ts`) is now the fake-model end-to-end run; see [agent-testing.md](../../development/agent-testing.md#auto-pipeline-flow-fake-model).
 
 **Investigation.** Add component coverage for every eligibility case, editor controls, cancellation, failures and retries. Add backend malformed/failed drafting cases and a fake-model end-to-end run through confirmation to PR or commit-only delivery, reload and inactive-environment recovery. Follow the isolated-browser guide without real credentials, prohibited ports, toolchain installation or provider billing. Capture desktop/narrow before-and-after images. Update architecture and user-facing documentation once those paths exist.
 
@@ -53,7 +53,7 @@ Analysed 2026-11-09 against main at `30bce689555ce4f62e473d19e196d912535d3d04`.
 
 ## Current state
 
-Auto-pipeline is available from the manual Multi Review dialog. Durable read-only drafting, editable confirmation, ticket creation and completed-Build adoption are implemented. Complete real-backend browser qualification remains open.
+Auto-pipeline is available from the manual Multi Review dialog. Durable read-only drafting, editable confirmation, ticket creation and completed-Build adoption are implemented. On 2026-11-09 `mise run test:agent:auto-pipeline` passed on beelink (Linux, headless): a disposable Pi-only profile with no credentials, Pi on a loopback fake model, drafting through the browser, confirmation, the promotion commit, package preparation, validation, a read-only Review, Verify and commit-only delivery finishing while another environment was shown, then the finished graph after a reload and at 390 px. The fake model answered 11 calls and one submission each for the draft, validation plan, review report and Verify; the source tab received no further turn. Every task is done; the durable behaviour is in [build-pipeline-view.md](../../architecture/build-pipeline-view.md#manual-auto-pipeline-promotion) and [review-preparation.md](../../architecture/review-preparation.md#auto-pipeline-build-handoff).
 
 ## Constraints and rationale
 
@@ -61,7 +61,7 @@ No real providers, logins or production data directories. Keep host reachability
 
 ## Needs verification
 
-The internal adoption tests use an in-process fake provider. They do not prove drafting, actual Git commits, rendered graph behavior, coordinator ownership, or the manual button flow.
+The browser run delivers commit-only. Open-PR delivery after promotion is the ordinary Ship stage and is not exercised by the fake-model run, because it needs `gh` and a GitHub remote; the backend tests cover simulated PR completion. Coordinator reads of a promoted pipeline are covered only by the shared pipeline records, not by a live coordinator.
 
 ## Assumptions and decisions
 
@@ -75,8 +75,21 @@ Failure recording and stage retry retain the adopted Build as idle. The setup ha
 
 ### Tasks 1, 2 and 4: outstanding product flow
 
-Drafting, manual UI and confirmed ticket publication are implemented with focused fake-provider and fixture-browser tests. Complete real-backend browser qualification remains open.
+Drafting, manual UI and confirmed ticket publication are implemented with focused fake-provider and fixture-browser tests. Task 4's real-backend browser run is done (below).
 
 ### Tasks 1–3: review repairs
 
 Confirmation repairs tab publication on replay, validates checkout and transcript again before committing, and creates the request-keyed ticket after the commit. Draft retention is pruned and environment deletion purges drafts. Source lists refresh while mounted, prefer the active tab, and drafting dialogs can be dismissed without waiting for a provider response.
+
+### Task 4: fake-model qualification
+
+- **Engine.** Pi on a loopback OpenAI-compatible fake (`auto-pipeline-fake-model.ts`, script in `auto-pipeline-fake-model-script.ts`), because Pi runs in process with no login and its isolated `models.json` is inside the profile. The fake reads each stage's result tool and key from the instruction, submits a fixed valid result, and keeps only counts. A Claude or Codex fake would also work but needs a CLI home or config the spec would have to manage as well.
+- **Delivery.** Commit-only, set on the ticket while Verify is parked by the fake, because open-PR needs `gh` and a GitHub remote the fixture does not have. The parked Verify also gives the inactive-environment step a fixed point: the spec switches environments before releasing it.
+- **Bug found and fixed.** The Build pipeline's stage sends (`build-pipeline-service-supervisor.ts`) and durable re-sends (`build-pipeline-prompt-dispatch.ts`) named the result tool but not its key, so Pi's read-only gate refused a pipeline Review's `submit_review_report` and the run sat in Review. Multi Review and pipeline consolidation already sent the key; the stage sends now do too. `build-pipeline-address-findings-report.test.ts` pins the Address supervisor path. Review repair adds `build-pipeline-workflow-key.test.ts`: it checks an initial read-only Review send and a durable pending Review resend after a deliberately ambiguous send that the provider journal proves absent, preserving the original result key and accepting a report before advancing to Verify.
+- **Component and backend coverage.** The eligibility, editor, cancellation, failure and retry cases the task names were already covered by `AutoPipelineLaunch.test.tsx`, `AutoPipelineDescriptionField.test.tsx`, `e2e/AutoPipeline.spec.ts` and `auto-pipeline.test.ts` (malformed and failed drafting); no new cases were needed.
+- **Screenshots.** Configure Multi Review is captured at desktop and 390 px, and the generated draft at 390 px. Launch, title and acceptance-criterion edits, and confirmation run at 390 px, with an additional edited-draft capture; the finished graph is captured at both widths. They are written to `output/visual-previews/auto-pipeline-live-*.png` on each run.
+- **File kept.** Every task is done and the index says Finished: Yes. The file is kept rather than deleted in this change because the ticket asked for it and its index row to be updated; a later docs sweep can delete it, since its durable behaviour already lives in the architecture docs.
+
+### Task 4: review coverage repairs
+
+The recovery regression throws before provider admission, then uses the provider journal's `absent` answer to permit the durable resend. This avoids a deduplicated no-op masking missing resend metadata. Both initial and recovered Review cases assert plan mode, read-only permission, tool and original result key, then submit and consume a valid report. The browser case captures desktop launch, then reopens Configure Multi Review through the mobile Tools menu at 390 px. It keeps that viewport through drafting, edits and confirmation, because changing between desktop and mobile shells remounts the toolbar and closes its dialogs.

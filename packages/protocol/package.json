@@ -8,6 +8,7 @@
     "./backend-diagnostics": "./src/backend-diagnostics.ts",
     "./capacity-retry": "./src/capacity-retry.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
+    "./agent-account-shared-usage": "./src/agent-account-shared-usage.ts",
     "./claude-login-notice": "./src/claude-login-notice.ts",
     "./agent-handoff": "./src/agent-handoff.ts",
     "./agent-handoff-frame": "./src/agent-handoff-frame.ts",

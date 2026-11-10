@@ -1,6 +1,8 @@
 /**
  * The standing permission for coordinators to switch the active account of
- * one provider without asking, and the switches it allowed.
+ * one provider without asking, and the switches it allowed. The switches are
+ * a log behind a **View log** button, in a dialog, so a long history does not
+ * push the account cards down the page.
  *
  * The permission belongs to the machine shown (each machine holds its own,
  * for the switches its coordinators make on it and on the machines it
@@ -11,7 +13,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { ScrollText } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { InfoHint } from "@/components/ui/info-hint";
 import { getCoordinatorAccountSwitchGrant, setCoordinatorAccountSwitchGrant } from "@/lib/backend";
 import type { AccountMachine } from "@/lib/backend/agent-accounts";
@@ -35,10 +47,27 @@ function outcomeLabel(record: CoordinatorAccountSwitchRecord): string | null {
   }
 }
 
+/** "9 Nov 2026, 14:03" in the reader's locale and time zone. */
+function formatSwitchTime(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return "Unknown time";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** One switch: when, on which machine, from → to, and who asked and why. */
 export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAccountSwitchRecord }) {
   const outcome = outcomeLabel(record);
   return (
-    <li className="space-y-0.5 text-xs" aria-label={`Switch on ${record.nodeName}`}>
+    <li
+      className="space-y-0.5 border-b border-border/60 py-2 text-xs last:border-b-0"
+      aria-label={`Switch on ${record.nodeName}`}
+    >
+      <p className="text-muted-foreground">
+        <time dateTime={record.at} title={record.at}>
+          {formatSwitchTime(record.at)}
+        </time>{" "}
+        ({formatRelativeTime(record.at)})
+      </p>
       <p className="text-foreground">
         <span className="font-medium">{record.nodeName}</span>:{" "}
         {record.fromAccountLabel ?? record.fromAccountId ?? "previous account"} →{" "}
@@ -46,7 +75,7 @@ export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAcco
         {outcome ? <span className="ml-1.5 text-destructive">{outcome}</span> : null}
       </p>
       <p className="text-muted-foreground">
-        {record.coordinatorName}, {formatRelativeTime(record.at)}
+        Asked by {record.coordinatorName}
         {record.reason ? `: “${record.reason}”` : ""}
       </p>
       {record.authorizedBy === "self-timer" ? (
@@ -56,6 +85,58 @@ export function CoordinatorSwitchRecordRow({ record }: { record: CoordinatorAcco
         </p>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * The switches as a log: a **View log** button with their count, opening a
+ * dialog that lists them newest first. The dialog scrolls, closes on Escape
+ * and gives focus back to the button (Radix Dialog).
+ */
+export function CoordinatorSwitchLog({
+  records,
+  platformLabel,
+}: {
+  records: readonly CoordinatorAccountSwitchRecord[];
+  platformLabel: string;
+}) {
+  const newestFirst = [...records].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const count = newestFirst.length;
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 text-xs"
+          aria-label={`View switch log, ${count} ${count === 1 ? "entry" : "entries"}`}
+        >
+          <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+          View log
+          <span className="rounded bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+            {count}
+          </span>
+        </Button>
+      </DialogTrigger>
+      <DialogContent size="xl" className="max-h-[min(80dvh,40rem)] grid-rows-[auto_minmax(0,1fr)]">
+        <DialogHeader>
+          <DialogTitle>{platformLabel} account switches</DialogTitle>
+          <DialogDescription>
+            Switches coordinators made without asking, newest first.
+          </DialogDescription>
+        </DialogHeader>
+        <ul
+          className="min-h-0 overflow-y-auto pr-1"
+          aria-label={`${platformLabel} account switch log`}
+          data-testid="coordinator-switch-log"
+        >
+          {newestFirst.map((record) => (
+            <CoordinatorSwitchRecordRow key={record.requestId} record={record} />
+          ))}
+        </ul>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -161,20 +242,16 @@ export function CoordinatorAccountSwitchGrant({
               <p>
                 Only to a signed-in account that is not known to be used up, and at most{" "}
                 {state.limit.switches} switches per machine in {state.limit.windowMinutes} minutes;
-                past that they ask again. Each switch is listed here, with any a timer you allowed
-                made.
+                past that they ask again. Each switch, with any a timer you allowed made, is in the
+                log.
               </p>
             </InfoHint>
           </div>
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
           {switches.length > 0 ? (
-            <div className="space-y-1 pt-1">
-              <p className="text-xs font-medium text-foreground">Switched without asking</p>
-              <ul className="space-y-1.5">
-                {switches.map((record) => (
-                  <CoordinatorSwitchRecordRow key={record.requestId} record={record} />
-                ))}
-              </ul>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <p className="text-xs text-muted-foreground">Switched without asking</p>
+              <CoordinatorSwitchLog records={switches} platformLabel={platformLabel} />
             </div>
           ) : null}
         </div>

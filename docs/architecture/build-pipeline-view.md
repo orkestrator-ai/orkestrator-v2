@@ -904,3 +904,17 @@ Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
 Restarting Build creates an ordinary ticket-based session and retains the
 original as the first attempt. Pipeline records and ticket linkage provide the
 same sidebar, coordinator and PR ownership as any other pipeline.
+
+The created ticket has no delivery choice of its own, so it follows the default
+("Open a PR, don't merge"). Changing the ticket's **When verified** choice before
+Verify passes applies to this run, as for any ticket build. After adoption the
+run starts at package preparation: with one reviewer a Package Preparation
+Session plans validation, the backend runs it, a read-only Review Session reads
+the sealed package, and Verify decides delivery.
+
+`mise run test:agent:auto-pipeline` qualifies this whole path in a real browser
+against a disposable profile whose only agent is Pi on a loopback fake model
+([agent-testing.md](../development/agent-testing.md#auto-pipeline-flow-fake-model)):
+drafting, title and criterion edits, confirmation, the promotion commit, the
+adopted Build, commit-only delivery finishing while another environment is
+shown, and the finished graph after a reload.

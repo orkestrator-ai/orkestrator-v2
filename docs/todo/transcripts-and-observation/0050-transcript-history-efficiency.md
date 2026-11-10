@@ -594,8 +594,10 @@ restart and after it, with and without the renderer fix.
 
 Not shown by this run: one call's own expanded output (stop 2, opened by the
 spec before the restart) is folded again after the rename, while the group
-stays open. Tracked in
-[7270](7270-call-expansion-across-codex-row-rename.md).
+stays open. Fixed on 2026-11-10 (to-do 7270): a call's own disclosure is now
+keyed by its call id within the transcript, and the spec asserts stop 2 is
+still expanded after the restart (see
+[transcript-scroll.md](../../architecture/transcript-scroll.md#tool-groups)).
 
 ## Qualification results (2026-10-26): hidden document at 8 MiB
 

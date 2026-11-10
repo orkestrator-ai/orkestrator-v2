@@ -653,3 +653,52 @@ retry or skip changed. The broad command on the observed head remains failed;
 focused passes do not replace it. Context teardown needs its own reproducer
 before changing the runner or its deadline. This record does not classify the
 failure as environmental or excuse it from qualification.
+
+
+## Explicit paging fixture lifetime — 2026-11-10
+
+The later qualification on `7c7a8b02e61188fc89742e26c66022a8c1b18fd2`
+repeated the same desktop context teardown failure in
+`e2e/TranscriptPaging.spec.ts:430`. Command:
+`mise run test:logged -- --name qualification-browser -- mise run test:browser`.
+Nine workers: 1,665 passed, 152 skipped, one failed, exit 1 in 1,241.2 s.
+The first-row poll succeeded in 21,616 ms; context teardown failed after
+30,003 ms. No paging assertion failed. Evidence:
+`orkestrator-test-run.QFwHN6/qualification-browser.log.gz` below the host
+temporary directory and
+`output/agent-testing/qualification-validation/transcript-paging-original/`.
+
+The complete unchanged owner passed (39 passed, one skipped, 195.4 s):
+
+```sh
+mise run test:logged -- --name qualification-paging-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1 --output output/agent-testing/qualification-validation/paging-owner
+```
+
+The separate public-site portion passed eight cases in 10.2 s. These results
+do not replace the failed broad command.
+
+### Fixture cleanup
+
+The fixture had left its transcript mounted throughout browser-context
+teardown. It now exposes an explicit view disposer; the paging owner's
+`afterEach` invokes it while the page can still service React cleanup, then
+verifies the disposed state and absence of the transcript scroller. This ends
+the view's lifetime before closing its browser context. It does not stop
+provider work or delete a conversation, and all paging assertions run before
+cleanup. Existing test, assertion and teardown deadlines, retries and skips
+are unchanged.
+
+At `b667bb50a1689ef6bb5b95ee933d62cbc12a7264`, E2E typechecking passed,
+the complete paging owner passed with three workers (82.2 s), and the
+implicated case passed five repeats in both viewport projects with nine
+workers (53.8 s). Passing per-case counts were not retained:
+
+```sh
+mise run test:logged -- --name paging-dispose-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=3 --output output/agent-testing/paging-dispose-owner
+mise run test:logged -- --name paging-dispose-stress -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --grep 'native: history pages in without a click' --repeat-each=5 --workers=9 --output output/agent-testing/paging-dispose-stress
+```
+
+This makes fixture ownership explicit and verifies cleanup before context
+shutdown. The underlying Chromium/Playwright close stall's cause remains
+unconfirmed; the aggregate case stays open. Final committed-head qualification
+is reported in the implementation handoff, without discarding prior failures.

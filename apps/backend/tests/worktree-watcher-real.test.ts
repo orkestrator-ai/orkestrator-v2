@@ -242,9 +242,20 @@ describe("worktree watcher on this platform's real watch", () => {
     "a write under an ignored node_modules goes unreported while a source write is noticed",
     async () => {
       const worktree = await makeWorktree();
-      const { seen } = await watchWorktree(worktree);
+      let proof: readonly string[] | undefined;
+      const { seen } = await watchWorktree(worktree, {
+        plan: {
+          ...worktreeWatchPlanIo,
+          listExcluded: async (root) => (proof = await listIgnoredDependencyTrees(root)),
+        },
+      });
       // Proves the watch is delivering before the absence below can mean anything.
       await expectNoticed(worktree, seen, "src");
+      // On macOS `qualified` does not wait for Git's proof, and until it is read
+      // nothing is left out (flake 9919). Writes before it are reported by design.
+      const deadline = Date.now() + DELIVERY_DEADLINE_MS;
+      while (proof === undefined && Date.now() < deadline) await Bun.sleep(10);
+      expect(proof).toEqual(["node_modules", "packages/app/node_modules"]);
       await write(worktree, "node_modules/pkg-1/lib/installed.js");
       await write(worktree, "packages/app/node_modules/pkg-1/lib/installed.js");
       // Delivered in order, so anything from the writes above has arrived by now.

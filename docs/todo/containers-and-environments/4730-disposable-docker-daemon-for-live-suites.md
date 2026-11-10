@@ -207,6 +207,15 @@ No group, sudo or host-daemon configuration change was made. Socket group
 access, real root-owned leftovers, restart and final resource absence on
 a rootful outer daemon still need the recommended host run.
 
+Observed in passing (2026-11-10, to-do
+[6820](6820-agent-tools-peer-gate-linux-evidence.md) task 1, on beelink,
+where this account may use the host's rootful Engine 29.9.2): `start --mode
+rootful --name s6820rf` recorded `outerRootless: false`, started in 12.9 s
+including the dind pull, served two runs of the peer evidence script, and
+`stop` left no labelled container or volume, no dind image and no runtime
+directory. Neither the suites this task names nor the printed restart ran
+there, and no root-owned leftover was checked, so the task stays open.
+
 **Decisions.**
 
 - **Where to run it?**

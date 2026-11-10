@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +9,9 @@ import { forkEnvironmentRecord } from "../commands-environment-fork.js";
 import { createEnvironment, createProject, StorageService } from "../storage.js";
 import { runCommand } from "../shell.js";
 import { NodeReadModel } from "./node-read-model.js";
-import { TestNodeNetwork, settle } from "./node-network-test-support.js";
+import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 
 test("real node summaries match live pipeline membership through forks and pipeline deletion", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-node-markers-"));

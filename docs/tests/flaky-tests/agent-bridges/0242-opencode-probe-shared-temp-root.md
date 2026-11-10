@@ -1,7 +1,7 @@
 # OpenCode probe cleanup observes another temporary root
 
 - **ID:** 0242
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `runOpenCodeLiveCompatibility > a deadline while the CLI version is read leaves nothing to create later`
 - **Owning file:** `scripts/opencode-live-compatibility-probe.test.ts:432`
@@ -110,3 +110,30 @@ The separate iOS command did not reach compilation or tests: `simctl list device
 - **Isolated rerun:** `mise run test:logged -- --name merge-probe -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures` passed the unchanged complete owner (exit 0, 0.7 seconds).
 - **Evidence:** group log `orkestrator-test-run.GN0XJN/root-and-agent-support-tests.log.gz` and outer log `orkestrator-test-run.IIdbng/merge-suite.log.gz` under the host temporary directory after aggregate finalization. Migration-copy rerun: `orkestrator-test-run.r93NgB/merge-migrate-copy.log.gz`.
 - **Assessment:** recurrence of the existing shared temporary-root snapshot flake. Concurrent creation or cleanup remains plausible but unproven. No probe implementation, assertion, timeout or skip changed.
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved.
+- **Root cause:** the hypothesis held. `tempRoots()` in
+  `scripts/opencode-live-compatibility-probe.test.ts` lists every
+  `ork-opencode-compat-*` entry in `tmpdir()`, and before 2026-10-29 that was
+  the host's shared temporary directory. Another worktree's run of the same
+  probe tests created or removed its own roots between this test's two
+  snapshots, which is both recorded shape: an extra root after the deadline,
+  and `[]` where the first snapshot had caught a foreign root.
+- **Fix:** already on `main` in `522a4f03c` (`fix(tests): isolate and clean
+  up leaked Playwright profiles`, #1425), which added `tests/isolate-tmpdir.ts`
+  to the root `tests/setup.ts` preload. Every test process now gets a private
+  `TMPDIR`, so `tmpdir()` in the test, and in the probe it runs, names a
+  directory no other process writes. No change in this sweep. Every
+  observation above predates that commit (the last is 2026-10-27).
+- **Reproduced:** yes — three loops creating and removing
+  `ork-opencode-compat-*` directories in a scratch directory, with the test
+  pointed at that directory as an inherited shared `TMPDIR`
+  (`TMPDIR=$SH ORKESTRATOR_TEST_PRIVATE_TMPDIR=$SH bun test ./scripts/opencode-live-compatibility-probe.test.ts`),
+  failed all five runs with one to four `toEqual(before)` failures at lines
+  282, 399, 422 and 450, the recorded signatures. With the same loops running
+  and only `TMPDIR=$SH` (so the preload makes its private directory) all five
+  runs passed, 31 pass, 0 fail.
+- **Stress:** the five private-directory runs above under the churners
+  (31 of 31 each).

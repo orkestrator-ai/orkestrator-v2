@@ -1,7 +1,7 @@
 # Codex deleted-session initial-prompt retry returns a transport error
 
 - **ID:** 0492
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `at-most-once dispatch > a deleted session cannot dispatch its delayed initial-prompt retry`
 - **File:** `bridges/codex-bridge/src/app-server-runtime-prompt.test.ts:231`
@@ -41,3 +41,36 @@
 - **Owning-file rerun:** `bun test bridges/codex-bridge/src/app-server-runtime-prompt.test.ts` passed three times in a row: 124 pass, 0 fail each.
 - **Evidence:** `orkestrator-test-run.hbIll4/codex-focused.log.gz` under the host temporary directory.
 - **Assessment:** recurrence of the existing intermittent race between the deletion and the delayed retry; under load the deletion can take longer than the 30 ms retry delay. Todo 0211 records a typed prompt only after a turn is accepted, outside the retry path. No assertion, timeout or skip changed.
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved.
+- **Root cause:** a real product race. `deleteSession`
+  (`app-server-runtime-sessions.ts`) claims the session synchronously but
+  keeps it registered while `releaseBridgeSession` awaits
+  `store.publishRemoval`. The delayed initial-prompt retry
+  (`app-server-runtime-prompt.ts`) only asked the registry whether its session
+  was still live. When the tombstone write outlasted the retry delay, the
+  retry passed that check and dispatched `turn/start` into a session being
+  deleted (`ok: true`, the 2026-10-26 shape), or the release dropped the thread
+  while the retry was re-attaching and the dispatch hit the released handle
+  (503 `Unknown app-server thread handle`). A user closing a tab whose initial
+  prompt had hit app-server overload could have that prompt run after the tab
+  was gone. The test added a second, test-side timing dependency: it polled
+  for the first attempt every millisecond, so a late poll under load could
+  delete only after the 30 ms retry delay had already expired.
+- **Fix:** `CodexRuntimeSessions.sessionDeleteClaimed` exposes the delete
+  claim, and the retry treats a claimed session as gone at both of its
+  liveness checks (after the delay and after generation recovery), so it
+  forgets the retry marker and answers 404 without dispatching. The existing
+  test now holds the retry inside `markRetryable` until the deletion has
+  finished instead of polling. A new test, `a deletion still publishing its
+  removal fences the delayed initial-prompt retry`, holds the deletion's
+  `publishRemoval` while releasing the retry.
+- **Reproduced:** yes — the new test, which holds `publishRemoval` until the
+  retry answers, failed on the unchanged prompt code with exactly the recorded
+  `ok: true` / `must-not-run` outcome. It passes with the fix.
+- **Stress:** `mise run test:logged -- --name codex-prompt-0492-stress -- bun scripts/test-under-contention.ts --burners 4 -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/app-server-runtime-prompt.test.ts -t "delayed initial-prompt retry" --rerun-each=30`
+  passed (exit 0; unpinned burners on macOS). The complete owner and
+  `app-server-runtime-sessions`, `session-close-route`,
+  `session-close-route-app` and `app-server-runtime-typed-prompts` passed.

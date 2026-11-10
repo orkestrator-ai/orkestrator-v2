@@ -7,7 +7,8 @@ Analysed 2026-11-06 against `main` at `ee2cc8423`. Found by
 before-and-after on macOS: on an idle profile with one container
 environment, `main`'s `tab-cleanup` job ran 5 `docker exec`, 1 `tmux` and 1
 other process a minute, and read 50–93 KB a minute of command output; on
-`0bd214ee` it ran none.
+`0bd214ee` it charged none (Docker's own count on 2026-11-10 shows base ran
+the same execs without charging them; see Investigation).
 
 ### Tasks
 
@@ -55,6 +56,13 @@ was not checked. Since to-do 7020 task 1 (2026-11-09), a census that lists any
 tmux process is followed by one more exec, an `sh` probe of `/proc`
 (`tmux-socket-owner.ts`), so a measurement after that date can count one more
 `process-spawn` or `docker-exec` per unreachable socket.
+
+Counted from Docker on 2026-11-10 (1202 task 1, Linux, `docker events` for
+the container during 120 s windows with no tab open): `0bd214ee` made the
+same cleanup execs a minute as `main` at `c98b20e6f`, `rm` 2, `tmux
+list-sessions` 1, `ps` 1 and `test` 1, but charged none of them to
+`tab-cleanup`. So base's zero was the second case above: the execs ran and
+were not counted. Whether `main` needs all five is still the open question.
 
 **Decisions.**
 

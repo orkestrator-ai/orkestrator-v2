@@ -11,6 +11,8 @@ import {
   SHELL_TOOL,
   offeredName,
   scriptedTurn,
+  taggedUserMessages,
+  turnStartTags,
   verificationResult,
 } from "./auto-pipeline-fake-model-script";
 
@@ -139,5 +141,63 @@ describe("Auto-pipeline fake model script", () => {
       "mcp_orkestrator_submit_fix_result",
     );
     expect(offeredName(["submit_fix_result_v2"], "submit_fix_result")).toBeUndefined();
+  });
+});
+
+describe("qualification tags", () => {
+  const TAG = "QATAG0A1B2C3D";
+
+  test("a prompt that starts a turn counts its tag once", () => {
+    expect(turnStartTags([user(`Build it. ${TAG} and again ${TAG}`)])).toEqual([TAG]);
+  });
+
+  test("later requests of the same turn count nothing", () => {
+    expect(
+      turnStartTags([
+        user(`Build it. ${TAG}`),
+        { role: "assistant", content: null },
+        { role: "tool", content: "ok" },
+      ]),
+    ).toEqual([]);
+    expect(turnStartTags([user(`Build it. ${TAG}`), { role: "assistant", content: "x" }])).toEqual(
+      [],
+    );
+  });
+
+  test("untagged, malformed and lower-case tags count nothing", () => {
+    expect(turnStartTags([user("Build it.")])).toEqual([]);
+    expect(turnStartTags([user("qatag0a1b2c3d QATAG0A1B")])).toEqual([]);
+    expect(turnStartTags(undefined)).toEqual([]);
+  });
+
+  test("a resent prompt in a later turn counts again", () => {
+    expect(
+      turnStartTags([
+        user(`Build it. ${TAG}`),
+        { role: "assistant", content: "Done." },
+        user(`Build it. ${TAG}`),
+      ]),
+    ).toEqual([TAG]);
+  });
+});
+
+describe("tagged user messages", () => {
+  const TAG = "QATAG0A1B2C3D";
+
+  test("counts each user message that carries the tag once", () => {
+    expect(
+      taggedUserMessages([
+        { role: "system", content: `System ${TAG}` },
+        user(`Build it. ${TAG} ${TAG}`),
+        { role: "assistant", content: `Echo ${TAG}` },
+        user("Continue."),
+        user(`Build it. ${TAG}`),
+      ]),
+    ).toEqual({ [TAG]: 2 });
+  });
+
+  test("a request without tags counts nothing", () => {
+    expect(taggedUserMessages([user("Build it.")])).toEqual({});
+    expect(taggedUserMessages(null)).toEqual({});
   });
 });

@@ -598,6 +598,29 @@ describe("pointer review package", () => {
     expect(isReviewPackage(pointerPackage({ changedFiles: [{ path: "src/a.ts" }] }))).toBe(false);
   });
 
+  test("accepts a sealed diff only at its digest-named path in the package's own directory", () => {
+    const digest = "d".repeat(64);
+    const diffArtifact = {
+      path: `.orkestrator/review-artifacts/package-1/review-diff-${digest}.patch`,
+      bytes: 2_048,
+      sha256: digest,
+    };
+    expect(isReviewPackage(pointerPackage({ diffArtifact }), 1)).toBe(true);
+    for (const wrong of [
+      { ...diffArtifact, path: `.orkestrator/review-artifacts/other/review-diff-${digest}.patch` },
+      {
+        ...diffArtifact,
+        path: `.orkestrator/review-artifacts/package-1/review-diff-${"e".repeat(64)}.patch`,
+      },
+      { ...diffArtifact, sha256: "D".repeat(64) },
+      { ...diffArtifact, bytes: -1 },
+      { ...diffArtifact, extra: true },
+      null,
+    ]) {
+      expect(isReviewPackage(pointerPackage({ diffArtifact: wrong }), 1)).toBe(false);
+    }
+  });
+
   test("ties artifact paths to whether the command actually ran", () => {
     const [entry] = pointerPackage().validation;
     expect(

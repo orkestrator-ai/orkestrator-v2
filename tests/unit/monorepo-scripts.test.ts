@@ -556,7 +556,9 @@ describe("monorepo orchestration scripts", () => {
     expect(root.tasks.build?.env).toBeUndefined();
 
     for (const script of ["apps/backend/scripts/build.ts", "packages/cli/scripts/build.ts"]) {
-      expect(read(script), script).toContain("define: buildCommitDefine()");
+      expect(read(script), script).toMatch(
+        /define:\s*\{\s*\.\.\.buildCommitDefine\(\),\s*__ORKESTRATOR_DISPATCH_HOLD__:\s*"false"\s*\}/,
+      );
       expect(read(script), script).not.toContain("rev-parse");
     }
     const stamp = '"$(bun scripts/build-commit.ts)"';

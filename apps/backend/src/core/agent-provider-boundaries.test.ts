@@ -18,7 +18,7 @@ const PROVIDER_SOURCE_FILES = [
   "opencode-messages.ts",
   "opencode-model-catalog.ts",
   "opencode-provider.ts",
-  "opencode-revert-reader.ts",
+  "opencode-revert.ts",
   "opencode-provider-environment.ts",
   "opencode-review-session-permissions.ts",
   "opencode-workflow-result-broker.ts",

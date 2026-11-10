@@ -117,12 +117,29 @@ function profileStatus(options: Options): Status {
   return JSON.parse(result.stdout) as Status;
 }
 
-/** Backend commands over the profile's gateway; the token stays in here. */
-export function gatewayFor(
+/**
+ * The gateway's whole metrics document, unvalidated, for drivers that need
+ * more than {@link gatewayFor}'s `kinds` (unattributed work, signal health).
+ * Same loopback and token rules; the token never leaves this function.
+ */
+export async function gatewayMetrics(
   status: Status,
   signal?: AbortSignal,
   request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
-) {
+): Promise<unknown> {
+  const { origin, token } = gatewayCredentials(status);
+  const response = await request(new URL("/__orkestrator/metrics", origin), {
+    headers: { authorization: `Bearer ${token}` },
+    redirect: "error",
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+      : AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Metrics request failed: HTTP ${response.status}`);
+  return response.json();
+}
+
+function gatewayCredentials(status: Status) {
   if (!status.browserUrl || !status.authFile) throw new Error("Profile has no browser gateway");
   const origin = new URL(status.browserUrl);
   if (origin.hostname !== "127.0.0.1" && origin.hostname !== "localhost") {
@@ -130,6 +147,16 @@ export function gatewayFor(
   }
   const token = (JSON.parse(readFileSync(status.authFile, "utf8")) as { token?: unknown }).token;
   if (typeof token !== "string" || !token) throw new Error("Gateway auth file has no token");
+  return { origin, token };
+}
+
+/** Backend commands over the profile's gateway; the token stays in here. */
+export function gatewayFor(
+  status: Status,
+  signal?: AbortSignal,
+  request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
+) {
+  const { origin, token } = gatewayCredentials(status);
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   return {
     async invoke<T>(

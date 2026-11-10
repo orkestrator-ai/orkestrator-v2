@@ -6,9 +6,8 @@ import type {
 import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
 
 /**
- * Supervision rules for Multi Review, shared by the keyed driver and the
- * `WorkflowDueScheduler` rollback so both classify a record, and jitter its
- * passes, from exactly the same code.
+ * Supervision rules for Multi Review: how its keyed driver classifies a
+ * record, decides its next pass and jitters it.
  */
 
 export function reviewSession(
@@ -80,6 +79,39 @@ export function supervisionDemand(
     return workflow.validationRun.status === "planned" ? "fast" : "observe";
   }
   return workflow.activeRequest?.state === "sent" ? "observe" : "fast";
+}
+
+/**
+ * Tool-mode result slots of turns the workflow has sent and is still
+ * observing: the active step's request and every running reviewer's.
+ *
+ * A model submits its result through a tool call, inside its turn, so the
+ * acceptance (and the `result-accepted` wake it raises) always lands before
+ * the turn can end. The pass that wake starts usually still finds the turn
+ * running, and nothing announces the turn's end afterwards: these sessions
+ * are not native agent sessions, so the activity sweep that raises
+ * `provider-transition` never sees them. The caller polls an accepted slot on
+ * a short settle cadence instead of the observation interval (todo 7557).
+ */
+export function resultKeysAwaitingTurnEnd(workflow: MultiReviewWorkflow): string[] {
+  const keys: string[] = [];
+  const request = workflow.activeRequest;
+  if (request?.resultTransport === "tool-v1" && request.state === "sent") {
+    keys.push(request.requestId);
+  }
+  if (workflow.phase === "reviewing") {
+    for (const reviewer of workflow.reviewers) {
+      if (
+        reviewer.status === "running" &&
+        reviewer.dispatchState === "sent" &&
+        reviewer.resultTransport === "tool-v1" &&
+        reviewer.requestId
+      ) {
+        keys.push(reviewer.requestId);
+      }
+    }
+  }
+  return keys;
 }
 
 /**

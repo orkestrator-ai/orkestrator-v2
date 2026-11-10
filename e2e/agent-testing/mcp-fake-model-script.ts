@@ -32,12 +32,20 @@ export interface FakeRequest {
    * JavaScript cell (`tools.<name>`, listed in `ALL_TOOLS`).
    */
   codeMode?: boolean;
+  /**
+   * Claude only: whether the CLI told the model plan mode is active for this
+   * prompt (its "Plan mode is active" reminder beside the prompt). Lets the
+   * warm-runtime spec see that a plan-mode toggle reached the running CLI.
+   */
+  planMode?: boolean;
 }
 
 export type FakeStep =
   | { kind: "text"; text: string; delayMs?: number }
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "shell"; command: string }
+  /** Claude's file write tool (`Write`), for the warm-runtime spec. */
+  | { kind: "write"; filePath: string; content: string }
   /** A Codex code cell (JavaScript source for its `exec` tool). */
   | { kind: "code"; source: string };
 
@@ -110,8 +118,10 @@ export function toolPrompt(prompt: string): ToolPrompt | undefined {
 
 /**
  * The offered name of an MCP server's tool: Claude and Codex spell it
- * `mcp__<server>__<tool>`, the Pi bridge `mcp_<server>_<tool>`; a namespaced
- * listing flattens to a name ending in `<server>__<tool>`.
+ * `mcp__<server>__<tool>`, the Pi bridge `mcp_<server>_<tool>`, OpenCode
+ * `<server>_<tool>` (1.19.5's own sanitizer: anything outside
+ * `[a-zA-Z0-9_-]` becomes `_`); a namespaced listing flattens to a name
+ * ending in `<server>__<tool>`.
  */
 export function offeredToolName(
   tools: readonly string[],
@@ -123,6 +133,7 @@ export function offeredToolName(
     `mcp__${sanitized}__${tool}`,
     `mcp_${sanitized}_${tool}`,
     `${sanitized}__${tool}`,
+    `${sanitized}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
   ]);
   return (
     tools.find((name) => exact.has(name)) ??
@@ -185,6 +196,21 @@ export function scriptedStep(request: FakeRequest): FakeStep {
       };
     }
     return { kind: "text", text: wanted.failure };
+  }
+  // claude-warm-runtime-live.spec.ts: report whether plan mode reached the CLI.
+  const planMarker = /Report the plan mode marker (WRM-[A-Za-z0-9-]+)/.exec(request.prompt);
+  if (planMarker) {
+    return { kind: "text", text: `${planMarker[1]} plan-mode=${request.planMode ? "on" : "off"}` };
+  }
+  // claude-warm-runtime-live.spec.ts: one file write, then WRITE-DONE.
+  const write = /create the file `([^`]+)` containing exactly `([^`]+)`/.exec(request.prompt);
+  if (write) {
+    return request.results.length > 0
+      ? {
+          kind: "text",
+          text: request.results.some((r) => r.isError) ? "WRITE-FAILED" : "WRITE-DONE",
+        }
+      : { kind: "write", filePath: write[1]!, content: write[2]! };
   }
   // mcp-apply-live.spec.ts's busy turn: one foreground command, then BUSY-DONE.
   const shell = /run the command `([^`]+)` once, in the foreground/.exec(request.prompt);

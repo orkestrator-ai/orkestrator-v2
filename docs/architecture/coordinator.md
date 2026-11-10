@@ -537,7 +537,12 @@ repository exchange ordinary node mail
   On the leaf each new message from the command node's coordinator starts a
   fresh budget, as a new request to a worker does, so the leaf answers every
   question the command node actually sends; the hourly limit still applies
-  there.
+  there. Replacing the command node's main does not release a held answer:
+  the next main takes it over still held
+  ([agent-messaging.md](agent-messaging.md#budgets)). The exchange, the bound
+  and the replacement are qualified between two `dev:test` profiles with a
+  loopback model by `mise run test:agent:coordinator:node-mail-fake`
+  ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same
@@ -1024,9 +1029,17 @@ checkout pointing into the data directory was read; the coordinator's server
 therefore loads `orkestrator-coordinator-read-boundary.js`
 (`opencode-read-boundary-plugin.ts`) from the host configuration directory,
 which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server, and absent when the
-user sets their own `OPENCODE_CONFIG_DIR`
-([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
+`tool.execute.before`. It is inert in every other server. When the user sets
+their own `OPENCODE_CONFIG_DIR`, OpenCode honours only that one directory, so
+the launcher keeps it and adds the plugins as `file://` entries of
+`OPENCODE_CONFIG_CONTENT`'s `plugin` list, which 1.19.5 appends to every other
+source's plugins (`installHostOpenCodePlugins`); a coordinator's server is
+refused when the user's own `OPENCODE_CONFIG_CONTENT` cannot be extended
+(unparseable, not an object, or a `plugin` value that is not a list of
+strings); any other server then starts without the plugins, as before. The
+credential plugin rides along, since it too is self-contained. Qualified on the
+pinned binary beside a user directory, with a control showing that directory
+alone reads through the link.
 Both layers are qualified on the pinned binary with a loopback model
 (`opencode-coordinator-read-boundary-live.test.ts`).
 
@@ -1074,8 +1087,19 @@ OS sandbox).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
-sandbox cannot be enabled. Its reading tools still reach the data directory
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
+sandbox cannot be enabled. `@cursor/sdk` has no per-call hook that sees a
+built-in tool's path, so a coordinator's agent runs `read`, `grep` (which also
+serves `glob`) and `ls` on the bridge's own executors
+(`local.resourceProviderOptions`; `bridges/cursor-bridge/src/read-boundary.ts`
+and `read-tools.ts`). They refuse a path inside the data directory, directly or
+through a link, and check every file a search or listing rooted above it would
+return, since searches follow links; the checkout and the coordinator's
+attachment directory stay readable. The read executor also serves an MCP call's
+`$file:` arguments. The executor shapes are unpublished SDK internals, so this
+is proven only against fakes and the SDK's own message descriptors until a live
+Cursor turn qualifies it
+([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)
+task 2).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
@@ -1280,6 +1304,15 @@ bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
 
+In a container environment the probe runs inside the container, where it
+answers `missing-programs`: the image ships neither program. That was checked
+with `docker exec` in a real environment container on 2026-11-10 (to-do 0145
+task 4), and the container's own bridge refused a provider-sandbox prompt
+with 422. Installing the two packages would not help: under Docker's default
+seccomp profile bubblewrap cannot create its user namespace (the CLI's own
+availability check fails too), and without seccomp it cannot mount `/proc`
+over Docker's masked one. The container is the sandbox there.
+
 Three consumers use it:
 
 - the backend's coordinator table, which reports Claude as
@@ -1328,14 +1361,41 @@ The boundary is shown, not silent:
   step (`stepRuntimes.consolidate.commandSandboxOff`). The reviewer's and the
   consolidation step's inspector show it as a warning note. A restarted
   reviewer or step starts without it.
+- **The reason names where it is.** In a container (`/.dockerenv` or
+  `/run/.containerenv`) the probe says the sandbox cannot run "in this
+  container" and that bubblewrap and socat are not in the container's image;
+  only a host is told to install the packages, since nobody installs into an
+  environment's image.
+
+Without the sandbox the hook refuses every Git command, because a
+repository's Git configuration can run helpers (an external diff, a
+textconv, `core.fsmonitor`). A packaged reviewer is told to run the
+package's `diffCommand`, which is Git, so in a container it could not see
+the change at all. The backend therefore seals the reviewed diff as a file
+beside the package when it builds it (`review-diff-artifact.ts`): it runs
+the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
+<base>...<head>` the package names, writes it read-only and Git-excluded as
+`review-diff-<sha256>.patch` in the round's artifact directory, records
+`diffArtifact: { path, bytes, sha256 }` in the package, and checks its bytes
+and digest with the package before each reviewer is dispatched. The
+reviewer instructions say to read that file when the session refuses Git. A
+diff over 16 MiB, or one Git or the write could not produce, is left out
+and the package's limitations say so; the review itself never fails for
+it. The runner decodes the output as UTF-8. If it contains a replacement
+character (including a literal U+FFFD), the backend leaves the artifact out
+and records a fidelity limitation instead of sealing potentially altered bytes.
 
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of
 `conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
 `socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
-case that pins the CLI's own refusal of a required sandbox runs only on Linux.
-Not yet run: a real Multi Review in a container environment and on stock
-Ubuntu
+case that pins the CLI's own refusal of a required sandbox runs only on Linux
+(all 19 cases passed on Linux on 2026-11-10). A real Multi Review in a
+container environment, with two Claude reviewers and a Claude consolidation
+on the image's real `claude` against a scripted Messages API, is
+`container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
+[container qualification](../development/container-qualification.md)). Not
+yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
 ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
@@ -1618,7 +1678,7 @@ running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
 Both paths are qualified against a slow remote on a real profile by
-`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+`mise run test:agent:coordinator-slow-remote` (to-do 4720, retired 2026-11-10; see
 [agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
 In that run a worker's mail to a coordinator whose turn is running waits on
 the coordinator's presence (`agent-mail delivery.waiting reason=working`)

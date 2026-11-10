@@ -2,14 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createNativeAgentProvider } from "./native-agent-provider.js";
 import { openCodeFake, waitUntil, type OpenCodeFake } from "./agent-provider-test-support.js";
 import {
+  consumeOpenCodeEventStream,
   isOpenCodeHeartbeat,
   OPENCODE_EVENT_STREAM_SILENCE_MS,
   OpenCodeStreamSilenceWatchdog,
+  type OpenCodeSilenceClock,
 } from "./opencode-observation-stream.js";
-import {
-  installControlledTimeout,
-  type ControlledTimeout,
-} from "../../../../tests/helpers/controlled-timeout.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 
 /**
@@ -22,20 +20,61 @@ const SILENCE_MS = 150;
 
 const providers: NativeAgentRuntimeProvider[] = [];
 const watchdogs: OpenCodeStreamSilenceWatchdog[] = [];
-const controlledTimers: ControlledTimeout[] = [];
-function timer(delay: number) {
-  const control = installControlledTimeout(delay);
-  controlledTimers.push(control);
-  return control;
-}
 
 afterEach(async () => {
   for (const watchdog of watchdogs.splice(0)) watchdog.stop();
   for (const provider of providers.splice(0)) await provider.dispose?.();
-  for (const control of controlledTimers.splice(0).reverse()) expect(control.restore()).toBe(0);
 });
 
-function silenceProvider(fake: OpenCodeFake): NativeAgentRuntimeProvider {
+/**
+ * A manual clock for the watchdog: time moves only when a test advances it,
+ * so no assertion depends on how long a sleep took on a loaded host. `reads`
+ * counts calls to `now()`, which the watchdog makes once per frame and once
+ * per deadline check, so a test can await "the frame was seen".
+ */
+function manualClock() {
+  let time = 0;
+  let nextId = 0;
+  let reads = 0;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const clock: OpenCodeSilenceClock = {
+    now: () => {
+      reads += 1;
+      return time;
+    },
+    setTimer(callback, delayMs) {
+      nextId += 1;
+      timers.set(nextId, { at: time + delayMs, callback });
+      return nextId;
+    },
+    clearTimer: (handle) => {
+      timers.delete(handle as number);
+    },
+  };
+  return {
+    clock,
+    get reads() {
+      return reads;
+    },
+    pending: () => timers.size,
+    /** Moves time forward and runs every timer that falls due, in order. */
+    advance(ms: number) {
+      time += ms;
+      for (;;) {
+        const due = Array.from(timers.entries())
+          .filter(([, timer]) => timer.at <= time)
+          .sort(([, a], [, b]) => a.at - b.at)[0];
+        if (!due) return;
+        timers.delete(due[0]);
+        due[1].callback();
+      }
+    },
+  };
+}
+
+type ManualClock = ReturnType<typeof manualClock>;
+
+function silenceProvider(fake: OpenCodeFake, clock: ManualClock): NativeAgentRuntimeProvider {
   const provider = createNativeAgentProvider(
     {
       agent: "opencode",
@@ -46,6 +85,7 @@ function silenceProvider(fake: OpenCodeFake): NativeAgentRuntimeProvider {
     {
       openCodeClient: fake.client,
       monitorSilenceMs: SILENCE_MS,
+      monitorClock: clock.clock,
       waitForMonitorRetry: (_ms, signal) =>
         signal.aborted ? Promise.reject(signal.reason) : Promise.resolve(),
     },
@@ -61,19 +101,26 @@ function unknownEventCount(provider: NativeAgentRuntimeProvider): number {
   return health.drift()?.unknownEvents ?? 0;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Pushes a frame and waits until the monitor's watchdog has seen it. */
+async function pushSeen(fake: OpenCodeFake, clock: ManualClock, frame: unknown): Promise<void> {
+  const before = clock.reads;
+  fake.subscriptions[0]!.push(frame);
+  await waitUntil(() => clock.reads > before);
+}
 
 describe("OpenCode event monitor silence", () => {
   test("a stream that heartbeated and then went silent is replaced", async () => {
     const fake = openCodeFake();
-    const provider = silenceProvider(fake);
+    const clock = manualClock();
+    const provider = silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
     fake.subscriptions[0]!.push({ type: "server.connected", properties: {} });
     fake.subscriptions[0]!.push(HEARTBEAT);
-    await waitUntil(() => provider.observationStreamLive?.() === true);
+    await waitUntil(() => provider.observationStreamLive?.() === true && clock.pending() === 1);
 
     // No further frames: the watchdog aborts and the monitor resubscribes.
-    await waitUntil(() => fake.subscriptions.length === 2, 2_000);
+    clock.advance(SILENCE_MS);
+    await waitUntil(() => fake.subscriptions.length === 2);
     expect(fake.subscribeCallCount).toBe(2);
     fake.subscriptions[1]!.push({ type: "server.connected", properties: {} });
     await waitUntil(() => provider.observationStreamLive?.() === true);
@@ -81,41 +128,50 @@ describe("OpenCode event monitor silence", () => {
 
   test("regular heartbeats keep the stream open", async () => {
     const fake = openCodeFake();
-    silenceProvider(fake);
+    const clock = manualClock();
+    silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
     for (let index = 0; index < 8; index += 1) {
-      fake.subscriptions[0]!.push(HEARTBEAT);
-      await sleep(SILENCE_MS / 3);
+      await pushSeen(fake, clock, HEARTBEAT);
+      clock.advance(SILENCE_MS / 3);
     }
+    // Two full silence windows have passed; the deadline is still armed.
+    expect(clock.pending()).toBe(1);
     expect(fake.subscribeCallCount).toBe(1);
   });
 
   test("any frame counts as life once the deadline is armed", async () => {
     const fake = openCodeFake();
-    silenceProvider(fake);
+    const clock = manualClock();
+    silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
-    fake.subscriptions[0]!.push(HEARTBEAT);
+    await pushSeen(fake, clock, HEARTBEAT);
     for (let index = 0; index < 8; index += 1) {
-      fake.subscriptions[0]!.push({ type: "vcs.branch.updated", properties: {} });
-      await sleep(SILENCE_MS / 3);
+      await pushSeen(fake, clock, { type: "vcs.branch.updated", properties: {} });
+      clock.advance(SILENCE_MS / 3);
     }
+    expect(clock.pending()).toBe(1);
     expect(fake.subscribeCallCount).toBe(1);
   });
 
   test("a server that never heartbeats is not reconnected while idle", async () => {
     const fake = openCodeFake();
-    const provider = silenceProvider(fake);
+    const clock = manualClock();
+    const provider = silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
-    fake.subscriptions[0]!.push({ type: "server.connected", properties: {} });
+    await pushSeen(fake, clock, { type: "server.connected", properties: {} });
     await waitUntil(() => provider.observationStreamLive?.() === true);
-    await sleep(SILENCE_MS * 4);
+    // No heartbeat, so no deadline was ever scheduled to fire.
+    expect(clock.pending()).toBe(0);
+    clock.advance(SILENCE_MS * 4);
     expect(fake.subscribeCallCount).toBe(1);
     expect(provider.observationStreamLive?.()).toBe(true);
   });
 
   test("heartbeats are not counted as unknown events", async () => {
     const fake = openCodeFake();
-    const provider = silenceProvider(fake);
+    const clock = manualClock();
+    const provider = silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
     fake.subscriptions[0]!.push(HEARTBEAT);
     fake.subscriptions[0]!.push(HEARTBEAT);
@@ -126,23 +182,29 @@ describe("OpenCode event monitor silence", () => {
 
   test("disposing the provider stops the deadline", async () => {
     const fake = openCodeFake();
-    const provider = silenceProvider(fake);
+    const clock = manualClock();
+    const provider = silenceProvider(fake, clock);
     await waitUntil(() => fake.subscriptions.length === 1);
-    fake.subscriptions[0]!.push(HEARTBEAT);
-    await sleep(5);
+    await pushSeen(fake, clock, HEARTBEAT);
+    expect(clock.pending()).toBe(1);
     await provider.dispose?.();
     providers.splice(providers.indexOf(provider), 1);
-    await sleep(SILENCE_MS * 2);
+    await waitUntil(() => clock.pending() === 0);
+    clock.advance(SILENCE_MS * 2);
     expect(fake.subscribeCallCount).toBe(1);
   });
 });
 
 describe("OpenCodeStreamSilenceWatchdog", () => {
-  function watchdog(silenceMs: number, now: () => number) {
+  function watchdog(silenceMs: number) {
+    const clock = manualClock();
     const fired: number[] = [];
-    const instance = new OpenCodeStreamSilenceWatchdog((ms) => fired.push(ms), { silenceMs, now });
+    const instance = new OpenCodeStreamSilenceWatchdog((ms) => fired.push(ms), {
+      silenceMs,
+      clock: clock.clock,
+    });
     watchdogs.push(instance);
-    return { instance, fired };
+    return { instance, fired, clock };
   }
 
   test("defaults to three missed 10 s heartbeats plus slack", () => {
@@ -150,46 +212,50 @@ describe("OpenCodeStreamSilenceWatchdog", () => {
   });
 
   test("stays unarmed until a heartbeat arrives", () => {
-    const control = timer(20);
-    let clock = 0;
-    const { instance, fired } = watchdog(20, () => clock);
+    const { instance, fired, clock } = watchdog(20);
     instance.frame(false);
-    clock = 1_000;
-    expect(control.advance()).toBe(0);
+    expect(clock.pending()).toBe(0);
+    clock.advance(1_000);
     expect(instance.isArmed).toBe(false);
     expect(fired).toEqual([]);
   });
 
   test("re-checks elapsed silence instead of firing on the first timer", () => {
-    const firstTimer = timer(30);
-    const remainingTimer = timer(20);
-    let clock = 0;
-    const { instance, fired } = watchdog(30, () => clock);
+    const { instance, fired, clock } = watchdog(30);
     instance.frame(true);
     // A frame 20 ms in moves the deadline; the first timer must re-arm.
-    clock = 20;
+    clock.advance(20);
     instance.frame(false);
-    clock = 30;
-    expect(firstTimer.advance()).toBe(1);
-    expect(remainingTimer.pendingCount()).toBe(1);
+    clock.advance(10);
     expect(fired).toEqual([]);
-    clock = 60;
-    expect(remainingTimer.advance()).toBe(1);
+    expect(clock.pending()).toBe(1);
+    clock.advance(19);
+    expect(fired).toEqual([]);
+    clock.advance(1);
     expect(fired).toEqual([30]);
     expect(instance.isArmed).toBe(false);
+    expect(clock.pending()).toBe(0);
   });
 
   test("stop cancels a pending deadline", () => {
-    const control = timer(10);
-    let clock = 0;
-    const { instance, fired } = watchdog(10, () => clock);
+    const { instance, fired, clock } = watchdog(10);
     instance.frame(true);
     instance.stop();
-    clock = 1_000;
-    expect(control.advance()).toBe(0);
+    expect(clock.pending()).toBe(0);
+    clock.advance(1_000);
     expect(fired).toEqual([]);
     instance.frame(true);
     expect(instance.isArmed).toBe(false);
+    expect(clock.pending()).toBe(0);
+  });
+
+  test("fires on the real clock when no clock is injected", async () => {
+    const fired: number[] = [];
+    const instance = new OpenCodeStreamSilenceWatchdog((ms) => fired.push(ms), { silenceMs: 5 });
+    watchdogs.push(instance);
+    instance.frame(true);
+    await waitUntil(() => fired.length === 1);
+    expect(fired).toEqual([5]);
   });
 
   test("recognises only the heartbeat frame", () => {
@@ -197,5 +263,51 @@ describe("OpenCodeStreamSilenceWatchdog", () => {
     expect(isOpenCodeHeartbeat({ type: "server.connected" })).toBe(false);
     expect(isOpenCodeHeartbeat(null)).toBe(false);
     expect(isOpenCodeHeartbeat("server.heartbeat")).toBe(false);
+  });
+});
+
+describe("consumeOpenCodeEventStream", () => {
+  async function* frames(...values: unknown[]) {
+    for (const value of values) yield value;
+  }
+
+  test("reports the first frame once, skips heartbeats and stops its watchdog", async () => {
+    const clock = manualClock();
+    const seen: unknown[] = [];
+    let connected = 0;
+    const event = { type: "session.idle", properties: {} };
+    const result = await consumeOpenCodeEventStream(
+      frames(HEARTBEAT, event, HEARTBEAT),
+      {
+        disposed: () => false,
+        connected: () => (connected += 1),
+        frame: (raw) => seen.push(raw),
+        silent: () => {
+          throw new Error("not silent");
+        },
+      },
+      { silenceMs: SILENCE_MS, clock: clock.clock },
+    );
+    expect(result).toBe("ended");
+    expect(connected).toBe(1);
+    expect(seen).toEqual([event]);
+    expect(clock.pending()).toBe(0);
+  });
+
+  test("returns disposed without dispatching once the owner is disposed", async () => {
+    const clock = manualClock();
+    const seen: unknown[] = [];
+    const result = await consumeOpenCodeEventStream(
+      frames({ type: "session.idle", properties: {} }),
+      {
+        disposed: () => true,
+        connected: () => {},
+        frame: (raw) => seen.push(raw),
+        silent: () => {},
+      },
+      { clock: clock.clock },
+    );
+    expect(result).toBe("disposed");
+    expect(seen).toEqual([]);
   });
 });

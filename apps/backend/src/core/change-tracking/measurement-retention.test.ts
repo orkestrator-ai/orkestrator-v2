@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import type { DiffStatsTarget } from "../diff-stats-service.js";
-import type { MeasurementFileRecord } from "./change-ledger.js";
+import type { MeasurementFileRecord, TurnBoundaryRow } from "./change-ledger.js";
 import { MEASUREMENTS_KEPT_PER_OWNER } from "./measurement-service.js";
+import { FINISHED_TURN_SUPERSEDED_GRACE_MS } from "./retention.js";
 import { createHarness, type Harness } from "./service-test-support.js";
 
 const harnesses: Harness[] = [];
@@ -412,4 +413,187 @@ describe("superseded measurements", () => {
       }
     },
   );
+});
+
+describe("finished turns", () => {
+  test("continues past an ineligible page and prunes each later owner scope once", async () => {
+    const { h, target, key } = setup();
+    await scan(h, target, 1, 0);
+    const ledger = h.service.ledger;
+    const latest = h.service.projections.selectedMeasurement(key)!;
+    const nowMs = Date.now();
+    const finishedAt = new Date(nowMs - FINISHED_TURN_SUPERSEDED_GRACE_MS - 60_000).toISOString();
+    const cutoff = new Date(nowMs - FINISHED_TURN_SUPERSEDED_GRACE_MS).toISOString();
+    const seed = (id: string, scope: "turn-net" | "provider-turn-diff" = "turn-net") => {
+      for (const suffix of ["old", "new"])
+        ledger.insertMeasurement(
+          { ...latest, scope, measurementId: `${id}-${scope}-${suffix}` },
+          { kind: "turn", id },
+          [fileRecord("p0")],
+          ledger.nextSequence(),
+        );
+    };
+    ledger.transaction(() => {
+      // Missing boundary rows are ineligible, but must still advance the cursor.
+      for (let index = 0; index < 512; index += 1) seed(`a-${String(index).padStart(4, "0")}`);
+      for (const id of ["z-first", "z-last"]) {
+        ledger.insertTurn({
+          turn_id: id,
+          segment_id: "seg-1",
+          thread_id: "thread-1",
+          environment_id: "env-1",
+          worktree_id: "wt-1",
+          lifecycle: "finalized",
+          start_attempt_id: null,
+          start_snapshot_id: null,
+          end_snapshot_id: null,
+          before_quality: "exact",
+          after_quality: "exact",
+          terminal_evidence: null,
+          dispatch_token: null,
+          dispatch_receipt: null,
+          reason: null,
+          started_at: finishedAt,
+          finished_at: finishedAt,
+          ordinal: 1,
+        });
+        seed(id);
+      }
+      seed("z-first", "provider-turn-diff");
+    });
+    const empty = ledger.finishedTurnOwnersPage(null, cutoff, 512);
+    expect(empty.owners).toEqual([]);
+    expect(empty.next).toEqual({ kind: "turn", id: "a-0511", scope: "turn-net" });
+    const firstScope = ledger.finishedTurnOwnersPage(empty.next, cutoff, 1);
+    expect(firstScope.owners).toEqual([
+      { kind: "turn", id: "z-first", scope: "provider-turn-diff" },
+    ]);
+    const secondScope = ledger.finishedTurnOwnersPage(firstScope.next, cutoff, 1);
+    expect(secondScope.owners).toEqual([{ kind: "turn", id: "z-first", scope: "turn-net" }]);
+    const last = ledger.finishedTurnOwnersPage(secondScope.next, cutoff, 512);
+    expect(last.owners).toEqual([{ kind: "turn", id: "z-last", scope: "turn-net" }]);
+    expect(last.next).toBeNull();
+
+    const pages = spyOn(ledger, "finishedTurnOwnersPage");
+    try {
+      const report = await h.service.retention.run(nowMs);
+      expect(report.prunedMeasurements).toBe(3);
+      expect(report.prunedMeasurementFiles).toBe(3);
+      expect(pages).toHaveBeenCalledTimes(2);
+      expect(pages).toHaveBeenNthCalledWith(2, empty.next, cutoff, 512);
+      for (const [id, scope] of [
+        ["z-first", "provider-turn-diff"],
+        ["z-first", "turn-net"],
+        ["z-last", "turn-net"],
+      ]) {
+        expect(ledger.measurement(`${id}-${scope}-old`)).toBeNull();
+        expect(ledger.measurement(`${id}-${scope}-new`)).not.toBeNull();
+      }
+      expect(
+        count(h, "SELECT COUNT(*) AS n FROM change_measurements WHERE owner_id LIKE 'a-%'"),
+      ).toBe(1024);
+      expect((await h.service.retention.run(nowMs)).prunedMeasurements).toBe(0);
+    } finally {
+      pages.mockRestore();
+    }
+  });
+
+  test("past the grace a finished turn keeps only its newest and selected measurements", async () => {
+    const { h, target, key } = setup();
+    await scan(h, target, 3, 0);
+    const ledger = h.service.ledger;
+    const latest = h.service.projections.selectedMeasurement(key)!;
+    const nowMs = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const turn = (
+      turnId: string,
+      lifecycle: TurnBoundaryRow["lifecycle"],
+      finishedMs: number | null,
+    ) =>
+      ledger.insertTurn({
+        turn_id: turnId,
+        segment_id: "seg-1",
+        thread_id: "thread-1",
+        environment_id: "env-1",
+        worktree_id: "wt-1",
+        lifecycle,
+        start_attempt_id: null,
+        start_snapshot_id: null,
+        end_snapshot_id: null,
+        before_quality: "exact",
+        after_quality: "exact",
+        terminal_evidence: null,
+        dispatch_token: null,
+        dispatch_receipt: null,
+        reason: null,
+        started_at: iso(nowMs - 3_600_000),
+        finished_at: finishedMs === null ? null : iso(finishedMs),
+        ordinal: 1,
+      });
+    /** A provisional then a final measurement for one turn, 50 rows each; the final selected. */
+    const measure = (turnId: string, select: "final" | "provisional" = "final") => {
+      const ids: [string, string] = [`${turnId}-provisional`, `${turnId}-final`];
+      ledger.transaction(() => {
+        for (const measurementId of ids)
+          ledger.insertMeasurement(
+            { ...latest, scope: "turn-net", measurementId },
+            { kind: "turn", id: turnId },
+            Array.from({ length: 50 }, (_, index) => fileRecord(`p${index}`)),
+            ledger.nextSequence(),
+          );
+      });
+      ledger.swapSelection({
+        key: `turn:${turnId}`,
+        selector: "live",
+        expectedRevision: 0,
+        baselineVersion: null,
+        measurementId: select === "final" ? ids[1] : ids[0],
+        observationEpoch: 0,
+        worktreeIncarnation: latest.worktreeIncarnation,
+        ownerFence: 0,
+      });
+      return ids;
+    };
+    const past = nowMs - FINISHED_TURN_SUPERSEDED_GRACE_MS - 60_000;
+    turn("turn-old", "finalized", past);
+    const [oldProvisional, oldFinal] = measure("turn-old");
+    turn("turn-old-selected-provisional", "interrupted", past);
+    const pinnedIds = measure("turn-old-selected-provisional", "provisional");
+    turn("turn-recent", "finalized", nowMs - 60_000);
+    const recentIds = measure("turn-recent");
+    turn("turn-recovering", "end-unavailable", past);
+    const recoveringIds = measure("turn-recovering");
+    ledger.addReference({
+      ownerKind: "turn",
+      ownerId: "turn-recovering",
+      snapshotId: "snap-recovery",
+      reason: "turn-recovery-pending",
+    });
+    turn("turn-running", "running", null);
+    const runningIds = measure("turn-running");
+
+    const report = await h.service.retention.run(nowMs);
+    expect(report.prunedMeasurements).toBe(1);
+    expect(report.prunedMeasurementFiles).toBe(50);
+    const kept = (turnId: string) =>
+      (
+        h
+          .database()
+          .db.query("SELECT id FROM change_measurements WHERE owner_kind = 'turn' AND owner_id = ?")
+          .all(turnId) as Array<{ id: string }>
+      )
+        .map((row) => row.id)
+        .sort();
+    expect(kept("turn-old")).toEqual([oldFinal]);
+    expect(ledger.measurementFileCount(oldProvisional)).toBe(0);
+    // A selected measurement stays whatever its age; so does the newest.
+    expect(kept("turn-old-selected-provisional")).toEqual([...pinnedIds].sort());
+    // Inside the grace, with end recovery pending, or still running: untouched.
+    expect(kept("turn-recent")).toEqual([...recentIds].sort());
+    expect(kept("turn-recovering")).toEqual([...recoveringIds].sort());
+    expect(kept("turn-running")).toEqual([...runningIds].sort());
+    // The environment's own measurement is untouched, and the pass is idempotent.
+    expect(ledger.measurementFileCount(latest.measurementId)).toBe(3);
+    expect((await h.service.retention.run(nowMs)).prunedMeasurements).toBe(0);
+  });
 });

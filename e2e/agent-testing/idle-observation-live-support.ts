@@ -332,7 +332,8 @@ export function idleObservationModel(
   fake: boolean,
   override?: string,
 ): string | undefined {
-  return fake && platform === "pi" ? PI_FAKE_MODEL_REF : override;
+  // Pi and OpenCode name the fake's provider the same way (todo 0049 tasks 6, 7).
+  return fake && (platform === "pi" || platform === "opencode") ? PI_FAKE_MODEL_REF : override;
 }
 
 export function asyncQuestionPrompt(title: string, word: string): string {

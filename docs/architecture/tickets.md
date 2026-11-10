@@ -305,8 +305,9 @@ limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
 `KanbanRepository` through `KanbanBoardStore`),
 `nodes/node-ticket-sync.ts` (the command node's runs),
 `commands-registry-ticket-sync.ts` (the leaf commands) and
-`coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). The
-follow-up work is [3800](../todo/coordinator-and-multi-review/3800-fleet-ticket-sync-follow-ups.md).
+`coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). It is
+qualified over two live `dev:test` profiles by `fleet-ticket-sync-live.spec.ts`
+([agent-testing.md](../development/agent-testing.md#live-fleet-ticket-sync-two-profiles)).
 
 **One board, one id.** The command node's board is authoritative. A leaf
 holds a copy (a *replica*) of each of its tickets under the same id, so a
@@ -335,9 +336,13 @@ results, the build or environment linked to it, deletion) is queued in that
 leaf's ticket outbox for that command node in the same commit as the change.
 Every queued operation remains immutable until acknowledged: later edits and
 deletions receive new sequences, even for newly created tickets or comments.
-This preserves changes made while an earlier operation is in transit. The leaf announces queued changes (`ticket-sync-outbox-ready`);
-the command node collects them (`collect_ticket_sync_outbox`) on that event,
-on every connect and stream resync, and every 60 s, applies them in order,
+This preserves changes made while an earlier operation is in transit. The leaf announces queued changes (`ticket-sync-outbox-ready`
+on its event stream, which the command node subscribes to by name in
+`NODE_SUMMARY_EVENT_PREFIXES`; a leaf's gateway sends nothing outside that
+list); the command node collects them (`collect_ticket_sync_outbox`) on that
+event, on every connect and stream resync, when it reads a change in the
+leaf's project list (its first read after attaching included), and every
+60 s, applies them in order,
 then acknowledges (`ack_ticket_sync_outbox`). Each outbox has an epoch and a
 sequence, and the command node records the last one it applied, so a lost
 acknowledgement or a retry never applies a change twice. Over 10,000 queued

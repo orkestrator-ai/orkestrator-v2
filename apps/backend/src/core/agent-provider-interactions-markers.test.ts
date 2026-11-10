@@ -211,6 +211,52 @@ describe("tool hints", () => {
     expect(byId(requests, "none")).not.toHaveProperty("toolHints");
   });
 
+  test("Claude: an MCP tool approval carries the hints its bridge read from the CLI's status", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    // What `requestClaudeToolApproval` parks for an `mcp__*` call whose server
+    // the CLI's status describes (pinned CLI 2.1.319 reports only `true` hints).
+    const interactions = [
+      {
+        id: "destructive",
+        kind: "permission",
+        toolName: "mcp__linear__delete_issue",
+        mcpServer: "linear",
+        mcpServerSource: "user",
+        input: '{"id":"ENG-1"}',
+        ruleEligible: true,
+        toolHints: { destructive: true },
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "malformed",
+        kind: "permission",
+        toolName: "mcp__linear__list_issues",
+        mcpServer: "linear",
+        toolHints: { readOnly: "true", readOnlyHint: true },
+        requestedAt,
+        expiresAt,
+      },
+    ];
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/questions")) return Response.json({ questions: [] });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      return Response.json({ interactions });
+    });
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    expect(requests).toHaveLength(2);
+    for (const request of requests) expect(isAgentInteractionRequest(request)).toBe(true);
+    const destructive = byId(requests, "destructive");
+    expect(destructive.toolHints).toEqual({ destructive: true });
+    expect(destructive.source).toMatchObject({ kind: "mcp-server", name: "linear" });
+    // The hint is a label: the rule detail is the server's, as without it.
+    expect(
+      provider.interactions!.permissionRuleDetail!("session-1", destructive.id)?.subject,
+    ).toEqual({ kind: "mcp-tool", server: "linear", tool: "delete_issue" });
+    expect(byId(requests, "malformed")).not.toHaveProperty("toolHints");
+  });
+
   test("Pi: an MCP tool's approval carries its hints, which never make it rule-eligible", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;

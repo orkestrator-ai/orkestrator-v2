@@ -462,7 +462,7 @@ description = "Prove what a parked Claude spare does and refuses, on the pinned 
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-first-turn.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."verify:claude:sandbox-live"]
-description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS; real CLI, no credentials, scripted model)"
+description = "Prove the pinned Claude CLI enforces the provider sandbox the bridge sets: no write outside the workspace, no unlisted host, no card (macOS, or Linux whose bubblewrap can nest the CLI's namespace; real CLI, no credentials, scripted model)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/claude-provider-sandbox.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
 
 [tasks."measure:claude:first-turn"]

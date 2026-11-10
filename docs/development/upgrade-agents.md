@@ -661,6 +661,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
 
+   Re-prove how an MCP tool's safety hints reach a Claude approval card
+   (`claude-mcp-tool-hints.ts`): the call name `canUseTool` reports, the bare
+   tool name and annotation keys in `mcpServerStatus()`, and that the status
+   read answers while the CLI waits on `canUseTool`. This runs the real CLI in
+   a temporary home with a local MCP server and a loopback model, with no
+   credentials; every call is denied. It also runs in the slow tier:
+
+   ```bash
+   bun test --cwd bridges/claude-bridge ./src/services/claude-mcp-tool-hints.live.test.ts --preload ../../tests/setup-node.ts --parallel=1
+   ```
+
+   A failure means the CLI changed how it names MCP calls or reports
+   annotations; update the module's header and its matching, never the card.
+
    Re-prove what a parked spare does and refuses, which is why the bridge does
    not use `prewarm()`: no model call while parked, a `sessionId` kept, a
    `resume` refused, a slow MCP server not connected ahead of the claim. This
@@ -675,7 +689,9 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
    reopening, not that the bridge is broken.
 
-   On macOS, re-prove that the CLI enforces the provider sandbox
+   On macOS, and on a Linux host whose bubblewrap can nest the CLI's user
+   namespace (elsewhere the check skips with the probe's reason), re-prove
+   that the CLI enforces the provider sandbox
    `claudeExecutionSandbox` sets: a command cannot write outside the
    workspace or reach an unlisted host under auto-approve, even when it asks
    to run unsandboxed, and neither raises an approval card. Under `ask`, an
@@ -691,7 +707,10 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    Its controls also pin what the sandbox proxy does without
    `strictAllowlist` (an unlisted host is granted unseen, or asked about in a
    second card); if one of them starts failing, the CLI changed its network
-   model and `claude-execution-sandbox.ts` needs another look.
+   model and `claude-execution-sandbox.ts` needs another look. What differs
+   between the two systems (the shell's refusal text, and whether full
+   network reaches loopback directly: on Linux it does not) is in
+   `PLATFORM_SANDBOX_EXPECTATIONS` in `claude-provider-sandbox.live-probe.ts`.
 
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI

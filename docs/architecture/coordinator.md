@@ -1304,6 +1304,15 @@ bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
 
+In a container environment the probe runs inside the container, where it
+answers `missing-programs`: the image ships neither program. That was checked
+with `docker exec` in a real environment container on 2026-11-10 (to-do 0145
+task 4), and the container's own bridge refused a provider-sandbox prompt
+with 422. Installing the two packages would not help: under Docker's default
+seccomp profile bubblewrap cannot create its user namespace (the CLI's own
+availability check fails too), and without seccomp it cannot mount `/proc`
+over Docker's masked one. The container is the sandbox there.
+
 Three consumers use it:
 
 - the backend's coordinator table, which reports Claude as

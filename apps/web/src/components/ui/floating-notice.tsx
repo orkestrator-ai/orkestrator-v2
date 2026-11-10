@@ -155,6 +155,13 @@ function layerLayout(layer: LayerContext | null): {
 
 const FloatingNoticeContext = createContext<LayerContext | null>(null);
 const FloatingNoticePresenceContext = createContext(false);
+/**
+ * The column shift and the claim on it, apart from the layer's measurements:
+ * the layer value changes on every pane resize, and a content column that
+ * only reads its shift must not render for each one.
+ */
+const FloatingNoticeColumnShiftContext = createContext(0);
+const FloatingNoticeClaimContext = createContext<(() => () => void) | null>(null);
 
 /**
  * Collects the notices of everything beneath it. With `anchor` it also shows
@@ -196,7 +203,7 @@ export function useInFloatingNoticeLayer(): boolean {
  * a card beside it; 0 when it is centred or there is no layer.
  */
 export function useFloatingNoticeColumnShift(): number {
-  return useContext(FloatingNoticeContext)?.columnShift?.shiftRem ?? 0;
+  return useContext(FloatingNoticeColumnShiftContext);
 }
 
 /**
@@ -204,7 +211,7 @@ export function useFloatingNoticeColumnShift(): number {
  * beside it. Has no effect when the pane has no room for that, or no layer.
  */
 export function useClaimFloatingNoticeColumnShift(active: boolean): void {
-  const claim = useContext(FloatingNoticeContext)?.claimColumnShift;
+  const claim = useContext(FloatingNoticeClaimContext);
   useEffect(() => (active && claim ? claim() : undefined), [active, claim]);
 }
 
@@ -241,10 +248,16 @@ function FloatingNoticeRoot({
   );
   return (
     <FloatingNoticePresenceContext.Provider value={true}>
-      <FloatingNoticeContext.Provider value={value}>
-        {anchor ? <FloatingNoticeAnchor columnRem={columnRem} className={anchorClassName} /> : null}
-        {children}
-      </FloatingNoticeContext.Provider>
+      <FloatingNoticeClaimContext.Provider value={claimColumnShift}>
+        <FloatingNoticeColumnShiftContext.Provider value={value.columnShift?.shiftRem ?? 0}>
+          <FloatingNoticeContext.Provider value={value}>
+            {anchor ? (
+              <FloatingNoticeAnchor columnRem={columnRem} className={anchorClassName} />
+            ) : null}
+            {children}
+          </FloatingNoticeContext.Provider>
+        </FloatingNoticeColumnShiftContext.Provider>
+      </FloatingNoticeClaimContext.Provider>
     </FloatingNoticePresenceContext.Provider>
   );
 }

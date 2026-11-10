@@ -903,7 +903,7 @@ export function cancelScheduledEnvironmentCleanup(dataDir: string): void {
  */
 export async function runStartupEnvironmentCleanup(
   context: CommandContext,
-  options: { orphanSweepIntervalMs?: number } = {},
+  options: { orphanSweepIntervalMs?: number; now?: () => Date } = {},
 ): Promise<void> {
   scheduleEnvironmentCleanupReconcile(context);
   const state = scheduled.get(path.resolve(context.storage.getDataDir()))!;
@@ -914,7 +914,7 @@ export async function runStartupEnvironmentCleanup(
     if (state.cancelled) return;
     try {
       try {
-        const removed = await sweepOrphanedEnvironmentState(context);
+        const removed = await sweepOrphanedEnvironmentState(context, { now: options.now });
         if (removed > 0) {
           log.info("orphan-state.removed", { removed });
         }
@@ -938,7 +938,10 @@ export async function runStartupEnvironmentCleanup(
         }
       }
       if (!state.cancelled) {
-        await sweepPreLedgerDiskState(context, { isCancelled: () => state.cancelled });
+        await sweepPreLedgerDiskState(context, {
+          isCancelled: () => state.cancelled,
+          now: options.now,
+        });
       }
     } finally {
       if (!state.cancelled) {

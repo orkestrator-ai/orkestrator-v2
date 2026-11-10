@@ -40,7 +40,10 @@ function getTooltipPosition(
   };
 }
 
-export function useHoverTooltip(openDelay = 500, closeDelay = 100) {
+/** How long a hover rests on a target before its tooltip opens. */
+export const HOVER_TOOLTIP_OPEN_DELAY_MS = 500;
+
+export function useHoverTooltip(openDelay = HOVER_TOOLTIP_OPEN_DELAY_MS, closeDelay = 100) {
   const [open, setOpen] = useState(false);
   const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);

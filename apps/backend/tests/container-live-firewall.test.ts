@@ -20,6 +20,7 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { GITHUB_RANGES_FILE, readGithubRangesSeed } from "../src/core/github-ranges-cache";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -176,6 +177,38 @@ async function refresherPids(containerId: string): Promise<string[]> {
 }
 
 describe("C23 allowlist edits, refresh and revocation", () => {
+  // The workflow runs this case separately with its seed variable cleared.
+  // The usual seeded run skips it, keeping the unauthenticated fetch to one
+  // deliberate qualification request per architecture.
+  (ENABLED && !process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim() ? test : test.skip)(
+    "restricted boot fetches GitHub ranges without a workflow seed",
+    async () => {
+      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const environment = lifecycleEnvironment({ id: `unseeded-${RUN}` });
+      const { context } = firewallContext([environment]);
+      const seed = path.join(dataDir, GITHUB_RANGES_FILE);
+      expect(await readGithubRangesSeed(seed)).toBeNull();
+      const resolved = await resolveDockerImage(IMAGE);
+      if (resolved.kind !== "present") throw new Error("qualification image missing");
+      const containerId = await createDockerContainer(environment, context, {
+        imageId: resolved.imageId,
+        runtimeGeneration: 1,
+      });
+      // Prove the backend fetched ranges instead of accepting a workflow copy
+      // or silently falling through to the container's own fetch.
+      expect((await readGithubRangesSeed(seed))?.ranges.length).toBeGreaterThan(0);
+      await context.storage.updateEnvironment(environment.id, { containerId, status: "running" });
+      await startRuntime(containerId);
+      const policy = await environmentNetworkPolicy(environment.id, context);
+      expect(policy.domains).toBe("applied");
+      expect(await probe(containerId, "https://api.github.com/meta")).toBe(0);
+      expect(await probe(containerId, "https://example.com/")).not.toBe(0);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
   live(
     "an edit applies in place, revokes removed addresses, survives a restart and never widens on failure",
     async () => {

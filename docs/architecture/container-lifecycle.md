@@ -1465,7 +1465,7 @@ The peer address a container's call arrives from, by topology:
 | Topology | Peer seen by the server | Admitted by | Evidence |
 | --- | --- | --- | --- |
 | Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
-| Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+| Linux Engine (rootful) | The container's own address on its network (no NAT for traffic to a host address): `172.30.0.2` on the environment network, `10.213.0.2` on the default bridge; an unowned network's `172.30.1.2` is refused | The network's subnet | Run twice 2026-11-10 on beelink with the same script, inside the network namespace of `docker:disposable`'s nested rootful daemon (Engine 29.9.3, linux/amd64) on the host's rootful Engine 29.9.2; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 1 |
 | Rootless, slirp4netns, host loopback on (`10.0.2.2`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-09 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, slirp4netns 1.3.3, linux/amd64) with the same script; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 2 |
 | Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same run; the host check then switches to `10.0.2.2` |
 
@@ -1479,6 +1479,18 @@ tailnet calls closed without bytes. The permitted subnet list stayed empty
 before and after removal, with zero leftover resources. The captured result
 is `output/agent-testing/s0170-address/desktop-peer-evidence.json` (local,
 git-ignored); it does not establish native Linux or rootless behavior.
+
+On rootful Linux Engine (todo 6820 task 1, 2026-11-10) the admitted list was
+the default bridge's and the environment network's subnets, and only the
+default bridge's once the environment network was removed. Requests from the
+daemon's host to its own addresses (its outer address and every bridge
+gateway, `10.213.0.1` included) were closed with no bytes: each arrived from
+the host's primary address (`172.17.0.2` there), outside every admitted
+subnet. That fits Docker's per-bridge `MASQUERADE` rule (for the default
+bridge, `-s 10.213.0.0/24 ! -o docker0`), which matches a local connection
+sourced from a gateway address but leaving through `lo`. Without that rule
+such a request would arrive from the gateway address and be admitted, which
+would give a local process nothing it does not already have on loopback.
 
 A host firewall is not part of this boundary. The gate refuses outside peers
 whatever the firewall does, so whether a typical host's firewall would also

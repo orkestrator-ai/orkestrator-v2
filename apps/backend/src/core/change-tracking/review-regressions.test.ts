@@ -22,6 +22,7 @@ import {
 } from "./capture.js";
 import { createHarness, git, spoolSource, type Harness } from "./service-test-support.js";
 import { turnIdFor } from "./turn-boundaries.js";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { gitScopeResourceKey } from "./git-scopes.js";
 
 const active: Harness[] = [];
@@ -50,6 +51,12 @@ async function end(h: Harness, requestId: string) {
     turnIdFor("env-1", "tab", requestId),
     "turn-net",
   )!;
+}
+async function settled(done: () => boolean) {
+  for (let turn = 0; !done(); turn++) {
+    if (turn >= 1_000) throw new Error("the late capture never settled");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 async function owner(h: Harness) {
   const id = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
@@ -134,14 +141,35 @@ test("foreground and queued deadlines settle while inventory is blocked and fenc
     await gate;
     return inventory(...args);
   };
-  const started = Date.now();
-  const first = o.capture({ purpose: "turn-start", deadlineMs: 30 });
-  const second = o.capture({ purpose: "turn-end", deadlineMs: 40 });
-  expect((await first).kind).toBe("unavailable");
-  expect((await second).kind).toBe("unavailable");
-  expect(Date.now() - started).toBeLessThan(300);
+  // Each deadline runs on controlled time, so a capture can settle only when
+  // its own deadline is advanced (inventory stays blocked throughout). A
+  // wall-clock bound here failed whenever a loaded worker fired the timers late.
+  // The running capture also arms its abort timer at 30 ms, hence two pending.
+  const firstDeadline = installControlledTimeout(30, {
+    label: "turn-start capture deadline",
+    maxPending: 2,
+  });
+  const secondDeadline = installControlledTimeout(40, { label: "turn-end capture deadline" });
+  try {
+    const first = o.capture({ purpose: "turn-start", deadlineMs: 30 });
+    const second = o.capture({ purpose: "turn-end", deadlineMs: 40 });
+    expect(firstDeadline.pendingCount()).toBeGreaterThan(0);
+    expect(secondDeadline.pendingCount()).toBe(1);
+    firstDeadline.advance();
+    expect(await first).toMatchObject({ kind: "unavailable", reason: "capture-timeout" });
+    expect(secondDeadline.pendingCount()).toBe(1);
+    secondDeadline.advance();
+    expect(await second).toMatchObject({ kind: "unavailable", reason: "capture-timeout" });
+  } finally {
+    secondDeadline.restore();
+    firstDeadline.restore();
+  }
   release();
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  // The late pass has finished (owner idle, no reserved attempt) before the
+  // negative check, instead of a fixed sleep.
+  await settled(
+    () => o.idleFor(Number.MAX_SAFE_INTEGER) > 0 && h.service.ledger.pendingCaptures().length === 0,
+  );
   expect(h.service.ledger.snapshots()).toHaveLength(0);
 });
 

@@ -3661,12 +3661,14 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
+      // Discovered extensions are excluded under every policy, so nothing can
+      // add a command at attach and the pre-attach read is the whole inventory.
       expect(body).toMatchObject({
         catalogueVersion: 1,
-        status: "stale",
-        attachPending: true,
+        status: "ready",
         commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
       });
+      expect(body).not.toHaveProperty("attachPending");
       // Still metadata: the read that started the preview kept no session warm.
       expect(state.lastAccessed).toBe(1);
       // Pushed on the status the backend already polls, so a late read is seen.

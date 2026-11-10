@@ -3,6 +3,7 @@ import {
   estimateOrderedEventBytes,
   mergeRateLimitWindows,
   messageSnapshotIntervalMs,
+  ORDERED_EVENT_ESTIMATE_MAX_DEPTH,
   normalizedMessageSnapshotChars,
 } from "./app-server-runtime.js";
 import type { EngineRateLimitWindow, EngineRateLimitWindowUpdate } from "./engine/types.js";
@@ -191,16 +192,28 @@ describe("estimateOrderedEventBytes", () => {
    * past the cap is deliberate.
    */
   test("stops descending at the depth cap instead of walking forever", () => {
+    // Record which levels the walk opens instead of timing it. A wall-clock
+    // bound measured host load in the aggregate (flake 0698), not the cap.
+    const opened: number[] = [];
+    const level = (depth: number, value: Record<string, unknown>) =>
+      new Proxy(value, {
+        ownKeys(target) {
+          opened.push(depth);
+          return Reflect.ownKeys(target);
+        },
+      });
     let deep: unknown = "leaf".repeat(64);
-    for (let index = 0; index < 40; index += 1) deep = { next: deep };
-    const start = performance.now();
+    for (let depth = 39; depth >= 0; depth -= 1) deep = level(depth, { next: deep });
     const estimate = estimateOrderedEventBytes(deep);
-    expect(performance.now() - start).toBeLessThan(50);
+    const walked = Array.from({ length: ORDERED_EVENT_ESTIMATE_MAX_DEPTH }, (_, depth) => depth);
+    expect(opened).toEqual(walked);
     // Nine nested nodes plus their keys, and nothing for the truncated tail.
     expect(estimate).toBeLessThan(400);
 
-    const cyclic: Record<string, unknown> = {};
+    opened.length = 0;
+    const cyclic: Record<string, unknown> = level(0, {});
     cyclic.self = cyclic;
     expect(estimateOrderedEventBytes(cyclic)).toBeLessThan(400);
+    expect(opened).toHaveLength(ORDERED_EVENT_ESTIMATE_MAX_DEPTH);
   });
 });

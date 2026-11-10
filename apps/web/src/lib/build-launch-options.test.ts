@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   buildLaunchDefaults,
   buildPipelineConfiguredDefaults,
+  buildPipelineLauncherDefaults,
   configuredOpenCodeModelIds,
 } from "./build-launch-options";
-import { MAX_BUILD_PIPELINE_REVIEWERS } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_BUILD_PIPELINE_REVIEWERS,
+  type BuildStepConfig,
+} from "@orkestrator/protocol/build-pipeline";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
 function makeConfig(
@@ -336,17 +340,106 @@ describe("buildPipelineConfiguredDefaults", () => {
   test("defaults to two identical reviewers and a preparation model copied from review", () => {
     const defaults = buildPipelineConfiguredDefaults(makeConfig(), "project-1");
 
+    expect(defaults.reviewers).toEqual([{ agent: "claude" }, { agent: "claude" }]);
+    expect(defaults.reviewPreparation).toEqual({ agent: "claude" });
+    expect(defaults.steps.verify).toEqual({ agent: "claude" });
+  });
+
+  // To-do 7546: a pinned row is an explicit choice and skips the swap a new
+  // session gets, so an inherited default must stay a default.
+  test("leaves an inherited platform model unpinned on every row", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        enabledAgentPlatforms: ["codex"],
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { model: "gpt-5.4", reasoningEffort: "high" } },
+          multiReview: { reviewerCount: 1 },
+        },
+      }),
+      "project-1",
+    );
+
+    const inherited: BuildStepConfig = { agent: "codex", reasoningEffort: "high" };
+    expect(defaults.reviewers).toEqual([inherited]);
+    expect(defaults.steps).toEqual({
+      review: inherited,
+      address: inherited,
+      verify: inherited,
+      pr: inherited,
+      "resolve-conflicts": inherited,
+    });
+    expect(defaults.reviewPreparation).toBeUndefined();
+  });
+
+  test("keeps a model an action or additional reviewer names itself", () => {
+    const defaults = buildPipelineConfiguredDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { model: "claude-sonnet-5" },
+            codex: { model: "gpt-5.4", reasoningEffort: "high" },
+          },
+          actionDefaults: {
+            review: { platform: "codex", model: "gpt-6.1-sol" },
+            review2: { platform: "claude" },
+          },
+          multiReview: {
+            reviewerCount: 4,
+            additionalReviewers: [
+              { platform: "codex", model: "gpt-6-luna" },
+              { platform: "claude" },
+            ],
+          },
+        },
+      }),
+      "project-1",
+    );
+
     expect(defaults.reviewers).toEqual([
-      { agent: "claude", model: "claude-sonnet-5" },
+      { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
+      { agent: "claude" },
+      { agent: "codex", model: "gpt-6-luna", reasoningEffort: "high" },
+      { agent: "claude" },
+    ]);
+  });
+
+  test("launcher panels open an unpinned row on its platform's own model", () => {
+    const config = makeConfig(undefined, {
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "gpt-5.4", reasoningEffort: "high" },
+        },
+        actionDefaults: {
+          review: { platform: "codex", model: "gpt-6.1-sol" },
+          review2: { platform: "claude" },
+        },
+      },
+    });
+
+    const defaults = buildPipelineLauncherDefaults(config, "project-1");
+
+    expect(defaults.reviewers).toEqual([
+      { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
       { agent: "claude", model: "claude-sonnet-5" },
     ]);
-    expect(defaults.reviewPreparation).toEqual({
-      agent: "claude",
-      model: "claude-sonnet-5",
+    expect(defaults.steps.address).toEqual({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
     });
-    expect(defaults.steps.verify).toEqual({
-      agent: "claude",
-      model: "claude-sonnet-5",
+    expect(defaults.reviewPreparation).toEqual({
+      agent: "codex",
+      model: "gpt-6.1-sol",
+      reasoningEffort: "high",
+    });
+    // The saved settings themselves are untouched.
+    expect(buildPipelineConfiguredDefaults(config, "project-1").steps.address).toEqual({
+      agent: "codex",
+      reasoningEffort: "high",
     });
   });
 
@@ -463,14 +556,8 @@ describe("buildPipelineConfiguredDefaults", () => {
       "project-1",
     );
 
-    expect(defaults.steps.review).toEqual({
-      agent: "claude",
-      model: "claude-sonnet-5",
-    });
-    expect(defaults.steps.verify).toEqual({
-      agent: "claude",
-      model: "claude-sonnet-5",
-    });
+    expect(defaults.steps.review).toEqual({ agent: "claude" });
+    expect(defaults.steps.verify).toEqual({ agent: "claude" });
   });
 
   test("clamps reviewer count to the pipeline maximum", () => {
@@ -509,6 +596,13 @@ describe("buildPipelineConfiguredDefaults", () => {
     );
 
     expect(configuredOpenCodeModelIds(defaults)).toEqual([
+      "acme/review",
+      "acme/verify",
+      "acme/review-2",
+      "acme/prep",
+    ]);
+    // A row with no model of its own opens on the inherited platform model.
+    expect(configuredOpenCodeModelIds(defaults, "acme/platform")).toEqual([
       "acme/review",
       "acme/platform",
       "acme/verify",

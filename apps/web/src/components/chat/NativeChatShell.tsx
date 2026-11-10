@@ -9,6 +9,7 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type RefObject,
@@ -289,6 +290,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   const columnShiftStyle = useChatColumnShiftStyle();
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
   const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
+  /** The height last committed to state, so an unchanged measurement queues nothing. */
+  const composeDockHeightRef = useRef<number | null>(null);
   const composeDockRef = useCallback((element: HTMLDivElement | null) => {
     setComposeDockElement(element);
   }, []);
@@ -300,9 +303,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
     const syncHeight = () => {
       const nextHeight = Math.ceil(composeDockElement.getBoundingClientRect().height);
-      setComposeDockHeight((currentHeight) =>
-        currentHeight === nextHeight ? currentHeight : nextHeight,
-      );
+      // Every pane resize fires this. Returning the current value from an
+      // updater is not enough: React only drops a same-value update before
+      // rendering when the component has no other pending work, and otherwise
+      // renders and commits the shell once before bailing out. So an unchanged
+      // height must not queue an update at all.
+      if (composeDockHeightRef.current === nextHeight) return;
+      composeDockHeightRef.current = nextHeight;
+      setComposeDockHeight(nextHeight);
     };
 
     syncHeight();

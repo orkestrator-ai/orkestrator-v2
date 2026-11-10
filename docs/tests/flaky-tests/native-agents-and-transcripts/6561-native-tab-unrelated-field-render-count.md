@@ -62,3 +62,57 @@ at line 903, expected zero commits, received one. React also reported unwrapped
 updates and an act-environment warning. Evidence:
 `/tmp/orkestrator-test-run.smRWs3/repro-native-owner-contention.log.gz`.
 Those results do not reproduce or explain the original unrelated-field failure.
+
+### `anchor resize` variant fixed — 2026-11-10
+
+The `anchor resize does not render the native controller` failures recorded in
+the recurrence above (one commit instead of zero) have a cause and a fix. This
+case's own test, `an unrelated environment field does not render a tab
+holding a transcript`, is not explained by it, so the status stays open.
+
+- **Reproduced:** the unchanged `anchor resize` test failed alone every time
+  (`env -u NODE_ENV bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --test-name-pattern 'anchor resize' --rerun-each=3`:
+  0 pass, 3 fail). It passed in the whole file only because of the update
+  history earlier tests left on the shell; one predecessor
+  (`the startup session's progress does not render the tab until it fails`)
+  was enough to make it pass. Under
+  `bun scripts/test-under-contention.ts --burners 6` with that test and this
+  case's test, it failed 3 of 5 reruns.
+- **Root cause (product):** two renders of `NativeChatShell` on every pane
+  resize.
+  1. Its compose-dock `ResizeObserver` callback (`syncHeight`,
+     `apps/web/src/components/chat/NativeChatShell.tsx`) called
+     `setComposeDockHeight` with an updater that returned the current height.
+     React drops such an update before rendering only when the fiber has no
+     other pending work. Otherwise it renders the shell, bails out, and the
+     `Profiler` above records a commit. Which path runs depends on the fiber's
+     earlier updates, which explains the order and load dependence. With
+     temporary tracing, the commit appeared only when this callback ran.
+  2. `useChatColumnShiftStyle` read the column shift through
+     `useContext(FloatingNoticeContext)`
+     (`apps/web/src/components/ui/floating-notice.tsx`). That context's value
+     changes on every anchor measurement, so the shell re-rendered on every
+     resize even when its shift stayed 0. With temporary render counting,
+     the shell rendered once per resize after fix 1 (the Profiler usually did
+     not count it; one alone run in ten still failed) and 0 times after fix 2.
+- **Fix:** `syncHeight` keeps the last committed height in a ref and queues no
+  update when the height is unchanged. The floating-notice layer provides
+  the column shift (`shiftRem`) and the stable claim callback through
+  contexts of their own, so `useFloatingNoticeColumnShift` and
+  `useClaimFloatingNoticeColumnShift` no longer subscribe to the layer's
+  measurements. No assertion, timeout or test code changed.
+- **Verification:**
+  - `mise run test:logged -- --name n6561-anchor-alone-after2 -- env -u NODE_ENV bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --test-name-pattern 'anchor resize' --rerun-each=20`
+    passed (it failed alone on every run before).
+  - The same test under `bun scripts/test-under-contention.ts --burners 6`,
+    `--rerun-each=20`: 20 pass, 0 fail.
+  - The recurrence's exact contention command, renamed
+    `repro-native-owner-contention-after` (whole owner, `--rerun-each=5`,
+    six burners), passed. It had failed 5 times before.
+  - `floating-notice.test.tsx`, `chat-column-shift.test.tsx`,
+    `CoordinatorActionsPanel.test.tsx`, `NativeChatShell.test.tsx` and this
+    owner passed with `--parallel=2`; the web typecheck passed.
+- **Still open:** the unrelated-field failure (one commit, 560.62 ms, at
+  `bfdc17ffa`). No resize happens in that test. A same-value state update
+  in a component that the environment write reaches is a candidate of the
+  same kind as fix 1, but it is not identified.

@@ -851,6 +851,101 @@ export const sessionCommands: CommandSpec[] = [
     },
   },
   {
+    path: ["session", "rewind"],
+    action: "session.rewind",
+    inputFields: { message: "messageId" },
+    summary: "Rewind the conversation to before one of its prompts (Codex, Pi, Cursor).",
+    description:
+      "Removes that prompt, its response and every later turn from the conversation. Files are not reverted. Codex and Cursor cannot bring the turns back; Pi keeps them as a branch (`session branches`).",
+    positionals: [{ name: "session", required: true }],
+    options: [
+      {
+        name: "message",
+        kind: "string",
+        valueName: "MESSAGE_ID",
+        description: "Required. A prompt (user message) ID from `session transcript`.",
+      },
+      REQUEST_ID_OPTION,
+    ],
+    async run(context, parsed) {
+      if (typeof parsed.options.message !== "string" || !parsed.options.message) {
+        throw new CliError("invalid-input", "--message is required");
+      }
+      const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
+        context,
+        "session.rewind",
+        { sessionId: parsed.positionals.session, messageId: parsed.options.message },
+        parsed.options,
+      );
+      return {
+        action: "session.rewind",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        human: [`rewound to before ${String(parsed.options.message)}`],
+      };
+    },
+  },
+  {
+    path: ["session", "branches"],
+    action: "session.branches",
+    summary: "List the conversation's other branches, such as turns a rewind removed (Pi).",
+    positionals: [{ name: "session", required: true }],
+    options: [],
+    idOutput: "branch entry IDs, one per line",
+    async run(context, parsed) {
+      const session = await context.session();
+      const branches = await session.read<{
+        activeEntryId: string | null;
+        items: Array<{ id: string; prompt: string; entries: number; updatedAt: string | null }>;
+        truncated: boolean;
+      }>("session.branches", { sessionId: parsed.positionals.session });
+      return {
+        action: "session.branches",
+        result: branches,
+        connection: session.identity,
+        ids: branches.items.map((item) => item.id),
+        human: table(
+          ["ENTRY ID", "PROMPT", "ENTRIES", "UPDATED"],
+          branches.items.map((item) => [
+            item.id,
+            item.prompt,
+            String(item.entries),
+            String(item.updatedAt ?? ""),
+          ]),
+        ),
+      };
+    },
+  },
+  {
+    path: ["session", "branch"],
+    action: "session.branch",
+    summary: "Switch the conversation to another branch from `session branches` (Pi).",
+    description: "The branch being left is kept and listed by `session branches`.",
+    positionals: [
+      { name: "session", required: true },
+      { name: "entry-id", required: true },
+    ],
+    options: [REQUEST_ID_OPTION],
+    async run(context, parsed) {
+      const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
+        context,
+        "session.branch",
+        { sessionId: parsed.positionals.session, entryId: parsed.positionals["entry-id"] },
+        parsed.options,
+      );
+      return {
+        action: "session.branch",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        human: [`switched to branch ${parsed.positionals["entry-id"]}`],
+      };
+    },
+  },
+  {
     path: ["session", "interactions", "list"],
     action: "session.interactions",
     summary: "List pending questions and approvals with their permitted answers.",

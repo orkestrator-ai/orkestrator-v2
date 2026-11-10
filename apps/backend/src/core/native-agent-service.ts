@@ -25,6 +25,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentToolDetails,
   Environment,
   PersistedNativeAgentSession,
@@ -2187,10 +2188,14 @@ export class NativeAgentService {
         // The only thing refusing this prompt is an older dispatch nobody has
         // resolved. If the provider can prove that one landed, or that it never
         // will (retired), the block was stale and this prompt was never in
-        // conflict with anything.
+        // conflict with anything. The same holds when the record is already
+        // gone: a projection read settles parked dispatches in the background,
+        // and one that confirmed it between this refusal and the settle here
+        // leaves this settle nothing to clear.
         if (
           allowRecoveryRetry &&
-          (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
+          ((await this.settleAmbiguousDispatch(input, key, error.pendingRequestId)) ||
+            (await this.parkedDispatchReleased(key, error.pendingRequestId)))
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
@@ -2351,6 +2356,20 @@ export class NativeAgentService {
         : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Whether the parked dispatch `requestId` no longer blocks this session,
+   * because something else settled or discarded it after it refused a prompt.
+   * A failed read answers `false`: "I could not find out" keeps the block.
+   */
+  private async parkedDispatchReleased(key: string, requestId: string): Promise<boolean> {
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      return session?.pendingDispatch?.requestId !== requestId;
+    } catch {
+      return false;
     }
   }
 
@@ -2619,6 +2638,10 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput & { action: NativeAgentSessionAction },
   ): Promise<NativeAgentSessionActionOutcome> {
     return this.sessionOperations.performProjectionAction(input);
+  }
+
+  listProjectionBranches(input: NativeAgentProjectionInput): Promise<NativeAgentSessionBranchList> {
+    return this.sessionOperations.listProjectionBranches(input);
   }
 
   performProjectionMcpAction(

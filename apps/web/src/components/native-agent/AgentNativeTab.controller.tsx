@@ -93,6 +93,10 @@ import {
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
+  useJoinedMessageActions,
+  useMessageRewind,
+} from "@/components/native-agent/MessageRewindAction";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
@@ -2967,12 +2971,54 @@ export function SharedNativeAgentController({
     disabled: forkInFlight || phase === "running" || phase === "recovering",
     onFork: handleForkAction,
   });
+  const rewindEnabled =
+    Boolean(adapter.capabilities.actions?.rewindMessages) &&
+    hasEnvironmentRecord &&
+    Boolean(projection?.sessionId);
+  const composerHasDraft = useCallback(() => {
+    const current = composeDrafts.getState().drafts.get(sessionKey);
+    return Boolean(
+      current?.text.trim() ||
+      current?.attachments.length ||
+      current?.annotations?.length ||
+      current?.mentions.length,
+    );
+  }, [composeDrafts, sessionKey]);
+  const restoreRewoundDraft = useCallback(
+    (restored: { text: string; annotations: TranscriptAnnotation[] }) => {
+      updateDraft(sessionKey, {
+        text: restored.text,
+        mentions: [],
+        attachments: [],
+        annotations: restored.annotations,
+      });
+    },
+    [sessionKey, updateDraft],
+  );
+  const messageRewind = useMessageRewind({
+    platform,
+    agentLabel: label,
+    enabled: rewindEnabled,
+    messages: handoff.displayMessages,
+    responseInProgress: isTurnActive,
+    disabled: forkInFlight || phase === "running" || phase === "recovering",
+    performAction,
+    composerHasDraft,
+    restoreDraft: restoreRewoundDraft,
+  });
+  const { renderRewindAction } = messageRewind;
+  const joinMessageActions = useJoinedMessageActions();
+  const forkEnabled = Boolean(adapter.capabilities.fork);
   const renderMessageActions = useCallback(
     (message: NativeMessage) => {
-      const planned = forkPlan.get(message.id);
-      return planned ? renderForkAction(message.id, planned.kind) : null;
+      const planned = forkEnabled ? forkPlan.get(message.id) : undefined;
+      return joinMessageActions(
+        message.id,
+        planned ? renderForkAction(message.id, planned.kind) : null,
+        renderRewindAction(message.id),
+      );
     },
-    [forkPlan, renderForkAction],
+    [forkEnabled, forkPlan, joinMessageActions, renderForkAction, renderRewindAction],
   );
   const latestIsPlanReview =
     latestAssistantMessage?.planReview === true ||
@@ -4083,7 +4129,7 @@ export function SharedNativeAgentController({
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       onAnnotationCommentDone={focusComposerAfterAnnotationComment}
       messageActions={
-        adapter.capabilities.fork && hasEnvironmentRecord ? renderMessageActions : undefined
+        (forkEnabled || rewindEnabled) && hasEnvironmentRecord ? renderMessageActions : undefined
       }
       onResumeClick={
         adapter.capabilities.resume && hasEnvironmentRecord ? openResumeDialog : undefined
@@ -4091,6 +4137,7 @@ export function SharedNativeAgentController({
       resumeDialog={
         <>
           {resumeDialog}
+          {messageRewind.dialog}
           {goalsAvailable ? (
             <GoalPanel
               open={goalPanelOpen}

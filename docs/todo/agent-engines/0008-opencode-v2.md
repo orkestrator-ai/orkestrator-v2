@@ -11,9 +11,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2026-11-06 against `main` at `ee2cc8423` (2.2.5); see "Assumptions and decisions" and [1031](1031-provider-upgrade-2026-11-06.md) task 7. Upstream rechecked again on 2026-11-08 against `main` at `8598abfe4` (2.2.6), and task 9 added; see "Upstream recheck at 2.2.6".
 
 1. **Upstream recheck**: rerun the recheck procedure against the current 1.x and 2.x releases (the "Needs verification" item). Status: done (2026-10-30, against 2.2.2 and the 1.19.4 pin; see "Upstream recheck at 2.2.2").
-2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: open (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. Accepting the other open conditions with the mitigations under "Task 2: owner decision" is proposed but not yet confirmed).
-3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done as a decision (keep on a pinned 1.x binary with its own database); the routing code is open (depends on 5).
-4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done as decisions (share dropped with 1.19.1; the rest decided below); the code is open (depends on 5).
+2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: done for the start, rechecked 2026-11-10 against `main` at `04639b12b`; making 2.x the default is task 7 (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. The 2.x provider was then built with the mitigations under "Task 2: owner decision" and merged as an opt-in preview in #2009 on 2026-11-09, so the start decision is settled; no explicit owner acceptance of those mitigations is recorded, and it belongs to the decision to make 2.x the default (task 7, phase 6)).
+3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done for the opt-in preview (keep existing sessions on a pinned 1.x binary with its own database; the persisted marker and per-session routing are built under task 5, phase 3). Qualification and the default switch remain task 7.
+4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done for the opt-in preview (share dropped with 1.19.1; the remaining rebuilds and capability gates are recorded under task 5, phases 4 and 5, including session features). Live qualification remains task 7.
 5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; open: a live-model run of the coordinator suite on 2.x, resume-picker archive, and phase 6 (qualification and default); see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: partly done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store). Done.
 7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification". Status: open (depends on 5).
@@ -301,14 +301,17 @@ The remaining window is a run OpenCode starts by itself between step 2 and step 
 
 The guard is therefore buildable as described, with two changes: settle from the live `seq` order plus the message snapshot, not from the log route; and detect a conflicting reuse by comparing the returned payload.
 
-This is the deferred checkpoint for moving from the OpenCode 1.x line to
-OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
-2.x. A 2.x server has no legacy HTTP API, so the move is a rewrite of the
-backend OpenCode provider rather than a version bump. Upstream evidence was
-last refreshed on 2026-10-30 against OpenCode `v2.2.2` (previously 2026-09-27
-against `v2.0.18`). The 1.x line was rechecked at `1.19.0` on 2026-10-11/13
-(#964) and moved to `1.19.4` on 2026-10-23; `1.19.5` shipped on 2026-10-28 and
-is not pinned yet.
+This file began as the deferred checkpoint for moving from the OpenCode 1.x
+line to OpenCode 2.x. Since #2009 (2026-11-09) 2.x runs as an opt-in preview:
+a separate `opencode2` provider beside the 1.x one, which stays the default
+and keeps its own binary and SDK pins (task 5; qualification and the default
+switch are task 7). A 2.x server has no legacy HTTP API, so the move is a
+rewrite of the backend OpenCode provider rather than a version bump. Upstream
+evidence was last refreshed on 2026-11-08 against OpenCode `v2.2.6` (see
+"Upstream recheck at 2.2.6"; before that 2026-10-30 against `v2.2.2` and
+2026-09-27 against `v2.0.18`). The 1.x line was rechecked at `1.19.0` on
+2026-10-11/13 (#964), moved to `1.19.4` on 2026-10-23 and is pinned at
+`1.19.5` (see Current state).
 
 Three different things are called "v2" around OpenCode. The file name is kept
 for existing links, but the text says "2.x" and never a bare "v2":
@@ -340,8 +343,9 @@ for existing links, but the text says "2.x" and never a bare "v2":
   builds), installed as `opencode2` beside the 1.x `opencode`. It belongs to
   the `opencode` platform (`agentPlatformForToolchain`), so enabling OpenCode
   installs both, on host toolchains and in the image
-  (`/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`). Nothing
-  launches it yet, and `opencode2` is not an agent platform. The bump procedure
+  (`/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`). Since #2009
+  (2026-11-09) the opt-in preview launches it for opted-in sessions (task 5);
+  `opencode2` is not an agent platform. The bump procedure
   is in `docs/development/upgrade-agents.md` ("OpenCode 2.x").
 - No `@opencode/*` dependency. `session.next.*` events are listed in
   `KNOWN_OPENCODE_EVENTS` (`apps/backend/src/core/opencode-events.ts`) as
@@ -2365,10 +2369,50 @@ providers, models and `AGENTS.md` as a 1.x one. The guard plugin still
 refuses every tool outside the read-only set, so the user's MCP servers load
 but their tools are refused, as the session rules already did.
 
+### Task 2: the start is settled by the preview (2026-11-10 housekeeping)
+
+Checked against `main` at `04639b12b`. The task list still read "open ...
+proposed but not yet confirmed" although the 2.x provider had been built and
+merged as an opt-in preview (#2009, `2e7a39755`), and the folder index still
+called this file a deferred checkpoint where nothing starts until the gate
+opens. Chosen: mark task 2 done for the start and point the remaining
+decision (whether the mitigations are accepted for a default switch) at task
+7, and rewrite the index row from the task list and the merged code
+(`apps/backend/src/core/opencode2/`). The row is re-rated Medium, a
+provider-parity and qualification gap behind an opt-in switch, and keeps its
+rank, which already sits after the last Medium row above it. The
+alternative, leaving task 2 open, would keep saying that 2.x work has not
+started.
+
+### Tasks 3 and 4: reconcile preview completion (2026-11-10)
+
+Reconciled against the implementation record already in task 5: phase 3
+built the persisted protocol marker and per-session routing; phases 4 and 5
+record the interactions, transcript, read-only permissions, structured output
+and session features. Tasks 3 and 4 are done for the opt-in preview. Their
+older decision-only notes above describe the 2.2.2 checkpoint, before that
+implementation, rather than outstanding code work.
+
+Chose to update the task summary statuses to match those dated records and
+the index. Keeping the statuses open would retain historical wording but
+misstate the preview's implementation. This closes no live qualification:
+the remaining task 5 follow-ups, task 7 qualification and default decision,
+and task 8 Session V2 work stay open.
+
+### Stale checkpoint wording outside the task list (2026-11-10 housekeeping)
+
+The paragraph that closes the Task analysis still said "do not bump ... to
+2.x", gave 2.2.2 as the last upstream check and called `1.19.5` unpinned, and
+Current state said nothing launches `opencode2`. All four predate #2009 and
+the 2.2.6 recheck, and contradicted the task list and the index row. Chosen:
+rewrite those sentences to the merged state (opt-in preview, 1.x default,
+`1.19.5` pinned, 2.2.6 recheck) and leave the dated notes below them as
+history. Leaving them would keep the file saying two things at once.
+
 ## Related
 
 - [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) (OpenCode
-  steer is blocked on this).
+  steer, built here for 2.x sessions).
 - [0039-mcp-management.md](../mcp/0039-mcp-management.md) (`POST /mcp` →
   `PUT /api/experimental/mcp/:server`, V1 config keys).
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md)

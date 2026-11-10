@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -365,67 +365,100 @@ describe("dev:test bridge builds", () => {
     };
   }
 
-  test("a successful start records bridges before launching the runtime and accepts backend readiness", async () => {
-    const roots = await profileRoots("ork-dev-bridge-success-");
-    const repository = await temporaryDirectory("ork-dev-bridge-repo-");
-    const args = parseAgentTestArguments(["--profile", "bridge-success"]);
-    const profile = resolveRuntimeProfile({
-      repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
-      requestedId: args.profile,
-      flavor: "agent-test",
-      roots,
-    });
-    const statusPath = statusManifestPath(profile);
-    const order: string[] = [];
-    const prepare = prepareProfileBridgeBuilds;
-    // Keep real build/record behavior, with bundles confined to a temporary checkout.
-    const preparation = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockImplementation(
-      async (options) => {
-        const result = await prepare({ ...options, repositoryRoot: repository });
-        order.push("record");
-        return result;
-      },
-    );
-    const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
-    const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
-      seeded: [],
-      failed: [],
-    });
-    const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
-      downloaded: [],
-    });
-    const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue([]);
-    const log = spyOn(console, "log").mockImplementation(() => {});
-    // Root runs preload Happy DOM; package runs use Bun's native fetch already.
-    const nativePlatform = Reflect.get(
-      globalThis,
-      Symbol.for("orkestrator.tests.native-web-platform"),
-    ) as { fetch: typeof fetch } | undefined;
-    const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
-    const request = spyOn(globalThis, "fetch").mockImplementation(((input, init) => {
-      if (!String(input).startsWith("http://127.0.0.1:"))
-        throw new Error("Outbound fetch forbidden in lifecycle test");
-      return fetchRuntime(input, init);
-    }) as typeof fetch);
-    const signals = new Map(
-      (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
-    );
-    const children: childProcess.ChildProcess[] = [];
-    const spawn = childProcess.spawn;
-    // Exercise real child readiness, status writes and shutdown without starting
-    // the desktop app or reading provider credentials. The Electron stand-in
-    // reports its backend then exits only after the launcher persisted "ready".
-    const launchStandIn = (
-      command: string,
-      _args?: readonly string[],
-      options?: childProcess.SpawnOptions,
-    ) => {
-      expect(order).toContain("record");
-      const vite = command === "bun";
-      order.push(vite ? "vite" : "electron/backend");
-      const script = vite
-        ? `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready")});`
-        : `
+  test.each([0, 1, 3])(
+    "a successful start records bridges before launching the runtime and accepts backend readiness (renderer port taken after reservation: %p)",
+    async (collisions) => {
+      const roots = await profileRoots("ork-dev-bridge-success-");
+      const repository = await temporaryDirectory("ork-dev-bridge-repo-");
+      const args = parseAgentTestArguments(["--profile", "bridge-success"]);
+      const profile = resolveRuntimeProfile({
+        repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
+        requestedId: args.profile,
+        flavor: "agent-test",
+        roots,
+      });
+      const statusPath = statusManifestPath(profile);
+      const order: string[] = [];
+      const prepare = prepareProfileBridgeBuilds;
+      // Keep real build/record behavior, with bundles confined to a temporary checkout.
+      const preparation = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockImplementation(
+        async (options) => {
+          const result = await prepare({ ...options, repositoryRoot: repository });
+          order.push("record");
+          return result;
+        },
+      );
+      const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
+      const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
+        seeded: [],
+        failed: [],
+      });
+      const prefetch = spyOn(profileIo, "prefetchAgentToolchains").mockResolvedValue({
+        downloaded: [],
+      });
+      const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue(
+        [],
+      );
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      // Root runs preload Happy DOM; package runs use Bun's native fetch already.
+      const nativePlatform = Reflect.get(
+        globalThis,
+        Symbol.for("orkestrator.tests.native-web-platform"),
+      ) as { fetch: typeof fetch } | undefined;
+      const fetchRuntime = nativePlatform?.fetch ?? globalThis.fetch;
+      const collisionObserved = path.join(roots.homeDir, "collision-observed");
+      const request = spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
+        if (!String(input).startsWith("http://127.0.0.1:"))
+          throw new Error("Outbound fetch forbidden in lifecycle test");
+        const response = await fetchRuntime(input, init);
+        if (response.ok && !response.headers.has("x-orkestrator-renderer-instance")) {
+          await writeFile(collisionObserved, "observed");
+        }
+        return response;
+      }) as typeof fetch);
+      const signals = new Map(
+        (["SIGINT", "SIGTERM"] as const).map((signal) => [signal, process.listeners(signal)]),
+      );
+      const children: childProcess.ChildProcess[] = [];
+      const spawn = childProcess.spawn;
+      // Another process can bind the reserved renderer port before Vite does
+      // (flake 1202). Hold the first one so the stand-in Vite cannot bind it.
+      const takenPorts: { port: number; stop: () => void }[] = [];
+      // Exercise real child readiness, status writes and shutdown without starting
+      // the desktop app or reading provider credentials. The Electron stand-in
+      // reports its backend then exits only after the launcher persisted "ready".
+      const launchStandIn = (
+        command: string,
+        _args?: readonly string[],
+        options?: childProcess.SpawnOptions,
+      ) => {
+        expect(order).toContain("record");
+        const vite = command === "bun";
+        if (!vite) {
+          const stored = JSON.parse(
+            readFileSync(path.join(profile.profileRoot, "profile.json"), "utf8"),
+          );
+          expect(options?.env?.VITE_DEV_SERVER_URL).toBe(`http://127.0.0.1:${stored.rendererPort}`);
+        }
+        order.push(vite ? "vite" : "electron/backend");
+        if (vite && takenPorts.length < collisions) {
+          const holder = Bun.serve({
+            hostname: "127.0.0.1",
+            port: Number(options?.env?.VITE_DEV_PORT),
+            fetch: () => new Response("foreign renderer", { status: 200 }),
+          });
+          takenPorts.push({
+            port: Number(options?.env?.VITE_DEV_PORT),
+            stop: () => holder.stop(true),
+          });
+        }
+        const collided =
+          vite && takenPorts.some(({ port }) => port === Number(options?.env?.VITE_DEV_PORT));
+        const script = vite
+          ? collided
+            ? `while (!(await Bun.file(${JSON.stringify(collisionObserved)}).exists())) await Bun.sleep(5); process.exit(1);`
+            : `Bun.serve({hostname: process.env.VITE_DEV_HOST, port: Number(process.env.VITE_DEV_PORT), fetch: () => new Response("ready", {headers: {"x-orkestrator-renderer-instance": process.env.ORKESTRATOR_RENDERER_INSTANCE}})});`
+          : `
           console.log(JSON.stringify({
             type: "orkestrator-electron-ready", profile: "bridge-success",
             electronPid: process.pid, backendPid: process.pid,
@@ -436,72 +469,99 @@ describe("dev:test bridge builds", () => {
             if (status.status === "ready") process.exit(0);
           }, 10);
         `;
-      const child = spawn(process.execPath, ["-e", script], options ?? {});
-      children.push(child);
-      return child;
-    };
-    const launch = spyOn(childProcess, "spawn").mockImplementation(
-      launchStandIn as typeof childProcess.spawn,
-    );
-    try {
-      await startDevelopment(args, "agent-test", {
-        roots,
-        prune: async () => [],
-        typecheck: () => {
-          order.push("typecheck");
-          return { status: 0 };
-        },
-        bundle: async () => {
-          order.push("bundle");
-          return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
-        },
-        turbo: fakeTurbo(repository, {
-          inputs: allInputs,
-          bundles: Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, `// ${bridge}`])),
-        }),
-      });
-      expect(order).toEqual(["typecheck", "bundle", "record", "vite", "electron/backend"]);
-      const status = await profileIo.readStatus(statusPath);
-      expect(status?.status).toBe("stopped");
-      expect(status?.browserUrl).toBe("http://fixture/");
-      expect(status?.pids.backend).toBe(children[1]?.pid);
-      const built = await readBridgeBuildRecord(statusPath);
-      expect(built).not.toBeNull();
-      expect(
-        compareBridgeBuilds(
-          built!,
-          snapshotBridgeBuilds(repository, {
-            run: fakeTurbo(repository, { inputs: allInputs, bundles: {} }),
+        const child = spawn(process.execPath, ["-e", script], options ?? {});
+        children.push(child);
+        return child;
+      };
+      const launch = spyOn(childProcess, "spawn").mockImplementation(
+        launchStandIn as typeof childProcess.spawn,
+      );
+      try {
+        const started = startDevelopment(args, "agent-test", {
+          roots,
+          prune: async () => [],
+          typecheck: () => {
+            order.push("typecheck");
+            return { status: 0 };
+          },
+          bundle: async () => {
+            order.push("bundle");
+            return { success: true, outputs: [], logs: [] } as unknown as Bun.BuildOutput;
+          },
+          turbo: fakeTurbo(repository, {
+            inputs: allInputs,
+            bundles: Object.fromEntries(LOCAL_BRIDGES.map((bridge) => [bridge, `// ${bridge}`])),
           }),
-        ),
-      ).toEqual([]);
-      expect(children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(
-        true,
-      );
-    } finally {
-      launch.mockRestore();
-      preparation.mockRestore();
-      cache.mockRestore();
-      toolchains.mockRestore();
-      prefetch.mockRestore();
-      credentials.mockRestore();
-      log.mockRestore();
-      request.mockRestore();
-      for (const [signal, before] of signals) {
-        for (const listener of process.listeners(signal)) {
-          if (!before.includes(listener)) process.removeListener(signal, listener);
+        });
+        if (collisions === 3) {
+          await expect(started).rejects.toThrow("Vite exited before serving");
+          expect(order.filter((entry) => entry === "vite")).toHaveLength(3);
+          expect(order).not.toContain("electron/backend");
+          expect((await profileIo.readStatus(statusPath))?.status).toBe("failed");
+          return;
         }
+        await started;
+        expect(order).toEqual([
+          "typecheck",
+          "bundle",
+          "record",
+          ...(collisions ? ["vite", "vite"] : ["vite"]),
+          "electron/backend",
+        ]);
+        const status = await profileIo.readStatus(statusPath);
+        expect(status?.status).toBe("stopped");
+        expect(status?.browserUrl).toBe("http://fixture/");
+        expect(status?.pids.backend).toBe(children.at(-1)?.pid);
+        expect(takenPorts.length).toBe(collisions);
+        for (const { port } of takenPorts) {
+          // The launcher moved Vite, its status and the profile to a new port.
+          expect(status?.rendererUrl).not.toBe(`http://127.0.0.1:${port}`);
+          expect(status?.pids.vite).toBe(children.at(-2)?.pid);
+          const stored = JSON.parse(
+            await readFile(path.join(profile.profileRoot, "profile.json"), "utf8"),
+          ) as { rendererPort: number };
+          expect(status?.rendererUrl).toBe(`http://127.0.0.1:${stored.rendererPort}`);
+        }
+        const built = await readBridgeBuildRecord(statusPath);
+        expect(built).not.toBeNull();
+        expect(
+          compareBridgeBuilds(
+            built!,
+            snapshotBridgeBuilds(repository, {
+              run: fakeTurbo(repository, { inputs: allInputs, bundles: {} }),
+            }),
+          ),
+        ).toEqual([]);
+        expect(
+          children.every((child) => child.exitCode !== null || child.signalCode !== null),
+        ).toBe(true);
+      } finally {
+        for (const taken of takenPorts) taken.stop();
+        launch.mockRestore();
+        preparation.mockRestore();
+        cache.mockRestore();
+        toolchains.mockRestore();
+        prefetch.mockRestore();
+        credentials.mockRestore();
+        log.mockRestore();
+        request.mockRestore();
+        for (const [signal, before] of signals) {
+          for (const listener of process.listeners(signal)) {
+            if (!before.includes(listener)) process.removeListener(signal, listener);
+          }
+        }
+        await Promise.all(
+          children.map(async (child) => {
+            if (child.exitCode !== null || child.signalCode !== null) return;
+            const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+            child.kill("SIGKILL");
+            await exited;
+          }),
+        );
       }
-      await Promise.all(
-        children.map(async (child) => {
-          if (child.exitCode !== null || child.signalCode !== null) return;
-          const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-          child.kill("SIGKILL");
-          await exited;
-        }),
-      );
-    }
-  }, 15_000);
+    },
+    15_000,
+  );
 
   test("an agent-test start builds the bridges after Electron compiles, and a failure stops it", async () => {
     const roots = await profileRoots("ork-dev-bridge-build-");

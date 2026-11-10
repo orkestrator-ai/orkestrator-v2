@@ -108,7 +108,7 @@ queued prompt, approval, mail, review; no duplicated dispatch). Each run
 still exited 1, because the driver's `workflow-sample` check failed in every
 round on "missing or ambiguous submit_review_preparation -> reviewing" while
 every review reached `ready`; that is a sampling mismatch in the driver,
-filed as [7551](7551-busy-driver-review-preparation-sample.md). The first
+filed as [7557](7557-busy-driver-review-preparation-sample.md). The first
 attempt refused to start the busy phase ("needs the fixture's ready local
 environment") only because the worktree had no CLI build
 (`packages/cli/dist`); `mise run build:cli` fixed it. All four kept profiles
@@ -158,4 +158,4 @@ means a missed wake.
 ## Related
 
 - [0048](0048-recurring-work-qualification.md) task 1: the busy profile run.
-- [7551](7551-busy-driver-review-preparation-sample.md): the driver's review-preparation sample, found by the task 2 reruns.
+- [7557](7557-busy-driver-review-preparation-sample.md): the driver's review-preparation sample, found by the task 2 reruns.

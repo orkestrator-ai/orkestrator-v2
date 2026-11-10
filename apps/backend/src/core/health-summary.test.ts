@@ -13,6 +13,7 @@ import {
   type HealthRow,
   type HealthSummaryOptions,
 } from "./health-summary.js";
+import { BridgeRestartCounter, bridgeRestarts } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
@@ -36,6 +37,7 @@ function summary(db: StorageDatabase, options: Partial<HealthSummaryOptions> = {
   return new HealthSummary({
     database: () => db,
     recurringWork: quietWork,
+    bridgeRestarts: () => ({}),
     isAlive: () => false,
     intervalMs: 3_600_000,
     ...options,
@@ -95,6 +97,52 @@ describe("health summary samples", () => {
       return value;
     });
     expect(strings).toEqual(["kind=sample"]);
+  });
+
+  test("a row counts bridge starts and unrequested exits per provider, as numbers", async () => {
+    const db = await database();
+    const counter = new BridgeRestartCounter();
+    const health = summary(db, { bridgeRestarts: () => counter.snapshot() });
+    counter.localStarted("codex:env-1");
+    counter.localExited("codex:env-1", false);
+    counter.localStarted("codex:env-1");
+    counter.containerLaunched("claude");
+    health.sample();
+
+    const [row] = readHealthRows(db);
+    expect(row).toMatchObject({
+      kind: "sample",
+      bridges: {
+        codex: { localStarts: 2, localUnrequestedExits: 1, containerLaunches: 0 },
+        claude: { localStarts: 0, localUnrequestedExits: 0, containerLaunches: 1 },
+      },
+    });
+    const strings: string[] = [];
+    JSON.stringify(row, (key, value: unknown) => {
+      if (typeof value === "string") strings.push(`${key}=${value}`);
+      return value;
+    });
+    expect(strings).toEqual(["kind=sample"]);
+  });
+
+  test("by default a row reads the process-wide bridge counter", async () => {
+    const db = await database();
+    bridgeRestarts.reset();
+    try {
+      const health = new HealthSummary({
+        database: () => db,
+        recurringWork: quietWork,
+        isAlive: () => false,
+        intervalMs: 3_600_000,
+      });
+      bridgeRestarts.containerLaunched("pi");
+      health.sample();
+      expect(readHealthRows(db)[0]).toMatchObject({
+        bridges: { pi: { containerLaunches: 1 } },
+      });
+    } finally {
+      bridgeRestarts.reset();
+    }
   });
 
   test("the timer writes a row per interval, and stop ends them", async () => {

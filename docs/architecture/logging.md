@@ -695,11 +695,11 @@ store, one row each:
 
 | Row | When | Holds |
 | --- | --- | --- |
-| `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, and the 8 recurring job kinds with the most run time |
+| `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, the 8 recurring job kinds with the most run time, and bridge starts per provider (`bridges`) |
 | `started` | When the backend's background work starts | Pid and start time |
 | `clean-exit` | The last shutdown step, before the database closes, and only if the drain succeeded | Pid and start time |
 
-Rows hold numbers and job kinds only. A backend's identity is its pid and start time, so
+Rows hold numbers, job kinds and bridge provider names only. A backend's identity is its pid and start time, so
 a row needs no string to say whose it is. The store keeps the newest 2,016 rows (seven
 days at one backend), pruned in the write's own transaction. Backends sharing a directory
 each write their own rows under that one bound, so two halve the history. The sample is
@@ -708,6 +708,18 @@ not count as content for [the hourly snapshot](storage.md#snapshots): an idle ma
 not take a copy because a sample landed.
 An older backend after a downgrade neither reads nor writes the store, so the rows stay
 until a later backend prunes them.
+
+**Bridge restarts.** `bridges` answers "did a bridge keep restarting?" with three
+counts per provider, cumulative in the process and left out while zero:
+`localStarts` (host bridges spawned, `bridge.started`), `localUnrequestedExits` (host
+bridges that stopped without being asked, `bridge.exited` with `requested: false`) and
+`containerLaunches` (container bridges launched, `bridge.launched`; a container
+relaunch is seen only on the host's launch path). `bridge-restarts.ts` counts them in
+memory beside those log lines, so the sample reads numbers and asks no bridge
+anything. Providers are a fixed list (`opencode`, `opencode2`, `claude`, `codex`,
+`cursor`, `grok`, `pi`); anything else is not counted. A first start counts too: a
+restart is a start beyond the first, which two samples tell apart, and the essential
+log still holds each event with its environment.
 
 The next start reads the rows and writes one `backend` `previous-run` line, which the
 [essential log](#the-essential-event-log) keeps: `outcome` is `clean` or `crashed`, at
@@ -742,18 +754,20 @@ Export diagnostics** or `orkestrator diagnostics export`. Nothing uploads it. Th
 | `manifest.json` | Every file with its size, SHA-256, description and redaction count; what is absent and why; the notice below |
 | `metrics.json` | What `/__orkestrator/metrics` answers, read in-process |
 | `health-summary.json` | The rows above |
-| `database.json` | Size, free pages, backups, retention and top tables of both databases; lease waits; slow SQLite operations (`slowOperations`, see [what ran during a stall](#what-ran-during-a-stall)) |
+| `database.json` | Size, free pages, backups, retention, top tables and the largest store families in `store_rows` of both databases; lease waits; slow SQLite operations (`slowOperations`, see [what ran during a stall](#what-ran-during-a-stall)) |
 | `change-tracking.json`, `progressive-reads.json`, `artifact-metrics.json` | Those services' counters |
 | `log-policy.json` | Whether logs are saved and the levels in force: names and levels only |
 | `log-storage.json` | Log sizes and counts |
 | `logs/essential/*` | The essential log |
 | `logs/debug/*` | With **Save Logs to Disk** on: the newest 8 MiB across the daily log files, from a line start |
+| `logs/containers/<environmentId>/*` | Only for the environments the user chose: each container server's log and the run before its last relaunch (`*.prev.log`), the newest 64 KiB and 200 lines of each |
 
 **The manifest is what is written.** A plan builds the whole archive in the backend's
 memory and answers with the same `manifest.json` that is inside it. Reading a plan returns
 those bytes, piece by piece, and the client checks they add up before saving. A plan lasts
 15 minutes, at most two are held, and nothing reaches the backend's disk. Both steps are
-reads, on the command `plan_diagnostics_bundle`/`read_diagnostics_bundle` and the public
+reads, on the commands `plan_diagnostics_bundle` (or
+`plan_diagnostics_bundle_with_container_logs`)/`read_diagnostics_bundle` and the public
 actions `diagnostics.plan`/`diagnostics.read`; a workspace client is refused them.
 
 **The bundle must not carry a credential, and redaction is not a proof.** Assume a log can
@@ -779,8 +793,26 @@ recognisable shape, so the manifest's notice says redaction is not a proof and t
 files before sharing them. `diagnostics-bundle.test.ts` holds this to fixture logs with
 tokens in each format, a `Bearer` header and home paths, reading the written archive.
 
-Container server logs are not collected: each read is a `docker exec`, and they are raw
-provider lines ([6143](../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md)).
+**Container server logs are opt-in, per environment.** The plan answers with the
+machine's container environments (`containerLogs`: id, name, stored status and
+whether this plan holds them; at most 64, by name). Ticking some in the Export dialog
+and choosing **Rebuild with these logs** plans again with
+`plan_diagnostics_bundle_with_container_logs` (at most 8 environments), so the manifest
+on screen is always the plan that will be saved. It is a command of its own rather
+than an argument to `plan_diagnostics_bundle`, whose empty arguments accepted any value;
+a backend without it answers `unknown-command`, which the dialog shows as the
+machine's update notice. Nothing reads a container for a bundle that chose none, and
+the manifest then names "container server logs" as not chosen. For a chosen
+environment, `diagnostics-container-logs.ts` runs one `docker exec` to list which
+servers have written a log, then one bounded tail per log (`boundedTailCommand`, as
+every container tail), scrubs it with `boundDiagnosticTail`, and the bundle redacts and
+checks it like a log file. An environment that is gone, has no container, is not
+running, or whose Docker does not answer is named as absent with that reason. These
+are raw provider lines, the riskiest content a bundle can hold, which is why they are
+never read by default and the dialog says so. A container bridge has no relay to the
+essential log, so this is also how its essential events (`session.resume-fell-back`)
+reach the evidence: on request, until the log rotates past them. The public
+`diagnostics.plan` action and the CLI do not offer the choice.
 
 ## Command failures
 

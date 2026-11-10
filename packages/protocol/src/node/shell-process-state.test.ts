@@ -39,14 +39,18 @@ async function withZombie(
   try {
     const deadline = Date.now() + 3_000;
     let zombiePid = 0;
+    let zombie = false;
     while (Date.now() < deadline) {
       zombiePid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
       const stat = zombiePid
         ? Bun.spawnSync(["ps", "-o", "stat=", "-p", String(zombiePid)]).stdout.toString()
         : "";
-      if (stat.trim().startsWith("Z")) break;
+      zombie = stat.trim().startsWith("Z");
+      if (zombie) break;
       await Bun.sleep(10);
     }
+    // Checking a group whose shell is still running would test something else.
+    if (!zombie) throw new Error(`no zombie appeared within 3 s (pid ${zombiePid})`);
     use(zombiePid, parent.pid!);
   } finally {
     parent.kill("SIGKILL");
@@ -88,19 +92,42 @@ describe("readZombieExit", () => {
   });
 });
 
+/**
+ * Runs `use` with the macOS `ps -A` scan given time to finish. The product
+ * bounds it at 100 ms and answers "unknown is yes" past that (tested below);
+ * on a loaded host a real scan of every process takes longer, which made
+ * these classification cases read `true` for an empty or zombie-only group
+ * (flakes 9840, 7271). These check what a completed scan means, not its speed.
+ */
+function withUnhurriedInspection(use: () => void): void {
+  const original = Bun.spawnSync;
+  const inspection = spyOn(Bun, "spawnSync").mockImplementation(((
+    args: string[],
+    options: typeof PROCESS_INSPECTION_OPTIONS,
+  ) =>
+    args[0] === "/bin/ps"
+      ? original(args, { ...options, timeout: 30_000 })
+      : original(args, options)) as typeof Bun.spawnSync);
+  try {
+    use();
+  } finally {
+    inspection.mockRestore();
+  }
+}
+
 describe("groupHasLiveMember", () => {
   posixOnly("sees a running member and ignores an empty group", async () => {
     await withZombie("exit 0", (_zombiePid, parentPid) => {
-      expect(groupHasLiveMember(parentPid)).toBe(true);
+      withUnhurriedInspection(() => expect(groupHasLiveMember(parentPid)).toBe(true));
     });
-    expect(groupHasLiveMember(2 ** 22 + 1)).toBe(false);
+    withUnhurriedInspection(() => expect(groupHasLiveMember(2 ** 22 + 1)).toBe(false));
   });
 
   posixOnly("does not count a zombie as a live member", async () => {
     await withZombie(
       "exit 0",
       (zombiePid) => {
-        expect(groupHasLiveMember(zombiePid)).toBe(false);
+        withUnhurriedInspection(() => expect(groupHasLiveMember(zombiePid)).toBe(false));
       },
       { ownGroup: true },
     );

@@ -201,6 +201,7 @@ What it costs, on the two repositories measured:
 | Test processes' private `TMPDIR`, `ork-test-tmp-<pid>-*` in the system temp dir, or `/private/tmp` on macOS (holds the browser profiles and anything else a test leaves) | The process itself when its preload's `afterAll` (Bun) or `exit` (Playwright runner) runs; otherwise the next test process | Once the owner has exited, the directory is over an hour old, and no live process names it on its command line |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
 | `<data dir>/git-mirrors/<project id>` | The project's removal; the backend's orphan sweep; its own refresh when it passes 2 GiB | With the project; hourly for one whose project is gone, once over an hour old. See [Project Git mirrors](#project-git-mirrors) |
+| Self-improvement state, `<data dir>/self-improvement/` | The self-improvement service | After each run: the newest 120 digests and 60 observations per tracked problem are kept; under `insights/`, conversation notes for 90 days (at most 3,000) and read positions for conversations touched in the last 90 days. See [self-improvement.md](../architecture/self-improvement.md) |
 
 ## What you clean yourself
 

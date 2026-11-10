@@ -362,6 +362,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
+    experimentalSelfImprovement,
+    setExperimentalSelfImprovement,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -2518,6 +2520,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               checked={experimentalScheduling}
               onCheckedChange={setExperimentalScheduling}
               aria-label="Enable scheduling"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Self-improvement"
+            htmlFor="experimental-self-improvement"
+            description={
+              <>
+                Reads this machine&apos;s own diagnostics and, if you allow it, your conversations
+                with agents, then files what it finds as tickets on a project&apos;s board and
+                checks each fix on later app versions. Turning this on adds Settings →
+                Self-improvement. Nothing runs until you start a run or turn on the daily run there.
+              </>
+            }
+          >
+            <Switch
+              id="experimental-self-improvement"
+              checked={experimentalSelfImprovement}
+              onCheckedChange={setExperimentalSelfImprovement}
+              aria-label="Enable self-improvement"
             />
           </SettingsRow>
           {isLocalDesktopWindow && (

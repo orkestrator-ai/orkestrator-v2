@@ -1775,6 +1775,24 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ operationId: "op-1", tailBytes: 4096 }],
     },
+    "self-improvement.status": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "self-improvement.run": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({
+        dryRun: {
+          type: "boolean",
+          description:
+            "Report what a run would file without filing it or calling a model. Default false.",
+        },
+      }),
+      examples: [{}, { dryRun: true }],
+    },
     "diagnostics.plan": {
       capability: "host",
       confirmation: "never",

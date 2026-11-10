@@ -127,6 +127,8 @@ export type CommandContext = {
   drainAgentMail?: () => Promise<void>;
   /** Durable, backend-timed scheduled jobs (docs/architecture/scheduled-jobs.md). */
   scheduledJobs?: import("./scheduled-jobs/index.js").ScheduledJobService;
+  /** Experimental self-improvement runs (docs/architecture/self-improvement.md). */
+  selfImprovement?: import("./self-improvement/service.js").SelfImprovementService;
   /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
   /** The graph template library: scopes, trust and per-project ceilings (item 109). */

@@ -25,6 +25,8 @@ import {
   updateBugReportBridgeFromEnvironment,
 } from "./bug-report-runtime.js";
 import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
+import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
+import type { SelfImprovementService } from "./self-improvement/service.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
@@ -428,6 +430,8 @@ export class OrkestratorBackend {
       >
     >;
   private readonly scheduledJobs: ScheduledJobService;
+  /** Experimental self-improvement runs; idle while its switch is off. */
+  private readonly selfImprovement: SelfImprovementService;
   /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
   private removeContainerLifecycleListener: (() => void) | null = null;
   /** Writes agent voice chat replies for Control MCP; created with the command context. */
@@ -1401,6 +1405,8 @@ export class OrkestratorBackend {
     context.transcriptArtifacts = this.transcriptArtifacts;
     this.scheduledJobs = this.createScheduledJobs(storage);
     context.scheduledJobs = this.scheduledJobs;
+    this.selfImprovement = createSelfImprovementService(context);
+    context.selfImprovement = this.selfImprovement;
     this.agentTools.setScheduledJobs?.(this.scheduledJobs);
     // A publication changes its conversation's projected transcript (the
     // artifact part beside its call): views of that environment re-read.
@@ -2855,6 +2861,8 @@ export class OrkestratorBackend {
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
     this.scheduledJobs.start();
+    // The daily self-improvement check; it runs nothing while its switch is off.
+    this.selfImprovement.start();
     // Acts on PR monitor readings for environments whose auto-merge is on.
     await this.prAutoMerge.resume();
     // Agent shell commands waiting on the user (sign-in links, codes, ENTER).
@@ -3207,6 +3215,10 @@ export class OrkestratorBackend {
     const scheduledJobsStopped = beginShutdownStep(() => this.scheduledJobs.stop()).catch(
       () => undefined,
     );
+    // Aborts a self-improvement run's model calls; its saved progress is kept.
+    const selfImprovementStopped = beginShutdownStep(() => this.selfImprovement.stop()).catch(
+      () => undefined,
+    );
     stopStepNow("coordinator-status-wakes", () => this.coordinators.stopStatusWakes());
     stopStepNow("usage-limit-notices", () => this.usageLimitNotices.stop());
     stopStepNow("graph-run-attention", () => this.graphRunAttention.stop());
@@ -3264,6 +3276,7 @@ export class OrkestratorBackend {
         }
         await nodesStopped;
         await scheduledJobsStopped;
+        await selfImprovementStopped;
         const commandTermination = await userCommandsStopped;
         try {
           await this.buildPipelines.shutdown();

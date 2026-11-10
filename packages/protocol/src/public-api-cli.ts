@@ -128,6 +128,8 @@ export const PUBLIC_ACTION_CLI_COMMANDS: Readonly<Record<PublicActionName, strin
     "run.output": "orkestrator run output",
     "diagnostics.plan": "orkestrator diagnostics plan",
     "diagnostics.read": "orkestrator diagnostics export",
+    "self-improvement.status": "orkestrator self-improvement status",
+    "self-improvement.run": "orkestrator self-improvement run",
     "host.status": "orkestrator host status",
     "host.update.channel": "orkestrator host update channel",
     "host.update.check": "orkestrator host update check",

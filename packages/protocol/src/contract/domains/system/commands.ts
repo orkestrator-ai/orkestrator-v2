@@ -27,6 +27,8 @@
 import * as Schema from "effect/Schema";
 import { recordDomainAdapterUsageCommand } from "../../client-usage.js";
 import { defineCommand } from "../../command.js";
+import { ownedObject } from "../../model-schema.js";
+import type { SelfImprovementRunStart, SelfImprovementStatus } from "../../../self-improvement.js";
 import { MACHINE_LOAD_COMMAND } from "../../../machine-load.js";
 import { RECORD_RENDERER_ERRORS_COMMAND } from "../../../renderer-errors.js";
 import { systemDomain } from "./domain.js";
@@ -678,8 +680,40 @@ export const getScopedResourceSnapshotsCommand = defineCommand({
 });
 
 /** Every defined `system` command. */
+// --- Self-improvement ---------------------------------------------------------
+
+/**
+ * Self-improvement status for Settings → Self-improvement: settings, the run in
+ * progress, the last run's summary, tracked tickets and themes. The machine's
+ * own (admin): it reads this machine's diagnostics and conversations.
+ */
+export const getSelfImprovementStatusCommand = defineCommand({
+  domain: systemDomain,
+  name: "get_self_improvement_status",
+  since: 1,
+  access: "admin",
+  read: true,
+  args: Schema.Struct({}),
+  result: ownedObject<SelfImprovementStatus>(),
+  critical: [],
+});
+
+/** Starts a run in the background; answers at once with whether it started. */
+export const runSelfImprovementCommand = defineCommand({
+  domain: systemDomain,
+  name: "run_self_improvement",
+  since: 1,
+  access: "admin",
+  read: false,
+  args: Schema.Struct({ dryRun: Schema.optionalKey(Schema.Boolean) }),
+  result: ownedObject<SelfImprovementRunStart>(),
+  critical: ["dryRun"],
+});
+
 export const SYSTEM_COMMANDS = [
   recordDomainAdapterUsageCommand,
+  getSelfImprovementStatusCommand,
+  runSelfImprovementCommand,
   getFleetUpdatePolicyCommand,
   setFleetUpdatePolicyCommand,
   getAppVersionCommand,

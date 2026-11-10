@@ -30,6 +30,8 @@ import {
  */
 const ADMIN = new Set([
   "record_domain_adapter_usage",
+  "get_self_improvement_status",
+  "run_self_improvement",
   "get_fleet_update_policy",
   "set_fleet_update_policy",
   "record_renderer_errors",
@@ -58,13 +60,14 @@ const CRITICAL: Record<string, readonly string[]> = {
   file_bug_report: ["via"],
   create_scheduled_job: ["requestId"],
   update_scheduled_job: ["expectedRevision"],
+  run_self_improvement: ["dryRun"],
 };
 
 describe("system definitions", () => {
-  it("defines the domain's 50 commands once each, at version 1", () => {
+  it("defines the domain's 52 commands once each, at version 1", () => {
     const names = SYSTEM_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(50);
-    expect(new Set(names).size).toBe(50);
+    expect(names).toHaveLength(52);
+    expect(new Set(names).size).toBe(52);
     expect(systemDomain).toMatchObject({ name: "system", version: 1, min: 1 });
     for (const def of SYSTEM_COMMANDS) {
       expect(def.domain).toBe(systemDomain);

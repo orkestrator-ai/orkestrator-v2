@@ -1031,6 +1031,24 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Read one piece of a planned diagnostics bundle. Nothing is uploaded.",
   },
+  "self-improvement.status": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read self-improvement's settings, the run in progress, the last run's summary, tracked tickets and conversation themes.",
+  },
+  "self-improvement.run": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata", "process"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Start a self-improvement run in the background: diagnostics and, when on, the conversation review, filed as tickets. dryRun reports without filing or calling a model.",
+  },
   "host.status": {
     version: 1,
     mutation: false,

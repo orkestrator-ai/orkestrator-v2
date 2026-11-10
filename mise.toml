@@ -385,6 +385,18 @@ run = "bun scripts/test-ios.ts"
 description = "Run the root unit tests"
 run = "bun test tests/unit"
 
+[tasks.improvement]
+description = "Run self-improvement now and wait for it (experimental; turn it on in Settings → Experimental; docs/architecture/self-improvement.md)"
+run = "orkestrator self-improvement run --wait"
+
+[tasks."improvement:preview"]
+description = "Show what a self-improvement run would file, without filing it or calling a model"
+run = "orkestrator self-improvement run --dry-run --wait"
+
+[tasks."improvement:status"]
+description = "Show self-improvement's settings, last run, tracked tickets and themes"
+run = "orkestrator self-improvement status"
+
 [tasks."efficiency:baseline"]
 description = "Run the efficiency counters harness (docs/development/efficiency-harness.md)"
 raw_args = true

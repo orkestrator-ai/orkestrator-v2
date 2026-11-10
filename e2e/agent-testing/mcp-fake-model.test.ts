@@ -27,6 +27,7 @@ import {
   anthropicRequest,
   chatMessage,
   chatRequest,
+  PLAN_MODE_REMINDER,
   responsesOutputItem,
   responsesRequest,
   serveMcpFakeModel,
@@ -186,6 +187,32 @@ describe("scriptedStep", () => {
     });
   });
 
+  test("warm-runtime prompts: the plan-mode marker and one file write", () => {
+    const marker = "Report the plan mode marker WRM-ab12 and nothing else.";
+    expect(scriptedStep({ prompt: marker, tools: [], results: [], planMode: true })).toEqual({
+      kind: "text",
+      text: "WRM-ab12 plan-mode=on",
+    });
+    expect(scriptedStep({ prompt: marker, tools: [], results: [] })).toEqual({
+      kind: "text",
+      text: "WRM-ab12 plan-mode=off",
+    });
+    const write =
+      "Use your file write tool to create the file `/w/out.txt` containing exactly `WRM-1`, then reply with exactly WRITE-DONE.";
+    expect(scriptedStep({ prompt: write, tools: ["Write"], results: [] })).toEqual({
+      kind: "write",
+      filePath: "/w/out.txt",
+      content: "WRM-1",
+    });
+    expect(scriptedStep({ prompt: write, tools: ["Write"], results: [{ text: "ok" }] })).toEqual({
+      kind: "text",
+      text: "WRITE-DONE",
+    });
+    expect(
+      scriptedStep({ prompt: write, tools: ["Write"], results: [{ text: "no", isError: true }] }),
+    ).toEqual({ kind: "text", text: "WRITE-FAILED" });
+  });
+
   test("plain prompts", () => {
     expect(
       scriptedStep({
@@ -236,6 +263,41 @@ describe("Anthropic Messages adapter", () => {
       { name: "mcp__mqu0_alpha__probe", text: "MCPQ-RESULT a v1 MQ1234" },
     ]);
     expect(request.tools).toEqual(["Bash", "mcp__mqu0_alpha__probe"]);
+  });
+
+  test("sees the CLI's plan-mode notice after the prompt, never in history", () => {
+    // The layout CLI 2.1.319 sends after `setPermissionMode("plan")`.
+    const notice = `${PLAN_MODE_REMINDER}. The user indicated that they do not want you to execute yet.`;
+    const current = anthropicRequest({
+      messages: [
+        { role: "user", content: "Reply with exactly A." },
+        { role: "assistant", content: [{ type: "text", text: "A" }] },
+        { role: "user", content: [{ type: "text", text: "Reply with exactly B." }] },
+        { role: "system", content: [{ type: "text", text: notice }] },
+      ],
+    });
+    expect(current).toMatchObject({ prompt: "Reply with exactly B.", planMode: true });
+    const earlier = anthropicRequest({
+      messages: [
+        { role: "user", content: "Reply with exactly A." },
+        { role: "system", content: [{ type: "text", text: notice }] },
+        { role: "assistant", content: [{ type: "text", text: "A" }] },
+        { role: "user", content: "Reply with exactly B." },
+        { role: "system", content: "## Exited Plan Mode" },
+      ],
+    });
+    expect(earlier.planMode).toBeUndefined();
+  });
+
+  test("a write step is one Write call", () => {
+    expect(anthropicContent({ kind: "write", filePath: "/w/a", content: "x" }, 4)).toEqual([
+      {
+        type: "tool_use",
+        id: "toolu_mcpq_4",
+        name: "Write",
+        input: { file_path: "/w/a", content: "x" },
+      },
+    ]);
   });
 
   test("a shell step is a Bash call", () => {

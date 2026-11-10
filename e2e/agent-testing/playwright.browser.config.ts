@@ -73,6 +73,7 @@ export default defineConfig({
     "agent-tab-requests-live.spec.ts",
     "conditional-reads-live.spec.ts",
     "mcp-apply-live.spec.ts",
+    "claude-warm-runtime-live.spec.ts",
     "mcp-overlay-recovery.spec.ts",
     "mcp-ui-matrix.spec.ts",
     "rich-transcripts-live.spec.ts",

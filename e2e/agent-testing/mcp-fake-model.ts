@@ -53,6 +53,7 @@ type AnthropicBlock = {
   content?: string | AnthropicBlock[];
   is_error?: boolean;
 };
+/** `role` is "user" or "assistant", and "system" for the CLI's mode notices. */
 type AnthropicMessage = { role?: string; content?: string | AnthropicBlock[] };
 export type AnthropicBody = {
   model?: string;
@@ -68,6 +69,9 @@ function blocksText(content: string | AnthropicBlock[] | undefined): string {
     .map((block) => block.text)
     .join("\n");
 }
+
+/** What the Claude CLI tells the model while plan mode is on (CLI 2.1.319). */
+export const PLAN_MODE_REMINDER = "Plan mode is active";
 
 /** The script's view of one Messages request. */
 export function anthropicRequest(body: AnthropicBody) {
@@ -93,6 +97,17 @@ export function anthropicRequest(body: AnthropicBody) {
     prompt = text;
     break;
   }
+  // CLI 2.1.319 sends its plan-mode notice as a `system`-role message right
+  // after the prompt, on every turn while plan mode is on. Read only this
+  // turn's messages (the prompt and what follows it), never history.
+  const planMode =
+    promptIndex >= 0 &&
+    messages
+      .slice(promptIndex)
+      .some(
+        (message) =>
+          message.role !== "assistant" && blocksText(message.content).includes(PLAN_MODE_REMINDER),
+      );
   const results: ToolResult[] = [];
   for (const message of messages.slice(promptIndex + 1)) {
     if (message.role !== "user" || !Array.isArray(message.content)) continue;
@@ -108,7 +123,7 @@ export function anthropicRequest(body: AnthropicBody) {
     }
   }
   const tools = (body.tools ?? []).map((tool) => tool.name ?? "").filter(Boolean);
-  return { prompt, tools, results };
+  return { prompt, tools, results, ...(planMode ? { planMode } : {}) };
 }
 
 /** Response content blocks for one step. */
@@ -116,12 +131,16 @@ export function anthropicContent(step: FakeStep, id: number): Array<Record<strin
   if (step.kind === "text") return [{ type: "text", text: step.text }];
   if (step.kind === "code") return [{ type: "text", text: "Done." }];
   const input =
-    step.kind === "shell" ? { command: step.command, description: "Run the command" } : step.input;
+    step.kind === "shell"
+      ? { command: step.command, description: "Run the command" }
+      : step.kind === "write"
+        ? { file_path: step.filePath, content: step.content }
+        : step.input;
   return [
     {
       type: "tool_use",
       id: `toolu_mcpq_${id}`,
-      name: step.kind === "shell" ? "Bash" : step.name,
+      name: step.kind === "shell" ? "Bash" : step.kind === "write" ? "Write" : step.name,
       input,
     },
   ];
@@ -178,7 +197,9 @@ export function chatRequest(body: ChatBody) {
 /** The assistant message (text or one tool call) for one step. */
 export function chatMessage(step: FakeStep, id: number) {
   if (step.kind === "text") return { content: step.text, toolCall: undefined };
-  if (step.kind === "code") return { content: "Done.", toolCall: undefined };
+  // A file write is scripted for Claude only (the warm-runtime spec).
+  if (step.kind === "code" || step.kind === "write")
+    return { content: "Done.", toolCall: undefined };
   return {
     content: undefined,
     toolCall: {
@@ -394,7 +415,8 @@ export function responsesOutputItem(
   return codexOutputItem(
     step.kind === "shell"
       ? { kind: "shell", command: step.command, background: false }
-      : { kind: "text", text: step.text },
+      : // A file write is scripted for Claude only (the warm-runtime spec).
+        { kind: "text", text: step.kind === "write" ? "Done." : step.text },
     offeredTools(asCodexFrame(frame)),
     id,
   );

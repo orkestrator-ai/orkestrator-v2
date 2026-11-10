@@ -32,12 +32,20 @@ export interface FakeRequest {
    * JavaScript cell (`tools.<name>`, listed in `ALL_TOOLS`).
    */
   codeMode?: boolean;
+  /**
+   * Claude only: whether the CLI told the model plan mode is active for this
+   * prompt (its "Plan mode is active" reminder beside the prompt). Lets the
+   * warm-runtime spec see that a plan-mode toggle reached the running CLI.
+   */
+  planMode?: boolean;
 }
 
 export type FakeStep =
   | { kind: "text"; text: string; delayMs?: number }
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "shell"; command: string }
+  /** Claude's file write tool (`Write`), for the warm-runtime spec. */
+  | { kind: "write"; filePath: string; content: string }
   /** A Codex code cell (JavaScript source for its `exec` tool). */
   | { kind: "code"; source: string };
 
@@ -185,6 +193,21 @@ export function scriptedStep(request: FakeRequest): FakeStep {
       };
     }
     return { kind: "text", text: wanted.failure };
+  }
+  // claude-warm-runtime-live.spec.ts: report whether plan mode reached the CLI.
+  const planMarker = /Report the plan mode marker (WRM-[A-Za-z0-9-]+)/.exec(request.prompt);
+  if (planMarker) {
+    return { kind: "text", text: `${planMarker[1]} plan-mode=${request.planMode ? "on" : "off"}` };
+  }
+  // claude-warm-runtime-live.spec.ts: one file write, then WRITE-DONE.
+  const write = /create the file `([^`]+)` containing exactly `([^`]+)`/.exec(request.prompt);
+  if (write) {
+    return request.results.length > 0
+      ? {
+          kind: "text",
+          text: request.results.some((r) => r.isError) ? "WRITE-FAILED" : "WRITE-DONE",
+        }
+      : { kind: "write", filePath: write[1]!, content: write[2]! };
   }
   // mcp-apply-live.spec.ts's busy turn: one foreground command, then BUSY-DONE.
   const shell = /run the command `([^`]+)` once, in the foreground/.exec(request.prompt);

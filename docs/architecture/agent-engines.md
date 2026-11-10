@@ -429,6 +429,20 @@ in an isolated environment. `plan` mode is the read-only alternative, and the
 SDK's `canUseTool` callback is what routes a tool request back through the
 bridge's approval flow when one is raised.
 
+A session's CLI stays warm between turns (`session-manager-runtime.ts`), so a
+follow-up, a model or mode change and a parked approval all go to the same
+process; a launch-only change (bypass mode, plugins, policy and the rest of
+`claudeLaunchProfile`) replaces an idle CLI instead. Each CLI the bridge
+launches takes the next number from a bridge-wide counter, which
+`/session/:id/runtime-health` serves as `summary.runtimeGeneration` beside
+`attached`/`detached` and Agent Info shows as "process N". The number is how a
+test or a user tells "the same CLI" from "a new one" without reading a PID; it
+restarts at 1 with the bridge. The backend caches that read for 30 seconds
+(`INTERACTIVE_RUNTIME_METADATA_TTL_MS`) and refreshes it in the background, so
+the projection can show the previous number for up to that long after a
+relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
+against a loopback model and asserts the number holds (todo 0005 task 8).
+
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
 default, 2 hours at most) and reports a `stopped` task notification saying why;

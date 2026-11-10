@@ -363,6 +363,7 @@ function MessagePartContent({
           denied={part.toolDenied}
           commandChanges={part.commandChanges}
           durationMs={part.toolDurationMs}
+          leftRunning={part.toolLeftRunning === true}
           deferredDetails={deferredDetails}
         />
       );

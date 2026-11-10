@@ -164,6 +164,13 @@ export interface NativeBasePart {
    * a live row's clock is `progress.elapsedMs`, not this.
    */
   toolDurationMs?: number;
+  /**
+   * The call was still running when its turn ended and the provider will not
+   * report its end: a Codex command the model left running (a dev server, a
+   * watcher). Such a row has no `toolState`; it reads "left running", without
+   * a spinner, rather than "running..." on an idle thread.
+   */
+  toolLeftRunning?: boolean;
   toolUseCount?: number;
   tokenCount?: number;
   tokenCountText?: string;

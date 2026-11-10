@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
@@ -60,6 +60,9 @@ describe("CreateEnvironmentDialog target machine", () => {
     const remoteView = federated();
     renderInAppCommandScope(dialog());
     expect(screen.getByTestId("create-environment-machine").textContent).toContain("on Build Mac");
+    expect(screen.queryByText("Isolated Docker environment on Build Mac") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on Build Mac") !== null).toBe(true);
     // The command scope never looks itself up among the other machines.
     expect(remoteView.mock.calls.every(([nodeId]) => nodeId === null)).toBe(true);
   });
@@ -75,6 +78,38 @@ describe("CreateEnvironmentDialog target machine", () => {
     const label = screen.getByTestId("create-environment-machine").textContent ?? "";
     expect(label).toContain("on Studio");
     expect(label).not.toContain("Build Mac");
+    // The type hint names the target machine too, not "your machine".
+    expect(screen.queryByText("Isolated Docker environment on Studio") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on Studio") !== null).toBe(true);
+    expect(screen.queryByText(/your machine/) === null).toBe(true);
     expect(remoteView.mock.calls.some(([nodeId]) => nodeId === LEAF)).toBe(true);
+  });
+
+  test("without federation the type hint names no machine", () => {
+    // No federation spy: the inactive default, a single machine.
+    renderInAppCommandScope(dialog());
+    expect(screen.queryByTestId("create-environment-machine") === null).toBe(true);
+    expect(screen.queryByText("Isolated Docker environment") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on the host") !== null).toBe(true);
+    expect(screen.queryByText(/your machine/) === null).toBe(true);
+  });
+
+  test("with federation on but the target machine unknown it falls back too", () => {
+    spyOn(federation, "useFederation").mockReturnValue({
+      portal: portalStore,
+      portalState: portalStore.getState(),
+      bound: null,
+      supported: true,
+      enabled: true,
+      kind: "browser",
+      boundMachine: null,
+    });
+    spyOn(machineViews, "useRemoteMachineView").mockReturnValue(null);
+    renderInAppCommandScope(dialog());
+    expect(screen.queryByText("Isolated Docker environment") !== null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByText("Git worktree on the host") !== null).toBe(true);
   });
 });

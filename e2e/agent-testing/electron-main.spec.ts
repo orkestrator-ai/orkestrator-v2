@@ -19,6 +19,7 @@ import {
   writeRemoteRelaunchMarker,
   readRemoteRelaunchMarker,
 } from "../../apps/desktop/electron/remote-relaunch";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -168,15 +169,11 @@ test("real invoke rejections keep only the handler message across the context br
       });
     `,
     );
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") env[key] = value;
-    }
     app = await electron.launch({
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, main],
       cwd: root,
-      env,
+      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     recordElectronDiagnostics(app);
     const window = await app.firstWindow();
@@ -254,13 +251,12 @@ async function testIndependentWindows(
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         APPIMAGE: "",
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
@@ -973,6 +969,7 @@ test("a real window with a missing preload reaches recovery without mounting the
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, entrypoint],
       cwd: repositoryRoot,
+      env: electronSpecEnvironment(process.env),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
@@ -1042,6 +1039,7 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
         entrypoint,
       ],
       cwd: repositoryRoot,
+      env: electronSpecEnvironment(process.env),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;

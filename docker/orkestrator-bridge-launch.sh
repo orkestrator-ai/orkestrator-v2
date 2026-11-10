@@ -7,6 +7,10 @@
 #   docker exec -i --user node --workdir / <container> \
 #     /usr/local/bin/orkestrator-bridge-launch <kind> <environment-snapshot>
 #
+# It prints `orkestrator-bridge-session=<id>`, the session the bridge runs in.
+# A launcher from before that line prints nothing, and the backend then
+# records the bridge's socket without the session check.
+#
 # The backend's start script runs as node in a login shell, so it reads
 # ~/.bash_profile, ~/.profile and the /tmp/orkestrator-ai snapshot, all of which
 # node can write: a function, BUN_OPTIONS or LD_PRELOAD planted there would run
@@ -83,3 +87,9 @@ setsid sh -c '
         /usr/local/bin/bun --config=/dev/null --no-env-file "$entry" ${extra:+"$extra"} 2>&1 |
         env -i PATH=/usr/bin:/bin /usr/local/bin/orkestrator-log-writer "$log"
 ' orkestrator-bridge "$log" "$entry" "$extra" "$snapshot" "$keys" "$@" </dev/null >/dev/null 2>&1 &
+# The bridge's session, for the backend to record its socket only while a
+# bridge in it lives (container-bridge-listener.ts). dash gives a background
+# job no process group of its own, so setsid calls setsid(2) in place rather
+# than forking, and the job's pid is the session's id. No process can join
+# that session later.
+printf 'orkestrator-bridge-session=%s\n' "$!"

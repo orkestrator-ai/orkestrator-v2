@@ -65,8 +65,11 @@ import {
   CONTAINER_TOKEN_FILES,
   containerBridgeLaunch,
   launchContainerScript,
+  isContainerBridgeKind,
   readContainerBridgeToken,
+  recordLaunchedContainerBridge,
   removeContainerBridgeCredential,
+  stopContainerBridgeProcess,
   type ContainerCredentialMode,
   type ContainerScriptLaunch,
 } from "./container-bridge-credential.js";
@@ -747,7 +750,7 @@ export async function startContainerServer(
   // Launching into a container Docker restarted since readiness was checked
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
-  await launchContainerScript(containerId, command, launch);
+  const launched = await launchContainerScript(containerId, command, launch);
   dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
@@ -759,6 +762,10 @@ export async function startContainerServer(
       `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
     );
   });
+  // A token in root's file is handed out only to the socket recorded here.
+  if (launch?.rootCredential && isContainerBridgeKind(processName)) {
+    await recordLaunchedContainerBridge(containerId, processName, launched.session);
+  }
   return { hostPort, wasRunning: false };
 }
 
@@ -943,6 +950,7 @@ export async function startContainerClaudeServer(
       containerId,
       `pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}`,
     );
+    await stopContainerBridgeProcess(containerId, "claude");
     await waitForUnhealthy(port);
   };
   const startWithFreshToken = async (): Promise<{

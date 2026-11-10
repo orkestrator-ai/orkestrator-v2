@@ -71,7 +71,10 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "pane-layouts": { kind: "record" },
   "multi-reviews": { kind: "record" },
   "build-pipelines": { kind: "record" },
-  "native-agent-sessions": { kind: "record" },
+  // Owned by environment so a delete finds its sessions without parsing the
+  // store; rows written before the owner existed are backfilled at open
+  // (`backfillNativeAgentSessionOwners`).
+  "native-agent-sessions": { kind: "record", owner: ownerField("environmentId") },
   "agent-interaction-resolution-journal": { kind: "document" },
   "prompt-queues": { kind: "record" },
   "auto-pipeline-drafts": { kind: "record", owner: ownerField("environmentId") },
@@ -680,6 +683,7 @@ export function openBackendDatabase(
   const database = new StorageDatabase(dataDir, {
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
+    unownedRowIndexes: [NATIVE_AGENT_SESSIONS_STORE],
     beforeMigrate: (opened, from) => snapshotBeforeMigration(opened, dataDir, from),
     ...RECURRING_STORAGE_OBSERVERS,
     cacheGaugeRegistry: recurringDiagnosticsRegistry,
@@ -710,5 +714,52 @@ export function openBackendDatabase(
     database.close();
     throw error;
   }
+  try {
+    backfillNativeAgentSessionOwners(database);
+  } catch (error) {
+    // Costs an environment delete some time, never correctness: its sweep
+    // also reads the rows that have no owner.
+    log.warn("native-session-owners.backfill-failed", { error: formatLogError(error) });
+  }
   return database;
+}
+
+export const NATIVE_AGENT_SESSIONS_STORE = "native-agent-sessions";
+
+/**
+ * Gives native-session rows that have no indexed owner their environment:
+ * rows written before the store had an owner, and rows an older build sharing
+ * the directory wrote since. Like `store_rows_position` it changes no value
+ * and no schema version, so an older build still opens the database. Runs at
+ * every open and reads only rows without an owner, through the store's partial
+ * index of them; after the first open that is normally none, or only
+ * unreadable records, and it then writes nothing. Rows it can give an owner are
+ * listed again and written in one transaction, so a value another process
+ * changed in between is never overwritten. Returns the number of rows given an
+ * owner.
+ */
+export function backfillNativeAgentSessionOwners(database: StorageDatabase): number {
+  const store = NATIVE_AGENT_SESSIONS_STORE;
+  const layout = storeLayout(store);
+  const ownerOf = layout.kind === "record" ? layout.owner : undefined;
+  if (!ownerOf) return 0;
+  const ownable = (rows: Array<{ key: string; position: number; value: string }>) =>
+    rows.flatMap((row) => {
+      try {
+        const owner = ownerOf(JSON.parse(row.value) as unknown);
+        return owner ? [{ ...row, owner }] : [];
+      } catch {
+        return [];
+      }
+    });
+  const rowsMode = () => database.readStoreHeader(store)?.mode === "rows";
+  if (!rowsMode() || ownable(database.listUnownedRows(store)).length === 0) return 0;
+  return database.transaction(() => {
+    if (!rowsMode()) return 0;
+    const rows = database.rows(store);
+    const owned = ownable(database.listUnownedRows(store));
+    for (const row of owned)
+      rows.put(row.key, row.value, { owner: row.owner, position: row.position });
+    return owned.length;
+  }, store);
 }

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ce20f0f98e65aea6c6a43e46981d566bfe153cfbda52ba88a5ff22c02fc234f8",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cacheOnly": {
+          "type": "boolean"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": "string"
+        }
+      },
+      "required": ["platform"],
+      "type": "object"
+    }
+  }
+}

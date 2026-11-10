@@ -41,6 +41,7 @@ import {
   publishCommandCatalogue,
   type BuiltCommandCatalogue,
 } from "./commands.js";
+import { excludeConfiguredPackages } from "./project-extensions.js";
 import { schedulePersist } from "./persistence.js";
 import { DefaultResourceLoader, getAgentDir, SettingsManager } from "./pi-sdk.js";
 import type { PiCommandPreview, SessionState } from "./state.js";
@@ -96,6 +97,7 @@ export async function readResourceCommands(options: {
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir, {
     projectTrusted: options.policy.projectTrusted,
   });
+  excludeConfiguredPackages(settingsManager);
   const loader = new DefaultResourceLoader({
     ...options.policy.discovery,
     cwd: options.cwd,

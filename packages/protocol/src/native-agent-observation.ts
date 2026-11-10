@@ -88,6 +88,8 @@ export const NATIVE_SESSION_INVALIDATION_CAUSES = [
   "discovery-deadline",
   /** A discovery section's read finished with a value a view would show differently. */
   "discovery-renewal",
+  /** An MCP server action (reconnect, enable, disable, sign-in) re-read the session's MCP list. */
+  "mcp-action",
   /** An expired environment model catalogue refreshed to a different catalogue. */
   "model-catalog-refresh",
   /** An environment's first model catalogue finished loading in the background. */
@@ -135,6 +137,7 @@ export function isNativeSessionInvalidationCause(
 const DISCOVERY_INVALIDATION_CAUSES: ReadonlySet<NativeSessionInvalidationCause> = new Set([
   "discovery-deadline",
   "discovery-renewal",
+  "mcp-action",
   "model-catalog-refresh",
   "model-catalog-load",
   "command-catalog",

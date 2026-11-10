@@ -770,12 +770,23 @@ host-reachability check: each backend is a new Docker owner stopped seconds
 after `ready`, so its Linux probe network would belong to an owner nothing
 reaps. A later on-demand check (a container scenario on a rootless daemon, a
 workflow preflight) still runs. A scenario that needs the boot check passes
-the variable through its own `env`. `renderer-log-boundary-electron.spec.ts`
-sets it because the probe's container can make Chromium abort the window's Vite
-module loads (flake 2340). `service-preview-electron.spec.ts` sets it
-for both of its backends too (agent-test backends keep it, in
-`AGENT_TEST_SAFE_ENV_NAMES`): on a host whose firewall drops Docker traffic the
-check's result dialog opened mid-test and took keyboard focus (flake 0620).
+the variable through its own `env`.
+
+The Electron specs under `e2e/agent-testing/` do the same through
+`electronSpecEnvironment` (`e2e/agent-testing/electron-spec-environment.ts`):
+every launch, Playwright's `electron.launch` or a bare spawn of the Electron
+binary, builds its `env` there (`packagedLaunchEnvironment` calls it), which
+sets the variable to `off` unless the spec passes its own value. The runner's
+own value is ignored. Agent-test backends keep the variable
+(`AGENT_TEST_SAFE_ENV_NAMES`). `tests/unit/electron-spec-environment.test.ts`
+fails on a launch that builds its `env` any other way, including one with no
+`env` at all. Besides the leaked network (todo 7470), the probe's container
+can make Chromium abort the window's Vite module loads (flake 2340), and on a
+host whose firewall drops Docker traffic the check's result dialog opened
+mid-test and took keyboard focus (flakes 0620, 4250). No Electron spec runs
+the boot probe now; the dialog itself is covered by
+`ContainerHostReachabilityNotice.test.tsx` and the browser specs that close it,
+and `dismissStartupDialogs` still closes it for a spec that turns the probe on.
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and

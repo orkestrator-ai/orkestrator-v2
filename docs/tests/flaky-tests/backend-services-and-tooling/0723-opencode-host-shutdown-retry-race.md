@@ -1,7 +1,7 @@
 # OpenCode host shutdown between database-lock retries
 
 - **ID:** 0723
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Owner:** `apps/backend/src/core/opencode-host-start.test.ts`
 - **Test:** `local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn`
@@ -46,7 +46,7 @@ implementation, assertion, timeout or skip changed.
 
 ## Fix for the likely cause — 2026-11-01
 
-- **Change:** [to-do 1172](../../../todo/agent-engines/1172-opencode-start-error-before-stderr.md) task 1 (`ec35a99b3`, #1532; the rule also lives in [agent-engines.md](../../../architecture/agent-engines.md#opencode)). `waitForLocalServerStartup` decides an OpenCode exit on `close`, or 1 s after `exit` if stdio stays open, so a `database is locked` chunk read after `exit` still selects the retry path.
+- **Change:** to-do 1172 task 1 (`ec35a99b3`, #1532; the to-do was retired 2026-11-10 after the aggregate confirmation below, and the rule lives in [agent-engines.md](../../../architecture/agent-engines.md#opencode)). `waitForLocalServerStartup` decides an OpenCode exit on `close`, or 1 s after `exit` if stdio stays open, so a `database is locked` chunk read after `exit` still selects the retry path.
 - **Evidence:** new fake-child tests in the owner (`waitForLocalServerStartup on an OpenCode exit`) fail on the old code (2 of 3) and pass with the fix. The full owner passed five consecutive runs alone (12 pass each).
 - **Disposition:** stays open until an aggregate run under load passes without it; then resolve.
 
@@ -71,3 +71,22 @@ replace the aggregate criterion: pre-fix contention also passed 60/60.
 To-do 1172 retains the outstanding confirmation. Record the aggregate command,
 worker configuration and owner outcome before resolving this case and retiring
 the to-do.
+
+## Aggregate confirmation — 2026-11-10
+
+- **Host and base:** Linux (beelink2, 16 cores), Bun 1.4.4, branch head `4223e0982` on `main` at `c6de4733c`, which contains `ec35a99b3`. No product code, test, assertion, test timeout or skip differs from `main`.
+- **Command:** `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 ORKESTRATOR_TEST_LOG_DIR=<run>/logs ORKESTRATOR_TEST_TIMINGS_DIR=<run>/timings mise run test:logged -- --name 0723-aggregate-full-run2 -- mise run test:full`. `test:full` is the default and slow tiers together, so it includes this slow-tier owner. The raised group bound changes only the harness wall clock: `test:logged` and `test-all.ts` share the 30-minute default, and the first attempt (below) was stopped by it.
+- **Worker configuration:** four concurrent groups reserving workspace/root/bridges/protocol-lockfile 4/1/2/1 slots; the all-tier backend ran at its two-worker ceiling, the same backend worker count as the original 2026-10-24 failure.
+- **Load:** another worktree's aggregate held the host lease first, so the groups queued 1,219.8 s and then shared the host with it. Load average was 9.8 at start and 72.3 at the end (16 cores).
+- **Owner outcome:** passed. All 1,403 backend files ran (the timings file lists 1,403, including `src/core/opencode-host-start.test.ts` at 5,117 ms) and the owner printed no `(fail)` line. Its log shows the lock path this case depends on: `database is locked`, `opencode.database-lost-retrying`, then `stop requested`, with no `exited before becoming healthy` rejection reaching the shutdown test.
+- **Counts:** backend 21,113 pass, 294 skip, 11 fail of 21,418 tests across 1,403 files (1,657.19 s); web 14,419 pass, 0 fail; protocol 5,825 pass; desktop 2,186 pass; root workspace 566 pass; toolchain 135 pass; web-public 41 pass. Bridges, root and agent-support, and the Codex protocol lockfile groups passed. Groups finished in 2,930.5 s; the aggregate exited 1 on the workspace group.
+- **Other failures (not this owner):** `two OrkestratorBackends in one process (todo 0733)`, `host OpenCode database > reads a database OpenCode closed cleanly without leaving files beside it`, five `host OpenCode 2.x server` / `a coordinator's OpenCode 2.x server` cases (`OpenCode credential list is not a 2.x envelope`), two `pull request status wakes > a PR wakes once per state change until merge` five-second timeouts, `bounded bridge output > the writer handles rotation failures, output errors, signals and fallback` (5,554 ms), and `Claude's installed parser accepts the generated agent MCP config`, which failed because this host's `~/.config/mise/config.toml` is untrusted. None is in this owner and none was triaged here.
+- **First attempt:** the same command without the raised bound (`0723-aggregate-full`, 01:19–01:49 UTC, load 49.9 at start) queued 349 s, passed the bridges, root and protocol-lockfile groups, and was stopped by the 1,800 s `test:logged` bound while the workspace group was still running. The owner had already finished there with no `(fail)` line and the same retry-then-stop log; that run has no final counts, so it is supporting evidence only.
+- **Evidence:** `output/agent-testing/0723-aggregate-run2/logs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `timings/backend.json` in the worker worktree (git-ignored; the first attempt is under `0723-aggregate-run1/`).
+
+## Resolution (2026-11-10)
+
+- **Root cause and fix:** as recorded under Focused fix evidence: OpenCode startup exits were classified on `exit` before late `database is locked` stderr was read; `ec35a99b3` decides on `close`, or 1 s after `exit`.
+- **Reproduced:** yes, deterministically with late stderr on the pre-fix decision (10 of 10), and passing 10 of 10 with the fix (2026-11-09).
+- **Stress:** focused contention runs on 2026-11-09, then the aggregate confirmation above under host load with the slow-tier owner included: the owner passed.
+- **Recurrences since the fix:** none. A later failure on a base containing `ec35a99b3` reopens the case.

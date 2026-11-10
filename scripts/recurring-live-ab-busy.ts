@@ -33,7 +33,10 @@ import { percentile, pickKindCounters, type LiveSample } from "./recurring-live-
  *    to `ready` (the workflow completion). Its validation plan runs one
  *    read-only command, which waits in the host-wide test scheduler
  *    (`host-test-scheduler.ts`) like any validation, so that step is its own
- *    row rather than a sample of "progress after a result";
+ *    row rather than a sample of "progress after a result". Every client
+ *    whose link is up also opens a review view (a second signed-in page) on
+ *    the review's own tab before the review starts, and each result is timed
+ *    to the moment that page shows the phase it leads to (todo 0048 task 2);
  * 7. the cut link restored, or the document shown again (the client resume).
  *
  * Every wait is timed in this process from the moment the cause is known:
@@ -110,7 +113,14 @@ export const BUSY_ROWS = {
   "workflow-progress": {
     budgetMs: 3_000,
     side: "backend",
-    label: "Backend phase observed after result submission (upper bound; no client measurement)",
+    label: "Backend phase observed after result submission (upper bound)",
+  },
+  // The same three results, timed to the client's review view showing the
+  // phase each one leads to (or a later one): what the budget row means.
+  "workflow-progress-visible": {
+    budgetMs: 3_000,
+    side: "client",
+    label: "Workflow progress visible after a result (the review's phase in its open tab)",
   },
   // The plan's next phase waits for its commands, which queue in the
   // host-wide test scheduler with every other worktree's validation and tests.
@@ -156,6 +166,18 @@ export interface BusyClient {
   /** Messages the open tab's agent-mail chip counts (0 when it shows none). */
   mailCount(): Promise<number>;
   setHidden(hidden: boolean): Promise<void>;
+  /**
+   * Opens this client's review view (its own signed-in page) on an
+   * environment, so a review launched there can be watched from its start.
+   */
+  prepareReview(environmentName: string): Promise<void>;
+  /** Starts recording a review's phases in the review view, then selects its tab. */
+  watchReview(workflowId: string): Promise<void>;
+  /**
+   * Each phase the review view has shown since `watchReview`, with when it
+   * first showed, on this process's clock (`BusyRuntime.now`).
+   */
+  reviewPhases(): Promise<ReviewSighting[]>;
   /** Cut (`false`) or restore (`true`) a linked client's connection. */
   setLinkUp(up: boolean): void;
   close(): Promise<void>;
@@ -167,6 +189,8 @@ export type BusyClientFactory = (input: {
   openEnvironment: string;
   signal?: AbortSignal;
 }) => Promise<BusyClient[]>;
+
+export type ReviewSighting = { phase: string; at: number };
 
 export type CliResult = { status: number | null; stdout: string };
 export type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
@@ -215,6 +239,12 @@ export type BusyResult = {
   admission: Record<string, AdmissionPeak>;
   /** Each review's validation run: host-scheduler queue, command and whole-run times. */
   validationRuns: ValidationTiming[];
+  /**
+   * Client review views: views that watched a review, results they timed,
+   * and results that reached the backend before the view showed the review
+   * (not sampled, since the view could not have shown them yet).
+   */
+  reviewViews: { watched: number; sampled: number; unobserved: number };
   modelRequests: number;
   durationMs: number;
 };
@@ -315,6 +345,39 @@ const STEP_TIMEOUT = "10m";
 const PI_RUN_ENDED = new Set([0, 7]);
 /** Phases a Multi Review passes through, in order, and its terminal ones. */
 const REVIEW_TERMINAL = new Set(["ready", "failed", "cancelled"]);
+const REVIEW_ORDER = ["preparing", "reviewing", "consolidating", "ready"];
+
+export type ClientProgressSample =
+  | { kind: "sample"; ms: number }
+  /** The view showed nothing of the review until after the result: not sampled. */
+  | { kind: "unobserved" }
+  /** The view never showed the phase, or showed it before its own result. */
+  | { kind: "missing" };
+
+/**
+ * When a client's review view showed the progress a result caused: the first
+ * sighting of `target` or a later phase (a quick phase can be skipped
+ * between two renders, and showing a later one shows this progress too).
+ * A view that showed nothing before the result was not watching yet, so it
+ * cannot time it.
+ */
+export function clientProgressSample(
+  sightings: readonly ReviewSighting[],
+  submittedAt: number,
+  target: string,
+): ClientProgressSample {
+  const rank = REVIEW_ORDER.indexOf(target);
+  if (rank < 0) return { kind: "missing" };
+  if (!sightings[0] || sightings[0].at > submittedAt) return { kind: "unobserved" };
+  const shown = sightings.find((sighting) => REVIEW_ORDER.indexOf(sighting.phase) >= rank);
+  if (!shown || shown.at < submittedAt) return { kind: "missing" };
+  return { kind: "sample", ms: Math.round(shown.at - submittedAt) };
+}
+
+/** An error's first line: Playwright appends a call log that may name page content. */
+function firstLine(error: unknown): string {
+  return error instanceof Error ? (error.message.split("\n", 1)[0] ?? "") : String(error);
+}
 
 export function parseBusyClients(raw: string): number[] {
   const counts = raw.split(",").filter(Boolean).map(Number);
@@ -382,6 +445,7 @@ export async function measureBusy(
     windowSamples: [],
     admission: {},
     validationRuns: [],
+    reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
     modelRequests: 0,
     durationMs: 0,
   };
@@ -862,6 +926,23 @@ export async function measureBusy(
 
           // 6. A Multi Review to completion, every slot on the fake model.
           if (reviewId) await step(["review", "cancel", reviewId]);
+          // Every client whose link is up watches it from a review view of
+          // its own (a hidden client's view is a separate, visible document).
+          const viewers = (
+            await Promise.all(
+              clients
+                .filter((client) => client !== outageClient)
+                .map(async (client) => {
+                  try {
+                    await client.prepareReview(reviewEnvironment.name);
+                    return client;
+                  } catch (error) {
+                    fail("workflow-visible", `${client.label}: ${firstLine(error)}`);
+                    return null;
+                  }
+                }),
+            )
+          ).filter((client): client is BusyClient => client !== null);
           const validationsBefore = runtime.validationRuns(reviewEnvironment.worktree);
           const launchAt = runtime.now();
           const workflowsBefore = fakeModel.workflow();
@@ -882,6 +963,20 @@ export async function measureBusy(
             fail("workflow", "the review did not launch");
           else {
             reviewId = launched.workflowId;
+            const watchedId = reviewId;
+            // Not awaited: the backend is followed from the launch while the
+            // views select the review's tab.
+            const watching = Promise.all(
+              viewers.map(async (client) => {
+                try {
+                  await client.watchReview(watchedId);
+                  return client;
+                } catch (error) {
+                  fail("workflow-visible", `${client.label}: ${firstLine(error)}`);
+                  return null;
+                }
+              }),
+            );
             const transitions: Array<{ phase: string; at: number }> = [];
             let phase = typeof launched.phase === "string" ? launched.phase : "";
             const completed = await until(
@@ -915,6 +1010,8 @@ export async function measureBusy(
               submit_consolidated_review: "ready",
             };
             const after = fakeModel.workflow();
+            /** Results the backend timed, which the review views time too. */
+            const progress: Array<{ target: string; at: number }> = [];
             for (const [tool, target] of Object.entries(expected)) {
               const earlier = workflowsBefore[tool]?.submissions.length ?? 0;
               const submissions = after[tool]?.submissions.slice(earlier) ?? [];
@@ -927,6 +1024,36 @@ export async function measureBusy(
                 tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
                 Math.round(transition.at - submissions[0]!.at),
               );
+              if (tool !== "submit_validation_plan")
+                progress.push({ target, at: submissions[0]!.at });
+            }
+            // What each review view showed: wait for it to reach the end the
+            // backend reached, then time every result against it.
+            const settledAt = transitions.at(-1)?.at ?? runtime.now();
+            for (const client of (await watching).filter(
+              (entry): entry is BusyClient => entry !== null,
+            )) {
+              result.reviewViews.watched += 1;
+              let sightings: ReviewSighting[] = [];
+              await until(
+                null,
+                settledAt,
+                async () => {
+                  sightings = await client.reviewPhases();
+                  return sightings.some((sighting) => sighting.phase === phase);
+                },
+                CLIENT_WAIT_MS,
+              );
+              for (const entry of progress) {
+                const sample = clientProgressSample(sightings, entry.at, entry.target);
+                if (sample.kind === "sample") {
+                  record("workflow-progress-visible", sample.ms);
+                  result.reviewViews.sampled += 1;
+                } else if (sample.kind === "unobserved") result.reviewViews.unobserved += 1;
+                else
+                  result.timeouts["workflow-progress-visible"] =
+                    (result.timeouts["workflow-progress-visible"] ?? 0) + 1;
+              }
             }
           }
 
@@ -954,7 +1081,7 @@ export async function measureBusy(
           if ((fakeModel.marker(approval)?.requests ?? 0) > 2) result.obligations.duplicates += 1;
         } catch (error) {
           if (signal?.aborted) throw error;
-          fail("round", error instanceof Error ? error.message.split("\n", 1)[0] : String(error));
+          fail("round", firstLine(error));
           // Release model waiters; parked provider approvals require session.stop below.
           for (const id of [held, queued, approval]) fakeModel.release(id);
         }
@@ -1043,6 +1170,11 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
         )
         .join("; ") || "not read"
     }.`,
+    `Review views: ${result.reviewViews.watched} watched a review, ${
+      result.reviewViews.sampled
+    } results timed in a view, ${
+      result.reviewViews.unobserved
+    } reached the backend before the view showed the review (not sampled).`,
     `Validation runs (queue/commands/run ms): ${
       result.validationRuns
         .map((run) => `${run.queuedMs}/${run.commandMs}/${run.runMs}`)

@@ -893,11 +893,11 @@ Generate the reference before making the change; no artifact is committed
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline and multi-review
-  supervisors over a temporary store, in rollback and keyed
-  modes, on one manual clock. Rollback is what
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
-  multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
-  per-workflow due passes). Each domain reports `storageReads` (store content
+  supervisors over a temporary store in keyed mode, and feature planning and
+  build pipelines also in rollback mode, on one manual clock. Rollback is what
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick. Multi
+  review has no rollback mode since its `WorkflowDueScheduler` was removed
+  (todo 0048 task 13). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
   (reuse of already-decoded records) and `storageBytes` (what those reads
   fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
@@ -942,8 +942,9 @@ disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
-activity stay keyed in both arms, since their rollback drivers were removed)
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend activity
+and Multi Review stay keyed in both arms, since their rollback drivers were
+removed)
 and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.

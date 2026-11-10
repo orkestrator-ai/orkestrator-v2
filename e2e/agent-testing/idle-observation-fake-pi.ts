@@ -11,7 +11,10 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * prints its base URL (`http://127.0.0.1:<port>/v1`) as the first stdout
  * line. Turns follow the Claude fake's script (`scriptedStep`) with Pi's
  * `bash` tool: a prompt asking for a command gets one call, and its result
- * ends the turn with the reply. Pi has no sub-agent, background or question
+ * ends the turn with the reply. OpenCode reaches the same endpoint through a
+ * custom provider (`idle-observation-fake-models.ts`, todo 0049 task 6); its
+ * `bash` tool also takes a description, which the call adds when the offered
+ * schema names one. Pi has no sub-agent, background or question
  * tool, so those steps reply in text. It keeps no request body and logs
  * nothing.
  */
@@ -28,7 +31,9 @@ type ChatMessage = { role?: string; content?: string | Part[] | null };
 type ChatBody = {
   stream?: boolean;
   messages?: ChatMessage[];
-  tools?: Array<{ function?: { name?: string } }>;
+  tools?: Array<{
+    function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
+  }>;
 };
 
 function textOf(content: ChatMessage["content"]): string {
@@ -54,14 +59,19 @@ export function piAssistantMessage(
 ): { content: string | null; toolCall?: { id: string; name: string; arguments: string } } {
   const { prompt, afterTool } = piRequestState(body);
   const step = scriptedStep(prompt, afterTool);
-  const bash = (body.tools ?? []).some((tool) => tool.function?.name === "bash");
+  const bash = (body.tools ?? []).find((tool) => tool.function?.name === "bash");
   if (step.kind === "shell" && bash) {
+    // OpenCode's `bash` also requires a description; Pi's takes the command alone.
+    const describe = Boolean(bash.function?.parameters?.properties?.description);
     return {
       content: null,
       toolCall: {
         id: `call_idleqa_${id}`,
         name: "bash",
-        arguments: JSON.stringify({ command: step.command }),
+        arguments: JSON.stringify({
+          command: step.command,
+          ...(describe ? { description: "Run the requested command" } : {}),
+        }),
       },
     };
   }

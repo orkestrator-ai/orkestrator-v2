@@ -934,11 +934,16 @@ credentials of the
 are no longer needed. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
 
-`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs the probe for Claude, Codex or
-Pi against a scripted loopback model (`e2e/agent-testing/mcp-fake-model.ts`)
+`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs the probe for Claude, Codex,
+Pi or OpenCode against a scripted loopback model (`e2e/agent-testing/mcp-fake-model.ts`)
 instead of a provider: the spec points the profile's own Claude settings,
-Codex `config.toml` or Pi `models.json` at it before the environment starts,
-and restores them afterwards. The real CLI, app-server or SDK, bridge and
+Codex `config.toml`, Pi `models.json` or global OpenCode `opencode.json` at
+it before the environment starts, and restores them afterwards. OpenCode
+reaches it through a custom `@ai-sdk/openai-compatible` provider (bundled
+with OpenCode) that becomes its default, small and only enabled model
+(`e2e/agent-testing/opencode-fake-provider.ts`); the spec also adds that
+provider to the profile's `openCodeModelProviders` allowlist for the run,
+since a connected provider outside the allowlist reads as signed out. The real CLI, app-server or SDK, bridge and
 probe servers run; only the model is fake, and no login is used. The fake
 calls a probed tool whenever the runtime offers it (Codex's code mode looks it
 up in `ALL_TOOLS` from a code cell), so a fake-model pass proves what the
@@ -971,8 +976,9 @@ product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
 `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
 cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
-Claude and Codex against scripted loopback models instead, with no login and
-nothing billed (the profile setup is in the spec's header), and
+Claude, Codex, Pi and OpenCode (the last through the same custom provider)
+against scripted loopback models instead, with no login and nothing billed
+(the profile setup is in the spec's header), and
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
@@ -2240,7 +2246,7 @@ obeys it; that needs the billed `routing` run. The content-free summary is
 
 `mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
 fast-forward to an already fetched upstream when the remote is slow (to-do
-4720), without a login, a billed turn or the network. It starts a disposable
+4720, retired 2026-11-10), without a login, a billed turn or the network. It starts a disposable
 `dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
 profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
 stops and resets the profile. The real backend, project Git service, Pi

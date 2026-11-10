@@ -1,6 +1,6 @@
 ## Task analysis
 
-Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at `af2e566e5`, again 2026-11-06 at `c1724ab74`), from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it. Tasks 2 to 4 were worked on a Linux host on 2026-11-06, and task 5 on 2026-11-09; see Assumptions and decisions.
+Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at `af2e566e5`, again 2026-11-06 at `c1724ab74`), from what the X1 batch (Coordinator trust boundary) could not prove or close. X1's outcome is the table ending `docs/reports/security/0090-x1-coordinator-trust-boundary.md`, in the parent of the commit that deleted it. Tasks 2 to 4 were worked on a Linux host on 2026-11-06, and task 5's code on 2026-11-09 (its live check is still open); see Assumptions and decisions.
 
 ### Tasks
 
@@ -8,7 +8,7 @@ Analysed 2026-11-09 against `main` at `c6de4733c` (first analysed 2026-11-05 at 
 2. **Prove the read boundary under bubblewrap**: the deny rule is proven on Seatbelt only. Status: done (2026-11-06, bubblewrap 0.13.1).
 3. **Close the data directory on the other providers**: OpenCode, Cursor, Pi and Grok coordinators can still read it. Status: done for Pi and OpenCode (a link defect fixed on OpenCode); Cursor in [7400](7400-cursor-coordinator-data-dir-reads.md), Grok in [7401](7401-grok-coordinator-data-dir-reads.md), OpenCode under a user `OPENCODE_CONFIG_DIR` in [7402](7402-opencode-coordinator-user-config-dir.md).
 4. **Decide what a read-only review turn may read**: a worker bridge's read-only turns have no read boundary. Status: done (decided: leave as is).
-5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. Status: done (2026-11-09; how a real model weighs the note is unobserved, see Needs verification).
+5. **Say where a delegated prompt came from**: mail is marked, `send_prompt_to_tab` and `launch_job` are not. Status: open. The note is on every path and tested (2026-11-09); left: a live run showing a real worker reads it, which needs a billed provider turn (see the task's Remaining).
 6. **Measure the default**: how often coordinators need environments they did not create. Status: open (depends on usage).
 7. **Retire the two compatibility paths**: the carrier's `selfReminder` spelling and the leaf capability. Status: open (depends on the floor).
 
@@ -135,6 +135,15 @@ Found on 2026-11-09:
   - **Leave prompts unmarked, since the origin check already limits them to the coordinator's own workers.**
     - Pros: no work.
     - Cons: an own worker still reads an injected request as an instruction.
+- **How to prove a real worker reads the note (left open).**
+  - **Run one coordinator turn started by worker mail on Claude and Codex, the two `enforced` platforms, and check the delegated worker's first reply treats the request as not the user's (recommended).**
+    - Pros: one billed turn per platform; the same shape as task 1's run, so both can share a session.
+    - Cons: a model's reading is judged from its reply, so the check is qualitative.
+  - **Rely on the unit and command tests.**
+    - Pros: no billed turn.
+    - Cons: they prove the note is sent, not that a model weighs it.
+
+**Remaining (2026-11-09).** The code and its tests are done: every delegated path carries the note and scheduled fires use the origin of the turn that set them (see Assumptions and decisions). Still open is the live check above. It needs a billed provider turn and a signed-in provider, which the node that built this (beelink, Linux) was not allowed to use, so it was not run and no evidence is claimed. Close the task once that run passes; if a model ignores the note, record what it did and reword `COORDINATOR_MAIL_ORIGIN_NOTE`, which the mail path shares.
 
 ### 6. Measure the default
 
@@ -192,7 +201,7 @@ Took the recommended option: the coordinator frame carries the note, and `send_p
 - **Where the note sits in the frame.** It is the last line, after the instruction (`coordinatorDelegationInstruction`), and it is the same sentence the mail carrier adds (`COORDINATOR_MAIL_ORIGIN_NOTE`). A frame from the user's turn is unchanged, byte for byte. Putting the note in the instruction text, rather than in a new delegation field, means a remote fork needs no protocol change: an older node copies the instruction into its frame and writes the note without knowing about it. A new `turnOrigin` field in the fork's `delegation` would have needed a capability gate, and an older node would have dropped the note silently.
 - **`send_prompt_to_tab`.** From a mail turn the prompt is wrapped in a frame that holds only the note (`createCoordinatorMailOriginPrompt`). From the user's turn it is sent as written, as before. Using the same tags rather than a bare sentence gives the worker the signal in the shape its launch prompt had. The frame shows as text in the worker's transcript, because a later prompt has no stored presentation. Hiding it would need a presentation on `dispatch_native_agent_intent`, which this task did not add.
 - **Scheduled fires** (the second half of the Problem). A coordinator schedule's owner now records `turnOrigin` (`user` or `mail`) at creation. Any `update_schedule` or `resume_schedule` from a turn the user did not start sets it to `mail`, and nothing clears it, because a later user turn may leave text that mail put there. Pausing does not set it. The executor copies it onto the fire's `CoordinatorControlScope` (new optional `turnOrigin`, set only by the scheduler), and every path above reads it before the newest turn. `send_coordinator_agent_mail` gained an optional `turnOrigin` argument for this (internal command, optional field, no domain version change; manifest regenerated). A schedule stored before this change has no `turnOrigin` and still reads the newest turn. Nothing can know which turn set it.
-- **Not done here:** the frame is not hidden in the worker's transcript for later prompts (above), and a real model's reading of the note is unobserved (Needs verification). Neither blocks the task.
+- **Not done here:** the frame is not hidden in the worker's transcript for later prompts (above); that is a presentation choice and does not keep the task open. A real model's reading of the note is unobserved because no billed provider turn was allowed, so the task stays open on that live check (the task's Remaining, and Needs verification).
 - **Unrelated fix in the same branch:** `apps/backend/tests/command-fixtures.ts` listed `deleteAutoPipelineDraftsByEnvironment` twice, which failed the backend test typecheck (TS1117) on `main` at `c6de4733c`. The duplicate was removed in its own commit.
 
 ### Task 3: retained provider-secret storage decision
@@ -208,7 +217,7 @@ work can still reach the accepted-risk decision.
 
 ## Needs verification
 
-- Whether a real coordinator worker treats a prompt that ends its frame with the agent-mail note as the note intends (as a request whose origin is not the user's) rather than ignoring it. Task 5 is covered by unit and command tests over the real Control MCP tools and stores; no billed provider turn was run.
+- Whether a real coordinator worker treats a prompt that ends its frame with the agent-mail note as the note intends (as a request whose origin is not the user's) rather than ignoring it. Task 5 is covered by unit and command tests over the real Control MCP tools and stores; no billed provider turn was run, so task 5 stays open until one is.
 
 - Whether a real Pi or OpenCode coordinator turn needs a path under the data directory beyond the checkout and the attachment root. The Pi check is unit-tested through the real gate and the OpenCode plugin through a loopback-model turn on the pinned binary; neither has met a real model.
 - Whether the Claude CLI ever needs another path under the data directory in a real coordinator turn. The scripted run covers saved tool results, memory, attachments and a command run under the sandbox; it does not cover skills or a large tool result written by a real MCP call. Re-run the qualification file on each CLI bump.

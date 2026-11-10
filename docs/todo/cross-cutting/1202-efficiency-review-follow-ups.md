@@ -28,14 +28,14 @@ governs, marked "Decided".
 
 ### Tasks
 
-1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (requires the user for what is left: `gh-spawn` per hour needs a real PR and a `gh` login, BG-12 a real Claude login handed to a container. macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop, and WEB-3's per-transition RPC counts on a native loopback turn; Linux done 2026-11-10: a claude-tmux tab in a container on a container-local fake model, counted by Docker (idle tab 297–471 → 124.5–128.5 execs a minute for the container; BG-1, BG-2, BG-7), tasks 2 and 10's per-pass counts on the 0048 busy profile, populated and with its environments stopped (activity sweep 13.7 → 5.9 KB fetched a pass, BG-3's presence reads 7 → 7 on base against 9 → 3 on after), BG-2's doorbell live on a rootless daemon whose containers reach the backend (doorbell confirmed; idle bound tab loop 0.44–0.45 execs a second, the container 32–33.5 a minute), BG-9 live on a native Claude session with a held turn (the monitor's bridge reads 11.7–12 → 2 a minute), and DK-3's cold page cache (a launch on stamps is no slower with the 1.5 GB toolchain evicted; a full check adds about 2.1 s cold, median). BG-11's live count needs a scripted fake-model build pipeline and moved to [7563](7563-bg11-review-fanout-live-count.md); see the table in task 1).
+1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open (requires the user for what is left: `gh-spawn` per hour needs a real PR and a `gh` login, BG-12 a real Claude login handed to a container. macOS done 2026-11-06: ST-13 and BG-15's baselines, ST-13 live on `dev:test` profiles, BG-15 live on a real claude-tmux tab with a loopback fake model, the idle recurring work of `0bd214ee` against `main`, the change-tracking and diff-scan benchmarks, DK-7 to DK-9's image sizes on linux/arm64 under Docker Desktop, and WEB-3's per-transition RPC counts on a native loopback turn; Linux done 2026-11-10: a claude-tmux tab in a container on a container-local fake model, counted by Docker (idle unbound tab 469.5–471 → 124.5–125 execs a minute for the container; BG-1, BG-2, BG-7), tasks 2 and 10's per-pass counts on the 0048 busy profile, populated and with its environments stopped (activity sweep 13.7 → 5.9 KB fetched a pass, BG-3's presence reads 7 → 7 on base against 9 → 3 on after), BG-2's doorbell live on a rootless daemon whose containers reach the backend (doorbell confirmed; idle bound tab loop 0.44–0.45 execs a second, the container 32–33.5 a minute), BG-9 live on a native Claude session with a held turn (the monitor's bridge reads 11.7–12 → 2 a minute), and DK-3's cold page cache (a launch on stamps is no slower with the 1.5 GB toolchain evicted; a full check adds about 2.1 s cold, median). BG-11's live count needs a scripted fake-model build pipeline and moved to [7563](7563-bg11-review-fanout-live-count.md); see the table in task 1).
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: done 2026-11-05, with what is left in to-dos (ST-7, ST-8, BG-5, ST-11 and ST-10 done, TX-4's rest done 2026-11-04; ST-9's rest measured 2026-11-05 and not built, thresholds in [6760](6760-agent-mail-store-split-thresholds.md); the prompt-queue reads a steer made were 5100, done 2026-11-05; live store sizes and write rates are [5101](5101-store-size-and-write-rate-live.md); live per-pass counts on the 0048 busy profile 2026-11-10 in task 1: the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1). E12 (WEB-2's third fix, WEB-6 and WEB-14) was checked back on 2026-11-05 and its batch file deleted: all three were built, and its two-tab Profiler run found no difference in commits; see the closing check of E12 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open, waiting on the maintainer's choice of push or long-poll (decided 2026-11-01 to choose only if the numbers still justify it; the numbers are in task 4 and nothing else is left to build) (WEB-1 and GW-1 done 2026-11-04, a visible running tab from 3 requests per round to 1.04; GW-3 done 2026-11-05; TX-5 and TX-6 measured in E10 on a `dev:test` profile (2026-11-06, a real Claude bridge streaming against a loopback model, no billed turn) and with a fake bridge, and not built: on the real stack the bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read; the figures and decisions are [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md), and the outcome is the closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: done 2026-11-06, every item done or measured, live evidence left in 5340 and 6680 (TX-1 and TX-2 done 2026-11-04, focused tests only; TX-1 measured in E10: on a `dev:test` profile every streaming answer was a delta for one viewer and for each of two, and with a fake bridge the ring disabled gave 46 of 47 snapshots, 1.86–6.63 MB per viewer in 10 s; see [6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 1; TX-8, TX-15 and TX-18 done 2026-11-05 in E9, with fixture figures and live evidence in [5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md); TX-3, TX-7, TX-9, TX-11 to TX-14 and TX-16 done 2026-11-05 in E11, focused tests only, see the closing check of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); TX-17 profiled and closed without a change, and E11's savings measured with a provider fake, 2026-11-05 in [6260](../transcripts-and-observation/6260-projection-hashing-measurements.md), figures in the measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: done (BR-1 and BR-3 done, tests for BR-1 added 2026-11-05 by E20; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings done 2026-11-05).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: done (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-17 done 2026-11-04 on Linux, a proved ignored `node_modules` taking no watches (4,672 to 170 on `watch-nm-4k`) and on macOS its events dropped on arrival; what is left of ST-16 and ST-17 is [5060](5060-worktree-watch-leftovers.md), which also has the outcome of every task in batch E7; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-20 done 2026-11-05, a second hourly retention pass over 400 snapshots of 2,000 files from 565 ms to 87 ms and a put during a sweep from about 400 ms to 1–2 ms, live sizing in [5361](5361-retention-pass-on-a-large-real-store.md); ST-19 done 2026-11-05, `activeTurns()` seeks the lifecycle index, and the ledger retention that decides what becomes of the rows is built, live sizing in [5821](5821-ledger-retention-live-evidence.md); ST-21 done 2026-11-05 by batch E-0580, its leftovers in [5800](5800-file-read-streaming-leftovers.md); ST-13 done 2026-11-06, the snapshot check's free-page release moved to a child process, its stall from 140 ms p50 (up to 2.4 s) to 6–7 ms on a 512 MiB database, and the deletion scrub and pre-migration copy left in-process in [7210](7210-storage-work-left-on-the-event-loop.md)).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, and seen live the same day on a real claude-tmux tab with a loopback fake model, 27 storage reads per delivery to 25, task 1; BG-1, BG-2 and BG-7 seen live 2026-11-10 with a claude-tmux tab in a container, counted by Docker: the idle tab's loop 3.8–6.7 → 0.94–0.99 execs a second on the one-exec poll; the doorbell itself seen live the same day on a rootless daemon whose containers reach the backend, confirmed with no demotion, an idle bound tab's loop 0.44–0.45 execs a second and its container 32–33.5 a minute, task 1).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: done (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 done 2026-11-06, a mail delivery to an idle tmux tab from 9 keyed reads to 7 with the fresh liveness probe kept, and seen live the same day on a real claude-tmux tab with a loopback fake model, 27 storage reads per delivery to 25, task 1; BG-1, BG-2 and BG-7 seen live 2026-11-10 with a claude-tmux tab in a container, counted by Docker: the idle tab's loop 6.7 (unbound only) → 0.94–0.99 execs a second on the one-exec poll; the doorbell itself seen live the same day on a rootless daemon whose containers reach the backend, confirmed with no demotion, an idle bound tab's loop 0.44–0.45 execs a second and its container 32–33.5 a minute, task 1).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live numbers not measurable on an isolated profile, which has no PR and no `gh` login; see task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; an idle `dev:test` profile shows no difference on 2026-11-06, because it has none of the items these skip; BG-3 seen live 2026-11-10 on 0048's busy profile, presence reads per pass 7 → 7 on base and 9 → 3 on after with both mailboxes' environments stopped; BG-9 seen live 2026-11-10 on a native Claude session with a held turn, the monitor's bridge reads 11.7–12 → 2 a minute; BG-11's live count is [7563](7563-bg11-review-fanout-live-count.md); BG-12 live stays with task 1 and needs a real Claude login).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: done (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md); GW-15 done 2026-11-05, a revalidation by date alone is [6160](6160-static-if-modified-since-compression.md); GW-10 declined 2026-11-05 on first-load numbers, with the rewriter unchanged).
@@ -351,8 +351,8 @@ after, one base) gave the same counter rates.
 | --- | --- | --- |
 | No tab open | 69.5 / 69.5 | 11 / 14 |
 | Idle tab before its first prompt (no transcript yet, checked) | 471.0 / 469.5 | 124.5 / 125.0 |
-| Idle tab, transcript bound (checked) | 297.0 / 354.0 | 128.5 / 128.5 |
-| Three queued turns (after's took ~4.7 s each; see Turns) | 477.7 / 511.9 | 351.9 / 352.1 |
+| Bound after turns: idle validity not established; withdrawn | — | — |
+| Three queued turns (raw, includes driver probes; not comparable; see Turns) | 477.7 / 511.9 | 351.9 / 352.1 |
 | From an outside `docker stop`, 60 s | 0 / 1 | 0 / 0 |
 | `docker stop` to stored status `stopped` | 386 / 507 ms | 300 / 318 ms (391 and 456 ms uncounted) |
 
@@ -362,10 +362,10 @@ What makes up the idle rows, per minute, from Docker's labels:
 | --- | --- | --- |
 | Claude state poll (`tmux-poll`, `sh -c if …`) | 60, tab or not | 2 without a tab, 60 with one (BG-7) |
 | Tab loop, before the first prompt | 402–404: snapshot, `test`, `stat` and the transcript `find` each ~86, `has-session` 41, `capture-pane` 17.5 | 59–59.5: snapshot 53.5, `find` 5.5–6 (every ~10 s, BG-1) |
-| Tab loop, transcript bound | 230–289: snapshot ~160, `has-session` 50, `capture-pane` 18.5–79.5 | 56.5–57: the snapshot alone (BG-2) |
+| Tab loop, transcript bound | Withdrawn: idle state not established at both boundaries | Withdrawn from this comparison |
 | Diff scan, tab cleanup and the rest | ~9 | ~9 |
 
-- **BG-1 and BG-2.** An idle tab's own loop went from 3.8–6.7 execs a
+- **BG-1 and BG-2.** An idle tab's own loop went from 6.7 (unbound only) execs a
   second to 0.94–0.99, with the transcript search down to one every ten
   seconds and gone once the transcript binds. That is task 8's one-exec poll
   (1.01/s bound, 1.12/s unbound in `tmux-exec-count.ts`), not its doorbell
@@ -387,7 +387,15 @@ What makes up the idle rows, per minute, from Docker's labels:
   4.6–4.8 s after it, in every turn. In two of three base passes the tab
   still reported busy when the wait for idle ran out (120 s, which ended the
   first pass, and 90 s for every turn of the third); the other base pass
-  went idle like after's. Not investigated on base.
+  went idle like after's. Not investigated on base. The bound-idle figures
+  from these runs are withdrawn: the driver did not require idle state at
+  both boundaries, and the available evidence cannot validate every row.
+  The turns row is a raw diagnostic only: the driver's 250 ms
+  `claude_tmux_status` probes can each issue `tmux has-session` through Docker.
+  Base's longer waits add more probe execs, so this row cannot establish a
+  polling-cost saving. No corrected turns comparison is claimed. The driver
+  now labels this confounder in every turns artifact and rejects invalid
+  bound-idle windows while retaining the independent stopped window.
 - **Tab cleanup on base.** Base's idle container made the same 5 cleanup execs
   a minute as after's (`rm` 2, `tmux list-sessions` 1, `ps` 1, `test` 1)
   without charging them to `tab-cleanup`; that answers part of
@@ -495,7 +503,7 @@ worktree signal were confirmed too.
   the doorbell is unconfirmed. Before the first prompt the loop made 45–47
   snapshots and 11 transcript searches in 120 s (0.47–0.48 a second).
   Base's loop, which has no doorbell and so does not depend on reaching the
-  host, made 3.8–6.7 a second on beelink (above); base was not rerun on the
+  host, made 6.7 (unbound only) a second on beelink (above); base was not rerun on the
   rootless daemon.
 - **No tab.** The confirmed Claude state signal left its poll at 2 a minute,
   as on macOS; the other 6 a minute are tab cleanup (7531).
@@ -563,7 +571,7 @@ in the testing guide.
 | Measurement | Items | Status |
 | --- | --- | --- |
 | `storage-read` bytes for `mail-presence` and `activity` | ST-7 | Measured idle (macOS) and on a populated busy profile (Linux, 2026-11-10, above): idle windows fetch no bytes on either side even with stores full; during the busy phase the activity sweep fetched 13.7 → 5.9 KB a pass and the queue scan 1.1 → 0.6 KB. After's presence pass reads 2 more cached rows than base's (7562 task 2). Done. |
-| `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Measured on Linux 2026-11-10 (above) with a claude-tmux tab in the container on a container-local fake model, counted by Docker: idle tab 297–471 → 124.5–128.5 execs a minute for the whole container, the tab's own loop 3.8–6.7 → 0.94–0.99 a second. The doorbell measured live the same day on a rootless daemon whose containers reach the backend (above): confirmed, the idle bound tab's loop 0.44–0.45 execs a second and the container 32–33.5 a minute. BG-8 showed no difference on an outside `docker stop` (both commits stop within 0.5 s). Done. |
+| `docker-exec` with an idle tmux tab | BG-1, BG-2, BG-8 | Measured on Linux 2026-11-10 (above) with a claude-tmux tab in the container on a container-local fake model, counted by Docker: idle unbound tab 469.5–471 → 124.5–125 execs a minute for the whole container, the tab's own loop 6.7 (unbound only) → 0.94–0.99 a second. The doorbell measured live the same day on a rootless daemon whose containers reach the backend (above): confirmed, the idle bound tab's loop 0.44–0.45 execs a second and the container 32–33.5 a minute. BG-8 showed no difference on an outside `docker stop` (both commits stop within 0.5 s). Done. |
 | `gh-spawn` per hour | BG-6, BG-13 (task 9) | Not measurable on an isolated profile: the fixture has no GitHub remote or PR, and the profile's `gh` configuration is isolated by design. It needs a real PR and a `gh` login, whose requests go to GitHub on the user's account. |
 | Live counts for BG-3, BG-9, BG-11, BG-12 (task 10) | | BG-3 measured on Linux 2026-11-10 (above): with both mailboxes' environments stopped, presence reads per pass 9 → 3 on after, 7 → 7 on base. BG-9 measured on Linux 2026-11-10 (above): the monitor's bridge reads for a held native Claude turn 11.7–12 → 2 a minute. Open: BG-11, which needs a scripted build pipeline on a fake model, is [7563](7563-bg11-review-fanout-live-count.md); BG-12 needs a real Claude login handed to a container (the user's). Their unit counts in task 10 stand. |
 | React Profiler, two tabs idle and streaming | WEB-2, WEB-5, WEB-7 | Answered 2026-11-05 by E12 (see Needs verification); production React not measured. |
@@ -2324,6 +2332,21 @@ DK-18 done on 2026-11-04. The writer (`installProductionApplicationLogging` in `
 
 ## Assumptions and decisions
 
+### Task 1: review corrections to container-window evidence (2026-11-10)
+
+Bound-idle windows now require every turn's busy and idle transitions, an
+explicitly running idle tab, and a transcript at both window boundaries. A
+failed window is omitted and the run fails; the stopped-container window can
+still be measured. Previously published rootful bound-idle comparisons are
+withdrawn because their idle state cannot be established from the record.
+
+Turns counts remain raw diagnostics, explicitly including driver status probes.
+This keeps the Docker event evidence intact without guessing which identical
+`has-session` execs belong to the driver. Subtraction could misattribute product
+work. No corrected live turns comparison is claimed. Cleanup failures are
+recorded by step and fail the run while all remaining cleanup is attempted.
+
+
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
 
@@ -3247,7 +3270,7 @@ method) would have been simpler and need no Docker stream, but the
 claude-tmux tab loop has no recurring kind on either commit and base charges
 fewer of its loops at all (its tab cleanup charged none of the 5 execs a
 minute it made), so the counters would have reported 64 a minute on both
-sides while Docker saw 297–471 against 124.5–128.5. Docker's count is the
+sides while Docker saw 469.5–471 against 124.5–125 (unbound only). Docker's count is the
 same instrument on both commits. Adding a recurring kind for the tab loop is
 [7562](../transcripts-and-observation/7562-tmux-tab-loop-recurring-kind.md).
 

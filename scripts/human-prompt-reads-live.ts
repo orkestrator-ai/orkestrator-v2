@@ -190,7 +190,30 @@ type Environment = {
   agentActivityState?: string;
 };
 
-export async function runHumanPromptReads(options: Options, signal: AbortSignal): Promise<number> {
+const runtime = {
+  spawnSync,
+  gatewayFor,
+  gatewayMetrics,
+  delay,
+  cliRunner,
+  startFakeAnthropicModel,
+  claudeFixture: mailTesting.mailRuntime.claudeFixture,
+};
+
+export async function runHumanPromptReads(
+  options: Options,
+  signal: AbortSignal,
+  dependencies: Partial<typeof runtime> = {},
+): Promise<number> {
+  const {
+    spawnSync,
+    gatewayFor,
+    gatewayMetrics,
+    delay,
+    cliRunner,
+    startFakeAnthropicModel,
+    claudeFixture,
+  } = { ...runtime, ...dependencies };
   const statusRun = spawnSync(
     "mise",
     ["run", "dev:status", "--profile", options.profile, "--json"],
@@ -225,8 +248,7 @@ export async function runHumanPromptReads(options: Options, signal: AbortSignal)
   const read = async () => providerRequests(await gatewayMetrics(gatewayStatus, signal));
 
   const configDir = mkdtempSync(path.join(os.tmpdir(), "bg9-cli-"));
-  const cli = cliRunner(options.profile, configDir, options.checkout);
-  const model = await startFakeAnthropicModel();
+  let model: Awaited<ReturnType<typeof startFakeAnthropicModel>> | undefined;
   let restore: (() => void) | undefined;
   const hold = `bg9-${Date.now().toString(36)}`;
   const windows: Array<Record<string, unknown>> = [];
@@ -262,11 +284,9 @@ export async function runHumanPromptReads(options: Options, signal: AbortSignal)
   };
   let exitCode = 0;
   try {
-    restore = mailTesting.mailRuntime.claudeFixture(
-      directory,
-      model.origin,
-      environment.worktreePath,
-    );
+    const cli = cliRunner(options.profile, configDir, options.checkout);
+    model = await startFakeAnthropicModel();
+    restore = claudeFixture(directory, model.origin, environment.worktreePath);
     const started = await cli(
       [
         "session",
@@ -323,12 +343,12 @@ export async function runHumanPromptReads(options: Options, signal: AbortSignal)
     result.error = error instanceof Error ? error.message.split("\n")[0] : "failed";
     log(`failed: ${String(result.error)}`);
   } finally {
-    model.release(hold);
+    model?.release(hold);
     const cleanup = await Promise.allSettled([
       Promise.resolve().then(() => restore?.()),
-      model.stop(),
+      Promise.resolve().then(() => model?.stop()),
+      Promise.resolve().then(() => rmSync(configDir, { recursive: true, force: true })),
     ]);
-    rmSync(configDir, { recursive: true, force: true });
     if (cleanup.some((outcome) => outcome.status === "rejected")) {
       exitCode = 1;
       result.ok = false;

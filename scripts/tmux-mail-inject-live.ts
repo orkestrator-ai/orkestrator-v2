@@ -117,7 +117,6 @@ function profileStatus(options: Options): Status {
   return JSON.parse(result.stdout) as Status;
 }
 
-/** Backend commands over the profile's gateway; the token stays in here. */
 /**
  * The gateway's whole metrics document, unvalidated, for drivers that need
  * more than {@link gatewayFor}'s `kinds` (unattributed work, signal health).
@@ -128,13 +127,7 @@ export async function gatewayMetrics(
   signal?: AbortSignal,
   request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
 ): Promise<unknown> {
-  if (!status.browserUrl || !status.authFile) throw new Error("Profile has no browser gateway");
-  const origin = new URL(status.browserUrl);
-  if (origin.hostname !== "127.0.0.1" && origin.hostname !== "localhost") {
-    throw new Error("Profile browser gateway is not loopback; refusing to send its token");
-  }
-  const token = (JSON.parse(readFileSync(status.authFile, "utf8")) as { token?: unknown }).token;
-  if (typeof token !== "string" || !token) throw new Error("Gateway auth file has no token");
+  const { origin, token } = gatewayCredentials(status);
   const response = await request(new URL("/__orkestrator/metrics", origin), {
     headers: { authorization: `Bearer ${token}` },
     redirect: "error",
@@ -146,11 +139,7 @@ export async function gatewayMetrics(
   return response.json();
 }
 
-export function gatewayFor(
-  status: Status,
-  signal?: AbortSignal,
-  request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
-) {
+function gatewayCredentials(status: Status) {
   if (!status.browserUrl || !status.authFile) throw new Error("Profile has no browser gateway");
   const origin = new URL(status.browserUrl);
   if (origin.hostname !== "127.0.0.1" && origin.hostname !== "localhost") {
@@ -158,6 +147,16 @@ export function gatewayFor(
   }
   const token = (JSON.parse(readFileSync(status.authFile, "utf8")) as { token?: unknown }).token;
   if (typeof token !== "string" || !token) throw new Error("Gateway auth file has no token");
+  return { origin, token };
+}
+
+/** Backend commands over the profile's gateway; the token stays in here. */
+export function gatewayFor(
+  status: Status,
+  signal?: AbortSignal,
+  request: (url: URL, init: RequestInit) => Promise<Response> = fetch,
+) {
+  const { origin, token } = gatewayCredentials(status);
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   return {
     async invoke<T>(

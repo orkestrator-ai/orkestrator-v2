@@ -448,10 +448,34 @@ type WindowResult = {
   note?: string;
 };
 
+const runtime = {
+  profileStatus,
+  gatewayFor,
+  gatewayMetrics,
+  docker,
+  waitFor,
+  delay,
+  installFakeModel,
+  execCounter,
+  transcriptExists,
+};
+
 export async function runContainerTabBenchmark(
   options: Options,
   signal: AbortSignal,
+  dependencies: Partial<typeof runtime> = {},
 ): Promise<number> {
+  const {
+    profileStatus,
+    gatewayFor,
+    gatewayMetrics,
+    docker,
+    waitFor,
+    delay,
+    installFakeModel,
+    execCounter,
+    transcriptExists,
+  } = { ...runtime, ...dependencies };
   const status = profileStatus(options);
   if (status.status !== "ready") throw new Error("Profile is not ready");
   const gateway = gatewayFor(status, signal);
@@ -486,6 +510,7 @@ export async function runContainerTabBenchmark(
     model:
       "loopback fake inside the container (e2e/agent-testing/container-fake-claude-api.ts); no provider was called",
     at: new Date().toISOString(),
+    turnsIncludeDriverStatusProbes: true,
     windows,
   };
   const sleep = (ms: number) => delay(ms, undefined, { signal });
@@ -581,8 +606,7 @@ export async function runContainerTabBenchmark(
             async () => ((await tab())?.busy === true ? Date.now() : null),
             signal,
           ).catch(() => null);
-          // A tab whose idle edge never arrives is recorded, not fatal, so the
-          // bound-idle and stopped windows still run.
+          // Keep failed transitions in the artifact; they invalidate bound-idle.
           const idleAt = await waitFor(
             "the tab to go idle",
             90_000,
@@ -599,12 +623,39 @@ export async function runContainerTabBenchmark(
           await sleep(5_000);
         }
       },
-      `${options.turns} queued prompts, each to busy and back to idle, 5 s apart`,
+      `${options.turns} queued prompts, 5 s apart; raw counts include driver claude_tmux_status liveness probes and are not a polling-cost comparison`,
     );
     result.turns = turns;
     await sleep(20_000);
+    const boundIdle = async () => {
+      const current = await tab();
+      const transcript = transcriptExists(containerId, current?.session_id);
+      return current?.running === true && current.busy === false && transcript === true;
+    };
     result.transcriptAfterTurns = transcriptExists(containerId, (await tab())?.session_id);
-    await measure("idle-bound", options.windowMs, "after the turns, transcript bound");
+    if (
+      turns.some((turn) => turn.busyMs === null || turn.idleMs === null) ||
+      !(await boundIdle())
+    ) {
+      result.idleBoundInvalid = "Missing turn transition, idle running tab, or transcript";
+      exitCode = 1;
+    } else {
+      // Only append a window after its end state has also been validated.
+      try {
+        await inWindow(
+          "idle-bound",
+          async () => {
+            await sleep(options.windowMs);
+            if (!(await boundIdle()))
+              throw new Error("Bound tab did not remain running and idle with a transcript");
+          },
+          "after the turns, transcript bound; running and idle at both boundaries",
+        );
+      } catch {
+        result.idleBoundInvalid = "Bound-idle window failed its measurement or end-state check";
+        exitCode = 1;
+      }
+    }
 
     log("stopping the container behind the app's back");
     const leftRunning = await inWindow(
@@ -636,23 +687,34 @@ export async function runContainerTabBenchmark(
     result.error = error instanceof Error ? error.message : "failed";
     log(`failed: ${String(result.error)}`);
   } finally {
+    const cleanupFailures: string[] = [];
     if (stoppedContainer) {
       try {
         docker(["start", containerId], undefined, 60_000);
         await delay(10_000);
       } catch {
+        cleanupFailures.push("container-restart");
         log("could not start the container again; dev:reset removes it");
       }
     }
     if (launched) {
       await gateway
         .invoke("claude_tmux_stop", { environmentId: environment.id, tabId }, true)
-        .catch(() => log("could not stop the tab's tmux session"));
+        .catch(() => {
+          cleanupFailures.push("tab-stop");
+          log("could not stop the tab's tmux session");
+        });
     }
     try {
       undoFake?.();
     } catch {
+      cleanupFailures.push("fake-model-restore");
       log("could not undo the fake model; dev:reset removes the container");
+    }
+    if (cleanupFailures.length) {
+      exitCode = 1;
+      result.cleanupFailed = true;
+      result.cleanupFailures = cleanupFailures;
     }
     mkdirSync(path.dirname(options.out), { recursive: true });
     writeFileSync(options.out, `${JSON.stringify(result, null, 2)}\n`);

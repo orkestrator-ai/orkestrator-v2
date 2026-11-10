@@ -2018,9 +2018,10 @@ describe("BrowserTab", () => {
         isActive
       />,
     );
-    await waitFor(() =>
-      expect(native.browserPreview.setVisible.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
+    // Still no resolvable address: the view stays hidden (it is not re-shown).
+    await act(async () => undefined);
+    expect(native.browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", true);
+    expect(native.browserPreview.setVisible).toHaveBeenLastCalledWith("browser-1", false);
     expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(
       true,
     );
@@ -2447,6 +2448,99 @@ describe("BrowserTab", () => {
     } finally {
       menu.remove();
       window.MutationObserver = NativeMutationObserver;
+    }
+  });
+
+  test("keeps the view shown while page state changes re-run the attach", async () => {
+    // Every navigation event used to tear the attach effect down, hiding the
+    // view until the next attach came back: a flash of empty pane each time.
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = renderInAppCommandScope(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+    native.browserPreview.setVisible.mockClear();
+    for (let navigation = 1; navigation <= 3; navigation += 1) {
+      native.emitState(previewState({ navigation, loading: navigation % 2 === 1 }));
+      await act(async () => undefined);
+    }
+    expect(native.browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
+    expect(native.browserPreview.attach).not.toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
+    );
+
+    view.unmount();
+    await Promise.resolve();
+    expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+  });
+
+  test("keeps the view shown for a listbox open beside it, not over it", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = renderInAppCommandScope(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const rect = (left: number, top: number, width: number, height: number) => () =>
+      ({
+        x: left,
+        y: top,
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const host = view.container.querySelector(
+      '[data-native-browser-preview="browser-1"]',
+    ) as HTMLDivElement;
+    host.getBoundingClientRect = rect(700, 140, 800, 900);
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+
+    // The chat composer's slash-command popup, in the pane to the left.
+    const listbox = document.createElement("div");
+    listbox.setAttribute("role", "listbox");
+    listbox.getBoundingClientRect = rect(320, 860, 340, 160);
+    try {
+      native.browserPreview.attach.mockClear();
+      document.body.append(listbox);
+      fireEvent.transitionRun(listbox);
+      await act(async () => undefined);
+      expect(native.browserPreview.attach).not.toHaveBeenCalledWith(
+        expect.objectContaining({ visible: false }),
+      );
+
+      // The same popup over the preview hides it.
+      listbox.getBoundingClientRect = rect(900, 860, 340, 160);
+      fireEvent.transitionEnd(listbox);
+      await waitFor(() =>
+        expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: false }),
+        ),
+      );
+    } finally {
+      listbox.remove();
+      view.unmount();
     }
   });
 

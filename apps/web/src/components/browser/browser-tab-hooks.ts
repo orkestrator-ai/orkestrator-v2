@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
@@ -53,8 +53,33 @@ export function isBlockingOverlay(element: Element): boolean {
   return !isClosing || isVisuallyPresent(element);
 }
 
-function hasVisuallyBlockingOverlay(): boolean {
-  return Array.from(document.querySelectorAll(BLOCKING_OVERLAY_SELECTOR)).some(isBlockingOverlay);
+function hasLayout(rect: DOMRect): boolean {
+  return rect.width > 0 && rect.height > 0;
+}
+
+/**
+ * Whether an overlay covers any of the native view's area. Only a measurable
+ * overlay that provably misses a measurable host is let through: an element
+ * without layout yet (or a host that is not laid out) counts as covering, so
+ * an unknown geometry still hides the view rather than painting over the UI.
+ */
+export function overlayCoversHost(overlay: Element, host: Element | null | undefined): boolean {
+  if (!host) return true;
+  const hostRect = host.getBoundingClientRect();
+  const overlayRect = overlay.getBoundingClientRect();
+  if (!hasLayout(hostRect) || !hasLayout(overlayRect)) return true;
+  return (
+    overlayRect.left < hostRect.right &&
+    hostRect.left < overlayRect.right &&
+    overlayRect.top < hostRect.bottom &&
+    hostRect.top < overlayRect.bottom
+  );
+}
+
+function hasVisuallyBlockingOverlay(host: Element | null | undefined): boolean {
+  return Array.from(document.querySelectorAll(BLOCKING_OVERLAY_SELECTOR)).some(
+    (overlay) => isBlockingOverlay(overlay) && overlayCoversHost(overlay, host),
+  );
 }
 
 const OVERLAY_MOTION_EVENTS = [
@@ -69,36 +94,110 @@ const OVERLAY_MOTION_EVENTS = [
 /**
  * A native preview view is composited above the renderer, so it must hide while
  * a dialog or menu is open over it.
+ *
+ * With `hostRef`, only an overlay that overlaps the host (the area the native
+ * view occupies) counts: a slash-command or mention listbox open in the chat
+ * pane beside the preview leaves it showing. Geometry is rechecked as overlays
+ * move (Floating UI positions them through `style`), and as the host resizes
+ * or anything scrolls. Without `hostRef`, any open overlay in the document
+ * blocks.
  */
-export function useBlockingOverlay(enabled: boolean): boolean {
+export function useBlockingOverlay(enabled: boolean, hostRef?: RefObject<Element | null>): boolean {
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
+  const tracksGeometry = hostRef !== undefined;
   useEffect(() => {
     if (!enabled) return;
-    const update = () => setHasBlockingOverlay(hasVisuallyBlockingOverlay());
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      setHasBlockingOverlay(hasVisuallyBlockingOverlay(hostRef?.current));
+    };
+    // Geometry changes arrive in bursts (scrolling, streaming layout); one
+    // document scan per frame is enough for them.
+    const scheduleUpdate = () => {
+      if (frame === 0) frame = requestAnimationFrame(update);
+    };
     const updateAfterOverlayMotion = (event: Event) => {
       if (event.target instanceof Element && event.target.matches(BLOCKING_OVERLAY_SELECTOR)) {
         update();
       }
     };
-    const observer = new MutationObserver(update);
+    const observer = new MutationObserver((records) => {
+      const onlyStyle =
+        records.length > 0 &&
+        records.every((record) => record.type === "attributes" && record.attributeName === "style");
+      if (onlyStyle) scheduleUpdate();
+      else update();
+    });
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["aria-hidden", "data-state", "hidden", "role"],
+      attributeFilter: tracksGeometry
+        ? ["aria-hidden", "data-state", "hidden", "role", "style"]
+        : ["aria-hidden", "data-state", "hidden", "role"],
       childList: true,
       subtree: true,
     });
     for (const eventName of OVERLAY_MOTION_EVENTS) {
       document.addEventListener(eventName, updateAfterOverlayMotion, true);
     }
+    const host = hostRef?.current;
+    const resizeObserver =
+      tracksGeometry && host && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(scheduleUpdate)
+        : null;
+    if (host) resizeObserver?.observe(host);
+    if (tracksGeometry) {
+      window.addEventListener("resize", scheduleUpdate);
+      window.addEventListener("scroll", scheduleUpdate, true);
+    }
     update();
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
+      resizeObserver?.disconnect();
       for (const eventName of OVERLAY_MOTION_EVENTS) {
         document.removeEventListener(eventName, updateAfterOverlayMotion, true);
       }
+      if (tracksGeometry) {
+        window.removeEventListener("resize", scheduleUpdate);
+        window.removeEventListener("scroll", scheduleUpdate, true);
+      }
     };
-  }, [enabled]);
+  }, [enabled, hostRef, tracksGeometry]);
   return hasBlockingOverlay;
+}
+
+/**
+ * Hides a native view when the effect that attached it is torn down for good,
+ * but not when that effect merely re-runs.
+ *
+ * React runs a re-render's cleanup and the next setup in the same commit. If
+ * the cleanup hid the view straight away, it stayed hidden until the next
+ * setup's attach came back from main, one animation frame plus a round trip
+ * later (longer for a service preview, whose attach waits on the tunnel), so
+ * every dependency change flashed the page away. It also ended any
+ * annotation selection, which a hide does. The cleanup calls `release`, which
+ * hides on a microtask; the next setup's `claim` for the same tab cancels it,
+ * and that setup's own attach then applies the visibility it wants.
+ */
+export function useDeferredPreviewHide(): {
+  claim: (tabId: string) => void;
+  release: (tabId: string, hide: () => void) => void;
+} {
+  const pendingRef = useRef<string | null>(null);
+  const claim = useCallback((tabId: string) => {
+    if (pendingRef.current === tabId) pendingRef.current = null;
+  }, []);
+  const release = useCallback((tabId: string, hide: () => void) => {
+    pendingRef.current = tabId;
+    queueMicrotask(() => {
+      if (pendingRef.current !== tabId) return;
+      pendingRef.current = null;
+      hide();
+    });
+  }, []);
+  return { claim, release };
 }
 
 /**

@@ -1,4 +1,13 @@
-import { lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -88,6 +97,7 @@ import {
   errorMessage,
   useAddressBarShortcut,
   useBlockingOverlay,
+  useDeferredPreviewHide,
 } from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
@@ -243,7 +253,8 @@ function ServicePreview({
   const dialogOpenerRef = useRef<HTMLElement | null>(null);
   const nativeAttachedRef = useRef(false);
   const previousRefresh = useRef(refreshRequestId);
-  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview);
+  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview, previewHostRef);
+  const { claim: claimPreviewHide, release: releasePreviewHide } = useDeferredPreviewHide();
   useAddressBarShortcut({
     tabId,
     environmentId,
@@ -400,6 +411,13 @@ function ServicePreview({
     },
     [mode, persistPath, service, serviceRef, setRoute, tabId],
   );
+  // The attach effect reads the latest handler through this ref: the handler
+  // is rebuilt whenever the service list refreshes, and re-running the effect
+  // for that would re-attach the view for no reason.
+  const applyNativeStateRef = useRef(applyNativeState);
+  useLayoutEffect(() => {
+    applyNativeStateRef.current = applyNativeState;
+  }, [applyNativeState]);
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
@@ -427,18 +445,21 @@ function ServicePreview({
     }
   }, [mode, path, resolvePreviewUrl, service]);
 
+  const compatibilityIframeUrl = compatibilityUrl?.iframeUrl ?? null;
+
   // `attachTarget` is rebuilt every render; only its identity (service and
   // path) should re-run the attach, or every render would re-attach the view.
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!nativeBrowserPreview) return;
+    claimPreviewHide(tabId);
     let disposed = false;
     const host = previewHostRef.current;
     const hide = () => void setBrowserPreviewVisible(tabId, false).catch(() => undefined);
     const canAttach =
       host &&
       ((mode === "desktop-tunnel" && attachTarget) ||
-        (mode === "compatibility" && compatibilityUrl));
+        (mode === "compatibility" && compatibilityIframeUrl));
     if (!canAttach) {
       hide();
       return () => {
@@ -470,7 +491,7 @@ function ServicePreview({
               })
             : attachBrowserPreview({
                 tabId,
-                url: compatibilityUrl!.iframeUrl,
+                url: compatibilityIframeUrl!,
                 environmentId,
                 ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
                 bounds,
@@ -483,7 +504,7 @@ function ServicePreview({
             nativeAttachedRef.current = true;
             setNativeAttached(true);
             setAttachError(null);
-            applyNativeState(state);
+            applyNativeStateRef.current(state);
           })
           .catch((error: unknown) => {
             if (disposed) return;
@@ -510,21 +531,22 @@ function ServicePreview({
       observer.disconnect();
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
-      hide();
+      releasePreviewHide(tabId, hide);
     };
   }, [
     annotations.previewHidden,
-    applyNativeState,
     attachNonce,
     attachTarget?.serviceId,
     attachTarget?.path,
-    compatibilityUrl,
+    claimPreviewHide,
+    compatibilityIframeUrl,
     dialog,
     environmentId,
     hasBlockingOverlay,
     isActive,
     mode,
     nativeBrowserPreview,
+    releasePreviewHide,
     route.basis,
     tabId,
   ]);

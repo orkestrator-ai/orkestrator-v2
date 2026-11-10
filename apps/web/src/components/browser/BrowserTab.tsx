@@ -65,6 +65,7 @@ import {
   errorMessage,
   useAddressBarShortcut,
   useBlockingOverlay,
+  useDeferredPreviewHide,
 } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 import { commandClient } from "@/lib/node-scope/app-window-scope";
@@ -158,7 +159,11 @@ function ManualBrowserTab({
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const nativeAttachedRef = useRef(false);
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
-  const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview && browserPreviewSupported);
+  const hasBlockingOverlay = useBlockingOverlay(
+    nativeBrowserPreview && browserPreviewSupported,
+    previewHostRef,
+  );
+  const deferredPreviewHide = useDeferredPreviewHide();
   const [nativeAttached, setNativeAttached] = useState(false);
   const navigateRef = useRef<(address: string) => void>(() => undefined);
   const currentPage = useMemo(() => currentPageForManualUrl(currentUrl), [currentUrl]);
@@ -255,6 +260,13 @@ function ManualBrowserTab({
     },
     [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl, urlBasis],
   );
+  // The attach effect reads the latest handler through this ref: the handler
+  // changes with every navigation, and re-running the effect for that would
+  // re-attach the view for no reason.
+  const applyNativeStateRef = useRef(applyNativeState);
+  useLayoutEffect(() => {
+    applyNativeStateRef.current = applyNativeState;
+  }, [applyNativeState]);
 
   // The persisted tab changed (restored, or another client navigated it):
   // follow it while rendering. The echo of a navigation made here keeps the
@@ -584,8 +596,10 @@ function ManualBrowserTab({
     setLoadRevision((revision) => revision + 1);
   }, [applyNativeState, currentUrl, nativeBrowserPreview, stopAnnotationForPageChange, tabId]);
 
+  const { claim: claimPreviewHide, release: releasePreviewHide } = deferredPreviewHide;
   useEffect(() => {
     if (!nativeBrowserPreview) return;
+    claimPreviewHide(tabId);
     let disposed = false;
     const hideNativePreview = (reportFailure: boolean) => {
       void setBrowserPreviewVisible(tabId, false).catch((visibilityError) => {
@@ -627,7 +641,7 @@ function ManualBrowserTab({
             if (disposed) return;
             nativeAttachedRef.current = true;
             setNativeAttached(true);
-            applyNativeState(state);
+            applyNativeStateRef.current(state);
           })
           .catch((attachError) => {
             if (disposed) return;
@@ -648,13 +662,14 @@ function ManualBrowserTab({
       observer.disconnect();
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
-      hideNativePreview(false);
+      releasePreviewHide(tabId, () => hideNativePreview(false));
     };
   }, [
     previewScope,
     annotations.previewHidden,
-    applyNativeState,
     browserPreviewSupported,
+    claimPreviewHide,
+    releasePreviewHide,
     environmentId,
     hasBlockingOverlay,
     isActive,

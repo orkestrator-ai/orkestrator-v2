@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 
-import { useBlockingOverlay } from "./browser-tab-hooks";
+import { overlayCoversHost, useBlockingOverlay, useDeferredPreviewHide } from "./browser-tab-hooks";
 
 const overlays: Element[] = [];
 
@@ -113,5 +113,95 @@ describe("useBlockingOverlay", () => {
     rerender({ enabled: true });
     expect(result.current).toBe(true);
     unmount();
+  });
+});
+
+type Box = { left: number; top: number; width: number; height: number };
+
+function placeAt(element: Element, box: Box) {
+  element.getBoundingClientRect = () =>
+    ({
+      x: box.left,
+      y: box.top,
+      left: box.left,
+      top: box.top,
+      right: box.left + box.width,
+      bottom: box.top + box.height,
+      width: box.width,
+      height: box.height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+}
+
+function previewHost(box: Box) {
+  const host = document.createElement("div");
+  placeAt(host, box);
+  document.body.append(host);
+  overlays.push(host);
+  return { current: host };
+}
+
+describe("useBlockingOverlay with a preview host", () => {
+  const HOST = { left: 700, top: 140, width: 800, height: 900 };
+
+  test("leaves the preview showing for a listbox that does not overlap it", async () => {
+    // The chat composer's slash-command popup sits in the pane beside the preview.
+    const hostRef = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, hostRef));
+    const { overlay } = siblingOverlay("listbox");
+    placeAt(overlay, { left: 320, top: 860, width: 340, height: 160 });
+    await act(async () => undefined);
+    expect(result.current).toBe(false);
+  });
+
+  test("hides the preview for a listbox that overlaps it, and rechecks when it moves", async () => {
+    const hostRef = previewHost(HOST);
+    const { result } = renderHook(() => useBlockingOverlay(true, hostRef));
+    const { overlay } = siblingOverlay("listbox");
+    placeAt(overlay, { left: 320, top: 860, width: 340, height: 160 });
+    await act(async () => undefined);
+    expect(result.current).toBe(false);
+    // Floating UI repositions through `style`; the hook rescans on the next frame.
+    placeAt(overlay, { left: 600, top: 860, width: 340, height: 160 });
+    overlay.setAttribute("style", "transform: translate(600px, 860px)");
+    await waitFor(() => expect(result.current).toBe(true));
+    placeAt(overlay, { left: 100, top: 860, width: 340, height: 160 });
+    window.dispatchEvent(new Event("resize"));
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  test("treats an overlay or host without layout as covering", () => {
+    const host = document.createElement("div");
+    const overlay = document.createElement("div");
+    placeAt(host, HOST);
+    expect(overlayCoversHost(overlay, host)).toBe(true);
+    placeAt(overlay, { left: 0, top: 0, width: 10, height: 10 });
+    expect(overlayCoversHost(overlay, host)).toBe(false);
+    placeAt(host, { left: 0, top: 0, width: 0, height: 0 });
+    expect(overlayCoversHost(overlay, host)).toBe(true);
+    expect(overlayCoversHost(overlay, null)).toBe(true);
+  });
+});
+
+describe("useDeferredPreviewHide", () => {
+  test("a re-run that claims the same tab cancels the pending hide", async () => {
+    const { result } = renderHook(() => useDeferredPreviewHide());
+    let hidden = 0;
+    result.current.release("tab-1", () => (hidden += 1));
+    result.current.claim("tab-1");
+    await Promise.resolve();
+    expect(hidden).toBe(0);
+  });
+
+  test("a final teardown, or a different tab, still hides", async () => {
+    const { result } = renderHook(() => useDeferredPreviewHide());
+    let hidden = 0;
+    result.current.release("tab-1", () => (hidden += 1));
+    await Promise.resolve();
+    expect(hidden).toBe(1);
+    result.current.release("tab-1", () => (hidden += 1));
+    result.current.claim("tab-2");
+    await Promise.resolve();
+    expect(hidden).toBe(2);
   });
 });

@@ -321,7 +321,7 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
   const frameAreaRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const api = getArtifactHostApi();
-  const blocked = useBlockingOverlay(api !== null);
+  const blocked = useBlockingOverlay(api !== null, frameAreaRef);
   const frameActive = ACTIVE_FRAME_PHASES.has(phase);
   const shown = placement !== "inline" || inline.rect !== null;
 

@@ -97,7 +97,14 @@ export interface FilteredProjectConfig {
    */
   instructions: string[];
   /** Why values were left out, by kind; never the values. */
-  dropped: { plugins: boolean; env: number; file: number; instructions: number };
+  dropped: {
+    plugins: boolean;
+    env: number;
+    file: number;
+    instructions: number;
+    instructionGlob: number;
+    instructionUrl: number;
+  };
   /** Files that are not a JSONC object and were left out. */
   rejected: string[];
 }
@@ -119,7 +126,14 @@ export async function filterProjectOpenCodeConfig(
   const merged = mergeOpenCodeUserConfig(
     files.map((file) => ({ name: file.name, directory: root, text: file.text })),
   );
-  const dropped = { plugins: merged.droppedPlugins, env: 0, file: 0, instructions: 0 };
+  const dropped = {
+    plugins: merged.droppedPlugins,
+    env: 0,
+    file: 0,
+    instructions: 0,
+    instructionGlob: 0,
+    instructionUrl: 0,
+  };
   const document =
     merged.text === undefined
       ? {}
@@ -203,6 +217,17 @@ export async function filterProjectOpenCodeConfig(
   const instructions: string[] = [];
   const seen = new Set<string>();
   for (const [index, entry] of requested.entries()) {
+    // These forms cannot be safely passed to the credential-bearing server.
+    // Report each unsupported kind separately rather than treating it as missing.
+    if (
+      typeof entry === "string" &&
+      (/^[a-z][a-z0-9+.-]*:\/\//i.test(entry) || /[*?[\]{}]/.test(entry))
+    ) {
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(entry)) dropped.instructionUrl++;
+      else dropped.instructionGlob++;
+      dropped.instructions++;
+      continue;
+    }
     const relative = typeof entry === "string" ? checkoutRelativePath(entry, root) : undefined;
     if (relative && seen.has(relative)) continue;
     const content =
@@ -303,7 +328,7 @@ export async function readFilteredProjectOpenCodeConfig(
     },
   );
   result.dropped.instructions += oversizedInstructions;
-  const { plugins, env, file, instructions } = result.dropped;
+  const { plugins, env, file, instructions, instructionGlob, instructionUrl } = result.dropped;
   if (plugins || env || file || instructions || result.rejected.length) {
     // Counts and file names only: values may be credentials.
     log.info("opencode.project-config-filtered", {
@@ -311,6 +336,8 @@ export async function readFilteredProjectOpenCodeConfig(
       env,
       file,
       instructions,
+      instructionGlob,
+      instructionUrl,
       rejected: result.rejected.join(","),
     });
   }

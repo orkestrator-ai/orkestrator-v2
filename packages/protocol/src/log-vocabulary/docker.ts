@@ -38,7 +38,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "opencode.project-config-too-large":
         "A checkout's opencode.json or opencode.jsonc was larger than the limit, so a launched OpenCode server does not read it. File name only.",
       "opencode.project-config-filtered":
-        "Values were left out of a checkout's OpenCode configuration before a launched server reads it (to-do 7550): counts of plugin keys, `{env:}` and `{file:}` references and instructions outside the checkout, and the names of files that were not a JSONC object. Never values.",
+        "Values were left out of a checkout's OpenCode configuration before a launched server reads it (to-do 7550): counts of plugin keys, `{env:}` and `{file:}` references and dropped instructions (including separate instructionGlob and instructionUrl counts), and the names of files that were not a JSONC object. Never values.",
       "log-driver.unbounded":
         "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":

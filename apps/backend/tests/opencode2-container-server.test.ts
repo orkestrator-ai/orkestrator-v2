@@ -317,6 +317,29 @@ describe("startContainerOpenCode2Server on an opencode2-launch image", () => {
     });
   }
 
+  for (const cleanup of ["find /proc/[0-9]*/fd", `rm -f ${containerCredentialFile("opencode2")}`]) {
+    test(`preserves warm-up errors when cleanup fails: ${cleanup}`, async () => {
+      let logFile = "";
+      const holder = await serveAfterLaunch(() => logFile, 500);
+      held.push(holder);
+      setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+      const { context } = createContext(containerEnvironment());
+      const failingDocker = FAKE_DOCKER_LAUNCHER.replace(
+        'case "$1" in',
+        `case "$*" in *'${cleanup}'*) exit 1 ;; esac\ncase "$1" in`,
+      );
+      await withFakeDocker(failingDocker, async (logs) => {
+        logFile = logs.exec;
+        await expect(
+          startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher"),
+        ).rejects.toThrow("500");
+        const { argv } = await readLog(logs.exec);
+        expect(argv).toContain(`rm -f ${containerCredentialFile("opencode2")}`);
+        expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      });
+    });
+  }
+
   test("delayed startup polls do not scan a listener before it is recorded", async () => {
     let logFile = "";
     const holder = await serveAfterLaunch(() => logFile, 200, 3);

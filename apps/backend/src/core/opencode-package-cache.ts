@@ -155,7 +155,7 @@ const texts = [];
 for (const name of ["config.json", "opencode.json", "opencode.jsonc"]) {
   try { texts.push(fs.readFileSync(path.join(dir, name), "utf8")); } catch {}
 }
-for (const install of installs(texts, ${JSON.stringify(kind)}).slice(0, ${OPENCODE_PACKAGE_INSTALL_LIMIT})) {
+for (const install of installs(texts, ${JSON.stringify(kind)})) {
   process.stdout.write(install.directory + "\\t" + install.spec + "\\n");
 }
 `;
@@ -172,12 +172,15 @@ for (const install of installs(texts, ${JSON.stringify(kind)}).slice(0, ${OPENCO
     `chmod -R u=rwX,go=rX "$cache"`,
     "cd /",
     `list=$(ORK_OPENCODE_CONFIG_DIR=${quoteShell(configDir)} ${ROOT_BUN} -e ${quoteShell(program)} 2>/dev/null) || list=""`,
+    "attempts=0",
     "printf '%s\\n' \"$list\" | while IFS=\"$(printf '\\t')\" read -r directory spec; do",
     '  [ -n "$directory" ] && [ -n "$spec" ] || continue',
     // The program printed only specs its pattern admits, so neither can leave the cache.
     '  case "$directory/$spec" in *..* | /*) continue ;; esac',
     `  target="$cache/opencode/${base}/$directory"`,
     '  [ -d "$target/node_modules" ] && continue',
+    `  [ "$attempts" -lt ${OPENCODE_PACKAGE_INSTALL_LIMIT} ] || break`,
+    "  attempts=$((attempts + 1))",
     '  stage=$(mktemp -d "$cache/opencode/.stage.XXXXXX") || continue',
     `  if (cd "$stage" && printf '{}\\n' > package.json && timeout ${OPENCODE_PACKAGE_INSTALL_TIMEOUT_SECONDS} env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root ${ROOT_BUN} add --exact --ignore-scripts --no-progress --no-summary "$spec" >/dev/null 2>&1); then`,
     '    rm -rf "$target"',

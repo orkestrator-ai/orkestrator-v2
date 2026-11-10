@@ -386,3 +386,27 @@ describe("writing the filtered configuration as root", () => {
     },
   );
 });
+
+test("reports unsupported glob and URL instructions distinctly without reading them", async () => {
+  const reads: string[] = [];
+  const result = await filterProjectOpenCodeConfig(
+    [
+      {
+        name: "opencode.json",
+        text: JSON.stringify({
+          instructions: ["rules/*.md", "https://example.test/rules.md", "rules/local.md"],
+        }),
+      },
+    ],
+    async (relative) => {
+      reads.push(relative);
+      return relative === "rules/local.md" ? "local rules" : undefined;
+    },
+    copyPath,
+  );
+  expect(result.instructions).toEqual(["local rules"]);
+  expect(result.dropped.instructions).toBe(2);
+  expect(result.dropped.instructionGlob).toBe(1);
+  expect(result.dropped.instructionUrl).toBe(1);
+  expect(reads).toEqual(["AGENTS.md", "rules/local.md"]);
+});

@@ -132,3 +132,19 @@ describe("openCodeListenerRecheckFetch", () => {
     expect(h.sent).toEqual(["http://x/a", "http://x/b"]);
   });
 });
+
+test("a rejected recovery check remains throttled while replaced", async () => {
+  const h = harness(
+    [new Response(null, { status: 401 })],
+    ["replaced", new Error("offline"), "ours"],
+  );
+  await expect(h.wrapped.fetch("http://x/a")).rejects.toThrow(OPENCODE_LISTENER_REPLACED_MESSAGE);
+  h.advance(OPENCODE_LISTENER_RECHECK_INTERVAL_MS);
+  await expect(h.wrapped.fetch("http://x/b")).rejects.toThrow(OPENCODE_LISTENER_REPLACED_MESSAGE);
+  h.advance(1);
+  await expect(h.wrapped.fetch("http://x/c")).rejects.toThrow(OPENCODE_LISTENER_REPLACED_MESSAGE);
+  expect(h.checks()).toBe(2);
+  expect(h.sent).toEqual(["http://x/a"]);
+  h.advance(OPENCODE_LISTENER_RECHECK_INTERVAL_MS);
+  expect((await h.wrapped.fetch("http://x/d")).status).toBe(200);
+});

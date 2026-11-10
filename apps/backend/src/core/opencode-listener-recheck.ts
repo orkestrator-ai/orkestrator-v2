@@ -83,7 +83,6 @@ export function openCodeListenerRecheckFetch(
     checking ??= recheck()
       .then(
         (judgement) => {
-          checkedAt = now();
           if (judgement === undefined) return;
           const wasReplaced = replaced;
           replaced = judgement === "replaced";
@@ -94,6 +93,7 @@ export function openCodeListenerRecheckFetch(
         () => undefined,
       )
       .finally(() => {
+        checkedAt = now();
         checking = undefined;
       });
     return checking;

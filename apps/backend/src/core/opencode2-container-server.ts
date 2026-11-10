@@ -337,11 +337,14 @@ export async function startContainerOpenCode2Server(
       await warmContainerOpenCode2(client, true, warmTimeoutMs);
       await recordOpenCode2Listener(containerId);
     } catch (error) {
-      try {
-        await stopOpenCode2Listeners(containerId);
-      } finally {
-        await removeContainerBridgeCredential(containerId, "opencode2");
-      }
+      // Both cleanup steps must be attempted without masking the startup error.
+      // Do not log raw cleanup errors: they can contain command output.
+      await stopOpenCode2Listeners(containerId).catch(() => {
+        log.warn("container-server.cleanup-failed", { step: "stop-listener" });
+      });
+      await removeContainerBridgeCredential(containerId, "opencode2").catch(() => {
+        log.warn("container-server.cleanup-failed", { step: "remove-credential" });
+      });
       throw error;
     }
     return { connection, wasRunning: false };

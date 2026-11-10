@@ -262,16 +262,23 @@ mkdir -p "node_modules/$name"; printf '{"name":"%s"}' "$name" > "node_modules/$n
     ]);
   });
 
-  test("installs at most the limit per start", async () => {
-    const provider = Object.fromEntries(
-      Array.from({ length: OPENCODE_PACKAGE_INSTALL_LIMIT + 3 }, (_, index) => [
-        `p${index}`,
-        { npm: `pkg${index}` },
-      ]),
-    );
-    const filled = await fill("opencode", { config: JSON.stringify({ provider }) });
-    expect(filled.installs).toHaveLength(OPENCODE_PACKAGE_INSTALL_LIMIT);
-  });
+  test.each(["opencode", "opencode2"] as const)(
+    "%s installs at most the limit per start and progresses on restart",
+    async (kind) => {
+      const provider = Object.fromEntries(
+        Array.from({ length: OPENCODE_PACKAGE_INSTALL_LIMIT + 3 }, (_, index) => [
+          `p${index}`,
+          { npm: `pkg${index}` },
+        ]),
+      );
+      const filled = await fill(kind, { config: JSON.stringify({ provider }) });
+      expect(filled.installs).toHaveLength(OPENCODE_PACKAGE_INSTALL_LIMIT);
+      expect(filled.run().exitCode).toBe(0);
+      expect((await filled.installLog()).split("\n").filter(Boolean)).toHaveLength(
+        OPENCODE_PACKAGE_INSTALL_LIMIT + 3,
+      );
+    },
+  );
 
   test("2.x installs the user's providers where 2.2.6 imports them, and keeps them", async () => {
     // What 2.x's merged configuration looks like: `opencode.jsonc`, no plugin key.

@@ -382,3 +382,10 @@ bridge it started through the launcher with the same verifier and key
 (`bridge.listener-refused reason=different-socket`). The next `start_pi_server`
 replaced that bridge with a new token, which the backend then read back, and
 the caught token was refused there.
+
+Project instruction staging supports literal files inside the checkout only.
+Glob patterns and remote instruction URLs are deliberately omitted: they are
+never passed to the credential-bearing server or fetched during staging.
+The `opencode.project-config-filtered` diagnostic reports their counts separately
+as `instructionGlob` and `instructionUrl`, as well as in the total dropped
+`instructions` count. Use explicit checkout-relative instruction paths instead.

@@ -182,6 +182,26 @@ export function dockerFixtureShards(
     : DOCKER_FIXTURE_SHARDS;
 }
 
+/**
+ * How long each profile launcher may live. Profiles start one after another,
+ * so the first launcher waits through every later startup before its tests
+ * begin: its budget covers all of them, not just its own. Docker profiles
+ * start while the image is smoked and qualified, so those steps' budgets are
+ * a floor for the startup phase rather than an addition to it.
+ */
+export function isolatedLauncherTimeoutMs(input: {
+  startupTimeoutMs: number;
+  sequentialStartups: number;
+  docker: boolean;
+  testTimeoutMs: number;
+}): number {
+  const startupPhase = Math.max(
+    input.startupTimeoutMs * input.sequentialStartups,
+    input.docker ? IMAGE_SMOKE_TIMEOUT_MS + IMAGE_QUALIFICATION_TIMEOUT_MS : 0,
+  );
+  return startupPhase + input.testTimeoutMs;
+}
+
 function imageQualificationArguments(): string[] {
   return [
     "test",
@@ -196,7 +216,8 @@ function imageQualificationArguments(): string[] {
 
 /**
  * Runs every step to completion. The first failure aborts the others, which
- * are still awaited so none outlives this call, and is the error thrown.
+ * are still awaited so none outlives this call, and is the error thrown,
+ * unless `parent` was aborted: then its reason is.
  */
 async function allOrAbort(
   steps: Array<(signal: AbortSignal) => Promise<void>>,
@@ -220,6 +241,9 @@ async function allOrAbort(
   } finally {
     parent?.removeEventListener("abort", forward);
   }
+  // A step stopped by the owner's cancel reports its own failure (a killed
+  // smoke exits non-zero); the cancel is what happened.
+  parent?.throwIfAborted();
   if (failure) throw failure.error;
 }
 
@@ -337,12 +361,12 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
   // run cut off here reports no result for the cases it never reached.
   const testTimeout = options.testTimeoutMs ?? 1_500_000;
   const cleanupTimeout = options.cleanupTimeoutMs ?? 45_000;
-  // Docker profiles start while the image is smoked and qualified, so their
-  // launchers also outlive those steps.
-  const launcherTimeout =
-    startupTimeout * (companions.length + 1) +
-    (options.docker ? IMAGE_SMOKE_TIMEOUT_MS + IMAGE_QUALIFICATION_TIMEOUT_MS : 0) +
-    testTimeout;
+  const launcherTimeout = isolatedLauncherTimeoutMs({
+    startupTimeoutMs: startupTimeout,
+    sequentialStartups: runProfiles.length + companions.length,
+    docker: options.docker === true,
+    testTimeoutMs: testTimeout,
+  });
   const launchTask = (
     task: string,
     args: string[],

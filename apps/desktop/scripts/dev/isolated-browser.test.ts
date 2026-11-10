@@ -8,6 +8,7 @@ import {
   DOCKER_FIXTURE_SHARDS,
   IMAGE_QUALIFICATION_TESTS,
   dockerFixtureShards,
+  isolatedLauncherTimeoutMs,
   isolatedProfileArguments,
   runIsolatedBrowser,
 } from "./isolated-browser.js";
@@ -626,6 +627,83 @@ test("a fixed agent-tools port keeps every Docker spec in one profile", async ()
   const events = await f.events();
   expect(events.filter((event) => event.task === "dev:test")).toHaveLength(1);
   expect(events.filter((event) => event.task === "playwright")).toHaveLength(1);
+});
+
+test("a launcher's budget covers every startup that runs before its tests", () => {
+  const smokeAndQualification = 180_000 + 420_000;
+  // Profiles start in turn, so the first launcher waits for all of them.
+  expect(
+    isolatedLauncherTimeoutMs({
+      startupTimeoutMs: 900_000,
+      sequentialStartups: 2,
+      docker: true,
+      testTimeoutMs: 1_500_000,
+    }),
+  ).toBe(2 * 900_000 + 1_500_000);
+  expect(
+    isolatedLauncherTimeoutMs({
+      startupTimeoutMs: 300_000,
+      sequentialStartups: 4,
+      docker: true,
+      testTimeoutMs: 1_500_000,
+    }),
+  ).toBe(4 * 300_000 + 1_500_000);
+  // The smoke and qualification overlap the startups: a floor, not an addition.
+  expect(
+    isolatedLauncherTimeoutMs({
+      startupTimeoutMs: 1_000,
+      sequentialStartups: 3,
+      docker: true,
+      testTimeoutMs: 5_000,
+    }),
+  ).toBe(smokeAndQualification + 5_000);
+  // Without Docker only the main profile and its companions start.
+  expect(
+    isolatedLauncherTimeoutMs({
+      startupTimeoutMs: 120_000,
+      sequentialStartups: 3,
+      docker: false,
+      testTimeoutMs: 1_500_000,
+    }),
+  ).toBe(3 * 120_000 + 1_500_000);
+});
+
+test("cancelling during the Docker image checks stops the checks and the starting profiles", async () => {
+  const f = await fixture("startup-hang");
+  // A smoke and a qualification that would both outlast the run unless stopped.
+  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  await writeFile(path.join(f.root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  const controller = new AbortController();
+  const started = performance.now();
+  const run = runIsolatedBrowser({
+    ...f,
+    docker: true,
+    profile: "qa-docker-cancel",
+    signal: controller.signal,
+  });
+  // Cancel once the first profile is starting alongside the image checks.
+  await waitForFile(path.join(f.root, "launcher"));
+  controller.abort(new Error("owner cancelled"));
+  await expect(run).rejects.toThrow("owner cancelled");
+  expect(performance.now() - started).toBeLessThan(15_000);
+  const events = await f.events();
+  expect(events.map((event) => event.task)).not.toContain("playwright");
+  const starts = events.filter((event) => event.task === "dev:test");
+  expect(starts).toHaveLength(1);
+  for (const start of starts) expect(alive(start.pid)).toBe(false);
+  expect(cleanupByProfile(events)).toEqual({ "qa-docker-cancel": ["dev:stop", "dev:reset"] });
+});
+
+test("a change to this runner selects the Docker fixture validation", async () => {
+  const config = JSON.parse(
+    await readFile(path.join(repositoryRoot, ".orkestrator-test-scheduler.json"), "utf8"),
+  ) as { commandProfiles: Record<string, { onDemand?: { when?: string[] } }> };
+  const when = config.commandProfiles["mise run test:agent:docker:isolated"]?.onDemand?.when ?? [];
+  expect(
+    when.some((pattern) =>
+      new Bun.Glob(pattern).match("apps/desktop/scripts/dev/isolated-browser.ts"),
+    ),
+  ).toBe(true);
 });
 
 test("Docker qualification refuses companion profiles", async () => {

@@ -23,7 +23,8 @@
           "apps/backend/src/core/egress-gateway*",
           "e2e/agent-testing/**",
           "apps/desktop/scripts/dev-test*",
-          "apps/desktop/scripts/test-agent-browser-isolated.ts"
+          "apps/desktop/scripts/test-agent-browser-isolated.ts",
+          "apps/desktop/scripts/dev/isolated-browser.ts"
         ]
       }
     },

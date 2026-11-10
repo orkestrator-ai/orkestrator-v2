@@ -170,7 +170,10 @@ describe("grep and glob", () => {
     }
   });
 
-  test.skipIf(process.platform === "win32")(
+  // macOS's APFS refuses file names that are not valid UTF-8 (`symlink` fails
+  // with EILSEQ), so the raw-byte links this case needs cannot exist there.
+  // Linux, where they can, runs it (CI).
+  test.skipIf(process.platform === "win32" || process.platform === "darwin")(
     "raw-byte links never expose protected search content or listings",
     async () => {
       const rawPath = (prefix: string, suffix = "") =>

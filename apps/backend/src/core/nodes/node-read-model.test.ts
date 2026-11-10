@@ -4,7 +4,10 @@ import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
-import { NodeReadModel } from "./node-read-model.js";
+import { NodeReadModel, NODE_SUMMARY_EVENT_PREFIXES } from "./node-read-model.js";
+import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
+import { eventMatchesSubscription } from "../../gateway-support-extra.js";
+import { NODE_OUTBOX_READY_EVENT } from "./node-mail.js";
 
 // Stop every node a test left running, so a network's summary jobs do not
 // outlive it; see `stopTestNodeNetworks`.
@@ -57,6 +60,20 @@ function harness() {
     },
   };
 }
+
+test("the node stream carries every leaf announcement the command node acts on", () => {
+  // The leaf's gateway filters its stream by these prefixes
+  // (`eventMatchesSubscription`); the outbox collectors read the same stream
+  // (`onNodeEvent`). The ticket-sync announcement was once filtered out, so a
+  // leaf's change waited for the 60 s reconcile (to-do 3800 task 1).
+  const subscribed = NODE_SUMMARY_EVENT_PREFIXES.join(",").split(",");
+  for (const event of [NODE_OUTBOX_READY_EVENT, TICKET_SYNC_OUTBOX_READY_EVENT]) {
+    expect({ event, delivered: eventMatchesSubscription(event, subscribed) }).toEqual({
+      event,
+      delivered: true,
+    });
+  }
+});
 
 test("self-summary invalidations survive ten minutes idle and reconcile after sleep", async () => {
   const h = harness();
@@ -229,6 +246,47 @@ test("config-only changes invalidate the cached self default branch", async () =
       { includeDefaultBranch: true, summaryIcons: true },
       { includeDefaultBranch: true, summaryIcons: true },
     ]);
+  } finally {
+    model.stop();
+  }
+});
+
+test("a node's project list read is announced when it is first read and when it changes", async () => {
+  // Ticket sync pairs boards by this list, and syncs on the announcement
+  // rather than waiting for its reconcile (to-do 3800 task 1).
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let projects = [{ id: "p1", name: "One", gitUrl: "https://github.com/acme/one.git" }];
+  leaf.commands.set("get_projects", () => projects);
+  leaf.commands.set("get_environments", () => []);
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 60_000,
+  });
+  const announced: string[] = [];
+  model.onProjectsChanged((nodeId) => announced.push(nodeId));
+  try {
+    await model.start();
+    await settle(40);
+    expect(announced).toHaveLength(1);
+    const nodeId = announced[0]!;
+    // A re-read that finds the same list says nothing.
+    leaf.emit("resource-changed", { resource: "project", id: "p1", revision: 1 });
+    await settle(40);
+    expect(announced).toEqual([nodeId]);
+    // A second copy appears there.
+    projects = [...projects, { id: "p2", name: "Two", gitUrl: "https://github.com/acme/two.git" }];
+    leaf.emit("resource-changed", { resource: "project", id: "p2", revision: 2 });
+    await settle(40);
+    expect(announced).toEqual([nodeId, nodeId]);
   } finally {
     model.stop();
   }

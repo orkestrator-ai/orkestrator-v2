@@ -5699,6 +5699,15 @@
       "argsDigest": "sha256:06610c9e417111b3d66f0ad12bdc75acfeb126711cc207c03cc9768edd5e9770",
       "resultDigest": "sha256:eef3198599fb5e29764d83044fa54b50098929ddc9865e69a2fd6f8dfea0cb63"
     },
+    "note_coordinator_node_unavailable": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f52a78094e93a4b0db02143a5b888c7e35be3068ea12b5eeaf90e0af012d1e6e",
+      "resultDigest": "sha256:f800bd7461dd77ac49bf74b0c680e39bd2bce575d79e03c00bc8c2f361e3e241"
+    },
     "open_agent_sign_in_terminal": {
       "domain": "accounts",
       "since": 1,

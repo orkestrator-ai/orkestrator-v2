@@ -261,14 +261,14 @@ describe("Pi transcript details", () => {
     });
   });
 
-  test("detail and page reads are user activity, like the transcript read", async () => {
+  test("detail and page reads, like the transcript read, never keep the session attached", async () => {
+    // Todo 7540: an open tab's reads must not hold off the idle detach.
     const state = sessionWith([toolMessage("tool", bigOutput)]);
     state.lastAccessed = 0;
     await read(detail(state.id, "not-a-locator"));
-    expect(state.lastAccessed).toBeGreaterThan(0);
-    state.lastAccessed = 0;
+    expect(state.lastAccessed).toBe(0);
     await read(page(state.id, { cursor: "garbage" }));
-    expect(state.lastAccessed).toBeGreaterThan(0);
+    expect(state.lastAccessed).toBe(0);
   });
 });
 

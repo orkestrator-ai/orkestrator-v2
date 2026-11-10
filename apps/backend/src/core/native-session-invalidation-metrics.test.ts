@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
-import { NativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
+import {
+  DISCOVERY_RENEWAL_PATH_LIMIT,
+  NativeSessionInvalidationMetrics,
+} from "./native-session-invalidation-metrics.js";
 import { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
@@ -31,7 +34,48 @@ describe("NativeSessionInvalidationMetrics", () => {
         environment: { "model-catalog-refresh": 1 },
       },
       droppedLabels: 0,
+      discoveryRenewals: {},
     });
+  });
+
+  test("names the discovery section and changed paths of each announcement (todo 7530)", () => {
+    const metrics = new NativeSessionInvalidationMetrics();
+    metrics.recordDiscoveryRenewal("runtime", "codex", ["summary.notices[].occurrences[]"]);
+    metrics.recordDiscoveryRenewal("runtime", "codex", [
+      "summary.notices[].occurrences[]",
+      "summary.state",
+    ]);
+    metrics.recordDiscoveryRenewal("mcp", "pi", ["initial"]);
+    expect(metrics.snapshot().discoveryRenewals).toEqual({
+      codex: {
+        runtime: {
+          count: 2,
+          changed: { "summary.notices[].occurrences[]": 2, "summary.state": 1 },
+        },
+      },
+      pi: { mcp: { count: 1, changed: { initial: 1 } } },
+    });
+    metrics.reset();
+    expect(metrics.snapshot().discoveryRenewals).toEqual({});
+  });
+
+  test("discovery labels stay inside their vocabulary and bounds", () => {
+    const metrics = new NativeSessionInvalidationMetrics();
+    metrics.recordDiscoveryRenewal("secrets" as never, "codex", ["value"]);
+    metrics.recordDiscoveryRenewal("mcp", "env-1:private-session-key", ["value"]);
+    // A path that is not a structural name is dropped, not kept.
+    metrics.recordDiscoveryRenewal("mcp", "codex", ["value", "a prompt with spaces"]);
+    for (let index = 0; index < DISCOVERY_RENEWAL_PATH_LIMIT + 5; index += 1) {
+      metrics.recordDiscoveryRenewal("commands", "codex", [`value[].k${index}`]);
+    }
+    const snapshot = metrics.snapshot();
+    expect(snapshot.droppedLabels).toBe(3);
+    expect(snapshot.discoveryRenewals?.codex?.mcp).toEqual({ count: 1, changed: { value: 1 } });
+    const commands = snapshot.discoveryRenewals?.codex?.commands;
+    expect(Object.keys(commands?.changed ?? {})).toHaveLength(DISCOVERY_RENEWAL_PATH_LIMIT + 1);
+    expect(commands?.changed.other).toBe(5);
+    expect(JSON.stringify(snapshot)).not.toContain("private-session-key");
+    expect(JSON.stringify(snapshot)).not.toContain("prompt");
   });
 
   test("never keeps a label outside the vocabulary", () => {

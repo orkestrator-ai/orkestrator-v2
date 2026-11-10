@@ -133,6 +133,41 @@ export function invalidationCauseDelta(
   return { ...delta, total };
 }
 
+/**
+ * The backend's per-section discovery announcement counters
+ * (`sessionInvalidations.discoveryRenewals`, todo 7530): per scope, per
+ * section, a count and the content-free value paths that changed.
+ */
+export type DiscoveryRenewalCounts = Record<
+  string,
+  Record<string, { count?: number; changed?: Record<string, number> } | undefined> | undefined
+>;
+
+/**
+ * Which discovery sections of `scope` announced during a window, and which
+ * of their value paths changed: `{ runtime: { count: 2, changed: {...} } }`.
+ * Sections that did not move are omitted.
+ */
+export function discoveryRenewalDelta(
+  before: DiscoveryRenewalCounts | undefined,
+  after: DiscoveryRenewalCounts | undefined,
+  scope: string,
+): Record<string, { count: number; changed: Record<string, number> }> {
+  const delta: Record<string, { count: number; changed: Record<string, number> }> = {};
+  for (const [section, end] of Object.entries(after?.[scope] ?? {})) {
+    const start = before?.[scope]?.[section];
+    const count = (end?.count ?? 0) - (start?.count ?? 0);
+    if (count <= 0) continue;
+    const changed: Record<string, number> = {};
+    for (const [path, total] of Object.entries(end?.changed ?? {})) {
+      const moved = total - (start?.changed?.[path] ?? 0);
+      if (moved > 0) changed[path] = moved;
+    }
+    delta[section] = { count, changed };
+  }
+  return delta;
+}
+
 export type SidebarActivity = "working" | "waiting" | "idle" | "stopped" | "unknown";
 
 /**

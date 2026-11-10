@@ -2021,7 +2021,14 @@ function MultiReviewOverviewTab({
               <p
                 className={`truncate text-xs ${headerStalled ? "text-amber-500" : "text-muted-foreground"}`}
               >
-                <span>
+                {/* The phase as data, whatever the copy says: the busy live
+                    profile (scripts/recurring-live-ab-busy-clients.ts) times
+                    workflow progress by what this header shows. */}
+                <span
+                  data-testid="multi-review-phase"
+                  data-phase={workflow.phase}
+                  data-workflow-id={workflow.id}
+                >
                   {reviewSessionStalled
                     ? "No activity from the review preparation model"
                     : addressFindingsSessionStalled

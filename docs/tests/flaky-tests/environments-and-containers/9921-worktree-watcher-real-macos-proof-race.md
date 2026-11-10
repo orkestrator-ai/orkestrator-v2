@@ -1,6 +1,6 @@
 # `a write under an ignored node_modules goes unreported` reports the write when Git's proof is late on macOS
 
-- **ID:** 9919
+- **ID:** 9921
 - **Status:** resolved
 - **Date observed:** 2026-11-10
 - **Test:** `worktree watcher on this platform's real watch > a write under an ignored node_modules goes unreported while a source write is noticed`

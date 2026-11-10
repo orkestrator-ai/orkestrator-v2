@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as filesystem from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ import {
   MAX_DISPATCHED_REQUEST_IDS,
   readSessionPreferences,
   sessionPreferencesUnavailable,
+  setBeforeOwnedFilePublishForTesting,
   setPreferenceLockTimeoutForTesting,
   updateSessionPreferences,
 } from "./session-preferences.js";
@@ -39,6 +41,7 @@ describe("session preferences", () => {
   afterEach(async () => {
     setClaudeHomeForTesting(null);
     setPreferenceLockTimeoutForTesting(null);
+    setBeforeOwnedFilePublishForTesting(null);
     resetProcessIdentityCacheForTesting();
     await stopLiveOwners();
     await rm(testHome, { recursive: true, force: true });
@@ -430,6 +433,111 @@ describe("session preferences", () => {
       await expectTakenOver();
     },
   );
+
+  test("a writer killed while taking the lock leaves nothing that blocks the next writer", async () => {
+    // The bridge can die (SIGKILL, OOM) between creating its lock and naming
+    // itself in it. An ownerless lock is recoverable only once stale (30 s), so
+    // every prompt claim meanwhile waited out the lock timeout and answered
+    // 503 (flakes 1305 and 1308). The child kills itself at that point.
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    const here = import.meta.dir;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+          const { setClaudeHomeForTesting } = await import(${JSON.stringify(join(here, "claude-home.ts"))});
+          const preferences = await import(${JSON.stringify(join(here, "session-preferences.ts"))});
+          setClaudeHomeForTesting(${JSON.stringify(testHome)});
+          preferences.setBeforeOwnedFilePublishForTesting(() => process.kill(process.pid, "SIGKILL"));
+          await preferences.updateSessionPreferences(${JSON.stringify(SESSION_ID)}, { planMode: false });
+        `,
+      ],
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    expect(await child.exited).not.toBe(0);
+    expect(child.signalCode).toBe("SIGKILL");
+
+    setPreferenceLockTimeoutForTesting(1_000);
+    await updateSessionPreferences(SESSION_ID, { planMode: true });
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({ planMode: true });
+    expect(
+      (await readdir(claudeSessionPreferencesDir())).some(
+        (name) => name.endsWith(".lock") || name.includes(".recover-") || name.endsWith(".owner"),
+      ),
+    ).toBe(false);
+    // A fresh Bun process that loads the preference modules: real start-up
+    // work with nothing to await but its exit, so it gets more than Bun's 5 s.
+  }, 30_000);
+
+  test.each(["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"])(
+    "falls back without hard links (%s) for locks and recovery markers",
+    async (code) => {
+      await seedLock({ pid: process.pid, instance: "dead-bridge" }, { stale: false });
+      const targets: string[] = [];
+      const unsupported = spyOn(filesystem, "link").mockImplementation(async (_source, target) => {
+        targets.push(String(target));
+        throw Object.assign(new Error("unsupported"), { code });
+      });
+      try {
+        await updateSessionPreferences(SESSION_ID, { planMode: true });
+        expect(await readSessionPreferences(SESSION_ID)).toEqual({ planMode: true });
+        expect(targets.some((name) => name.endsWith(".lock"))).toBe(true);
+        expect(targets.some((name) => name.includes(".recover-"))).toBe(true);
+        expect(await readdir(claudeSessionPreferencesDir())).toEqual([`${SESSION_ID}.json`]);
+      } finally {
+        unsupported.mockRestore();
+      }
+    },
+  );
+
+  test("publishes recovery markers with owner metadata already in the inode", async () => {
+    await seedLock({ pid: process.pid, instance: "dead-bridge" }, { stale: false });
+    const linked = filesystem.link;
+    const targets: string[] = [];
+    const publication = spyOn(filesystem, "link").mockImplementation(async (source, target) => {
+      const owner = JSON.parse(await readFile(source, "utf8"));
+      expect(owner.pid).toBe(process.pid);
+      expect(owner.instance).toBe(BRIDGE_INSTANCE_ID);
+      expect(owner.token).toBeString();
+      await linked(source, target);
+      expect(await readFile(target, "utf8")).toBe(await readFile(source, "utf8"));
+      targets.push(String(target));
+    });
+    try {
+      await updateSessionPreferences(SESSION_ID, { planMode: true });
+      expect(targets.some((name) => name.includes(".recover-"))).toBe(true);
+      expect(await readdir(claudeSessionPreferencesDir())).toEqual([`${SESSION_ID}.json`]);
+    } finally {
+      publication.mockRestore();
+    }
+  });
+
+  test("reclaims stale incomplete staging files but retains fresh and live owners", async () => {
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    const staging = () => `${preferencePath()}.lock.${crypto.randomUUID()}.owner`;
+    const stale = staging();
+    const fresh = staging();
+    const live = staging();
+    await writeFile(stale, "");
+    await writeFile(fresh, "");
+    const owner = spawnLiveOwner();
+    await writeFile(
+      live,
+      JSON.stringify({
+        token: "live",
+        pid: owner.pid,
+        instance: "live-bridge",
+        ...recordedIdentity(owner),
+      }),
+    );
+    const aged = new Date(Date.now() - 60_000);
+    await Promise.all([utimes(stale, aged, aged), utimes(live, aged, aged)]);
+    await updateSessionPreferences(SESSION_ID, { planMode: true });
+    await expect(stat(stale)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(fresh)).isFile()).toBe(true);
+    expect((await stat(live)).isFile()).toBe(true);
+  });
 
   test("refuses with a typed timeout when a live owner keeps the lock", async () => {
     const owner = spawnLiveOwner();

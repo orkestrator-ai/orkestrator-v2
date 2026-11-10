@@ -109,7 +109,7 @@ The callbacks remain, as expected, and cost the backend's thread under a millise
 
 So the stall was the saturated host's: 20 watches start in 5–10 ms, against 19,836 ms on 2026-11-04. But every start or close rebuilds the process's one FSEvents stream, and the events of every watch in that process during the rebuild are lost, not delayed: about 30 ms of them per rebuild, whatever the count. The same probe through `watchDirectory` lost 65–73 of 175–178 writes when one or four other watches started and closed, and none without. That is also why no event names a first write straight after `qualified` through the helper: `established` resolves when the helper's `fs.watch` returns, while the stream is still being rebuilt for the watcher's last metadata watch. A lone watch delivered a write made 2–28 ms after it started. The watcher's own change is not lost, because each watch sends a hint with unknown paths when it is established and the scan it starts runs after the settle; the other watches in the helper get no such hint.
 
-The real-Git tests on this host now deliver a single write: in `worktree-watcher-real.test.ts` every one of 19 detections took one write, and in `worktree-snapshots-git.test.ts` the first native event took 103 ms and 12 detections through the real service took 0.7–2.7 s, which is the 2 s scan gap (the test repeats a change every second while it waits). On the saturated host the same detections needed up to 581 repeated writes. One test raced Git's proof on macOS and is fixed (flake [9919](../../tests/flaky-tests/environments-and-containers/9919-worktree-watcher-real-macos-proof-race.md)).
+The real-Git tests on this host now deliver a single write: in `worktree-watcher-real.test.ts` every one of 19 detections took one write, and in `worktree-snapshots-git.test.ts` the first native event took 103 ms and 12 detections through the real service took 0.7–2.7 s, which is the 2 s scan gap (the test repeats a change every second while it waits). On the saturated host the same detections needed up to 581 repeated writes. One test raced Git's proof on macOS and is fixed (flake [9921](../../tests/flaky-tests/environments-and-containers/9921-worktree-watcher-real-macos-proof-race.md)).
 
 **Decisions.**
 
@@ -300,7 +300,7 @@ A worktree with more than 256 ignored `node_modules` or a plan of over 1,024 wat
 
 - [git-scan-caches.md](../../architecture/git-scan-caches.md)
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 7
-- Flakes [9892](../../tests/flaky-tests/environments-and-containers/9892-worktree-git-aggregate-timeouts.md), [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md), [9919](../../tests/flaky-tests/environments-and-containers/9919-worktree-watcher-real-macos-proof-race.md)
+- Flakes [9892](../../tests/flaky-tests/environments-and-containers/9892-worktree-git-aggregate-timeouts.md), [5061](../../tests/flaky-tests/environments-and-containers/5061-real-git-owner-saturated-fseventsd.md), [9921](../../tests/flaky-tests/environments-and-containers/9921-worktree-watcher-real-macos-proof-race.md)
 - [7551 macOS watch churn loses events](7551-macos-watch-churn-loses-events.md), found by task 3
 
 ## Replaces

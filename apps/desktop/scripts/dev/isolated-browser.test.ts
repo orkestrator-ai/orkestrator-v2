@@ -22,27 +22,33 @@ async function fixture(mode = "success") {
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.ORK_ISOLATED_TEST_ROOT;
-const mode = process.env.ORK_ISOLATED_TEST_MODE;
-const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
+let mode = process.env.ORK_ISOLATED_TEST_MODE;
 const args = process.argv.slice(2);
+// The profile a task names; Playwright has none and runs in the main one.
+const named = args.indexOf("--profile");
+const profile = named >= 0 ? args[named + 1] : process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
+if (process.env.ORK_ISOLATED_TEST_FAIL_PROFILE && profile !== process.env.ORK_ISOLATED_TEST_FAIL_PROFILE) mode = "success";
+const readyFile = (name) => path.join(root, "ready-" + name);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
 fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, tabRequests: process.env.ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
-  if (mode !== "startup-hang") fs.writeFileSync(path.join(root, "ready"), profile);
-  process.on("SIGTERM", () => { fs.rmSync(path.join(root, "ready"), { force: true }); process.exit(0); });
+  if (mode !== "startup-hang") fs.writeFileSync(readyFile(profile), profile);
+  process.on("SIGTERM", () => { fs.rmSync(readyFile(profile), { force: true }); process.exit(0); });
   setInterval(() => {
     if (mode === "launcher-dies" && fs.existsSync(path.join(root, "tests-started"))) process.exit(8);
   }, 20);
 } else if (task === "dev:status") {
-  const ready = fs.existsSync(path.join(root, "ready"));
+  const ready = fs.existsSync(readyFile(profile));
   console.log(JSON.stringify({ profile, status: ready ? "ready" : "starting", live: { launcher: ready, vite: ready, electron: ready, backend: ready } }));
 } else if (browser) {
-  if (!fs.existsSync(path.join(root, "ready"))) process.exit(42);
+  if (!fs.existsSync(readyFile(profile))) process.exit(42);
+  for (const companion of (process.env.ORK_ISOLATED_TEST_COMPANIONS ?? "").split(",").filter(Boolean))
+    if (!fs.existsSync(readyFile(companion))) process.exit(44);
   fs.writeFileSync(path.join(root, "tests-started"), String(process.pid));
-  if (mode === "test-hang" || mode === "launcher-dies") setInterval(() => {}, 1000);
+  if (mode === "test-hang" || mode === "launcher-dies" || process.env.ORK_ISOLATED_TEST_FAIL_PROFILE) setInterval(() => {}, 1000);
   else process.exit(mode === "test-fail" ? 7 : 0);
 } else if (task === "dev:stop") {
   fs.writeFileSync(path.join(root, "stopped"), "yes");
@@ -265,6 +271,83 @@ test("another suite runs its own config and opt-in in a profile the caller names
   expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
 });
 
+test("companion profiles start after the main one, stay up for the suite, and are reset with it", async () => {
+  const f = await fixture();
+  f.env.ORK_ISOLATED_TEST_COMPANIONS = "qa-node-leaf-test";
+  expect(
+    await runIsolatedBrowser({
+      ...f,
+      profile: "qa-node-desk-test",
+      companionProfiles: ["qa-node-leaf-test"],
+      profileArgs: ["--no-agent-credentials", "--agent-platforms", "pi"],
+      suite: {
+        label: "two-profile suite",
+        config: "e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts",
+        env: { ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE: "qa-node-leaf-test" },
+      },
+    }),
+  ).toBe(0);
+  const events = await f.events();
+  const starts = events.filter((event) => event.task === "dev:test");
+  expect(starts.map((event) => event.profile)).toEqual(["qa-node-desk-test", "qa-node-leaf-test"]);
+  // Both get the same flags.
+  expect(new Set(starts.map((event) => JSON.stringify(event.args.slice(4))))).toEqual(
+    new Set([
+      JSON.stringify([
+        "--fixture",
+        "--headless",
+        "--no-agent-credentials",
+        "--agent-platforms",
+        "pi",
+      ]),
+    ]),
+  );
+  expect(events.find((event) => event.task === "playwright")!.profile).toBe("qa-node-desk-test");
+  expect(
+    events
+      .filter((event) => event.task === "dev:stop" || event.task === "dev:reset")
+      .map((event) => `${event.task} ${event.profile}`),
+  ).toEqual([
+    "dev:stop qa-node-desk-test",
+    "dev:reset qa-node-desk-test",
+    "dev:stop qa-node-leaf-test",
+    "dev:reset qa-node-leaf-test",
+  ]);
+  for (const start of starts) expect(alive(start.pid)).toBe(false);
+});
+
+test("a profile that fails to start stops the run before its companions and is still reset", async () => {
+  const f = await fixture("startup-hang");
+  await expect(
+    runIsolatedBrowser({
+      ...f,
+      profile: "qa-node-desk-test",
+      companionProfiles: ["qa-node-leaf-test"],
+      startupTimeoutMs: 400,
+    }),
+  ).rejects.toThrow("startup timed out");
+  const events = await f.events();
+  expect(events.some((event) => event.task === "playwright")).toBe(false);
+  // The main profile never got ready, so the companion was never started
+  // and is not touched; the main one is cleaned as before.
+  expect(
+    events
+      .filter((event) => ["dev:test", "dev:stop", "dev:reset"].includes(event.task))
+      .map((event) => `${event.task} ${event.profile}`),
+  ).toEqual([
+    "dev:test qa-node-desk-test",
+    "dev:stop qa-node-desk-test",
+    "dev:reset qa-node-desk-test",
+  ]);
+});
+
+test("a companion profile must not repeat the main one", async () => {
+  const f = await fixture();
+  await expect(
+    runIsolatedBrowser({ ...f, profile: "qa-same", companionProfiles: ["qa-same"] }),
+  ).rejects.toThrow("Companion profiles must be distinct");
+});
+
 test("full task runs the whole configured suite and preserves Playwright failure", async () => {
   const f = await fixture("test-fail");
   expect(await runIsolatedBrowser(f)).toBe(7);
@@ -441,3 +524,36 @@ test("a failed image qualification stops before the fixture and still cleans up"
   expect(tasks).not.toContain("playwright");
   expect(tasks.slice(-2)).toEqual(["dev:stop", "dev:reset"]);
 });
+
+for (const mode of ["startup-hang", "launcher-dies"]) {
+  test(`companion ${mode} stops the suite and resets both started profiles`, async () => {
+    const f = await fixture(mode);
+    f.env.ORK_ISOLATED_TEST_FAIL_PROFILE = "qa-companion-failure";
+    await expect(
+      runIsolatedBrowser({
+        ...f,
+        profile: "qa-main-ok",
+        companionProfiles: ["qa-companion-failure"],
+        startupTimeoutMs: 1500,
+      }),
+    ).rejects.toThrow(
+      mode === "startup-hang" ? "startup timed out" : "exited during browser tests",
+    );
+    const events = await f.events();
+    const browser = events.find((event) => event.task === "playwright");
+    if (mode === "startup-hang") expect(browser).toBeUndefined();
+    else expect(alive(browser!.pid)).toBe(false);
+    for (const profile of ["qa-main-ok", "qa-companion-failure"]) {
+      expect(
+        events
+          .filter(
+            (event) => event.profile === profile && ["dev:stop", "dev:reset"].includes(event.task),
+          )
+          .map((event) => event.task),
+      ).toEqual(["dev:stop", "dev:reset"]);
+      expect(
+        alive(events.find((event) => event.task === "dev:test" && event.profile === profile)!.pid),
+      ).toBe(false);
+    }
+  });
+}

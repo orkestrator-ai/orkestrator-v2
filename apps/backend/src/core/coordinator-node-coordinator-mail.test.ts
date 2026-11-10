@@ -4,7 +4,7 @@
  * command node's coordinator commands route `deliver_node_mail` to the leaf's
  * command handlers, and its mail collector drains the leaf's outbox.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -221,6 +221,36 @@ async function link(
       attached = false;
     },
   };
+}
+
+/**
+ * Each coordinator answers whatever woke it with a new question, forever,
+ * until the command node's budget holds the leaf coordinator's mail. Returns
+ * how many answers woke the command node's coordinator.
+ */
+async function loopUntilHeld(world: Awaited<ReturnType<typeof link>>): Promise<number> {
+  let leafWakes = world.leaf.wakes(world.leafMain);
+  let question = (await world.ask("Q0")).messageId as string;
+  // A storage event can deliver the question before the send's caller resumes.
+  // Drive that ordering explicitly rather than relying on scheduler timing.
+  await world.leaf.deliver();
+  let rounds = 0;
+  for (; rounds < 12; rounds += 1) {
+    await world.leaf.deliver();
+    if (world.leaf.wakes(world.leafMain) === leafWakes) break;
+    // Compare with the count before sending, since event-driven delivery can
+    // already have happened by the time ask() resolves.
+    leafWakes = world.leaf.wakes(world.leafMain);
+    await world.tell(`A${rounds}`, question);
+    await world.leaf.finishTurn(world.leafMain, { deliver: false });
+    const answers = world.fromLeaf().length;
+    expect(await world.collect()).toBe(true);
+    await world.command.deliver();
+    if (world.fromLeaf().length === answers) break;
+    await world.command.finishTurn(world.commandMain, { deliver: false });
+    question = (await world.ask(`Q${rounds + 1}`)).messageId as string;
+  }
+  return rounds;
 }
 
 describe("command node coordinator ↔ leaf coordinator", () => {
@@ -654,28 +684,7 @@ describe("command node coordinator ↔ leaf coordinator", () => {
 
   test("budgets stop two coordinators from waking each other endlessly", async () => {
     const world = await link({ budget: 3 });
-    // Each coordinator answers whatever woke it with a new question, forever.
-    let leafWakes = world.leaf.wakes(world.leafMain);
-    let question = (await world.ask("Q0")).messageId as string;
-    // A storage event can deliver the question before the send's caller resumes.
-    // Drive that ordering explicitly rather than relying on scheduler timing.
-    await world.leaf.deliver();
-    let rounds = 0;
-    for (; rounds < 12; rounds += 1) {
-      await world.leaf.deliver();
-      if (world.leaf.wakes(world.leafMain) === leafWakes) break;
-      // Compare with the count before sending, since event-driven delivery can
-      // already have happened by the time ask() resolves.
-      leafWakes = world.leaf.wakes(world.leafMain);
-      await world.tell(`A${rounds}`, question);
-      await world.leaf.finishTurn(world.leafMain, { deliver: false });
-      const answers = world.fromLeaf().length;
-      expect(await world.collect()).toBe(true);
-      await world.command.deliver();
-      if (world.fromLeaf().length === answers) break;
-      await world.command.finishTurn(world.commandMain, { deliver: false });
-      question = (await world.ask(`Q${rounds + 1}`)).messageId as string;
-    }
+    const rounds = await loopUntilHeld(world);
     const notices = await world.command.storage.getAgentMailMailbox(
       world.commandMain.environmentId,
       world.commandMain.tabId,
@@ -710,5 +719,107 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     });
     // Each new question is a new request to the leaf, as to a worker.
     expect(world.leaf.wakes(world.leafMain)).toBe(4);
+  });
+
+  test("a held answer stays held when the user replaces the command node's main", async () => {
+    // Found by the two-profile run (to-do 2900): closing the main and opening
+    // a new one released the budget-held answer, which woke the new main with
+    // no prompt or Resume from the user.
+    const world = await link({ budget: 3 });
+    expect(await loopUntilHeld(world)).toBe(3);
+    await world.command.closeMain();
+    const snapshot = await world.command.coordinator.createConversation(world.command.projectId);
+    const opened = snapshot.workspace.conversations.find(
+      (item) => item.role === "main" && !item.closedAt,
+    )!;
+    await world.command.coordinator.assignConversationAgent(
+      world.command.projectId,
+      opened.id,
+      "codex",
+    );
+    await world.command.storage.synchronizeAgentMailboxes();
+    const next = await world.command.main();
+    expect(next.conversationId).not.toBe(world.commandMain.conversationId);
+    await world.command.deliver();
+
+    // Moved across with the closed main's inbox, still held by the budget.
+    expect(world.command.wakes(next)).toBe(0);
+    const held = (await world.command.undelivered(next)).filter(
+      (message) => message.from.kind === "node",
+    );
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({
+      placement: "inject-held",
+      placementReason: "loop-budget-exhausted",
+    });
+
+    // The user's Resume releases it, as on the main it was held for.
+    await world.command.storage.retryAgentMailInject(next.environmentId, next.tabId, held[0]!.id);
+    await world.command.deliver();
+    expect(world.command.wakes(next)).toBe(1);
+    expect(await world.command.undelivered(next)).toEqual([]);
+  });
+  test("hourly history survives main replacement until the hour expires", async () => {
+    const world = await link({ budget: 10 });
+    const config = await world.command.storage.loadConfig();
+    await world.command.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 2 },
+    });
+    for (let i = 0; i < 3; i++) {
+      await world.tell(`answer ${i}`);
+      await world.collect();
+      await world.command.deliver();
+      await world.command.finishTurn(world.commandMain, { deliver: false });
+    }
+    expect(
+      (await world.command.undelivered(world.commandMain)).filter((m) => m.from.kind === "node"),
+    ).toMatchObject([{ placementReason: "hourly-limit" }]);
+    await world.command.closeMain();
+    expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(0);
+    const snapshot = await world.command.coordinator.createConversation(world.command.projectId);
+    const opened = snapshot.workspace.conversations.find(
+      (item) => item.role === "main" && !item.closedAt,
+    )!;
+    await world.command.coordinator.assignConversationAgent(
+      world.command.projectId,
+      opened.id,
+      "codex",
+    );
+    await world.command.storage.synchronizeAgentMailboxes();
+    const next = await world.command.main();
+    expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(0);
+    await world.command.deliver();
+    expect(world.command.wakes(next)).toBe(0);
+    expect(
+      (await world.command.undelivered(next)).filter((m) => m.from.kind === "node"),
+    ).toMatchObject([{ placement: "inject-held", placementReason: "hourly-limit" }]);
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_001);
+    try {
+      expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(1);
+      await world.command.deliver();
+      expect(world.command.wakes(next)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("closing a side conversation makes its budget-held mail undeliverable", async () => {
+    const world = await link({ budget: 1 });
+    const side = await world.command.addSide();
+    await world.command.send(world.commandMain, side, "first");
+    const held = await world.command.send(world.commandMain, side, "held");
+    expect(held).toMatchObject({
+      placement: "inject-held",
+      placementReason: "loop-budget-exhausted",
+    });
+    await world.command.coordinator.closeConversation(
+      world.command.projectId,
+      side.conversationId!,
+    );
+    await world.command.storage.synchronizeAgentMailboxes();
+    expect(
+      await world.command.storage.getAgentMailMessage(side.environmentId, side.tabId, held.id),
+    ).toMatchObject({ placement: "undeliverable", placementReason: "tab-closed" });
   });
 });

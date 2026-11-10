@@ -946,87 +946,82 @@ test("MultiReviewService releases the controller lease when it hands off", async
   );
 });
 
-// Both drivers from the same starting state (step 08): the keyed supervisor
-// and its rollback, the adaptive due scheduler, must settle the interactive
-// Address Findings handoff identically with no renderer attached.
-test.each(["keyed", "adaptive"] as const)(
-  "MultiReviewService settles the interactive Address Findings card in the background with final usage (%s driver)",
-  async (driver) => {
-    const provider = new Provider();
-    provider.usageTokens = 23_456;
-    await withService(
-      "env-interactive-fix-settlement",
-      provider,
-      async ({ service, storage, start, snapshot }) => {
-        await service.init();
-        const started = await start();
-        await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+// The keyed supervisor settles the interactive Address Findings handoff with no
+// renderer attached.
+test("MultiReviewService settles the interactive Address Findings card in the background with final usage", async () => {
+  const provider = new Provider();
+  provider.usageTokens = 23_456;
+  await withService(
+    "env-interactive-fix-settlement",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
 
-        provider.statusValue = "running";
-        await service.address(started.id);
-        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
-        const running = (await snapshot(started.id))!;
-        expect(running).toMatchObject({
-          phase: "interactive",
-          fixSession: { status: "running" },
-          stepRuntimes: { fix: { tokenBaseline: 0 } },
-        });
+      provider.statusValue = "running";
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      const running = (await snapshot(started.id))!;
+      expect(running).toMatchObject({
+        phase: "interactive",
+        fixSession: { status: "running" },
+        stepRuntimes: { fix: { tokenBaseline: 0 } },
+      });
 
-        provider.statusValue = "idle";
-        await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "idle");
-        await waitUntil(async () => {
-          const environment = await storage.getEnvironment("env-interactive-fix-settlement");
-          return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
-        });
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "idle");
+      await waitUntil(async () => {
+        const environment = await storage.getEnvironment("env-interactive-fix-settlement");
+        return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
+      });
 
-        const settled = (await snapshot(started.id))!;
-        expect(settled).toMatchObject({
-          phase: "interactive",
-          fixSession: {
-            status: "idle",
+      const settled = (await snapshot(started.id))!;
+      expect(settled).toMatchObject({
+        phase: "interactive",
+        fixSession: {
+          status: "idle",
+          tokenCount: 23_456,
+          completedAt: expect.any(String),
+        },
+        stepRuntimes: {
+          fix: {
+            tokenBaseline: 0,
             tokenCount: 23_456,
             completedAt: expect.any(String),
           },
-          stepRuntimes: {
-            fix: {
-              tokenBaseline: 0,
-              tokenCount: 23_456,
-              completedAt: expect.any(String),
-            },
-          },
-        });
-        // The workflow snapshot is committed before its derived environment
-        // projection. Observe both authoritative stores settling instead of
-        // racing the second write after the session itself becomes idle.
-        await waitUntil(async () => {
-          const environment = await storage.getEnvironment("env-interactive-fix-settlement");
-          return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
-        });
-        expect(await storage.getEnvironment("env-interactive-fix-settlement")).toMatchObject({
-          agentActivitySources: { "multi-review": { state: "idle" } },
-        });
-      },
-      {
-        serviceOptions: {
-          autoAdvance: true,
-          keyedScheduling: driver === "keyed",
-          pollIntervalMs: 5,
-          dispatchAddressFindingsPrompt: async (workflow) => ({
-            tabId: workflow.addressTabId!,
-            fixSession: {
-              ...workflow.fixModel,
-              sessionKey: workflow.addressSessionKey!,
-              providerSessionId: "provider-interactive-fix",
-              requestIds: [workflow.addressRequestId!],
-              status: "running",
-              startedAt: new Date().toISOString(),
-            },
-          }),
         },
+      });
+      // The workflow snapshot is committed before its derived environment
+      // projection. Observe both authoritative stores settling instead of
+      // racing the second write after the session itself becomes idle.
+      await waitUntil(async () => {
+        const environment = await storage.getEnvironment("env-interactive-fix-settlement");
+        return environment?.agentActivitySources?.["multi-review"]?.state === "idle";
+      });
+      expect(await storage.getEnvironment("env-interactive-fix-settlement")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 5,
+        dispatchAddressFindingsPrompt: async (workflow) => ({
+          tabId: workflow.addressTabId!,
+          fixSession: {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-interactive-fix",
+            requestIds: [workflow.addressRequestId!],
+            status: "running",
+            startedAt: new Date().toISOString(),
+          },
+        }),
       },
-    );
-  },
-);
+    },
+  );
+});
 
 /** Records auto-PR launches; the first `failures` launches throw, as a full tab strip does. */
 function autoPrInvoker(
@@ -1443,41 +1438,35 @@ test("MultiReviewService leaves the PR to the user after a custom Address Findin
   );
 });
 
-test.each(["keyed", "adaptive"] as const)(
-  "MultiReviewService delivers auto-PR in the background with no renderer (%s driver)",
-  async (driver) => {
-    const provider = new Provider();
-    const pr = autoPrInvoker();
-    await withService(
-      `env-auto-pr-${driver}`,
-      provider,
-      async ({ service, start, snapshot }) => {
-        await service.init();
-        const started = await start();
-        await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
-        provider.statusValue = "running";
-        await service.address(started.id);
-        await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "running");
-        provider.statusValue = "idle";
-        await waitUntil(
-          async () => (await snapshot(started.id))?.autoPrLaunch?.state === "launched",
-        );
-        expect(pr.launches).toHaveLength(1);
+test("MultiReviewService delivers auto-PR in the background with no renderer", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-auto-pr-background",
+    provider,
+    async ({ service, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      provider.statusValue = "running";
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.fixSession?.status === "running");
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.autoPrLaunch?.state === "launched");
+      expect(pr.launches).toHaveLength(1);
+    },
+    {
+      autoPr: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 5,
+        dispatchAddressFindingsPrompt: autoPrAddressFindingsDispatch,
+        interactiveAddressFindingsTurnOutcome: async () => "completed",
       },
-      {
-        autoPr: true,
-        invoke: pr.invoke,
-        serviceOptions: {
-          autoAdvance: true,
-          keyedScheduling: driver === "keyed",
-          pollIntervalMs: 5,
-          dispatchAddressFindingsPrompt: autoPrAddressFindingsDispatch,
-          interactiveAddressFindingsTurnOutcome: async () => "completed",
-        },
-      },
-    );
-  },
-);
+    },
+  );
+});
 
 test("MultiReviewService uses the pull request action default for the auto-PR agent", async () => {
   const provider = new Provider();
@@ -4605,36 +4594,71 @@ async function waitUntil(
   }
 }
 
-test.each(["keyed", "adaptive"] as const)(
-  "adaptive supervision keeps a running review scheduled until consolidation finishes (%s driver)",
-  async (driver) => {
+test("supervision keeps a running review scheduled until consolidation finishes", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-adaptive-review",
+    provider,
+    async ({ service, start, snapshot }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.reviewers[0]?.status === "running");
+      const callsWhileRunning = provider.statusCalls;
+      await waitUntil(() => provider.statusCalls > callsWhileRunning);
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      expect((await snapshot(started.id))?.consolidatedReport).toBeDefined();
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 10,
+        observationIntervalMs: 10,
+        reconcileIntervalMs: 30,
+      },
+    },
+  );
+});
+
+// The keyed supervisor is the only driver: the adaptive due scheduler that
+// ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review selected was removed by
+// todo 0048 task 13, so a retired rollback value changes nothing.
+test.each(["multi-review", "all"])(
+  "a retired rollback value (%s) still runs Multi Review on the keyed supervisor",
+  async (value) => {
+    const previous = process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK;
+    process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK = value;
     const provider = new Provider();
     provider.statusValue = "running";
-    await withService(
-      "env-adaptive-review",
-      provider,
-      async ({ service, start, snapshot }) => {
-        await service.init();
-        const started = await start();
-        await waitUntil(
-          async () => (await snapshot(started.id))?.reviewers[0]?.status === "running",
-        );
-        const callsWhileRunning = provider.statusCalls;
-        await waitUntil(() => provider.statusCalls > callsWhileRunning);
-        provider.statusValue = "idle";
-        await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
-        expect((await snapshot(started.id))?.consolidatedReport).toBeDefined();
-      },
-      {
-        serviceOptions: {
-          autoAdvance: true,
-          keyedScheduling: driver === "keyed",
-          pollIntervalMs: 10,
-          observationIntervalMs: 10,
-          reconcileIntervalMs: 30,
+    try {
+      await withService(
+        `env-retired-rollback-${value}`,
+        provider,
+        async ({ service, start, snapshot }) => {
+          await service.init();
+          expect(service.schedulingStatus()).not.toBeNull();
+          const started = await start();
+          await waitUntil(
+            async () => (await snapshot(started.id))?.reviewers[0]?.status === "running",
+          );
+          provider.statusValue = "idle";
+          await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+          expect(service.schedulingStatus()?.domain).toBe("multi-review");
         },
-      },
-    );
+        {
+          serviceOptions: {
+            autoAdvance: true,
+            pollIntervalMs: 10,
+            observationIntervalMs: 10,
+            reconcileIntervalMs: 30,
+          },
+        },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK;
+      else process.env.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK = previous;
+    }
   },
 );
 

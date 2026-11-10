@@ -111,17 +111,40 @@ export function pairMessagesInLastHour(
   secondMailboxId: string,
   now: number,
 ): number {
+  // A replacement main inherits the hourly history, even though delivered
+  // messages remain in the predecessor's mailbox. Side conversations keep
+  // their own identity. This also covers repeated main replacements.
+  const aliases = (id: string): Set<string> => {
+    const mailbox = store.mailboxes[id];
+    if (mailbox?.ownerKind !== "coordinator" || mailbox.coordinatorRole === "side")
+      return new Set([id]);
+    return new Set(
+      Object.values(store.mailboxes)
+        .filter(
+          (other) =>
+            other.ownerKind === "coordinator" &&
+            other.coordinatorRole !== "side" &&
+            other.coordinatorId === mailbox.coordinatorId,
+        )
+        .map((other) => other.mailboxId),
+    );
+  };
+  const first = aliases(firstMailboxId);
+  const second = aliases(secondMailboxId);
   const since = now - 3_600_000;
   let count = 0;
-  for (const mailboxId of [firstMailboxId, secondMailboxId]) {
+  for (const mailboxId of new Set([...first, ...second])) {
     for (const message of store.mailboxes[mailboxId]?.messages ?? []) {
+      const from = budgetSenderOf(message);
+      const to = agentMailboxId(message.toEnvironmentId, message.toTabId);
       if (
         message.autonomousSequence === undefined ||
         Date.parse(message.wakeAdmittedAt ?? message.createdAt) < since ||
         message.placement === "stored" ||
         message.placement === "bounced" ||
         isAgentMailBudgetHeld(message) ||
-        !sameMailboxPair(message, firstMailboxId, secondMailboxId)
+        !from ||
+        !((first.has(from) && second.has(to)) || (second.has(from) && first.has(to)))
       ) {
         continue;
       }

@@ -41,7 +41,7 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0820`, `0810`
 
 - **What decides that it is fine?**
   - **Sampling one real install after a week: the row's bytes, the store's share of the file and the commit's time (recommended).**
-    - Pros: replaces the report's "trivial" and "tens of KB" with numbers; also shows whether `store_rows` swamps the top tables ([6144](6144-per-store-sizes.md)).
+    - Pros: replaces the report's "trivial" and "tens of KB" with numbers; also shows whether `store_rows` swamps the top tables (6144).
     - Cons: needs the user's installation and a week.
   - **Rely on the bound.**
     - Pros: the worst case is already known to be small.

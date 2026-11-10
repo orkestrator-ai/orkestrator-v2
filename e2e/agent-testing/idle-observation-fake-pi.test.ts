@@ -14,6 +14,25 @@ const warmup =
 const bash = [{ type: "function", function: { name: "bash" } }];
 
 describe("scripted fake Pi model", () => {
+  test("adds the description OpenCode's bash schema requires, and only then", () => {
+    const messages = [{ role: "user", content: warmup }];
+    const openCodeBash = [
+      {
+        type: "function",
+        function: {
+          name: "bash",
+          parameters: { properties: { command: {}, description: {}, timeout: {} } },
+        },
+      },
+    ];
+    expect(
+      JSON.parse(piAssistantMessage({ messages, tools: openCodeBash }, 1).toolCall!.arguments),
+    ).toEqual({ command: "sleep 5; echo IDLEQA-WARM-1", description: "Run the requested command" });
+    expect(
+      JSON.parse(piAssistantMessage({ messages, tools: bash }, 1).toolCall!.arguments),
+    ).toEqual({ command: "sleep 5; echo IDLEQA-WARM-1" });
+  });
+
   test("calls Pi's bash tool for a command, then replies once its result is back", () => {
     const asked = {
       messages: [

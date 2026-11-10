@@ -196,16 +196,16 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `graph-run`, or
-  `all`. A named domain runs its old whole-store driver; `multi-review` falls
-  back to `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling
-  it back disables graph runs (launches are refused, nothing advances; stored
-  runs stay readable and can be cancelled). `native-queues` and
-  `backend-activity` are no longer revertible: their rollback drivers (the
-  2 s timer over every environment and queue, and the 2 s activity bundle
-  with its 60 s tab timer) were removed after the busy live profile and the
-  long soak (todo 0048 task 13), so naming them, or `all`, leaves them on
-  their keyed drivers.
+  list of `feature-planning`, `build-pipeline`, `graph-run`, or `all`. A named
+  domain runs its old whole-store driver. `graph-run` has no previous driver:
+  rolling it back disables graph runs (launches are refused, nothing
+  advances; stored runs stay readable and can be cancelled). `multi-review`,
+  `native-queues` and `backend-activity` are no longer revertible: their
+  rollback drivers (Multi Review's adaptive `WorkflowDueScheduler`, the 2 s
+  timer over every environment and queue, and the 2 s activity bundle with
+  its 60 s tab timer) were removed after the busy live profile and the long
+  soak (todo 0048 task 13), so naming them, or `all`, leaves them on their
+  keyed drivers.
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
@@ -236,7 +236,7 @@ the running attempt.
 | B12 | `activity-lease-expiry` | `core/index.ts`, `protocol/agent-activity.ts` | Every 15 s for a 30 s frontend activity lease. Critical. |
 | B13 | `tab-cleanup` | `core/index.ts` | 60 s plus startup; teardown and orphan reaping each guarded in flight; orphans get a one-hour grace. |
 | B14 | `build-supervisor-tick` | `build-pipeline-service-lifecycle.ts` | Keyed: one pass per pipeline with an obligation every 1.5 s, 30 s discovery. A pass looks at a session's transcript only at the 5 s persist boundary, when a turn ends or while a stall warning shows, through a conditional progress probe; the whole body is read only when the probe moved since the committed copy, and always once when a turn ends (`refreshMovedTranscript`). |
-| B16 | `multi-review-tick`, `multi-review-lease-renewal` | `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). Multi review's rollback (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`) is `WorkflowDueScheduler`: the same per-workflow due times with a 15 s reconciliation scan. The legacy 1 s whole-store tick was removed on 2026-10-25. |
+| B16 | `multi-review-tick`, `multi-review-lease-renewal` | `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). The keyed driver is the only one: the legacy 1 s whole-store tick was removed on 2026-10-25, and the rollback `WorkflowDueScheduler` (the same per-workflow due times with a 15 s reconciliation scan) on 2026-11-10 (todo 0048 task 13). |
 | B17 | `feature-planning-tick` | `feature-planning.ts` | Keyed per-record 1 s passes, 30 s discovery. A pass reads its plan as one row (`getFeaturePlan`), not the whole feature-plan store. |
 | B18 | `tmux-poll` | `tmux-poll.ts` | One `docker exec` per read, change-only writes. On `claude-state-signal` images the hooks ring the backend, which reads on each ring plus a 30 s safety read (2 reads a minute idle); a change the safety read finds unannounced returns the container to 1 s. A container where terminal Claude never ran (no state file) also costs 2 reads a minute. Older images, and containers whose doorbell has not rung, keep the 1 s poll, which dominates their idle cost; recurring diagnostics count them (`signals`). See [container-lifecycle.md](container-lifecycle.md#claude-terminal-state-signal-claude-state-signal2). |
 | B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. |

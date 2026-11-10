@@ -2,6 +2,9 @@
 
 ## Task analysis
 
+Analysed 2026-11-10 against main at c98b20e6f (task 13: the `multi-review`
+rollback driver removed, decision W6).
+
 Analysed 2026-11-10 against main at 04639b12b (tasks 2 and 13; live
 evidence from Linux that day, see
 [Workflow client visibility](#workflow-client-visibility-2026-11-10-linux)).
@@ -41,7 +44,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (depends on 5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5; the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (`feature-planning` and `build-pipeline` depend on 5; observation sharing on 0049; `multi-review` has its fresh timing but is not removed) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; task 2's two busy runs are the fresh keyed Multi Review timing the review repair asked for, every review reaching `ready`, with the tail in [7557](7557-multi-review-progress-tail.md); its removal with `WorkflowDueScheduler` is a separate change).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (depends on 5) (left: the `feature-planning` and `build-pipeline` rollback drivers and the switch itself, which wait for task 5's live GitHub run; `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, which waits for 0049) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; later that day the `multi-review` rollback driver, `WorkflowDueScheduler`, is removed too, on task 2's fresh keyed timing (every review reaching `ready`, tail in [7557](7557-multi-review-progress-tail.md)), decision W6; the other two drivers were rechecked and stay blocked, decision W7).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
 16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines and a scoped firewall rule; the 2026-11-06 run could change neither the host's firewall nor its network).
@@ -598,6 +601,42 @@ review in four ([7557](7557-multi-review-progress-tail.md)). The runs had no
 rollback arm, so they do not compare the two drivers; removing it is the
 next domain in decision B8's order, in its own change.
 
+**Outcome (2026-11-10, later).** Rechecked on `c98b20e6f`. The `multi-review`
+rollback driver is removed (decision W6):
+
+- `WorkflowDueScheduler` (`multi-review-scheduler.ts`) and its test are
+  deleted. `MultiReviewService` always starts its keyed supervisor when
+  `autoAdvance` is on; the due scheduler's own lease-renewal timer, its
+  metered pass and discovery wrappers (`runScheduled`,
+  `discoverSupervisedWorkflows`, `renewLeases`) and the 15 s reconciliation
+  default are gone. Lease renewal is only the supervisor's critical job.
+- `MultiReviewServiceOptions` no longer accepts `keyedScheduling`
+  (`Omit<KeyedWorkflowServiceOptions, "keyedScheduling">`), so a caller that
+  still asks for the old driver fails the typecheck. `reconcileIntervalMs`
+  stays as the keyed safety discovery's fallback period.
+- `REVERTIBLE_KEYED_SCHEDULING_DOMAINS` drops `multi-review`; a value naming
+  it, or `all`, leaves Multi Review keyed. The efficiency vocabulary drops
+  `scheduler.pass`, which only the due scheduler recorded.
+- Tests: the three Multi Review tests that ran under both drivers (interactive
+  Address Findings settlement, background auto-PR, a running review kept
+  scheduled to `ready`) run on the keyed driver only; a new test checks that
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review` or `all` still runs a
+  review to `ready` on the keyed supervisor; the due scheduler's lease-renewal
+  test is replaced by one that drives the keyed critical job on a manual clock
+  (one renewal per interval, none overlapping a slow one, one job after a
+  repeated `init`, none after shutdown); `workflow-supervisor.test.ts` pins the
+  smaller revertible list.
+- The recurring baseline harness keeps a rollback mode for feature planning
+  and build pipelines only, and `recurring-baseline.test.ts` checks Multi
+  Review's keyed counts on their own.
+- The catalogue comment (`RECURRING_JOB_CATALOGUE`, B16), `recurring-work.md`,
+  `testing-guide.md`, the `recurring-live-ab.ts` header and 0027's
+  current state describe the change.
+
+Not done here: the `feature-planning` and `build-pipeline` rollback drivers,
+and with them the switch and its desktop allowlist entry, still wait for
+task 5 (decision W7); observation sharing waits for 0049.
+
 ### 14. Metrics switch decision
 
 **Problem.** None left; decided on 2026-10-25.
@@ -926,8 +965,9 @@ and the decisions below were recorded.
   [recurring-work.md](../../architecture/recurring-work.md#latency-budgets).
   No reference artifact is committed; generate one before any comparison.
   The workflows block drives feature planning, build pipelines and multi
-  review (its rollback is the real `WorkflowDueScheduler`, on the
-  harness's manual clock since 2026-10-25). It reports `storageReads`
+  review on the keyed drivers, and the first two also on their rollback
+  drivers (Multi Review's rollback, `WorkflowDueScheduler`, was removed on
+  2026-11-10). It reports `storageReads`
   beside `storageStats` and `storageBytes` (what those reads fetched from
   SQLite, since 2026-10-25), and the test holds each attempt to a per-domain
   storage budget (`STORAGE_PER_ATTEMPT`). The harness now closes each
@@ -968,17 +1008,17 @@ and the decisions below were recorded.
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
     `workflow-supervisor.ts`): a comma list of `feature-planning`,
-    `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, or
-    `all`. A named domain runs its old whole-store
-    driver instead of the keyed one; `multi-review` falls back to
-    `WorkflowDueScheduler`.
+    `build-pipeline`, `graph-run`, or `all`. A named domain runs its old
+    whole-store driver instead of the keyed one (`graph-run` is turned off).
+    `multi-review`, `native-queues` and `backend-activity` are no longer
+    revertible (2026-11-10, task 13).
   - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` (read in `core/index.ts`).
   - `ORKESTRATOR_RECURRING_METRICS=0` turns the recorder off.
 - Multi review's own rollback gates (`adaptiveScheduling: false`, the legacy
   1 s tick, and `evidencePermits`) were removed on 2026-10-25 by
   [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
-  Only the `multi-review` domain of the switch above and its
-  `WorkflowDueScheduler` remain.
+  The `multi-review` domain of the switch above and its
+  `WorkflowDueScheduler` were removed on 2026-11-10 (task 13, decision W6).
 - Trial constants: `DEFAULT_PR_MONITOR_POLICY` (terminal discovery 5 min plus
   30 s jitter), `CONTAINER_FETCH_COOLDOWN_MS` (5 min) and
   `CONTAINER_FETCH_FAILURE_COOLDOWN_MAX_MS` (30 min),
@@ -988,8 +1028,8 @@ and the decisions below were recorded.
 - `HostSuspendDetector` re-times every live scheduler after a host sleep so
   overdue keys run once.
 - `stableJitterMs` lives in `multi-review-scheduling.ts` (moved 2026-10-25),
-  which the keyed driver and the `WorkflowDueScheduler` rollback share, so
-  removing `multi-review-scheduler.ts` no longer touches the keyed path.
+  which is why removing `multi-review-scheduler.ts` on 2026-11-10 did not
+  touch the keyed path.
 - Container fetch reach (found 2026-10-25): every new container records its
   creation commit before setup (`establishCreatedFromCommit`,
   `commands-local-server-lifecycle.ts`), and `resolveComparisonRef`
@@ -1800,8 +1840,8 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
 ### Code: after soak
 
-Removal started 2026-11-10: the `backend-activity` and `native-queues`
-rollback drivers are gone (task 13, decision W2). Its preparation was done
+Removal started 2026-11-10: the `backend-activity`, `native-queues` and
+`multi-review` rollback drivers are gone (task 13, decisions W2 and W6). Its preparation was done
 on 2026-10-25 (`stableJitterMs` moved, the metrics switch decided). The idle A/B on macOS shows the keyed
 drivers starting no more often than the rollback drivers, with the same
 freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
@@ -1814,16 +1854,14 @@ observation sharing stay.
 
 - ~~Remove the `backend-activity` and `native-queues` rollback drivers.~~
   Done 2026-11-10 (task 13, decision W2).
-- Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
-  domain by domain, with the desktop allowlist entry. Remove the
-  `multi-review` domain together with `WorkflowDueScheduler`
-  (`multi-review-scheduler.ts` and its test). Since 2026-10-25 nothing else in
-  Multi Review depends on it, and `stableJitterMs` has moved to
-  `multi-review-scheduling.ts` (done 2026-10-25; its test moved with it), so
-  deleting the file is now self-contained. The busy live profile has run
-  (decision B8): remove `backend-activity`, then `native-queues`, then
-  `multi-review`; `feature-planning` and `build-pipeline` wait for task 5
-  and 0049.
+- ~~Remove the `multi-review` domain together with `WorkflowDueScheduler`
+  (`multi-review-scheduler.ts` and its test).~~ Done 2026-11-10 (task 13,
+  decision W6).
+- Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the remaining
+  whole-store drivers (`feature-planning`, `build-pipeline`), then the switch
+  with its desktop allowlist entry (`graph-run`'s rollback only turns graph
+  runs off and goes with the switch). Both drivers wait for task 5 and 0049
+  (decision W7).
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
 - ~~Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
   switch.~~ Decided 2026-10-25: it stays, as a permanent diagnostic kill
@@ -2747,6 +2785,34 @@ collide with other tasks' decisions.
   in-memory test harness mirrored the same wrong flow, so its tests passed.
   Fixed in both; the live row now has two progress results per review, which
   is also what the withdrawn 2026-11-06 figures counted (18 for 9 reviews).
+- **W6 Remove the `multi-review` rollback driver now? (task 13)** Decision B8
+  ordered it after the other two, and the review repair asked for fresh keyed
+  timing first. Task 2's two busy runs on 2026-11-10 are that timing (twelve
+  reviews to `ready`, every obligation kept, tail in 7557). B8's remaining
+  con, that Address Findings and auto-PR never ran live, does not separate the
+  drivers: both ran the same locked pass (`runLocked`) with the same due-time
+  policy (`nextDelayMs`), and differed only in which timer called it, which
+  is W1's argument for the first two domains. The keyed driver's Address
+  Findings settlement and background auto-PR are covered by tests on that
+  driver. Options: keep it until a live run with findings; or remove it now.
+  Chosen: remove it. Pros: one Multi Review scheduler to maintain and test;
+  the lease is renewed by one job. Cons: no rollback remains; a regression in
+  the keyed driver needs a revert. The 7557 tail is on the keyed driver; the
+  rollback's own figure was 3.51 / 4.05 s, so keeping it would not help.
+  How: `MultiReviewServiceOptions` omits `keyedScheduling` so a stale caller
+  fails the typecheck, and the switch ignores the value as for W2. The
+  ticket's wording, "move Multi Review onto `WorkflowDueScheduler`", is read
+  as moving it off: `WorkflowDueScheduler` is the rollback driver this task
+  removes, and the keyed supervisor already ran by default.
+- **W7 Are `feature-planning` and `build-pipeline` ready too? (task 13)**
+  Rechecked 2026-11-10. Decision 1 asks for the busy profile, live GitHub and
+  the long soak. Neither domain was in the busy profile (they need Codex or a
+  ticket-driven pipeline; task 1, "Not covered"), and build pipelines own PR
+  terminal effects that only task 5's live GitHub run can qualify. Task 5 is
+  still open and cannot run on this host without GitHub credentials. Options:
+  remove them on the deterministic harness alone; or keep them. Chosen: keep
+  them, and the switch with them. Pros: decision 1 stays the bar for every
+  domain. Cons: the switch and two whole-store drivers stay in the code.
 
 ### Review repair: task 1 backend workflow timing and recovery
 

@@ -301,9 +301,10 @@ Mail held by either budget stays held when the user replaces a main
 coordinator. Closing the main tombstones its mailbox but keeps the hold, and
 the next main takes the message over still `inject-held` with the same reason
 (`moveClosedCoordinatorMail`). It is released by Resume on the new main, or by
-the drain for the hourly limit. A new main is a new pair with no routed
-history, so judging the message against its budget again would always release
-it, and would restart the loop the budget stopped (found live, to-do 2900).
+the drain for the hourly limit once the earlier admissions age out. Hourly
+accounting includes earlier main conversations of the same coordinator; side
+conversations remain separate. Replacing a main therefore cannot bypass the
+hourly window or restart the loop the budget stopped (found live, to-do 2900).
 
 When a worker's mail to its coordinator is held by either, the coordinator
 gets one workflow notice per budget (or per hour), so it can read the held

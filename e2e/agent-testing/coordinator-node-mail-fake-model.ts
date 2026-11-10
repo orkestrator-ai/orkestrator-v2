@@ -126,8 +126,11 @@ const server = Bun.serve({
       return new Response("bad request", { status: 400 });
     }
     const counts = calls[node];
-    counts.completions += 1;
     const turn = scriptedTurn(node, { messages: body.messages, tools: body.tools });
+    // Exercise dispatch acceptance preceding model observation in the live spec.
+    if (node === "desk" && turn.wake?.some((facts) => facts.answer !== undefined))
+      await Bun.sleep(1500);
+    counts.completions += 1;
     if (turn.wake && counts.wakes.length < MAX_TRACKED) counts.wakes.push(turn.wake);
     if (turn.step.kind === "tool") {
       const name = turn.step.name;

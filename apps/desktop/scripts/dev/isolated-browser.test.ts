@@ -22,11 +22,12 @@ async function fixture(mode = "success") {
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.ORK_ISOLATED_TEST_ROOT;
-const mode = process.env.ORK_ISOLATED_TEST_MODE;
+let mode = process.env.ORK_ISOLATED_TEST_MODE;
 const args = process.argv.slice(2);
 // The profile a task names; Playwright has none and runs in the main one.
 const named = args.indexOf("--profile");
 const profile = named >= 0 ? args[named + 1] : process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
+if (process.env.ORK_ISOLATED_TEST_FAIL_PROFILE && profile !== process.env.ORK_ISOLATED_TEST_FAIL_PROFILE) mode = "success";
 const readyFile = (name) => path.join(root, "ready-" + name);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
@@ -47,7 +48,7 @@ if (task === "dev:test") {
   for (const companion of (process.env.ORK_ISOLATED_TEST_COMPANIONS ?? "").split(",").filter(Boolean))
     if (!fs.existsSync(readyFile(companion))) process.exit(44);
   fs.writeFileSync(path.join(root, "tests-started"), String(process.pid));
-  if (mode === "test-hang" || mode === "launcher-dies") setInterval(() => {}, 1000);
+  if (mode === "test-hang" || mode === "launcher-dies" || process.env.ORK_ISOLATED_TEST_FAIL_PROFILE) setInterval(() => {}, 1000);
   else process.exit(mode === "test-fail" ? 7 : 0);
 } else if (task === "dev:stop") {
   fs.writeFileSync(path.join(root, "stopped"), "yes");
@@ -523,3 +524,36 @@ test("a failed image qualification stops before the fixture and still cleans up"
   expect(tasks).not.toContain("playwright");
   expect(tasks.slice(-2)).toEqual(["dev:stop", "dev:reset"]);
 });
+
+for (const mode of ["startup-hang", "launcher-dies"]) {
+  test(`companion ${mode} stops the suite and resets both started profiles`, async () => {
+    const f = await fixture(mode);
+    f.env.ORK_ISOLATED_TEST_FAIL_PROFILE = "qa-companion-failure";
+    await expect(
+      runIsolatedBrowser({
+        ...f,
+        profile: "qa-main-ok",
+        companionProfiles: ["qa-companion-failure"],
+        startupTimeoutMs: 1500,
+      }),
+    ).rejects.toThrow(
+      mode === "startup-hang" ? "startup timed out" : "exited during browser tests",
+    );
+    const events = await f.events();
+    const browser = events.find((event) => event.task === "playwright");
+    if (mode === "startup-hang") expect(browser).toBeUndefined();
+    else expect(alive(browser!.pid)).toBe(false);
+    for (const profile of ["qa-main-ok", "qa-companion-failure"]) {
+      expect(
+        events
+          .filter(
+            (event) => event.profile === profile && ["dev:stop", "dev:reset"].includes(event.task),
+          )
+          .map((event) => event.task),
+      ).toEqual(["dev:stop", "dev:reset"]);
+      expect(
+        alive(events.find((event) => event.task === "dev:test" && event.profile === profile)!.pid),
+      ).toBe(false);
+    }
+  });
+}

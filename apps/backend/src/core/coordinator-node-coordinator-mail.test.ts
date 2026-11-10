@@ -4,7 +4,7 @@
  * command node's coordinator commands route `deliver_node_mail` to the leaf's
  * command handlers, and its mail collector drains the leaf's outbox.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -758,5 +758,68 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     await world.command.deliver();
     expect(world.command.wakes(next)).toBe(1);
     expect(await world.command.undelivered(next)).toEqual([]);
+  });
+  test("hourly history survives main replacement until the hour expires", async () => {
+    const world = await link({ budget: 10 });
+    const config = await world.command.storage.loadConfig();
+    await world.command.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 2 },
+    });
+    for (let i = 0; i < 3; i++) {
+      await world.tell(`answer ${i}`);
+      await world.collect();
+      await world.command.deliver();
+      await world.command.finishTurn(world.commandMain, { deliver: false });
+    }
+    expect(
+      (await world.command.undelivered(world.commandMain)).filter((m) => m.from.kind === "node"),
+    ).toMatchObject([{ placementReason: "hourly-limit" }]);
+    await world.command.closeMain();
+    expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(0);
+    const snapshot = await world.command.coordinator.createConversation(world.command.projectId);
+    const opened = snapshot.workspace.conversations.find(
+      (item) => item.role === "main" && !item.closedAt,
+    )!;
+    await world.command.coordinator.assignConversationAgent(
+      world.command.projectId,
+      opened.id,
+      "codex",
+    );
+    await world.command.storage.synchronizeAgentMailboxes();
+    const next = await world.command.main();
+    expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(0);
+    await world.command.deliver();
+    expect(world.command.wakes(next)).toBe(0);
+    expect(
+      (await world.command.undelivered(next)).filter((m) => m.from.kind === "node"),
+    ).toMatchObject([{ placement: "inject-held", placementReason: "hourly-limit" }]);
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_001);
+    try {
+      expect(await world.command.storage.releaseHourlyHeldAgentMail()).toBe(1);
+      await world.command.deliver();
+      expect(world.command.wakes(next)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("closing a side conversation makes its budget-held mail undeliverable", async () => {
+    const world = await link({ budget: 1 });
+    const side = await world.command.addSide();
+    await world.command.send(world.commandMain, side, "first");
+    const held = await world.command.send(world.commandMain, side, "held");
+    expect(held).toMatchObject({
+      placement: "inject-held",
+      placementReason: "loop-budget-exhausted",
+    });
+    await world.command.coordinator.closeConversation(
+      world.command.projectId,
+      side.conversationId!,
+    );
+    await world.command.storage.synchronizeAgentMailboxes();
+    expect(
+      await world.command.storage.getAgentMailMessage(side.environmentId, side.tabId, held.id),
+    ).toMatchObject({ placement: "undeliverable", placementReason: "tab-closed" });
   });
 });

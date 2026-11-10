@@ -507,7 +507,24 @@ test.describe("coordinator node mail between two profiles on a fake model", () =
         () => mailbox(deskCoordinator),
         (messages) => fresh(messages).some((m) => m.injectedAt),
       );
-      fake = await calls(model.origin);
+      fake = await until(
+        "the desk model to observe the round-trip answer",
+        () => calls(model.origin),
+        (counts) => answerWakes(counts.desk).length > 0,
+      );
+      await until(
+        "the desk answer turn to finish",
+        () =>
+          deskCoordinator.invoke<{ turn: { phase: string } } | null>(
+            "get_native_agent_projection",
+            {
+              environmentId: deskCoordinator.environmentId,
+              agent: "pi",
+              logicalSessionKey: deskCoordinator.logicalSessionKey,
+            },
+          ),
+        (session) => session?.turn.phase === "idle",
+      );
       const roundTrip = {
         leafQuestion: nodeMail(leafQuestion).map(({ from, trust, placement }) => ({
           fromKind: from.kind,

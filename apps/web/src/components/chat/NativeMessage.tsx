@@ -12,6 +12,7 @@ import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
 import { OpenCodeAuthRecoveryAction } from "@/components/opencode/OpenCodeAuthRecoveryAction";
 import { openCodeCredentialFailureProvider } from "@/lib/opencode-auth";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { formatTranscriptTimestamp } from "@/lib/format-transcript-timestamp";
 import {
   type NativeMessage as NativeMessageType,
   type NativeMessagePart,
@@ -185,7 +186,7 @@ export const NativeMessage = memo(function NativeMessage({
     return (
       <MessageErrorAlert
         content={message.content}
-        timestampLabel={formatTime(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
         action={
           openCodeAuthProvider ? (
             <OpenCodeAuthRecoveryAction
@@ -202,13 +203,18 @@ export const NativeMessage = memo(function NativeMessage({
     const mail = message.peerMail ?? peerMailFromContent(message);
     // A watched pull request's status change is awareness only: one quiet line.
     if (mail.notice?.resource.kind === "watched-pull-request") {
-      return <PullRequestUpdateNotice mail={mail} timestampLabel={formatTime(message.createdAt)} />;
+      return (
+        <PullRequestUpdateNotice
+          mail={mail}
+          timestampLabel={formatTranscriptTimestamp(message.createdAt)}
+        />
+      );
     }
     return (
       <MailTile
         mail={mail}
         expansionKey={`peer-mail:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTime(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
       />
     );
   }
@@ -218,7 +224,7 @@ export const NativeMessage = memo(function NativeMessage({
       <GoalTurnTile
         turn={message.goalTurn ?? {}}
         expansionKey={`goal-turn:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTime(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
       />
     );
   }
@@ -229,7 +235,7 @@ export const NativeMessage = memo(function NativeMessage({
         status={message.goalStatus}
         text={message.content}
         expansionKey={`goal-status:${stableAgentExpansionScope}:${message.id}`}
-        timestampLabel={formatTime(message.createdAt)}
+        timestampLabel={formatTranscriptTimestamp(message.createdAt)}
       />
     );
   }
@@ -350,7 +356,7 @@ export const NativeMessage = memo(function NativeMessage({
                         <MessageShell
                           isUser={isUser}
                           authorLabel={isUser ? "You" : assistantAuthorLabel}
-                          timestampLabel={formatTime(message.createdAt)}
+                          timestampLabel={formatTranscriptTimestamp(message.createdAt)}
                           durationLabel={durationLabel}
                           showHeader={!isContinuation}
                           showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
@@ -543,18 +549,6 @@ function firstClassImageToolUseIds(parts: readonly NativeMessagePart[]): Readonl
     if (toolUseId) result.add(toolUseId);
   }
   return result;
-}
-
-function formatTime(isoString: string): string {
-  try {
-    const date = new Date(isoString);
-    return date.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
 }
 
 function formatResponseDuration(startIso: string, endIso: string): string | null {

@@ -19,6 +19,7 @@ import {
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
+import { formatTranscriptTimestamp } from "@/lib/format-transcript-timestamp";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { createPeerMailNativeMessage, ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -88,12 +89,9 @@ function makeMessage(
   };
 }
 
-/** Mirrors `formatTime` in NativeMessage.tsx, which is module-private. */
+/** The footer label NativeMessage renders for `isoString`, relative to now. */
 function expectedTimeLabel(isoString: string): string {
-  return new Date(isoString).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatTranscriptTimestamp(isoString);
 }
 
 function getClassTokens(element: Element | null | undefined): string[] {
@@ -1427,6 +1425,35 @@ describe("NativeMessage task list rendering", () => {
 
     expect(container.firstElementChild?.className).toContain("py-3");
     expect(container.firstElementChild?.className).not.toContain("pt-0");
+  });
+
+  test("shows only the time for a block from today", () => {
+    const today = new Date();
+    today.setHours(9, 5, 0, 0);
+    const createdAt = today.toISOString();
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "text", content: "Fresh" }], { createdAt })} />,
+    );
+    const timeOnly = today.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    expect(expectedTimeLabel(createdAt)).toBe(timeOnly);
+    expect(screen.getByText(timeOnly)).toBeTruthy();
+  });
+
+  test("adds the date for a block from an earlier day", () => {
+    const earlier = new Date();
+    earlier.setDate(earlier.getDate() - 3);
+    earlier.setHours(9, 5, 0, 0);
+    const createdAt = earlier.toISOString();
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "text", content: "Older" }], { createdAt })} />,
+    );
+    const day = earlier.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      ...(earlier.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+    });
+    const time = earlier.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    expect(screen.getByText(`${day}, ${time}`)).toBeTruthy();
   });
 
   test("survives a platform time formatter failure", () => {

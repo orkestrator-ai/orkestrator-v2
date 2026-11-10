@@ -64,6 +64,33 @@ export async function resolveContainerGitHubToken(
   return undefined;
 }
 
+/** A GitHub login, or an app's `name[bot]`; anything else is not trusted as one. */
+const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
+
+/**
+ * The account a token acts as, lower-cased (GitHub logins ignore case), read
+ * with `gh api user`. Undefined when it cannot be read: no `gh`, no network, a
+ * token `/user` refuses, or an answer that is not a login. The token goes by
+ * environment only and is never logged; neither is the error.
+ */
+export async function getGitHubTokenLogin(
+  token: string,
+  gitHubCliSelection: GitHubCliSelection | undefined,
+  run: typeof runCommand = runCommand,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await run(
+      gitHubCli(gitHubCliSelection),
+      ["api", "--hostname", "github.com", "user", "--jq", ".login"],
+      { timeoutMs: 10_000, env: { ...hostGitHubCliEnv(), GH_TOKEN: token } },
+    );
+    const login = stdout.trim();
+    return GITHUB_LOGIN_PATTERN.test(login) ? login.toLowerCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function getContainerGitHubCredentialStatus(
   globalConfig: AppConfig["global"],
   gitHubCliSelection: GitHubCliSelection | undefined,

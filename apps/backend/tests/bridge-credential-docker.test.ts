@@ -8,8 +8,12 @@
  * ours, is held to the same on a permission a real tool call parked, raised by a
  * fake model inside the container.
  *
+ * On an `opencode-launch=1` image OpenCode's server runs root's binary with only root's
+ * configuration, so plugins the agent plants never load, and a process the agent puts
+ * on its port gets no password and is replaced.
+ *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
- * with `bridge-credential=1` and `bridge-launch=1`. No credential is delivered (an agent-test context
+ * with `bridge-credential=1`, `bridge-launch=1` and `opencode-launch=1`. No credential is delivered (an agent-test context
  * with no sources) and no agent turn runs, so nothing is billed. Tokens reach
  * the container only on stdin, so this suite adds none to any argv.
  */
@@ -25,6 +29,7 @@ import {
 import { bridgeTokenVerifier } from "@orkestrator/protocol/node/bridge-credential";
 import { bridgeAuthorityHeaders } from "../src/core/bridge-authority-keys";
 import { bridgeFetch } from "../src/core/http-bridge/transport";
+import { peekContainerAgentBridge } from "../src/core/commands-servers";
 import {
   containerAuthorityKeyFile,
   containerCredentialFile,
@@ -94,6 +99,8 @@ const BRIDGES: ReadonlyArray<{
 
 let dataDir = "";
 let home = "";
+/** The user's host `~/.config/opencode`, mounted read-only as the staged input. */
+let openCodeHostConfig = "";
 let containerId = "";
 let homeDirectory: ReturnType<typeof spyOn> | undefined;
 let invoke: (name: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -159,6 +166,8 @@ async function startFixture(image: string, name: string) {
     ...BRIDGES.flatMap((bridge) => ["-p", `127.0.0.1::${bridge.port}`]),
     "-p",
     `127.0.0.1::${OPENCODE_SERVER_PORT}`,
+    "-v",
+    `${openCodeHostConfig}:/opencode-config:ro`,
     image,
   ]);
   await waitForContainerBoot(id, { timeoutMs: 120_000 });
@@ -196,6 +205,29 @@ beforeAll(async () => {
   home = path.join(root, "home");
   await fs.mkdir(dataDir);
   await fs.mkdir(home);
+  // The user's own OpenCode configuration: the fixture model, and a plugin of
+  // theirs that must still load from root's copy.
+  openCodeHostConfig = path.join(root, "opencode-config");
+  await fs.mkdir(path.join(openCodeHostConfig, "plugins"), { recursive: true });
+  await fs.writeFile(
+    path.join(openCodeHostConfig, "opencode.json"),
+    JSON.stringify({
+      provider: {
+        fixture: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Local fixture",
+          options: { baseURL: `http://127.0.0.1:${FAKE_MODEL_PORT}/v1`, apiKey: "not-a-key" },
+          models: { fixture: { name: "Fixture", limit: { context: 16000, output: 2000 } } },
+        },
+      },
+    }),
+  );
+  await fs.writeFile(
+    path.join(openCodeHostConfig, "plugins", "user-plugin.js"),
+    `import { writeFileSync } from "node:fs";
+export const UserPlugin = async () => { writeFileSync("/tmp/user-host-plugin-loaded", "1"); return {}; };
+`,
+  );
   // No host login can reach the container, whatever this machine holds.
   process.env.HOME = home;
   homeDirectory = spyOn(os, "homedir").mockReturnValue(home);
@@ -634,6 +666,7 @@ PLANT`);
 /** What a user's model would ask for, from a port inside the container. */
 const FAKE_MODEL_PORT = 4599;
 const FAKE_MODEL = `
+import { appendFileSync } from "node:fs";
 const chunk = { id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture" };
 const stream = (delta, finish_reason) =>
   new Response(
@@ -648,6 +681,7 @@ Bun.serve({
   port: ${FAKE_MODEL_PORT},
   async fetch(request) {
     const { messages } = await request.json();
+    appendFileSync("/tmp/fake-model-system", JSON.stringify(messages.filter((m) => m.role === "system")) + "\\n");
     const last = messages.at(-1);
     if (last.role === "tool") return stream({ role: "assistant", content: "Done." }, "stop");
     const text = typeof last.content === "string" ? last.content : JSON.stringify(last.content);
@@ -710,20 +744,9 @@ describe("OpenCode's password on a real container", () => {
   live(
     "starts from the root-only file, and only root and the server hold the password",
     async () => {
+      // The fixture provider is the user's own configuration (/opencode-config).
       await asAgent(
-        `mkdir -p ~/.config/opencode
-        cat > ~/.config/opencode/opencode.json <<'CONFIG'
-${JSON.stringify({
-  provider: {
-    fixture: {
-      npm: "@ai-sdk/openai-compatible",
-      name: "Local fixture",
-      options: { baseURL: `http://127.0.0.1:${FAKE_MODEL_PORT}/v1`, apiKey: "not-a-key" },
-      models: { fixture: { name: "Fixture", limit: { context: 16000, output: 2000 } } },
-    },
-  },
-})}
-CONFIG
+        `printf 'Instruction sentinel 7252.\\n' > /workspace/AGENTS.md
         cat > /tmp/fake-model.js <<'MODEL'
 ${FAKE_MODEL}
 MODEL
@@ -809,6 +832,18 @@ PROBE`);
       ).toBe("0");
       expect(await asAgent("cat /tmp/tool-parent-error")).toContain("Permission denied");
       expect(await asAgent("wc -c < /tmp/tool-parent-env")).toBe("0");
+      // The start script's environment, not the launcher's: node's home and
+      // tool paths, and not the server's root-owned configuration directory.
+      expect(await asAgent("grep -c '^XDG_CONFIG_HOME=' /tmp/tool-env || true")).toBe("0");
+      expect(await asAgent("grep -c '^ORKESTRATOR_BRIDGE_LAUNCH' /tmp/tool-env || true")).toBe("0");
+      expect(await asAgent("grep '^HOME=' /tmp/tool-env")).toBe("HOME=/home/node");
+      // The checkout's AGENTS.md still reaches the model.
+      expect(
+        await asAgent("grep -c 'Instruction sentinel 7252' /tmp/fake-model-system || true"),
+      ).not.toBe("0");
+      expect(await asAgent("grep '^PATH=' /tmp/tool-env")).toContain(
+        "/usr/local/share/npm-global/bin",
+      );
     },
     LIVE_TIMEOUT_MS,
   );
@@ -843,6 +878,200 @@ PROBE`);
       const refused = await client().permission.list();
       expect(refused.response.status).toBe(401);
       await invoke("stop_opencode_server", { containerId });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+/**
+ * Plugins the agent's uid plants, in every place OpenCode would look on its
+ * own, each writing a marker if it ever runs. The user's own plugin, from the
+ * host input, writes one too and must load.
+ */
+const PLANT_OPENCODE_PLUGINS = `set -e
+plugin() { mkdir -p "$(dirname "$1")"; printf 'import { writeFileSync } from "node:fs";\\nexport const P = async () => { writeFileSync("/tmp/planted-marker-%s", "1"); return {}; };\\n' "$2" > "$1"; }
+plugin ~/.config/opencode/plugins/planted-global.js global-dir
+plugin ~/.opencode/plugins/planted-home.js home-dir
+plugin /workspace/.opencode/plugins/planted-project.js project-dir
+plugin /tmp/planted-key.js project-key
+plugin /tmp/planted-global-key.js global-key
+plugin /tmp/planted-config-dir/plugins/planted-env.js dotenv-config-dir
+plugin /tmp/second-project/.opencode/plugins/planted-second.js second-project
+printf '{"plugin":["file:///tmp/planted-key.js"]}' > /workspace/opencode.json
+printf '{"plugin":["file:///tmp/planted-global-key.js"]}' > ~/.config/opencode/opencode.json
+printf 'require("node:fs").writeFileSync("/tmp/planted-marker-bunfig", "1");\\n' > /workspace/planted-preload.js
+printf 'preload = ["./planted-preload.js"]\\n' > /workspace/bunfig.toml
+printf 'OPENCODE_CONFIG_DIR=/tmp/planted-config-dir\\n' > /workspace/.env
+# node's own path to OpenCode, which the server no longer starts from.
+rm -f ~/.opencode/bin/opencode
+printf '#!/bin/sh\\ntouch /tmp/planted-marker-binary\\nexec /opt/opencode/bin/opencode "$@"\\n' > ~/.opencode/bin/opencode
+chmod 755 ~/.opencode/bin/opencode
+rm -f /tmp/planted-marker-* /tmp/user-host-plugin-loaded`;
+
+const openCodeHeaders = (password: string) => ({
+  authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
+});
+
+describe("OpenCode on an opencode-launch image", () => {
+  const start = async () =>
+    (await invoke("start_opencode_server", { containerId })) as {
+      hostPort: number;
+      wasRunning: boolean;
+      authToken: string;
+    };
+  /** The inode of the socket listening on OpenCode's port, from /proc/net/tcp. */
+  const listeningInode = () =>
+    asAgent(
+      `awk 'FNR > 1 && $4 == "0A" && substr($2, length($2) - 4) == ":1000" { print $10 }' /proc/net/tcp /proc/net/tcp6`,
+    );
+  const serverPids = async () =>
+    (await asAgent(`pgrep -f '[o]pencode serve' || true`)).split("\n").filter(Boolean);
+
+  live(
+    "the server runs root's binary, and plugins the agent plants never load",
+    async () => {
+      await invoke("stop_opencode_server", { containerId });
+      await asAgent(PLANT_OPENCODE_PLUGINS);
+      const started = await start();
+      expect(started.wasRunning).toBe(false);
+      // A second project, with a planted `.opencode`, in the same server.
+      const second = await fetch(
+        `http://127.0.0.1:${started.hostPort}/session/status?directory=${encodeURIComponent("/tmp/second-project")}`,
+        { headers: openCodeHeaders(started.authToken), signal: AbortSignal.timeout(120_000) },
+      );
+      expect(second.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+      expect(await asAgent("ls /tmp | grep '^planted-marker-' || true")).toBe("");
+      // The user's own plugin, copied by root from the host input, did load.
+      expect(await asAgent("cat /tmp/user-host-plugin-loaded 2>/dev/null || true")).toBe("1");
+
+      const pids = await serverPids();
+      expect(pids).toHaveLength(1);
+      // Its exe and cwd links are closed even to the container's root (no
+      // CAP_SYS_PTRACE, and the server is non-dumpable); its argv is not.
+      expect(await asAgent(`tr '\\0' ' ' < /proc/${pids[0]}/cmdline`)).toBe(
+        "/opt/opencode/bin/opencode serve --port 4096 --hostname 0.0.0.0",
+      );
+      expect(await asRoot("stat -c '%u %a' /opt/opencode/bin/opencode")).toBe("0 755");
+      // Nothing the server loads is the agent's to change.
+      expect(
+        await asAgent(
+          `for path in /opt/opencode/bin/opencode /run/orkestrator-opencode/config/opencode/plugins /run/orkestrator-opencode/home; do
+            if [ -w "$path" ]; then echo "writable $path"; fi
+          done
+          touch /run/orkestrator-opencode/config/opencode/plugins/x.js 2>/dev/null && echo planted || true`,
+        ),
+      ).toBe("");
+      expect(
+        await asRoot("stat -c '%u %a' /run/orkestrator-opencode/config/opencode/plugins"),
+      ).toBe("0 755");
+      // The root record names the socket that process listens on.
+      expect(await asRoot("cat /run/orkestrator-bridge/opencode-listener")).toBe(
+        await listeningInode(),
+      );
+      expect(await asAgent("cat /run/orkestrator-bridge/opencode-listener 2>&1 || true")).toContain(
+        "Permission denied",
+      );
+      // Reused while it is the recorded listener.
+      expect(await start()).toMatchObject({ wasRunning: true, authToken: started.authToken });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  /** Stop the server as the agent can, and put `command` on its port instead. */
+  const replaceServer = async (command: string, stdin?: string) => {
+    await asAgent(
+      `pkill -f '[o]pencode serve' || true
+      for i in $(seq 1 50); do curl -s -o /dev/null -m 1 http://127.0.0.1:${OPENCODE_SERVER_PORT}/ || break; sleep 0.2; done
+      ${command}
+      for i in $(seq 1 100); do curl -s -o /dev/null -m 1 http://127.0.0.1:${OPENCODE_SERVER_PORT}/ && break; sleep 0.2; done`,
+      stdin,
+    );
+  };
+
+  live(
+    "a listener the agent puts on the port gets no password and is replaced",
+    async () => {
+      const original = await start();
+      // Records every Authorization header it is sent.
+      await asAgent(`cat > /tmp/imposter.js <<'IMPOSTER'
+import { appendFileSync } from "node:fs";
+Bun.serve({
+  hostname: "0.0.0.0",
+  port: ${OPENCODE_SERVER_PORT},
+  fetch(request) {
+    appendFileSync("/tmp/imposter-seen", (request.headers.get("authorization") ?? "none") + "\\n");
+    return Response.json({ healthy: true });
+  },
+});
+IMPOSTER
+      rm -f /tmp/imposter-seen`);
+      await replaceServer(
+        "setsid bun --config=/dev/null /tmp/imposter.js > /tmp/imposter.log 2>&1 < /dev/null &",
+      );
+      // The backend's observers do not hand it the password.
+      expect(await readContainerBridgeToken(containerId, "opencode")).toBeNull();
+      expect(await peekContainerAgentBridge(containerId, "opencode")).toBeNull();
+      expect(await invoke("get_opencode_server_status", { containerId })).toMatchObject({
+        running: false,
+      });
+      expect(await asAgent("grep -c Basic /tmp/imposter-seen 2>/dev/null || true")).toBe("0");
+
+      // A start replaces it with a server and password it never sees.
+      const replaced = await start();
+      expect(replaced.wasRunning).toBe(false);
+      expect(replaced.authToken).not.toBe(original.authToken);
+      expect(await asAgent("pgrep -f '[i]mposter.js' || true")).toBe("");
+      expect(await asAgent("grep -c Basic /tmp/imposter-seen 2>/dev/null || true")).toBe("0");
+      expect(
+        (
+          await fetch(`http://127.0.0.1:${replaced.hostPort}/global/health`, {
+            headers: openCodeHeaders(replaced.authToken),
+          })
+        ).status,
+      ).toBe(200);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
+    "an OpenCode server the agent starts itself, with a password it caught, is not trusted",
+    async () => {
+      const current = await start();
+      // Root's binary and the very password the backend holds: only the
+      // recorded process tells it apart.
+      await replaceServer(
+        `IFS= read -r password
+        cd /workspace
+        # Not spelled out: this shell's own argv must not match the pkill above.
+        binary=/opt/opencode/bin/opencode
+        OPENCODE_SERVER_PASSWORD="$password" setsid "$binary" serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/agent-opencode.log 2>&1 < /dev/null &`,
+        `${current.authToken}\n`,
+      );
+      expect(
+        (
+          await fetch(`http://127.0.0.1:${current.hostPort}/global/health`, {
+            headers: openCodeHeaders(current.authToken),
+          })
+        ).status,
+      ).toBe(200);
+      expect(await readContainerBridgeToken(containerId, "opencode")).toBeNull();
+      expect(await invoke("get_opencode_server_status", { containerId })).toMatchObject({
+        running: false,
+      });
+      const replaced = await start();
+      expect(replaced.wasRunning).toBe(false);
+      expect(replaced.authToken).not.toBe(current.authToken);
+      const pids = await serverPids();
+      expect(pids).toHaveLength(1);
+      expect(await asRoot("cat /run/orkestrator-bridge/opencode-listener")).toBe(
+        await listeningInode(),
+      );
+      await invoke("stop_opencode_server", { containerId });
+      expect(
+        await asRoot("test -e /run/orkestrator-bridge/opencode-listener && echo kept || true"),
+      ).toBe("");
     },
     LIVE_TIMEOUT_MS,
   );

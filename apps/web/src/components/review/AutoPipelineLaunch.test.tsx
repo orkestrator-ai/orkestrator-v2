@@ -212,7 +212,7 @@ test("reopening a cancelled draft shows drafting and can cancel the new pending 
   node.respond("draft_auto_pipeline", () => pending.promise);
   fireEvent.click(screen.getByRole("button", { name: "Auto-pipeline" }));
   expect(screen.getByRole("status").textContent).toContain("Drafting ticket and Build notes");
-  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(screen.queryByLabelText("Title") === null).toBe(true);
   expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
   const cancel = screen.getByRole("button", { name: "Cancel" });
   expect(cancel.hasAttribute("disabled")).toBe(false);
@@ -226,7 +226,7 @@ test("reopening a cancelled draft shows drafting and can cancel the new pending 
     pending.resolve(draft);
     await pending.promise;
   });
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("dialog") === null).toBe(true);
   expect(node.calls("draft_auto_pipeline")).toHaveLength(2);
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
 });
@@ -356,4 +356,25 @@ test("an empty criteria list explains why confirmation is disabled", async () =>
   expect(
     screen.getByRole("button", { name: "Confirm Auto-pipeline" }).hasAttribute("disabled"),
   ).toBe(true);
+});
+
+test("the Build transcript dropdown shares the reviewer Focus dropdown's theme", async () => {
+  renderInNodeScope(
+    <MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      onConfirm={() => undefined}
+      defaultAgent="codex"
+      catalog={{ claude: [], codex: [], opencode: [] }}
+      autoPipelineEnvironmentId="env"
+    />,
+    { client: client() },
+  );
+  const transcript = await screen.findByRole("combobox", { name: "Build transcript" });
+  const focus = screen.getByRole("combobox", { name: "Reviewer 1 focus" });
+  for (const select of [transcript, focus]) {
+    expect(select.getAttribute("data-slot")).toBe("native-select");
+    expect(select.className).toContain("bg-input-surface");
+  }
+  expect(transcript.className).toBe(focus.className);
 });

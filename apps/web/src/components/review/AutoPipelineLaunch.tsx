@@ -9,6 +9,7 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
   DialogContent,
@@ -153,30 +154,31 @@ export function AutoPipelineLaunch({
   if (!sources?.available || !sources.sources.length) return null;
   const promoting = busy && !!draft;
   return (
-    <section className="mx-5 my-4 rounded-lg border border-divider p-4">
-      <h3 className="font-semibold">Auto-pipeline</h3>
-      <p className="mb-3 text-xs text-muted-foreground">
+    <section className="mx-5 mt-5 rounded-lg border border-divider p-4 sm:mx-6">
+      <h3 className="text-sm font-semibold">Auto-pipeline</h3>
+      <p className="mb-3 text-xs text-zinc-500">
         Turn finished work into a ticket and continue from Review through verification and delivery.
         Review the draft before anything is created.
       </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Label htmlFor={`${fieldId}-source`} className="text-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        <label htmlFor={`${fieldId}-source`} className="shrink-0 text-xs font-medium text-zinc-400">
           Build transcript
-        </Label>
-        <select
+        </label>
+        <NativeSelect
           id={`${fieldId}-source`}
           aria-label="Build transcript"
+          size="sm"
+          wrapperClassName="flex-1"
           value={tabId}
           disabled={busy}
           onChange={(event) => setTabId(event.target.value)}
-          className="focus-hairline h-9 min-w-0 max-w-full rounded-md border border-border/70 bg-input-surface px-2 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-50"
         >
           {sources.sources.map((source) => (
             <option key={source.tabId} value={source.tabId}>
               {source.label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       {selected?.disabledReason && (
         <p role="status" className="my-2 text-xs text-muted-foreground">

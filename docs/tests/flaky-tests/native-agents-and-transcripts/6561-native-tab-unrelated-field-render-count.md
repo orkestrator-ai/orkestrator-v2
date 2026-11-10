@@ -1,7 +1,7 @@
 # Native tab render count after an unrelated environment update
 
 - **ID:** 6561
-- **Status:** resolved
+- **Status:** open
 - **Observed:** 2026-11-06 on macOS
 - **Test:** `an unrelated environment field does not render a tab holding a transcript`
 - **File:** `apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx:365`
@@ -32,3 +32,33 @@ or implementation was changed to hide the failure.
 - **Reproduced:** yes. Holding the tab for 3 s after `renderTab()` and before `writeUnrelatedFields()` failed the unchanged test with 3 commits instead of 0.
 - **Fix:** `AgentNativeTab.render-count.test.tsx` now answers the transcript, session-state and discovery reads the way the backend does: `unchanged` when the read names the current token and does not force a snapshot, a snapshot otherwise. Tokens now include the tab's session key, and the state token includes the queued items, so a changed fixture still produces a new snapshot. No assertion, timeout or product code changed.
 - **Verification:** with the 3 s and 7 s holds in place (temporary), the test passed with 0 commits. `mise run test:logged -- --name n6561-owner -- bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.render-count.test.tsx --rerun-each=5` passed. `mise run test:logged -- --name n6561-stress -- bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.render-count.test.tsx src/components/native-agent/AgentNativeTab.progressive.test.tsx --parallel=2 --rerun-each=4` passed 316 tests with 0 failures, at a host load average of about 20-30.
+
+## Recurrence — 2026-11-10
+
+At review head `bfdc17ffa9635c914a038b2ea387c0fd86dfa9fe`, based on
+`60c065c366e65ffc7d7cc1fb32e4c4517fc661ac`, the default aggregate again
+reported one commit instead of zero (560.62 ms). The web package reported
+14,337 pass, 10 skip and one fail. Command:
+`mise run test:logged -- --name review-tests -- mise run test`.
+Evidence: `/tmp/orkestrator-test-run.z2tD5X/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The complete unchanged owner passed with one worker using
+`mise run test:logged -- --name review-native-tab-test-env -- env -u NODE_ENV bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures`
+(10.1 s; passing counts unavailable because the runner removed the log).
+The recurrence checker against `origin/main` confirmed that the observing base
+contains fix `ee2cc84234`. The token-aware mocks are already present, so this
+observation does not establish the previous cause again.
+
+An unchanged-code contention attempt also passed:
+`mise run test:logged -- --name repro-native-tab-contention -- env -u NODE_ENV bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures --rerun-each=10 --test-name-pattern 'an unrelated environment field'`
+(20.5 s). Cause remains unproved; no assertion, deadline or production behavior
+has been changed to hide the failure.
+
+The broader unchanged-owner stress command
+`mise run test:logged -- --name repro-native-owner-contention -- env -u NODE_ENV bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures --rerun-each=5`
+finished with 180 pass and five fail (151.3 s). This case's original test passed
+all five runs. Each failure was instead `anchor resize does not render the native controller`
+at line 903, expected zero commits, received one. React also reported unwrapped
+updates and an act-environment warning. Evidence:
+`/tmp/orkestrator-test-run.smRWs3/repro-native-owner-contention.log.gz`.
+Those results do not reproduce or explain the original unrelated-field failure.

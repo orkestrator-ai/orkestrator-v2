@@ -1,6 +1,6 @@
 # Auto-pipeline fix validation: intermittent browser owners and incomplete broad checks
 
-- **ID:** 9916
+- **ID:** 9919
 - **Status:** open
 - **Date observed:** 2026-11-10
 - **Branch:** `autopipeline-text-boxes-7182fc46ef5e-r1`, fix commit `944b37af1` after reviewed commit `02f72782c`.
@@ -186,3 +186,79 @@ Shared-host contention is a hypothesis, not a demonstrated root cause. The
 unexecuted remainder of the broad commands and every undetermined failure
 remain validation limitations. No product or test behavior outside the
 Auto-pipeline fixes was changed.
+
+
+## Main merge validation, 2026-11-10
+
+Merge parents: branch `fb3e0831cf3569772a661f51e9c50f1027414602` and
+`origin/main` at `04639b12b71d4326a3b8941485367aca197f4966`.
+The complete four-path original conflict list was retained before staging in
+local Git metadata, tied to those parents. It includes the Auto-pipeline
+component and its test, claim 9916, and this group's index. Main keeps claim
+9916; this branch's case and references were renumbered to 9919.
+
+- `mise run test:logged -- --name merge-default -- mise run test` exited 1 at
+  1,800.0 s, after waiting about 789 s for the host lease. Protocol and bridge
+  groups passed. The root group completed with 4,283 passes, 26 skips and one
+  failure: `bounded test diagnostics > never passes a DOM-producing query
+  result directly to toBeNull`. That failure reproduced alone (one pass, one
+  failure) and identified two assertions already in the conflicted
+  `AutoPipelineLaunch.test.tsx`. Both now compare the query result to null
+  before asserting the boolean; the assertion semantics are unchanged.
+  The complete diagnostics owner and Auto-pipeline owner then passed, as did
+  `mise run check`. The workspace group was still running at the outer deadline,
+  with eleven named failures across eight owning files. There is no final
+  workspace total or passing aggregate result.
+  Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KMFO5Y/merge-default.log.gz`.
+  Bounded root/workspace failure logs were also compressed into this merge's
+  local Git metadata for resume.
+- `ORKESTRATOR_E2E_PORT=15290 ORKESTRATOR_PUBLIC_E2E_PORT=15291 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name merge-browser -- mise run test:browser`
+  exited 1 at 1,800.0 s, reaching 1,197/1,814 with four workers. Its one named
+  failure was the desktop `CoordinatorActions.spec.ts` test
+  `reduced motion shows and hides without a transition in both modes`:
+  `aria-expanded` stayed `false` after focus at line 441 (5 s assertion limit).
+  There are no final pass/skip totals; the public-site suite was not reached.
+  Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.kGUJpB/merge-browser.log.gz`.
+- The complete Auto-pipeline browser owner passed at both viewports in 31.4 s:
+  `ORKESTRATOR_E2E_PORT=15289 mise run test:logged -- --name merge-auto-pipeline-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/AutoPipeline.spec.ts --workers=2`.
+  Registry checks (`number-claims`, `todo-index`, `flaky-tests-index`) also passed.
+
+### Individual workspace owner reruns
+
+Each row runs exactly one unchanged owning file with `--parallel=1` through
+`mise run test:logged -- --name <name> -- bun test --cwd <package> ./<path> --parallel=1 --only-failures`.
+The aggregate used six workspace slots and one root slot. These are observed
+results, not evidence of a common cause or a reproduction on main.
+
+| Name | Package and path | Result | Failure artifact directory under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/` |
+| --- | --- | --- | --- |
+| merge-container-exec-alone | apps/backend; tests/commands-container-exec.test.ts | 14 pass, 1 fail, 1 error; 29.2 s. Credential-helper test still hits its 5 s limit. | orkestrator-test-run.T5ZEPJ |
+| merge-preview-ownership-alone | apps/backend; src/core/preview-listener-ownership.test.ts | 21 pass, 2 fail; 11.5 s. Both real-listener tests still receive `unchecked`. | orkestrator-test-run.QJ1iee |
+| merge-container-readiness-alone | apps/backend; tests/container-readiness.test.ts | 19 pass, 2 fail; 16.9 s. Probe-clipping elapsed time exceeds 1,500 ms; renewed readiness still times out. | orkestrator-test-run.iBRBji |
+| merge-shared-skills-alone | apps/backend; tests/portable-inputs-shared-skills.test.ts | 19 pass, 2 fail, 2 errors; 16.3 s. Relay import and linked-skill import hit their 5 s limits. | orkestrator-test-run.jk89ua |
+| merge-portable-stamps-alone | apps/backend; tests/portable-inputs-stamps.test.ts | Incomplete: five-minute no-output watchdog; no test totals. The aggregate's changed-tree and planted-link failures remain undetermined. | orkestrator-test-run.IVMpxK |
+| merge-diff-baseline-alone | apps/backend; src/core/diff-baseline.test.ts | Passed unchanged, 12.7 s. Aggregate test `a branch that took in newer target history is measured from where it now leaves it` timed out at 5,018.50 ms. Intermittency observed; cause unresolved. | Passing output deleted |
+| merge-claude-state-alone | apps/backend; tests/claude-state-signal-integration.test.ts | Passed unchanged, 9.4 s. Aggregate test `hook writers serialize counters and retain a completed turn without any config` timed out at 5,002.13 ms. Intermittency observed; cause unresolved. | Passing output deleted |
+| merge-cli-surface-alone | packages/cli; tests/command-surface.test.ts | 18 pass, 1 fail; 15.4 s. `zsh bashcompinit parses option values and offers short flags` still hits its 5 s limit. | orkestrator-test-run.sHzW8S |
+
+`mise run flaky:recurrence -- 9919 --base fb3e0831cf3569772a661f51e9c50f1027414602`
+reported `open` against the working-tree registry. The same query against
+`--registry-ref origin/main` found no case 9919, as expected for this branch's
+newly renumbered case. The two passing individual workspace owners establish
+intermittency only for their own aggregate failures. The failing and incomplete
+reruns above remain unresolved; no timeout, assertion, retry or skip in those
+owners was changed.
+
+### CoordinatorActions complete owner rerun
+
+`ORKESTRATOR_E2E_PORT=15292 mise run test:logged -- --name merge-coordinator-actions-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/CoordinatorActions.spec.ts --workers=1 --output output/agent-testing/merge-coordinator-actions`
+finished in 124.8 s with 32 passes and two failures. The same reduced-motion
+focus assertion at line 441 failed at both viewport projects. This remains
+unresolved, not classified as flaky; the owner was not changed.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UK8bUS/merge-coordinator-actions-alone.log.gz`.
+
+All test processes launched for this merge have finished. No isolated app profile
+was started. Real-stack agent qualification and unrelated scenario suites were
+not run: this resolution changes the Auto-pipeline presentation and its tests,
+plus registry metadata and links. The focused owner passes do not establish a
+passing complete default or browser suite.

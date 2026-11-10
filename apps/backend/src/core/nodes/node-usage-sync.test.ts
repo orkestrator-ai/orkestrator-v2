@@ -54,7 +54,7 @@ interface FakeNode {
   identities: UsageIdentity[];
   events: Array<{ event: string; payload: unknown }>;
   link: UsageSyncLink & { connected: boolean };
-  /** Arguments of every `apply_shared_usage_readings` it was sent. */
+  /** Arguments of every completed `apply_shared_usage_readings` call. */
   applied: unknown[];
   /** Answer every call as a node that predates the commands. */
   older: boolean;
@@ -135,8 +135,11 @@ async function fakeNode(nodeId: string, name: string, identities: UsageIdentity[
         return structuredClone(await collectSharedUsageReadings(context, node.identities)) as T;
       }
       if (command === "apply_shared_usage_readings") {
+        const result = await applySharedUsageReadings(context, node.identities, wire.readings, NOW);
+        // Reconnect assertions use this as their completion signal. The store
+        // updates its cache before persistence and the notification finish.
         node.applied.push(wire);
-        return (await applySharedUsageReadings(context, node.identities, wire.readings, NOW)) as T;
+        return result as T;
       }
       throw unknownCommand(command, "accounts");
     },
@@ -275,7 +278,31 @@ describe("shared usage readings", () => {
     Object.assign(command.context.runtime.accounts, { sharedUsage: new AgentAccountSharedUsage() });
     Object.assign(omarchy.context.runtime.accounts, { sharedUsage: new AgentAccountSharedUsage() });
     omarchy.link.connected = true;
-    sync.handleNodeEvent("native-event-stream-connected", {});
+    const sharedUsage = omarchy.context.runtime.accounts.sharedUsage;
+    const record = sharedUsage.record.bind(sharedUsage);
+    let persisted!: () => void;
+    const persistedWrite = new Promise<void>((resolve) => {
+      persisted = resolve;
+    });
+    let release!: () => void;
+    const releaseNotification = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    sharedUsage.record = async (...args) => {
+      const kept = await record(...args);
+      persisted();
+      await releaseNotification;
+      return kept;
+    };
+    try {
+      sync.handleNodeEvent("native-event-stream-connected", {});
+      await persistedWrite;
+      // Cached data is visible, but apply has not yet announced its update.
+      expect((await omarchy.show(TRADING)).windows[0]?.usedPercent).toBe(100);
+      expect(omarchy.applied).toHaveLength(0);
+    } finally {
+      release();
+    }
     for (let attempt = 0; attempt < 100 && omarchy.applied.length === 0; attempt += 1) {
       await Bun.sleep(5);
     }

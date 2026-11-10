@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1012,
-    "defined": 1012,
+    "commands": 1017,
+    "defined": 1017,
     "untyped": 0,
     "events": 45
   },
@@ -1420,8 +1420,8 @@
       "access": "internal",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:fb947d220e7c3b7f03a29f233c2166c8831ea7c8a89afb2fb4b80c76d6b15186",
-      "resultDigest": "sha256:5fbc85c5b15ade60178130b302a22ac05bff0c3c3654ac996b3abfdc02e6777c"
+      "argsDigest": "sha256:e0a4a83105a09e198dd65969104edc57595cbbae6a16160da695687ef2156d1c",
+      "resultDigest": "sha256:6ab49d052941d328bdbcafd3b45c7a948820f70afded1209e22efb9435470f60"
     },
     "commit_node_file_write": {
       "domain": "node-files",
@@ -2399,6 +2399,15 @@
       "critical": [],
       "argsDigest": "sha256:0508f8563808e33e2efb96b101aabcfad154ed72a9f8596febbdd4f32b8cc15a",
       "resultDigest": "sha256:0ff580835abc00a37ff1faab7ea2eb191306f798ed1f70e42f3cf4444e6f7375"
+    },
+    "dismiss_ticket_sync_conflicts": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:16d03cb4785ab379bacb08c972c1b6a3a77a16e0378f96448e89575bb510a4bb",
+      "resultDigest": "sha256:a262e4981bb5061fc55f737e2c95e3b41f486ec58fdc887ce8a3761519384bba"
     },
     "dispatch_native_agent_intent": {
       "domain": "native-sessions",
@@ -4434,6 +4443,15 @@
       "argsDigest": "sha256:eed485fb1202008a5928b06d200efdbe447d75ba13fa6c3571b2304310db4868",
       "resultDigest": "sha256:1112b3b3289793c369b899a78855583de75e0d052116ffadf2b03162a82d4ee9"
     },
+    "get_ticket_sync_leaf_status": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
+      "resultDigest": "sha256:6148d1eca008c1f633d2ad082b2c880e3e42d07dab451898ccd2af814215b333"
+    },
     "get_ticket_sync_status": {
       "domain": "ticket-sync",
       "since": 1,
@@ -4441,7 +4459,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
-      "resultDigest": "sha256:8b3c01e4df3f8057515b4e0c8c931bd9e7a0bfc56e89b20a2ca2aa57adda4487"
+      "resultDigest": "sha256:9f82f31ee897e9a8ad489fbf11a5375fd1780b3fee6cea7abbcc87c5fea34cdd"
     },
     "get_usage_history": {
       "domain": "accounts",
@@ -6104,6 +6122,15 @@
       "argsDigest": "sha256:bb01ba0620344056575129be5e476e5e8ab72ecb04068f66824cfc63beb3c987",
       "resultDigest": "sha256:d9845eccb449721bb9c4e44cfb06f65d2597a2dee0fb846652d39ef610a1970b"
     },
+    "put_ticket_image": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d60bc9ca0aaa7b1123fc67e80a7d117e372c42a43ef3c84b7ba00de26154425",
+      "resultDigest": "sha256:39ff58fcafb899bde40ae9b87218a9aff9e0eeba5ee5b890efb256c9c82f56d3"
+    },
     "read_agent_skill": {
       "domain": "agent-servers",
       "since": 1,
@@ -6256,6 +6283,15 @@
       "critical": [],
       "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
       "resultDigest": "sha256:537819e6eac00ad88a70e19bb2ec1497b574e9a04f1a07f8133edc849324db34"
+    },
+    "read_ticket_image": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a64ad72c2db9e100844e0b462dd860ec7605907a84f9be5e769cbacadba67370",
+      "resultDigest": "sha256:1e4894c7e2cf56ec43abef62930ad6c3e7bcd18a61adbff9cc38bcecfc44c75d"
     },
     "reattach_container": {
       "domain": "docker",
@@ -7316,7 +7352,7 @@
       "access": "internal",
       "read": false,
       "critical": ["attachments", "deliverNow", "requestId"],
-      "argsDigest": "sha256:cacf30d727385fcc50c8f00c6ba61a2799849b9f28e7507394f4bca2c098f377",
+      "argsDigest": "sha256:8a11561719a66eb6de7ea9195bdbfd02889ad28d6c9739026e88a0758947b4e8",
       "resultDigest": "sha256:5cf60d42c369b1c95cf2d9f4365dad0c8e19d1730beb8eab28a0054cfdcfb73c"
     },
     "send_coordinator_command_node_mail": {
@@ -7642,6 +7678,15 @@
       "critical": [],
       "argsDigest": "sha256:84f144656938f27b14fccb2d88dec0bea28d32dc99a7afff97351d79a2365518",
       "resultDigest": "sha256:380cceab024fd5ad6459a0c112b1b04fdb6dd87ba4aa5ee5b9d2be65eb217a4b"
+    },
+    "share_tickets_with_command_node": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2690bffcb81d0b6bb700267c523fdf79c0592eae97c0bd51b030fe31467ef9e5",
+      "resultDigest": "sha256:e7626249a5561cafac276b0d973a72feda9699aaaefbc769d280870d79e21bb9"
     },
     "sign_out_native_agent": {
       "domain": "native-sessions",

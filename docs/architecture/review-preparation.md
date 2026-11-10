@@ -215,8 +215,8 @@ one self-contained function. It reads:
 - **The branch diff and the test's static import graph** (`Bun.Transpiler` and
   `Bun.resolveSync`, which follow tsconfig paths and workspace packages; every
   bunfig `preload` counts as each Bun test's own import). A test that is
-  changed, imports a changed file, or whose test or helper files name a changed
-  path or a changed directory is `related`. Helpers are the files the test
+  changed, imports a changed file closely (see below), or whose test or helper
+  files name a changed path or a changed directory is `related`. Helpers are the files the test
   reaches through its own imports that live under a `tests`, `testing`,
   `fixtures`, `mocks` or `e2e` directory, are test files, or carry a test,
   spec, fixture, mock, stub or fake part in their name (`*-test-support.ts`);
@@ -227,9 +227,31 @@ one self-contained function. It reads:
   transpiler). A directory match reports that directory as `changedPath`.
   Before this rule, a doc comment naming `apps/web` in a protocol module that
   most backend tests load made a web-only branch's backend failures `related`.
-  An import counts at any depth, so a change to a widely shared module still
-  makes most tests `related`; [to-do 6920](../todo/coordinator-and-multi-review/6920-triage-related-through-a-widely-shared-import.md)
-  measures that and proposes narrowing it.
+  **Import distance.** A changed file makes a test `related` by import alone
+  (`imports-changed-file`) only within `MAX_RELATED_IMPORT_HOPS` (2) import
+  edges of the test's own code: the test file and the helpers it reaches
+  through other helpers. A file one of them imports is one hop away, one
+  module further is two, and a bunfig preload is itself one hop away. A
+  changed file the graph reaches only further away leaves the test
+  `undetermined` with `reaches-changed-file-indirectly`, never `unrelated`:
+  the verifier still sees it. Both reasons report the distance as
+  `changedPathHops` beside `changedPath`. The walk is breadth-first by
+  distance, so the closest changed file is the one reported. A backend
+  test's graph holds over a thousand files, so before this limit a change to
+  one widely shared module made most of the repository's failures `related`
+  and blocked Verify until the verifier argued each away. Replayed against
+  this checkout (to-do 6920, 2026-11-09), the ten owners flake case 6862
+  recorded as `related` through
+  `native-agent-projection-encoding.ts` (at 3 and 8 hops) are now
+  `undetermined`, as are case 6600's seven owners had their branch changed
+  `web-annotations.ts` (3 and 4 hops); with `storage.ts` changed, the one
+  owner that imports it directly stays `related` and six become
+  `undetermined`. The limit does not help with a module that most production
+  modules import directly, such as `packages/protocol/src/logger.ts`: every
+  test reaches it within two hops, so a change there still makes nearly every
+  failure `related`. A fan-in rule (how many test files reach the changed
+  file) would cover that case, at the cost of building the reverse graph of
+  every test per triage.
   A change to configuration every
   test loads (manifests, lockfiles, tsconfig, bunfig, mise, test setup) leaves
   an untouched test `undetermined`, as does an unresolvable local import.

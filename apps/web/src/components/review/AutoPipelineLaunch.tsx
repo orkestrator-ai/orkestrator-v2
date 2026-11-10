@@ -85,6 +85,7 @@ export function AutoPipelineLaunch({
     if (busy || !selected || selected.disabledReason) return;
     const request = ++generation.current;
     draftingTab.current = tabId;
+    setDraft(null);
     setBusy(true);
     setOpen(true);
     setError(null);
@@ -333,7 +334,6 @@ export function AutoPipelineLaunch({
                   variant="outline"
                   disabled={busy}
                   onClick={() => {
-                    setDraft(null);
                     void generate();
                   }}
                 >

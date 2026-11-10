@@ -1,7 +1,7 @@
 # Host picker (narrow): "Repository settings" never became visible after "Open tools" (`e2e/agent-testing/browser-gateway.spec.ts`)
 
 - **ID:** 0224
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `host path browsing › host picker creates and browses folders through the authenticated gateway above fullscreen settings (narrow)`
 - **Owning file:** `e2e/agent-testing/browser-gateway.spec.ts:147`
@@ -738,3 +738,62 @@ code was changed. The complete gateway owner has not passed in this stage;
 this remains undetermined validation evidence, not an environmental exemption
 or a newly established flake cause. The profile was stopped and reset, retaining
 toolchains.
+
+
+## First-paint readiness repair — 2026-11-10
+
+**Base and recurrence.** Base
+`c98b20e6f6332895320b84b8edfd1f3cc9542ba0`, observed head
+`02b16b3f4ee1c9461fe357e5a4a1f727cd885d26`.
+`mise run flaky:recurrence -- 0224 --base c98b20e6f6332895320b84b8edfd1f3cc9542ba0`
+classified this as an open recurrence. The complete unchanged gateway owner
+ran on a credential-free Codex fixture profile with one worker:
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-generation-r5 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-final-head mise run test:logged -- --name notes-final-head-gateway-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1
+```
+
+**Reproduced: yes.** It reported 13 passed, 11 skipped and two failed in
+542.3 s. The narrow picker could not find either drawer toggle at line 251;
+the 390px maintenance case could not find the drawer or its opener at line
+2872 on its initial `openUpdates` call (line 2908). Both screenshots are
+entirely blank. The sanitizer also rejected the oversized expanded traces,
+removed them and failed teardown; its safety bound is working as intended.
+The compressed log is `orkestrator-test-run.Jr1MU2/notes-final-head-gateway-smoke.log.gz`
+under the host temporary directory; bounded screenshots/context are under
+`output/agent-testing/notes-final-head/browser/artifacts/`.
+
+**Startup boundary and fix.** `main.tsx` starts `bootstrapRenderer()` without
+awaiting it. That function dynamically imports the application; `startApp`
+also restores cached catalogues before the first React render. Navigation
+load events are therefore not application readiness. The picker explicitly
+returned at `DOMContentLoaded` on reload, and the shared sign-in helper
+returned at navigation load. Both could start five-second drawer assertions
+against an empty root.
+
+A controlled browser probe held the `renderer-entry.tsx` request after
+`DOMContentLoaded`, reproduced the blank root and five-second missing-drawer
+assertion, then released the import and verified that first paint and the
+drawer arrived. `gateway-startup-gate` passed (12.9 s). Normal untraced and
+traced startup/reload probes also passed; they do not independently establish
+a product crash or explain every historical picker-layer observation.
+
+`waitForGatewayRenderer` now waits for the application's first root content
+using the existing 30-second cold module-load bound. Sign-in and the affected
+picker/maintenance reload paths await it before their interaction assertions.
+Interaction deadlines, test timeouts, retries, skips and sanitizer bounds
+are unchanged. This separates the expensive asynchronous dev-module bootstrap
+from the drawer behavior being tested rather than extending drawer deadlines.
+
+**Focused verification.** Both previously failing narrow cases passed on a
+fresh credential-free fixture profile (two expected, zero skipped, unexpected
+or flaky results; 17.4 s):
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-generation-r5 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-ready-focused mise run test:logged -- --name gateway-ready-focused -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'host picker creates.*narrow|host maintenance.*390px' --workers=1
+```
+
+Report: `output/agent-testing/notes-ready-focused/browser/results.json`.
+The complete committed-head owner and repository validation are reported in
+the implementation handoff. No picker, drawer or maintenance implementation
+was changed.

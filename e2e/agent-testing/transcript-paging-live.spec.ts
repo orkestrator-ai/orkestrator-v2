@@ -777,15 +777,32 @@ async function restartCodexBridge(invoke: Invoke, environmentId: string) {
   expect(restarted.pid, "the bridge was not replaced").not.toBe(before.pid);
 }
 
+/** Pages whose optional-tool dialogs are already dismissed whenever they open. */
+const dismissingOptionalToolDialogs = new WeakSet<Page>();
+
+/**
+ * Dismisses the Docker and GitHub CLI dialogs whenever they open, not only on
+ * arrival: on a host whose user cannot reach the Docker daemon the Docker one
+ * opens after the probe answers, which can be after the sidebar has rendered,
+ * and its overlay then swallows the next click.
+ */
+async function dismissOptionalToolDialogs(page: Page): Promise<void> {
+  if (dismissingOptionalToolDialogs.has(page)) return;
+  dismissingOptionalToolDialogs.add(page);
+  for (const name of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+    await page.addLocatorHandler(page.getByRole("button", { name, exact: true }), (button) =>
+      button.click(),
+    );
+  }
+}
+
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
+  await dismissOptionalToolDialogs(page);
   await page.goto(status.browserUrl!);
   const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
   const entry = page.getByText(environmentName, { exact: true }).first();
   await expect(expand.or(entry)).toBeVisible({ timeout: 60_000 });
-  for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-    const button = page.getByRole("button", { name: label, exact: true });
-    if (await button.isVisible()) await button.click();
-  }
+  // The optional-tool dialogs are dismissed by `dismissOptionalToolDialogs`.
   if (await expand.isVisible()) await expand.click();
   await page.mouse.move(1100, 20);
   await entry.click({ timeout: 15_000 });

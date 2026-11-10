@@ -192,6 +192,32 @@ describe("HttpBridgeObservationStream", () => {
     await settle();
     expect(streams).toHaveLength(1);
   });
+
+  test("close ends a pending reconnect delay at once", async () => {
+    let requests = 0;
+    const observer = new HttpBridgeObservationStream({
+      connection,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response(null, { status: 503 });
+      }) as unknown as typeof fetch,
+      hint: () => undefined,
+      // Without the abort, the loop would sit in this delay for a minute.
+      retryInitialMs: 60_000,
+      retryMaxMs: 60_000,
+      random: () => 0,
+    });
+    observer.start();
+    while (requests < 1) await settle();
+    await settle();
+    observer.close();
+    const outcome = await Promise.race([
+      observer.stopped().then(() => "stopped" as const),
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe("stopped");
+    expect(requests).toBe(1);
+  });
 });
 
 describe("frameSessionId", () => {

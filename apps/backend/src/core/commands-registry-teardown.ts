@@ -22,6 +22,7 @@ import {
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
+import { runWithTimeout } from "./abortable-timing.js";
 import { sweepAgentHandoffs } from "./agent-handoffs.js";
 import {
   fenceRetainingCloseSessionId,
@@ -89,37 +90,17 @@ export function registerTeardownCommands(
     });
 
   /**
-   * One bounded, non-destructive bridge close request.
+   * One bounded, non-destructive bridge close request. The deadline aborts the
+   * request, so it does not outlive the timeout.
    */
-  const requestProviderTabSession = async (
+  const requestProviderTabSession = (
     url: URL,
     headers: Record<string, string>,
-  ): Promise<Response> => {
-    const controller = new AbortController();
-    let rejectTimeout!: (error: Error) => void;
-    const timeoutResult = new Promise<Response>((_resolve, reject) => {
-      rejectTimeout = reject;
+  ): Promise<Response> =>
+    runWithTimeout((signal) => tabTeardownFetch(url, { method: "POST", headers, signal }), {
+      timeoutMs: tabTeardownCloseTimeoutMs,
+      message: `Tab teardown request timed out after ${tabTeardownCloseTimeoutMs}ms`,
     });
-    const timeout = setTimeout(() => {
-      rejectTimeout(
-        new Error(`Tab teardown request timed out after ${tabTeardownCloseTimeoutMs}ms`),
-      );
-      controller.abort();
-    }, tabTeardownCloseTimeoutMs);
-    timeout.unref?.();
-    try {
-      return await Promise.race([
-        tabTeardownFetch(url, {
-          method: "POST",
-          headers,
-          signal: controller.signal,
-        }),
-        timeoutResult,
-      ]);
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
 
   /**
    * OpenCode tab close goes through the provider (via the native agent

@@ -167,6 +167,8 @@ export class LocalServerRuntime {
   private readonly environmentOperations = new Map<string, Promise<void>>();
   private readonly containerBridgeOperations = new Map<string, Promise<void>>();
   private shutdownRequested = false;
+  /** Aborted when admission closes, so a wait before a retried start wakes then. */
+  private readonly shutdownAbort = new AbortController();
   private shutdownPromise: Promise<void> | null = null;
 
   constructor(options: LocalServerRuntimeOptions = {}) {
@@ -487,6 +489,19 @@ export class LocalServerRuntime {
   }
 
   /**
+   * Aborts once {@link isShuttingDown} turns true, for a wait that should end
+   * then rather than run out its delay. Listeners must not throw.
+   */
+  get shutdownSignal(): AbortSignal {
+    return this.shutdownAbort.signal;
+  }
+
+  private requestShutdown(): void {
+    this.shutdownRequested = true;
+    this.shutdownAbort.abort(new Error(BACKEND_SHUTTING_DOWN));
+  }
+
+  /**
    * Closes admission for everything that would start new owned processes, without
    * waiting for any of it to drain.
    *
@@ -496,7 +511,7 @@ export class LocalServerRuntime {
    * clean up — or that a SIGKILL leaves orphaned.
    */
   closeAdmission(): void {
-    this.shutdownRequested = true;
+    this.requestShutdown();
     this.openCodeAgentTools.cancelAll();
   }
 
@@ -511,7 +526,7 @@ export class LocalServerRuntime {
    */
   async shutdown(options: { operationDrainTimeoutMs?: number } = {}): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
-    this.shutdownRequested = true;
+    this.requestShutdown();
 
     const attempt = (async () => {
       await this.waitForEnvironmentOperations(options.operationDrainTimeoutMs);

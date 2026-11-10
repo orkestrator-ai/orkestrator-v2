@@ -359,7 +359,7 @@ describe("OpenCode agent-tool configuration", () => {
     schedule("test", server.port);
     await waitFor(() => server.requests.length === 1, "the first attempt");
 
-    // Cancel while the task is parked in `waitForOpenCodeAgentToolsRetry`,
+    // Cancel while the task is parked in its backoff (`abortableSleep`),
     // which resolves on abort instead of throwing.
     agentTools().cancel("test");
     await sleep(300);

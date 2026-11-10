@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { boundedUtf8Tail, NATIVE_AGENT_GOAL_LIMITS } from "@orkestrator/protocol/native-agent-goal";
+import { abortableSleep } from "./abortable-timing.js";
 import type { CommandContext } from "./commands-context.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
@@ -15,19 +16,6 @@ function errorMessage(error: unknown): string {
 
 const CHECK_POLL_MS = 1_000;
 const CHECK_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-    if (signal?.aborted) done();
-  });
-}
 
 /** Stable across backend generations; a goal's next iteration gets a new worker. */
 export function goalCheckOperationId(goalId: string, iteration: number): string {
@@ -100,7 +88,7 @@ export async function runGoalCheck(
       if (Date.now() > deadline) {
         return { kind: "unavailable", detail: "The check did not report a result." };
       }
-      await sleep(CHECK_POLL_MS, input.signal);
+      await abortableSleep(CHECK_POLL_MS, input.signal);
       if (input.signal?.aborted) return { kind: "stopped" };
       try {
         state = (await control(environment, context, {

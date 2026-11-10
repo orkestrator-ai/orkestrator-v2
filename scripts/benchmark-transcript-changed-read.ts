@@ -16,7 +16,16 @@
  *   of which changes its tool state on every read (part 0340's case);
  * - `near-full`: a 100-row window of ~4 KiB rows, close to the 512 KiB
  *   target, whose last row streams;
- * - `legacy`: `getProjection` on the near-full rows (part 0210's case).
+ * - `short-incomplete`: an incomplete 60-row window whose raw inline tool
+ *   outputs bring it near the bridge's byte bound, so every changed read asks
+ *   whether the preview already fills the window (to-do 6861);
+ * - `short-incomplete-idle`: the same rows from a provider that answers with
+ *   an interactive snapshot and a revision, polled while nothing changes, so
+ *   every read reprojects the same revision (to-do 6861);
+ * - `legacy`: `getProjection` on the near-full rows (part 0210's case),
+ *   encoded with `JSON.stringify` as the gateway writes that command;
+ * - `legacy-spliced`: the same read encoded with `spliceEncodedJson`, which
+ *   measured slower (to-do 6860), so the command is not marked.
  *
  * Per read it reports CPU time (user + system, `process.cpuUsage`), wall time,
  * and, from a separate instrumented pass, the characters `JSON.stringify`
@@ -226,6 +235,41 @@ function nearFullSource(): Source {
   };
 }
 
+/**
+ * A tool-heavy session whose bridge cut the window by bytes: 60 rows, half of
+ * them carrying a ~15 KiB inline tool output, about 480 KB in all, reported
+ * `complete: false` with no omitted parts and no summary representation.
+ */
+function shortIncompleteSource(): Source {
+  const history = () =>
+    Array.from({ length: 59 }, (_, index) =>
+      textRow(
+        `m${index + 400}`,
+        index % 2 === 0 ? "user" : "assistant",
+        filler(index, 400),
+        index % 2 === 0 ? [] : [toolPart(`m${index}-call`, filler(12_000 + index, 15_000))],
+      ),
+    );
+  let revision = 0;
+  const rows = () => [
+    ...history(),
+    textRow("tail", "assistant", `streaming ${revision} ${filler(0, 400)}`),
+  ];
+  return {
+    stream: () => {
+      revision += 1;
+    },
+    rows,
+    snapshot: () => ({
+      messages: rows(),
+      complete: false,
+      sourceToken: `short-incomplete-${revision}`,
+      historyEpoch: "1:1",
+      freshness: "current",
+    }),
+  };
+}
+
 interface Counters {
   hydrationReads: number;
 }
@@ -258,6 +302,27 @@ function opencodeProvider(source: Source) {
     status: async () => "busy",
     messages: async () => source.rows(),
     interactiveSnapshot: async () => ({ status: "busy", messages: source.rows() }),
+    structured: async () => null,
+    abort: async () => undefined,
+    dispose: async () => undefined,
+  };
+}
+
+/** A provider that answers transcript reads with an interactive snapshot and a revision. */
+function interactiveProvider(source: Source, revision: () => number) {
+  return {
+    agent: "opencode",
+    createSession: async () => "provider-session",
+    registerSession: () => undefined,
+    send: async () => undefined,
+    status: async () => "idle",
+    messages: async () => source.rows(),
+    interactiveSnapshot: async () => ({
+      status: "idle",
+      messages: source.rows(),
+      messagesComplete: false,
+      providerRevision: revision(),
+    }),
     structured: async () => null,
     abort: async () => undefined,
     dispose: async () => undefined,
@@ -365,12 +430,16 @@ async function withService<T>(
   }
 }
 
-async function progressiveScenario(name: string, source: Source): Promise<Measurement> {
+async function progressiveScenario(
+  name: string,
+  source: Source,
+  options: { agent?: "codex" | "opencode"; provider?: unknown; idle?: boolean } = {},
+): Promise<Measurement> {
   const counters: Counters = { hydrationReads: 0 };
-  return withService(codexProvider(source, counters), async (service) => {
+  return withService(options.provider ?? codexProvider(source, counters), async (service) => {
     const identity = {
       environmentId: "env-1",
-      agent: "codex" as const,
+      agent: options.agent ?? ("codex" as const),
       logicalSessionKey: `env-env-1:${name}`,
     };
     await service.ensureSession(identity);
@@ -388,7 +457,7 @@ async function progressiveScenario(name: string, source: Source): Promise<Measur
     const statuses: Record<string, number> = {};
     let responseBytes = 0;
     const read = async () => {
-      source.stream();
+      if (!options.idle) source.stream();
       const update = await service.getTranscriptUpdate({
         ...identity,
         viewVersion: 1,
@@ -412,7 +481,11 @@ async function progressiveScenario(name: string, source: Source): Promise<Measur
   });
 }
 
-async function legacyScenario(source: Source): Promise<Measurement> {
+async function legacyScenario(
+  name: string,
+  source: Source,
+  encode: (result: unknown) => string,
+): Promise<Measurement> {
   const counters: Counters = { hydrationReads: 0 };
   return withService(opencodeProvider(source), async (service) => {
     const identity = {
@@ -423,20 +496,20 @@ async function legacyScenario(source: Source): Promise<Measurement> {
     await service.ensureSession(identity);
     const first = await service.getProjection(identity);
     const windowMessages = first?.messages.length ?? 0;
-    const windowBytes = Buffer.byteLength(JSON.stringify({ result: first }));
+    const windowBytes = Buffer.byteLength(encode(first));
     const statuses: Record<string, number> = {};
     let responseBytes = 0;
     let revision = first?.revision ?? 0;
     const read = async () => {
       source.stream();
       const projection = await service.getProjection(identity);
-      responseBytes = Buffer.byteLength(JSON.stringify({ result: projection }));
+      responseBytes = Buffer.byteLength(encode(projection));
       const status = (projection?.revision ?? 0) > revision ? "changed" : "unchanged";
       revision = projection?.revision ?? revision;
       statuses[status] = (statuses[status] ?? 0) + 1;
     };
     return measure(
-      "legacy",
+      name,
       read,
       statuses,
       () => responseBytes,
@@ -527,7 +600,29 @@ const scenarios: Array<{ name: string; run: () => Promise<Measurement> }> = [
   { name: "tool-parts", run: () => progressiveScenario("tool-parts", toolPartsSource()) },
   { name: "revised", run: () => progressiveScenario("revised", revisedSource()) },
   { name: "near-full", run: () => progressiveScenario("near-full", nearFullSource()) },
-  { name: "legacy", run: () => legacyScenario(nearFullSource()) },
+  {
+    name: "short-incomplete",
+    run: () => progressiveScenario("short-incomplete", shortIncompleteSource()),
+  },
+  {
+    name: "short-incomplete-idle",
+    run: () => {
+      const source = shortIncompleteSource();
+      return progressiveScenario("short-incomplete-idle", source, {
+        agent: "opencode",
+        provider: interactiveProvider(source, () => 7),
+        idle: true,
+      });
+    },
+  },
+  {
+    name: "legacy",
+    run: () => legacyScenario("legacy", nearFullSource(), (result) => JSON.stringify({ result })),
+  },
+  {
+    name: "legacy-spliced",
+    run: () => legacyScenario("legacy-spliced", nearFullSource(), responseBody),
+  },
 ];
 
 const results: Measurement[] = [];

@@ -684,11 +684,14 @@ test.describe("warm Claude CLI app path", () => {
       // What a user sees: the generation beside the CLI's state in Agent Info.
       try {
         await page.goto(status.browserUrl!, { waitUntil: "domcontentloaded" });
-        // This host gives the profile no Docker access, which the app reports
-        // in a dialog; local environments carry on without it.
-        const noDocker = page.getByRole("button", { name: "Continue Without Docker" });
-        if (await noDocker.isVisible({ timeout: 15_000 }).catch(() => false)) {
-          await noDocker.click();
+        // A credential-free profile reports no Claude login, and a host
+        // without Docker access says so too; each dialog offers to carry on.
+        await page.waitForTimeout(4_000);
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const carryOn = page.getByRole("button", { name: /^Continue Without/ }).first();
+          if (!(await carryOn.isVisible().catch(() => false))) break;
+          await carryOn.click();
+          await page.waitForTimeout(1_000);
         }
         await page.getByText(environment.name, { exact: true }).first().click({ timeout: 30_000 });
         await page

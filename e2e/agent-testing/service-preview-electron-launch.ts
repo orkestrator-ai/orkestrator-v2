@@ -32,6 +32,7 @@ import {
   pageStartupWindow,
   waitForRendererStart,
 } from "./electron-startup-recovery";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 export const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 export const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -108,8 +109,7 @@ export async function launchElectron(current: {
       path.join(packageRoot, "dist", "electron", "main.js"),
     ],
     cwd: repositoryRoot,
-    env: {
-      ...(headless ? withoutDisplay(process.env) : process.env),
+    env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
       ELECTRON_DEV: "1",
       VITE_DEV_SERVER_URL: current.rendererUrl,
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
@@ -125,7 +125,7 @@ export async function launchElectron(current: {
       // Partition retention passes every 2 s instead of after a minute
       // (agent-test runtimes only), so the retention test sees one run.
       [AGENT_TEST_PREVIEW_RETENTION_ENV]: "2000",
-    },
+    }),
   });
   recordElectronDiagnostics(app);
   const startupConsole = collectStartupConsole(app.context());

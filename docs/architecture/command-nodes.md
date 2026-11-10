@@ -857,6 +857,20 @@ ticket outbox, conflicts, tombstones) is in
   made on the leaf goes to the command node that synced that project last.
   When a command node detaches, the leaf keeps its copies as its own tickets.
 
+## Usage readings across nodes
+
+The newest plan-usage reading of each agent login (provider, email and
+organisation) is shared the same way: the command node dials out, collects each
+connected node's newest readings (`collect_shared_usage_readings`), keeps the
+newest per login centrally and sends each node the readings of the logins it
+has (`apply_shared_usage_readings`). It runs on every connect and stream resync,
+when a node announces a reading it took (`agent-usage-readings-changed`), when
+the command node takes one, and every 60 s. Both commands run only over the
+link of an attached command node and are never routed. Only usage figures,
+reset times, the plan, the reading time and the machine that took it travel,
+never a credential. A node that predates the commands takes no part. The model
+is in [agent-accounts.md](agent-accounts.md#shared-readings).
+
 ## Projects on leaf nodes
 
 - **Copying a project to another machine.** Any project's menu offers

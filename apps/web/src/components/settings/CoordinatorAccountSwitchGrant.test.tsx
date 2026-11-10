@@ -150,6 +150,16 @@ function show(machine: string | null | undefined = undefined) {
 const tick = () =>
   screen.findByRole("checkbox", { name: "Let coordinators switch accounts without asking" });
 
+/** Opens the switch log and answers its dialog. */
+async function openLog(entries = 1) {
+  const button = await screen.findByRole("button", {
+    name: `View switch log, ${entries} ${entries === 1 ? "entry" : "entries"}`,
+  });
+  button.focus();
+  fireEvent.click(button);
+  return { button, dialog: await screen.findByRole("dialog", { name: "Claude account switches" }) };
+}
+
 describe("coordinator account-switch permission in Settings", () => {
   test("is off by default, and ticking it grants the provider on this machine", async () => {
     show();
@@ -187,6 +197,7 @@ describe("coordinator account-switch permission in Settings", () => {
   test("lists each switch with machine, accounts, coordinator and reason", async () => {
     state = { ...state, grants: { claude: true, codex: false }, recentSwitches: [record] };
     show();
+    await openLog();
     const row = await screen.findByRole("listitem", { name: "Switch on beelink" });
     expect(row.textContent).toContain("beelink");
     expect(row.textContent).toContain("Host login");
@@ -194,6 +205,57 @@ describe("coordinator account-switch permission in Settings", () => {
     expect(row.textContent).toContain("orkestrator-v2 coordinator");
     expect(row.textContent).toContain("Workers are about to hit the 5-hour limit");
     expect(row.textContent).toContain("5m ago");
+    // The local date and time, not only the age.
+    expect(
+      within(row).getByText(
+        new Date(record.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }),
+      ),
+    ).toBeTruthy();
+  });
+
+  test("the log is not shown inline: a button with its count opens it in a dialog", async () => {
+    const older = {
+      ...record,
+      requestId: "older",
+      at: new Date(Date.now() - 4 * 24 * 60 * 60_000).toISOString(),
+      nodeName: "rkmbp",
+      fromAccountLabel: "618BTrading",
+      toAccountLabel: "arkaydeusdev",
+      reason: "User asked to move off the limited account",
+    };
+    const middle = {
+      ...record,
+      requestId: "middle",
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      nodeName: "mini",
+    };
+    // Delivered out of order; the dialog still lists newest first.
+    state = { ...state, recentSwitches: [older, record, middle] };
+    show();
+    await tick();
+    expect(screen.queryByRole("listitem") === null).toBe(true);
+    expect(screen.queryByText(/Workers are about to hit/) === null).toBe(true);
+
+    const { button, dialog } = await openLog(3);
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Switch on beelink",
+      "Switch on mini",
+      "Switch on rkmbp",
+    ]);
+    expect(rows[2]!.textContent).toContain("618BTrading → arkaydeusdev");
+    expect(rows[2]!.textContent).toContain(
+      "Asked by orkestrator-v2 coordinator: “User asked to move off the limited account”",
+    );
+    // The list scrolls inside the dialog rather than growing past the viewport.
+    expect(within(dialog).getByTestId("coordinator-switch-log").className).toContain(
+      "overflow-y-auto",
+    );
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+    await waitFor(() => expect(document.activeElement).toBe(button));
   });
 
   test("a switch a self-timer's permission allowed says so, with the user's words", async () => {
@@ -206,6 +268,7 @@ describe("coordinator account-switch permission in Settings", () => {
     };
     state = { ...state, recentSwitches: [timed] };
     show();
+    await openLog();
     const row = await screen.findByRole("listitem", { name: "Switch on beelink" });
     expect(row.textContent).toContain(
       "Allowed by a timer you set: you asked “check in 2 hours and switch if they are limited”",
@@ -231,10 +294,18 @@ describe("coordinator account-switch permission in Settings", () => {
     await tick();
     state = { ...state, recentSwitches: [record] };
     refresh?.();
-    await screen.findByRole("listitem", { name: "Switch on beelink" });
-    state = { ...state, recentSwitches: [{ ...record, nodeName: "other leaf" }] };
+    const { dialog } = await openLog();
+    await within(dialog).findByRole("listitem", { name: "Switch on beelink" });
+    state = {
+      ...state,
+      recentSwitches: [record, { ...record, requestId: "2", nodeName: "other leaf" }],
+    };
     resync?.();
-    await screen.findByRole("listitem", { name: "Switch on other leaf" });
+    // An open log follows the history as it changes.
+    await within(dialog).findByRole("listitem", { name: "Switch on other leaf" });
+    expect(
+      await screen.findByRole("button", { name: "View switch log, 2 entries", hidden: true }),
+    ).toBeTruthy();
   });
 
   test("reads and writes a specific leaf grant and refreshes after events and resync", async () => {
@@ -254,11 +325,11 @@ describe("coordinator account-switch permission in Settings", () => {
     });
     state = { ...state, recentSwitches: [record] };
     nodeSubscribers.get("bk_leaf")!.onEvent("coordinator-account-switched", record);
-    await screen.findByRole("listitem", { name: "Switch on beelink" });
+    await screen.findByRole("button", { name: "View switch log, 1 entry" });
     state = { ...state, grants: { claude: false, codex: false }, recentSwitches: [] };
     nodeSubscribers.get("bk_leaf")!.onResync();
     await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByRole("listitem") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /View switch log/ }) === null).toBe(true);
     view.unmount();
     expect(nodeStops).toEqual(["bk_leaf"]);
   });

@@ -14,6 +14,7 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * The boundary docs/architecture/logging.md promises, through the real Electron
@@ -68,7 +69,7 @@ test("rejected second launch leaves crash markers intact and immediate exit flus
       cwd: root,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     ownProcessGroup(child);
     recordProcessOutput("essential-lifecycle", child);
@@ -242,8 +243,7 @@ test("a real window sends its startup markers to the main process and none of it
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         APPIMAGE: "",
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
@@ -252,7 +252,7 @@ test("a real window sends its startup markers to the main process and none of it
         // while the renderer is loading, and Chromium aborts the loopback module
         // requests with ERR_NETWORK_CHANGED (flake 2340).
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;

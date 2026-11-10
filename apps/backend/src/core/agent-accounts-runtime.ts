@@ -4,6 +4,7 @@ import type { AgentAccountPlatform } from "@orkestrator/protocol/agent-accounts"
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import { AgentAccountLastUsage } from "./agent-accounts-last-usage.js";
+import { AgentAccountSharedUsage } from "./agent-accounts-shared-usage.js";
 import type { AgentAccountLoginHandle } from "./agent-accounts-login.js";
 import { PlanUsageState } from "./plan-usage-cache.js";
 import { createPlanUsageReader, type PlanUsageReader } from "./plan-usage.js";
@@ -93,6 +94,8 @@ export class HostMcpRefreshDigests {
  */
 export class AgentAccountsRuntime {
   readonly lastUsage = new AgentAccountLastUsage();
+  /** The newest reading of each login identity, shared with other machines. */
+  readonly sharedUsage = new AgentAccountSharedUsage();
   /** The active account's plan usage: the cache sessions write through. */
   readonly planUsage = new PlanUsageState();
   /** The provider read behind the settings card, over `planUsage.cache`. */

@@ -1,6 +1,6 @@
 # Log writer regression script: marker-and-data case split by bash's printf
 
-- **ID:** 9915
+- **ID:** 9916
 - **Status:** resolved
 - **Date observed:** 2026-11-09
 - **Test:** the marker-and-data failure case of `docker/tests/log-writer-test.sh`

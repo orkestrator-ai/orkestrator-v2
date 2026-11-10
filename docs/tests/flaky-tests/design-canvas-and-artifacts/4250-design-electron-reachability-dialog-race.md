@@ -62,3 +62,15 @@ modal causes the failures. Run 2's title timeout is a new failing step. When the
 probe ran, its modal may have opened, but that was not recorded. Whether Electron
 specs should skip the probe is [7470](../../../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
 task 1.
+
+## Probe off by default for Electron specs (2026-11-09)
+
+[7470](../../../todo/containers-and-environments/7470-electron-spec-backends-run-the-boot-probe.md)
+task 1 launches every Electron spec with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`
+(`electronSpecEnvironment`), so the boot check no longer runs and its modal no
+longer opens during this journey. One headless run alone on beelink, branch
+for 7470 based on `main` at `c6de4733c`, `playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` and the scoped Docker shim on
+`PATH`: passed in 48 s. One pass does not resolve this case: run 3 above
+failed with the probe off, so the modal is not shown to be the cause, and the
+status stays open until repeated runs with the probe off pass.

@@ -11,9 +11,9 @@ import { networkChurnReport } from "./network-churn-report";
  * `onExit` runs after every reporter's `onEnd`. List this reporter last.
  */
 export default class ArtifactSanitizingReporter implements Reporter {
-  private readonly suite: "browser" | "coordinator" | "goals";
+  private readonly suite: "browser" | "coordinator" | "goals" | "auto-pipeline";
 
-  constructor(options: { suite?: "browser" | "coordinator" | "goals" } = {}) {
+  constructor(options: { suite?: "browser" | "coordinator" | "goals" | "auto-pipeline" } = {}) {
     this.suite = options.suite ?? "browser";
   }
 

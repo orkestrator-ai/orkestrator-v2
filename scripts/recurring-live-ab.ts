@@ -1169,7 +1169,7 @@ export async function runArm(
       try {
         result.busy = await runtime.measureBusy(
           gateway,
-          runtime.asyncCliRunner(profile, cliConfig()),
+          runtime.asyncCliRunner(profile, cliConfig(), options.checkout),
           { ...options, dataDir: status.dataDir },
           signal,
           {

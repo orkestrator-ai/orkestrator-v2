@@ -37,7 +37,15 @@ test("Home placeholder exposes its panel, loading, error and no-checkout states"
   view.rerender(<ProjectWorkspace projectId="project" />);
   expect(screen.getByRole("tabpanel").textContent).toContain("no project with this id");
   expect(screen.getByRole("tabpanel").textContent).not.toContain("Set a local checkout");
-  appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false });
+
+  // A list that could not be read is not an absence: the read error is shown.
+  appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false, error: "offline" });
+  view.rerender(<ProjectWorkspace projectId="project" />);
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Could not load this machine's projects: offline",
+  );
+  expect(screen.getByRole("tabpanel").textContent).not.toContain("no project with this id");
+  appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false, error: null });
 });
 
 test("Notes tab shows the project notes editor in its own panel", () => {

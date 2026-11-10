@@ -115,7 +115,7 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
-import { useNodeScope } from "@/lib/node-scope/providers";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -277,8 +277,10 @@ export function CreateEnvironmentDialog({
   const pickHostPath = usePickHostPath();
   const federation = useFederation();
   // The machine the environment is created on: this node scope's, which is
-  // another machine when the dialog opens in that machine's workspace.
-  const dialogScope = useNodeScope();
+  // another machine when the dialog opens in that machine's workspace. The
+  // sidebar opens it outside every node's provider, where it is the command
+  // scope's, as for `useScopeBackend` above.
+  const dialogScope = useScopesWithCommandFallback().scope;
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
   );
@@ -319,7 +321,7 @@ export function CreateEnvironmentDialog({
         ? "containerized"
         : configEnvironmentType;
   // The node whose catalogue this dialog reads and seeds (plan item 3003).
-  const catalogScope = useNodeScope();
+  const catalogScope = dialogScope;
   const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
   const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);

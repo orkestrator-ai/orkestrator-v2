@@ -5,7 +5,7 @@ import { useUIStore } from "@/stores";
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
 import { ProjectSchedulesView } from "./ProjectSchedulesView";
-import { useProjectCheckout } from "./useProjectCheckout";
+import { useProjectCheckout, useProjectListError } from "./useProjectCheckout";
 
 export function ProjectWorkspace({
   projectId,
@@ -18,6 +18,7 @@ export function ProjectWorkspace({
 }) {
   const tab = useUIStore((state) => state.projectBoardTab);
   const checkout = useProjectCheckout(projectId);
+  const listError = useProjectListError();
   const hasCheckout = checkout === "ready";
   if (tab === "home") {
     // The project home's own tabs replace this panel once it is active.
@@ -37,6 +38,10 @@ export function ProjectWorkspace({
             <Loader2 className="h-4 w-4 animate-spin" />
             Opening project home…
           </>
+        ) : checkout === "unavailable" ? (
+          <p role="alert">
+            Could not load this machine's projects: {listError ?? "Failed to load projects"}
+          </p>
         ) : checkout === "missing" ? (
           "This machine's project list has no project with this id. Open the project again from the sidebar."
         ) : checkout === "loading" ? (

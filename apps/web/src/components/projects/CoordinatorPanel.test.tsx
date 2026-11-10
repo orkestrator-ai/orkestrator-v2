@@ -1727,9 +1727,9 @@ describe("CoordinatorPanel", () => {
     try {
       renderInAppCommandScope(<CoordinatorPanel projectId="other-node-project" />);
       expect(screen.getByText("Project not found on this machine")).toBeTruthy();
-      expect(screen.queryByText("Connect a local checkout")).toBeNull();
+      expect(screen.queryByText("Connect a local checkout") === null).toBe(true);
       // Repository settings could not find the project and would close at once.
-      expect(screen.queryByRole("button", { name: "Repository settings" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Repository settings" }) === null).toBe(true);
       expect(screen.getByRole("button", { name: "Reload projects" })).toBeTruthy();
     } finally {
       appCommandStore(projectStore).setState({ hasLoaded: false, isLoading: false });

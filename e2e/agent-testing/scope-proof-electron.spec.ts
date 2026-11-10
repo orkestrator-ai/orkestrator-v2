@@ -47,6 +47,7 @@ import {
   type Gateway,
   type ScopeProofReport,
 } from "./scope-proof-support";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
 const webRoot = path.join(repositoryRoot, "apps", "web");
@@ -272,15 +273,13 @@ test("one Electron renderer holds the command scope and a leaf scope (direct, th
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, path.join(packageRoot, "dist", "electron", "main.js")],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
         ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
         ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      },
+      }),
     });
     const electronApp = app;
     dismissStartupDialogs(electronApp);

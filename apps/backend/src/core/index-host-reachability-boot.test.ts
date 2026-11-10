@@ -62,3 +62,35 @@ describe("OrkestratorBackend host-reachability boot check", () => {
     expect(await bootAndStop()).toEqual(["ready", "dispose"]);
   });
 });
+
+describe("OrkestratorBackend probe creator wiring", () => {
+  test("passes runtime flavor and temporary data directory classification to the real service", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-creator-wiring-"));
+    const previous = process.env.NODE_ENV;
+    try {
+      for (const runtimeFlavor of [undefined, "agent-test", "development"] as const) {
+        // Exercise construction, not init: no boot probe or daemon work is started.
+        process.env.NODE_ENV = "development";
+        const backend = new OrkestratorBackend({
+          dataDir,
+          runtimeFlavor,
+          toolchainBinDir: "",
+          appRoot: "",
+          resourceRoot: "",
+          emit: () => undefined,
+        });
+        const service = (
+          backend as unknown as {
+            containerHostReachability: { deps: { creator: string } };
+          }
+        ).containerHostReachability;
+        expect(service.deps.creator).toBe(`${runtimeFlavor ?? "production"}/temporary`);
+        await backend.shutdown();
+      }
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

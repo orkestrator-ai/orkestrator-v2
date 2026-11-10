@@ -45,6 +45,10 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
 import type { ExpiredPipelineWorkerMail } from "./storage-agent-mail-directory.js";
+import {
+  applyEnvironmentMailDeletion,
+  planEnvironmentMailDeletion,
+} from "./storage-agent-mail-deletion.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -1424,51 +1428,22 @@ export class AgentMailRepository {
   async deleteAgentMailByEnvironment(environmentId: string): Promise<void> {
     if (!environmentId.trim()) throw new Error("environmentId is required");
     await this.store.enqueue(async () => {
-      const store = await this.store.load();
-      let changed = false;
-      const changedMailboxes = new Map<string, string | undefined>();
-      for (const [mailboxId, mailbox] of Object.entries(store.mailboxes)) {
-        if (mailbox.environmentId === environmentId) {
-          for (const message of mailbox.messages) {
-            store.counterparts[message.id] = {
-              ...metadataMessage(message),
-              placement: "undeliverable",
-              placementReason: "recipient-deleted",
-              revision: message.revision + 1,
-            };
-          }
-          changedMailboxes.set(mailboxId, mailbox.projectId);
-          delete store.mailboxes[mailboxId];
-          changed = true;
-          continue;
-        }
-        for (const message of mailbox.messages) {
-          if (message.from.kind !== "tab" || message.from.environmentId !== environmentId) continue;
-          message.body = "";
-          message.bodyBytes = 0;
-          delete message.subject;
-          message.placement = "expired";
-          message.placementReason = "sender-deleted";
-          message.revision += 1;
-          mailbox.revision += 1;
-          changedMailboxes.set(mailboxId, mailbox.projectId);
-          changed = true;
-        }
+      // Planned on the shared read model and committed as the rows it changes:
+      // cloning and rewriting the whole store held the event loop for about
+      // 120 ms per delete at 20 MiB of mail (todo 6120 task 6).
+      let deletion = planEnvironmentMailDeletion(await this.store.snapshot(), environmentId);
+      if (!deletion) return;
+      // Reading and committing are each one synchronous block; give timers a
+      // turn between them. The lease keeps every writer out meanwhile.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!this.store.saveRows(deletion)) {
+        const store = await this.store.load();
+        deletion = planEnvironmentMailDeletion(store, environmentId);
+        if (!deletion) return;
+        applyEnvironmentMailDeletion(store, deletion);
+        await this.store.save(store);
       }
-      for (const [key, row] of Object.entries(store.idempotency)) {
-        if (row.senderScope.startsWith(`tab:${environmentId}\0`)) {
-          delete store.idempotency[key];
-          changed = true;
-        }
-      }
-      const pendingInject = store.pendingInject.filter(
-        ({ mailboxId }) => !mailboxId.startsWith(`${environmentId}\0`),
-      );
-      if (pendingInject.length !== store.pendingInject.length) changed = true;
-      store.pendingInject = pendingInject;
-      if (!changed) return;
-      store.revision += 1;
-      await this.store.save(store);
+      const { changedMailboxes } = deletion;
       await this.context.transformSensitiveJsonBackups(this.files.agentMailFile(), (record) => {
         const backup = record as unknown as PersistedAgentMailStore;
         if (backup.version !== 1 || !backup.mailboxes) return record;

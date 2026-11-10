@@ -15,7 +15,12 @@ import {
   type HostFirewallKind,
 } from "@orkestrator/protocol/container-host-reachability";
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
-import { DOCKER_LABEL_OWNER, DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
+import {
+  DOCKER_LABEL_CREATOR,
+  DOCKER_LABEL_OWNER,
+  DOCKER_LABEL_RESOURCE_ROLE,
+} from "./constants.js";
+import type { ProbeCreator } from "./container-host-reachability-creator.js";
 import { runCommand } from "./shell.js";
 import { reportDockerNetworkChange } from "./docker-network-changes.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -487,6 +492,12 @@ export type ContainerHostReachabilityDependencies = {
   servicePort: () => number | null;
   /** Docker owner namespace of this data directory, for probe labels. */
   ownerNamespace: string;
+  /**
+   * Content-free kind of this backend (`probeCreator`), labelled on every
+   * probe network and container so a leaked one can be traced to a test
+   * backend, a profile or production. Omitted, the label is left off.
+   */
+  creator?: ProbeCreator;
   /** Configured environment image, the fallback probe image. */
   fallbackImage: () => string;
   emit?: BackendEmit;
@@ -1231,6 +1242,7 @@ export class ContainerHostReachabilityService {
       `${DOCKER_LABEL_OWNER}=${this.deps.ownerNamespace}`,
       "--label",
       `${DOCKER_LABEL_RESOURCE_ROLE}=${HOST_REACHABILITY_PROBE_ROLE}`,
+      ...(this.deps.creator ? ["--label", `${DOCKER_LABEL_CREATOR}=${this.deps.creator}`] : []),
     ];
   }
 

@@ -1,3 +1,4 @@
+import { readActiveAgentAccountUsage } from "./agent-accounts.js";
 import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
@@ -1078,6 +1079,13 @@ export function registerProjectCommands(
     async (args, context) => {
       const platform = planUsagePlatform(args.platform);
       const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
+      if (platform === "claude" || platform === "codex") {
+        return readActiveAgentAccountUsage(context, platform, {
+          force,
+          cacheOnly: args.cacheOnly === true,
+          reader: planUsageReader,
+        });
+      }
       return planUsageReader(context, platform, { force });
     },
     asyncHandlerCheckingFirst((args) => {

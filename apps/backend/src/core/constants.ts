@@ -28,6 +28,12 @@ export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
 export const DOCKER_LABEL_PROJECT_SEED_REFUSED = "orkestrator-project-seed-refused";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
+/**
+ * Kind of backend that made a host-reachability probe resource
+ * (`<runtime flavor>/<temporary|persistent>`, `container-host-reachability-creator.ts`).
+ * Content-free: never a path or a name.
+ */
+export const DOCKER_LABEL_CREATOR = "orkestrator-creator";
 
 export {
   AGENT_NETWORK_DOMAINS_BY_PLATFORM,

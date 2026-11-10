@@ -16,6 +16,7 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * The desktop half of terminal input recovery
@@ -148,12 +149,11 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;

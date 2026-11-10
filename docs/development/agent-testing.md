@@ -155,8 +155,13 @@ through the command scope's client. It is off by default.
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host
 interface change can reach Chromium. A host that cannot create the namespace
-(no unprivileged user namespaces, or no `ip`) runs them on the host network and
-prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
+runs them on the host network and prints one `[loopback-network]` line naming
+the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
+host refused the namespace, with the kernel's own message (for example Ubuntu
+24.04's AppArmor restriction or a container's seccomp profile).
+`ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
+`test:browser` fails on a Linux host other than the one it was qualified on
+(to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -2060,6 +2065,39 @@ and the backend reads the matching hashed Keychain entry or that directory's
 the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
+
+### Auto-pipeline flow (fake model)
+
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
+end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
+then stops and resets the profile. The real backend, Pi bridge, Pi SDK
+sessions, Git worktree, ticket store and renderer all run; only the model is
+fake. The spec points the profile's isolated Pi `models.json` at a loopback
+model (`auto-pipeline-fake-model.ts`, script in
+`auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
+defaults as Pi on that model with one reviewer. The fake answers each stage's
+result tool with a fixed, valid, finding-free result, keeps only counts, and
+parks Verify until the spec releases it.
+
+The one case walks the user's path: an interactive Pi tab writes a file and
+goes idle; in the browser the user right-clicks **Multi Review**, chooses
+**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+then checks the ticket, the promotion commit and its trailer, and the adopted
+Build; sets the ticket's delivery to commit-only while Verify is parked;
+switches to another environment, releases Verify, and waits for the pipeline
+to finish unwatched. Back on the environment, and again after a reload and at
+a 390 px viewport, the graph must show the commit-only completion from backend
+state, and the source tab must have received no further turn. Screenshots go to
+`output/visual-previews/auto-pipeline-live-*.png`.
+
+To run the spec against a profile you started yourself, start it with the same
+flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
+fixture project's Build defaults and leaves its environments behind, so reset
+the profile afterwards.
 
 ### Live goal suite
 

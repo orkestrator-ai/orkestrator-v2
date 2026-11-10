@@ -47,6 +47,62 @@ export interface PlanUsageSnapshot {
    */
   stale?: boolean;
   fetchedAt: string;
+  /**
+   * The machine that took this reading, when it was another machine: the
+   * newest reading of the same login, shared through the command node
+   * (`agent-account-shared-usage.ts`). Absent for a reading taken here.
+   */
+  readOn?: PlanUsageReadingSource;
+}
+
+/** The machine (node) that took a shared usage reading. */
+export interface PlanUsageReadingSource {
+  nodeId: string;
+  nodeName: string;
+}
+
+/**
+ * How old a reading can be before Settings shows it as stale (muted bars and
+ * a "Stale" label). Display only: automatic switching keeps its own, much
+ * shorter bound (`AUTO_SWITCH_MAX_READING_AGE_MS`, five minutes), because it
+ * acts on a reading while a person only reads it. Half an hour is long enough
+ * that a reading taken by the periodic checks or another machine is not
+ * flagged between refreshes, and short enough that a figure older than a
+ * fraction of the 5-hour window never passes for current.
+ */
+export const PLAN_USAGE_DISPLAY_STALE_MS = 30 * 60_000;
+
+/**
+ * Whether Settings shows a reading as stale: served as the last known reading
+ * after a failed read, older than {@link PLAN_USAGE_DISPLAY_STALE_MS}, or
+ * carrying a fetch time that is unreadable.
+ */
+export function isPlanUsageReadingStale(
+  snapshot: Pick<PlanUsageSnapshot, "fetchedAt" | "stale">,
+  now: number,
+): boolean {
+  if (snapshot.stale) return true;
+  const fetchedAt = Date.parse(snapshot.fetchedAt);
+  if (!Number.isFinite(fetchedAt)) return true;
+  return now - fetchedAt > PLAN_USAGE_DISPLAY_STALE_MS;
+}
+
+/**
+ * A reading's windows brought forward to `now`: a window whose reset time has
+ * passed has started over, so it is shown empty and its next reset is unknown.
+ */
+export function restartPassedPlanWindows(
+  windows: readonly NativeAgentAccountUsageWindow[],
+  now: number,
+): NativeAgentAccountUsageWindow[] {
+  return windows.map((window) => {
+    const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+    if (!Number.isFinite(resetsAt) || resetsAt > now) return window;
+    const restarted = { ...window };
+    delete restarted.resetsAt;
+    if (restarted.usedPercent !== undefined) restarted.usedPercent = 0;
+    return restarted;
+  });
 }
 
 export interface PlanUsagePaidOverage {
@@ -85,14 +141,7 @@ export function stalePlanUsageSnapshot(
   now: number,
   message?: string,
 ): PlanUsageSnapshot {
-  const windows = snapshot.windows.map((window) => {
-    const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
-    if (!Number.isFinite(resetsAt) || resetsAt > now) return window;
-    const restarted = { ...window };
-    delete restarted.resetsAt;
-    if (restarted.usedPercent !== undefined) restarted.usedPercent = 0;
-    return restarted;
-  });
+  const windows = restartPassedPlanWindows(snapshot.windows, now);
   return {
     platform: snapshot.platform,
     status: "ok",
@@ -102,6 +151,7 @@ export function stalePlanUsageSnapshot(
     ...(message ? { message } : {}),
     stale: true,
     fetchedAt: snapshot.fetchedAt,
+    ...(snapshot.readOn ? { readOn: snapshot.readOn } : {}),
   };
 }
 

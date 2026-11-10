@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:76b2b15e73423f850337ba3a7ead7064c60c696935e740a555835452579ae396",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "cacheOnly": {
+          "type": "boolean"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": "string"
+        }
+      },
+      "required": ["accountId", "platform"],
+      "type": "object"
+    }
+  }
+}

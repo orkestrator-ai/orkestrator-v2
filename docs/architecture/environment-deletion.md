@@ -343,6 +343,41 @@ that time in `readStore` and in `saveSensitiveJson`. SQLite calls are
 synchronous, so neither call gives timers a turn, concurrent deletes run their
 store tails as one block, and the gap grows with the number of deletes. Every other store call took under 10 ms per delete.
 
+Since to-do 6120 task 6 neither call walks the whole store:
+
+- **Native sessions** are owned by their environment in the store's indexed
+  `owner` column, so the sweep lists one environment's keys without reading a
+  value. Rows with no owner (written before the column was filled, or by an
+  older build) sit in a partial index of their own and are parsed and checked
+  individually; every open gives them their owner. A store held as a document,
+  or buffered by an atomic scope, is still read whole.
+- **Agent mail** is planned from the shared read model under the mail lease
+  and committed as the rows it changes (`updateStoreRows`), with a turn for
+  timers between the two. It no longer clones the store or reserializes
+  mailboxes it does not change. How much it writes still depends on how many
+  mailboxes hold mail the environment sent.
+
+Measured on beelink (Linux, 16 cores, 62 GB) on 2026-11-09 with the same
+workload, the base commit and this change run alternately, five times each,
+with a load average of 49-56 from other work on the host:
+
+| | Before | After |
+| --- | --- | --- |
+| Native-session sweep, one delete | 205-336 ms, 181-293 ms of it without yielding | 11-18 ms, 2-3 ms without yielding |
+| Longest event-loop gap, one delete | 409-630 ms | 264-451 ms |
+| Longest event-loop gap, five at once | 1.10-1.59 s | 0.37-0.42 s |
+| Each of five concurrent deletes | 1.96-3.13 s | 0.88-1.91 s |
+
+Finding an environment's session keys alone took 0.3-0.4 ms against 140-180 ms
+for the whole-store parse. The agent-mail call did not get faster in this
+workload, because every one of its 200 mailboxes holds mail from every deleted
+environment, so each delete has to rewrite them all. Timed alone (the store
+call in a loop over six environments, three runs each, not the benchmark), with
+that mail in three mailboxes, each call after the first took 4-35 ms against
+36-210 ms. In the benchmark the agent-mail call is the largest store call left
+(238-420 ms per delete in these runs); how its time divides between parsing
+the read model and the rewrite was not profiled.
+
 What the ticket's leads came to:
 
 - **A recursive watch still open while `node_modules` is removed.** The order

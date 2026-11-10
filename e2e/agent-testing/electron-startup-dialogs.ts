@@ -13,7 +13,8 @@ const STARTUP_DIALOG_BUTTONS = ["Continue Without Docker", "Continue Without Git
 /**
  * The backend's boot-time container reachability check opens this modal a few
  * seconds after startup on a host whose firewall drops Docker's traffic to the
- * host (beelink's ufw does). It hides the rest of the window from role queries
+ * host (beelink's ufw does). Electron specs launch with the check off
+ * (`electronSpecEnvironment`), so this matters only to a spec that turns it on. It hides the rest of the window from role queries
  * whichever step is running, so it is closed through its own Close control, as
  * the browser specs do (`browser-gateway.spec.ts`). Nothing is written to the
  * profile. The Electron specs use local worktree environments, which the

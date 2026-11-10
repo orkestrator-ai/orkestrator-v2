@@ -145,6 +145,20 @@ mutations, deletions and explicit commands; a 30 s discovery pass
 adds what it found but never drops a key. Obligations are named per domain,
 not inferred from a `running` phase.
 
+A model submits a workflow result through a tool call inside its turn, so the
+acceptance and its `result-accepted` wake always land before that turn can
+end, and the turn's end raises no wake: workflow sessions are not native agent
+sessions, so the activity sweep never reports a `provider-transition` for
+them. A pass that reads the turn still running would otherwise leave the
+result for the next observation pass (3 s plus jitter). Multi Review therefore
+schedules its next pass after 250 ms (`RESULT_SETTLE_POLL_MS`) while a
+tool-mode result it observes (the active step's, or a running reviewer's) is
+accepted but not consumed, for one observation interval from the acceptance;
+past that window the ordinary cadence applies, so a model that keeps working
+after submitting cannot hold the short cadence (todo 7557, retired
+2026-11-10; `multi-review-result-settle.test.ts`). Graph runs read their turns
+the same way and are not changed yet ([7561](../todo/transcripts-and-observation/7561-graph-run-result-turn-end-tail.md)).
+
 **Native observation broker** (`native-agent-observation.ts`). The backend's
 activity sweep is the only observer of provider activity. Prompt-queue
 drains, agent mail, the coordinator and workflows read its bounded,
@@ -328,7 +342,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | PR created after create-pending | 5 s (B01) | ≤ 10 s | |
 | Open PR state change | 20 s (B01) | ≤ 30 s | Includes jitter |
 | Terminal PR replacement or reopen | 5 min plus jitter (B01) | ≤ 5 min plus immediate explicit and completion wakes | Accepted slowdown |
-| Workflow progress after a result | Keyed wake; 1 to 1.5 s passes (B14 to B17) | ≤ 3 s | |
+| Workflow progress after a result | Keyed wake; 1 to 1.5 s passes (B14 to B17); 250 ms passes while an accepted Multi Review result waits for its turn to end | ≤ 3 s | Before 2026-11-10 about one Multi Review in four waited one observation pass after its consolidated result (3.7 to 4.3 s, todo 7557). Graph runs may still (7561) |
 | Lease renewal, approval and auth expiry, watchdogs | 5 s renewal of a 15 s lease (B16); durable deadlines | Unchanged | Critical class |
 | Recovery after a deliberately missed hint | Safety scans and discovery passes | Unchanged or better | Required before reducing any polling |
 

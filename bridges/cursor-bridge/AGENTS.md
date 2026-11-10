@@ -20,6 +20,14 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
+- A coordinator's `read`, `grep` (and `glob`) and `ls` run on the bridge's own
+  executors (`src/read-boundary.ts`, `src/read-tools.ts`), passed as
+  `local.resourceProviderOptions`, because the SDK has no per-call hook that
+  sees a built-in tool's path. They refuse Orkestrator's data directory and
+  filter every search result. The executor interfaces are unpublished: on an
+  SDK bump, `read-tools.test.ts` checks the returned fields against the new
+  bundle's message descriptors, and the args and result handling in the
+  bundle (`overrideReadExecutor` and its neighbours) needs a reread.
 - Project settings (`.cursor/`) load only when the resolved environment
   execution policy enables project resources, on both host and container runs.
   Host project resources are off by default; enabling them permits repository

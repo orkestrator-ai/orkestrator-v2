@@ -126,7 +126,7 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
 import { chmod, lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { writeHostOpenCodeCredentialPlugin } from "./opencode-host-credential.js";
+import { installHostOpenCodePlugins } from "./opencode-host-credential.js";
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
@@ -1016,14 +1016,15 @@ async function startLocalServerAttempt(
     // binary every native session depends on; never let it offer to replace
     // itself with OpenCode 2.
     Object.assign(env, OPENCODE_PINNED_RUNTIME_ENV);
-    // Keeps the password from this server's tools. A directory the user named
-    // stays theirs: this would replace it, so that server goes without.
-    if (env.OPENCODE_CONFIG_DIR?.trim()) {
-      nativeAgentOpencodeLog.warn("credential-plugin.skipped", { reason: "config-dir-set" });
-    } else {
-      env.OPENCODE_CONFIG_DIR = await writeHostOpenCodeCredentialPlugin(
-        context.storage.getDataDir(),
-      );
+    // Keeps the password from this server's tools and, for a coordinator,
+    // its reads out of the data directory. A directory the user named stays
+    // theirs: the plugins are then added through OPENCODE_CONFIG_CONTENT, and
+    // a coordinator's server is refused when even that cannot be done.
+    const plugins = await installHostOpenCodePlugins(env, context.storage.getDataDir(), {
+      coordinator: Boolean(coordinatorId),
+    });
+    if (plugins.mode === "skipped") {
+      nativeAgentOpencodeLog.warn("credential-plugin.skipped", { reason: plugins.reason });
     }
   } else if (kind === "claude") {
     command = resolveBunBinary(context);

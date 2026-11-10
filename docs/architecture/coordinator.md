@@ -1029,9 +1029,17 @@ checkout pointing into the data directory was read; the coordinator's server
 therefore loads `orkestrator-coordinator-read-boundary.js`
 (`opencode-read-boundary-plugin.ts`) from the host configuration directory,
 which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server, and absent when the
-user sets their own `OPENCODE_CONFIG_DIR`
-([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
+`tool.execute.before`. It is inert in every other server. When the user sets
+their own `OPENCODE_CONFIG_DIR`, OpenCode honours only that one directory, so
+the launcher keeps it and adds the plugins as `file://` entries of
+`OPENCODE_CONFIG_CONTENT`'s `plugin` list, which 1.19.5 appends to every other
+source's plugins (`installHostOpenCodePlugins`); a coordinator's server is
+refused when the user's own `OPENCODE_CONFIG_CONTENT` cannot be extended
+(unparseable, not an object, or a `plugin` value that is not a list of
+strings); any other server then starts without the plugins, as before. The
+credential plugin rides along, since it too is self-contained. Qualified on the
+pinned binary beside a user directory, with a control showing that directory
+alone reads through the link.
 Both layers are qualified on the pinned binary with a loopback model
 (`opencode-coordinator-read-boundary-live.test.ts`).
 
@@ -1079,8 +1087,19 @@ OS sandbox).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
-sandbox cannot be enabled. Its reading tools still reach the data directory
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
+sandbox cannot be enabled. `@cursor/sdk` has no per-call hook that sees a
+built-in tool's path, so a coordinator's agent runs `read`, `grep` (which also
+serves `glob`) and `ls` on the bridge's own executors
+(`local.resourceProviderOptions`; `bridges/cursor-bridge/src/read-boundary.ts`
+and `read-tools.ts`). They refuse a path inside the data directory, directly or
+through a link, and check every file a search or listing rooted above it would
+return, since searches follow links; the checkout and the coordinator's
+attachment directory stay readable. The read executor also serves an MCP call's
+`$file:` arguments. The executor shapes are unpublished SDK internals, so this
+is proven only against fakes and the SDK's own message descriptors until a live
+Cursor turn qualifies it
+([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)
+task 2).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`

@@ -7,6 +7,8 @@ import {
   isNetworkChangedStartupFailure,
   nextStartupStep,
   waitForRendererStart,
+  watchElectronStartup,
+  type StartupConsoleMessage,
   type StartupWindow,
 } from "./electron-startup-recovery";
 
@@ -165,5 +167,103 @@ describe("collectStartupConsole", () => {
     emit(ABORTED);
     expect(console.drain()).toEqual([]);
     expect(listeners.size).toBe(0);
+  });
+});
+
+/** A context whose console messages name the window that logged them. */
+function fakeContext() {
+  const listeners = new Set<(message: StartupConsoleMessage) => void>();
+  const context = {
+    on: (_event: "console", listener: (message: StartupConsoleMessage) => void) =>
+      listeners.add(listener),
+    off: (_event: "console", listener: (message: StartupConsoleMessage) => void) =>
+      listeners.delete(listener),
+  };
+  const emit = (page: unknown, text: string) => {
+    for (const listener of listeners) listener({ text: () => text, page: () => page });
+  };
+  return { app: { context: () => context }, emit, listeners };
+}
+
+/**
+ * A Playwright page as `pageStartupWindow` reads it: a title, the startup
+ * failure text and a reload. Each reload runs `onReload`, which may log.
+ */
+function fakePage(loads: boolean[], onReload: () => void = () => undefined) {
+  let load = 0;
+  const state = { reloads: 0 };
+  const page = {
+    title: async () => (loads[load] ? TITLE : "Orkestrator AI"),
+    // Present, whatever its box: a headless window is 1x1 until a spec sizes it.
+    getByText: () => ({ count: async () => (loads[load] ? 0 : 1) }),
+    reload: async () => {
+      state.reloads += 1;
+      load = Math.min(load + 1, loads.length - 1);
+      onReload();
+    },
+  };
+  return { page: page as never, state };
+}
+
+describe("collectStartupConsole by window", () => {
+  test("a window's drain takes its own lines and unclaimed ones, never another window's", () => {
+    const { app, emit } = fakeContext();
+    const console = collectStartupConsole(app.context());
+    const first = {};
+    const second = {};
+    emit(first, ABORTED);
+    emit(first, IMPORT_FAILED);
+    emit(second, ABORTED);
+    emit(null, IMPORT_FAILED);
+    expect(console.drain(second)).toEqual([ABORTED, IMPORT_FAILED]);
+    expect(console.drain(first)).toEqual([ABORTED, IMPORT_FAILED]);
+    expect(console.drain()).toEqual([]);
+  });
+});
+
+describe("watchElectronStartup", () => {
+  test("reloads a window that lost its modules to a network change, once", async () => {
+    const { app, emit, listeners } = fakeContext();
+    const watch = watchElectronStartup(app);
+    const { page, state } = fakePage([false, true]);
+    emit(page, `${MODULE_IMPORT_FAILED}: http://127.0.0.1:1/src/renderer-entry.tsx`);
+    emit(page, ABORTED);
+    await expect(watch.waitForTitle(page, TITLE, { timeoutMs: 5_000 })).resolves.toBe(1);
+    expect(state.reloads).toBe(1);
+    watch.dispose();
+    expect(listeners.size).toBe(0);
+  });
+
+  test("a later window is judged on its own console, not on an earlier window's aborts", async () => {
+    const { app, emit } = fakeContext();
+    const watch = watchElectronStartup(app);
+    const earlier = {};
+    emit(earlier, IMPORT_FAILED);
+    emit(earlier, ABORTED);
+    const { page, state } = fakePage([false, true]);
+    emit(page, "[web.startup] renderer.load-failed error.name=Error error.message=boom");
+    await expect(watch.waitForTitle(page, TITLE, { timeoutMs: 5_000 })).rejects.toThrow(
+      "not a network-change module failure",
+    );
+    expect(state.reloads).toBe(0);
+    watch.dispose();
+  });
+
+  test("a window that keeps failing for the same reason fails after the budget", async () => {
+    const { app, emit } = fakeContext();
+    const watch = watchElectronStartup(app);
+    let pageRef: unknown;
+    const { page, state } = fakePage([false], () => {
+      emit(pageRef, IMPORT_FAILED);
+      emit(pageRef, ABORTED);
+    });
+    pageRef = page;
+    emit(page, IMPORT_FAILED);
+    emit(page, ABORTED);
+    await expect(
+      watch.waitForTitle(page, TITLE, { timeoutMs: 5_000, maxReloads: 2 }),
+    ).rejects.toBeInstanceOf(RendererStartupError);
+    expect(state.reloads).toBe(2);
+    watch.dispose();
   });
 });

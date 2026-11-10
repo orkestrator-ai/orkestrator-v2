@@ -18,6 +18,7 @@ import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagn
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 import { terminalVisibleText } from "./terminal-visible-text";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The desktop half of terminal input recovery
@@ -150,13 +151,15 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     await installFetchFault(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
     // index.html's title stays until Vite serves and runs renderer-entry; under
-    // host load that startup takes longer than expect's 5 s default.
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // host load that startup takes longer than expect's 5 s default. A start
+    // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
         ({ command, args }) =>
@@ -223,6 +226,8 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     expect(worktree).toBeTruthy();
 
     await window.reload();
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     const openEnvironment = async (page: Page, name: string) => {
       const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
       const entry = page.getByText(name, { exact: true }).first();

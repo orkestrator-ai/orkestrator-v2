@@ -24,6 +24,7 @@ import {
 } from "./local-gateway-transport-stack";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 import { terminalVisibleText } from "./terminal-visible-text";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
@@ -353,11 +354,14 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    // Every window here loads its modules from Vite: a load that lost them to
+    // ERR_NETWORK_CHANGED is reloaded, and only that (flake 2340).
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     await instrumentMain(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
 
     const composed = await window.evaluate(() => ({
       host: "orkestratorDesktopHost" in window,
@@ -418,7 +422,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
 
     await instrumentPage(window);
     await window.reload();
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     const openEnvironment = async (name: string, page: Page = window) => {
       const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
       const entry = page.getByText(name, { exact: true }).first();
@@ -582,7 +586,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await clickNewWindow(electronApp);
     const extra = await secondOpened;
     extra.setDefaultTimeout(20_000);
-    await expect(extra).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(extra, profile.electronTitle, { timeoutMs: 60_000 });
     expect(await extra.evaluate(() => "orkestratorDesktopHost" in window)).toBe(mode === "gateway");
     await openEnvironment(target.name, extra);
     await expect(extra.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
@@ -820,7 +824,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       });
       await clickNewWindow(electronApp);
       const second = await opened;
-      await expect(second).toHaveTitle(/electron-transport-relay/, { timeout: 60_000 });
+      await startup.waitForTitle(second, /electron-transport-relay/, { timeoutMs: 60_000 });
       expect(await second.evaluate(() => "orkestratorDesktopHost" in window)).toBe(true);
       expect(await window.evaluate(() => "orkestratorDesktopHost" in window)).toBe(false);
       expect(

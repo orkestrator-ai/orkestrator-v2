@@ -1,4 +1,5 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 import { isRootAssistantRecord } from "@orkestrator/protocol/model-id";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type {
@@ -45,6 +46,50 @@ export function diagnosticErrorClass(error: unknown): string {
       : "Error";
   } catch {
     return "Error";
+  }
+}
+
+/**
+ * Whether a failed turn's error is the provider refusing it because the
+ * account's plan allowance is used up ("You've hit your 5-hour limit · resets
+ * 5:30am"). That is an account state the session reports and the backend acts
+ * on (limit stops, account switching), not a bridge failure, so the turn's
+ * logs record it as a warning under its own event rather than as an error.
+ */
+export function isUsageLimitError(error: unknown): boolean {
+  try {
+    const text = error instanceof Error ? error.message : error;
+    return classifyUsageLimitError(text) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The plain property a failed turn's rejection carries when the turn was a
+ * usage-limit refusal. The prompt route reads it to keep its own completion
+ * log consistent with the turn's: a refusal known only from the turn's
+ * rejected `rate_limit_event` has wording no text classifier recognises.
+ *
+ * A property on the turn's own error rather than the session's `errorCode`,
+ * which a later turn replaces before the route's handler runs. A plain string
+ * key rather than a symbol or class, because the route reaches the session
+ * manager through an import boundary that tests replace wholesale.
+ */
+export const USAGE_LIMITED_ERROR_PROPERTY = "usageLimited";
+
+/** Mark a failed turn's rejection as a usage-limit refusal (see above). */
+export function markUsageLimitError(error: unknown): void {
+  if ((typeof error !== "object" && typeof error !== "function") || error === null) return;
+  try {
+    Object.defineProperty(error, USAGE_LIMITED_ERROR_PROPERTY, {
+      value: true,
+      configurable: true,
+      enumerable: false,
+      writable: false,
+    });
+  } catch {
+    // A frozen or exotic rejection keeps its text classification only.
   }
 }
 

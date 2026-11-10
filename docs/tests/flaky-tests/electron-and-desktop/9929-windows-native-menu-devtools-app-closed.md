@@ -53,7 +53,7 @@ crashpad `not connected`. The release branch changed only version numbers.
 `mise run flaky:recurrence -- 9929 --base 53340356c --registry-ref origin/main`
 answered **open**, so this is counted as a recurrence. Still Windows only;
 the Linux failure of the same test on run 42833338750 has a different
-symptom and is [9933](9933-linux-native-menu-devtools-open-poll.md).
+symptom and is [9935](9935-linux-native-menu-devtools-open-poll.md).
 
 ## Assessment
 

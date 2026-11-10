@@ -1,6 +1,6 @@
 # Linux native menu: DevTools not reported open within the poll
 
-- **ID:** 9933
+- **ID:** 9935
 - **Status:** open
 - **Date observed:** 2026-11-10
 

@@ -7,7 +7,7 @@ Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. Re-checke
 ### Tasks
 
 1. **Decide whether the small projection scans matter**: from part 0380, task 1. Status: done (2026-11-05): closed without a change; each scan is under 0.1% of a changed read. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`).
-2. **Measure what E11 saves on a changed read**: from the "Needs verification" of parts 0210, 0220, 0330 and 0350. Status: done (2026-11-05): 38–53% less CPU per changed progressive read. The legacy commit was 39% slower, which is now fixed. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); follow-ups are [6860](6860-splice-legacy-projection-response.md) and [6861](6861-raw-preview-window-serialisation.md).
+2. **Measure what E11 saves on a changed read**: from the "Needs verification" of parts 0210, 0220, 0330 and 0350. Status: done (2026-11-05): 38–53% less CPU per changed progressive read. The legacy commit was 39% slower, which is now fixed. Figures in Measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); follow-ups 6860 and 6861 were done 2026-11-10 (legacy response left unspliced, preview fill check memoised; see "Response encoding" and "Incomplete previews and exact recovery" in [native-transcripts.md](../../architecture/native-transcripts.md)), with [7551](7551-transcript-splice-slower-on-large-rows.md) as their follow-up.
 3. **How often a part-trimmed head streams, and whether one second suits it**: from part 0320's "Needs verification". Status: open.
 
 ### 3. How often a part-trimmed head streams, and whether one second suits it
@@ -56,5 +56,5 @@ The benchmark is committed as `scripts/benchmark-transcript-changed-read.ts`, be
 
 - Efficiency outcome, closing check and measurement of E11 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), tasks 1 and 5
-- [6860](6860-splice-legacy-projection-response.md) and [6861](6861-raw-preview-window-serialisation.md): costs the measurement found that E11 left
+- 6860 and 6861 (done 2026-11-10, deleted): costs the measurement found that E11 left; [7551](7551-transcript-splice-slower-on-large-rows.md) followed from them
 - [5340](5340-transcript-reads-live-evidence.md): E9's live evidence, which a live run for task 3 can collect too

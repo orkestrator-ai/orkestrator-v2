@@ -252,3 +252,24 @@ No gateway code, assertion, deadline or skip changed; the aggregate remains red.
 - **Complete unchanged owner:** after the aggregate finished, `mise run test:logged -- --name merge-gateway-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --output output/playwright/merge-gateway-isolated` passed both viewport cases, exit 0, in 37.6 seconds. Passing raw output was deleted by the logged runner.
 - **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
 - **Assessment:** the unchanged isolated pass confirms intermittence. The cause remains unconfirmed. No gateway implementation, assertion, timeout or skip changed; the aggregate remains red.
+
+## Auto-pipeline address validation — 2026-11-10
+
+Observed on `autopipeline-text-boxes-7182fc46ef5e-r1` at `944b37af1`, based on
+`8d0ae2764e0a5875144d15ee0f526608e6c1c1e8`. The reviewed commit `02f72782c` remains in history.
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=15182 ORKESTRATOR_PUBLIC_E2E_PORT=15183 mise run test:logged -- --name browser -- mise run test:browser`.
+- **Aggregate result:** incomplete at the 1,800 s runner deadline; 69 named failures,
+  last progress 1,194/1,814, with no final pass/skip totals. Public-site tests were not reached.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pcV7xY/browser.log.gz`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=15210 mise run test:logged -- --name address-datasavinggateway-alone -- bunx playwright test --config e2e/playwright.config.ts --workers=1 --output output/agent-testing/address-datasavinggateway-alone e2e/DataSavingGateway.spec.ts`; exit 0, exit 0, one worker and both viewport projects.
+- **Recurrence check:** `mise run flaky:recurrence -- 1310 --base 8d0ae2764e0a5875144d15ee0f526608e6c1c1e8 --registry-ref origin/main` reported `open`.
+
+| Project | Location | Exact test |
+| --- | --- | --- |
+| mobile-chromium | `e2e/DataSavingGateway.spec.ts:18` | data saving survives reload, stays client-local and preserves event latency through resume and reconnect |
+
+The owning spec and its implementation were unchanged. No assertion, deadline,
+retry or skip was changed. This establishes intermittency, not its cause.
+The full run and remaining undetermined failures are recorded in
+[9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).

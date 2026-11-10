@@ -7,6 +7,8 @@ import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { openCodeCommandChangeJournalDirectory } from "./opencode-command-changes.js";
 import type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
+import { openCodeListenerRecheckFetch } from "./opencode-listener-recheck.js";
+import { openCodeSdkFetch } from "./http-bridge/index.js";
 
 export type OpenCodeEnvironmentDependencies = Pick<
   OpenCodeProviderDependencies,
@@ -15,6 +17,7 @@ export type OpenCodeEnvironmentDependencies = Pick<
   | "ensureCoordinatorResearch"
   | "invalidateCoordinatorResearch"
   | "resolveOpenCodeModelProviders"
+  | "openCodeFetch"
 >;
 
 export function openCodeEnvironmentDependencies(
@@ -48,6 +51,16 @@ export function openCodeEnvironmentDependencies(
     // OpenCode name: it is on-disk configuration.
     dependencies.resolveOpenCodeModelProviders = async () =>
       (await loadConfig()).global.openCodeModelProviders;
+  }
+  // A container server's listener is checked again after a refused
+  // connection or an answer its password does not open.
+  const recheck = environment.openCodeListenerRecheck;
+  if (recheck) {
+    dependencies.openCodeFetch = openCodeListenerRecheckFetch(
+      openCodeSdkFetch,
+      recheck,
+      "opencode",
+    ).fetch;
   }
   return dependencies;
 }

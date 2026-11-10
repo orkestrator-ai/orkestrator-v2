@@ -30,6 +30,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
+import { OPENCODE_LAUNCH_ENVIRONMENT_SOURCE } from "../agent-credential-files.js";
 import type { OpenCode2Client } from "./client.js";
 import type { OpenCode2Info } from "./types.js";
 import { mirrorOpenCodeUserConfig } from "./user-config.js";
@@ -54,7 +55,7 @@ export const OPENCODE2_FLAGS = "todo,-schedules,-background_compaction,-artifact
  * (docs/architecture/agent-approvals.md).
  */
 export function buildOpenCode2CredentialPluginSource(
-  options: { hardened?: "refuse-tools" } = {},
+  options: { hardened?: "refuse-tools"; applyLaunchEnvironment?: boolean } = {},
 ): string {
   if (!options.hardened) {
     return `// Written by Orkestrator. Keeps the server password from this server's tools.
@@ -71,7 +72,11 @@ export default {
 };
 `;
   }
-  return `// Written by Orkestrator. Keeps the server password from this server's tools.
+  // A server `orkestrator-bridge-launch opencode2` started runs under
+  // `env -i`; the plugin applies the start script's environment for its
+  // tools, as the 1.x plugin does (`agent-credential-files.ts`).
+  const launch = options.applyLaunchEnvironment ? OPENCODE_LAUNCH_ENVIRONMENT_SOURCE : "";
+  return `${launch}// Written by Orkestrator. Keeps the server password from this server's tools.
 const NAMES = ["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"];
 const PR_SET_DUMPABLE = 4;
 
@@ -104,7 +109,7 @@ export default {
       await ctx.tool.hook("execute.before", () => {
         throw new Error("Refusing to run tools: Orkestrator could not protect this OpenCode server's password from them.");
       });
-    }
+    }${options.applyLaunchEnvironment ? "\n    applyLaunchEnvironment();" : ""}
     await ctx.shell.hook("create.before", (event) => {
       for (const name of NAMES) delete event.env[name];
     });

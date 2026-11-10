@@ -8,6 +8,7 @@ import {
 import { HttpBridgeProvider, type HttpBridgeProviderDependencies } from "./http-bridge/index.js";
 import type { AppConfig } from "./models.js";
 import type { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
+import type { OpenCodeListenerRecheck } from "./opencode-listener-recheck.js";
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
@@ -58,6 +59,12 @@ export interface NativeAgentProviderEnvironment {
     OpenCodeCoordinatorResearch,
     "ensure" | "invalidate" | "toolIds"
   >;
+  /**
+   * Which socket listens on the environment's container OpenCode port, against
+   * the one recorded at launch (`opencode-listener-recheck.ts`). Absent for a
+   * local environment and without a backend.
+   */
+  openCodeListenerRecheck?: OpenCodeListenerRecheck;
 }
 
 /**

@@ -243,6 +243,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           Authorization: `Basic ${basic}`,
           "X-Orkestrator-OpenCode-Token": connection.authToken,
         },
+        ...(dependencies.openCodeFetch ? { fetch: dependencies.openCodeFetch } : {}),
       });
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
     this.researchTools = dependencies.coordinatorResearchToolIds ?? (() => []);

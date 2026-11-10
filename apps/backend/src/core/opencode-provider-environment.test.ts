@@ -115,3 +115,61 @@ describe("createNativeAgentProvider environment wiring", () => {
     }
   });
 });
+
+describe("a container server's listener re-check", () => {
+  test("is the OpenCode client's fetch, and a replaced listener gets nothing more", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => {
+        requests++;
+        return new Response("unauthorized", { status: 401 });
+      },
+    });
+    const factoryCalls: Array<{ fetch?: typeof fetch }> = [];
+    const checks: string[] = [];
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        authToken: "factory-token",
+        directory: "/workspace",
+      },
+      {
+        environment: {
+          environmentId: "env-c",
+          openCodeListenerRecheck: async () => {
+            checks.push("checked");
+            return "replaced";
+          },
+        },
+        openCodeClientFactory: ((options: { fetch?: typeof fetch }) => {
+          factoryCalls.push(options);
+          return openCodeFake().client;
+        }) as never,
+      },
+    );
+    try {
+      const clientFetch = factoryCalls[0]?.fetch;
+      expect(typeof clientFetch).toBe("function");
+      await expect(clientFetch!(`http://127.0.0.1:${server.port}/session`)).rejects.toThrow(
+        "replaced by another process",
+      );
+      await expect(clientFetch!(`http://127.0.0.1:${server.port}/session`)).rejects.toThrow(
+        "replaced by another process",
+      );
+      expect(requests).toBe(1);
+      expect(checks).toEqual(["checked"]);
+    } finally {
+      await provider.dispose?.();
+      server.stop(true);
+    }
+  });
+
+  test("a local environment keeps the default fetch", () => {
+    expect(
+      openCodeEnvironmentDependencies({ environmentId: "env-l" }).openCodeFetch,
+    ).toBeUndefined();
+  });
+});

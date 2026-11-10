@@ -6,7 +6,9 @@ import path from "node:path";
 import {
   judgeOpenCodeListener,
   listOpenCodeListenersScript,
+  OPENCODE2_LISTENER_RECORD,
   OPENCODE_LISTENER_RECORD,
+  openCodeListenerRecord,
   parseOpenCodeListeners,
   recordOpenCodeListenerScript,
   stopOpenCodeListenersScript,
@@ -88,6 +90,23 @@ describe.skipIf(process.platform !== "linux")("the scripts on a real socket", ()
     expect(judge()).toBe("replaced");
     await listen(port);
     expect(judge()).toBe("replaced");
+  });
+
+  test("the 2.x server has a record of its own, written where it is named", async () => {
+    expect(openCodeListenerRecord("opencode")).toBe(OPENCODE_LISTENER_RECORD);
+    expect(openCodeListenerRecord("opencode2")).toBe(OPENCODE2_LISTENER_RECORD);
+    expect(OPENCODE2_LISTENER_RECORD).not.toBe(OPENCODE_LISTENER_RECORD);
+    const port = await listen();
+    const directory = await mkdtemp(path.join(tmpdir(), "ork-opencode-listener-"));
+    directories.push(directory);
+    const record = path.join(directory, "opencode2-listener");
+    const script = recordOpenCodeListenerScript(port, OPENCODE2_LISTENER_RECORD).replaceAll(
+      OPENCODE2_LISTENER_RECORD,
+      record,
+    );
+    expect(script).not.toContain(OPENCODE_LISTENER_RECORD);
+    expect(sh(script).trim()).toBe("recorded");
+    expect((await readFile(record, "utf8")).trim()).toMatch(/^\d+$/);
   });
 
   test("refuses to record a port nobody listens on", async () => {

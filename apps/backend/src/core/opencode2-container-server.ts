@@ -9,13 +9,17 @@
  *
  * - only in a container whose image lists `opencode2` and that publishes the
  *   port ({@link containerRunsOpenCode2}); an older image stays on 1.x;
- * - started by `buildOpenCode2ContainerStartScript` with the same secret
- *   handling as 1.x: the password on stdin to a root-only file
- *   (`opencode2-token`) and to the server alone, the credential plugin
- *   keeping it from the agent's tools, and an image that keeps no root
- *   credential refused rather than weakened;
+ * - on an `opencode2-launch=1` image, started by the root-owned launcher from
+ *   root's binary and configuration, with its listening socket recorded
+ *   (`opencode2-container-launch.ts`), as 1.x is; on an older image, by
+ *   `buildOpenCode2ContainerStartScript` from node's login shell. Either way
+ *   the password goes on stdin to a root-only file (`opencode2-token`) and to
+ *   the server alone, the credential plugin keeps it from the agent's tools,
+ *   and an image that keeps no root credential is refused rather than weakened;
  * - ready once `/api/info` answers as 2.x, then warmed once in `/workspace`
- *   so its plugins load before any tool can run;
+ *   (`/api/agent`) so its plugins load before any tool can run;
+ * - every request re-checks the listener after a refused connection or an
+ *   answer the password does not open (`opencode-listener-recheck.ts`);
  * - reused while it answers with the persisted password and was started with
  *   the current plugins, and adopted after a backend restart (it outlives
  *   the backend, as every container server does).
@@ -40,10 +44,18 @@ import {
 import {
   launchContainerScript,
   readContainerBridgeToken,
+  readContainerOpenCodeCredential,
+  recheckContainerOpenCodeListener,
   removeContainerBridgeCredential,
-  type ContainerCredentialMode,
 } from "./container-bridge-credential.js";
-import { containerCredentialMode } from "./container-credential-mode.js";
+import {
+  openCodeListenerRecheckFetch,
+  type OpenCodeListenerRecheck,
+} from "./opencode-listener-recheck.js";
+import {
+  containerOpenCode2Mode,
+  type OpenCode2ContainerMode,
+} from "./container-credential-mode.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { boundDiagnosticTail, boundedTailCommand } from "./container-log-bounds.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
@@ -63,6 +75,12 @@ import {
   publishesOpenCode2Port,
 } from "./opencode2/container-server.js";
 import type { OpenCode2RouteConnection } from "./opencode2/routing-provider.js";
+import {
+  OPENCODE2_LAUNCH_FINGERPRINT,
+  recordOpenCode2Listener,
+  startOpenCode2WithLauncher,
+  stopOpenCode2Listeners,
+} from "./opencode2-container-launch.js";
 import { waitForOpenCode2Ready } from "./opencode2/server.js";
 import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import { runCommand } from "./shell.js";
@@ -100,11 +118,19 @@ function serversOf(context: Pick<CommandContext, "runtime">): ContainerServers {
   return servers;
 }
 
-/** A new password is a new server, so the router rebuilds its 2.x provider. */
+/**
+ * A new password is a new server, so the router rebuilds its 2.x provider.
+ * Every request goes through the listener re-check
+ * (`opencode-listener-recheck.ts`): after a refused connection or an answer
+ * the password does not open, root is asked which socket listens on the port,
+ * and once it is not the recorded one nothing more is sent on this connection.
+ */
 export function openCode2ContainerConnection(
   containerId: string,
   hostPort: number,
   password: string,
+  recheck: OpenCodeListenerRecheck = () =>
+    recheckContainerOpenCodeListener(containerId, "opencode2"),
 ): OpenCode2RouteConnection {
   const passwordTag = createHash("sha256").update(password).digest("hex").slice(0, 12);
   return {
@@ -112,6 +138,7 @@ export function openCode2ContainerConnection(
     password,
     directory: OPENCODE2_CONTAINER_DIRECTORY,
     generation: `container:${containerId}:${hostPort}:${passwordTag}`,
+    fetch: openCodeListenerRecheckFetch(fetch, recheck, "opencode2").fetch,
   };
 }
 
@@ -164,57 +191,28 @@ export async function containerRunsOpenCode2(
 }
 
 /**
- * Start the container's 2.x server, or return the running one. Callers hold
- * the container's OpenCode bridge operation ({@link ensureOpenCode2ContainerServer}).
+ * Load the workspace's instance, and with it the server's plugins: the
+ * credential plugin's hardening (non-dumpable, password out of the
+ * environment) is then in place before an agent's first tool call, and before
+ * a launched server's socket is recorded. On 2.2.6 `/api/agent` loads them;
+ * `/api/session/active` does not (probed 2026-11-10).
  */
-export async function startContainerOpenCode2Server(
-  context: CommandContext,
+async function warmContainerOpenCode2(client: OpenCode2Client): Promise<void> {
+  await client
+    .api("GET", "/api/agent", "OpenCode agents", { signal: AbortSignal.timeout(30_000) })
+    .catch((error: unknown) => {
+      log.warn("container-server.warm-incomplete", {
+        error: formatLogError(error, { message: false }),
+      });
+    });
+}
+
+/** Wait for a fresh server, with its log tail in the error when it never answers. */
+async function waitForContainerOpenCode2(
   containerId: string,
-  credentialMode: () => Promise<ContainerCredentialMode> = () =>
-    containerCredentialMode(context, containerId),
-): Promise<{ connection: OpenCode2RouteConnection; wasRunning: boolean }> {
-  assertContainerNotDraining(containerId);
-  if (!(await isContainerRunning(containerId))) {
-    throw retryableBridgeStartupError("Container is not running");
-  }
-  const hostPort = await getHostPort(containerId, OPENCODE2_SERVER_PORT);
-  if (!hostPort) {
-    throw new ProviderUnavailableError(
-      "This container was created without the OpenCode 2 port; rebuild it to use OpenCode 2",
-    );
-  }
-
-  const persisted = await readContainerBridgeToken(containerId, "opencode2");
-  if (persisted) {
-    const running = openCode2ContainerConnection(containerId, hostPort, persisted);
-    if ((await answersAs2x(running)) && (await startedWithCurrentPlugins(containerId))) {
-      return { connection: running, wasRunning: true };
-    }
-  }
-  // A persisted password that no longer answers belongs to a stale process,
-  // and a server without one was not started by this backend: replace either.
-  if (persisted || (await isHttpServerReachable(hostPort, "/api/info"))) {
-    await dockerExec(containerId, STOP_OPENCODE2_CONTAINER_SERVER_SCRIPT);
-    await removeContainerBridgeCredential(containerId, "opencode2").catch(() => undefined);
-    await waitForHttpServerExit(hostPort);
-  }
-
-  await ensureCurrentBootReady(containerId);
-  // Every image with `opencode2` keeps credentials in root's files; an image
-  // that would leave the password where `node` reads it is refused.
-  if ((await credentialMode()) === "token-file") {
-    throw new ProviderUnavailableError(
-      "This container's image cannot keep the OpenCode 2 password from its agent; rebuild it from a current image",
-    );
-  }
-  const password = mintBridgeToken();
-  await launchContainerScript(containerId, buildOpenCode2ContainerStartScript(), {
-    secrets: { OPENCODE_PASSWORD: password },
-    rootCredential: { kind: "opencode2", token: password },
-  });
-  log.info("container-server.launched", { containerPort: OPENCODE2_SERVER_PORT });
-  const connection = openCode2ContainerConnection(containerId, hostPort, password);
-  const client = new OpenCode2Client(connection);
+  client: OpenCode2Client,
+  password: string,
+): Promise<void> {
   try {
     await waitForOpenCode2Ready(client, { timeoutMs: OPENCODE2_CONTAINER_READY_TIMEOUT_MS });
   } catch (error) {
@@ -229,24 +227,135 @@ export async function startContainerOpenCode2Server(
       cause: error,
     });
   }
-  // The first request naming the workspace loads its plugins: the credential
-  // plugin's hardening is in place before an agent's first tool call.
-  await client.activeSessions(AbortSignal.timeout(30_000)).catch((error: unknown) => {
-    log.warn("container-server.warm-incomplete", {
-      error: formatLogError(error, { message: false }),
+}
+
+/**
+ * Start the container's 2.x server, or return the running one. Callers hold
+ * the container's OpenCode bridge operation ({@link ensureOpenCode2ContainerServer}).
+ *
+ * On an `opencode2-launch=1` image (`opencode2-launcher`) the root-owned
+ * launcher starts it from root's binary and configuration
+ * (`opencode2-container-launch.ts`), its socket is recorded, and a server is
+ * reused only while that socket is still the only listener.
+ */
+export async function startContainerOpenCode2Server(
+  context: CommandContext,
+  containerId: string,
+  credentialMode: () => Promise<OpenCode2ContainerMode> = () =>
+    containerOpenCode2Mode(context, containerId),
+): Promise<{ connection: OpenCode2RouteConnection; wasRunning: boolean }> {
+  assertContainerNotDraining(containerId);
+  if (!(await isContainerRunning(containerId))) {
+    throw retryableBridgeStartupError("Container is not running");
+  }
+  const hostPort = await getHostPort(containerId, OPENCODE2_SERVER_PORT);
+  if (!hostPort) {
+    throw new ProviderUnavailableError(
+      "This container was created without the OpenCode 2 port; rebuild it to use OpenCode 2",
+    );
+  }
+  let resolvedMode: OpenCode2ContainerMode | undefined;
+  const mode = async (): Promise<OpenCode2ContainerMode> =>
+    (resolvedMode ??= await credentialMode());
+
+  const persisted = await readContainerOpenCodeCredential(containerId, {}, "opencode2");
+  // The password would go to whatever answers the port now: only the
+  // recorded socket, on an image that records one, may receive it.
+  const usable =
+    persisted.token &&
+    persisted.listener !== "replaced" &&
+    !(persisted.requiresRecordedListener && persisted.listener !== "ours")
+      ? persisted.token
+      : null;
+  if (usable) {
+    const running = openCode2ContainerConnection(containerId, hostPort, usable);
+    const launched = persisted.listener === "ours";
+    if (
+      (await answersAs2x(running)) &&
+      (await startedWith(
+        containerId,
+        launched ? OPENCODE2_LAUNCH_FINGERPRINT : OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
+      )) &&
+      // A login-shell server is not reused once the image can launch one.
+      (launched ||
+        (await mode().then(
+          (current) => current !== "opencode2-launcher",
+          () => true,
+        )))
+    ) {
+      return { connection: running, wasRunning: true };
+    }
+  }
+  // A persisted password that no longer answers belongs to a stale process,
+  // a server without one was not started by this backend, and a listener that
+  // is not the recorded one is an imposter: replace any of them. Such a
+  // listener may run under any name, so it is found by the socket it holds.
+  const stopListeners = persisted.listener !== "unrecorded";
+  if (persisted.token || stopListeners || (await isHttpServerReachable(hostPort, "/api/info"))) {
+    if (stopListeners || (await mode()) === "opencode2-launcher") {
+      await stopOpenCode2Listeners(containerId);
+    }
+    await dockerExec(containerId, STOP_OPENCODE2_CONTAINER_SERVER_SCRIPT);
+    await removeContainerBridgeCredential(containerId, "opencode2").catch(() => undefined);
+    await waitForHttpServerExit(hostPort).catch((error: unknown) => {
+      if (!stopListeners) throw error;
+      throw new ProviderUnavailableError(
+        "Something other than OpenCode 2's server holds its port in this container and could not be stopped; restart the environment",
+        { cause: error },
+      );
     });
+  }
+
+  await ensureCurrentBootReady(containerId);
+  const current = await mode();
+  // Every image with `opencode2` keeps credentials in root's files; an image
+  // that would leave the password where `node` reads it is refused.
+  if (current === "token-file") {
+    throw new ProviderUnavailableError(
+      "This container's image cannot keep the OpenCode 2 password from its agent; rebuild it from a current image",
+    );
+  }
+  if (current === "opencode2-launcher") {
+    const password = await startOpenCode2WithLauncher(containerId);
+    log.info("container-server.launched", {
+      containerPort: OPENCODE2_SERVER_PORT,
+      launcher: true,
+    });
+    const connection = openCode2ContainerConnection(containerId, hostPort, password);
+    const client = new OpenCode2Client(connection);
+    try {
+      await waitForContainerOpenCode2(containerId, client, password);
+      // Warmed first: loading the plugins makes the server non-dumpable, so
+      // the socket recorded next cannot be taken out of it.
+      await warmContainerOpenCode2(client);
+      await recordOpenCode2Listener(containerId);
+    } catch (error) {
+      await removeContainerBridgeCredential(containerId, "opencode2").catch(() => undefined);
+      throw error;
+    }
+    return { connection, wasRunning: false };
+  }
+  const password = mintBridgeToken();
+  await launchContainerScript(containerId, buildOpenCode2ContainerStartScript(), {
+    secrets: { OPENCODE_PASSWORD: password },
+    rootCredential: { kind: "opencode2", token: password },
   });
+  log.info("container-server.launched", { containerPort: OPENCODE2_SERVER_PORT });
+  const connection = openCode2ContainerConnection(containerId, hostPort, password);
+  const client = new OpenCode2Client(connection);
+  await waitForContainerOpenCode2(containerId, client, password);
+  await warmContainerOpenCode2(client);
   return { connection, wasRunning: false };
 }
 
-async function startedWithCurrentPlugins(containerId: string): Promise<boolean> {
+async function startedWith(containerId: string, expected: string): Promise<boolean> {
   const fingerprint = (
     await dockerExec(
       containerId,
       `cat ${OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE} 2>/dev/null || true`,
     ).catch(() => "")
   ).trim();
-  return fingerprint === OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT;
+  return fingerprint === expected;
 }
 
 async function containerEnvironment(

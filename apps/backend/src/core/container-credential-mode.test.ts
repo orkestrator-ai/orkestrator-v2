@@ -1,5 +1,9 @@
 import { expect, test, spyOn } from "bun:test";
-import { containerCredentialMode, containerOpenCodeMode } from "./container-credential-mode.js";
+import {
+  containerCredentialMode,
+  containerOpenCode2Mode,
+  containerOpenCodeMode,
+} from "./container-credential-mode.js";
 import type { CommandContext } from "./commands-context.js";
 const context = {} as CommandContext;
 test.each([
@@ -150,6 +154,36 @@ test("OpenCode refuses a downgrade when its launcher support cannot be read", as
   await expect(
     containerOpenCodeMode(context, "container", async (_id, _context, capability) =>
       capability === "opencode-launch" ? "unknown" : "supported",
+    ),
+  ).rejects.toThrow("Cannot determine bridge credential support");
+});
+
+test.each([
+  ["supported", "supported", "opencode2-launcher"],
+  ["unsupported", "supported", "launcher"],
+  ["unsupported", "unsupported", "verifier"],
+] as const)(
+  "OpenCode 2 with opencode2-launch %s and bridge-launch %s starts as %s",
+  async (openCode2Launch, bridgeLaunch, mode) => {
+    const asked: string[] = [];
+    expect(
+      await containerOpenCode2Mode(context, "container", async (_id, _context, capability) => {
+        asked.push(capability);
+        if (capability === "opencode2-launch") return openCode2Launch;
+        if (capability === "bridge-launch") return bridgeLaunch;
+        return "supported";
+      }),
+    ).toBe(mode);
+    expect(asked.includes("opencode2-launch")).toBe(bridgeLaunch === "supported");
+    // 1.x's capability says nothing about 2.x.
+    expect(asked).not.toContain("opencode-launch");
+  },
+);
+
+test("OpenCode 2 refuses a downgrade when its launcher support cannot be read", async () => {
+  await expect(
+    containerOpenCode2Mode(context, "container", async (_id, _context, capability) =>
+      capability === "opencode2-launch" ? "unknown" : "supported",
     ),
   ).rejects.toThrow("Cannot determine bridge credential support");
 });

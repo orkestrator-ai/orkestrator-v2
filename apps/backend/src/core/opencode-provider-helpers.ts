@@ -89,6 +89,12 @@ export const OPENCODE_SUBAGENT_FETCH_CONCURRENCY = 4;
 export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
   openCodeClientFactory?: typeof createOpencodeClient;
+  /**
+   * The `fetch` the default client uses, for a container server whose
+   * listener is re-checked after a failed or unexpected answer
+   * (`opencode-listener-recheck.ts`). Unset keeps `openCodeSdkFetch`.
+   */
+  openCodeFetch?: typeof fetch;
   openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
   /** Test seam over the shared capacity backoff; unset fields keep the defaults. */
   openCodeCapacityRetryPolicy?: Partial<CapacityRetryPolicy>;

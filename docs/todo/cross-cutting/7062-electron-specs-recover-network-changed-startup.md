@@ -6,6 +6,8 @@ Analysed 2026-11-06 against `main` at `e6c3da899`, with branch
 `preview-flakes-1bb27c3be3fd-r1` at `9ef37bfd1`. Found while repairing the
 review validation of to-do 0042 task 11. Updated 2026-11-10 against `main` at
 `04639b12b`: task 1's code and task 2 are done; task 1's live runs remain.
+Updated again 2026-11-10 (review repair): the live qualification's fixtures
+were made deterministic after repeated runs needed two reloads.
 
 ### Tasks
 
@@ -13,8 +15,9 @@ review validation of to-do 0042 task 11. Updated 2026-11-10 against `main` at
    waits for a development window's first title. Status: open (code done
    2026-11-10; a live run of the specs that need a display remains).
 2. **Measure it under forced network churn**: show a real reload recovering a
-   startup. Status: done (2026-11-10, a real headless Electron window in a
-   private network namespace, 5 of 5 recovered with one reload).
+   startup. Status: done (2026-11-10, Chromium and a real headless Electron
+   window in a private network namespace; after the review repair every run
+   recovered with exactly one reload, see task 2).
 
 ### 1. Use the startup recovery in the other Electron specs
 
@@ -136,20 +139,62 @@ unless its namespace differs from the parent's:
   watch theirs: `watchElectronStartup` straight after `electron.launch()`,
   `firstWindow()`, then `waitForTitle`.
 
-Both add and remove a bridge while a 1,000-module dynamic-import fan-out loads,
-require a real `requestfailed` with `net::ERR_NETWORK_CHANGED` and the failure
-screen, then exactly one reload to the title; the Electron case also requires
-the `[startup-recovery]` line. Results on beelink2, 2026-11-10: the test file
-passed (2 of 2), and five direct runs of the Electron fixture each reported
-`{"networkChanged":true,"reloads":1}` with 1,030 to 1,055 module requests and a
-1x1 viewport.
+Both share `electron-startup-recovery-live-support.ts`: the namespace check,
+a 1,000-module dynamic-import fan-out server and bounded bursts of churn
+(add a bridge, remove it). Each requires a real `requestfailed` with
+`net::ERR_NETWORK_CHANGED` and the failure screen, then exactly one reload to
+the title; the Electron case also requires the `[startup-recovery]` line.
+
+The first version passed (2 of 2, and five direct Electron runs) but the
+review's repeated runs did not: Chromium needed two reloads and Electron
+sometimes saw no abort. Reproduced on beelink2 on 2026-11-10 (load average
+about 60 on 16 cores): the Chromium fixture needed two reloads in 3 of 3 runs.
+`ip monitor` in the namespace showed why. The churn loop stopped at the first
+abort, often with the bridge still up, and about 1.5 s later the kernel gave
+that bridge its IPv6 link-local address (after duplicate address detection).
+Chromium aborted the *reload's* modules on that address change, so the
+helper reloaded a second time, which is correct for the helper but not what
+the qualification measures. The no-abort case was a burst that never hit a
+queued module; its cause was not captured.
+
+The fixtures now make the churn finish before the measured reload:
+
+- new interfaces in the namespace get no IPv6
+  (`net.ipv6.conf.default.disable_ipv6`, per namespace);
+- every burst ends with its bridge removed, also when an `ip` step throws,
+  and then waits `NETWORK_SETTLE_MS` (2 s) before the caller reloads;
+- module responses are held until the fixture releases them, so the first
+  load always has queued modules for a change to abort;
+- a burst that aborts nothing starts the load over (`about:blank`, then the
+  page again, because the held responses fill all six connections Chromium
+  allows to the server and a plain reload could not send its request) and
+  churns again, at most three bursts. The fixtures report `bursts`. A restart
+  happens before the measured recovery, so it cannot change the reload count.
+
+`electron-startup-recovery-live-support.test.ts` (root suite) covers those
+rules without a namespace: removal at an abort, at the budget and after a
+failing `ip` step, the settle wait, restart between bursts and the held
+responses.
+
+Results after the repair, beelink2, 2026-11-10:
+
+- Chromium fixture, direct: 6 of 6 with `reloads: 1`.
+- Electron fixture, direct, before the restart existed: 26 of 29 with
+  `reloads: 1`; the other 3 saw no abort in a whole burst (one confirmed by
+  its error, two not captured). A debug copy with `ip monitor` passed 39 of
+  39 and did not reproduce it. This is what the restart is for.
+- The restart path, forced in a debug copy that ignores the first burst's
+  abort: `bursts: 2, reloads: 1` in both engines, 2 of 2 each.
+- The integration test file after the restart: 16 of 16 (15 through
+  `test:logged`, 1 direct showing 2 pass, 0 skipped), about 5.7 s each, while
+  the host's load average fell from about 60 to about 2.
 
 ```bash
 mise run test:logged -- --name startup-live -- bun test ./e2e/agent-testing/electron-startup-recovery.integration.test.ts --parallel=1
 ```
 
-This qualifies the helper in a real Electron window with a small module
-fixture. The complete Orkestrator app was not run inside the namespace: its
+This qualifies the helper in a real Chromium page and a real Electron window
+with a small module fixture. The complete Orkestrator app was not run inside the namespace: its
 backend, Vite and bridges would all have to start there, and the fixture
 already exercises everything the helper reads (the context's console, the
 window, its reload).
@@ -172,8 +217,10 @@ Every Electron spec that waits for a Vite-served window's title uses
 [agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display).
 Unit tests (`electron-startup-recovery.test.ts`) cover the step rule, the
 per-window collector and the watcher (a reload, a later window judged on its
-own console, the reload budget). The opt-in live qualification passes in
-Chromium and in headless Electron.
+own console, the reload budget), and
+`electron-startup-recovery-live-support.test.ts` covers the live fixtures'
+churn rules. The opt-in live qualification passes repeatably in Chromium and
+in headless Electron, each with exactly one reload.
 
 ## Outstanding work
 
@@ -226,14 +273,34 @@ a different startup failure that must fail without an automatic reload.
 
 ### Task 2: review-stage qualification evidence (2026-11-10)
 
-The explicit integration run reached both the Chromium and headless Electron
-cases. Electron passed on the first run, but subsequent runs were inconsistent:
-Chromium recovered with two reloads instead of the asserted one, and Electron
-sometimes observed no abort or needed two reloads. The qualification remains
-open; the exact-one-reload assertions have not been weakened. Failure artifacts
-from this repair stage include `/tmp/orkestrator-test-run.JXl8Ui` and
-`/tmp/orkestrator-test-run.rZ0pKa`. Full migrated-spec and terminal-owner runs
-still require the documented display, Docker and outage setup.
+The review's explicit integration runs were inconsistent: Chromium recovered
+with two reloads instead of the asserted one, and Electron sometimes observed
+no abort. The exact-one-reload assertions were kept; the fixtures were
+repaired instead (next entry).
+
+### Task 2: the churn must be over before the measured reload (review repair, 2026-11-10)
+
+- **What makes the qualification repeatable?**
+  - **End every burst with its bridge removed, give new interfaces no IPv6,
+    settle before the reload, hold modules during the burst, restart a load a
+    burst missed (chosen, done).**
+    - Pros: removes the late IPv6 event that `ip monitor` showed reaching the
+      reload; keeps the exact-one-reload assertion; a restart is reported.
+    - Cons: more fixture code, and a fixed 2 s settle is an assumption about
+      how soon Chromium reads the last event (it read it within tens of
+      milliseconds in every run seen).
+  - **Accept up to the helper's three reloads in the qualification.**
+    - Pros: no fixture change.
+    - Cons: no longer shows that one network change costs one reload, and
+      hides a fixture whose churn outlives its burst.
+  - **Retry the whole qualification on failure.**
+    - Pros: simple.
+    - Cons: retries a test into passing without knowing why it failed.
+
+The no-abort case is handled by the restart rather than explained: it was not
+reproduced in 39 Electron runs with diagnostics, and the fixtures now
+name bursts, interface changes and module requests in their error if it ever
+uses all three bursts.
 
 ## Related
 

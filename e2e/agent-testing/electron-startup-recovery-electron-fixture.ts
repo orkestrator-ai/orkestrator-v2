@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "@playwright/test";
@@ -14,6 +13,11 @@ import {
 } from "./electron-startup-recovery";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import {
+  churnLoadUntilAborted,
+  enterPrivateNetwork,
+  serveModuleFanOut,
+} from "./electron-startup-recovery-live-support";
 
 /**
  * The Electron half of to-do 7062 task 2: a real headless Electron window,
@@ -25,46 +29,12 @@ import { electronSpecEnvironment } from "./electron-spec-environment";
  * removes are this child's alone and no other build's Chromium sees them.
  */
 
-// Refuse to change interfaces unless unshare gave us a private network namespace.
-if (!process.argv[2] || readlinkSync("/proc/self/ns/net") === process.argv[2]) {
-  throw new Error("Startup qualification requires a private network namespace");
-}
+enterPrivateNetwork(process.argv[2]);
 const electronExecutable = process.argv[3];
 if (!electronExecutable) throw new Error("Pass the Electron executable");
-const ip = (...args: string[]) => execFileSync("ip", args, { stdio: "pipe" });
-ip("link", "set", "lo", "up");
 
-let moduleRequests = 0;
-let allowModules = false;
-let moduleStarted!: () => void;
-const started = new Promise<void>((resolve) => (moduleStarted = resolve));
 const title = "Startup recovered";
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 0,
-  async fetch(request) {
-    if (new URL(request.url).pathname === "/entry.js") {
-      moduleRequests += 1;
-      moduleStarted();
-      if (!allowModules) await new Promise((resolve) => setTimeout(resolve, 20));
-      return new Response("export const ready = true", {
-        headers: { "Content-Type": "text/javascript" },
-      });
-    }
-    // The renderer's own failure path: log the rejected import, then show
-    // the startup failure text, as renderer-entry does.
-    return new Response(
-      `<title>Starting</title><script type="module">
-        Promise.all(Array.from({length: 1000}, (_, i) => import('/entry.js?i=' + i)))
-        .then(() => { document.title = ${JSON.stringify(title)}; }).catch(error => {
-          console.error(error.message);
-          document.body.textContent = ${JSON.stringify(STARTUP_FAILED_TEXT)};
-        });
-      </script><body></body>`,
-      { headers: { "Content-Type": "text/html; charset=utf-8" } },
-    );
-  },
-});
+const server = await serveModuleFanOut(title);
 
 const root = mkdtempSync(path.join(os.tmpdir(), "startup-recovery-electron-"));
 const main = path.join(root, "main.cjs");
@@ -106,32 +76,49 @@ try {
       }
     });
     const window = await app.firstWindow({ timeout: 30_000 });
-    await started;
+    await server.started;
     // Change only this child's interfaces while the window has modules in flight.
-    for (let attempt = 0; attempt < 200 && !networkChanged; attempt += 1) {
-      if (attempt % 2 === 0) {
-        ip("link", "add", "churn-test", "type", "bridge");
-        ip("addr", "add", "192.0.3.1/24", "dev", "churn-test");
-        ip("link", "set", "churn-test", "up");
-      } else {
-        ip("link", "del", "churn-test");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    // A burst that aborted nothing starts the load over, before any recovery.
+    const churn = await churnLoadUntilAborted(
+      () => networkChanged,
+      async () => {
+        const nextLoad = server.nextModuleRequest();
+        // The held responses fill every connection Chromium allows to the
+        // server, so a reload could not even send its request. Leaving for
+        // about:blank cancels them and frees those connections first.
+        await window.goto("about:blank");
+        await window.goto(server.url.href, { waitUntil: "commit" });
+        await nextLoad;
+      },
+    );
+    if (!networkChanged) {
+      throw new Error(
+        `No actual ERR_NETWORK_CHANGED module failure observed (${JSON.stringify({
+          ...churn,
+          moduleRequests: server.moduleRequests(),
+        })})`,
+      );
     }
-    if (!networkChanged) throw new Error("No actual ERR_NETWORK_CHANGED module failure observed");
     await window.getByText(STARTUP_FAILED_TEXT).waitFor({ state: "attached", timeout: 10_000 });
     const viewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-    allowModules = true;
+    server.release();
     const reloads = await startup.waitForTitle(window, title, { timeoutMs: 20_000 });
     // waitForTitle prints its own `[startup-recovery]` line; the result is the last line.
     process.stdout.write(
-      `\n${JSON.stringify({ networkChanged, reloads, moduleRequests, viewport })}\n`,
+      `\n${JSON.stringify({
+        networkChanged,
+        reloads,
+        moduleRequests: server.moduleRequests(),
+        bursts: churn.bursts,
+        interfaceChanges: churn.interfaceChanges,
+        viewport,
+      })}\n`,
     );
   } finally {
     startup.dispose();
   }
 } finally {
   await app.close().catch(() => undefined);
-  await server.stop(true);
+  await server.stop();
   rmSync(root, { recursive: true, force: true });
 }

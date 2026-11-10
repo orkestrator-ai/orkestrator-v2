@@ -661,6 +661,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
 
+   Re-prove how an MCP tool's safety hints reach a Claude approval card
+   (`claude-mcp-tool-hints.ts`): the call name `canUseTool` reports, the bare
+   tool name and annotation keys in `mcpServerStatus()`, and that the status
+   read answers while the CLI waits on `canUseTool`. This runs the real CLI in
+   a temporary home with a local MCP server and a loopback model, with no
+   credentials; every call is denied. It also runs in the slow tier:
+
+   ```bash
+   bun test --cwd bridges/claude-bridge ./src/services/claude-mcp-tool-hints.live.test.ts --preload ../../tests/setup-node.ts --parallel=1
+   ```
+
+   A failure means the CLI changed how it names MCP calls or reports
+   annotations; update the module's header and its matching, never the card.
+
    Re-prove what a parked spare does and refuses, which is why the bridge does
    not use `prewarm()`: no model call while parked, a `sessionId` kept, a
    `resume` refused, a slow MCP server not connected ahead of the claim. This

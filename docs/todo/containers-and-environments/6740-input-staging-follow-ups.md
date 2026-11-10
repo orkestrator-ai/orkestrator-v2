@@ -92,4 +92,4 @@ What E25 (DK-14, report part `0490`) left after the host staging copy learned to
 
 - [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
 - [4580 input stamp follow-ups](4580-input-stamp-follow-ups.md).
-- 6741 Git mirror access, done 2026-11-09: see [Project Git mirror](../../architecture/container-lifecycle.md#project-git-mirror).
+- [6741 Git mirror access](6741-git-mirror-access.md).

@@ -89,12 +89,35 @@ function openWorktreeWatcher(worktree: string, overrides: Partial<WorktreeWatche
 }
 
 async function watchWorktree(worktree: string, overrides: Partial<WorktreeWatcherOptions> = {}) {
-  const opened = openWorktreeWatcher(worktree, overrides);
+  const plan =
+    overrides.plan === undefined
+      ? overrides.startWatch
+        ? null
+        : worktreeWatchPlanIo
+      : overrides.plan;
+  let proofRead = plan === null;
+  const opened = openWorktreeWatcher(worktree, {
+    ...overrides,
+    plan: plan && {
+      ...plan,
+      async listExcluded(root) {
+        try {
+          return await plan.listExcluded(root);
+        } finally {
+          proofRead = true;
+        }
+      },
+    },
+  });
   const deadline = Date.now() + DELIVERY_DEADLINE_MS;
-  while (!opened.watcher.qualified && Date.now() < deadline) {
+  // On macOS a recursive root already covers everything before Git has read
+  // which events to omit. Ignore-rule assertions need that independent proof,
+  // not just native coverage or the first source event.
+  while ((!opened.watcher.qualified || !proofRead) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   expect(opened.watcher.qualified).toBe(true);
+  expect(proofRead).toBe(true);
   expect(opened.errors).toEqual([]);
   return opened;
 }

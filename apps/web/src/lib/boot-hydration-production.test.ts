@@ -65,8 +65,8 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
       try {
         await nextTask();
         if (command === "get_environments" || command === "get_environment_snapshots") return [];
-        if (command === "list_build_pipelines")
-          return [
+        if (command === "list_build_pipelines") {
+          const records = [
             {
               id: `pipeline-${input.projectId}`,
               projectId: input.projectId,
@@ -82,6 +82,11 @@ for (const failedPart of ["promptQueues", "multiReviewWorkflows"] as const) {
               },
             },
           ];
+          // A conditional read (with knownRevisions) answers ids and records.
+          return args && "knownRevisions" in args
+            ? { ids: records.map(({ id }) => id), records }
+            : records;
+        }
         if (command === "list_environment_hydration")
           return {
             environments: input.environmentIds.map((id) => ({

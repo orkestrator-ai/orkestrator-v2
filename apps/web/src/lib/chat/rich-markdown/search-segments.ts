@@ -61,8 +61,6 @@ export interface SearchProjection {
   roots?: readonly SearchRoot[];
 }
 
-export const EMPTY_SEARCH_PROJECTION: SearchProjection = { text: "", segments: [] };
-
 /** Shift a projection's segments into a combined text at `offset` / `part`. */
 export function offsetSegments(
   segments: readonly SearchSegment[],

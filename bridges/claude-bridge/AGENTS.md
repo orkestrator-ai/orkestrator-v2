@@ -220,10 +220,11 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   full-mode replay sends as `bridge.cursor`. An observation replay
   (`?observe=1`) still sends one content-free frame per revision under its
   original type, so what the backend observer reads does not change.
-- **`DELETE /session/:id` is destructive.** It calls the SDK's
-  `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
-  uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops
-  the query and keeps the rollout; nothing may fall back from close to DELETE.
+- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`;
+  an older bridge's called the SDK's `deleteSession`, which removes the
+  `{sessionId}.jsonl` rollout. Tab close uses `POST /session/:id/close`
+  (`closeSessionRetainingHistory`), which stops the query and keeps the
+  rollout; nothing may fall back from close to DELETE.
   Close answers 503 pending, keeping the session registered and fenced, when
   it cannot prove the query stopped (`Query.close()` threw or did not settle,
   or a racing dispatch claim did not settle).
@@ -304,8 +305,8 @@ invariants keep it honest:
 
 ## Goals stay with the backend
 
-Orkestrator's goal loop runs in the backend (decisions D1 and D2 of the retired
-goal plan, `git show 2b876486b:plans/goals.md`), so
+Orkestrator's goal loop runs in the backend ([goals.md](../../docs/architecture/goals.md);
+decisions D1 and D2 of the retired goal plan, `git show 2b876486b:plans/goals.md`), so
 `ProposeGoal` is in `disallowedTools` on every turn, and the catalogue's `/goal`
 row is replaced by the backend's session action. Two loops must never stack on
 one session.

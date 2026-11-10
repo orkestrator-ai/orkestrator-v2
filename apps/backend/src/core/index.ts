@@ -1780,7 +1780,7 @@ export class OrkestratorBackend {
       ceiling: async (projectId) => (await this.graphTemplates.getCeiling(projectId)).ceiling,
     });
     context.graphDescribe = this.graphDescribe;
-    // A goal's optional verifier session (plans/goals/401).
+    // A goal's optional verifier session (docs/architecture/goals.md).
     this.goalVerifierProviders = new GraphAgentProviders({
       connection: (environment, agent) =>
         graphAgentBridgeConnection(invokeCommand, agent, environment),

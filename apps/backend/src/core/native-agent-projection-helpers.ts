@@ -554,7 +554,7 @@ export function discoveryAnnouncementKey(value: unknown): string {
 }
 
 /**
- * MCP servers with each server's tool names in one fixed order (todo 7530).
+ * MCP servers with each server's tool names in one fixed order (#2062).
  * A provider may list a server's tools in a different order on every read
  * (Codex app-server reports them as a map), and a view shows them as a set.
  * Left alone, every 30 s renewal of an idle Codex view's MCP section stored
@@ -576,7 +576,7 @@ const DISCOVERY_PATH_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/;
 
 /**
  * Where two announced values of one discovery section differ, as content-free
- * paths (todo 7530): object keys that are plain identifiers (anything else
+ * paths (#2062): object keys that are plain identifiers (anything else
  * reads `other`), `[]` for an entry of an array of the same length, `[count]`
  * when its length changed and `[order]` when only its order did. Values never
  * appear. Both sides are compared as a view sees them

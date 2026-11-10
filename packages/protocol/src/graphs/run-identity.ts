@@ -22,7 +22,6 @@ import { graphUtf8Bytes, isGraphPlanId } from "./grammar.js";
 import {
   GRAPH_ARTIFACT_FORMAT_VERSION,
   GRAPH_RUN_BOUNDS,
-  GRAPH_RUN_INPUT_PRODUCER,
   type GraphArtifactBody,
   type GraphArtifactProducer,
   type GraphArtifactWorkspace,
@@ -210,13 +209,6 @@ export function graphArtifactId(
         : null,
       ...(identity.sourceItem === undefined ? {} : { sourceItem: identity.sourceItem }),
     }),
-  );
-}
-
-/** Whether a producer names a run input rather than an activation. */
-export function isGraphRunInputProducer(producer: GraphArtifactProducer): boolean {
-  return (
-    producer.nodeId === GRAPH_RUN_INPUT_PRODUCER && producer.activation === GRAPH_RUN_INPUT_PRODUCER
   );
 }
 

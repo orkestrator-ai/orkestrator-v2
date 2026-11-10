@@ -433,7 +433,7 @@ export class TerminalWebSocketClient {
   };
 
   /**
-   * The visible-page heartbeat (to-do 7200 task 4). Runs only while channels
+   * The visible-page heartbeat (#2052). Runs only while channels
    * are desired, the page is visible and the current socket is ready and
    * answers pings; every other state stops it, and `dispose` cancels it.
    */

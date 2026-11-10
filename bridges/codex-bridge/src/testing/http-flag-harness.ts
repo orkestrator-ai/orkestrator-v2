@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     }),
   );
 
-  await record("delete", await request(`/session/${sessionId}`, { method: "DELETE" }));
+  await record("close", await request(`/session/${sessionId}/close`, { method: "POST" }));
 
   process.stdout.write(`${JSON.stringify({ engine: "app-server", results })}\n`);
   process.exit(0);

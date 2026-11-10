@@ -1,5 +1,5 @@
 /**
- * Which session routes keep a Pi session attached (todo 7540).
+ * Which session routes keep a Pi session attached (#2062).
  *
  * The idle detach (`idle-detach.ts`) releases a session's Pi SDK handle and
  * its MCP processes once `lastAccessed` is ten minutes old. An open but idle

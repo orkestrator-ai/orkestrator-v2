@@ -47,7 +47,6 @@ import {
   reconcilePersistedSessions,
   ensurePersistedSession,
   hydratePersistedSessionMessages,
-  deleteSessionDurably,
   renameSessionDurably,
   forkPersistedSession,
   rewindSessionFiles,
@@ -104,6 +103,7 @@ import { registerSessionCloseRoute } from "./session-close.js";
 import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 
 const log = createLogger("bridge.claude");
 
@@ -180,6 +180,37 @@ function sessionErrorStatus(error: unknown): 400 | 404 | 409 | 500 | 503 {
   if (code === "invalid") return 400;
   if (code === "unavailable") return 503;
   return 500;
+}
+
+/**
+ * Whether a turn's rejection is a usage-limit refusal. The turn marks its own
+ * rejection with a plain `usageLimited` property when it classified the
+ * refusal, including from a rejected `rate_limit_event` whose result wording no
+ * classifier recognises (`markUsageLimitError` in the turn lifecycle). A plain
+ * property for the same reason `sessionErrorStatus` reads `code`. The text
+ * classifier remains the fallback for a rejection the turn did not settle.
+ */
+function isUsageLimitedRejection(error: unknown): boolean {
+  try {
+    if ((error as { usageLimited?: unknown } | null)?.usageLimited === true) return true;
+    return classifyUsageLimitError(error instanceof Error ? error.message : error) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Log a prompt turn that failed after the route accepted it. A turn the
+ * provider refused on a used-up plan allowance was already recorded by the
+ * turn as `prompt.usage-limited` and is reported to the session; it is an
+ * account state, not a processing fault, so it is not logged again as one.
+ */
+function logPromptProcessingFailure(error: unknown): void {
+  if (isUsageLimitedRejection(error)) {
+    log.debug("prompt.processing-usage-limited");
+    return;
+  }
+  log.error("prompt.processing-failed", { error: formatLogError(error) });
 }
 
 /**
@@ -443,47 +474,6 @@ session.get("/:id/usage", async (c) => {
   }
 });
 
-session.put("/:id/preferences", async (c) => {
-  const id = c.req.param("id");
-  try {
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "Request body must be valid JSON" }, 400);
-    }
-    if (
-      body === null ||
-      typeof body !== "object" ||
-      Array.isArray(body) ||
-      Object.getPrototypeOf(body) !== Object.prototype
-    ) {
-      return c.json({ error: "Request body must be a JSON object" }, 400);
-    }
-    const record = body as Record<string, unknown>;
-    const unexpectedField = Object.keys(record).find((key) => key !== "planMode");
-    if (unexpectedField) {
-      return c.json({ error: `Unexpected session preference field: ${unexpectedField}` }, 400);
-    }
-    if (!Object.hasOwn(record, "planMode")) {
-      return c.json({ error: "planMode is required" }, 400);
-    }
-    if (Object.hasOwn(record, "planMode") && typeof record.planMode !== "boolean") {
-      return c.json({ error: "planMode must be a boolean" }, 400);
-    }
-    const updated = await setSessionPreferences(
-      id,
-      typeof record.planMode === "boolean" ? { planMode: record.planMode } : {},
-    );
-    return c.json({ planMode: updated.planMode ?? false });
-  } catch (error) {
-    return c.json(
-      { error: errorMessage(error, "Failed to update session preferences") },
-      sessionErrorStatus(error),
-    );
-  }
-});
-
 /** The composer's approval modes; `plan` and `dontAsk` are set by other controls. */
 function claudeApprovalMode(
   value: unknown,
@@ -664,27 +654,6 @@ session.get("/:id/structured-output", (c) => {
     structuredOutput: sessionData.structuredOutput ?? null,
     requestId: sessionData.structuredOutputRequestId,
   });
-});
-
-// Get the authoritative task list for a session.
-//
-// The bridge owns this state, so a tab that was unmounted while tasks changed
-// rehydrates from here rather than replaying the transcript and hoping the last
-// task tool part is still present.
-session.get("/:id/tasks", async (c) => {
-  const id = c.req.param("id");
-  const sessionData = getSession(id) ?? (await ensurePersistedSession(id));
-
-  if (!sessionData) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-
-  if (sessionData.persistedMessagesLoaded === false) {
-    await hydratePersistedSessionMessages(id);
-  }
-
-  // A session that has never run a task tool has an empty, and complete, list.
-  return c.json(sessionData.taskRegistry?.snapshot() ?? { items: [], complete: true });
 });
 
 // Get session messages
@@ -1004,7 +973,7 @@ session.post("/:id/prompt", async (c) => {
           },
           (error) => {
             rejectStarted?.(error);
-            log.error("prompt.processing-failed", { error: formatLogError(error) });
+            logPromptProcessingFailure(error);
           },
         );
         return { started, completion };
@@ -1067,7 +1036,7 @@ session.post("/:id/prompt", async (c) => {
       ...(workflowResultTurn ? { workflowResultTurn } : {}),
       ...(providerPrompt !== undefined ? { providerPrompt } : {}),
     }).catch((error) => {
-      log.error("prompt.processing-failed", { error: formatLogError(error) });
+      logPromptProcessingFailure(error);
     });
 
     log.debug("prompt.accepted", { sessionId: id });
@@ -1131,49 +1100,11 @@ session.post("/:id/hard-abort", (c) => {
   return c.json({ status: abortSession(id) ? "aborted" : "not_running" });
 });
 
-// Permanently delete a session, including its Claude rollout. Tab close must
-// use POST /:id/close instead.
-session.delete("/:id", async (c) => {
-  const id = c.req.param("id");
-  try {
-    const deleted = await deleteSessionDurably(id);
-    if (deleted) {
-      return c.json({ status: "deleted" });
-    }
-    return c.json({ error: "Session not found" }, 404);
-  } catch (error) {
-    log.error("session.delete-failed", { error: formatLogError(error) });
-    return c.json(
-      { error: errorMessage(error, "Failed to delete session") },
-      sessionErrorStatus(error),
-    );
-  }
-});
-
 // Ordinary tab close: stop owned work and release the mapping, keep history.
-// DELETE above stays the explicit, destructive operation.
+// The bridge serves no DELETE: nothing may remove a Claude rollout over HTTP.
 registerSessionCloseRoute(session);
 
-session.post("/:id/rename", async (c) => {
-  const id = c.req.param("id");
-  const body = await c.req.json().catch(() => ({}));
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  if (!title) return c.json({ error: "Title is required" }, 400);
-  try {
-    const renamed = await renameSessionDurably(id, title);
-    return renamed
-      ? c.json({ status: "renamed", title })
-      : c.json({ error: "Session not found" }, 404);
-  } catch (error) {
-    log.error("session.rename-failed", { error: formatLogError(error) });
-    return c.json(
-      { error: errorMessage(error, "Failed to rename session") },
-      sessionErrorStatus(error),
-    );
-  }
-});
-
-// Neutral provider surface; `/rename` remains as the compatibility alias.
+// Neutral provider surface for a session title.
 session.post("/:id/title", async (c) => {
   const title = String(
     ((await c.req.json().catch(() => ({}))) as { title?: unknown }).title ?? "",

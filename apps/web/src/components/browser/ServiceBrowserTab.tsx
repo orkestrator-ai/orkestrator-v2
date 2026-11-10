@@ -282,14 +282,14 @@ function ServicePreview({
   const backendMismatch =
     capabilities !== null && capabilities.backendInstanceId !== serviceRef.backendInstanceId;
   const mode: Mode = useMemo(() => {
-    if (!capabilities) return status === "unsupported" ? "unsupported" : "compatibility";
+    if (!capabilities) return "compatibility";
     if (nativeBrowserPreview) {
       if (capabilities.surfaces.desktopTunnel.available) return "desktop-tunnel";
       return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
     }
     if (capabilities.surfaces.browserTopLevel.available) return "top-level";
     return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
-  }, [capabilities, nativeBrowserPreview, status]);
+  }, [capabilities, nativeBrowserPreview]);
 
   // Follow the durable path when another client (or an undo) changes it.
   useEffect(() => {
@@ -1128,11 +1128,7 @@ function PreviewIntentChooser({
       .loadCapabilities()
       .then((loaded) => {
         if (cancelled) return;
-        if (!loaded) {
-          // Older backend: keep the original behaviour for this link.
-          if (previews.getState().status === "unsupported") retarget(target.url);
-          return;
-        }
+        if (!loaded) return;
         return backendForScope(backendScope)
           .resolvePreviewTarget({
             intent: { url: target.url, source: target.source, environmentId: target.environmentId },

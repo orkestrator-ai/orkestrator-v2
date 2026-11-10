@@ -20,7 +20,6 @@ import {
   listAgentMailboxesCommand,
   retryAgentMailInjectCommand,
   sendAgentMailCommand,
-  setAgentMessagingPausedCommand,
 } from "./index.js";
 
 /** The keys each handler read before (2026-11-07); every handler was lenient. */
@@ -39,7 +38,6 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   get_agent_mail_inbox_snapshot: [],
   get_agent_mail_mailbox: ["environmentId", "tabId", "unreadOnly", "offset", "limit"],
   get_agent_mail_mailboxes: ["addresses"],
-  list_agent_mail_inbox: ["environmentId", "tabId", "unreadOnly", "offset", "limit"],
   get_agent_mail_message: ["environmentId", "tabId", "messageId"],
   get_agent_mail_status: ["messageId"],
   list_agent_mail_sent: ["environmentId", "tabId"],
@@ -62,7 +60,6 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   discard_agent_mail_inject: ["environmentId", "tabId", "messageId"],
   get_agent_messaging_settings: [],
   update_agent_messaging_settings: ["settings"],
-  set_agent_messaging_paused: ["paused"],
 };
 
 const ALL: readonly AnyCommandDef[] = AGENT_MAIL_COMMANDS;
@@ -114,8 +111,8 @@ const descriptor = {
 };
 
 describe("agent-mail definitions", () => {
-  it("cover the 23 commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(23);
+  it("cover the 21 commands once, each since version 1 of the domain", () => {
+    expect(ALL).toHaveLength(21);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({
@@ -163,7 +160,6 @@ describe("agent-mail definitions", () => {
       [getAgentMailMessageCommand, { environmentId: 7, tabId: null }],
       [sendAgentMailCommand, { requestId: "", body: 12 }],
       [retryAgentMailInjectCommand, { now: "yes" }],
-      [setAgentMessagingPausedCommand, { paused: "no" }],
       [getAgentMailMailboxCommand, { limit: "all", unreadOnly: 1 }],
     ] as const) {
       expect({ name: def.name, ok: Result.isSuccess(decodeCommandArgs(def, args)) }).toEqual({

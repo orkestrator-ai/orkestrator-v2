@@ -1,6 +1,5 @@
 import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
 import {
-  cacheOpencodeModelCatalogCommand,
   getClaudeModelCatalogCommand,
   getClaudeServerLogCommand,
   getClaudeServerStatusCommand,
@@ -81,7 +80,6 @@ import {
   resolveCursorApiKey,
   cursorApiKeyFingerprint,
   asNonBlankString,
-  asOpenCodeModelCatalog,
   quoteShell,
   getHostPort,
   dockerExec,
@@ -305,12 +303,6 @@ export function registerServerCommands(
           connected && !connected.includes(model.provider) ? { ...model, connected: false } : model,
         ),
     };
-  });
-  register(cacheOpencodeModelCatalogCommand, (args, { storage }) => {
-    return storage.cacheOpenCodeModelCatalog(
-      asNonBlankString(args.projectId, "projectId"),
-      asOpenCodeModelCatalog(args.models),
-    );
   });
   registerBridgeStart(startClaudeServerCommand, "claude", async ({ containerId }, context) => {
     const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));

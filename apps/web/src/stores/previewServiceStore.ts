@@ -1,5 +1,4 @@
 import {
-  isUnknownPreviewCommandError,
   previewErrorFromUnknown,
   type PreviewCapabilities,
   type PreviewRegistrySnapshot,
@@ -26,11 +25,8 @@ export interface EnvironmentPreviewState {
 }
 
 export interface PreviewServiceStoreState {
-  /**
-   * `unsupported` means the backend specifically reported the preview commands
-   * as unknown (an older backend). Network or auth failures are `error`.
-   */
-  status: "idle" | "loading" | "ready" | "unsupported" | "error";
+  /** Every backend in the support window has preview services; any failure is `error`. */
+  status: "idle" | "loading" | "ready" | "error";
   capabilities: PreviewCapabilities | null;
   error: string | null;
   environments: Record<string, EnvironmentPreviewState>;
@@ -102,7 +98,6 @@ export const previewServiceStore = defineScopedStore<PreviewServiceStoreState>(
 
       loadCapabilities: ({ force = false } = {}) => {
         if (!force && get().status === "ready") return Promise.resolve(get().capabilities);
-        if (!force && get().status === "unsupported") return Promise.resolve(null);
         if (capabilitiesRequest && !force) return capabilitiesRequest;
         const requestGeneration = generation;
         set({ status: get().capabilities ? get().status : "loading" });
@@ -139,15 +134,10 @@ export const previewServiceStore = defineScopedStore<PreviewServiceStoreState>(
           })
           .catch((error: unknown) => {
             if (requestGeneration !== generation) return get().capabilities;
-            if (isUnknownPreviewCommandError(error)) {
-              set({ status: "unsupported", capabilities: null, error: null });
-            } else {
-              set({
-                status: "error",
-                error:
-                  previewErrorFromUnknown(error)?.message ?? "Preview services are unavailable.",
-              });
-            }
+            set({
+              status: "error",
+              error: previewErrorFromUnknown(error)?.message ?? "Preview services are unavailable.",
+            });
             return null;
           })
           .finally(() => {

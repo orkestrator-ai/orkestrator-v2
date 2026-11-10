@@ -71,46 +71,6 @@ afterEach(() => {
 });
 
 describe("Electron backend command registry", () => {
-  test("exclusive checkout ownership refuses a legacy container-only terminal attach", async () => {
-    const environment = createEnvironment({
-      id: "env-promoting",
-      environmentType: "containerized",
-      containerId: "container-promoting",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    let admitted!: () => void;
-    let resume!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      admitted = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      resume = resolve;
-    });
-    const reservation = context.runtime.environments.fence.withExclusiveMutation(
-      environment.id,
-      [],
-      async () => {
-        admitted();
-        await gate;
-      },
-    );
-    await ready;
-    try {
-      await expect(
-        commands.get("attach_terminal")!(
-          { containerId: environment.containerId, cols: 80, rows: 24 },
-          context,
-        ),
-      ).rejects.toThrow("being moved");
-      expect(context.runtime.terminals.processCount()).toBe(0);
-    } finally {
-      resume();
-      await reservation;
-    }
-  });
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -2755,12 +2715,6 @@ printf '["exists","missing"]'
       expect(
         await context.runtime.terminals.history.stateSnapshot(containerCreated.sessionId),
       ).toBeNull();
-      const attached = await commands.get("attach_terminal")?.(
-        { containerId: "container-without-history", cols: 80, rows: 24 },
-        context,
-      );
-      expect(attached).toBeString();
-      expect(await context.runtime.terminals.history.stateSnapshot(String(attached))).toBeNull();
     });
     const setupSessionId = beginSetupPreparationSession(environment, context);
     expect(setupSessionId).toBe(`${environment.id}:setup`);

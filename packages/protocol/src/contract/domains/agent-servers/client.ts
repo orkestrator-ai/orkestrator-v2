@@ -28,6 +28,10 @@ const legacyAgentServersApi = (
 ): AgentServersApi => legacyCommandApi(context, AGENT_SERVERS_COMMANDS);
 
 export const agentServersClient = domainClient(agentServersDomain, {
+  2: agentServersApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: agentServersApi,
   0: legacyAgentServersApi,
 });

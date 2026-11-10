@@ -363,16 +363,6 @@ export function createBuildPipelinesApi(client: BackendClient) {
     const response: unknown = await hydrationRequests.run(() =>
       domain().list_build_pipelines({ projectId, knownRevisions }),
     );
-    // Older backends ignore knownRevisions and return the complete record array.
-    if (Array.isArray(response)) {
-      if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
-        throw new Error("Invalid list_build_pipelines response");
-      }
-      return {
-        ids: response.map((entry) => entry.id as string),
-        records: response as Array<PersistedBuildPipeline<T>>,
-      };
-    }
     if (
       !isRecord(response) ||
       !Array.isArray(response.ids) ||

@@ -619,7 +619,3 @@ export interface GraphDescribeStartInput {
   /** The draft to modify ("modify current draft"). */
   baseDraft?: GraphTemplateV1;
 }
-
-export function isGraphDescribeTerminal(status: GraphDescribeJobStatus): boolean {
-  return status !== "running";
-}

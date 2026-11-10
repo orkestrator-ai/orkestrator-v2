@@ -367,23 +367,12 @@ describe("ACP bridge", () => {
     });
   });
 
-  test("allows authenticated renderer requests from trusted local origins", async () => {
+  test("refuses browser origins other than loopback and serves no CORS", async () => {
     const { base } = await spawnBridge();
     const origin = "http://127.0.0.1:1420";
-    const preflight = await nativeFetch(`${base}/session/create`, {
-      method: "OPTIONS",
-      headers: {
-        origin,
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "x-orkestrator-acp-token, content-type",
-      },
-    });
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
-    expect(preflight.headers.get("access-control-allow-headers")?.toLowerCase()).toContain(
-      "x-orkestrator-acp-token",
-    );
 
+    // A loopback page with the credential is served, but nothing is echoed
+    // back: no browser client remains, so no response is made readable to one.
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers: {
@@ -393,72 +382,30 @@ describe("ACP bridge", () => {
       },
     });
     expect(created.status).toBe(201);
-    expect(created.headers.get("access-control-allow-origin")).toBe(origin);
-    const session = (await created.json()) as { id: string };
+    expect(created.headers.get("access-control-allow-origin")).toBeNull();
 
-    // Packaged Electron renderers use an opaque origin. They still have to
-    // prove possession of the bridge credential, but must not be rejected by
-    // the browser-origin boundary before authentication runs.
-    const opaqueOrigin = await nativeFetch(`${base}/session/${session.id}`, {
-      headers: {
-        origin: "null",
-        "x-orkestrator-acp-token": "integration-test-token",
-      },
-    });
-    expect(opaqueOrigin.status).toBe(200);
-    expect(opaqueOrigin.headers.get("access-control-allow-origin")).toBe("null");
+    // An opaque origin is something any public page can mint through a
+    // sandboxed iframe, so it is refused like any other foreign origin.
+    for (const foreign of ["null", "file://", "https://attacker.invalid"]) {
+      const rejected = await nativeFetch(`${base}/global/health`, {
+        headers: { origin: foreign },
+      });
+      expect(rejected.status).toBe(403);
+    }
 
-    const rejected = await nativeFetch(`${base}/global/health`, {
-      headers: { origin: "https://attacker.invalid" },
-    });
-    expect(rejected.status).toBe(403);
-  });
-
-  test("withholds CORS and private-network access from the unauthenticated health route", async () => {
-    const { base } = await spawnBridge();
-
-    // `/global/health` answers before the token check. Any public page can mint
-    // an opaque origin through a sandboxed iframe, so reflecting that origin
-    // here — or granting Private Network Access for it — would hand the open
-    // web a readable loopback probe. The route stays reachable for the
-    // backend's non-browser prober; a browser just cannot read the body.
-    const opaque = await nativeFetch(`${base}/global/health`, {
-      headers: { origin: "null" },
-    });
-    expect(opaque.status).toBe(200);
-    expect(opaque.headers.get("access-control-allow-origin")).toBeNull();
-
-    const loopback = await nativeFetch(`${base}/global/health`, {
-      headers: { origin: "http://127.0.0.1:1420" },
-    });
-    expect(loopback.status).toBe(200);
-    expect(loopback.headers.get("access-control-allow-origin")).toBeNull();
-
-    const preflight = await nativeFetch(`${base}/global/health`, {
+    // A preflight is an ordinary request: it needs the token like any other.
+    const preflight = await nativeFetch(`${base}/session/create`, {
       method: "OPTIONS",
-      headers: {
-        origin: "null",
-        "access-control-request-method": "GET",
-      },
+      headers: { origin, "access-control-request-method": "POST" },
     });
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.status).toBe(401);
     expect(preflight.headers.get("access-control-allow-private-network")).toBeNull();
 
     // The backend probes without an Origin header at all, which must keep
-    // working — that is the only client this route exists for.
+    // working — that is the only client the health route exists for.
     const prober = await nativeFetch(`${base}/global/health`);
     expect(prober.status).toBe(200);
     expect(await prober.json()).toMatchObject({ ok: true });
-
-    // Authenticated data routes still get their preflight, including the
-    // private-network opt-in a packaged renderer needs.
-    const dataPreflight = await nativeFetch(`${base}/session/create`, {
-      method: "OPTIONS",
-      headers: { origin: "null", "access-control-request-method": "POST" },
-    });
-    expect(dataPreflight.status).toBe(204);
-    expect(dataPreflight.headers.get("access-control-allow-private-network")).toBe("true");
   });
 
   test("reaps a session process when the creating HTTP client disconnects", async () => {

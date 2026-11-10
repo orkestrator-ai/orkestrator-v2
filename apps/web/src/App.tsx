@@ -124,22 +124,14 @@ function desktopConnectionScopeSeed(): {
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
 /**
- * A single daemon probe, normalised to a structured result. It never rejects -
- * the poll would otherwise leave an unhandled rejection behind. The boolean
- * fallback keeps the renderer compatible with an older backend during a dev
- * hot reload.
+ * A single daemon probe. It never rejects - the poll would otherwise leave an
+ * unhandled rejection behind.
  */
 async function probeDocker(
   source: "startup" | "retry" | "poll",
 ): Promise<DockerAvailability | null> {
   try {
-    const result: DockerAvailability | boolean = await checkDocker();
-    if (typeof result === "boolean") {
-      return result
-        ? { available: true, reason: null }
-        : { available: false, reason: "daemon-unavailable" };
-    }
-    return result;
+    return await checkDocker();
   } catch (error) {
     log.error("docker.check-failed", { source, error: formatLogError(error) });
     // A failed request says nothing about Docker. In particular, treating an

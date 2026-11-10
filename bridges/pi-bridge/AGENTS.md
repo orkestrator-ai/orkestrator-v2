@@ -179,7 +179,7 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   until Pi settles the prompt — a late acceptance is aborted and observed — so
   every status route reports running while something can still reach Pi.
   Config and compaction take no claim, so a cancel during them cannot stop a
-  later prompt. Close and DELETE mark the session closed before their first
+  later prompt. Close marks the session closed before its first
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).

@@ -66,9 +66,7 @@ export function environmentsResultFixture(command: string): unknown {
     case "run_environment_setup":
     case "update_port_mappings":
     case "update_environment_agent_settings":
-    case "set_environment_pending_agent_launch":
     case "acknowledge_startup_agent_session":
-    case "set_environment_initial_prompt":
     case "update_environment_allowed_domains":
       return environment;
     case "start_environment":
@@ -93,7 +91,6 @@ export function environmentsResultFixture(command: string): unknown {
     case "get_log_storage_stats":
     case "cleanup_logs":
       return { totalBytes: 0, fileCount: 0, essentialBytes: 0, essentialFileCount: 0 };
-    case "add_environment_domains":
     case "remove_environment_domains":
       return "";
     case "get_environment_status":

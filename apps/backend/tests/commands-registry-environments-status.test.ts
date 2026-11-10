@@ -68,19 +68,6 @@ describe("environment status and settings commands", () => {
     }
   });
 
-  test("reports Claude credential availability through the credential status handler", async () => {
-    const { context } = createContext([]);
-    const commands = createCommandRegistry();
-    const hasClaudeCredentials = mock(async () => true);
-    commands.set("has_claude_credentials", hasClaudeCredentials);
-
-    await expect(commands.get("get_credential_status")?.({}, context)).resolves.toEqual({
-      available: true,
-      expiresAt: null,
-    });
-    expect(hasClaudeCredentials).toHaveBeenCalledTimes(1);
-  });
-
   test(
     "preserves an admitted container start while its container is not yet persisted",
     async () => {
@@ -1277,88 +1264,6 @@ exit 0
     );
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
 
-    // Re-arm a launch with options so the clear below has something to destroy.
-    await commands.get("update_environment_agent_settings")?.(
-      {
-        environmentId: environment.id,
-        agentSettings: {
-          defaultAgent: "codex",
-          platforms: {
-            claude: { mode: null, claudeNativeBackend: null },
-            opencode: { mode: null },
-            codex: { mode: "native" },
-          },
-        },
-        pendingAgentLaunch: true,
-        initialAgentModel: "gpt-5.6-sol",
-        initialReasoningEffort: "high",
-      },
-      context,
-    );
-    expect(environment.initialAgentModel).toBe("gpt-5.6-sol");
-
-    await commands.get("set_environment_pending_agent_launch")?.(
-      {
-        environmentId: environment.id,
-        pending: false,
-      },
-      context,
-    );
-    expectClearsPendingAgentLaunch(updates.at(-1));
-    expect(environment.initialAgentModel).toBeUndefined();
-    expect(environment.initialReasoningEffort).toBeUndefined();
-    await commands.get("set_environment_pending_agent_launch")?.(
-      {
-        environmentId: environment.id,
-        pending: true,
-      },
-      context,
-    );
-    // Arming must not touch the options: the renderer sets the model through
-    // `update_environment_agent_settings`, and clobbering it here would drop a
-    // choice that had already been recorded.
-    expect(updates.at(-1)).toEqual({ pendingAgentLaunch: true });
-    expect(updates.at(-1)).not.toHaveProperty("initialAgentModel");
-    expect(updates.at(-1)).not.toHaveProperty("initialReasoningEffort");
-    // A malformed call must fail rather than silently destroying the intent by
-    // reading a missing/garbage value as `false`.
-    expect(() =>
-      commands.get("set_environment_pending_agent_launch")?.(
-        {
-          environmentId: environment.id,
-        },
-        context,
-      ),
-    ).toThrow("Expected pending to be a boolean");
-    expect(() =>
-      commands.get("set_environment_pending_agent_launch")?.(
-        {
-          environmentId: environment.id,
-          pending: "false",
-        },
-        context,
-      ),
-    ).toThrow("Expected pending to be a boolean");
-
-    await commands.get("set_environment_initial_prompt")?.(
-      {
-        environmentId: environment.id,
-        initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
-      },
-      context,
-    );
-    expect(updates).toContainEqual({
-      initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
-    });
-    expect(() =>
-      commands.get("set_environment_initial_prompt")?.(
-        {
-          environmentId: environment.id,
-          initialPrompt: 42,
-        },
-        context,
-      ),
-    ).toThrow("Expected initialPrompt to be a string");
     await commands.get("update_environment_allowed_domains")?.(
       {
         environmentId: environment.id,
@@ -1368,19 +1273,7 @@ exit 0
     );
     expect(updates).toContainEqual({ allowedDomains: ["one.example.com", "two.example.com"] });
 
-    environment.allowedDomains = ["api.example.com", "shared.example.com"];
-    await expect(
-      commands.get("add_environment_domains")?.(
-        {
-          environmentId: environment.id,
-          domains: ["shared.example.com", "new.example.com"],
-        },
-        context,
-      ),
-    ).resolves.toBe("api.example.com,shared.example.com,new.example.com");
-    expect(updates).toContainEqual({
-      allowedDomains: ["api.example.com", "shared.example.com", "new.example.com"],
-    });
+    environment.allowedDomains = ["api.example.com", "shared.example.com", "new.example.com"];
     await expect(
       commands.get("remove_environment_domains")?.(
         {
@@ -1390,15 +1283,6 @@ exit 0
         context,
       ),
     ).resolves.toBe("api.example.com,new.example.com");
-    await expect(
-      commands.get("add_environment_domains")?.(
-        {
-          environmentId: "missing",
-          domains: [],
-        },
-        context,
-      ),
-    ).rejects.toThrow("Environment not found: missing");
     await expect(
       commands.get("remove_environment_domains")?.(
         {

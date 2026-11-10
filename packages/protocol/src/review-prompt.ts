@@ -38,12 +38,3 @@ export function parseReviewInstruction(value: unknown): string | undefined {
   if (error) throw new ReviewInstructionValidationError(error);
   return value as string | undefined;
 }
-
-/** @deprecated Use REVIEW_INSTRUCTION_MAX_LENGTH. */
-export const REVIEW_PROMPT_MAX_LENGTH = REVIEW_INSTRUCTION_MAX_LENGTH;
-/** @deprecated Use ReviewInstructionValidationError. */
-export const ReviewPromptValidationError = ReviewInstructionValidationError;
-/** @deprecated Use getReviewInstructionValidationError. */
-export const getReviewPromptValidationError = getReviewInstructionValidationError;
-/** @deprecated Use parseReviewInstruction. */
-export const parseReviewPrompt = parseReviewInstruction;

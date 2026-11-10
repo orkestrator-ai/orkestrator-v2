@@ -32,10 +32,10 @@ describe("previewServiceStore", () => {
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
-  test("an unknown command marks an old backend; other failures are errors", async () => {
+  test("any capabilities failure, an unknown command included, is an error", async () => {
     install({});
     expect(await appCommandStore(previewServiceStore).getState().loadCapabilities()).toBeNull();
-    expect(appCommandStore(previewServiceStore).getState().status).toBe("unsupported");
+    expect(appCommandStore(previewServiceStore).getState().status).toBe("error");
 
     resetPreviewServiceSyncForTests();
     install({

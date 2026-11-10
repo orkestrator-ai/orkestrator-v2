@@ -134,18 +134,6 @@ export const getAgentMailMailboxesCommand = defineCommand({
   result: AgentMailMailboxBatchSnapshotSchema,
 });
 
-/** The same page as `get_agent_mail_mailbox`, by the Control MCP's name. */
-export const listAgentMailInboxCommand = defineCommand({
-  domain: agentMailDomain,
-  name: "list_agent_mail_inbox",
-  since: 1,
-  access: "workspace",
-  read: true,
-  critical: [],
-  args: Schema.Struct(mailboxPage),
-  result: AgentMailMailboxSnapshotSchema,
-});
-
 export const getAgentMailMessageCommand = defineCommand({
   domain: agentMailDomain,
   name: "get_agent_mail_message",
@@ -339,17 +327,6 @@ export const updateAgentMessagingSettingsCommand = defineCommand({
   result: AgentMessagingSettingsSchema,
 });
 
-export const setAgentMessagingPausedCommand = defineCommand({
-  domain: agentMailDomain,
-  name: "set_agent_messaging_paused",
-  since: 1,
-  access: "workspace",
-  read: false,
-  critical: [],
-  args: Schema.Struct({ paused: optionalUnknown }),
-  result: Schema.Struct({ paused: Schema.Boolean }),
-});
-
 /** Every `agent-mail` command, in registration order. */
 export const AGENT_MAIL_COMMANDS = [
   getAgentRegistryCommand,
@@ -358,7 +335,6 @@ export const AGENT_MAIL_COMMANDS = [
   getAgentMailInboxSnapshotCommand,
   getAgentMailMailboxCommand,
   getAgentMailMailboxesCommand,
-  listAgentMailInboxCommand,
   getAgentMailMessageCommand,
   getAgentMailStatusCommand,
   listAgentMailSentCommand,
@@ -374,5 +350,4 @@ export const AGENT_MAIL_COMMANDS = [
   discardAgentMailInjectCommand,
   getAgentMessagingSettingsCommand,
   updateAgentMessagingSettingsCommand,
-  setAgentMessagingPausedCommand,
 ] as const;

@@ -172,7 +172,7 @@ from the repository root with those arguments.
 
 `get_docker_image_status` reports `missing`, `compatible`, `legacy`,
 `incompatible` or `unavailable` with the missing capabilities and fixed
-remediation text. `check_base_image` remains a presence-only adapter.
+remediation text.
 
 ## Daemon topology
 
@@ -701,8 +701,8 @@ operation's candidate set or a pending deletion.
 from that set, re-classifying each at removal time: one that became referenced
 is a `conflict`, one outside the preview is `not-in-preview`, a volume still
 mounted is `skipped` (`in-use`), never forced. Every resource gets its own
-outcome. The earlier one-shot `docker_system_prune` / `cleanup_orphaned_containers`
-commands are refused (`invalid-request`): nothing is removed without a review.
+outcome. Nothing is removed without a review: the earlier one-shot prune and
+orphan-cleanup commands were removed on 2026-11-10.
 A container from before owner labels is classified `legacy-unadopted` — it
 could be any installation's on this daemon — and is offered for reattachment,
 never removal.
@@ -1776,9 +1776,8 @@ diagnostics export is the likely first consumer.
 one `docker logs -f` per container among subscribers; a read renews the lease,
 a cursor older than the ring or from another source returns an explicit `gap`,
 and a replaced runtime is a new source id. Closing releases only the observer.
-The legacy `stream_container_logs` is an adapter onto the same service whose
-lease lapses, so an old client that never closes cannot leave an immortal
-follower. Backend shutdown stops every follower.
+A lease that is not renewed lapses, so a client that never closes cannot leave
+an immortal follower. Backend shutdown stops every follower.
 
 ## Claude terminal state signal (`claude-state-signal=3`)
 

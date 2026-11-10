@@ -9,8 +9,6 @@
 import {
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_MAX_SHADOW_DEPTH,
-  WEB_ANNOTATION_PROVENANCES,
-  WEB_ANNOTATION_REQUEST_STATES,
   webAnnotationUtf8Bytes,
   type WebAnnotationAnchor,
   type WebAnnotationAnchorResolution,
@@ -24,10 +22,8 @@ import {
   type WebAnnotationOutcome,
   type WebAnnotationPageEvidence,
   type WebAnnotationPageIdentity,
-  type WebAnnotationProvenance,
   type WebAnnotationRect,
   type WebAnnotationRedactionSummary,
-  type WebAnnotationRequestState,
   type WebAnnotationShadowHost,
   type WebAnnotationSourceHint,
   type WebAnnotationTarget,
@@ -516,14 +512,6 @@ export function assertNoDeclaredProvenance(value: unknown): void {
   if (isRecord(value) && Object.hasOwn(value, "provenance")) {
     throw new WebAnnotationValidationError("Provenance is assigned by the receiver");
   }
-}
-
-export function isWebAnnotationProvenance(value: unknown): value is WebAnnotationProvenance {
-  return WEB_ANNOTATION_PROVENANCES.includes(value as WebAnnotationProvenance);
-}
-
-export function isWebAnnotationRequestState(value: unknown): value is WebAnnotationRequestState {
-  return WEB_ANNOTATION_REQUEST_STATES.includes(value as WebAnnotationRequestState);
 }
 
 const OUTCOMES: ReadonlySet<WebAnnotationOutcome> = new Set([

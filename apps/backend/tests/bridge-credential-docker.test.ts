@@ -4,7 +4,7 @@
  * it, and the backend's own calls still work. On a `bridge-launch=1` image
  * (docs/architecture/agent-approvals.md) a token it catches in flight still answers nothing, and what it
  * plants in its login shell does not run inside the next bridge. A bridge it starts in place of the
- * backend's is noticed and replaced (to-do 7250). OpenCode, which has no bridge of
+ * backend's is noticed and replaced (#2030). OpenCode, which has no bridge of
  * ours, is held to the same on a permission a real tool call parked, raised by a
  * fake model inside the container.
  *
@@ -14,7 +14,7 @@
  *
  * On an `opencode2-launch=1` image the same holds for the OpenCode 2.x server, both
  * servers' package caches are root's, and the checkout's configuration reaches them
- * only as root's filtered copy (to-do 7550).
+ * only as root's filtered copy (#2091).
  *
  * Opt-in: RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE=<image>
  * with `bridge-credential=1`, `bridge-launch=1`, `opencode-launch=1` and
@@ -278,7 +278,7 @@ describe("bridge credential on a real container", () => {
         started.set(bridge.kind, result);
         // The token is where the backend reads it back, with its authority key beside it.
         expect(await readContainerBridgeToken(containerId, bridge.kind)).toBe(result.authToken);
-        // And the socket the bridge listens on is recorded as its own (to-do 7250).
+        // And the socket the bridge listens on is recorded as its own (#2030).
         expect(await asRoot(`cat ${containerListenerRecordFile(bridge.kind)}`)).toMatch(
           /^\d+:[0-9a-f]+$/,
         );
@@ -496,7 +496,7 @@ IMPOSTER
       expect(replayed.status).toBe(403);
       expect(await replayed.json()).toMatchObject({ reason: "replayed" });
 
-      // The backend tells the two apart (to-do 7250): this bridge's socket is
+      // The backend tells the two apart (#2030): this bridge's socket is
       // not the one recorded for the bridge it started, so its token is not
       // handed out, and the next start replaces the agent's bridge with a new
       // token the agent never saw.

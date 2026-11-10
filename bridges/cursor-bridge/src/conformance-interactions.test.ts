@@ -61,7 +61,7 @@ describe("cancel and close racing a held publication", () => {
       const cancel = await harness.call(`/session/${state.id}/cancel`, { method: "POST" });
       // Claimed but not yet sent: parked, never reported as stopped.
       expect(cancel.status).toBe(202);
-      const closing = harness.call(`/session/${state.id}`, { method: "DELETE" });
+      const closing = harness.call(`/session/${state.id}/close`, { method: "POST" });
       await waitFor(() => state.closed === true);
       hold.release();
 

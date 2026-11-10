@@ -41,7 +41,6 @@ import {
   ContainerGitHubCredentialStatusSchema,
   ContainerServerStartSchema,
   ContainerServerStatusSchema,
-  CredentialStatusSchema,
   EnvironmentAgentSkillFileSchema,
   EnvironmentAgentSkillScanSchema,
   GitHubCliLoginProgressSchema,
@@ -284,17 +283,6 @@ export const getOpencodeModelCatalogCacheCommand = defineCommand({
   critical: [],
 });
 
-export const cacheOpencodeModelCatalogCommand = defineCommand({
-  domain: agentServersDomain,
-  name: "cache_opencode_model_catalog",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ projectId: Schema.String, models: optionalUnknown }),
-  result: OpenCodeModelCatalogSnapshotSchema,
-  critical: [],
-});
-
 export const getClaudeModelCatalogCommand = defineCommand({
   domain: agentServersDomain,
   name: "get_claude_model_catalog",
@@ -347,17 +335,6 @@ export const getNativeAgentModelCatalogCommand = defineCommand({
   read: true,
   args: Schema.Struct({ environmentId: Schema.String, ensureAgent: optionalUnknown }),
   result: NativeAgentModelCatalogSchema,
-  critical: [],
-});
-
-export const cacheAgentModelCatalogCommand = defineCommand({
-  domain: agentServersDomain,
-  name: "cache_agent_model_catalog",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ agent: Schema.String, models: optionalUnknown }),
-  result: AgentModelCatalogCacheSchema,
   critical: [],
 });
 
@@ -453,17 +430,6 @@ export const checkGrokCliCommand = hostCheck("check_grok_cli", true);
 export const checkPiCliCommand = hostCheck("check_pi_cli", true);
 export const checkGithubCliCommand = hostCheck("check_github_cli", true);
 export const checkAnyAiCliCommand = hostCheck("check_any_ai_cli", true);
-
-export const getCredentialStatusCommand = defineCommand({
-  domain: agentServersDomain,
-  name: "get_credential_status",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: NoArgs,
-  result: CredentialStatusSchema,
-  critical: [],
-});
 
 /** The first available AI CLI (`claude`, `opencode`, `codex`, `cursor`, `grok`, `pi`), or `null`. */
 export const getAvailableAiCliCommand = defineCommand({
@@ -583,13 +549,11 @@ export const AGENT_SERVERS_COMMANDS = [
   peekContainerAgentBridgeCommand,
   getOpencodeModelPreferencesCommand,
   getOpencodeModelCatalogCacheCommand,
-  cacheOpencodeModelCatalogCommand,
   getClaudeModelCatalogCommand,
   ensureHostPiModelCatalogCommand,
   refreshHostAgentModelCatalogCommand,
   getAgentModelCatalogCacheCommand,
   getNativeAgentModelCatalogCommand,
-  cacheAgentModelCatalogCommand,
   listAgentSkillsCommand,
   listAgentPluginsCommand,
   readAgentSkillCommand,
@@ -605,7 +569,6 @@ export const AGENT_SERVERS_COMMANDS = [
   checkPiCliCommand,
   checkGithubCliCommand,
   checkAnyAiCliCommand,
-  getCredentialStatusCommand,
   getAvailableAiCliCommand,
   getContainerGithubCredentialStatusCommand,
   getGithubCliStatusCommand,

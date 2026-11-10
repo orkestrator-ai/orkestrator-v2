@@ -313,14 +313,6 @@ export const TICKET_SECTION_DEFINITIONS: readonly TicketSectionDefinition[] = [
   },
 ];
 
-const DEFINITION_BY_KEY = new Map(
-  TICKET_SECTION_DEFINITIONS.map((definition) => [definition.key, definition]),
-);
-
-export function ticketSectionHeading(key: Exclude<TicketSectionKey, "custom">): string {
-  return DEFINITION_BY_KEY.get(key)?.heading ?? key;
-}
-
 function normalizedHeading(text: string): string {
   return text
     .replace(/\*\*|__/g, "")

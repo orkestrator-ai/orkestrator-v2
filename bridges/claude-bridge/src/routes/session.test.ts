@@ -21,7 +21,6 @@ const realClaudeSignInSnapshot = { ...realClaudeSignIn };
 // here so the real catalogue functions serve real rows through the route.
 import { sessions as coreSessions } from "../services/session-manager-core.js";
 import type { SessionState } from "../types/index.js";
-import { PreferenceLockTimeoutError } from "../services/session-preferences.js";
 
 // --- Mock session-manager before importing the route ---
 
@@ -166,7 +165,6 @@ const mockPersistedDispatchStatus = mock<typeof realSessionManager.persistedDisp
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
 const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
-const mockDeleteSessionDurably = mock(async (id: string) => mockDeleteSession(id));
 const mockRenameSessionDurably = mock(async (id: string) => id === "s-1");
 const mockForkPersistedSession = mock(async () => ({
   id: "session-fork",
@@ -212,7 +210,6 @@ mock.module("../services/session-manager.js", () => ({
   reconcilePersistedSessions: mockReconcilePersistedSessions,
   ensurePersistedSession: mockEnsurePersistedSession,
   hydratePersistedSessionMessages: mockHydratePersistedSessionMessages,
-  deleteSessionDurably: mockDeleteSessionDurably,
   renameSessionDurably: mockRenameSessionDurably,
   forkPersistedSession: mockForkPersistedSession,
   rewindSessionFiles: mockRewindSessionFiles,
@@ -364,7 +361,6 @@ describe("session routes", () => {
     mockReconcilePersistedSessions.mockClear();
     mockEnsurePersistedSession.mockClear();
     mockHydratePersistedSessionMessages.mockClear();
-    mockDeleteSessionDurably.mockClear();
     mockGetPendingQuestions.mockClear();
     mockAnswerQuestion.mockClear();
     mockDismissQuestion.mockClear();
@@ -695,94 +691,6 @@ describe("session routes", () => {
     });
   });
 
-  describe("PUT /session/:id/preferences", () => {
-    test("persists plan mode in the authoritative session", async () => {
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: true });
-
-      expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ planMode: true });
-      expect(mockSetSessionPreferences).toHaveBeenCalledWith("s-1", { planMode: true });
-    });
-
-    test.each([[null], [[]], ["plan"], [true], [1]])(
-      "rejects a non-object request body: %p",
-      async (body) => {
-        const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
-
-        expect(res.status).toBe(400);
-        expect(await jsonBody(res)).toEqual({
-          error: "Request body must be a JSON object",
-        });
-        expect(mockSetSessionPreferences).not.toHaveBeenCalled();
-      },
-    );
-
-    test("rejects a non-boolean plan mode", async () => {
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: "yes" });
-
-      expect(res.status).toBe(400);
-      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
-    });
-
-    test.each([
-      [{}, "planMode is required"],
-      [{ planMode: true, future: true }, "Unexpected session preference field: future"],
-    ])("rejects incomplete or unknown preference fields", async (body, message) => {
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
-
-      expect(res.status).toBe(400);
-      expect(await jsonBody(res)).toEqual({ error: message });
-      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
-    });
-
-    test("rejects malformed JSON without calling the preference store", async () => {
-      const res = await app.request("/session/s-1/preferences", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: "{",
-      });
-
-      expect(res.status).toBe(400);
-      expect(await jsonBody(res)).toEqual({
-        error: "Request body must be valid JSON",
-      });
-      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
-    });
-
-    test("does not acknowledge a preference that failed to persist", async () => {
-      mockSetSessionPreferences.mockRejectedValueOnce(new Error("disk full"));
-
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", {
-        planMode: true,
-      });
-
-      expect(res.status).toBe(500);
-      expect(await jsonBody(res)).toEqual({ error: "disk full" });
-    });
-
-    test("keeps a non-claim preference lock timeout as 500", async () => {
-      const error = new PreferenceLockTimeoutError();
-      mockSetSessionPreferences.mockRejectedValueOnce(error);
-
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: true });
-
-      expect(res.status).toBe(500);
-      expect(await jsonBody(res)).toEqual({ error: error.message });
-      expect(mockSendPrompt).not.toHaveBeenCalled();
-    });
-
-    test("maps an unknown session preference update to 404", async () => {
-      mockSetSessionPreferences.mockRejectedValueOnce(refusal("not_found", "Session not found"));
-
-      const res = await jsonRequest("PUT", "/session/missing/preferences", {
-        planMode: true,
-      });
-
-      expect(res.status).toBe(404);
-      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
-    });
-  });
-
   describe("DELETE /session/:id/prompt-suggestion", () => {
     test("dismisses the persisted suggestion", async () => {
       const res = await jsonRequest("DELETE", "/session/s-1/prompt-suggestion");
@@ -980,61 +888,6 @@ describe("session routes", () => {
       expect(res.status).toBe(404);
       expect(await jsonBody(res)).toEqual({ error: "Session has not been materialized" });
       expect(mockHydratePersistedSessionMessages).not.toHaveBeenCalled();
-    });
-  });
-
-  // --- GET /session/:id/tasks ---
-  describe("GET /session/:id/tasks", () => {
-    test("serves the session's authoritative task list", async () => {
-      const res = await app.request("/session/s-tasks/tasks");
-      expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({
-        items: [{ id: "1", subject: "Rehydrated task", status: "pending" }],
-        complete: true,
-      });
-    });
-
-    test("reports an empty, complete list for a session that has run no task tools", async () => {
-      const res = await app.request("/session/s-1/tasks");
-      expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ items: [], complete: true });
-    });
-
-    test("hydrates a persisted session before serving its reconstructed tasks", async () => {
-      const persistedRegistry = new TaskRegistry();
-      const persisted = {
-        id: "s-persisted",
-        title: "From disk",
-        status: "idle" as const,
-        createdAt: new Date("2026-01-01"),
-        lastActivity: new Date("2026-01-01"),
-        persistedMessagesLoaded: false,
-        taskRegistry: undefined as TaskRegistry | undefined,
-      };
-      mockEnsurePersistedSession.mockImplementationOnce(async () => persisted);
-      mockHydratePersistedSessionMessages.mockImplementationOnce(async () => {
-        persistedRegistry.apply(
-          "TaskCreate",
-          { subject: "Recovered task" },
-          "Task #1 created successfully: Recovered task",
-        );
-        persisted.taskRegistry = persistedRegistry;
-        persisted.persistedMessagesLoaded = true;
-        return [];
-      });
-
-      const res = await app.request("/session/s-persisted/tasks");
-      expect(res.status).toBe(200);
-      expect(mockHydratePersistedSessionMessages).toHaveBeenCalledWith("s-persisted");
-      expect(await jsonBody(res)).toEqual({
-        items: [{ id: "1", subject: "Recovered task", status: "pending" }],
-        complete: true,
-      });
-    });
-
-    test("returns 404 for unknown session", async () => {
-      const res = await app.request("/session/s-unknown/tasks");
-      expect(res.status).toBe(404);
     });
   });
 
@@ -2510,39 +2363,6 @@ describe("session routes", () => {
     });
   });
 
-  // --- DELETE /session/:id ---
-  describe("DELETE /session/:id", () => {
-    test("returns deleted status", async () => {
-      const res = await jsonRequest("DELETE", "/session/s-1");
-      expect(res.status).toBe(200);
-      const data = await jsonBody(res);
-      expect(data.status).toBe("deleted");
-    });
-
-    test("returns 404 for unknown session", async () => {
-      const res = await jsonRequest("DELETE", "/session/s-unknown");
-      expect(res.status).toBe(404);
-    });
-
-    test("maps concurrent deletion and unexpected storage failures", async () => {
-      mockDeleteSessionDurably.mockImplementationOnce(async () => {
-        throw refusal("conflict", "Session deletion is already in progress");
-      });
-      const conflict = await jsonRequest("DELETE", "/session/s-1");
-      expect(conflict.status).toBe(409);
-      expect(await jsonBody(conflict)).toEqual({
-        error: "Session deletion is already in progress",
-      });
-
-      mockDeleteSessionDurably.mockImplementationOnce(async () => {
-        throw new Error("disk busy");
-      });
-      const failure = await jsonRequest("DELETE", "/session/s-1");
-      expect(failure.status).toBe(500);
-      expect(await jsonBody(failure)).toEqual({ error: "disk busy" });
-    });
-  });
-
   // --- GET /session/:id/questions ---
   describe("GET /session/:id/questions", () => {
     test("returns questions for session", async () => {
@@ -3663,8 +3483,8 @@ describe("persisted session routes", () => {
     });
   });
 
-  // --- POST /session/:id/rename ---
-  describe("POST /session/:id/rename", () => {
+  // --- POST /session/:id/title ---
+  describe("POST /session/:id/title", () => {
     test("persists backend-owned titles through the neutral title route", async () => {
       const res = await jsonRequest("POST", "/session/s-1/title", {
         title: "First prompt title",
@@ -3674,20 +3494,20 @@ describe("persisted session routes", () => {
     });
 
     test("renames a session and echoes the trimmed title", async () => {
-      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "  Renamed  " });
+      const res = await jsonRequest("POST", "/session/s-1/title", { title: "  Renamed  " });
       expect(res.status).toBe(200);
       expect(await jsonBody(res)).toEqual({ status: "renamed", title: "Renamed" });
       expect(mockRenameSessionDurably).toHaveBeenCalledWith("s-1", "Renamed");
     });
 
     test("returns 400 for a blank or missing title", async () => {
-      expect((await jsonRequest("POST", "/session/s-1/rename", { title: "   " })).status).toBe(400);
-      expect((await jsonRequest("POST", "/session/s-1/rename", {})).status).toBe(400);
+      expect((await jsonRequest("POST", "/session/s-1/title", { title: "   " })).status).toBe(400);
+      expect((await jsonRequest("POST", "/session/s-1/title", {})).status).toBe(400);
       expect(mockRenameSessionDurably).not.toHaveBeenCalled();
     });
 
     test("returns 404 when the session does not exist", async () => {
-      const res = await jsonRequest("POST", "/session/s-unknown/rename", { title: "x" });
+      const res = await jsonRequest("POST", "/session/s-unknown/title", { title: "x" });
       expect(res.status).toBe(404);
       expect(await jsonBody(res)).toEqual({ error: "Session not found" });
     });
@@ -3696,7 +3516,7 @@ describe("persisted session routes", () => {
       mockRenameSessionDurably.mockImplementation(async () => {
         throw refusal("not_found", "Session has not been materialized");
       });
-      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "x" });
+      const res = await jsonRequest("POST", "/session/s-1/title", { title: "x" });
       expect(res.status).toBe(404);
       expect(await jsonBody(res)).toEqual({ error: "Session has not been materialized" });
     });
@@ -3705,7 +3525,7 @@ describe("persisted session routes", () => {
       mockRenameSessionDurably.mockImplementation(async () => {
         throw new Error("disk full");
       });
-      const res = await jsonRequest("POST", "/session/s-1/rename", { title: "x" });
+      const res = await jsonRequest("POST", "/session/s-1/title", { title: "x" });
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "disk full" });
     });

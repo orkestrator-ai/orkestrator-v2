@@ -69,14 +69,6 @@ export function setBoundedMapEntry<K, V>(
   map.set(key, value);
 }
 
-export function setBoundedSetEntry<T>(set: Set<T>, value: T, maximumSize: number): void {
-  if (!set.has(value) && set.size >= maximumSize) {
-    const oldest = set.values().next().value as T | undefined;
-    if (oldest !== undefined) set.delete(oldest);
-  }
-  set.add(value);
-}
-
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

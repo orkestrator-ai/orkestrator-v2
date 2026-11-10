@@ -57,13 +57,11 @@ describe("HTTP bridge command transport", () => {
         await expect(provider.refreshCommands!("session-1")).resolves.toEqual({
           outcome: "reread",
         });
-        await expect(provider.reloadMcpConfiguration!()).resolves.toBe("unsupported");
         expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
           "/session/session-1/commands",
           "/session/session-1/commands/refresh",
-          "/global/mcp/reload",
         ]);
-        expect(cancellations).toHaveLength(3);
+        expect(cancellations).toHaveLength(2);
         for (const cancel of cancellations) expect(cancel).toHaveBeenCalledTimes(1);
       } finally {
         warn.mockRestore();

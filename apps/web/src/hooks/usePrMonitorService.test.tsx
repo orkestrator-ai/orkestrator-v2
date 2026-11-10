@@ -26,15 +26,13 @@ const getPrMonitorState = mock(async (_known?: unknown): Promise<unknown> => {
   return { entries: [] };
 });
 const playConfiguredNotificationSound = mock(async () => true);
-// Terminal side effects are backend-owned; the subscriber must never call these.
+// Terminal side effects are backend-owned; the subscriber must never call this.
 const prMonitorWatch = mock(async () => undefined);
-const prMonitorRefresh = mock(async () => undefined);
 
 mock.module("@/lib/backend", () => ({
   ...realBackend,
   getPrMonitorState,
   prMonitorWatch,
-  prMonitorRefresh,
 }));
 mock.module("@/lib/native/events", () => ({ ...realNativeEvents, listen }));
 mock.module("@/lib/notification-sounds", () => ({
@@ -57,7 +55,6 @@ beforeEach(() => {
   });
   playConfiguredNotificationSound.mockClear();
   prMonitorWatch.mockClear();
-  prMonitorRefresh.mockClear();
   appCommandStore(prMonitorStore).setState({ states: new Map(), syncStatus: "idle" });
   appCommandStore(environmentStore).setState({
     environments: [{ id: "env-1", branch: "feature/sounds" }] as never,
@@ -197,7 +194,6 @@ describe("usePrMonitorService revision-aware recovery", () => {
     expect(appCommandStore(prMonitorStore).getState().states.get("env-1")?.prState).toBe("merged");
     // The subscriber never performs terminal side effects itself.
     expect(prMonitorWatch).not.toHaveBeenCalled();
-    expect(prMonitorRefresh).not.toHaveBeenCalled();
     observer.unmount();
   });
 
@@ -264,19 +260,5 @@ describe("usePrMonitorService revision-aware recovery", () => {
     // Unmounting unsubscribes from the cadence.
     act(() => requestViewSafetyChecks("interval"));
     expect(getPrMonitorState).toHaveBeenCalledTimes(2);
-  });
-
-  test("an unknown snapshot command selects the unsupported capability", async () => {
-    getPrMonitorState.mockImplementation(async () => {
-      throw new Error("Unknown backend command: get_pr_monitor_state");
-    });
-    const observer = renderHookInAppCommandScope(() => usePrMonitorService());
-    await waitFor(() =>
-      expect(appCommandStore(prMonitorStore).getState().syncStatus).toBe("unsupported"),
-    );
-
-    act(() => requestViewSafetyChecks("interval"));
-    expect(getPrMonitorState).toHaveBeenCalledTimes(1);
-    observer.unmount();
   });
 });

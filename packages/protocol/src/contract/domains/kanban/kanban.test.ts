@@ -81,7 +81,6 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
     "modelId",
   ],
   start_feature_planning: ["operationId", "featureId", "kind", "storyId", "userMessage"],
-  get_feature_planning_snapshot: ["projectId"],
   retry_feature_planning: ["featureId"],
   cancel_feature_planning: ["featureId"],
   get_linear_connection: [],
@@ -117,9 +116,9 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 33 commands once, each in version 1 of the domain", () => {
-    expect(ALL).toHaveLength(33);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(33);
+  it("cover the 32 commands once, each since version 1 of the domain", () => {
+    expect(ALL).toHaveLength(32);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(32);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({

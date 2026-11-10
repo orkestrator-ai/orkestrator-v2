@@ -25,6 +25,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
+| Cutting, building or publishing a release (`release:*`, `publish:cli`, `scripts/release-*`, `scripts/publish-cli.ts`) | [`docs/development/releasing.md`](docs/development/releasing.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Another node's workspace in the window, node scopes, their tiers, budgets and snapshots (`lib/node-scope/`, `InTreeWorkspace`, `RemoteWorkspaceRegion`, `lib/federation/in-tree-scopes.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree); store recipe in [`docs/development/node-scopes.md`](docs/development/node-scopes.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
@@ -100,6 +101,18 @@ that branch explicitly, and open a pull request for review; the final merge into
 Before pushing, verify both the current branch and its configured upstream. If
 either operation would update `main` directly, stop and correct the branch or
 upstream configuration instead of pushing.
+
+## Releases
+
+An agent cutting a release runs both desktop builds itself and does not hand
+either to the maintainer: `mise run release:desktop` on the Mac, and the Linux
+half from the same Mac with `mise run release:linux -- build`, which reaches
+the Linux builder (`omarchy-hp`) over SSH and fetches from GitHub over HTTPS
+through the builder's `gh`. Run `mise run release:linux -- check` first rather
+than guessing hosts. `release:publish` uses the stored npm token when there is
+one; otherwise the only human step is approving npm's browser sign-in, which
+raises a desktop notification. Pass any approval link to the user at once.
+Details: [`docs/development/releasing.md`](docs/development/releasing.md).
 
 ## Background Work and Transport Invariants
 
@@ -599,10 +612,11 @@ session surface. When touching the session catalogue
   the rollout keeps (a task report, an interruption marker) must be produced
   by both the live loop and `normalizePersistedSessionMessages`, or a reload
   will disagree with the live tab.
-- **`DELETE /session/:id` is destructive.** It calls the SDK's
-  `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
-  uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops
-  the query and keeps the rollout; nothing may fall back from close to DELETE.
+- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`;
+  an older bridge's called the SDK's `deleteSession`, which removes the
+  `{sessionId}.jsonl` rollout. Tab close uses `POST /session/:id/close`
+  (`closeSessionRetainingHistory`), which stops the query and keeps the
+  rollout; nothing may fall back from close to DELETE.
   Close answers 503 pending, keeping the session registered and fenced, when
   it cannot prove the query stopped (`Query.close()` threw or did not settle,
   or a racing dispatch claim did not settle).
@@ -831,7 +845,7 @@ When touching the Pi bridge:
   until Pi settles the prompt — a late acceptance is aborted and observed — so
   every status route reports running while something can still reach Pi.
   Config and compaction take no claim, so a cancel during them cannot stop a
-  later prompt. Close and DELETE mark the session closed before their first
+  later prompt. Close marks the session closed before its first
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
@@ -905,8 +919,8 @@ When touching the SDK bridge:
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
-  are the same non-destructive operation here) lives in `src/session-close.ts`.
+- Permanent close (`POST /session/:id/close`, non-destructive; the bridge
+  serves no DELETE) lives in `src/session-close.ts`.
   It sets `state.closed` before its first await, and every admission path —
   prompt, attach, config, steer, same-key create, resume — refuses a closed
   session. A late attach is disposed instead of installed, and a late
@@ -989,7 +1003,8 @@ When touching any of them:
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
 - **A close never falls back to DELETE.** On 404/405 the teardown stays pending
   with a `bridge-upgrade-required` failure the renderer shows as a restart
-  notice, on every platform. Claude's DELETE deletes the rollout.
+  notice, on every platform. No bridge serves `DELETE /session/:id` any more;
+  an older Claude bridge's DELETE deleted the rollout. Do not add one back.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.

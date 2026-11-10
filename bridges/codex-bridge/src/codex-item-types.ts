@@ -47,7 +47,7 @@ export interface CommandExecutionItem {
    * `in_progress` when its turn ended. A unified-exec process the model did
    * not wait for (a dev server, a watcher) outlives its `exec_command` call,
    * and app-server reports nothing for it after the turn, so no end will ever
-   * settle it (to-do 7522).
+   * settle it (#2064).
    */
   left_running?: true;
 }

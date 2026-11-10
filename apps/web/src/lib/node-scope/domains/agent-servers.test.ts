@@ -42,8 +42,7 @@ describe("agent-servers over a lib/backend client", () => {
     const answer = { anything: "as sent" };
     const client = fakeClient(null, () => answer);
     const api = createDockerSkillsApi(client);
-    await expect(api.getCredentialStatus()).resolves.toBe(answer as never);
-    expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_credential_status"]);
+    await expect(api.getGitHubCliStatus()).resolves.toBe(answer as never);
     await api.getGitHubCliStatus();
     // The machine-aware functions always sent an arguments object.
     expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_github_cli_status", {}]);

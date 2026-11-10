@@ -515,7 +515,3 @@ export function graphBuiltInValidator(id: GraphBuiltInValidatorId): GraphBuiltIn
 export function graphBuiltInValidators(): readonly GraphBuiltInValidator[] {
   return VALIDATORS;
 }
-
-export function isGraphBuiltInValidatorId(value: unknown): value is GraphBuiltInValidatorId {
-  return typeof value === "string" && BY_ID.has(value as GraphBuiltInValidatorId);
-}

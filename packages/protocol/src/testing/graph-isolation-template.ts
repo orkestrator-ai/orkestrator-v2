@@ -3,10 +3,10 @@
  * isolated branch worktrees end to end. Three samples of a builder each
  * implement the ticket in their own worktree, a judge reads the three
  * branches and decides, and `select-workspace` fast-forwards the run's
- * branch to the winner. The tests, the mock runs and the guide use it.
+ * branch to the winner. A test fixture: the graph tests compile and run it.
  * Returns a fresh copy. Browser-safe.
  */
-import type { GraphTemplateV1 } from "./template-model.js";
+import type { GraphTemplateV1 } from "../graphs/template-model.js";
 
 export const GRAPH_COMPETING_IMPLEMENTATIONS_BRANCHES = ["sample.1", "sample.2", "sample.3"];
 

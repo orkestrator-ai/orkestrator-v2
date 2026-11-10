@@ -51,7 +51,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
-| Isolated branch worktrees (403) | `isolation.ts`, `isolation-template.ts` | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
+| Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
 | Per-node user MCP (404) | `native-agent-capabilities.ts` (`userMcpServers`) | each bridge's MCP loader, `opencode-user-mcp.ts` | `GraphMcpServersEditor.tsx`, `graph-designer-mcp.ts` |
 | CLI (214) | `public-api-inputs-graph.ts` | `public-api/actions-graphs.ts` | `packages/cli/src/client/commands/graphs.ts` |
 

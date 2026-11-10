@@ -79,46 +79,6 @@ describe("conditional backend wrappers", () => {
     ]);
   });
 
-  test("normalizes legacy raw arrays for every snapshot wrapper", async () => {
-    const changes = [
-      {
-        path: "src/App.tsx",
-        filename: "App.tsx",
-        directory: "src",
-        additions: 1,
-        deletions: 0,
-        status: "M",
-      },
-    ];
-    const tree = [{ name: "src", path: "src", isDirectory: true }];
-    invokeMock
-      .mockResolvedValueOnce(changes)
-      .mockResolvedValueOnce(tree)
-      .mockResolvedValueOnce(changes)
-      .mockResolvedValueOnce(tree);
-
-    await expect(getGitStatusSnapshot("container-1", "main")).resolves.toEqual({
-      unchanged: false,
-      digest: "",
-      value: changes,
-    });
-    await expect(getFileTreeSnapshot("container-1")).resolves.toEqual({
-      unchanged: false,
-      digest: "",
-      value: tree,
-    });
-    await expect(getLocalGitStatusSnapshot("/worktree", "main")).resolves.toEqual({
-      unchanged: false,
-      digest: "",
-      value: changes,
-    });
-    await expect(getLocalFileTreeSnapshot("/worktree")).resolves.toEqual({
-      unchanged: false,
-      digest: "",
-      value: tree,
-    });
-  });
-
   test("rejects malformed conditional snapshot envelopes", async () => {
     const malformed = [
       null,
@@ -128,6 +88,9 @@ describe("conditional backend wrappers", () => {
       { unchanged: true, digest: "digest", value: [] },
       { unchanged: false, digest: "digest" },
       { unchanged: false, digest: "digest", value: {} },
+      // A bare array is what a backend that ignored knownDigest sent; none
+      // in the support window does, so it is malformed.
+      [{ name: "src", path: "src", isDirectory: true }],
     ];
 
     for (const response of malformed) {
@@ -142,10 +105,10 @@ describe("conditional backend wrappers", () => {
     const first = pipelineRecord("pipeline-1");
     const second = pipelineRecord("pipeline-2");
     invokeMock
-      .mockResolvedValueOnce([first, second])
+      .mockResolvedValueOnce({ ids: ["pipeline-1", "pipeline-2"], records: [first, second] })
       .mockResolvedValueOnce({ ids: ["pipeline-1"], records: [first] })
       .mockResolvedValueOnce({ ids: [42], records: [] })
-      .mockResolvedValueOnce([{ missingId: true }]);
+      .mockResolvedValueOnce([first, second]);
 
     await expect(listBuildPipelinesConditional("project-1", {})).resolves.toEqual({
       ids: ["pipeline-1", "pipeline-2"],

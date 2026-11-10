@@ -19,5 +19,5 @@
     "sourceMap": true
   },
   "include": ["electron/**/*.ts"],
-  "exclude": ["electron/**/*.test.ts", "electron/web-client-controller.ts"]
+  "exclude": ["electron/**/*.test.ts"]
 }

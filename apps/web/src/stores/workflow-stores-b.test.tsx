@@ -102,7 +102,7 @@ const CASES: ReadonlyArray<Case<unknown>> = [
   scopedCase({
     def: previewServiceStore,
     hook: usePreviewServiceStore,
-    write: (store) => store.setState({ status: "unsupported" }),
+    write: (store) => store.setState({ status: "error" }),
     read: (state) => state.status,
   }),
   scopedCase({

@@ -79,12 +79,9 @@ import {
   awaitEnvironmentSetupSessionCommand,
   updatePortMappingsCommand,
   updateEnvironmentAgentSettingsCommand,
-  setEnvironmentPendingAgentLaunchCommand,
   acknowledgeStartupAgentSessionCommand,
-  setEnvironmentInitialPromptCommand,
   getEnvironmentExtensionsCommand,
   updateEnvironmentAllowedDomainsCommand,
-  addEnvironmentDomainsCommand,
   removeEnvironmentDomainsCommand,
   teardownTabCommand,
   reconcileTabTeardownsCommand,
@@ -148,12 +145,9 @@ export interface EnvironmentsApi {
   awaitEnvironmentSetupSession: Call<typeof awaitEnvironmentSetupSessionCommand>;
   updatePortMappings: Call<typeof updatePortMappingsCommand>;
   updateEnvironmentAgentSettings: Call<typeof updateEnvironmentAgentSettingsCommand>;
-  setEnvironmentPendingAgentLaunch: Call<typeof setEnvironmentPendingAgentLaunchCommand>;
   acknowledgeStartupAgentSession: Call<typeof acknowledgeStartupAgentSessionCommand>;
-  setEnvironmentInitialPrompt: Call<typeof setEnvironmentInitialPromptCommand>;
   getEnvironmentExtensions: Call<typeof getEnvironmentExtensionsCommand>;
   updateEnvironmentAllowedDomains: Call<typeof updateEnvironmentAllowedDomainsCommand>;
-  addEnvironmentDomains: Call<typeof addEnvironmentDomainsCommand>;
   removeEnvironmentDomains: Call<typeof removeEnvironmentDomainsCommand>;
   teardownTab: Call<typeof teardownTabCommand>;
   reconcileTabTeardowns: Call<typeof reconcileTabTeardownsCommand>;
@@ -217,12 +211,9 @@ export function environmentsApi(call: CommandCall): EnvironmentsApi {
     awaitEnvironmentSetupSession: (args) => call(awaitEnvironmentSetupSessionCommand, args),
     updatePortMappings: (args) => call(updatePortMappingsCommand, args),
     updateEnvironmentAgentSettings: (args) => call(updateEnvironmentAgentSettingsCommand, args),
-    setEnvironmentPendingAgentLaunch: (args) => call(setEnvironmentPendingAgentLaunchCommand, args),
     acknowledgeStartupAgentSession: (args) => call(acknowledgeStartupAgentSessionCommand, args),
-    setEnvironmentInitialPrompt: (args) => call(setEnvironmentInitialPromptCommand, args),
     getEnvironmentExtensions: (args) => call(getEnvironmentExtensionsCommand, args),
     updateEnvironmentAllowedDomains: (args) => call(updateEnvironmentAllowedDomainsCommand, args),
-    addEnvironmentDomains: (args) => call(addEnvironmentDomainsCommand, args),
     removeEnvironmentDomains: (args) => call(removeEnvironmentDomainsCommand, args),
     teardownTab: (args) => call(teardownTabCommand, args),
     reconcileTabTeardowns: (args) => call(reconcileTabTeardownsCommand, args),
@@ -241,6 +232,10 @@ export function answeredAsSent(context: DomainAdapterContext): CommandCall {
 }
 
 export const environmentsClient = domainClient(environmentsDomain, {
+  2: environmentsApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: environmentsApi,
   0: (_call, context) => environmentsApi(answeredAsSent(context)),
 });

@@ -23,7 +23,7 @@
  *    user's Codex home that every later Codex session on the host obeys.
  *    app-server has no method to list or remove those rules, so Orkestrator
  *    neither offers nor sends them: a rule it saved would be one it could never
- *    revoke (todo 0160).
+ *    revoke (#1325).
  */
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { EngineGeneration } from "../engine/types.js";

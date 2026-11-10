@@ -101,16 +101,6 @@ describe("useWorktreeSnapshotRevisions", () => {
     expect(appCommandStore(worktreeSnapshotStore).getState().entries.has("env-1")).toBe(false);
   });
 
-  test("an older backend without the command is unsupported, not retried", async () => {
-    snapshotSpy.mockImplementation(async () => {
-      throw new Error("Unknown backend command: get_worktree_snapshot_revisions");
-    });
-    renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: true }));
-    await flush();
-    expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
-    expect(snapshotSpy).toHaveBeenCalledTimes(1);
-  });
-
   test("does nothing while disabled", async () => {
     renderHookInAppCommandScope(() => useWorktreeSnapshotRevisions({ enabled: false }));
     await flush();

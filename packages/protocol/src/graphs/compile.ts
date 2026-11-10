@@ -162,6 +162,3 @@ export function compile(template: unknown, options: GraphCompileOptions = {}): G
     pendingAcknowledgements: [...pending],
   };
 }
-
-/** {@link compile} under a descriptive name. */
-export const compileGraphTemplate = compile;

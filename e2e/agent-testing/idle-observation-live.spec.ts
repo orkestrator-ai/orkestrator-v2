@@ -1642,7 +1642,7 @@ test.describe("live idle observation", () => {
               `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
             // Nothing reports the end of a command the turn left running, so its
-            // card must not keep claiming to run on an idle thread (to-do 7522).
+            // card must not keep claiming to run on an idle thread (#2064).
             expect(
               afterEnd.filter((state) => state.endsWith(":pending")),
               "a tool call still reads running on the idle thread",
@@ -1872,7 +1872,7 @@ test.describe("live idle observation", () => {
           );
           record.timings.idleInvalidations = invalidations.total ?? 0;
           record.notes.push(`idle invalidations by cause: ${JSON.stringify(invalidations)}`);
-          // Todo 7530: which discovery section announced, and which paths moved.
+          // #2062: which discovery section announced, and which paths moved.
           record.notes.push(
             `idle discovery announcements by section: ${JSON.stringify(
               discoveryRenewalDelta(

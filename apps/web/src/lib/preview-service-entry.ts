@@ -20,8 +20,8 @@ import type { Environment } from "@/types";
 /**
  * Target for the environment's browser button: the registered entry service
  * (resolved to a transport only when the tab attaches), falling back to the
- * legacy entry address when the backend predates preview services. `scope`
- * is the environment's node (the app's command scope when omitted).
+ * legacy entry address when preview services cannot answer. `scope` is the
+ * environment's node (the app's command scope when omitted).
  */
 export async function environmentBrowserTarget(
   environment: Pick<Environment, "id">,
@@ -54,8 +54,8 @@ export async function environmentBrowserTarget(
  * Target for a loopback link printed by a terminal or agent. It is kept as an
  * unresolved intent interpreted in its *source* environment, so a container's
  * `localhost:3000` means that container's port 3000 rather than whichever
- * backend process owns host port 3000. Non-loopback links and older backends
- * keep the previous behaviour. `scope` is the environment's node.
+ * backend process owns host port 3000. Non-loopback links keep the previous
+ * behaviour. `scope` is the environment's node.
  */
 export function linkBrowserTarget(
   environment: Pick<Environment, "id" | "environmentType"> | null | undefined,
@@ -65,7 +65,6 @@ export function linkBrowserTarget(
 ): string {
   if (!environment || !isLoopbackUrl(url)) return url;
   ensurePreviewServiceSync(scope);
-  if (scope.store(previewServiceStore).getState().status === "unsupported") return url;
   const source = linkUrlSource(environment, origin);
   return formatPreviewIntentUri({ environmentId: environment.id, source, url: url.trim() });
 }

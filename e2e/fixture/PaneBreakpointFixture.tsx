@@ -206,9 +206,13 @@ function installBackend() {
           drafts.delete(String(args?.draftKey));
           break;
         case "get_native_agent_model_catalog":
+          result = [];
+          break;
         case "get_file_tree":
         case "get_local_file_tree":
-          result = [];
+          // A conditional read (knownDigest) answers the envelope, as every backend does.
+          result =
+            args?.knownDigest === undefined ? [] : { unchanged: false, digest: "", value: [] };
           break;
         // The agent information panel names the session's account.
         case "get_native_agent_session_account":

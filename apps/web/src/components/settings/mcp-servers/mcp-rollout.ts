@@ -1,8 +1,9 @@
 import type { McpTargetCapabilities } from "@orkestrator/protocol/mcp-management";
 
 /**
- * The backend's rollout gate, read from the capabilities it overlays. Absent
- * on older backends, which means both writing and applying are allowed. The
+ * The backend's rollout gate, read from the capabilities it overlays. Every
+ * backend in the support window overlays it; the field stays optional because
+ * a provider reports capabilities before the overlay, and absent allows. The
  * backend refuses gated requests itself (`management-disabled`); these only
  * keep the UI from offering what will be refused, and say why.
  */

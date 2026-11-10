@@ -3,6 +3,7 @@ import {
   resolveComparisonRef,
   type EnvironmentDiffBaseline,
 } from "@orkestrator/protocol/diff-stats";
+import { stat } from "node:fs/promises";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { runCommand } from "./shell.js";
@@ -77,6 +78,22 @@ const log = createLogger("diff-stats");
  * no such signal and keep this bound.
  */
 export const DIFF_CACHE_MAX_AGE_MS = 3_000;
+
+/**
+ * Whether a target's worktree is there to scan. A local environment whose
+ * folder was deleted or moved, or whose drive is unmounted, would otherwise
+ * run `git -C <missing>` on every poll and fail each time. Only a missing
+ * path answers no; any other stat error lets the scan report itself.
+ */
+export async function diffTargetPresent(target: DiffStatsTarget): Promise<boolean> {
+  if (target.kind !== "local" || !target.worktreePath) return true;
+  try {
+    return (await stat(target.worktreePath)).isDirectory();
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
+  }
+}
 
 /** The worktree fetch scheduler as the backend runs it: real `git fetch`, shared per repository. */
 export function createGitFetchScheduler(): GitFetchScheduler {
@@ -237,6 +254,7 @@ export class DiffStatsTracking {
       onScanEvent: options.onScanEvent,
       startWatcher: this.sharedWatchers.startWatcher,
       startContainerWatcher: (watch) => this.worktreeSignals.start(watch),
+      targetPresent: diffTargetPresent,
       scan: async (target, request) => {
         // A scan follows every change the watcher sees, including HEAD moving
         // when the branch takes in newer target history.

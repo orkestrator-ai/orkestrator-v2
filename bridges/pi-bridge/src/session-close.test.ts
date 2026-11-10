@@ -34,7 +34,7 @@ process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
-const { setDeleteCancelTimeoutForTests } = await import("./http.js");
+const { setCloseCancelTimeoutForTests } = await import("./http.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState } = await import("./agent-session.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
@@ -136,7 +136,7 @@ describe("POST /session/:id/close", () => {
     sessions.set(state.id, state);
     const hung = deferred();
     state.cancelTurn = () => hung.promise;
-    setDeleteCancelTimeoutForTests(5);
+    setCloseCancelTimeoutForTests(5);
     try {
       expect((await close(state.id)).status).toBe(503);
       const response = await nativeFetch(`${origin}/session/resume`, {
@@ -148,7 +148,7 @@ describe("POST /session/:id/close", () => {
       expect(await response.json()).toMatchObject({ kind: "session-closing" });
     } finally {
       hung.resolve();
-      setDeleteCancelTimeoutForTests();
+      setCloseCancelTimeoutForTests();
       sessions.delete(state.id);
       if (previous === undefined) delete process.env.PI_SESSION_DIR;
       else process.env.PI_SESSION_DIR = previous;
@@ -222,7 +222,7 @@ describe("POST /session/:id/close", () => {
     // Held, not never-settling: released in `finally` so nothing outlives the test.
     const hung = deferred();
     state.cancelTurn = () => hung.promise;
-    setDeleteCancelTimeoutForTests(5);
+    setCloseCancelTimeoutForTests(5);
     try {
       const response = await close(state.id);
       expect(response.status).toBe(503);
@@ -250,7 +250,7 @@ describe("POST /session/:id/close", () => {
       expect(sessions.has(state.id)).toBe(false);
     } finally {
       hung.resolve();
-      setDeleteCancelTimeoutForTests();
+      setCloseCancelTimeoutForTests();
       sessions.delete(state.id);
       clientSessionKeys.delete("tab-hung");
     }

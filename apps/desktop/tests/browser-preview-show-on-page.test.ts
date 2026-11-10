@@ -30,8 +30,12 @@ const matched = (annotationId: string) =>
     diagnostics: null,
   });
 
+/** The page layer's answer: `{ revision, results, diagnostics }`. */
+const pageAnswer = (results: unknown[]) =>
+  JSON.stringify({ revision: 0, results, diagnostics: null });
+
 const missing = (annotationId: string) =>
-  JSON.stringify([{ annotationId, state: "missing", rule: "none", candidateCount: 0, rect: null }]);
+  pageAnswer([{ annotationId, state: "missing", rule: "none", candidateCount: 0, rect: null }]);
 
 describe("pins across document changes", () => {
   test("a same-URL reload clears pins and asks for them again once the document is ready", async () => {
@@ -91,7 +95,7 @@ describe("pins across document changes", () => {
     contents.pinsResponse = () =>
       JSON.stringify({
         revision: 0,
-        results: JSON.parse(missing("annotation-1")),
+        results: JSON.parse(missing("annotation-1")).results,
         diagnostics: null,
       });
     const [initial] = await harness.manager.showPins({
@@ -210,7 +214,7 @@ describe("Show on page", () => {
     const harness = createHarness();
     const contents = await harness.attach("http://localhost:5173/settings");
     contents.pinsResponse = (queries) =>
-      JSON.stringify([
+      pageAnswer([
         {
           annotationId: queries[0]!.annotationId,
           state: "ambiguous",
@@ -239,7 +243,7 @@ describe("Show on page", () => {
     const harness = createHarness();
     const contents = await harness.attach("http://localhost:5173/settings");
     contents.pinsResponse = (queries) =>
-      JSON.stringify([
+      pageAnswer([
         {
           annotationId: queries[0]!.annotationId,
           state: "matched",
@@ -264,7 +268,7 @@ describe("Show on page", () => {
       const harness = createHarness();
       const contents = await harness.attach("http://localhost:5173/settings");
       contents.pinsResponse = () =>
-        JSON.stringify([
+        pageAnswer([
           {
             annotationId: "annotation-1",
             state: "matched",

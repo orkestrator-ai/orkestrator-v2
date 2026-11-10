@@ -95,9 +95,8 @@ interface Window {
         ): () => void;
       };
     };
-    /** Electron only: open (with a hold), release and read a node scope's snapshot. */
+    /** Electron only: release and read a node scope's snapshot (`node(id)` opens it). */
     nodes?: {
-      open(nodeId: string): Promise<unknown>;
       release(nodeId: string): Promise<void>;
       gateway(nodeId: string): Promise<unknown>;
     };

@@ -32,7 +32,6 @@ const {
   createTerminalSession,
   bootstrapTerminalSession,
   disconnectLinear,
-  ensureEnvironmentSetup,
   deletePaneLayout,
   getEnvironmentSnapshots,
   awaitEnvironmentSetupSession,
@@ -51,14 +50,12 @@ const {
   closeGitHubIssue,
   addGitHubIssueComment,
   updateGitHubIssueComment,
-  postGitHubCompletionComment,
   getAgentModelCatalogCache,
   ensureHostPiModelCatalog,
   refreshHostAgentModelCatalog,
   getNativeAgentModelCatalog,
   getGatewayTokenSettings,
   getWebClientStatus,
-  postLinearCompletionComment,
   openInBrowser,
   propagateGithubCredentialsToContainers,
   runEnvironmentSetup,
@@ -72,18 +69,12 @@ const {
   setOpenCodeZenApiKey,
   getPlanUsage,
   setEnvironmentUnread,
-  setEnvironmentPendingAgentLaunch,
-  setEnvironmentInitialPrompt,
-  setEnvironmentPr,
-  cacheOpenCodeModelCatalog,
-  cacheAgentModelCatalog,
   appendFeaturePlanMessage,
   appendFeatureStoryMessage,
   cancelFeaturePlanning,
   claimFeaturePlanBuild,
   createFeaturePlan,
   createProjectFromScratch,
-  getFeaturePlanningSnapshot,
   getFeaturePlans,
   retryFeaturePlanning,
   startFeaturePlanning,
@@ -211,22 +202,6 @@ describe("backend setup wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("launch_terminal_job", input);
   });
 
-  test("passes explicit tri-state PR metadata to the backend", async () => {
-    await setEnvironmentPr("env-1", "https://github.com/acme/repo/pull/7", "open", null);
-
-    expect(invokeMock.mock.calls).toEqual([
-      [
-        "set_environment_pr",
-        {
-          environmentId: "env-1",
-          prUrl: "https://github.com/acme/repo/pull/7",
-          prState: "open",
-          hasMergeConflicts: null,
-        },
-      ],
-    ]);
-  });
-
   test("passes a scratch project target path to the backend", async () => {
     invokeMock.mockResolvedValue({ id: "project-1" });
 
@@ -235,20 +210,6 @@ describe("backend setup wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("create_project_from_scratch", {
       localPath: "/Users/dev/Projects/new-app",
     });
-  });
-
-  test("persists the durable post-setup agent launch flag", async () => {
-    await setEnvironmentPendingAgentLaunch("env-1", false);
-
-    expect(invokeMock.mock.calls).toEqual([
-      [
-        "set_environment_pending_agent_launch",
-        {
-          environmentId: "env-1",
-          pending: false,
-        },
-      ],
-    ]);
   });
 
   test("configures an environment and its durable launch intent together", async () => {
@@ -372,20 +333,6 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
-  test("persists a rewritten initial prompt so a recovered launch keeps its attachment references", async () => {
-    await setEnvironmentInitialPrompt("env-1", "Fix it [img](/work/a.png)");
-
-    expect(invokeMock.mock.calls).toEqual([
-      [
-        "set_environment_initial_prompt",
-        {
-          environmentId: "env-1",
-          initialPrompt: "Fix it [img](/work/a.png)",
-        },
-      ],
-    ]);
-  });
-
   test("forwards initial prompt attachments through durable launch settings", async () => {
     const attachments = [
       {
@@ -404,7 +351,6 @@ describe("backend setup wrappers", () => {
       "high",
       attachments,
     );
-    await setEnvironmentInitialPrompt("env-1", "Inspect the diagram", attachments);
 
     expect(invokeMock.mock.calls).toEqual([
       [
@@ -414,14 +360,6 @@ describe("backend setup wrappers", () => {
           initialPromptAttachments: attachments,
         }),
       ],
-      [
-        "set_environment_initial_prompt",
-        {
-          environmentId: "env-1",
-          initialPrompt: "Inspect the diagram",
-          initialPromptAttachments: attachments,
-        },
-      ],
     ]);
   });
 
@@ -429,14 +367,6 @@ describe("backend setup wrappers", () => {
     await runEnvironmentSetup("env-1");
 
     expect(invokeMock.mock.calls).toEqual([["run_environment_setup", { environmentId: "env-1" }]]);
-  });
-
-  test("calls the ensure-environment-setup Electron command with the environment id", async () => {
-    await ensureEnvironmentSetup("env-1");
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["ensure_environment_setup", { environmentId: "env-1" }],
-    ]);
   });
 
   test("forwards terminal bootstrap and setup wait payloads exactly", async () => {
@@ -503,7 +433,7 @@ describe("backend setup wrappers", () => {
     });
   });
 
-  test("loads and updates the durable OpenCode model catalogue", async () => {
+  test("loads the durable OpenCode model catalogue", async () => {
     const snapshot = {
       schemaVersion: 2 as const,
       projectId: "project-1",
@@ -520,16 +450,12 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValue(snapshot);
 
     await expect(getCachedOpenCodeModelCatalog("project-1")).resolves.toEqual(snapshot);
-    await expect(cacheOpenCodeModelCatalog("project-1", snapshot.models)).resolves.toEqual(
-      snapshot,
-    );
     expect(invokeMock.mock.calls).toEqual([
       ["get_opencode_model_catalog_cache", { projectId: "project-1" }],
-      ["cache_opencode_model_catalog", { projectId: "project-1", models: snapshot.models }],
     ]);
   });
 
-  test("loads and updates the host-wide agent model catalogue", async () => {
+  test("loads the host-wide agent model catalogue", async () => {
     const cache = {
       schemaVersion: 1 as const,
       claude: {
@@ -540,12 +466,8 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValue(cache);
 
     await expect(getAgentModelCatalogCache()).resolves.toEqual(cache);
-    await expect(cacheAgentModelCatalog("claude", cache.claude.models)).resolves.toEqual(cache);
 
-    expect(invokeMock.mock.calls).toEqual([
-      ["get_agent_model_catalog_cache"],
-      ["cache_agent_model_catalog", { agent: "claude", models: cache.claude.models }],
-    ]);
+    expect(invokeMock.mock.calls).toEqual([["get_agent_model_catalog_cache"]]);
   });
 
   test("seeds the workspace catalogue when requested", async () => {
@@ -611,70 +533,6 @@ describe("backend setup wrappers", () => {
       ["get_native_agent_model_catalog", { environmentId: "env-1", ensureAgent: "pi" }],
       ["get_native_agent_model_catalog", { environmentId: "env-1", ensureAgent: "pi" }],
     ]);
-  });
-
-  test("projects catalogue entries onto the fields the cache command accepts", async () => {
-    invokeMock.mockResolvedValue(null);
-
-    await cacheOpenCodeModelCatalog("project-1", [
-      {
-        id: "openai/gpt-5",
-        name: "GPT-5",
-        provider: "openai",
-        variants: ["high", "  ", ""],
-        inputCost: 0,
-        outputCost: 1.5,
-        contextWindow: 400_000,
-        // A field added to `OpenCodeModel` upstream must not start failing the
-        // command's strict key check.
-        extra: "unexpected",
-      } as never,
-      {
-        id: "openai/gpt-4",
-        name: "GPT-4",
-        provider: "openai",
-        // `typeof x === "number"` lets these through upstream; the command
-        // rejects them, so they are dropped rather than sent.
-        inputCost: Number.NaN,
-        outputCost: Number.POSITIVE_INFINITY,
-        contextWindow: Number.NEGATIVE_INFINITY,
-        variants: [],
-      },
-    ]);
-
-    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
-      projectId: "project-1",
-      models: [
-        {
-          id: "openai/gpt-5",
-          name: "GPT-5",
-          provider: "openai",
-          variants: ["high"],
-          inputCost: 0,
-          outputCost: 1.5,
-          contextWindow: 400_000,
-        },
-        { id: "openai/gpt-4", name: "GPT-4", provider: "openai" },
-      ],
-    });
-  });
-
-  test("keeps a non-array variants field from reaching the command", async () => {
-    invokeMock.mockResolvedValue(null);
-
-    await cacheOpenCodeModelCatalog("project-1", [
-      {
-        id: "openai/gpt-5",
-        name: "GPT-5",
-        provider: "openai",
-        variants: "high" as never,
-      },
-    ]);
-
-    expect(invokeMock).toHaveBeenCalledWith("cache_opencode_model_catalog", {
-      projectId: "project-1",
-      models: [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }],
-    });
   });
 
   test("calls the create-environment Electron command with naming prompt", async () => {
@@ -897,7 +755,6 @@ describe("backend setup wrappers", () => {
   test("forwards authoritative PR-monitor and completion-refresh commands exactly", async () => {
     await backendWrappers.getPrMonitorState();
     await backendWrappers.prMonitorWatch("env-1", "merge-pending");
-    await backendWrappers.prMonitorRefresh("env-1");
     await backendWrappers.armPrRefreshAfterAgentCompletion("env-1");
     await backendWrappers.disarmPrRefreshAfterAgentCompletion("env-1", "armed-at-1");
 
@@ -910,7 +767,6 @@ describe("backend setup wrappers", () => {
           mode: "merge-pending",
         },
       ],
-      ["pr_monitor_refresh", { environmentId: "env-1" }],
       ["arm_pr_refresh_after_agent_completion", { environmentId: "env-1" }],
       [
         "disarm_pr_refresh_after_agent_completion",
@@ -1159,7 +1015,6 @@ describe("backend setup wrappers", () => {
     await connectLinear("lin_api_secret");
     await getLinearIssues();
     await getLinearIssue("ENG-123");
-    await postLinearCompletionComment("pipeline-1", "issue-1", "Done");
     await disconnectLinear();
 
     expect(invokeMock.mock.calls).toEqual([
@@ -1167,14 +1022,6 @@ describe("backend setup wrappers", () => {
       ["connect_linear", { apiKey: "lin_api_secret" }],
       ["get_linear_issues"],
       ["get_linear_issue", { issueId: "ENG-123" }],
-      [
-        "post_linear_completion_comment",
-        {
-          pipelineId: "pipeline-1",
-          issueId: "issue-1",
-          body: "Done",
-        },
-      ],
       ["disconnect_linear"],
     ]);
   });
@@ -1187,14 +1034,6 @@ describe("backend setup wrappers", () => {
     await addGitHubIssueComment("project-1", 42, "Comment");
     await updateGitHubIssueComment("project-1", 42, 9001, "Edited");
     await closeGitHubIssue("project-1", 42);
-    await postGitHubCompletionComment(
-      "pipeline-1",
-      "project-1",
-      "acme",
-      "widget",
-      42,
-      "Build completed",
-    );
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_github_issues", { projectId: "project-1" }],
@@ -1234,17 +1073,6 @@ describe("backend setup wrappers", () => {
         },
       ],
       ["close_github_issue", { projectId: "project-1", issueNumber: 42 }],
-      [
-        "post_github_completion_comment",
-        {
-          pipelineId: "pipeline-1",
-          projectId: "project-1",
-          repositoryOwner: "acme",
-          repositoryName: "widget",
-          issueNumber: 42,
-          body: "Build completed",
-        },
-      ],
     ]);
   });
 
@@ -1501,39 +1329,6 @@ describe("backend native agent and review workflow wrappers", () => {
     invokeMock.mockResolvedValue(undefined);
   });
 
-  test("acknowledges a startup session with its durable identity", async () => {
-    const environment = {
-      id: "env-1",
-    } as Awaited<ReturnType<typeof backendWrappers.acknowledgeStartupAgentSession>>;
-    invokeMock.mockResolvedValueOnce(environment);
-
-    await expect(
-      backendWrappers.acknowledgeStartupAgentSession("env-1", {
-        providerSessionId: "provider-1",
-        startedAt: "2026-07-29T12:00:00.000Z",
-      }),
-    ).resolves.toBe(environment);
-
-    expect(invokeMock).toHaveBeenCalledWith("acknowledge_startup_agent_session", {
-      environmentId: "env-1",
-      providerSessionId: "provider-1",
-      startedAt: "2026-07-29T12:00:00.000Z",
-    });
-  });
-
-  test("omits absent startup session identity fields", async () => {
-    await backendWrappers.acknowledgeStartupAgentSession("env-1", {
-      providerSessionId: "",
-      startedAt: undefined,
-    });
-
-    const [[command, payload]] = invokeMock.mock.calls as [[string, Record<string, unknown>]];
-    expect(command).toBe("acknowledge_startup_agent_session");
-    expect(payload).toEqual({ environmentId: "env-1" });
-    expect(payload).not.toHaveProperty("providerSessionId");
-    expect(payload).not.toHaveProperty("startedAt");
-  });
-
   test("ensures native sessions with full and minimal payloads", async () => {
     const session = {
       version: 1 as const,
@@ -1639,77 +1434,6 @@ describe("backend native agent and review workflow wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
     expect(minimalPayload).not.toHaveProperty("sessionMode");
     expect(minimalPayload).not.toHaveProperty("fastMode");
-  });
-
-  test("reads native sessions", async () => {
-    invokeMock.mockResolvedValueOnce(null);
-    const identity = {
-      environmentId: "env-1",
-      agent: "opencode" as const,
-      logicalSessionKey: "tab-1",
-    };
-    await expect(backendWrappers.getNativeAgentSession(identity)).resolves.toBeNull();
-    expect(invokeMock).toHaveBeenLastCalledWith("get_native_agent_session", identity);
-  });
-
-  test("dispatches native prompts with full and minimal payloads", async () => {
-    const dispatched = {
-      version: 1 as const,
-      key: "native-session-key",
-      environmentId: "env-1",
-      agent: "claude" as const,
-      logicalSessionKey: "fix-1",
-      providerSessionId: "provider-1",
-      origin: "interactive-native" as const,
-      interactionPolicy: {
-        version: 1 as const,
-        mode: "interactive" as const,
-        input: "await-user" as const,
-        authorization: "await-user" as const,
-        unknown: "deny-and-fail" as const,
-      },
-      dispatchedRequestIds: ["request-1"],
-      createdAt: "2026-07-29T12:00:00.000Z",
-      updatedAt: "2026-07-29T12:01:00.000Z",
-    };
-    invokeMock.mockResolvedValueOnce(dispatched);
-
-    const fullInput = {
-      environmentId: "env-1",
-      agent: "claude" as const,
-      logicalSessionKey: "fix-1",
-      origin: "build-pipeline" as const,
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      title: "Fix review",
-      model: "claude-model",
-      reasoningEffort: "high",
-      phase: "fix" as const,
-      prompt: "Fix the finding",
-      requestId: "request-1",
-      images: [{ filename: "failure.png", data: "cGl4ZWxz" }],
-      schema: { type: "object" },
-    };
-    await expect(backendWrappers.dispatchNativeAgentPrompt(fullInput)).resolves.toBe(dispatched);
-    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", fullInput);
-
-    const minimalInput = {
-      environmentId: "env-2",
-      agent: "codex" as const,
-      logicalSessionKey: "build-2",
-      prompt: "Continue",
-      requestId: "request-2",
-    };
-    await backendWrappers.dispatchNativeAgentPrompt(minimalInput);
-    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", minimalInput);
-    const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
-    expect(minimalPayload).not.toHaveProperty("title");
-    expect(minimalPayload).not.toHaveProperty("origin");
-    expect(minimalPayload).not.toHaveProperty("interactionPolicy");
-    expect(minimalPayload).not.toHaveProperty("model");
-    expect(minimalPayload).not.toHaveProperty("reasoningEffort");
-    expect(minimalPayload).not.toHaveProperty("phase");
-    expect(minimalPayload).not.toHaveProperty("images");
-    expect(minimalPayload).not.toHaveProperty("schema");
   });
 
   test("dispatches shared native-agent intents with an explicit outcome", async () => {
@@ -1871,20 +1595,6 @@ describe("backend native agent and review workflow wrappers", () => {
       workflowId: "multi-1",
     });
   });
-
-  test("propagates native dispatch and controller errors unchanged", async () => {
-    const dispatchError = new Error("dispatch denied");
-    invokeMock.mockRejectedValueOnce(dispatchError);
-    await expect(
-      backendWrappers.dispatchNativeAgentPrompt({
-        environmentId: "env-1",
-        agent: "codex",
-        logicalSessionKey: "review-1",
-        prompt: "Review",
-        requestId: "request-1",
-      }),
-    ).rejects.toBe(dispatchError);
-  });
 });
 
 describe("backend command wrapper coverage", () => {
@@ -1977,51 +1687,6 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  test("validates and returns backend bridge readiness snapshots", async () => {
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "codex", 12_345)).resolves.toEqual({
-      status: "ready",
-      port: 4321,
-      authToken: "token",
-    });
-    expect(invokeMock).toHaveBeenLastCalledWith("await_bridge_ready", {
-      environmentId: "env-ready",
-      agent: "codex",
-      timeoutMs: 12_345,
-    });
-
-    const failed = {
-      status: "failed",
-      error: { message: "bridge failed", retryable: false },
-    } as const;
-    invokeMock.mockResolvedValueOnce(failed);
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "claude")).resolves.toEqual(failed);
-
-    const timedOut = {
-      status: "timed-out",
-      error: { message: "bridge timed out", retryable: true, retryAfterMs: 500 },
-    } as const;
-    invokeMock.mockResolvedValueOnce(timedOut);
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "opencode")).resolves.toEqual(
-      timedOut,
-    );
-  });
-
-  test("rejects empty and malformed readiness payloads", async () => {
-    for (const malformed of [
-      undefined,
-      null,
-      { status: "ready", port: 0, authToken: "token" },
-      { status: "ready", port: 4321, authToken: "" },
-      { status: "timed-out", error: { message: "timeout" } },
-      { status: "unknown" },
-    ]) {
-      invokeMock.mockResolvedValueOnce(malformed);
-      await expect(backendWrappers.awaitBridgeReady("env-invalid", "codex")).rejects.toThrow(
-        "invalid bridge readiness result",
-      );
-    }
-  });
-
   test("opens browser-gateway links in a client-side tab", async () => {
     const windowOpen = mock(() => null);
     window.open = windowOpen as typeof window.open;
@@ -2038,44 +1703,6 @@ describe("backend command wrapper coverage", () => {
       "noopener,noreferrer",
     );
     expect(invokeMock).not.toHaveBeenCalled();
-  });
-
-  test("forwards PR verification and deterministic package-generation inputs", async () => {
-    invokeMock.mockResolvedValueOnce({
-      url: "https://github.com/acme/repo/pull/42",
-      headRefName: "feature/review",
-      baseRefName: "main",
-      state: "OPEN",
-    });
-    await backendWrappers.verifyEnvironmentPr(
-      "env-1",
-      "https://github.com/acme/repo/pull/42",
-      "main",
-    );
-    expect(invokeMock).toHaveBeenLastCalledWith("verify_environment_pr", {
-      environmentId: "env-1",
-      prUrl: "https://github.com/acme/repo/pull/42",
-      targetBranch: "main",
-    });
-
-    const preparation = {
-      validation: [
-        {
-          command: "bun test",
-          status: "passed" as const,
-          exitCode: 0,
-          stdoutPath: ".orkestrator/review-artifacts/package-1/validation-01.stdout.txt",
-          stderrPath: ".orkestrator/review-artifacts/package-1/validation-01.stderr.txt",
-          durationMs: 42,
-          limitation: null,
-        },
-      ],
-      uncommittedFiles: [],
-      limitations: [],
-    };
-    // Review package generation is invoked by the backend service, never by
-    // the renderer, so there is no wrapper here to exercise.
-    void preparation;
   });
 
   test("requests validation output by authoritative environment and step identity", async () => {
@@ -2156,38 +1783,6 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  test("forwards explicit committed-only Git status requests", async () => {
-    await backendWrappers.getGitStatus("container-1", "base-sha", false);
-    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
-      containerId: "container-1",
-      targetBranch: "base-sha",
-      includeUncommitted: false,
-    });
-
-    await backendWrappers.getLocalGitStatus("/tmp/worktree", "base-sha", false);
-    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
-      worktreePath: "/tmp/worktree",
-      targetBranch: "base-sha",
-      includeUncommitted: false,
-    });
-  });
-
-  test("includes uncommitted changes in Git status requests by default", async () => {
-    await backendWrappers.getGitStatus("container-1", "main");
-    expect(invokeMock).toHaveBeenLastCalledWith("get_git_status", {
-      containerId: "container-1",
-      targetBranch: "main",
-      includeUncommitted: true,
-    });
-
-    await backendWrappers.getLocalGitStatus("/tmp/worktree", "main");
-    expect(invokeMock).toHaveBeenLastCalledWith("get_local_git_status", {
-      worktreePath: "/tmp/worktree",
-      targetBranch: "main",
-      includeUncommitted: true,
-    });
-  });
-
   test("every exported command wrapper reaches the native invoke boundary", async () => {
     const specialWrappers = new Set([
       "getWebClientStatus",
@@ -2195,13 +1790,11 @@ describe("backend command wrapper coverage", () => {
       "resetWebClientServe",
       "getGatewayTokenSettings",
       "setGatewayToken",
-      "readBinaryFile",
       "createLocalTerminalSession",
       "createTerminalSession",
       "getTerminalOutputSnapshot",
       "getTerminalStateSnapshot",
       "getTerminalHistoryPage",
-      "getResourceRevisionManifest",
       "getScopedResourceRevisionManifest",
       "getScopedResourceSnapshots",
       "getNativeAgentModelCatalog",
@@ -2254,28 +1847,6 @@ describe("backend command wrapper coverage", () => {
     });
     invokeMock.mockResolvedValueOnce({ ...profile, colorToken: "#ff0000" });
     await expect(backendWrappers.getBackendProfile()).rejects.toThrow("palette token");
-  });
-
-  test("validates and forwards resource revision manifest knowledge", async () => {
-    const response = {
-      generation: "a".repeat(32),
-      reset: false,
-      revisions: { config: "b".repeat(32) },
-    };
-    invokeMock.mockResolvedValueOnce(response);
-
-    await expect(
-      backendWrappers.getResourceRevisionManifest("a".repeat(32), { config: "c".repeat(32) }),
-    ).resolves.toEqual(response);
-    expect(invokeMock).toHaveBeenLastCalledWith("get_resource_revision_manifest", {
-      knownGeneration: "a".repeat(32),
-      knownRevisions: { config: "c".repeat(32) },
-    });
-
-    invokeMock.mockResolvedValueOnce({ generation: "invalid" });
-    await expect(backendWrappers.getResourceRevisionManifest()).rejects.toThrow(
-      "Invalid resource revision manifest response",
-    );
   });
 
   test("validates and forwards scoped resource synchronization commands", async () => {
@@ -2532,11 +2103,6 @@ describe("backend command wrapper coverage", () => {
       storyId: "story-2",
     });
 
-    await getFeaturePlanningSnapshot("project-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("get_feature_planning_snapshot", {
-      projectId: "project-1",
-    });
-
     await retryFeaturePlanning("feature-1");
     expect(invokeMock).toHaveBeenLastCalledWith("retry_feature_planning", {
       featureId: "feature-1",
@@ -2658,12 +2224,5 @@ describe("backend command wrapper coverage", () => {
         base64Data: "eA==",
       });
     });
-  });
-
-  test("readBinaryFile decodes the base64 wrapper result", async () => {
-    await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
-      Uint8Array.from(new TextEncoder().encode("binary")),
-    );
-    expect(invokeMock).toHaveBeenCalledWith("read_file_base64", { filePath: "/tmp/image.bin" });
   });
 });

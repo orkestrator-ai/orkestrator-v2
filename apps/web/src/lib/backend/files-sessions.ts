@@ -104,10 +104,6 @@ function normalizeConditionalArraySnapshot<T>(
   response: unknown,
   command: string,
 ): ConditionalSnapshot<T[]> {
-  // Older backends ignore knownDigest and return the original raw array.
-  if (Array.isArray(response)) {
-    return { unchanged: false, digest: "", value: response as T[] };
-  }
   if (
     !isRecord(response) ||
     typeof response.unchanged !== "boolean" ||
@@ -227,20 +223,6 @@ export function createFilesSessionsApi(client: BackendClient) {
   const gitDomain = () => git(client);
   const prDomain = () => pullRequests(client);
 
-  /** Get git changes comparing current state against a target branch */
-  async function getGitStatus(
-    containerId: string,
-    targetBranch: string,
-    includeUncommitted = true,
-  ): Promise<GitFileChange[]> {
-    // Without `knownDigest` the answer is the bare list.
-    return (await gitDomain().get_git_status({
-      containerId,
-      targetBranch,
-      includeUncommitted,
-    })) as GitFileChange[];
-  }
-
   async function getGitStatusSnapshot(
     containerId: string,
     targetBranch: string,
@@ -297,13 +279,6 @@ export function createFilesSessionsApi(client: BackendClient) {
   /** Read a file from a specific git branch inside a container
    * Returns null if the file doesn't exist in the specified branch (e.g., new file)
    */
-  async function readFileAtBranch(
-    containerId: string,
-    filePath: string,
-    branch: string,
-  ): Promise<FileContent | null> {
-    return filesDomain().read_file_at_branch({ containerId, filePath, branch });
-  }
 
   /** Read a binary file from inside a container as base64 */
   async function readContainerFileBase64(containerId: string, filePath: string): Promise<string> {
@@ -403,19 +378,6 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
-  /** Get git changes for a local environment (worktree path) */
-  async function getLocalGitStatus(
-    worktreePath: string,
-    targetBranch: string,
-    includeUncommitted = true,
-  ): Promise<GitFileChange[]> {
-    return (await gitDomain().get_local_git_status({
-      worktreePath,
-      targetBranch,
-      includeUncommitted,
-    })) as GitFileChange[];
-  }
-
   async function getLocalGitStatusSnapshot(
     worktreePath: string,
     targetBranch: string,
@@ -490,11 +452,6 @@ export function createFilesSessionsApi(client: BackendClient) {
     return answer as WorktreeSnapshotRevisionsSnapshot | WorktreeSnapshotRevisionsOutcome;
   }
 
-  /** Forces an immediate rescan, e.g. after an operation that changed the tree. */
-  async function refreshEnvironmentDiffStats(environmentId: string): Promise<void> {
-    return gitDomain().refresh_environment_diff_stats({ environmentId });
-  }
-
   /** Branches an environment's checkout can compare its changes against. */
   async function listEnvironmentDiffBaseBranches(environmentId: string): Promise<DiffBaseBranch[]> {
     return gitDomain().list_environment_diff_base_branches({ environmentId });
@@ -553,11 +510,6 @@ export function createFilesSessionsApi(client: BackendClient) {
     return prDomain().pr_monitor_watch({ environmentId, mode });
   }
 
-  /** Requests an immediate PR check for an environment already being monitored. */
-  async function prMonitorRefresh(environmentId: string): Promise<void> {
-    return prDomain().pr_monitor_refresh({ environmentId });
-  }
-
   /** Durably re-check a conflicting PR when the launched agent turn completes. */
   async function armPrRefreshAfterAgentCompletion(environmentId: string): Promise<string | null> {
     return prDomain().arm_pr_refresh_after_agent_completion({ environmentId });
@@ -614,13 +566,6 @@ export function createFilesSessionsApi(client: BackendClient) {
   /** Read a file from a specific git branch in a local environment
    * Returns null if the file doesn't exist in the specified branch (e.g., new file)
    */
-  async function readLocalFileAtBranch(
-    worktreePath: string,
-    filePath: string,
-    branch: string,
-  ): Promise<FileContent | null> {
-    return filesDomain().read_local_file_at_branch({ worktreePath, filePath, branch });
-  }
 
   /** Write a file to a local environment (worktree path) from base64-encoded data */
   /** See `writeContainerFile` for `expected`. */
@@ -754,50 +699,11 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
-  /** Persist or clear the post-setup agent launch intent. */
-  async function setEnvironmentPendingAgentLaunch(
-    environmentId: string,
-    pending: boolean,
-  ): Promise<Environment> {
-    return environments().setEnvironmentPendingAgentLaunch({
-      environmentId,
-      pending,
-    });
-  }
-
-  /** Acknowledge that the backend-created startup session now has a durable tab. */
-  async function acknowledgeStartupAgentSession(
-    environmentId: string,
-    startupSession: {
-      providerSessionId?: string;
-      startedAt?: string;
-    },
-  ): Promise<Environment> {
-    return environments().acknowledgeStartupAgentSession({
-      environmentId,
-      ...(startupSession.providerSessionId
-        ? { providerSessionId: startupSession.providerSessionId }
-        : {}),
-      ...(startupSession.startedAt ? { startedAt: startupSession.startedAt } : {}),
-    });
-  }
-
   /**
    * Persist the initial prompt after the renderer has rewritten it (for example to
    * add references to uploaded attachments), so a recovered launch reads the same
    * prompt the uninterrupted path would have used.
    */
-  async function setEnvironmentInitialPrompt(
-    environmentId: string,
-    initialPrompt: string,
-    initialPromptAttachments?: InitialPromptImageAttachment[],
-  ): Promise<Environment> {
-    return environments().setEnvironmentInitialPrompt({
-      environmentId,
-      initialPrompt,
-      ...(initialPromptAttachments ? { initialPromptAttachments } : {}),
-    });
-  }
 
   /**
    * Read the effective MCP and plugin configuration for every supported agent.
@@ -900,11 +806,6 @@ export function createFilesSessionsApi(client: BackendClient) {
     return asWebModel<Session[]>(native().reorder_sessions({ environmentId, sessionIds }));
   }
 
-  /** Clean up orphaned buffer files (buffers without corresponding sessions) */
-  async function cleanupOrphanedBuffers(): Promise<string[]> {
-    return native().cleanup_orphaned_buffers({});
-  }
-
   async function getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
     return asWebModel<PersistedPaneLayout | null>(native().get_pane_layout({ environmentId }));
   }
@@ -951,24 +852,11 @@ export function createFilesSessionsApi(client: BackendClient) {
    * the in-app file and folder picker browse the remote machine over a gateway.
    * Omit `path` to start at the host's home directory.
    */
-  async function listHostDirectory(
-    path?: string,
-    options: { includeFiles?: boolean; showHidden?: boolean } = {},
-  ): Promise<HostDirectoryListing> {
-    return hostFiles().list_host_directory({
-      ...(path ? { path } : {}),
-      includeFiles: options.includeFiles ?? false,
-      showHidden: options.showHidden ?? false,
-    });
-  }
 
   /**
    * Creates one folder named `name` inside `parent` on the backend host and
    * returns its absolute path. Fails if the entry already exists.
    */
-  async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
-    return hostFiles().create_host_directory({ parent, name });
-  }
 
   /**
    * Absolute paths of images on the backend host where a project usually keeps
@@ -984,13 +872,11 @@ export function createFilesSessionsApi(client: BackendClient) {
   }
 
   return {
-    getGitStatus,
     getGitStatusSnapshot,
     getFileTree,
     getFileTreeSnapshot,
     getFileSubtreeSnapshot,
     readContainerFile,
-    readFileAtBranch,
     readContainerFileBase64,
     writeContainerFile,
     writeInitialPromptAttachments,
@@ -1000,25 +886,21 @@ export function createFilesSessionsApi(client: BackendClient) {
     renameContainerFile,
     createContainerFolder,
     copyExternalFile,
-    getLocalGitStatus,
     getLocalGitStatusSnapshot,
     getEnvironmentDiffStats,
     getEnvironmentHead,
     getWorktreeSnapshotRevisions,
-    refreshEnvironmentDiffStats,
     listEnvironmentDiffBaseBranches,
     listEnvironmentDiffBaseCommits,
     setEnvironmentDiffBase,
     getPrMonitorState,
     prMonitorWatch,
-    prMonitorRefresh,
     armPrRefreshAfterAgentCompletion,
     disarmPrRefreshAfterAgentCompletion,
     getLocalFileTree,
     getLocalFileTreeSnapshot,
     getLocalFileSubtreeSnapshot,
     readLocalFile,
-    readLocalFileAtBranch,
     writeLocalFile,
     revertLocalFile,
     deleteLocalFile,
@@ -1028,9 +910,6 @@ export function createFilesSessionsApi(client: BackendClient) {
     updatePortMappings,
     updateEnvironmentAgentSettings,
     prepareEnvironmentAgentLaunch,
-    setEnvironmentPendingAgentLaunch,
-    acknowledgeStartupAgentSession,
-    setEnvironmentInitialPrompt,
     getEnvironmentExtensions,
     createSession,
     getSession,
@@ -1045,13 +924,10 @@ export function createFilesSessionsApi(client: BackendClient) {
     loadSessionBuffer,
     syncSessionsWithContainer,
     reorderSessions,
-    cleanupOrphanedBuffers,
     getPaneLayout,
     savePaneLayout,
     applyPaneLayoutIntent,
     deletePaneLayout,
-    listHostDirectory,
-    createHostDirectory,
     findProjectIcons,
     readHostImageFile,
   };
@@ -1061,13 +937,11 @@ export type FilesSessionsApi = ReturnType<typeof createFilesSessionsApi>;
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
-  getGitStatus,
   getGitStatusSnapshot,
   getFileTree,
   getFileTreeSnapshot,
   getFileSubtreeSnapshot,
   readContainerFile,
-  readFileAtBranch,
   readContainerFileBase64,
   writeContainerFile,
   writeInitialPromptAttachments,
@@ -1077,25 +951,21 @@ export const {
   renameContainerFile,
   createContainerFolder,
   copyExternalFile,
-  getLocalGitStatus,
   getLocalGitStatusSnapshot,
   getEnvironmentDiffStats,
   getEnvironmentHead,
   getWorktreeSnapshotRevisions,
-  refreshEnvironmentDiffStats,
   listEnvironmentDiffBaseBranches,
   listEnvironmentDiffBaseCommits,
   setEnvironmentDiffBase,
   getPrMonitorState,
   prMonitorWatch,
-  prMonitorRefresh,
   armPrRefreshAfterAgentCompletion,
   disarmPrRefreshAfterAgentCompletion,
   getLocalFileTree,
   getLocalFileTreeSnapshot,
   getLocalFileSubtreeSnapshot,
   readLocalFile,
-  readLocalFileAtBranch,
   writeLocalFile,
   revertLocalFile,
   deleteLocalFile,
@@ -1105,9 +975,6 @@ export const {
   updatePortMappings,
   updateEnvironmentAgentSettings,
   prepareEnvironmentAgentLaunch,
-  setEnvironmentPendingAgentLaunch,
-  acknowledgeStartupAgentSession,
-  setEnvironmentInitialPrompt,
   getEnvironmentExtensions,
   createSession,
   getSession,
@@ -1122,13 +989,10 @@ export const {
   loadSessionBuffer,
   syncSessionsWithContainer,
   reorderSessions,
-  cleanupOrphanedBuffers,
   getPaneLayout,
   savePaneLayout,
   applyPaneLayoutIntent,
   deletePaneLayout,
-  listHostDirectory,
-  createHostDirectory,
   findProjectIcons,
   readHostImageFile,
 } = createFilesSessionsApi(commandBackendClient);

@@ -51,9 +51,6 @@ export const GRAPH_PROMPT_ROOTS = [
 ] as const;
 export type GraphPromptRoot = (typeof GRAPH_PROMPT_ROOTS)[number];
 
-/** Roots whose value differs per branch of a replicated node. */
-export const GRAPH_PROMPT_BRANCH_ROOTS: readonly GraphPromptRoot[] = ["lens", "item", "branch"];
-
 /** Elements assumed for a list input when the compiler does not say (the fan-out cap). */
 export const GRAPH_PROMPT_DEFAULT_LIST_ITEMS = GRAPH_TEMPLATE_BOUNDS.maxBranches;
 /** Bytes of a branch key (`reviewer-2.lens-api`); the runtime keeps keys within it. */

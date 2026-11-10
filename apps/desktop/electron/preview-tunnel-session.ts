@@ -394,7 +394,7 @@ export class PreviewTunnelSession {
    * Ping, and retire a session that answered none of its last
    * {@link PREVIEW_TUNNEL_SESSION_MISSED_PINGS} pings: a half-open socket
    * would otherwise stay selectable, and every stream opened on it would
-   * wait out its whole open timeout (todo 7200, task 3). The socket is
+   * wait out its whole open timeout (#1940). The socket is
    * destroyed rather than closed, since a dead peer never answers the close
    * frame, so the connector drops the session and the next open connects a
    * new one.

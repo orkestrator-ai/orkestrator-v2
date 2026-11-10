@@ -33,7 +33,6 @@ process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
-const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // Read back rather than assumed. In a shared process another suite may have
 // imported `config.ts` before the assignment above, in which case the module
 // froze a different token and every request here would 401 — a failure that
@@ -1882,7 +1881,7 @@ describe("session routes", () => {
     expect(state.lastAccessed).toBe(0);
   });
 
-  test("an open idle tab's reads never keep the session attached (todo 7540)", async () => {
+  test("an open idle tab's reads never keep the session attached (#2062)", async () => {
     const state = seedSession();
     state.lastAccessed = 0;
     // Everything an open, idle tab reaches through the backend: the live
@@ -2034,75 +2033,20 @@ describe("session routes", () => {
 });
 
 describe("closing a session", () => {
-  test("removes the session, its client key, and answers deleted", async () => {
+  // Closing is `POST /session/:id/close` (session-close.test.ts); the bridge
+  // serves no DELETE, and one leaves the session as it was.
+  test("serves no DELETE, and a live session is kept", async () => {
     const state = newSessionState("tab-7");
     sessions.set(state.id, state);
     clientSessionKeys.set("tab-7", state.id);
-
-    const response = await call(`/session/${state.id}`, { method: "DELETE" });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ deleted: true });
-
-    // Without this route the backend's tab teardown reads a 404 as "already
-    // gone" and the bridge retains the session — and its transcript — forever.
-    expect(sessions.has(state.id)).toBe(false);
-    expect(clientSessionKeys.has("tab-7")).toBe(false);
-    expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
-      activity: "missing",
-    });
-  });
-
-  test("denies anything parked on the way out", async () => {
-    const state = seedSession();
-    const decisions: string[] = [];
-    state.approvals.set("a1", {
-      id: "a1",
-      toolCallId: "call-1",
-      toolName: "bash",
-      input: { command: "rm -rf build" },
-      createdAt: Date.now(),
-      deadline: testApprovalDeadline(),
-      settle: (decision) => decisions.push(decision),
-    });
-
-    await call(`/session/${state.id}`, { method: "DELETE" });
-    // A closing session must never leave a tool call awaiting a promise
-    // nothing will settle, and it must deny rather than approve.
-    expect(decisions).toEqual(["deny"]);
-  });
-
-  test("cancels a turn still in flight", async () => {
-    const state = seedSession();
-    state.status = "running";
-    let cancelled = false;
-    state.cancelTurn = async () => {
-      cancelled = true;
-    };
-
-    await call(`/session/${state.id}`, { method: "DELETE" });
-    expect(cancelled).toBe(true);
-  });
-
-  test("finishes deletion when cancellation never settles", async () => {
-    const state = newSessionState("tab-hung-cancel");
-    sessions.set(state.id, state);
-    clientSessionKeys.set("tab-hung-cancel", state.id);
-    state.status = "running";
-    state.cancelTurn = () => new Promise<void>(() => undefined);
-    setDeleteCancelTimeoutForTests(5);
     try {
       const response = await call(`/session/${state.id}`, { method: "DELETE" });
-      expect(response.status).toBe(200);
-      expect(sessions.has(state.id)).toBe(false);
-      expect(clientSessionKeys.has("tab-hung-cancel")).toBe(false);
+      expect(response.status).not.toBe(200);
+      expect(sessions.has(state.id)).toBe(true);
     } finally {
-      setDeleteCancelTimeoutForTests();
+      sessions.delete(state.id);
+      clientSessionKeys.delete("tab-7");
     }
-  });
-
-  test("answers an unknown session 404 so teardown treats it as gone", async () => {
-    const response = await call("/session/never-existed", { method: "DELETE" });
-    expect(response.status).toBe(404);
   });
 });
 

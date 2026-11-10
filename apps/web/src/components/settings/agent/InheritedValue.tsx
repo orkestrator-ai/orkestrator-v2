@@ -9,14 +9,8 @@
  * (Native)", "Default (Agent SDK)") and none of them said which tier answered.
  */
 import { cn } from "@/lib/utils";
-import { TIER_LABELS, type AgentSettingsTierName } from "@/lib/agent-settings";
 
 export const INHERIT = "__inherit__";
-
-export function inheritLabel(value: string | undefined, from: AgentSettingsTierName): string {
-  if (!value) return `Inherit (from ${TIER_LABELS[from]})`;
-  return `Inherit — ${value} (from ${TIER_LABELS[from]})`;
-}
 
 interface OptionCardsProps<T extends string> {
   ariaLabel: string;

@@ -276,15 +276,6 @@ export const PrDetectionSchema = Schema.NullOr(
 ).annotate({ identifier: "PrDetection" });
 export type PrDetection = typeof PrDetectionSchema.Type;
 
-/** `verify_environment_pr`: the attached PR is open and belongs to this branch. */
-export const VerifiedEnvironmentPrSchema = Schema.Struct({
-  url: Schema.String,
-  headRefName: Schema.String,
-  baseRefName: Schema.String,
-  state: Schema.Literal("OPEN"),
-}).annotate({ identifier: "VerifiedEnvironmentPr" });
-export type VerifiedEnvironmentPr = typeof VerifiedEnvironmentPrSchema.Type;
-
 const MergeOutcomeSchema = Schema.Literals(["merged", "pending", "unknown"]);
 
 /** `merge_pr` / `merge_pr_local`: merged, accepted but not yet merged, or unknown. */

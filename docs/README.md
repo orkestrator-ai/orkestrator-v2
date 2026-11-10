@@ -136,8 +136,6 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | --- | --- |
 | [0000-index.md](tests/flaky-tests/0000-index.md) | The flake registry's top-level index. It lists the ten group folders and what each covers; each group's own `0000-index.md` table tracks its cases. Search the group indexes; open a case file only when the row matches. |
 
-Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/), not under `docs/`.
-
 ## Todo
 
 Each file covers one piece of work: its purpose, the current state with code

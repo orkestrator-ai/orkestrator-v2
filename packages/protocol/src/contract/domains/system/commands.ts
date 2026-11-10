@@ -54,7 +54,6 @@ import {
   ProjectGitMirrorUsageSchema,
   RecordRendererErrorsResultSchema,
   RecurringWorkDiagnosticsSchema,
-  ResourceRevisionManifestSchema,
   ScheduledJobCreateResultSchema,
   ScheduledJobDeleteResultSchema,
   ScheduledJobListSchema,
@@ -660,18 +659,6 @@ export const updateWorktreeLocationsCommand = defineCommand({
 
 // --- Resource manifests -----------------------------------------------------
 
-/** Revisions that differ from the client's known ones (all of them on a generation reset). */
-export const getResourceRevisionManifestCommand = defineCommand({
-  domain: systemDomain,
-  name: "get_resource_revision_manifest",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({ knownGeneration: optionalUnknown, knownRevisions: optionalUnknown }),
-  result: ResourceRevisionManifestSchema,
-  critical: [],
-});
-
 /** The changed resource scopes after `cursor`, bounded by `highWater`. */
 export const getScopedResourceRevisionManifestCommand = defineCommand({
   domain: systemDomain,
@@ -783,7 +770,6 @@ export const SYSTEM_COMMANDS = [
   getEnvironmentDiskUsageCommand,
   getWorktreeLocationsCommand,
   updateWorktreeLocationsCommand,
-  getResourceRevisionManifestCommand,
   getScopedResourceRevisionManifestCommand,
   getScopedResourceSnapshotsCommand,
 ] as const;

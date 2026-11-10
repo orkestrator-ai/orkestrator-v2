@@ -39,9 +39,6 @@ import {
   type TicketSections,
 } from "./ticket-sections.js";
 
-/** Advertised by a backend that serves the leaf side of ticket sync. */
-export const TICKET_SYNC_CAPABILITY = "ticket-sync";
-
 /** A leaf announces queued ticket changes for one command node with this event. */
 export const TICKET_SYNC_OUTBOX_READY_EVENT = "ticket-sync-outbox-ready";
 

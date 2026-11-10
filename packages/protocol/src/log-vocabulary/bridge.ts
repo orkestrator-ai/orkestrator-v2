@@ -93,11 +93,17 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "prompt.accepted": "The route accepted a prompt and answered 202.",
       "prompt.failed": "A prompt turn failed; the session reports the error.",
       "prompt.processing-failed": "A prompt accepted by the route failed while processing.",
+      "prompt.processing-usage-limited":
+        "A prompt accepted by the route ended on a usage limit; the turn already logged prompt.usage-limited.",
       "prompt.received": "A prompt reached the bridge; only its length is logged.",
       "prompt.send-failed": "A prompt request failed; the route answered with an error.",
+      "prompt.usage-limited":
+        "A prompt turn ended because the account's plan allowance is used up; the session reports the limit.",
       "query.close-failed":
         "Stopping the Claude query failed while closing a tab; the close stays pending.",
       "query.failed": "A Claude query ended with an error result.",
+      "query.usage-limited":
+        "Claude refused a query because the account's plan allowance is used up; the turn reports the limit.",
       "question.answer-failed": "The answer-question route failed.",
       "question.answering": "Answering a parked question.",
       "question.answers-prepared": "The route prepared a question answer for the session.",

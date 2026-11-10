@@ -31,6 +31,10 @@ const legacyKanbanApi = (_call: CommandCall, context: DomainAdapterContext): Kan
   legacyCommandApi(context, KANBAN_COMMANDS);
 
 export const kanbanClient = domainClient(kanbanDomain, {
+  2: kanbanApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: kanbanApi,
   0: legacyKanbanApi,
 });

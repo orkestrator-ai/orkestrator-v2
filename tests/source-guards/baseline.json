@@ -471,7 +471,7 @@
     "apps/web/src/stores/previewServiceStore.ts": 1
   },
   "lib-backend-command-default": {
-    "[projects-environments] apps/web/src/lib/scope-services.ts": 3
+    "[projects-environments] apps/web/src/lib/scope-services.ts": 2
   },
   "window-orkestrator-portal": {},
   "workspace-command-bound-call": {},

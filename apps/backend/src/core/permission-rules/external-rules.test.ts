@@ -38,7 +38,7 @@ describe("parsers", () => {
   });
 
   test("Codex 0.166.0's saved command and network rules are each one entry", () => {
-    // Exactly as the pinned binary wrote them (todo 0160, task 2).
+    // Exactly as the pinned binary wrote them (#1518).
     const lines = [
       'prefix_rule(pattern=["touch", "probe-file.txt"], decision="allow")',
       'network_rule(host="probe-host.example.test", protocol="http", decision="allow", justification="Allow http access to probe-host.example.test")',

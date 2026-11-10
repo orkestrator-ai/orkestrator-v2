@@ -4,11 +4,9 @@ import { GRAPH_TEMPLATE_BOUNDS } from "@orkestrator/protocol/graphs/grammar";
 import type { GraphPredicate } from "@orkestrator/protocol/graphs/predicates";
 import { graphNodeOutlets, type GraphGateNode } from "@orkestrator/protocol/graphs/template";
 import { Button } from "@/components/ui/button";
-import { GraphMergeEditor, GraphHumanEditor } from "./GraphMergeHumanEditors";
 import { graphWithoutField } from "./GraphNodeExecutionFields";
 import { GraphPredicateEditor } from "./GraphPredicateEditor";
-import { GraphSystemEditor } from "./GraphSystemEditor";
-import { graphNodeById, uniqueGraphKey, updateGraphNode } from "./graph-designer-edits";
+import { uniqueGraphKey, updateGraphNode } from "./graph-designer-edits";
 import {
   graphNodePredicateScopeFor,
   pruneGraphOutletReferences,
@@ -208,23 +206,4 @@ export function GraphGateEditor({ node }: { node: GraphGateNode }) {
       </FormSection>
     </div>
   );
-}
-
-/** For callers that hold only an id: the node's kind editor, or null for kinds without one here. */
-export function GraphKindEditor({ nodeId }: { nodeId: string }) {
-  const { template } = useGraphEditor();
-  const node = graphNodeById(template, nodeId);
-  if (!node) return null;
-  switch (node.kind) {
-    case "system":
-      return <GraphSystemEditor node={node} />;
-    case "gate":
-      return <GraphGateEditor node={node} />;
-    case "merge":
-      return <GraphMergeEditor node={node} />;
-    case "human":
-      return <GraphHumanEditor node={node} />;
-    default:
-      return null;
-  }
 }

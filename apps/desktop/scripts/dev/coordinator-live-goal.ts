@@ -9,7 +9,7 @@ import type {
 } from "./coordinator-live-delegation.js";
 
 /**
- * The `goal` scenario (`plans/goals/403`): a coordinator gives a worker a goal,
+ * The `goal` scenario (`docs/architecture/goals.md`, Verifier and other surfaces): a coordinator gives a worker a goal,
  * and hears once when it stops.
  *
  * The coordinator launches one worker with a one-word task, then sets a goal on

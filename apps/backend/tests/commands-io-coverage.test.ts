@@ -193,7 +193,7 @@ afterAll(async () => {
 });
 
 describe("backend command I/O coverage", () => {
-  test("attaches, drives, lists, and detaches a container terminal", async () => {
+  test("starts, drives, lists, and detaches a container terminal", async () => {
     const context = createContext();
     const emitted: Array<{ event: string; payload: unknown }> = [];
     context.emit = eventSink((event, payload) => emitted.push({ event, payload }));
@@ -202,10 +202,11 @@ describe("backend command I/O coverage", () => {
 
     // Resolves after the ownership check the registry applies to every
     // command naming a container.
-    const sessionId = (await commands.get("attach_terminal")?.(
+    const { sessionId } = (await commands.get("create_terminal_session")!(
       { containerId: "container-1", cols: 0, rows: Number.NaN, user: "node" },
       context,
-    )) as string;
+    )) as { sessionId: string };
+    await commands.get("start_terminal_session")!({ sessionId }, context);
 
     expect(sessionId).toStartWith("container-1:");
     // The shell is marked with a fresh token so closing the tab can end it in

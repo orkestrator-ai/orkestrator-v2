@@ -1,11 +1,10 @@
-import { AlertTriangle, Clock, CloudOff, Radio } from "lucide-react";
+import { AlertTriangle, Clock, CloudOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
 
 const ICONS: Record<FreshnessNotice["kind"], typeof AlertTriangle> = {
   stale: AlertTriangle,
   degraded: AlertTriangle,
-  unsupported: Radio,
   "remote-stale": CloudOff,
   "remote-unknown": Clock,
 };

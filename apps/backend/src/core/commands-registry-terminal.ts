@@ -9,7 +9,6 @@ import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
-  attachTerminalCommand,
   bootstrapTerminalSessionCommand,
   closeLocalTerminalSessionCommand,
   createLocalTerminalSessionCommand,
@@ -579,29 +578,6 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
-  register(attachTerminalCommand, async ({ containerId, cols, rows, user }, context) => {
-    const { storage, runtime } = context;
-    assertContainerNotDraining(containerId);
-    const id = `${containerId}:${randomUUID()}`;
-    const config = {
-      kind: "container" as const,
-      containerId,
-      cols: asTerminalDimension(cols, 80),
-      rows: asTerminalDimension(rows, 24),
-      user: asOptionalString(user),
-    };
-    runtime.terminals.rememberSession(id, config);
-    runtime.terminals.history.configure({
-      sessionId: id,
-      dataDir: storage.getDataDir(),
-      stableIdentity: id,
-      cols: config.cols,
-      rows: config.rows,
-    });
-    await assertContainerCheckoutAvailable(containerId, context);
-    spawnContainerTerminal(id, config, context);
-    return id;
-  });
   register(
     startTerminalSessionCommand,
     async ({ sessionId }, context) => {

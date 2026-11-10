@@ -4,8 +4,6 @@ import { codexConnection, httpProvider } from "./agent-provider-test-support.js"
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { compatibilityPathUsage, type CompatibilityPathId } from "./compatibility-path-usage.js";
-import { bridgeReportsMcpConfig } from "./http-bridge/runtime-health.js";
-import { olderBridgeOutcome } from "./mcp-management/evidence.js";
 
 const count = (id: CompatibilityPathId) => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
 
@@ -46,19 +44,6 @@ test("retaining close counts only the restart notice", async () => {
     closeBridgeSessionRetaining("codex", "s1", async () => new Response(null, { status: 404 })),
   ).rejects.toThrow("predates non-destructive tab close");
   expect(count("bridge-close.upgrade-required")).toBe(upgrade + 1);
-});
-
-test("MCP counters distinguish marked reports and older bridge decisions", () => {
-  const unmarked = count("mcp-report.unmarked-config");
-  const older = count("mcp-report.older-bridge-outcome");
-  expect(bridgeReportsMcpConfig({ mcpConfigReporting: 1, mcpConfig: {} })).toBe(true);
-  expect(bridgeReportsMcpConfig({})).toBe(false);
-  expect(count("mcp-report.unmarked-config")).toBe(unmarked);
-  expect(count("mcp-report.older-bridge-outcome")).toBe(older);
-  expect(bridgeReportsMcpConfig({ mcpConfig: {} })).toBe(true);
-  expect(count("mcp-report.unmarked-config")).toBe(unmarked + 1);
-  expect(olderBridgeOutcome("claude").state).toBe("pending-next-turn");
-  expect(count("mcp-report.older-bridge-outcome")).toBe(older + 1);
 });
 
 test("transcript fallback counts legacy messages reads, not current reads or missing sessions", async () => {

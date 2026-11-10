@@ -135,7 +135,7 @@ export function invalidationCauseDelta(
 
 /**
  * The backend's per-section discovery announcement counters
- * (`sessionInvalidations.discoveryRenewals`, todo 7530): per scope, per
+ * (`sessionInvalidations.discoveryRenewals`, #2062): per scope, per
  * section, a count and the content-free value paths that changed.
  */
 export type DiscoveryRenewalCounts = Record<
@@ -265,7 +265,7 @@ export function freshToolStates(
     for (const part of message.parts as Array<Record<string, unknown>>) {
       if (part?.type === "subagent") states.push(`subagent:${String(part.toolState ?? "?")}`);
       if (part?.type !== "tool-invocation") continue;
-      // A command its turn ended around has no state, only the flag (to-do 7522).
+      // A command its turn ended around has no state, only the flag (#2064).
       const state = part.toolLeftRunning === true ? "left-running" : (part.toolState ?? "?");
       states.push(`${String(part.toolName ?? "?")}:${String(state)}`);
     }

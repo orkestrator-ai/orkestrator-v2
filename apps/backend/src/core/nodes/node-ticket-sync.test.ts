@@ -13,7 +13,7 @@ import { cleanupFleets, COMMAND_ID, fleet, LEAF_ID } from "./node-ticket-sync-te
 /**
  * Kanban sync between a command node and a leaf, each a real storage service
  * in its own data directory, over an in-process link that runs the leaf's real
- * sync commands (`node-ticket-sync-test-support.ts`). The to-do 3800
+ * sync commands (`node-ticket-sync-test-support.ts`). The #2027
  * follow-ups are in `node-ticket-sync-followups.test.ts`.
  */
 
@@ -65,7 +65,7 @@ describe("command node to leaf", () => {
   test("a leaf just attached, its projects not read yet, syncs as soon as they are", async () => {
     // Live over two dev:test profiles the first sync after attach waited for
     // the 60 s reconcile: the read found no projects, so nothing paired and
-    // nothing retried (to-do 3800 task 1).
+    // nothing retried (#2027).
     let pending = true;
     const f = await fleet({ summaryPending: () => pending, retryDelayMs: 5 });
     const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Early", "");

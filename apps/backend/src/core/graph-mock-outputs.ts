@@ -4,7 +4,6 @@
  * outputs through the run's artifact store (so mock values pass the same
  * validation as real ones), pinned failures and the `stepMs` delay.
  */
-import { createHash } from "node:crypto";
 import {
   graphMockPinAt,
   type GraphMockPin,
@@ -250,9 +249,4 @@ export async function graphMockStep(
     }
     throw error;
   }
-}
-
-/** A short, stable id for log lines and fake identities. */
-export function graphMockDigest(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }

@@ -89,10 +89,3 @@ export const SETUP_FAILED_OSC_DATA = "setup_failed";
  */
 export const SETUP_DONE_PRINTF_CMD = `printf '\\033]${SETUP_DONE_OSC_ID};${SETUP_DONE_OSC_DATA}\\007'`;
 export const SETUP_FAILED_PRINTF_CMD = `printf '\\033]${SETUP_DONE_OSC_ID};${SETUP_FAILED_OSC_DATA}\\007'`;
-
-/** Patterns that indicate a shell prompt is ready */
-export const SHELL_PROMPT_PATTERNS: (string | RegExp)[] = [
-  "=== Container Ready ===",
-  /➜\s+\w+\s+git:\(/,
-  /➜\s+workspace/,
-];

@@ -43,7 +43,6 @@ import type {
 import type { MachineLoadReport, MachineLoadWindow } from "../../../machine-load.js";
 import type {
   ResourceChange,
-  ResourceRevisionManifest,
   ScopedResourceRevisionManifest,
   ScopedResourceSnapshotBatch,
 } from "../../../resource-events.js";
@@ -431,13 +430,6 @@ const ResourceChangeSchema = modelRecord<ResourceChange>()({
   id: Schema.String,
   revision: Schema.Finite,
 });
-
-export const ResourceRevisionManifestSchema: ModelSchema<ResourceRevisionManifest> =
-  modelRecord<ResourceRevisionManifest>()({
-    generation: Schema.String,
-    reset: Schema.Boolean,
-    revisions: RevisionMapSchema,
-  });
 
 export const ScopedResourceRevisionManifestSchema: ModelSchema<ScopedResourceRevisionManifest> =
   modelRecord<ScopedResourceRevisionManifest>()({

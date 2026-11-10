@@ -2,15 +2,12 @@ import { afterEach, describe, expect, test, type Mock } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
   compileGraphTemplateInBackend,
-  deleteGraphTemplate,
   duplicateGraphTemplate,
   exportGraphTemplate,
-  getGraphCapabilityCeiling,
   getGraphTemplate,
   importGraphTemplate,
   listGraphTemplates,
   saveGraphTemplate,
-  setGraphCapabilityCeiling,
   setGraphTemplateTrust,
 } from "./graph-templates";
 
@@ -47,12 +44,6 @@ describe("graph template wrappers", () => {
         "graph_template_save",
         { template, expectedRevision: 3 },
       ],
-      [() => deleteGraphTemplate("mine"), "graph_template_delete", { id: "mine" }],
-      [
-        () => deleteGraphTemplate("mine", 2),
-        "graph_template_delete",
-        { id: "mine", expectedRevision: 2 },
-      ],
       [
         () => duplicateGraphTemplate(projectRef, { digest: "d" }),
         "graph_template_duplicate",
@@ -76,17 +67,6 @@ describe("graph template wrappers", () => {
           }),
         "graph_template_trust",
         { projectId: "p1", path: projectRef.path, action: "approve", digest: "d" },
-      ],
-      [() => getGraphCapabilityCeiling("p1"), "graph_capability_ceiling_get", { projectId: "p1" }],
-      [
-        () => setGraphCapabilityCeiling("p1", { deny: ["network"] }, 1),
-        "graph_capability_ceiling_set",
-        { projectId: "p1", ceiling: { deny: ["network"] }, expectedRevision: 1 },
-      ],
-      [
-        () => setGraphCapabilityCeiling("p1", null),
-        "graph_capability_ceiling_set",
-        { projectId: "p1", ceiling: null },
       ],
     ];
     for (const [call, command, args] of calls) {

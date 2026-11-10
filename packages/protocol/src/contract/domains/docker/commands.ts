@@ -55,18 +55,6 @@ export const checkDockerCommand = defineCommand({
   critical: [],
 });
 
-/** The daemon's server version. */
-export const dockerVersionCommand = defineCommand({
-  domain: dockerDomain,
-  name: "docker_version",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: noArgs,
-  result: Schema.String,
-  critical: [],
-});
-
 export const getDockerImageStatusCommand = defineCommand({
   domain: dockerDomain,
   name: "get_docker_image_status",
@@ -111,18 +99,6 @@ export const getDockerTopologyCommand = defineCommand({
   // `refresh` is read as `=== true`.
   args: Schema.Struct({ refresh: optionalUnknown }),
   result: DockerTopologySchema,
-  critical: [],
-});
-
-/** Legacy presence check; capability gates use `get_docker_image_status`. */
-export const checkBaseImageCommand = defineCommand({
-  domain: dockerDomain,
-  name: "check_base_image",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: noArgs,
-  result: Schema.Boolean,
   critical: [],
 });
 
@@ -191,31 +167,6 @@ export const dockerContainerStatusCommand = defineCommand({
   critical: [],
 });
 
-/** `[id, name]` of this installation's containers. */
-export const listDockerContainersCommand = defineCommand({
-  domain: dockerDomain,
-  name: "list_docker_containers",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: noArgs,
-  result: mutableArray(Schema.mutable(Schema.Tuple([Schema.String, Schema.String]))),
-  critical: [],
-});
-
-/** The host port a container port is published on, or `null`. */
-export const getContainerHostPortCommand = defineCommand({
-  domain: dockerDomain,
-  name: "get_container_host_port",
-  since: 1,
-  access: "workspace",
-  read: true,
-  // `containerPort` is checked by `asNumber` (finite) with its own text.
-  args: Schema.Struct({ containerId: Schema.String, containerPort: optionalUnknown }),
-  result: Schema.NullOr(Schema.Finite),
-  critical: [],
-});
-
 /** The last lines of a container's log, bounded in lines and bytes. */
 export const getContainerLogsCommand = defineCommand({
   domain: dockerDomain,
@@ -266,30 +217,6 @@ export const closeContainerLogsCommand = defineCommand({
   access: "workspace",
   read: false,
   args: Schema.Struct({ subscriptionId: Schema.String }),
-  result: Schema.Void,
-  critical: [],
-});
-
-/** Legacy follow: a subscription whose lease lapses for clients that never close. */
-export const streamContainerLogsCommand = defineCommand({
-  domain: dockerDomain,
-  name: "stream_container_logs",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: containerArgs,
-  result: Schema.Struct({ subscriptionId: Schema.String, sourceId: Schema.String }),
-  critical: [],
-});
-
-/** Refused: cleanup is reviewed (`docker_cleanup_preview`, then `_execute`). */
-export const dockerSystemPruneCommand = defineCommand({
-  domain: dockerDomain,
-  name: "docker_system_prune",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: noArgs,
   result: Schema.Void,
   critical: [],
 });
@@ -373,18 +300,6 @@ export const dockerCleanupExecuteCommand = defineCommand({
   critical: ["selectionToken"],
 });
 
-/** Refused like `docker_system_prune`. */
-export const cleanupOrphanedContainersCommand = defineCommand({
-  domain: dockerDomain,
-  name: "cleanup_orphaned_containers",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: noArgs,
-  result: Schema.Void,
-  critical: [],
-});
-
 /** Adopts a reviewed, unclaimed container of this installation as a new environment. */
 export const reattachContainerCommand = defineCommand({
   domain: dockerDomain,
@@ -416,32 +331,25 @@ export const propagateGithubTokenToContainersCommand = defineCommand({
 
 export const DOCKER_COMMANDS = [
   checkDockerCommand,
-  dockerVersionCommand,
   getDockerImageStatusCommand,
   getContainerHostReachabilityCommand,
   checkContainerHostReachabilityCommand,
   getDockerTopologyCommand,
-  checkBaseImageCommand,
   provisionEnvironmentCommand,
   dockerStartContainerCommand,
   dockerStopContainerCommand,
   dockerRemoveContainerCommand,
   dockerContainerStatusCommand,
-  listDockerContainersCommand,
-  getContainerHostPortCommand,
   getContainerLogsCommand,
   openContainerLogsCommand,
   readContainerLogsCommand,
   closeContainerLogsCommand,
-  streamContainerLogsCommand,
-  dockerSystemPruneCommand,
   getDockerSystemStatsCommand,
   getDockerCapacityCommand,
   getContainerUsageCommand,
   getOrkestratorContainersCommand,
   dockerCleanupPreviewCommand,
   dockerCleanupExecuteCommand,
-  cleanupOrphanedContainersCommand,
   reattachContainerCommand,
   propagateGithubTokenToContainersCommand,
 ] as const;

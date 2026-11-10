@@ -1122,7 +1122,7 @@ test("production take-back pass retries from the 60-second recovery timer", asyn
 
 test("a leaf's project list read starts a ticket sync on a command node", async () => {
   // Live over two dev:test profiles the first sync after attaching waited up
-  // to the 60 s reconcile for the leaf's projects (to-do 3800 task 1).
+  // to the 60 s reconcile for the leaf's projects (#2059).
   const world = await MailWorld.create();
   worlds.push(world);
   let projectsChanged: (nodeId: string) => void = () => {};

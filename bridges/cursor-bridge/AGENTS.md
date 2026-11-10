@@ -49,8 +49,8 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
-  are the same non-destructive operation here) lives in `src/session-close.ts`.
+- Permanent close (`POST /session/:id/close`, non-destructive; the bridge
+  serves no DELETE) lives in `src/session-close.ts`.
   It sets `state.closed` before its first await, and every admission path —
   prompt, attach, config, steer, same-key create, resume — refuses a closed
   session. A late attach is disposed instead of installed, and a late

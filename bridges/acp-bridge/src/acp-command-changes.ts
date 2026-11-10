@@ -315,9 +315,8 @@ export async function applyJournaledCommandChanges(state: SessionState): Promise
 
 /**
  * One journal per ACP session id, the id `session/load` resumes by, so a
- * journal outlives the bridge session that wrote it. Closing or deleting a tab
- * keeps the vendor conversation (see the `DELETE` route), so the journal is
- * kept too; it is bounded by `CommandChangeJournal` itself.
+ * journal outlives the bridge session that wrote it. Closing a tab keeps the
+ * vendor conversation (see the close route), so the journal is kept too; it is bounded by `CommandChangeJournal` itself.
  */
 function journalFor(acpSessionId: string): CommandChangeJournal | undefined {
   if (!journalDirectory || !acpSessionId) return undefined;

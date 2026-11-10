@@ -3,7 +3,7 @@ import { preferCompleteLiveHead } from "./native-agent-live-head";
 
 // A copy of the merge as it was when it compared serialized parts, kept so the
 // parity test below proves the comparison change altered no result. It is verbatim
-// except where marked "To-do 4520", which changed those results on purpose: a held
+// except where marked "#1867", which changed those results on purpose: a held
 // row as long as the omitted count used to read as the cut prefix even when the
 // incoming parts overlapped it, and an unchanged row always reported a restored
 // prefix. The tests above the parity test pin the new answers directly.
@@ -49,7 +49,7 @@ function oldLocateIncomingParts(
   local: readonly unknown[],
   incoming: readonly unknown[],
   hint: number | undefined,
-  // To-do 4520: the length rule below now asks for the loose match too.
+  // #1867: the length rule below now asks for the loose match too.
   acceptGrowth: boolean,
 ): number {
   if (local.length === 0 || incoming.length === 0) return -1;
@@ -94,7 +94,7 @@ function oldLocateIncomingParts(
   };
   const overlapAt = (offset: number) => {
     const overlap = Math.min(local.length - offset, incoming.length);
-    // To-do 4520 review: only content-only matches require a suffix.
+    // #1867 review: only content-only matches require a suffix.
     let identity = false;
     let strict = 0;
     for (let index = 0; index < overlap; index += 1) {
@@ -158,7 +158,7 @@ function oldPreferCompleteLiveHead<TMessage>(
   const localParts = (local as { parts?: unknown } | undefined)?.parts;
   const headParts = (head as { parts?: unknown }).parts;
   if (!Array.isArray(localParts) || !Array.isArray(headParts)) return incomingOnly();
-  // To-do 4520: overlap comes first; content-only matches must be a suffix.
+  // #1867: overlap comes first; content-only matches must be a suffix.
   const located =
     headParts.length === 0 && (omittedParts ?? 0) > 0
       ? localParts.length
@@ -192,7 +192,7 @@ function oldPreferCompleteLiveHead<TMessage>(
   ) {
     return {
       messages: [local, ...incoming.slice(1)],
-      // To-do 4520: an unchanged row short of the omitted count restores nothing.
+      // #1867: an unchanged row short of the omitted count restores nothing.
       restoredPrefix: omittedParts === undefined || offset >= omittedParts,
     };
   }

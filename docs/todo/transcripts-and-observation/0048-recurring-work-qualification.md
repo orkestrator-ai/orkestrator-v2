@@ -33,7 +33,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 ### Tasks
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, [7557](7557-multi-review-progress-tail.md); the four PR rows need live GitHub and moved to task 5, decision W3) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, [7557](7557-multi-review-progress-tail.md); the four PR rows need live GitHub and moved to task 5, decision W3) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, 7201; turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown, and the four PR rows of the latency budgets as a client sees them (moved from task 2 on 2026-11-10). Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
@@ -51,7 +51,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 17. **View PR stale marker with a real PR**: a failed PR read shows the stale marker and last-check tooltip, which clear on the next good read. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs GitHub credentials and a real PR; run it with task 5).
 18. **Reconnect timing in a real background tab**: a hidden tab's retries under timer throttling, and an immediate retry when it becomes visible. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs a headed browser; the 2026-11-06 host runs browsers headless only, and the busy profile's hidden client is emulated, so its timers are not throttled).
 19. **Changes-tab remote freshness**: qualify `WorktreeSnapshotState.remote` and the stale-base warning through the real browser. Carried from 0020's pointer to retired 0051. Status: done (2026-11-06: qualified on a legacy container record on macOS, `changes-remote-freshness.spec.ts`; it found that the Changes tab's Refresh never asked a container for its remote, fixed, decision M3).
-20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in [7200](7200-event-stream-reader-gaps.md), two fixed with tests).
+20. **Other event-stream readers**: assess silent-drop detection and retry spread beyond the browser gateway and Electron client. Moved from 0051's unverified scope note (deleted 2026-11-06). Status: done (2026-11-06: a disposition per reader; four gaps in 7200, two fixed with tests).
 21. **Retired to-do pointers in source comments**: repoint five comments in a code-allowed follow-up; this retirement ticket changes documentation only. Status: done (2026-11-06).
 
 ### 1. Busy live profile
@@ -144,7 +144,7 @@ entry, and after an explicit Refresh. Container probes start at random
 offsets in the 15 s scan interval. On macOS every row it covers was within
 budget except the container Changes refresh, whose p95 is pulled over 1 s by
 refreshes that follow a scan already running (decision M6,
-[7201](7201-explicit-refresh-behind-running-scan.md)). See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The other
+7201). See [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos). The other
 budget rows need a live turn, approvals, mail, PRs or workflows; task 11
 already measured turn completion, the activity indicator and queued prompts
 on two clients, and the rest belong with tasks 1 and 5.
@@ -853,7 +853,7 @@ Applying the same patch everywhere is quicker but may duplicate existing logic.
 **Outcome (2026-11-06).** Done. Every long-lived reader outside the browser
 gateway and Electron clients was traced and given a disposition; see
 [Event-stream reader inventory](#event-stream-reader-inventory-2026-11-06).
-Three gaps and one possible gap went to [7200](7200-event-stream-reader-gaps.md).
+Three gaps and one possible gap went to 7200.
 Two were fixed with tests in the same change: the desktop connection
 manager's reconnect ladder now spreads its retries (7200 task 2), and a v2
 preview tunnel session that answers no pings for about 30 s is destroyed
@@ -1471,7 +1471,7 @@ The container rows are far inside their budgets because the container's own
 change signal announces a write; the 15 s poll is only a backstop. The one
 miss is the Changes refresh: 14 of the second run's 15 refreshes took 317 to
 635 ms and one 1.30 s, a refresh that followed a scan already running
-(decision M6, [7201](7201-explicit-refresh-behind-running-scan.md)).
+(decision M6, 7201).
 
 - **Bursts at the badge.** 2,000 files (exactly the untracked line-count
   cap): `+2,000` in 714 ms. 5,000 and 20,000 files: the badge turned
@@ -1536,7 +1536,7 @@ owners: the child's exit is the signal.
 | Desktop relayed stream (`backend-process.ts`) | SSE | 60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`) | `ReconnectBackoff` | Covered (part of the Electron client) |
 | Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
 | `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
-| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was [7200](7200-event-stream-reader-gaps.md) task 4, fixed |
+| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was 7200 task 4, fixed |
 | OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream has none: [7559](7559-opencode2-event-stream-silence.md) |
 | Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
 | Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
@@ -1745,7 +1745,7 @@ credentials or a platform CI lacks are batched in
     macOS for the diff badge and Files panel rows (see
     [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos));
     the container Changes refresh tail is accepted as one scan longer
-    ([7201](7201-explicit-refresh-behind-running-scan.md), 2026-11-10); the turn,
+    (7201, 2026-11-10); the turn,
     approval and mail rows were done 2026-11-06 by the busy
     profile; workflow visibility was done 2026-11-10 (a review view per
     client, over budget at p95 from a backend tail,
@@ -2500,7 +2500,7 @@ not collide with other tasks' decisions.
   scan already running and then needs its own, so about one refresh in
   fifteen took 1.3 to 2.2 s against a 1 s budget. This is deliberate (a
   running scan may predate the click), so it is a budget decision, not a
-  defect fixed here: [7201](7201-explicit-refresh-behind-running-scan.md)
+  defect fixed here: 7201
   holds the options, recommending a budget amendment. Accepted 2026-11-10:
   the budget row reads "≤ 1 s, or one scan longer when a scan is already
   running", and the spec marks scan-wait qualification unverified on
@@ -2511,7 +2511,7 @@ not collide with other tasks' decisions.
   clients. That is a harness of its own, larger than this run; nothing in it
   needs a real provider, so it stays open rather than blocked.
 - **M8 Which reader gaps to fix now (task 20).** The inventory found four
-  ([7200](7200-event-stream-reader-gaps.md)). Fixed with tests: the desktop
+  (7200). Fixed with tests: the desktop
   reconnect ladder's lock-step retries (each delay now drawn from the upper
   half of its rung) and the v2 preview tunnel's ignored pongs (two unanswered
   pings destroy the session). Left: OpenCode's silent stream, which needs a
@@ -2653,9 +2653,9 @@ collide with other tasks' decisions.
 - [7202-busy-profile-follow-ups.md](7202-busy-profile-follow-ups.md): what
   task 1's busy profile found (approving from the CLI, one unexplained
   review stall).
-- [7200-event-stream-reader-gaps.md](7200-event-stream-reader-gaps.md): the
+- to-do 7200 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)): the
   reader gaps task 20 found, two fixed.
-- [7201-explicit-refresh-behind-running-scan.md](7201-explicit-refresh-behind-running-scan.md):
+- to-do 7201 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)):
   the container Changes refresh tail task 2 measured.
 - [7100-long-soak-follow-ups.md](7100-long-soak-follow-ups.md): what task 10's
   long soak left (containers, a browser reader, three projection maps

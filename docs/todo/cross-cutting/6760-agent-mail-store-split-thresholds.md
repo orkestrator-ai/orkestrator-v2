@@ -16,7 +16,7 @@ Analysed 2026-11-05 against `main` at `cbe0f9a5b`. From efficiency report part `
 
 **Context.** On 2026-10-28 arktech-mini's `agent-mail` store had 600 rows totalling 1,224 KiB ([0741](0741-backend-responsiveness-under-load.md) task 3). The store's bound is 32 MiB (`AGENT_MAIL_MAX_STORE_BYTES`, `packages/protocol/src/agent-mail.ts:11`). A mailbox keeps at most 200 messages (`:7`), and retention is 14 days by default (`:12`).
 
-**Investigation.** The recurring-work metrics cannot show the store's size. `storage-read` bytes are charged only for content fetched from SQLite (`RECURRING_STORAGE_OBSERVERS`, `apps/backend/src/core/storage-stores.ts:656-661`), and a write in the same process refreshes the row cache with the rows it wrote. Measured below: a `mail-presence` pass is charged 0 bytes after an in-process send, and the whole store (1.96 MB at a 1.85 MB store, 29.0 MB at 28.9 MB) after another connection's write. On a real host, where the backend is the only mail writer, the metric reads near zero whatever the store's size. A per-store size from the backup child ([6144](6144-per-store-sizes.md)) or a read-only size query like 0741's gives the size; the event-loop stall log from 0741 gives whether a write stalls.
+**Investigation.** The recurring-work metrics cannot show the store's size. `storage-read` bytes are charged only for content fetched from SQLite (`RECURRING_STORAGE_OBSERVERS`, `apps/backend/src/core/storage-stores.ts:656-661`), and a write in the same process refreshes the row cache with the rows it wrote. Measured below: a `mail-presence` pass is charged 0 bytes after an in-process send, and the whole store (1.96 MB at a 1.85 MB store, 29.0 MB at 28.9 MB) after another connection's write. On a real host, where the backend is the only mail writer, the metric reads near zero whatever the store's size. A per-store size from the backup child (6144) or a read-only size query like 0741's gives the size; the event-loop stall log from 0741 gives whether a write stalls.
 
 **Decisions.**
 
@@ -124,7 +124,7 @@ Stored-format changes follow the migration rules in `AGENTS.md` ("Storage rules"
 - [0741 backend responsiveness under load](0741-backend-responsiveness-under-load.md): tasks 3 (the first real size) and 5 (the read model).
 - [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 2.
 - 5100 prompt queue row writes (done 2026-11-05, deleted 2026-11-06; see git history): the row-write pattern task 2 recommends.
-- [6144 per-store sizes](6144-per-store-sizes.md).
+- 6144 per-store sizes (retired on 2026-11-10; see [storage.md](../../architecture/storage.md)).
 - Efficiency report, E (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`), ST-9.
 
 ## Replaces

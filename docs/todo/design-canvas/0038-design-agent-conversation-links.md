@@ -12,7 +12,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Archived link state**: show "archived" for a link whose conversation the provider has archived. Status: blocked (on native archive semantics, 0006 item 3).
+1. **Archived link state**: show "archived" for a link whose conversation the provider has archived. Status: open (it was blocked on native archive semantics, 0006 item 3, which is done: #1337 for Codex, Cursor added 2026-10-31).
 2. **Live close after the bridge lost the session**: an optional live check of decision 11's fallback, the identity kept on the mapping. Status: partly done (a bridge restart before close is exercised live; the lost-session branch is deterministic only).
 3. **Stale 0082 cross-reference**: the "Codex rerun is owed there" note under Live spec run. Status: done (0082 reran both Codex design specs on 2026-10-26).
 

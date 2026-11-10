@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cleanupEvidenceContainers } from "../../apps/backend/scripts/rootless-budget-evidence-cleanup";
+import { cleanupEvidenceContainers } from "../scripts/rootless-budget-evidence-cleanup";
 
 describe("budget evidence cleanup", () => {
   const label = "orkestrator-s0019-budget-evidence=this-run";

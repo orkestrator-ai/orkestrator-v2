@@ -1618,7 +1618,7 @@ running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
 Both paths are qualified against a slow remote on a real profile by
-`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+`mise run test:agent:coordinator-slow-remote` (to-do 4720, retired 2026-11-10; see
 [agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
 In that run a worker's mail to a coordinator whose turn is running waits on
 the coordinator's presence (`agent-mail delivery.waiting reason=working`)

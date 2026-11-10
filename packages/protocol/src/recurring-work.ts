@@ -342,10 +342,9 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "per-key-serial",
     "storage-reconcile",
   ),
-  // Step 08 keyed supervision by default (per-workflow due times, 30 s safety
-  // discovery); the adaptive due scheduler is its rollback
-  // (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`). The legacy 1 s
-  // whole-store tick is gone.
+  // Step 08 keyed supervision (per-workflow due times, 30 s safety discovery)
+  // is the only driver: its rollback, the adaptive due scheduler, was removed
+  // by todo 0048 task 13, and the legacy 1 s whole-store tick before it.
   "multi-review-tick": backend(
     "B16",
     "interval",

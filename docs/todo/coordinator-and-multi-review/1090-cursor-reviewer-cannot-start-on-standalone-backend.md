@@ -8,7 +8,7 @@ Analysed 2026-10-31 against `main` at `12b222fe`.
 
 ### Tasks
 
-1. **Confirm a Cursor reviewer starts on a release that includes #1491**: run a Build Pipeline with a Cursor reviewer on a standalone backend. Status: open (depends on a release with #1491).
+1. **Confirm a Cursor reviewer starts on a release that includes #1491**: run a Build Pipeline with a Cursor reviewer on a standalone backend. Status: open (the release dependency is met: #1491 shipped in v2.34.5-beta and later; needs a signed-in Cursor account).
 2. **Measure the first-use bridge install inside a reviewer start**: how long the on-demand install takes when a reviewer is the first Cursor use on a host. Status: open (depends on 1).
 3. **Decide what happens when a reviewer's agent cannot start**: today it fails silently in every round. Status: done (2026-11-01). The reviewer is marked as unable to start and named, with its reason, above the review and pipeline graphs; the rest of the panel carries on. See "Assumptions and decisions".
 

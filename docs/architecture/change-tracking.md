@@ -855,7 +855,7 @@ longer waits on it and has a first count from this run.
 The soak also found, outside the cap: Multi Review launches refused after the
 ninth round because each review left its tab open (a driver fault, fixed: the
 busy driver closes each finished review's tabs), and backend event-loop stalls
-that grew over the run ([7561](../todo/cross-cutting/7561-busy-soak-event-loop-stall-growth.md)).
+that grew over the run ([7562](../todo/cross-cutting/7562-busy-soak-event-loop-stall-growth.md)).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose

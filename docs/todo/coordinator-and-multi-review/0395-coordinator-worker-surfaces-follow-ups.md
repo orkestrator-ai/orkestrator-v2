@@ -38,7 +38,7 @@ association kind.
 2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open (scope call for the user).
 3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: done.
 4. **Live `surfaces` scenario**: a scenario in `mise run test:agent:coordinator` that calls each tool once on a real stack. Status: open (needs a live provider).
-5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (depends on 3).
+5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (task 3, which it depended on, is done).
 
 ### 1. Worker surfaces on other nodes
 

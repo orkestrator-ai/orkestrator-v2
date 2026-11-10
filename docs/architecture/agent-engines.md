@@ -981,7 +981,7 @@ and on Linux each command gets its own network namespace whose only way out
 is the proxy, which `NO_PROXY` skips for loopback. So with full network a
 sandboxed command on Linux cannot reach a service on the machine's loopback
 directly (a dev server, a local database); on macOS it can. Agent Info does
-not say so yet ([7561](../todo/agent-engines/7561-claude-linux-sandbox-loopback-under-full-network.md)).
+not say so yet ([7563](../todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md)).
 `mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
 either system (to-do 0001 task 9).
 

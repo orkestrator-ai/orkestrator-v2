@@ -26,7 +26,7 @@ repeated as tasks; their live checks are. The open questions and the
 6. **Live Claude question preview**: whether Claude emits previews and the card shows them verbatim (item 3). Status: open.
 7. **Browser interaction checks**: MCP elicitation rehydration, Claude `ask` and `deny` overrides, a coordinator turn that delegates and asks. Status: done with provider fakes (`e2e/InteractionPolicyChecks.spec.ts`); a coordinator turn on a real model stays with 0024.
 8. **Container cells on Cursor and Pi**: `mise run test:agent:docker` for Cursor and Pi. Status: done (2026-11-06, fake engines; live-provider runs are [7040](7040-container-cells-on-real-cursor-and-pi.md)).
-9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented and its Agent Info note is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md)).
+9. **Claude provider sandbox on a real CLI**: `allowUnsandboxedCommands: false` and `strictAllowlist` hold. Status: done (macOS half 2026-11-06, Linux bubblewrap half 2026-11-10, both with `mise run verify:claude:sandbox-live`; no sandbox defect found; Linux's direct-loopback difference is documented and its Agent Info note is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md)).
 
 ### 1. Grok project resources off
 
@@ -267,7 +267,7 @@ Linux half done on 2026-11-10 on `beelink2` (Arch/Omarchy, kernel 7.2.15, x86_64
 | `control-proxy-full-ask` | reached the server after a second card | Bash, then `SandboxNetworkAccess` | Yes |
 | `control-direct-full` | **refused**: `Could not connect to server`; 0 requests | none | **No**: macOS reaches it |
 
-So `allowUnsandboxedCommands: false` and `strictAllowlist` hold under bubblewrap exactly as under Seatbelt, and the controls show both refusals are the options' doing. The one difference is a documented vendor limit, not a bridge defect: `allowLocalBinding` is "macOS only" in the SDK's types, and the CLI runs each Linux command in its own network namespace, so with full network a sandboxed command reaches loopback only through the proxy, and a plain `curl localhost:…` (which `NO_PROXY` sends direct) fails. Agent Info still says "full network" for such a session; whether it should add a note is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md). The 14-turn check passed three times on 2026-11-10 (15.1 s, 14.7 s, 27.5 s). A Linux host whose bubblewrap cannot nest the namespace (Ubuntu's AppArmor profile) skips it with the probe's reason; there the bridge would refuse every turn with 422, which 0145's CI pair already covers.
+So `allowUnsandboxedCommands: false` and `strictAllowlist` hold under bubblewrap exactly as under Seatbelt, and the controls show both refusals are the options' doing. The one difference is a documented vendor limit, not a bridge defect: `allowLocalBinding` is "macOS only" in the SDK's types, and the CLI runs each Linux command in its own network namespace, so with full network a sandboxed command reaches loopback only through the proxy, and a plain `curl localhost:…` (which `NO_PROXY` sends direct) fails. Agent Info still says "full network" for such a session; whether it should add a note is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md). The 14-turn check passed three times on 2026-11-10 (15.1 s, 14.7 s, 27.5 s). A Linux host whose bubblewrap cannot nest the namespace (Ubuntu's AppArmor profile) skips it with the probe's reason; there the bridge would refuse every turn with 422, which 0145's CI pair already covers.
 
 **Decisions.**
 
@@ -1128,7 +1128,7 @@ Task 9. Chose to lift the macOS-only gate of `claude-provider-sandbox.live.test.
 
 ### Task 9: assert Linux's direct-loopback refusal rather than drop the control (2026-11-10)
 
-Task 9. `control-direct-full` was a macOS control (full network reaches loopback directly). On Linux it is refused. Options were dropping the control on Linux, or asserting the refusal as the platform's behaviour. Chose to assert it: the SDK documents `allowLocalBinding` as macOS-only, so a later CLI that starts reaching loopback on Linux is a network-model change an upgrade should notice. `control-proxy-full` still shows that a full-network command reaches the server, so the restricted turns' refusals keep their meaning. Whether users should be told is [7561](7561-claude-linux-sandbox-loopback-under-full-network.md); no production code changed for it here.
+Task 9. `control-direct-full` was a macOS control (full network reaches loopback directly). On Linux it is refused. Options were dropping the control on Linux, or asserting the refusal as the platform's behaviour. Chose to assert it: the SDK documents `allowLocalBinding` as macOS-only, so a later CLI that starts reaching loopback on Linux is a network-model change an upgrade should notice. `control-proxy-full` still shows that a full-network command reaches the server, so the restricted turns' refusals keep their meaning. Whether users should be told is [7563](7563-claude-linux-sandbox-loopback-under-full-network.md); no production code changed for it here.
 
 ### Task 2: keep a skill written during a running turn as residual risk
 
@@ -1200,7 +1200,7 @@ server as loaded; the address is never contacted.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Docker and provider runs.
 - [agent-engines.md](../../architecture/agent-engines.md) "Execution policy".
-- [7561-claude-linux-sandbox-loopback-under-full-network.md](7561-claude-linux-sandbox-loopback-under-full-network.md)
+- [7563-claude-linux-sandbox-loopback-under-full-network.md](7563-claude-linux-sandbox-loopback-under-full-network.md)
   (task 9's Linux finding: a full-network provider sandbox does not reach
   loopback directly).
 

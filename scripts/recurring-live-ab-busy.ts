@@ -62,13 +62,35 @@ export type BusyOptions = {
   busyClients: number[];
   /** Files each environment gets in a burst. */
   busyBurstFiles: number;
+  /**
+   * Files written into the turn environment while each round's held turn is
+   * at the model, and removed when the round ends; 0 writes none. Past the
+   * measurement file row cap (2,000) this puts capped lists on the turn and
+   * thread-segment owners, not only the environment scan (todo 4960).
+   */
+  busyTurnFiles: number;
 };
+
+/**
+ * Untracked files the environment scan counts lines for
+ * (`UNTRACKED_SCAN_MAX_FILES` in apps/backend/src/core/commands-validation.ts;
+ * the test pins the two together). Past it the rest are listed uncounted and
+ * the badge reads `~+2,000`, so a larger burst can only be waited for up to
+ * this many added lines. The busy environments hold no other untracked files.
+ */
+export const UNTRACKED_COUNTED_FILES = 2_000;
+
+/** Lines a burst of `files` one-line files adds to a change badge. */
+export function burstBadgeLines(files: number): number {
+  return Math.min(files, UNTRACKED_COUNTED_FILES);
+}
 
 export const BUSY_DEFAULTS: BusyOptions = {
   busyRounds: 0,
   busyEnvironments: 10,
   busyClients: [0, 1, 2],
   busyBurstFiles: 200,
+  busyTurnFiles: 0,
 };
 
 /**
@@ -228,6 +250,8 @@ export type BusyResult = {
     /** A marker the model saw more often than once per prompt. */
     duplicates: number;
   };
+  /** Held turns that had `busyTurnFiles` files written while they ran. */
+  turnFileRounds: number;
   failures: BusyFailure[];
   /** `recurringWork` kinds and process totals, sampled at each round boundary. */
   windowSamples: LiveSample[];
@@ -374,6 +398,42 @@ export function clientProgressSample(
   return { kind: "sample", ms: Math.round(shown.at - submittedAt) };
 }
 
+/**
+ * A pane layout's tree without the tabs of one Multi Review (its root,
+ * reviewer and Address Findings tabs), and how many it removed. Leaves whose
+ * active tab went select their first remaining tab. The renderer owns the
+ * tree's shape: leaves carry `tabs` and `activeTabId`, splits `children`.
+ */
+export function withoutReviewTabs(
+  root: unknown,
+  workflowId: string,
+): { root: unknown; removed: number } {
+  let removed = 0;
+  const isReviewTab = (tab: unknown) => {
+    if (!tab || typeof tab !== "object") return false;
+    const record = tab as { id?: unknown; multiReviewTabData?: { workflowId?: unknown } };
+    return (
+      record.multiReviewTabData?.workflowId === workflowId ||
+      record.id === `multi-review:${workflowId}` ||
+      (typeof record.id === "string" && record.id.startsWith(`multi-review:${workflowId}:`)) ||
+      record.id === `multi-review-fix:${workflowId}`
+    );
+  };
+  const walk = (node: unknown): unknown => {
+    if (!node || typeof node !== "object") return node;
+    const record = node as { tabs?: unknown; activeTabId?: unknown; children?: unknown };
+    if (Array.isArray(record.children)) return { ...record, children: record.children.map(walk) };
+    if (!Array.isArray(record.tabs)) return node;
+    const tabs = record.tabs.filter((tab) => !isReviewTab(tab));
+    removed += record.tabs.length - tabs.length;
+    const active = tabs.some((tab) => (tab as { id?: unknown }).id === record.activeTabId)
+      ? record.activeTabId
+      : ((tabs[0] as { id?: unknown } | undefined)?.id ?? null);
+    return { ...record, tabs, activeTabId: active };
+  };
+  return { root: walk(root), removed };
+}
+
 /** An error's first line: Playwright appends a call log that may name page content. */
 function firstLine(error: unknown): string {
   return error instanceof Error ? (error.message.split("\n", 1)[0] ?? "") : String(error);
@@ -441,6 +501,7 @@ export async function measureBusy(
     samples,
     timeouts: {},
     obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+    turnFileRounds: 0,
     failures: [],
     windowSamples: [],
     admission: {},
@@ -530,12 +591,43 @@ export async function measureBusy(
     return { ok: response?.ok === true, result: response?.result };
   };
 
+  const closeReviewTabs = async (environmentId: string, workflowId: string) => {
+    const layout = (await gateway.invoke("get_pane_layout", { environmentId })) as {
+      version?: unknown;
+      containerId?: unknown;
+      activePaneId?: unknown;
+      root?: unknown;
+    } | null;
+    if (!layout) return;
+    const next = withoutReviewTabs(layout.root, workflowId);
+    if (next.removed === 0) return;
+    // The merge takes exactly these four fields and refuses any other.
+    const base = {
+      version: layout.version,
+      containerId: layout.containerId,
+      activePaneId: layout.activePaneId,
+      root: layout.root,
+    };
+    await gateway.invoke("apply_pane_layout_intent", {
+      environmentId,
+      baseLayout: base,
+      desiredLayout: { ...base, root: next.root },
+    });
+  };
+
   const fakeModel = runtime.startFakeModel();
   let clients: BusyClient[] = [];
   try {
     runtime.writeFakePiModels(options.dataDir, fakeModel.baseUrl);
     // --- Environments ------------------------------------------------------
-    const listed = cliJson(await step(["environment", "list"])) as { items?: unknown[] } | null;
+    const listing = await step(["environment", "list"]);
+    // Every step goes through the worktree's CLI; an unbuilt one fails here,
+    // and reporting that as a missing environment hid the cause (todo 4960).
+    if (listing.status !== 0)
+      throw new Error(
+        `The CLI's environment list failed (exit ${listing.status}); build it with mise run build:cli`,
+      );
+    const listed = cliJson(listing) as { items?: unknown[] } | null;
     const fixture = (listed?.items ?? [])
       .map((raw) => raw as Record<string, unknown>)
       .find((entry) => entry.environmentType === "local" && entry.ready === true);
@@ -660,6 +752,7 @@ export async function measureBusy(
         const held = `t-${tag}`;
         const queued = `q-${tag}`;
         const approval = `a-${tag}`;
+        const turnFilesPath = path.join("busy-turn", tag);
         // A round that throws (a client that cannot open its view, a refused
         // command) is recorded and the next round still runs.
         try {
@@ -734,7 +827,8 @@ export async function measureBusy(
           await watchBadges(
             "burst-badge",
             burstAt,
-            (additions, base) => additions !== null && additions >= base + options.busyBurstFiles,
+            (additions, base) =>
+              additions !== null && additions >= base + burstBadgeLines(options.busyBurstFiles),
           );
           record("burst-backend", await backendBurst);
           const clearAt = runtime.now();
@@ -762,6 +856,12 @@ export async function measureBusy(
             BACKEND_WAIT_MS,
           );
           if (dispatched === null) fail("turn", "the held turn never reached the model");
+          else if (options.busyTurnFiles > 0) {
+            // Written inside the held turn, so the turn and its thread segment
+            // measure them; removed once the round ends (below).
+            runtime.writeBurst([turnEnvironment.worktree], turnFilesPath, options.busyTurnFiles);
+            result.turnFileRounds += 1;
+          }
           const heldAt = fakeModel.marker(held)?.firstAt ?? runtime.now();
           await allClients(
             "activity-working",
@@ -925,7 +1025,17 @@ export async function measureBusy(
           if (fakeModel.marker(held)) result.obligations.turns += 1;
 
           // 6. A Multi Review to completion, every slot on the fake model.
-          if (reviewId) await step(["review", "cancel", reviewId]);
+          if (reviewId) {
+            await step(["review", "cancel", reviewId]);
+            // Each review opens tabs in its environment, which holds at most
+            // nine; close the last one's as a user would, or every launch
+            // after the ninth is refused (todo 4960's soak).
+            try {
+              await closeReviewTabs(reviewEnvironment.id, reviewId);
+            } catch (error) {
+              fail("workflow-tabs", firstLine(error));
+            }
+          }
           // Every client whose link is up watches it from a review view of
           // its own (a hidden client's view is a separate, visible document).
           const viewers = (
@@ -1091,6 +1201,8 @@ export async function measureBusy(
           // Release model waiters; parked provider approvals require session.stop below.
           for (const id of [held, queued, approval]) fakeModel.release(id);
         }
+        if (options.busyTurnFiles > 0)
+          runtime.removeBurst([turnEnvironment.worktree], turnFilesPath);
         if (result.failures.length > failuresBefore) {
           for (const id of [held, queued, approval]) fakeModel.release(id);
           // A successful stop confirms provider work ended, including parked approvals.
@@ -1159,7 +1271,9 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
       result.obligations.approvals
     } approvals, ${result.obligations.mails} mails, ${result.obligations.workflows} reviews completed, ${
       result.obligations.duplicates
-    } duplicated dispatches. Failures: ${
+    } duplicated dispatches${
+      result.turnFileRounds > 0 ? `, ${result.turnFileRounds} held turns wrote files` : ""
+    }. Failures: ${
       result.failures
         .map(
           (entry) =>

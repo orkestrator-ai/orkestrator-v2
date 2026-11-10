@@ -5,7 +5,7 @@ below was taken at `9b3f53a2`, before the 2026-10-23 code changes.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held. Tasks 1, 2, 9 and 10 worked 2026-11-06 against `main` at `c1724ab74`, live with loopback fake models (see "Live check (2026-11-06, loopback models)"). Tasks 3, 4, 5, 7 (Pi) and 8 worked 2026-11-06 against `main` at `ee2cc8423`, also live with loopback fake models only (see "Second live check (2026-11-06, loopback models)").
+Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held. Tasks 1, 2, 9 and 10 worked 2026-11-06 against `main` at `c1724ab74`, live with loopback fake models (see "Live check (2026-11-06, loopback models)"). Tasks 3, 4, 5, 7 (Pi) and 8 worked 2026-11-06 against `main` at `ee2cc8423`, also live with loopback fake models only (see "Second live check (2026-11-06, loopback models)"). Task 6 worked 2026-11-10 against `main` at `c98b20e6f`, live with OpenCode on a loopback model through a custom provider (see "OpenCode live check (2026-11-10, loopback model)").
 
 ### Tasks
 
@@ -14,9 +14,9 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 ag
 3. **Codex live async question and background shell**: neither has been exercised live. Status: done (2026-11-06, loopback model: the async question reached a backed-off view in 13 ms and its answer settled; the backgrounded command's card stayed "running..." for good, moved to 7522 and fixed on 2026-11-10: it now reads "left running").
 4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: done (2026-11-06, loopback models: the live per-cause counts are Claude none and Codex `discovery-renewal` 6 in 300 s; naming the section and stopping it moved to 7530, closed 2026-11-10: the MCP section's tool order moved; a rerun read 0 invalidations and 8.4 reads a minute, see [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round)).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
-6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code); open: no loopback model is wired into OpenCode, and this host has no OpenCode login to use instead.
+6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: done (2026-11-10, loopback model through a custom OpenCode provider: an idle OpenCode view read 8 times a minute over 300 s with no invalidation of any cause, so nothing is left to attribute).
 7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: partly done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to 7540, closed 2026-11-10: the full 630 s wait now passes, see `bridges/pi-bridge/AGENTS.md`); Grok blocked (needs a Grok login; no loopback model reaches it).
-8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); Cursor and OpenCode open (no loopback model reaches either).
+8. **Unexercised cases**: Codex sub-agents, and background shells on Codex, Cursor and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); OpenCode open (2026-11-10, loopback model: the case ran, but the scripted model reuses Pi's script, which has no background call, so the command ran in the foreground; it needs a scripted background call, if OpenCode 1.19.5's `bash` offers one); Cursor open (no loopback model reaches it).
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
 
@@ -325,6 +325,23 @@ OpenCode loads at run time; no harness for that exists, and building one
 was out of this change's scope. The task-4 cause tags are in place, so the
 rerun will attribute whatever it finds.
 
+**Outcome (2026-11-10, loopback model).** Done. The harness now reaches
+OpenCode: the Pi fake's chat-completions endpoint is added as a custom
+provider (`@ai-sdk/openai-compatible`, bundled with OpenCode, so nothing is
+downloaded) to the profile's own global `opencode.json`, made the default
+and small model and the only enabled provider, and Orkestrator's provider
+allowlist admits it for the run (decision D23). The `detach` case's 300 s
+idle wait on an idle OpenCode view read **8 times a minute** (41 reads:
+24 live updates, 17 discovery updates; gaps 15 under 250 ms, 1 of
+0.25 to 2 s, 1 of 2 to 6 s, 1 of 6 to 12 s, 17 of 12 s or more; largest
+15.0 s), with **0 invalidations of any cause** and no discovery
+announcement; the backend read the group 71 times and skipped 79 sweeps.
+That is below the 12 a minute the task asked for and well below the 27.9 of
+2026-10-21, so the two code fixes held and the hints this task was to
+attribute did not occur. One sample on a loopback model; real-provider
+latency is not part of it. Every other case also ran (see "OpenCode live
+check (2026-11-10, loopback model)"); no defect found.
+
 ### 7. Grok and Pi rerun
 
 **Problem.** Grok and Pi have no idle-observation evidence at all, yet both have client quiet backoff on by default (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`).
@@ -399,6 +416,15 @@ scripted Codex call had to name the tool's namespace: `spawn_agent` and
 "unsupported call". Cursor and OpenCode stay open. Cursor's SDK talks to
 Cursor's own service, which has no loopback stand-in; OpenCode has no fake
 provider wired in (task 6).
+
+**OpenCode (2026-11-10, loopback model).** OpenCode now runs on the
+loopback model (task 6), and its `background` case ran, but it recorded
+`not-exercised`: the OpenCode fake reuses Pi's script, which has no
+background call, so `sleep …; echo <marker>` ran in the foreground and its
+output came back in the tool result. Exercising it needs the fake to send
+OpenCode's background form, if its `bash` has one at 1.19.5 (not checked
+here). Its `subagents` case was `not-exercised` for the same reason (the
+script answers in text; OpenCode's `task` tool was not scripted).
 
 ### 9. Container environment
 
@@ -709,6 +735,9 @@ open qualification cases from the 2026-10-21 run.
    attribute the remaining hints by tagging the callers at
    `native-agent-transcript-projection.ts` (hydration, the discovery deadline and
    success, the catalogue refresh).
+   **Done (2026-11-10, loopback model):** an idle OpenCode view read 8 times
+   a minute with no invalidation of any cause over 300 s (task 6), so no
+   caller needed tagging beyond task 4's causes.
 
 ### Qualification
 
@@ -722,13 +751,18 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   (and a real provider's latency) are not part of them.
 - Grok: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once a Grok
   login is available; no loopback model reaches Grok. Pi ran on a loopback
-  model on 2026-11-06 (task 7).
+  model on 2026-11-06 (task 7), and OpenCode on 2026-11-10 (task 6): every
+  OpenCode case passed except `subagents`, `background` (both
+  not exercised: the scripted model has no call for them) and `detach`
+  (cadence only: OpenCode reports no session attachment on the no-touch
+  runtime read).
 - Cases the models did not exercise: Codex sub-agents and the Codex
   background shell ran with scripted tool calls on 2026-11-06 (task 8; the
   separate live sub-agent card run is in
   [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)).
   Background shells on Cursor and OpenCode are still unexercised (each ran the
-  command in the foreground on 2026-10-21; neither has a loopback model). Cursor's approval case ran under an `approvals: "ask"`
+  command in the foreground on 2026-10-21; Cursor has no loopback model, and
+  OpenCode's loopback fake from 2026-11-10 has no background call yet). Cursor's approval case ran under an `approvals: "ask"`
   policy and still ran the command without asking, which is the documented
   Cursor mapping (it reports `ask` as the auto-approval it runs).
 - Completion with no renderer was observed for a local environment only; the
@@ -883,6 +917,60 @@ detach itself (runtime `summary.state` and `summary.mcpServers`, MCP list
 Evidence: `output/agent-testing/idleqa-0049-r2-*/idle-observation-live/<platform>.json`
 in the worktree that ran it. Every environment the runs and probes created
 was deleted, and the profile was stopped and reset afterwards.
+
+## OpenCode live check (2026-11-10, loopback model)
+
+Task 6 on beelink (Arch Linux, kernel 7.1.8, no display), at `c98b20e6f`
+plus this change. **A loopback-model run:** no login and no billed turn. The
+pinned OpenCode 1.19.5 server talked to the scripted chat-completions model
+(`idle-observation-fake-pi.ts`, the one Pi uses), reached through a custom
+OpenCode provider merged into the profile's own global `opencode.json`
+(`opencode-fake-provider.ts`): `@ai-sdk/openai-compatible`, the default and
+small model, and the only enabled provider, so neither a turn nor a title
+request could reach a hosted model. The spec adds the fake's provider to
+Orkestrator's `openCodeModelProviders` allowlist for the run and restores
+it. The fake adds the description OpenCode's `bash` requires. Disposable
+profile `oc-loop-0049`, headless, no host credentials, only OpenCode
+enabled, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; no Docker container was
+created:
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run dev:test --profile oc-loop-0049 --fixture --no-agent-credentials \
+  --agent-platforms opencode --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=oc-loop-0049 ORKESTRATOR_AGENT_TEST_RUN_ID=oc-loop-0049-idle-all \
+  ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1 \
+  ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=opencode \
+  ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final,approval,subagents,background,reconnect,hidden,no-renderer,detach \
+  ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS=300000 ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIMEOUT_MS=120000 \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/idle-observation-live.spec.ts --workers=1 --reporter=line
+```
+
+A first `missed-final`-only run (`oc-loop-0049-idle-smoke`) skipped: the
+composer asked for a sign-in because the fake's provider was outside the
+allowlist (D23). After the fix, `oc-loop-0049-idle-smoke2` passed, then the
+full run passed (8.0 min, exit 0), on a profile with no other environment.
+Single samples, not p95 estimates.
+
+| Case | OpenCode |
+| --- | --- |
+| Warm-up (UI / sidebar lag) | 318 / 1,208 ms; sidebar idle, working, idle |
+| `missed-final` (every frame naming the environment dropped) | passed: page 13.1 s (inside the 17.5 s lost-announcement bound, over the 3 s budget; D7), sidebar 15 ms; group read 10 and skipped 7 sweeps while idle (the smoke run: 13.8 s, 9 and 8) |
+| `approval` (environment policy `ask`; no "ask" composer mode) | passed: permission card 21 ms, page 282 ms, sidebar 1.6 s after approval |
+| `subagents` | not exercised: the scripted model answers in text (OpenCode's `task` tool is not scripted) |
+| `background` | not exercised: the scripted model has no background call, so the command ran in the foreground and its output came back in the tool result |
+| `reconnect` | passed: 151 ms after online |
+| `hidden` | passed: 0 reads hidden, 140 ms after visible |
+| `no-renderer` | passed: backend aggregate 10 ms, second client 10.0 s |
+| `detach` (300 s, cadence only) | 8 reads a minute, largest gap 15.0 s, **0 invalidations**, no discovery announcement; group read 71, skipped 79; follow-up page 13 ms. OpenCode reports no session attachment on the no-touch runtime read (`unknown` before and after) |
+
+Evidence: `output/agent-testing/oc-loop-0049-*/idle-observation-live/opencode.json`
+in the worktree that ran it. The spec deleted its environments and restored
+the profile's `opencode.json` and allowlist; the profile was stopped and
+reset afterwards.
 
 ## Live check (2026-10-23)
 
@@ -1304,6 +1392,25 @@ observation paths this file qualifies, the first needs a rendering decision
 for a state Codex never reports, and the second's source is not yet named.
 Pros: this change stays a qualification run; each follow-up has its evidence
 and options. Cons: both costs remain until then.
+
+**D23. Task 6: how OpenCode gets a loopback model.** Options: (a) a custom
+provider in the profile's own global `opencode.json` (its isolated
+`XDG_CONFIG_HOME`), served by the bundled `@ai-sdk/openai-compatible`
+package and pointed at the Pi fake's chat-completions endpoint; (b) the
+same provider through `OPENCODE_CONFIG_CONTENT`, as the backend's OpenCode
+live tests do; (c) a project `opencode.json` in the worktree. Chosen: (a).
+Pros: the backend starts each environment's OpenCode server with that
+directory, so no launch code changes; one fake serves Pi and OpenCode; no
+download. Cons: the file is shared with the MCP editor's OpenCode user
+scope, so the merge keeps every other key and refuses a JSONC file rather
+than drop a comment. (b) needs a backend environment change for a test;
+(c) depends on project resources and would mix into the project scope.
+The first run also showed that Orkestrator's `openCodeModelProviders`
+allowlist treats a connected provider outside it as signed out. That is a
+user setting working as designed, not a defect, so the spec adds the fake's
+provider to the profile's setting for the run and restores it, as a user
+with a custom provider would; admitting configured providers automatically
+would widen a deliberate allowlist without a product decision.
 
 **Assumptions.**
 

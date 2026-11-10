@@ -117,6 +117,100 @@ describe("ensureBuildPipelineNotesTab", () => {
     });
   });
 
+  test.each(["backend-first", "renderer-first"])(
+    "preserves completion publication for concurrent same-ID additions: %s",
+    async (order) => {
+      await withTemporaryStorage(async (storage) => {
+        const base = await seedBuildLayout(storage);
+        const desired = structuredClone(base);
+        const leaf = desired.root as Leaf;
+        leaf.tabs.push({
+          id: NOTES_ID("env-notes"),
+          type: "key-information",
+          keyInformationTabData: {
+            environmentId: "env-notes",
+            pipelineId: "pipeline-1",
+            view: "notes",
+          },
+        });
+        leaf.activeTabId = NOTES_ID("env-notes");
+        const publish = () =>
+          storage.ensureBuildPipelineNotesTab({
+            environmentId: "env-notes",
+            pipelineId: "pipeline-1",
+          });
+        const renderer = () => storage.applyPaneLayoutIntent("env-notes", base, desired);
+        if (order === "backend-first") {
+          await publish();
+          await renderer();
+        } else {
+          await renderer();
+          await publish();
+        }
+        const saved = (await storage.getPaneLayout("env-notes"))!;
+        const notes = (saved.root as Leaf).tabs.filter((tab) => tab.id === NOTES_ID("env-notes"));
+        expect(notes).toHaveLength(1);
+        expect(notes[0]?.keyInformationTabData).toMatchObject({ completionPublished: true });
+        expect((saved.root as Leaf).activeTabId).toBe(NOTES_ID("env-notes"));
+      });
+    },
+  );
+
+  test("full saves preserve the marker until Notes is closed, and manual reopen stays unmarked", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await seedBuildLayout(storage);
+      const published = (await storage.ensureBuildPipelineNotesTab({
+        environmentId: "env-notes",
+        pipelineId: "pipeline-1",
+      }))!;
+      const unmarked = structuredClone(published);
+      const notes = (unmarked.root as Leaf).tabs.find((tab) => tab.id === NOTES_ID("env-notes"))!;
+      delete (notes.keyInformationTabData as Record<string, unknown>).completionPublished;
+      const saved = await storage.savePaneLayout("env-notes", unmarked, published.revision);
+      expect(
+        (saved.root as Leaf).tabs.find((tab) => tab.id === notes.id)?.keyInformationTabData,
+      ).toMatchObject({ completionPublished: true });
+      const closed = structuredClone(saved);
+      (closed.root as Leaf).tabs = (closed.root as Leaf).tabs.filter((tab) => tab.id !== notes.id);
+      (closed.root as Leaf).activeTabId = (closed.root as Leaf).tabs[0]!.id as string;
+      const removed = await storage.savePaneLayout("env-notes", closed, saved.revision);
+      const reopened = await storage.applyPaneLayoutIntent("env-notes", removed, unmarked);
+      expect(
+        (reopened.root as Leaf).tabs.find((tab) => tab.id === notes.id)?.keyInformationTabData,
+      ).not.toHaveProperty("completionPublished");
+    });
+  });
+
+  test("places Notes in the active pane when no pane holds the pipeline tab", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const before = await seedBuildLayout(storage, {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
+          { kind: "leaf", id: "active", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
+        ],
+      });
+      await storage.savePaneLayout(
+        "env-notes",
+        { ...before, activePaneId: "active" },
+        before.revision,
+      );
+      const saved = (await storage.ensureBuildPipelineNotesTab({
+        environmentId: "env-notes",
+        pipelineId: "pipeline-1",
+      }))!;
+      const leaves = (saved.root as { children: Leaf[] }).children;
+      expect(saved.activePaneId).toBe("active");
+      expect(leaves[0]?.tabs).toEqual([{ id: "one", type: "plain" }]);
+      expect(leaves[1]?.activeTabId).toBe(NOTES_ID("env-notes"));
+      expect(leaves[1]?.tabs.map((tab) => tab.id)).toEqual(["two", NOTES_ID("env-notes")]);
+    });
+  });
+
   test("leaves a full layout unchanged", async () => {
     await withTemporaryStorage(async (storage) => {
       const tabs = Array.from({ length: MAX_TABS_PER_ENVIRONMENT }, (_, index) => ({

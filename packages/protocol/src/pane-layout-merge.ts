@@ -72,6 +72,29 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Keep a completion publication on a retained Notes tab, never recreate a closed tab. */
+export function preserveNotesCompletion<T extends object>(tab: T, previous?: object): T {
+  const next = tab as Record<string, unknown>;
+  const prior = previous as Record<string, unknown> | undefined;
+  const data = next.keyInformationTabData;
+  const priorData = prior?.keyInformationTabData;
+  if (
+    next.id === prior?.id &&
+    next.type === "key-information" &&
+    prior?.type === "key-information" &&
+    isPlainObject(data) &&
+    isPlainObject(priorData) &&
+    data.view === "notes" &&
+    priorData.view === "notes" &&
+    data.environmentId === priorData.environmentId &&
+    data.pipelineId === priorData.pipelineId &&
+    priorData.completionPublished === true
+  ) {
+    return { ...tab, keyInformationTabData: { ...data, completionPublished: true } };
+  }
+  return tab;
+}
+
 function valuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
@@ -429,7 +452,7 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
     const remoteTab = remoteState.tabs.get(id);
     if (baseTab && (!localTab || !remoteTab)) continue;
     if (!baseTab) {
-      if (localTab) finalTabs.set(id, localTab);
+      if (localTab) finalTabs.set(id, preserveNotesCompletion(localTab, remoteTab));
       else if (remoteTab) finalTabs.set(id, remoteTab);
       continue;
     }
@@ -440,7 +463,13 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
       remoteTab,
       mergeChangedFields(baseTab, localTab, remoteTab) as TabInfo,
     );
-    finalTabs.set(id, mergeNativeAgentIdentity(baseTab, localTab, remoteTab, mergedTab));
+    finalTabs.set(
+      id,
+      preserveNotesCompletion(
+        mergeNativeAgentIdentity(baseTab, localTab, remoteTab, mergedTab),
+        remoteTab,
+      ),
+    );
   }
 
   const leaves = collectLeaves(root);

@@ -80,6 +80,61 @@ function asSplit(node: PaneNode): Extract<PaneNode, { kind: "split" }> {
 }
 
 describe("mergePersistedPaneLayouts", () => {
+  test.each([false, true])(
+    "concurrent Notes additions preserve completion (reverse=%s)",
+    (reverse) => {
+      const base = input(leaf("pane", ["chat"]));
+      const renderer = structuredClone(base);
+      const notes: TabInfo = {
+        id: "notes",
+        type: "key-information",
+        keyInformationTabData: { environmentId: "env", pipelineId: "pipeline", view: "notes" },
+      };
+      asLeaf(renderer.root).tabs.push(notes);
+      asLeaf(renderer.root).activeTabId = "notes";
+      const backend = structuredClone(renderer);
+      (
+        asLeaf(backend.root).tabs[1]!.keyInformationTabData as Record<string, unknown>
+      ).completionPublished = true;
+      const merged = reverse
+        ? mergePersistedPaneLayouts(base, backend, renderer)
+        : mergePersistedPaneLayouts(base, renderer, backend);
+      expect(tabs(merged.root).filter((tab) => tab.id === "notes")).toHaveLength(1);
+      expect(tabs(merged.root)[1]?.keyInformationTabData).toMatchObject({
+        completionPublished: true,
+      });
+      expect(asLeaf(merged.root).activeTabId).toBe("notes");
+      expect(notes.keyInformationTabData).not.toHaveProperty("completionPublished");
+    },
+  );
+
+  test("a stale metadata edit cannot clear completion, but a close still wins", () => {
+    const base = input({
+      kind: "leaf",
+      id: "pane",
+      activeTabId: "notes",
+      tabs: [
+        {
+          id: "notes",
+          type: "key-information",
+          keyInformationTabData: {
+            environmentId: "env",
+            pipelineId: "pipeline",
+            view: "notes",
+            completionPublished: true,
+          },
+        },
+      ],
+    });
+    const local = structuredClone(base);
+    delete (asLeaf(local.root).tabs[0]!.keyInformationTabData as Record<string, unknown>)
+      .completionPublished;
+    expect(
+      tabs(mergePersistedPaneLayouts(base, local, base).root)[0]?.keyInformationTabData,
+    ).toMatchObject({ completionPublished: true });
+    expect(tabs(mergePersistedPaneLayouts(base, input(leaf("pane", [])), base).root)).toEqual([]);
+  });
+
   test("keeps a browser navigation's URL and write identity atomic while merging panel edits", () => {
     const browser = (url: string, navigationRequestId?: string, open = false) =>
       input({

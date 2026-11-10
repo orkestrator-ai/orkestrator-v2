@@ -798,6 +798,10 @@ when a tab marked `completionPublished` first arrives in that window
 published setup terminal. Manual Notes openings have no completion marker and
 leave other windows on their selected tab. A user who then picks another tab is
 not pulled back.
+The shared layout merge preserves the completion marker when the backend and
+renderer concurrently add the same Notes tab. Full-layout saves also retain it
+on an existing tab for the same environment and pipeline. Closing Notes removes
+the marker with the tab, so a later manual reopening stays unmarked.
 Completion is the only trigger, so a reload never reopens old notes.
 
 The renderer also reacts to a completion it observed

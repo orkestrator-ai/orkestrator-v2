@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mergePersistedPaneLayouts } from "@orkestrator/protocol/pane-layout-merge";
 import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { Environment } from "@/types";
 import { reconcileAuthoritativePaneLayout } from "./pane-layout-authoritative";
@@ -47,7 +48,7 @@ function split(left: PaneNode, right: PaneNode): PaneNode {
   };
 }
 
-function persisted(root: PaneNode, activePaneId: string): PersistedPaneLayout {
+function persisted(root: PaneNode, activePaneId: string): PersistedPaneLayout & { root: PaneNode } {
   return {
     version: PANE_LAYOUT_VERSION,
     environmentId: "env-1",
@@ -139,6 +140,45 @@ describe("completion notes arriving in an Electron window", () => {
       ],
     });
   });
+
+  test.each(["backend-first", "renderer-first"])(
+    "a second window follows the completion after concurrent additions: %s",
+    (order) => {
+      const base = persisted(
+        split(leaf("pane-build", [buildTab], buildTab.id), leaf("pane-chat", [chatTab], "chat")),
+        "pane-chat",
+      );
+      const backend = persisted(
+        split(
+          leaf("pane-build", [buildTab, notesTab], NOTES_ID),
+          leaf("pane-chat", [chatTab], "chat"),
+        ),
+        "pane-build",
+      );
+      const renderer = structuredClone(backend);
+      if (renderer.root.kind !== "split" || renderer.root.children[0].kind !== "leaf")
+        throw new Error("expected build pane");
+      delete renderer.root.children[0].tabs[1]!.keyInformationTabData!.completionPublished;
+      const merged =
+        order === "backend-first"
+          ? mergePersistedPaneLayouts(base, renderer, backend)
+          : mergePersistedPaneLayouts(base, backend, renderer);
+      // This window first loaded the pipeline already complete (beforeEach),
+      // and has only the pre-publication layout; no transition observer ran.
+      const reconciled = reconcileAuthoritativePaneLayout(
+        "env-1",
+        { ...backend, ...merged },
+        current(base.root, "pane-chat"),
+      );
+      expect(selection(reconciled)).toEqual({
+        activePaneId: "pane-build",
+        leaves: [
+          { id: "pane-build", activeTabId: NOTES_ID },
+          { id: "pane-chat", activeTabId: "chat" },
+        ],
+      });
+    },
+  );
 
   test.each(["open", "reopen"])(
     "another window's manual Notes %s preserves chat selection",

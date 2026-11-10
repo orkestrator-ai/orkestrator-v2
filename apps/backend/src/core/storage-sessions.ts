@@ -6,6 +6,7 @@ import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-s
 import type { UsageEnvironmentLabel } from "./usage-history-record.js";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 import { keyInformationTabId, MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { preserveNotesCompletion } from "@orkestrator/protocol/pane-layout-merge";
 import {
   AGENT_HANDOFF_PRUNE_GRACE_MS,
   MAX_SESSIONS_PER_ENVIRONMENT,
@@ -159,8 +160,13 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-/** Renderer renames and moves cannot remove a backend-owned job marker. */
-function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unknown {
+/** Renderer saves cannot remove backend metadata from a retained tab. */
+function preserveBackendTabMetadata(root: unknown, previousRoot: unknown): unknown {
+  const previousTabs = new Map(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .map((tab) => [tab.id, tab]),
+  );
   const actions = new Map(
     paneLayoutLeaves(previousRoot)
       .flatMap((leaf) => leaf.tabs)
@@ -175,6 +181,7 @@ function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unk
   );
   const next = structuredClone(root);
   for (const leaf of paneLayoutLeaves(next)) {
+    leaf.tabs = leaf.tabs.map((tab) => preserveNotesCompletion(tab, previousTabs.get(tab.id)));
     for (const tab of leaf.tabs) {
       if (consumedHandoffs.has(tab.id)) tab.setupHandoffConsumed = true;
       if (tab.type === "agent-native" && actions.has(tab.id))
@@ -394,7 +401,7 @@ export class SessionsRepository {
         activePaneId: layout.activePaneId,
         root:
           previous?.containerId === layout.containerId
-            ? preserveJobCompletionActions(layout.root, previous.root)
+            ? preserveBackendTabMetadata(layout.root, previous.root)
             : layout.root,
         updatedAt: nowIso(),
         revision: currentRevision + 1,
@@ -530,7 +537,7 @@ export class SessionsRepository {
       if (sameGeneration)
         next = {
           ...next,
-          root: preserveJobCompletionActions(
+          root: preserveBackendTabMetadata(
             next.root,
             previous.root,
           ) as PaneLayoutMergeInput["root"],

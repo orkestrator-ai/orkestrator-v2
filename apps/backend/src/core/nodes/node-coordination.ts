@@ -442,6 +442,7 @@ export class NodeCoordination {
             name: project.name,
             ...(project.repositoryHint ? { repositoryHint: project.repositoryHint } : {}),
           })),
+          ...(node.loadedAt === null ? { summaryPending: true } : {}),
         })),
       localProjects: () => storage.loadProjects(),
       ticketSync: storage.ticketSync,

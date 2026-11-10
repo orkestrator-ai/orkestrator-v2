@@ -43,6 +43,7 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
+import { devTestRestartArgs } from "./profile-restart-args";
 
 type Status = {
   status: string;
@@ -155,15 +156,7 @@ async function restartProfile(logFile: string): Promise<Status> {
     timeout: 60_000,
   });
   expect(stop.status, `dev:stop failed: ${stop.stderr}`).toBe(0);
-  const args = [
-    "apps/desktop/scripts/dev-test.ts",
-    "--profile",
-    profile,
-    ...(stored.credentialSources ?? []).flatMap((source) => ["--credential-source", source]),
-    ...(stored.agentPlatforms?.length
-      ? ["--agent-platforms", stored.agentPlatforms.join(",")]
-      : []),
-  ];
+  const args = devTestRestartArgs(profile, stored);
   const output = openSync(logFile, "a");
   // The launcher is a foreground supervisor; it outlives this test and is
   // stopped with the profile, exactly like the one the caller started.

@@ -69,6 +69,7 @@ import {
 import { HttpBridgeInteractionAdapter } from "./interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
+import { promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
 import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
 import {
@@ -361,6 +362,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.agent,
       await resolvePromptAttachments(options, this.stageImages),
     );
+    // Agent-test profiles only (to-do 0050 task 3): a spec can stop the
+    // backend here, after the caller journaled the attempt and before the
+    // request leaves. Production installs no hold, so this is `undefined`.
+    const holdDetail = { agent: this.agent, sessionId, requestId: options.requestId };
+    const heldBeforeSend = promptDispatchHold("before-send", holdDetail);
+    if (heldBeforeSend) await heldBeforeSend;
     let response: Response;
     try {
       response = await bridgeFetch(
@@ -440,6 +447,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
     }
+    // The bridge accepted; the caller has not recorded it yet. Same seam.
+    const heldAfterResponse = promptDispatchHold("after-response", holdDetail);
+    if (heldAfterResponse) await heldAfterResponse;
   }
 
   /**

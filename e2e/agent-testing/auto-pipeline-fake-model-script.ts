@@ -245,3 +245,41 @@ export function scriptedTurn(request: ScriptedRequest): ScriptedTurn {
   }
   return { step: { kind: "text", text: FAKE_REPLY } };
 }
+
+/**
+ * A qualification tag: `QATAG` and eight upper-case hex digits. A spec puts
+ * one in a prompt so the fake can count how many turns that prompt started
+ * without keeping any prompt text (to-do 0050 task 3).
+ */
+export const QA_TAG = /\bQATAG[0-9A-F]{8}\b/g;
+
+/**
+ * The tags in the prompt that starts a turn: the request's last message is the
+ * user's, so nothing has answered it yet. Later requests of the same turn
+ * (after a tool result or a reply) and requests with no tag answer `[]`, so a
+ * prompt delivered twice counts twice and a long turn counts once.
+ */
+export function turnStartTags(messages: unknown): string[] {
+  const list = Array.isArray(messages) ? (messages as ChatMessage[]) : [];
+  const last = list[list.length - 1];
+  if (last?.role !== "user") return [];
+  return [...new Set(messageText(last).match(QA_TAG) ?? [])];
+}
+
+/**
+ * How many of the request's user messages carry each tag. A provider session
+ * sends its whole history on every request, so a prompt delivered twice into
+ * one session shows here as 2 on its next request, while the same tag quoted
+ * by separate sessions (later stages repeat the ticket) stays at 1 each.
+ */
+export function taggedUserMessages(messages: unknown): Record<string, number> {
+  const list = Array.isArray(messages) ? (messages as ChatMessage[]) : [];
+  const counts: Record<string, number> = {};
+  for (const message of list) {
+    if (message?.role !== "user") continue;
+    for (const tag of new Set(messageText(message).match(QA_TAG) ?? [])) {
+      counts[tag] = (counts[tag] ?? 0) + 1;
+    }
+  }
+  return counts;
+}

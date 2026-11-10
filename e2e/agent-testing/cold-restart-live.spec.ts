@@ -85,6 +85,7 @@ import {
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
+import { devTestRestartArgs } from "./profile-restart-args";
 
 type Status = {
   status: string;
@@ -266,15 +267,7 @@ async function restartProfile(
   // would see its zombie as a surviving launcher.
   const stop = await runAsync("mise", ["run", "dev:stop", "--profile", profile], 90_000);
   expect(stop.code, `dev:stop failed: ${stop.stderr}`).toBe(0);
-  const args = [
-    "apps/desktop/scripts/dev-test.ts",
-    "--profile",
-    profile,
-    ...(stored.credentialSources ?? []).flatMap((source) => ["--credential-source", source]),
-    ...(stored.agentPlatforms?.length
-      ? ["--agent-platforms", stored.agentPlatforms.join(",")]
-      : []),
-  ];
+  const args = devTestRestartArgs(profile, stored);
   const output = openSync(test.info().outputPath(`dev-test-restart-${Date.now()}.log`), "a");
   // The launcher is a foreground supervisor; it outlives this test and is
   // stopped with the profile, exactly like the one the caller started.

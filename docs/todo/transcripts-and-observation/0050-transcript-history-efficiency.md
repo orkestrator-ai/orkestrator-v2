@@ -7,8 +7,9 @@ measurement run, against `main` at `930189337` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed; the
-other tasks re-read, unchanged since 2026-10-27).
+Analysed 2026-11-10 against `main` at `c98b20e6f` (task 3 built, run and
+closed; tasks 1, 2 and 4 re-read, unchanged since 2026-11-06). Previously
+analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed).
 
 ### Tasks
 
@@ -16,7 +17,7 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window; the Claude change is in `v2.33.0-beta` only).
 2. **Inactive Cursor run at a lowered trim threshold**: reach the producer trim while the environment is inactive, then check the bounded window, pages, sub-agent card and controls. Status: open (the pass-through is in place; no Cursor live spec exists).
-3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: blocked (on a bridge fault hook that does not exist).
+3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
 4. **Electron and Docker with real providers**: the transcript paths in the Electron window and in container environments; iOS only where the wrapper changes. Status: open.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
 6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
@@ -78,6 +79,8 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 **Context.** In the 2026-10-21 cold-restart runs the provider had always already accepted. The file says a fault hook that holds the bridge's prompt route would make the window deterministic, and that adding it is its own change.
 
 **Investigation.** `pendingPromptAttempt` is used by `apps/backend/src/core/build-pipeline-prompts.ts`, `build-pipeline-review-fanout.ts` and `build-pipeline-service-helpers.ts`. No bridge has an env-driven stall or fault hook on its prompt route; the only `process.env` reads near the routes are unrelated configuration.
+
+Done on 2026-11-10 (see [Qualification results (2026-11-10)](#qualification-results-2026-11-10-pre-acceptance-dispatch-window)). `apps/backend/src/core/agent-test-dispatch-hold.ts` holds `HttpBridgeProvider.send` at two points while a marker file exists in the profile's data directory: before the prompt request leaves the backend (`hold-before-send`) and after the bridge answered 2xx but before the caller records the send (`hold-after-response`). It is installed only when the runtime flavor is `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1` is set and the data directory is not the default one, so a production build never installs it. `e2e/agent-testing/dispatch-hold-live.spec.ts` drives one Pi build pipeline on the Auto-pipeline loopback model through both points with a backend `SIGKILL` at each. The restarted backend resent the journaled prompt once under its original request id, and settled the accepted one without resending; the run finished `complete` on the same build session. The "sent, not yet accepted inside the bridge" half stays covered by each bridge's dispatch-journal unit tests only, as the recommended option below accepted.
 
 **Decisions.**
 
@@ -169,10 +172,11 @@ joined `sync-v1` history itself. The Claude bridge now loads those sessions on
 `/transcript`, which starts the fallback's retirement clock, and the joined
 path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
 browser document is measured. What remains is real-stack qualification not
-run here: a long inactive Cursor run (now reachable in a short run), the
-pre-acceptance pipeline dispatch window, and Electron and Docker with real
-providers. The mounted tab across a bridge-only restart ran on 2026-11-06 and
-found two defects, both fixed.
+run here: a long inactive Cursor run (now reachable in a short run), and
+Electron and Docker with real providers. The mounted tab across a bridge-only
+restart ran on 2026-11-06 and found two defects, both fixed. The
+pre-acceptance pipeline dispatch window ran on 2026-11-10 through a test-only
+dispatch hold and found no product defect.
 
 ## Current state
 
@@ -496,20 +500,76 @@ Still open:
   `truncated` window and its history pages, the sub-agent card and the stop
   and steer controls. Still owed: it is a paid provider run, and no Cursor
   live spec exists yet to drive it.
-- Hit the pre-acceptance build-pipeline dispatch window live. In the
-  2026-10-21 cold-restart runs the backend was killed while the prompt was
-  journaled (`pendingPromptAttempt`), but each time the provider already
-  showed the build session running, so the retry under the same request id
-  before acceptance was proved only by unit tests. A fault hook that holds the
-  bridge's prompt route would make the window deterministic. Not done: no
-  bridge has such a hook, and adding a test-only stall to a production
-  dispatch route is its own change.
 - Electron window and Docker environments with real providers; native iOS
   only where the wrapper changes.
 
 Done on 2026-11-06 (results below): a mounted Codex tab with loaded history
 across a bridge-only restart (task 5), on the pinned Codex against a
 loopback model.
+
+Done on 2026-11-10 (results below): the pre-acceptance build-pipeline
+dispatch window (task 3), held deterministically by a test-only dispatch hold
+in the backend's bridge client, on Pi against a loopback model.
+
+## Qualification results (2026-11-10): pre-acceptance dispatch window
+
+Task 3. Worktree at `main` `c98b20e6f` plus this change, on Linux (beelink2,
+headless), in the isolated profile `qa-0050-dispatch-hold`
+(`--no-agent-credentials --agent-platforms pi`, with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`). Pi ran against the Auto-pipeline
+loopback model (`auto-pipeline-fake-model.ts`) named in the profile's own
+`models.json`: no login, nothing billed. How to run it is in
+[agent-testing.md](../../development/agent-testing.md#live-dispatch-hold).
+
+The new hold (`apps/backend/src/core/agent-test-dispatch-hold.ts`) parks
+`HttpBridgeProvider.send` while a marker file exists in
+`<data dir>/agent-test-fixtures/dispatch-hold/`, and writes a record of the
+held send (agent, session and request ids, times; no prompt text). The spec,
+`e2e/agent-testing/dispatch-hold-live.spec.ts`, starts one Pi build pipeline
+(commit-only delivery) whose ticket carries a random `QATAG…` word; the fake
+model counts the turns whose opening prompt carries it and the most user
+messages carrying it in any one request.
+
+| Step | Result (4 passing runs) |
+| --- | --- |
+| `hold-before-send` armed, build stage starts | The send was held with `pendingPromptAttempt` journaled, `dispatchingAt` set and the same request id as the held send; the build session showed `running`; the model had seen no turn for the tag. |
+| Backend `SIGKILL`, `hold-after-response` armed, profile restarted | The restarted backend asked the bridge, which proved the id absent, and resent under the **same** request id on the **same** Pi session: the after-response hold parked it with the original id. The model had seen exactly one turn for the tag. The resend was held 0.1 to 1.9 s before `dev:status` reported the restarted profile ready (status is polled every 2 s). Restarts took 13.2 to 17.9 s. |
+| Backend `SIGKILL` while the accepted resend was held, profile restarted | The restarted backend settled the attempt as sent without resending (1.8 to 2.9 s after ready). No restart continuation was sent. The pipeline went on through Review and Verify to `complete` on the same build session. |
+| Duplicate checks at the end | The build session's committed history (3 rows) held the task prompt in exactly one user row; no model request carried the tag in more than one user message. The tag opened 3 turns in all, one per stage session (build, review, verify), each quoting the ticket once. |
+
+No product defect showed. The run found two harness defects, both fixed in
+this change:
+
+- **A restarted credential-free profile gained every host credential.**
+  `profile.json` records `--no-agent-credentials` as `credentialSources: []`,
+  and the restart helpers in `cold-restart-live.spec.ts`,
+  `goals-restart-live.spec.ts`, `multi-review-live.spec.ts` and
+  `web-annotations-approval-live.spec.ts` passed no credential flag for an
+  empty list, which the launcher reads as "all host credentials". They and
+  the new spec now share `devTestRestartArgs` (`profile-restart-args.ts`),
+  which passes `--no-agent-credentials` for an empty list; covered by
+  `profile-restart-args.test.ts`, which parses the result with the
+  launcher's own argument parser.
+- **The spec's first pass counted later stages as duplicates** (3 turns for
+  the tag) and its second read a stale hold record left by a backend killed
+  mid-hold. Duplicates are now counted per provider session (most tagged
+  user messages in one request, and the build history's user rows), and
+  arming a point removes its old record. A profile the spec restarted
+  (without `--fixture`) no longer names its test project in `dev:status`; the
+  spec falls back to the profile's `fixtures/test-project`.
+
+Not covered: the "sent, not yet accepted inside the bridge" half (the request
+reached the bridge but the bridge had not handed it to the provider when the
+backend died). The hold sits in the backend, so it covers "journaled, not
+sent" and "accepted, not recorded"; the in-bridge half rests on each bridge's
+dispatch-journal unit tests, as task 3's recommended option accepted.
+
+Validation: the hold's unit tests (`agent-test-dispatch-hold.test.ts`, 13
+tests, including the bridge client waiting before the request and after the
+answer, and no hold on a rejected send), the fake model's tag counters
+(`auto-pipeline-fake-model.test.ts`), `profile-restart-args.test.ts`, and the
+backend, `e2e` and `e2e/agent-testing` typechecks passed. The profile was
+stopped and reset afterwards.
 
 ## Qualification results (2026-11-06): mounted Codex tab across a bridge restart
 
@@ -903,7 +963,7 @@ Restarts took 4.9 to 9.5 s.
 | Native Codex, idle graceful restart | Pass. The first read after the restart was the persisted tail (`freshness: "cached"`) with exactly the 8 rows from before. A client following updates from it (never forcing) converged on the provider's rows: no lost or added content, no repeated prompt. All 8 rows came back under new ids (Code item 5). The browser showed the prompt and the closing word in exactly one row each, before and after the restart and after a reload. |
 | Native Codex, backend `SIGKILL` mid-turn | Pass after the fix below. The crash came 16 to 17 s after the sixth stop. The cached tail held 23 to 26 of the 25 to 30 rows that existed then, never a row the provider lacked, and always the prompt (the 10 s checkpoint age bound held). The turn went `recovering` then `error` (restarted mid-turn). The provider kept every stop read before the crash and the client converged on it. A follow-up finished the trail, and every prompt and closing word showed once in the browser. |
 | Native Claude, idle and crash | Pass. Same checks. Cold hydration split a thinking part into its own row (9 rows for 8) and re-keyed the rows, with no content lost. After the crash the cached tail lagged 7 rows (Haiku reads about a stop a second) and the turn settled straight to `error`. |
-| Build pipeline, backend `SIGKILL` with the build prompt journaled | Pass (3 runs). Each kill landed while `pendingPromptAttempt` was set and the session already showed running. After the restart the stage kept its session, the task prompt reached the provider once, at most one restart continuation was sent, no prompt repeated, and the build finished the trail. The pre-acceptance half of the window was not isolated live (see Qualification). |
+| Build pipeline, backend `SIGKILL` with the build prompt journaled | Pass (3 runs). Each kill landed while `pendingPromptAttempt` was set and the session already showed running. After the restart the stage kept its session, the task prompt reached the provider once, at most one restart continuation was sent, no prompt repeated, and the build finished the trail. The pre-acceptance half of the window was not isolated live here; it was on 2026-11-10 (task 3). |
 | Build pipeline, graceful restart mid-turn | Pass (2 runs). The committed history was readable straight after the restart, before the provider answered, with all earlier content. By then the supervisor had already committed the bridge's replay, so ids differed (Code item 5). The stage continued once on the same session and finished, and the final history held every earlier row's content once. |
 | Build pipelines, idle graceful restart | Pass. With both pipelines cancelled, every stage history (2 or 3 sessions) came back byte-identical. |
 
@@ -1285,7 +1345,9 @@ measurement.
     stay open with the steps above. None was run on 2026-10-26: each needs a
     paid provider turn or a platform run that 0031 batches, and the dispatch
     window also needs the hook first. The mounted-tab run was done on
-    2026-11-06 (decisions 17 to 21).
+    2026-11-06 (decisions 17 to 21), and the dispatch window on 2026-11-10
+    with a hold in the backend's bridge client rather than a bridge hook
+    (decisions 22 to 25).
 17. **Task 5: a loopback model instead of a real Codex turn.**
     - Options: the host's Codex login with a real model (the 2026-10-24
       method); the pinned Codex CLI against a loopback stand-in for the
@@ -1344,6 +1406,59 @@ measurement.
     - Why: right after a restart the bridge answered up to eight early pages
       empty within two seconds, which used up the fixed cap in one run of
       three. Retrying per poll would tie the cadence to the poll interval.
+
+22. **Task 3: where the hold sits.**
+    - Options: a test-only hold in the backend's bridge client (task 3's
+      recommendation); a stall hook in each bridge's prompt route; a hold in
+      the build pipeline's `dispatchPending` only.
+    - Chosen: the bridge client, `HttpBridgeProvider.send`, at two points
+      (before the request, after a 2xx).
+    - Why: no production bridge route changes; the backend owns the journal
+      under test; one seam serves every HTTP bridge and every caller of
+      `send` (pipelines, Multi Review, native tabs). The after-response point
+      makes the second half ("accepted, not recorded") deterministic too,
+      which the 2026-10-21 runs only hit by chance.
+    - Pros: one small module; nothing to await when it is not installed.
+    - Cons: the in-bridge half is still not live (see the results section);
+      OpenCode's provider is not an HTTP bridge client and has no hold.
+23. **Task 3: how the hold is kept out of production.**
+    - Options: an environment variable alone; the agent-test runtime flavor
+      plus `ORKESTRATOR_AGENT_TEST_ISOLATED=1` plus a non-default data
+      directory, armed by a marker file in that directory (the pattern of
+      `agentTestTerminalSurvival`); a build-time flag.
+    - Chosen: the flavor, isolation switch and data-directory gate, armed by a
+      marker file.
+    - Why: a production build runs with flavor `production` and the default
+      data directory, so the hold is never installed and `send` never touches
+      the file system; the marker lets a spec arm and release a point across
+      backend restarts without restarting with new flags.
+    - Pros: the same gate the existing agent-test fixtures use; unit-tested.
+    - Cons: a packaged app started with an agent-test runtime profile could
+      install it, which is what agent-test profiles are for.
+24. **Task 3: provider and pass criteria.**
+    - Options: Codex on a loopback model (task 5's method); Pi on the
+      Auto-pipeline loopback model; a real provider.
+    - Chosen: Pi on the Auto-pipeline loopback model.
+    - Why: the ticket rules out logins and billed turns, and that model
+      already answers every build-pipeline turn, so the run can go on to
+      `complete` and prove the stage carried on, not just that one prompt
+      arrived. Pass criteria: the same request id on the resend (read from
+      the hold's record), exactly one tagged turn before later stages, one
+      tagged user row in the build history, no request with the tag twice,
+      the same build session, and a completed run.
+    - Pros: about 50 s a run, repeatable, nothing billed.
+    - Cons: Pi's dispatch journal is the bridge exercised; Claude, Codex,
+      Cursor and Grok answer the same `/dispatch` contract but were not run
+      here.
+25. **Task 3: the restart arguments of a credential-free profile.**
+    - Options: fix only the new spec; share one helper across the five specs
+      that restart a profile.
+    - Chosen: the shared helper (`devTestRestartArgs`).
+    - Why: the same copy in four specs would restart a credential-free profile
+      with every host login, against the constraint that such runs use no
+      real logins.
+    - Pros: one tested place.
+    - Cons: touches four specs outside the task (one-line changes each).
 
 ## Constraints and rationale
 

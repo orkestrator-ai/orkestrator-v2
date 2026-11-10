@@ -1528,6 +1528,53 @@ The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
 
+### Live dispatch hold
+
+`e2e/agent-testing/dispatch-hold-live.spec.ts` kills the backend inside the
+build pipeline's prompt dispatch window, at both of its backend-side points,
+and checks that the restart resends a journaled prompt once under its
+original request id and never resends one the bridge already accepted. It
+runs Pi against the Auto-pipeline loopback model (`auto-pipeline-fake-model.ts`),
+so it needs no login and bills nothing. Its opt-in is
+`ORKESTRATOR_AGENT_TEST_DISPATCH_HOLD=1`; it restarts the profile twice, so
+run it on its own against a credential-free, Pi-only profile you started by
+hand:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile qa-dispatch-hold --fixture --no-agent-credentials --agent-platforms pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-dispatch-hold ORKESTRATOR_AGENT_TEST_DISPATCH_HOLD=1 \
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run test:logged -- --name dispatch-hold-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/dispatch-hold-live.spec.ts
+mise run dev:stop --profile qa-dispatch-hold
+mise run dev:reset --profile qa-dispatch-hold
+```
+
+The window is made deterministic by a test-only hold in the backend's bridge
+client (`apps/backend/src/core/agent-test-dispatch-hold.ts`). It exists only
+in an agent-test backend (flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`
+and a non-default data directory) and is armed by marker files in
+`<data dir>/agent-test-fixtures/dispatch-hold/`:
+
+- `hold-before-send` parks every prompt send after its caller journaled it
+  and before the request leaves the backend;
+- `hold-after-response` parks a send after the bridge answered 2xx and before
+  the caller records it.
+
+While a send is parked, `held-<point>.json` beside the marker names its agent,
+session and request ids (never the prompt) and gains `releasedAt` once the
+marker is removed. A backend killed while held never marks its record
+released, so remove the record when you arm the point again. A forgotten
+marker is released after 15 minutes. Results are in
+[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
+
+A spec that restarts a profile builds the launcher's arguments with
+`devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
+credential-free profile records an empty credential list, which the launcher
+would otherwise read as "every host credential".
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless

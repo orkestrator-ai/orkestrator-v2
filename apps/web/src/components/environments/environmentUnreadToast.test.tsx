@@ -64,13 +64,13 @@ describe("showEnvironmentUnreadToast", () => {
     );
   });
 
-  test("shows the same blue bell as the environment list", () => {
+  test("shows the same amber bell as the environment list", () => {
     showEnvironmentUnreadToast(environment({ unreadReason: "agent_finished" }));
 
     const { container } = render(lastToast().options.icon);
     const icon = container.querySelector("svg");
-    expect(icon?.classList.contains("text-primary")).toBe(true);
-    expect(icon?.classList.contains("fill-primary/20")).toBe(true);
+    expect(icon?.classList.contains("text-amber-400")).toBe(true);
+    expect(icon?.classList.contains("fill-amber-400/20")).toBe(true);
   });
 
   test("labels the hidden project home the way the sidebar does", () => {

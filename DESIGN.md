@@ -281,7 +281,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 
 ### Primary
 - **Signal Blue** (`brand-blue`): the brand blue. On the site it carries the primary button, links and the start of the headline gradient; its brighter partner **Signal Blue Bright** (`brand-blue-bright`) carries eyebrows, focus outlines and the gradient's first stop.
-- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, unread dots and bells, and the "creating" status.
+- **App Signal Blue** (`primary`): the app's current blue for lines, text and marks: links, the selected row's 2px accent bar, the focus hairline (`--color-ring`), the active tab underline, the unread-mail count, and the "creating" status. Bells are not blue; see Approval Amber.
 - **Deep Signal Fill** (`primary-fill`): the same blue one step deeper, for any fill that carries white text or glyphs: primary buttons (Create PR), the selected segment, the compose bar's Send. White on `primary` is 3.7:1, below AA for 14px text; white on `primary-fill` is 5.2:1.
 
 ### Secondary
@@ -289,7 +289,7 @@ A cool, blue-cast night with one blue voice and one green/red pair for outcomes.
 - **App All-Clear Green** (`success`): the app's one success colour. Diff additions, successful tool calls, running status (`--color-status-running`) and the merge-ready shimmer.
 
 ### Tertiary
-- **Approval Amber** (`brand-amber`): the site's "approval needed" and fix-stage accent. In the app, waiting-on-you states use Tailwind's `yellow-400` (the needs-answer shimmer, the project-home activity icon).
+- **Approval Amber** (`brand-amber`): the site's "approval needed" and fix-stage accent. In the app, waiting-on-you and new-activity states are yellow: the needs-answer shimmer uses Tailwind's `yellow-400`, and every bell uses `amber-400` with a `fill-amber-400/20` body (the unread bell on an environment row and in its toast, the sidebar's waiting-environments counter, the project-home activity icon). A bell is how a glance finds the row that changed, so it keeps its yellow at rest rather than taking Signal Blue.
 - **Fault Red** (`brand-red`, app `failure`): text-weight red for failures, blocked rows, diff deletions and error status. **Destructive Coral** (`destructive`) is the fill for destructive buttons; it is deliberately not `failure`, which is tuned for text and would put white glyphs on a pale fill at roughly 2.5:1.
 
 ### Neutral
@@ -465,6 +465,7 @@ A 16px-radius panel on the ground colour, with header and footer bands separated
 - **Do** keep touch targets at 40–44px below 640px and gate hover-only controls behind `hover-fine`.
 - **Do** match a status row's height across its states, so the transcript does not jump at the end of a turn.
 - **Do** carry a notice's tone in its 8px dot on a neutral card, never in a tinted background.
+- **Do** draw every bell (unread activity, waiting environments, project-home activity) in `amber-400`, never in Signal Blue.
 - **Do** keep the compose bar's input limits (one to twelve 20px lines) shared across every agent platform.
 - **Do** put white text only on `primary-fill`.
 - **Do** keep status text at 11px or larger in `muted-foreground` or brighter; message metadata (model name, time) is the deliberate 10px faded exception.

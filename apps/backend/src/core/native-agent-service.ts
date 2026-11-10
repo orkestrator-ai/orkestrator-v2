@@ -171,7 +171,7 @@ import {
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
 import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
-import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
   PromptRejectedError,
@@ -1456,24 +1456,20 @@ export class NativeAgentService {
     const progressMs = Number.isFinite(launchReconcileIntervalMs)
       ? Math.max(20, launchReconcileIntervalMs as number)
       : 2_000;
-    if (this.options.keyedQueueScheduling ?? keyedSchedulingEnabled("native-queues")) {
-      this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
-        progressIntervalMs: progressMs,
-        // Safety discovery. A test that shortens the launch cadence keeps
-        // discovery at that cadence; production uses the 30 s interval.
-        discoveryIntervalMs:
-          this.options.queueDiscoveryIntervalMs ??
-          (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
-        ...(this.options.queueSchedulerClock
-          ? {
-              now: this.options.queueSchedulerClock.now,
-              timers: this.options.queueSchedulerClock.timers,
-            }
-          : {}),
-      });
-    } else {
-      this.launches.startTimer(progressMs, () => this.promptQueues.queueScan());
-    }
+    this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
+      progressIntervalMs: progressMs,
+      // Safety discovery. A test that shortens the launch cadence keeps
+      // discovery at that cadence; production uses the 30 s interval.
+      discoveryIntervalMs:
+        this.options.queueDiscoveryIntervalMs ??
+        (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
+      ...(this.options.queueSchedulerClock
+        ? {
+            now: this.options.queueSchedulerClock.now,
+            timers: this.options.queueSchedulerClock.timers,
+          }
+        : {}),
+    });
     await this.interactions.start();
   }
 
@@ -4420,7 +4416,6 @@ export class NativeAgentService {
     await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
-    this.launches.stopTimer();
     this.promptQueues.stopScheduling();
     this.interactions.stop();
     await Promise.allSettled([

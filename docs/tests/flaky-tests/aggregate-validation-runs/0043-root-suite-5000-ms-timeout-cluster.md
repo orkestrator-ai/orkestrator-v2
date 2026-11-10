@@ -93,3 +93,37 @@ review-scan-final -- bun test ./tests/unit/dom-absence-scan.test.ts
 ./tests/unit/todo-index.test.ts --parallel=2 --only-failures` passed (exit 0,
 3.8 seconds). This exercises the original canaries and the new discovery fixtures
 together; it is not a loaded-host aggregate rerun.
+
+
+## Completion Notes preparation, 2026-11-10
+
+- **Observed branch base:** `c6de4733c5beb87a578f82a8548725305e1ff254`;
+  preparation tested `54a1a8c9039f64a288ad263b202dae379aeb4637`.
+  `mise run flaky:recurrence -- 0043 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+  reports the case open.
+- **Original command:** `mise run test`, concurrent aggregate groups. The captured
+  root runner identifies `1x PARALLEL`; the protocol worker count is not present
+  beside its captured failure.
+- **Failures:** `auth-secret canary coverage > apps/backend/src/core/opencode-capabilities.ts keeps a canary test beside it`
+  (`tests/unit/auth-secret-guards.test.ts`), 9,331.77 ms against 5,000 ms;
+  and `the committed adapter list > holds every domain client definition in the repository`
+  (`packages/protocol/src/contract/client-adapters.test.ts`), 20,479.55 ms against
+  5,000 ms. Both scan repository sources; no assertion failure was reported.
+- **Original evidence:**
+  `.orkestrator/review-artifacts/review-validation-e07e4846-593e-4b06-8dc7-788c1d914dd2/validation-04.stdout.txt`
+  lines 2171–2173 and 2224–2226. The package has incomplete totals: the observed
+  groups account for 36,783 passes, 174 skips and three named failures, including
+  a separate Grok stamp timeout. This is not a complete aggregate total.
+- **Whole-owner reruns at `a819c147b`:**
+  `mise run test:logged -- --name notes-recorded-canary -- bun test tests/unit/auth-secret-guards.test.ts --parallel=1 --only-failures`
+  passed, exit 0, 1.2 s;
+  `mise run test:logged -- --name notes-recorded-adapters -- bun test packages/protocol/src/contract/client-adapters.test.ts --parallel=1 --only-failures`
+  passed, exit 0, 1.3 s. Neither owner or its scanner was edited. Passing logs
+  were deleted by the logged runner; per-test counts were not retained.
+- **Scope and limits:** the Notes repair changes shared layout merging and
+  backend layout persistence, not these scanners. Preparation classified both
+  failures `undetermined` because their test-file locations were missing from
+  its parsed failure records. Isolated passes establish flake evidence, not an
+  environmental cause or a green default suite. No deadline or assertion was
+  changed. The separate stamp owner reproduced timeouts and is not classified
+  as a flake from its one selected Grok pass.

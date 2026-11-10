@@ -21,7 +21,7 @@
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
 import { parseLogRecordLine } from "@orkestrator/protocol/logger";
-import { afterEach, jest } from "bun:test";
+import { afterAll, afterEach, beforeAll, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -350,6 +350,106 @@ export async function spawnBridge(
       throw new Error(`ACP bridge exited while starting on port ${port} (attempt ${attempt})`);
     }
   }
+}
+
+export type SpawnedBridge = Awaited<ReturnType<typeof spawnBridge>>;
+
+export type SharedBridge = SpawnedBridge & {
+  /**
+   * Fake-agent switches (`FAKE_ACP_*`) for the agents this test starts. Call it
+   * before creating the session; the next test starts with none.
+   */
+  agentEnv(env: Record<string, string>): Promise<void>;
+  /** A session this test opened, closed once the test ends. */
+  track(sessionId: string): void;
+};
+
+const AGENT_ENV_FILE = "agent-env.json";
+
+/**
+ * One bridge process for every test in the enclosing `describe`, for tests that
+ * need a bridge but not a fresh process: each test opens its own session, and
+ * the bridge's own environment (`env`) is the same for all of them.
+ *
+ * Starting a bridge is a cold `bun index.ts` plus a readiness poll, most of a
+ * small test's time. Between tests the helper closes every session the test
+ * tracked (so its agent stops and its `clientSessionKey` is free again) and
+ * clears the per-test agent switches. Tests that restart the bridge, read its
+ * state directory, or set a bridge-level variable keep `spawnBridge`.
+ */
+export function sharedBridge(env: NodeJS.ProcessEnv = {}): SharedBridge {
+  let spawned: SpawnedBridge | undefined;
+  let stateDirectory: string | undefined;
+  const sessionIds = new Set<string>();
+  const current = (): SpawnedBridge => {
+    if (!spawned) throw new Error("sharedBridge() is only usable inside its describe's tests");
+    return spawned;
+  };
+
+  beforeAll(async () => {
+    // Not `temporaryDirectory()`: the per-test cleanup would delete it.
+    stateDirectory = await fs.realpath(
+      await fs.mkdtemp(resolve(os.tmpdir(), "acp-bridge-shared-test-")),
+    );
+    const workspace = join(stateDirectory, "workspace");
+    await fs.mkdir(workspace);
+    spawned = await spawnBridge({
+      stateDirectory,
+      env: {
+        CWD: workspace,
+        ...env,
+        FAKE_ACP_ENV_FILE: join(stateDirectory, AGENT_ENV_FILE),
+      },
+    });
+    // The per-test cleanup stops every child it tracks; this one lives until afterAll.
+    children.delete(spawned.child);
+  });
+
+  afterEach(async () => {
+    const bridge = spawned;
+    if (!bridge) return;
+    const ids = Array.from(sessionIds);
+    sessionIds.clear();
+    const failures: string[] = [];
+    await Promise.all(
+      ids.map(async (id) => {
+        const response = await nativeFetch(`${bridge.base}/session/${id}/close`, {
+          method: "POST",
+          headers: bridge.headers,
+        });
+        const body = (await response.json().catch(() => ({}))) as { closed?: unknown };
+        if (body.closed !== true) failures.push(`${id} (${response.status})`);
+      }),
+    );
+    await fs.rm(join(stateDirectory!, AGENT_ENV_FILE), { force: true });
+    if (failures.length > 0) {
+      throw new Error(`Shared ACP bridge did not close sessions: ${failures.join(", ")}`);
+    }
+  });
+
+  afterAll(async () => {
+    if (spawned) await stopChild(spawned.child);
+    spawned = undefined;
+    if (stateDirectory) await fs.rm(stateDirectory, { recursive: true, force: true });
+  });
+
+  return {
+    get child() {
+      return current().child;
+    },
+    get base() {
+      return current().base;
+    },
+    get headers() {
+      return current().headers;
+    },
+    async agentEnv(agentEnv) {
+      await fs.writeFile(join(stateDirectory!, AGENT_ENV_FILE), JSON.stringify(agentEnv));
+    },
+    track(sessionId) {
+      sessionIds.add(sessionId);
+    },
+  };
 }
 
 /** Fresh-port attempts before a bridge that keeps exiting at startup fails. */

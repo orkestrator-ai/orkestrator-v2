@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, jest } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { StateSnapshot } from "react-virtuoso";
 import {
@@ -7,6 +7,7 @@ import {
 } from "@/hooks/useVirtuosoScrollState";
 import { uiStore } from "@/stores/uiStore";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import { elapseFakeTime } from "../../../apps/web/src/test/fake-clock-frames";
 
 /**
  * happy-dom reports 0 for every layout metric, so a scroller that can actually
@@ -716,6 +717,16 @@ describe("useVirtuosoScrollState", () => {
     });
 
     test("scheduled scrollTo does not fire after unmount", async () => {
+      // Installed before rendering; restored even when an assertion fails.
+      jest.useFakeTimers();
+      try {
+        await scheduledScrollToAfterUnmount();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    async function scheduledScrollToAfterUnmount() {
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
 
       const scrollToCalls: any[] = [];
@@ -734,13 +745,12 @@ describe("useVirtuosoScrollState", () => {
       // Unmount before the scheduled callback fires
       unmount();
 
-      // Flush any pending setTimeout — scrollTo should NOT be called
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      });
+      // Let every timer due within 250 ms run, with the frames between them;
+      // scrollTo should NOT be called.
+      await elapseFakeTime(250);
 
       expect(scrollToCalls).toHaveLength(0);
-    });
+    }
   });
 
   describe("ResizeObserver fallback", () => {

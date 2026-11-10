@@ -18,6 +18,7 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realAgentHandoff from "@/hooks/useAgentHandoff";
+import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
@@ -109,7 +110,7 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
 
 const configSnapshot = appCommandStore(configStore).getState().config;
 
-const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
+const sessionProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
   if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
     throw new Error("Refresh unavailable");
   return projectionFor(input.agent);
@@ -146,6 +147,10 @@ mock.module("@/hooks/useAgentHandoff", () => ({
 mock.module("@/hooks/useNativeComposeBarPaste", () => ({
   useNativeComposeBarPaste: () => {},
 }));
+// The session as the fake backend holds it; every progressive read answers from it.
+const sessionBackend = createNativeAgentSessionBackend({
+  readProjection: (input) => sessionProjectionMock(input),
+});
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getNativeAgentModelCatalog: async () => [],
@@ -163,8 +168,7 @@ mock.module("@/lib/backend", () => ({
   renameEnvironmentFromPrompt: async () => {},
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
-  getNativeAgentProjection: getNativeAgentProjectionMock,
+  ...sessionBackend.api,
   getComposeDraft: async () => null,
   saveComposeDraft: async (
     draftKey: string,
@@ -228,7 +232,7 @@ async function sendToWorkingCoordinator(text: string) {
     />,
   );
   const input = await screen.findByRole("textbox");
-  await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+  await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
   await act(async () => {
     await Promise.resolve();
   });
@@ -260,7 +264,7 @@ afterEach(() => {
   resetSonnerMocks();
   appCommandStore(configStore).getState().setConfig(configSnapshot);
   steerNativeAgentQueuedPromptMock.mockClear();
-  getNativeAgentProjectionMock.mockClear();
+  sessionProjectionMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
@@ -454,11 +458,10 @@ for (const outcome of ["rejected", "applied"] as const) {
         : { outcome, reason: "steer-not-recorded", requestId: "r" };
     await sendToWorkingCoordinator("check pull requests");
     if (outcome === "rejected") {
-      await waitFor(() =>
-        expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
-          "could not be recorded",
-        ),
-      );
+      // A failed session-state read withdraws the queue's authority, so the
+      // row (and its note) waits for the next good read; the refusal itself
+      // must survive the failure.
+      await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
       expect(queuedItems).toHaveLength(1);
     } else {
       await waitFor(() =>
@@ -471,6 +474,13 @@ for (const outcome of ["rejected", "applied"] as const) {
     refreshError = false;
     await publishProjection();
     await waitFor(() => expect(queuedRows()).toHaveLength(outcome === "applied" ? 0 : 1));
+    if (outcome === "rejected") {
+      await waitFor(() =>
+        expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+          "could not be recorded",
+        ),
+      );
+    }
     expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
   });
 }

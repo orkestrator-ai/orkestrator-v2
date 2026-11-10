@@ -9,10 +9,13 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 
 import {
   nativeFetch,
+  sharedBridge,
   spawnBridge,
   stopChild,
   temporaryDirectory,
   waitFor,
+  type SharedBridge,
+  type SpawnedBridge,
 } from "./acp-test-harness.js";
 
 // `sandbox`, `networkAccess` and `projectResources` are reported as they apply,
@@ -28,14 +31,19 @@ const askPolicy: NativeAgentExecutionPolicy = {
 const widerPolicy: NativeAgentExecutionPolicy = { ...askPolicy, approvals: "auto-approve" };
 const narrowerPolicy: NativeAgentExecutionPolicy = { ...askPolicy, approvals: "deny" };
 
-type Bridge = Awaited<ReturnType<typeof spawnBridge>>;
+type Bridge = SpawnedBridge | SharedBridge;
 
-function post(bridge: Bridge, path: string, body: unknown): Promise<Response> {
-  return nativeFetch(`${bridge.base}${path}`, {
+async function post(bridge: Bridge, path: string, body: unknown): Promise<Response> {
+  const response = await nativeFetch(`${bridge.base}${path}`, {
     method: "POST",
     headers: bridge.headers,
     body: JSON.stringify(body),
   });
+  // A shared bridge closes what each test opened, so the next test's keys are free.
+  if ("track" in bridge && path === "/session/create" && response.status === 201) {
+    bridge.track(((await response.clone().json()) as { id: string }).id);
+  }
+  return response;
 }
 
 async function reportedApprovals(bridge: Bridge, sessionId: string): Promise<string | undefined> {
@@ -71,12 +79,18 @@ async function agentStarts(lifecycleFile: string): Promise<number> {
     .length;
 }
 
+// One bridge for every test that does not restart it; each opens its own session.
+const shared = sharedBridge();
+
 describe("the routes that take a policy for a live session", () => {
   test("create and resume refuse a wider policy, and keep the running agent", async () => {
     const lifecycleFile = resolve(await temporaryDirectory(), "wider.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "wider");
     const starts = await agentStarts(lifecycleFile);
+    // The shared bridge's agent took this test's switches.
+    expect(starts).toBeGreaterThan(0);
 
     await expectRefused(
       await post(bridge, "/session/create", { clientSessionKey: "wider", policy: widerPolicy }),
@@ -92,7 +106,8 @@ describe("the routes that take a policy for a live session", () => {
 
   test("create applies a narrower policy by respawning the agent under it", async () => {
     const lifecycleFile = resolve(await temporaryDirectory(), "create-narrower.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "create-narrower");
 
     const response = await post(bridge, "/session/create", {
@@ -105,7 +120,7 @@ describe("the routes that take a policy for a live session", () => {
   });
 
   test("resume applies a narrower policy", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "resume-narrower");
 
     const response = await post(bridge, "/session/resume", { sessionId, policy: narrowerPolicy });
@@ -116,9 +131,12 @@ describe("the routes that take a policy for a live session", () => {
 
   test("create and resume accept an equal policy without respawning", async () => {
     const lifecycleFile = resolve(await temporaryDirectory(), "equal.log");
-    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    await shared.agentEnv({ FAKE_ACP_LIFECYCLE_FILE: lifecycleFile });
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "equal");
     const starts = await agentStarts(lifecycleFile);
+    // The shared bridge's agent took this test's switches.
+    expect(starts).toBeGreaterThan(0);
 
     expect(
       (
@@ -138,7 +156,7 @@ describe("the routes that take a policy for a live session", () => {
   });
 
   test("a request with no policy leaves it alone", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "absent");
 
     expect((await post(bridge, "/session/create", { clientSessionKey: "absent" })).status).toBe(
@@ -150,7 +168,7 @@ describe("the routes that take a policy for a live session", () => {
   });
 
   test("a session with no policy takes the first it is sent", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const created = await post(bridge, "/session/create", { clientSessionKey: "none" });
     const sessionId = ((await created.json()) as { id: string }).id;
     expect(await reportedApprovals(bridge, sessionId)).toBeUndefined();
@@ -165,7 +183,7 @@ describe("the routes that take a policy for a live session", () => {
   });
 
   test("a prompt naming a wider policy is refused; narrower and equal run under the session's own", async () => {
-    const bridge = await spawnBridge();
+    const bridge = shared;
     const sessionId = await liveSession(bridge, "prompt");
     const prompt = (requestId: string, policy: NativeAgentExecutionPolicy) =>
       post(bridge, `/session/${sessionId}/prompt`, { prompt: "DIRECT:go", requestId, policy });
@@ -241,12 +259,11 @@ test.each([narrowerPolicy, widerPolicy])(
     const directory = await temporaryDirectory();
     const release = resolve(directory, "release-new");
     const requests = resolve(directory, "new-requests");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_NEW_RELEASE_FILE: release,
-        FAKE_ACP_SESSION_REQUEST_FILE: requests,
-      },
+    await shared.agentEnv({
+      FAKE_ACP_NEW_RELEASE_FILE: release,
+      FAKE_ACP_SESSION_REQUEST_FILE: requests,
     });
+    const bridge = shared;
     const first = post(bridge, "/session/create", { clientSessionKey: "join", policy: askPolicy });
     await waitFor(
       () => fs.readFile(requests, "utf8").catch(() => ""),
@@ -270,11 +287,11 @@ test("narrowing a running ACP turn refuses without closing its child", async () 
   const directory = await temporaryDirectory();
   const release = resolve(directory, "release-turn");
   const lifecycle = resolve(directory, "lifecycle");
-  const bridge = await spawnBridge({
-    env: { FAKE_ACP_HOLD_TURN_FILE: release, FAKE_ACP_LIFECYCLE_FILE: lifecycle },
-  });
+  await shared.agentEnv({ FAKE_ACP_HOLD_TURN_FILE: release, FAKE_ACP_LIFECYCLE_FILE: lifecycle });
+  const bridge = shared;
   const sessionId = await liveSession(bridge, "busy-policy");
   const starts = await agentStarts(lifecycle);
+  expect(starts).toBeGreaterThan(0);
   expect(
     (await post(bridge, `/session/${sessionId}/prompt`, { prompt: "go", requestId: "busy" }))
       .status,
@@ -291,5 +308,4 @@ test("narrowing a running ACP turn refuses without closing its child", async () 
   } finally {
     await fs.writeFile(release, "release");
   }
-  await stopChild(bridge.child);
 });

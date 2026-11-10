@@ -9,10 +9,20 @@ import {
   invokeMock,
 } from "@/test/web-annotation-fakes";
 import { DRAFT_AUTOSAVE_MS, useAnnotationDraft } from "./useAnnotationDraft";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../../../tests/helpers/controlled-timeout";
 
 let backend: FakeWebAnnotationBackend;
 let bus: ReturnType<typeof installFakeOrkestrator>;
-const SETTLE = { timeout: DRAFT_AUTOSAVE_MS * 3 };
+let autosave: ControlledTimeout | null = null;
+
+/** Controls the autosave debounce; install before rendering. */
+function controlAutosave(): ControlledTimeout {
+  autosave = installControlledTimeout(DRAFT_AUTOSAVE_MS, { label: "draft autosave" });
+  return autosave;
+}
 
 function renderDraft(editorId = "editor-1") {
   return renderHookInAppCommandScope(
@@ -51,11 +61,14 @@ describe("useAnnotationDraft", () => {
   });
   afterEach(() => {
     cleanup();
+    autosave?.restore();
+    autosave = null;
     bus.restore();
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
   test("debounces typing into one revision-checked autosave", async () => {
+    const debounce = controlAutosave();
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.status).toBe("idle"));
     act(() => result.current.setText("G"));
@@ -64,7 +77,11 @@ describe("useAnnotationDraft", () => {
     expect(result.current.status).toBe("dirty");
     expect(backend.callsOf("web_annotation_draft_save")).toHaveLength(0);
 
-    await waitFor(() => expect(result.current.status).toBe("saved"), SETTLE);
+    // Each keystroke re-armed the one debounce (a second live timer would throw).
+    await act(async () => {
+      expect(debounce.advance()).toBe(1);
+    });
+    await waitFor(() => expect(result.current.status).toBe("saved"));
     const saves = backend.callsOf("web_annotation_draft_save");
     expect(saves).toHaveLength(1);
     expect(saves[0]!.args).toMatchObject({
@@ -77,10 +94,10 @@ describe("useAnnotationDraft", () => {
 
     // The next autosave carries the revision the first one returned.
     act(() => result.current.setText("Give it more room"));
-    await waitFor(
-      () => expect(backend.callsOf("web_annotation_draft_save")).toHaveLength(2),
-      SETTLE,
-    );
+    await act(async () => {
+      expect(debounce.advance()).toBe(1);
+    });
+    await waitFor(() => expect(backend.callsOf("web_annotation_draft_save")).toHaveLength(2));
     expect(backend.callsOf("web_annotation_draft_save")[1]!.args.expectedRevision).toBe(1);
   });
 
@@ -94,6 +111,7 @@ describe("useAnnotationDraft", () => {
 
   test("hydration never overwrites typed text and surfaces a conflict instead", async () => {
     seedDraft("editor-1", "Server version", 2);
+    const debounce = controlAutosave();
     const hold = backend.hold("web_annotation_draft_get");
     const { result } = renderDraft();
     act(() => result.current.setText("Typed first"));
@@ -106,8 +124,12 @@ describe("useAnnotationDraft", () => {
       server: "Server version",
       serverRevision: 2,
     });
-    // An open conflict blocks autosave.
-    await new Promise((resolve) => setTimeout(resolve, DRAFT_AUTOSAVE_MS + 100));
+    // An open conflict blocks autosave: its deadline passes without a save.
+    await act(async () => {
+      debounce.advance();
+    });
+    expect(debounce.pendingCount()).toBe(0);
+    expect(result.current.status).toBe("conflict");
     expect(backend.callsOf("web_annotation_draft_save")).toHaveLength(0);
 
     act(() => result.current.resolveConflict("keep-local"));
@@ -120,6 +142,7 @@ describe("useAnnotationDraft", () => {
   });
 
   test("keeps text typed before the editor's identity effect ran (flake 0161)", async () => {
+    const debounce = controlAutosave();
     // A keystroke can arrive after the editor's first commit but before its
     // passive effects; React then flushes the identity effect at the start of
     // the keystroke's own render. A layout effect lands in exactly that
@@ -142,7 +165,10 @@ describe("useAnnotationDraft", () => {
 
     expect(result.current.text).toBe("Typed early");
     expect(result.current.readText()).toBe("Typed early");
-    await waitFor(() => expect(result.current.status).toBe("saved"), SETTLE);
+    await act(async () => {
+      expect(debounce.advance()).toBe(1);
+    });
+    await waitFor(() => expect(result.current.status).toBe("saved"));
     expect(backend.callsOf("web_annotation_draft_save")[0]!.args).toMatchObject({
       editorId: "editor-1",
       expectedRevision: 0,
@@ -152,6 +178,7 @@ describe("useAnnotationDraft", () => {
 
   test("choosing the other version discards local text without saving", async () => {
     seedDraft("editor-1", "Server version", 2);
+    const debounce = controlAutosave();
     const hold = backend.hold("web_annotation_draft_get");
     const { result } = renderDraft();
     act(() => result.current.setText("Typed first"));
@@ -161,7 +188,8 @@ describe("useAnnotationDraft", () => {
     act(() => result.current.resolveConflict("use-server"));
     expect(result.current.text).toBe("Server version");
     expect(result.current.status).toBe("saved");
-    await new Promise((resolve) => setTimeout(resolve, DRAFT_AUTOSAVE_MS + 100));
+    // The choice replaced the autosave typing armed, so no deadline is left to save.
+    expect(debounce.pendingCount()).toBe(0);
     expect(backend.callsOf("web_annotation_draft_save")).toHaveLength(0);
   });
 

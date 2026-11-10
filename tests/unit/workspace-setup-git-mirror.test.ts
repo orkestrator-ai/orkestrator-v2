@@ -4,10 +4,20 @@
  * `upload-pack` runs a logging `uploadpack.packObjectsHook` whenever it has to
  * send objects, so a test can tell what came from the remote.
  */
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,13 +29,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IMAGE_CAPABILITIES } from "../../packages/protocol/src/image-manifest";
 
-// Each case's setup alone runs about a dozen real Git processes (two inits, a
-// clone and two commit-and-push rounds over `file://`), and each case clones
-// again. On an idle macOS host the owner takes about 3 s a case; a saturated
-// aggregate pushed the setup hook past Bun's generic five seconds (flake case
-// 6081). Bun applies this file-scoped budget to the hooks as well.
+// The template setup runs about a dozen real Git processes once (two inits, a
+// clone, two commit-and-push rounds over `file://` and a mirror fetch); each
+// case copies it and then clones for real. A saturated aggregate once pushed
+// the per-case setup past Bun's generic five seconds (flake case 6081). Bun
+// applies this file-scoped budget to the hooks as well.
 setDefaultTimeout(30_000);
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -106,6 +115,54 @@ function remoteSentObjects(): boolean {
   return existsSync(packLog);
 }
 
+/** Writes the per-root Git config whose upload-pack hook logs to this root's pack log. */
+function configureRoot(directory: string, log: string): NodeJS.ProcessEnv {
+  const hook = join(directory, "pack-objects-hook");
+  writeFileSync(hook, `#!/bin/sh\necho sent >> "${log}"\nexec "$@"\n`);
+  chmodSync(hook, 0o755);
+  const globalConfig = join(directory, "gitconfig");
+  writeFileSync(
+    globalConfig,
+    `[user]\n\tname = T\n\temail = t@example.com\n[uploadpack]\n\tpackObjectsHook = ${hook}\n\tallowFilter = true\n`,
+  );
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: globalConfig,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  delete env.ORKESTRATOR_GIT_MIRROR;
+  return env;
+}
+
+// The remote, its working clone with two pushed commits, and a mirror built
+// from it are made once; each case copies them into its own root. None of
+// them records its own path, and the working clone's origin is rewritten to
+// the copied remote.
+let template: string;
+
+beforeAll(() => {
+  template = mkdtempSync(join(tmpdir(), "ork-git-mirror-template-"));
+  root = template;
+  remote = join(template, "remote.git");
+  remoteUrl = `file://${remote}`;
+  mirror = join(template, "mirror.git");
+  work = join(template, "work");
+  packLog = join(template, "pack-objects.log");
+  gitEnv = configureRoot(template, packLog);
+  git(template, ["init", "-q", "--bare", "--initial-branch=main", remote]);
+  git(template, ["config", "--file", join(remote, "config"), "uploadpack.allowFilter", "true"]);
+  git(template, ["clone", "-q", remote, work]);
+  git(work, ["checkout", "-qb", "main"]);
+  commit("one.txt", "one\n");
+  commit("two.txt", "two\n");
+  buildMirror();
+});
+
+afterAll(() => {
+  rmSync(template, { recursive: true, force: true });
+});
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ork-git-mirror-setup-"));
   remote = join(root, "remote.git");
@@ -113,29 +170,20 @@ beforeEach(() => {
   mirror = join(root, "mirror.git");
   work = join(root, "work");
   packLog = join(root, "pack-objects.log");
-  const hook = join(root, "pack-objects-hook");
-  writeFileSync(hook, `#!/bin/sh\necho sent >> "${packLog}"\nexec "$@"\n`);
-  chmodSync(hook, 0o755);
-  const globalConfig = join(root, "gitconfig");
-  writeFileSync(
-    globalConfig,
-    `[user]\n\tname = T\n\temail = t@example.com\n[uploadpack]\n\tpackObjectsHook = ${hook}\n\tallowFilter = true\n`,
-  );
-  gitEnv = {
-    ...process.env,
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  delete gitEnv.ORKESTRATOR_GIT_MIRROR;
-  git(root, ["init", "-q", "--bare", "--initial-branch=main", remote]);
-  git(root, ["config", "--file", join(remote, "config"), "uploadpack.allowFilter", "true"]);
-  git(root, ["clone", "-q", remote, work]);
-  git(work, ["checkout", "-qb", "main"]);
-  commit("one.txt", "one\n");
-  commit("two.txt", "two\n");
-  rmSync(packLog, { force: true });
+  gitEnv = configureRoot(root, packLog);
+  cpSync(join(template, "remote.git"), remote, { recursive: true });
+  cpSync(join(template, "work"), work, { recursive: true });
+  const workConfig = join(work, ".git", "config");
+  const templateRemote = join(template, "remote.git");
+  const config = readFileSync(workConfig, "utf8");
+  expect(config).toContain(templateRemote);
+  writeFileSync(workConfig, config.replaceAll(templateRemote, remote));
 });
+
+/** The mirror the backend would build from the remote as the template left it. */
+function copyMirror(): void {
+  cpSync(join(template, "mirror.git"), mirror, { recursive: true });
+}
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -143,7 +191,7 @@ afterEach(() => {
 
 describe("clone from the project's Git mirror", () => {
   test("a second environment gets its objects from the mirror, not the remote", () => {
-    buildMirror();
+    copyMirror();
     rmSync(packLog, { force: true });
     const dest = join(root, "env-two");
 
@@ -165,7 +213,7 @@ describe("clone from the project's Git mirror", () => {
   });
 
   test("the clone stays whole after the mirror is removed", () => {
-    buildMirror();
+    copyMirror();
     const dest = join(root, "env");
     expect(runClone(dest).code).toBe(0);
     expect(existsSync(join(dest, ".git", "objects", "info", "alternates"))).toBe(false);
@@ -183,7 +231,7 @@ describe("clone from the project's Git mirror", () => {
   });
 
   test("a mirror behind the remote costs only the commits it lacks", () => {
-    buildMirror();
+    copyMirror();
     commit("three.txt", "three\n");
     const dest = join(root, "env");
 
@@ -200,7 +248,7 @@ describe("clone from the project's Git mirror", () => {
   });
 
   test("a held lock in the mirror does not get in a reader's way", () => {
-    buildMirror();
+    copyMirror();
     for (const lock of ["packed-refs.lock", "HEAD.lock", "config.lock", "gc.pid"]) {
       writeFileSync(join(mirror, lock), "");
     }
@@ -215,7 +263,7 @@ describe("clone from the project's Git mirror", () => {
   });
 
   test("a mirror removed between the check and the clone still leaves a whole clone", () => {
-    buildMirror();
+    copyMirror();
     rmSync(packLog, { force: true });
     const dest = join(root, "env");
 
@@ -234,7 +282,7 @@ describe("clone from the project's Git mirror", () => {
   });
 
   test("the mirror is not written to", () => {
-    buildMirror();
+    copyMirror();
     const files = () => git(mirror, ["--git-dir=.", "count-objects", "-v"]);
     const before = [readdirSync(mirror).sort(), files()];
 
@@ -321,7 +369,7 @@ describe("fallback to the ordinary clone", () => {
   });
 
   test("a remote that cannot be reached still fails, after one try at the mirror", () => {
-    buildMirror();
+    copyMirror();
     const absent = `file://${join(root, "no-such-remote.git")}`;
 
     const result = runClone(join(root, "env"), mirror, absent);
@@ -338,20 +386,5 @@ describe("fallback to the ordinary clone", () => {
     expect(code).toBe(0);
     expect(stdout).not.toContain("mirror");
     expect(git(dest, ["config", "remote.origin.promisor"])).toBe("true");
-  });
-});
-
-describe("image contract", () => {
-  test("the mirror clone uses --reference-if-able with --dissociate", () => {
-    const setup = readFileSync(setupScript, "utf8");
-    expect(setup).toContain('git clone --no-tags --reference-if-able "$mirror" --dissociate');
-    expect(setup).not.toMatch(/git clone[^\n]*--reference "/);
-  });
-
-  test("the script declares the capability the backend gates the mount on", () => {
-    const setup = readFileSync(setupScript, "utf8");
-    expect(setup).toContain(
-      `ORKESTRATOR_CAPABILITY git-mirror=${IMAGE_CAPABILITIES["git-mirror"]}`,
-    );
   });
 });

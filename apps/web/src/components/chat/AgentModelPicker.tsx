@@ -137,7 +137,7 @@ const VISIBLE_MODEL_ROWS = 5;
  * belonging to the model name.
  */
 const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
-const FAVORITE_LONG_PRESS_MS = 400;
+export const FAVORITE_LONG_PRESS_MS = 400;
 const FAVORITE_DRAG_TOLERANCE_PX = 8;
 const REASONING_EFFORT_RANK: ReadonlyMap<string, number> = new Map([
   ["default", 0],

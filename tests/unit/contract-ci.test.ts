@@ -605,15 +605,8 @@ describe("runContractCi", () => {
     expect(() => parseArguments(["--other"])).toThrow("usage");
   });
 
-  test("passes on the committed tree", async () => {
-    const lines: string[] = [];
-    const status = await runContractCi({
-      now: new Date("2026-11-07T12:00:00Z"),
-      log: (line) => lines.push(line),
-    });
-    expect(lines.join("\n")).toContain("Contract CI passed");
-    expect(status).toBe(0);
-  });
+  // The committed tree is checked by `mise run contract:ci` itself, at the
+  // real date, in CI's lint job; these cases cover the runner on fixtures.
 
   async function fixtureRoot(adapters: AdapterList["domains"]): Promise<string> {
     const dir = await temporaryDir();

@@ -160,7 +160,6 @@ mock.module("@/lib/backend", () => ({
     accounts: [],
     active: { claude: "default", codex: "default" },
   }),
-  getNativeAgentProjection: async () => null,
   getNativeAgentTranscriptUpdate: async (input: ReadInput) =>
     unchangedOr(input, `transcript-${identity.logicalSessionKey}-${served.length}`, (token) => ({
       viewVersion: 1,

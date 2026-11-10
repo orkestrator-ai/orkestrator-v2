@@ -1,5 +1,5 @@
 import { flushPaneTabActivation } from "./pane-layout-authoritative";
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import {
   beginTabLaunch,
   cancelTabLaunchFocus,
@@ -222,14 +222,23 @@ describe("claimTabLaunch", () => {
     expect(claimTabLaunch("run", "another-environment")).not.toBeNull();
   });
 
-  test("a request that answers quickly still covers a double press", async () => {
-    const release = claimTabLaunch("run", ENV);
+  test("a request that answers quickly still covers a double press", () => {
+    // The claim's hold is measured with Date.now, so the fake clock pins it too.
+    jest.useFakeTimers();
+    try {
+      const release = claimTabLaunch("run", ENV);
 
-    release?.();
-    expect(claimTabLaunch("run", ENV)).toBeNull();
+      release?.();
+      expect(claimTabLaunch("run", ENV)).toBeNull();
 
-    await new Promise((resolve) => setTimeout(resolve, TAB_LAUNCH_CLAIM_MIN_MS + 50));
-    expect(claimTabLaunch("run", ENV)).not.toBeNull();
+      jest.advanceTimersByTime(TAB_LAUNCH_CLAIM_MIN_MS - 1);
+      expect(claimTabLaunch("run", ENV)).toBeNull();
+
+      jest.advanceTimersByTime(1);
+      expect(claimTabLaunch("run", ENV)).not.toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

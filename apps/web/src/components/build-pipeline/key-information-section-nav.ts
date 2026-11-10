@@ -2,8 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 
 
 /** How far below the scroller's top a section heading lands after a jump. */
 const JUMP_OFFSET_PX = 12;
-/** Releases a jump's highlight where the browser fires no `scrollend`. */
-const JUMP_SETTLE_FALLBACK_MS = 1000;
+/** Releases a jump's highlight where the browser fires no `scrollend`. Exported for tests. */
+export const JUMP_SETTLE_FALLBACK_MS = 1000;
 
 /**
  * Jumping to and tracking the sections of a key information view that scrolls

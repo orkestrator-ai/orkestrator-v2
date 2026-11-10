@@ -1,4 +1,14 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  mock,
+  test,
+} from "bun:test";
 import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
 import { COORDINATOR_ACTIVITY_COMMAND } from "@orkestrator/protocol/coordinator-activity";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -17,9 +27,20 @@ const listenMock = listen as unknown as ReturnType<typeof mock>;
 const nativeCallbacks = new Map<string, (event: { payload: unknown }) => void>();
 const emitNative = (event: string, payload: unknown) => nativeCallbacks.get(event)?.({ payload });
 
-/** Longer than the resource-change coalescing window plus this store's own. */
-const settled = () =>
-  new Promise((resolve) => setTimeout(resolve, COORDINATOR_ACTIVITY_COALESCE_MS + 150));
+/**
+ * Lets more than the resource-change coalescing window plus this store's own
+ * pass on Bun's fake clock, in 10 ms steps with a real immediate between steps
+ * so the reads each timer starts settle before the next step, as they would in
+ * real time. Every timer due within the window has run when this resolves.
+ */
+const settled = async () => {
+  const windowMs = COORDINATOR_ACTIVITY_COALESCE_MS + 150;
+  for (let elapsed = 0; elapsed < windowMs; elapsed += 10) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    jest.advanceTimersByTime(10);
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+};
 
 let answer: Record<string, string>;
 let reads: number;
@@ -37,6 +58,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  jest.useFakeTimers();
   appCommandStore(coordinatorActivityStore).getState().reset();
   answer = {};
   reads = 0;
@@ -53,6 +75,7 @@ beforeEach(() => {
 afterEach(() => {
   appCommandStore(coordinatorActivityStore).getState().reset();
   invokeMock.mockReset();
+  jest.useRealTimers();
 });
 
 describe("coordinator activity store", () => {

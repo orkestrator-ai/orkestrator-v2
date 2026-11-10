@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { useLayoutEffect } from "react";
-import { SIDEBAR_WIDTH_TRANSITION_MS, type SidebarPanelMode } from "@/lib/sidebar-width";
+import type { SidebarPanelMode } from "@/lib/sidebar-width";
 import { uiStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
-import { useSidebarPanelMotion } from "./useSidebarPanelMotion";
+import { SIDEBAR_SETTLE_MS, useSidebarPanelMotion } from "./useSidebarPanelMotion";
 import { appCommandStore } from "@/test/app-command-store";
+import {
+  type ControlledTimeout,
+  installControlledTimeout,
+} from "../../../../../tests/helpers/controlled-timeout";
 
 const initialUI = appCommandStore(uiStore).getState();
 
@@ -63,9 +67,17 @@ function Harness(props: {
   return null;
 }
 
+let settleTimer: ControlledTimeout;
+// A test may replace the global to hold the hook's own frames; settle() still needs a real one.
+const realRequestAnimationFrame = globalThis.requestAnimationFrame;
+
+/** Ends the transition: runs the armed settle timer, then lets the frame it requests pass. */
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, SIDEBAR_WIDTH_TRANSITION_MS + 80));
+    expect(settleTimer.advance()).toBe(1);
+  });
+  await act(async () => {
+    await new Promise((resolve) => realRequestAnimationFrame(() => resolve(undefined)));
   });
 }
 
@@ -76,6 +88,7 @@ async function nextFrame() {
 }
 
 beforeEach(() => {
+  settleTimer = installControlledTimeout(SIDEBAR_SETTLE_MS, { label: "sidebar settle" });
   panelWidth = 344;
   panelSizeError = null;
   resizeError = null;
@@ -84,7 +97,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first, so a transition still in flight is cleared rather than dropped.
   cleanup();
+  settleTimer.restore();
   appCommandStore(uiStore).setState(initialUI, true);
 });
 

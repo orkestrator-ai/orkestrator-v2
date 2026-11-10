@@ -1,41 +1,52 @@
 name: Validate Bun runtime
 
+# The packaged desktop app and the container image are slow to build and use
+# macOS runners, of which the Free plan allows five at once. Pull requests and
+# merges run this only when Bun, dependencies or packaging change; a nightly
+# run on main catches everything else within a day.
 on:
+  schedule:
+    - cron: "23 3 * * *"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/validate-bun-runtime.yml"
-      - "bridges/**"
-      - "apps/backend/**"
-      - "apps/desktop/**"
       - "docker/**"
-      - "packages/**"
       - "patches/**"
       - ".dockerignore"
       - "bun.lock"
+      - "bridges/claude-bridge/bun.lock"
       - "bunfig.toml"
       - "mise.toml"
       - "package.json"
+      - "*/*/package.json"
+      - "electron-builder*"
       - "turbo.json"
+      - "apps/backend/scripts/build.ts"
+      - "apps/desktop/scripts/**"
+      - "bridges/*/scripts/**"
       - "scripts/download-bun.sh"
       - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/validate-bun-runtime.yml"
-      - "bridges/**"
-      - "apps/backend/**"
-      - "apps/desktop/**"
       - "docker/**"
-      - "packages/**"
       - "patches/**"
       - ".dockerignore"
       - "bun.lock"
+      - "bridges/claude-bridge/bun.lock"
       - "bunfig.toml"
       - "mise.toml"
       - "package.json"
+      - "*/*/package.json"
+      - "electron-builder*"
       - "turbo.json"
+      - "apps/backend/scripts/build.ts"
+      - "apps/desktop/scripts/**"
+      - "bridges/*/scripts/**"
       - "scripts/download-bun.sh"
       - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
@@ -50,6 +61,7 @@ concurrency:
 jobs:
   bundled-bun:
     name: Bundled Bun (${{ matrix.name }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -133,6 +145,7 @@ jobs:
 
   container:
     name: Container (${{ matrix.name }})
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:

@@ -141,7 +141,6 @@ mock.module("@/lib/backend", () => ({
   checkCoordinatorUpstreamMerge: mock(async () => null),
   selectCoordinatorConversation: mock(async () => snapshot),
   listHumanPrompts: async () => ({ prompts: workerPrompts }),
-  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
 }));
 
 /** Renders of each conversation's agent tab, by tab id. */

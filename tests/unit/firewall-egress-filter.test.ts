@@ -1,19 +1,22 @@
 /**
- * The firewall scripts' side of the egress gateway's name checks: when they
- * run, the names they hand the daemon, the redirects and marked rules at
- * boot, failing closed when the daemon does not start, and live edits. The
+ * The firewall scripts' side of the egress gateway's name checks: the
+ * redirects and marked rules at boot, failing closed when the daemon does not
+ * start, and live edits. These run the real firewall scripts against stub
+ * tools, so the file is in the slow tier; when the checks run and the names
+ * they hand the daemon are in firewall-egress-filter-names.test.ts. The
  * daemon itself is covered by egress-filter-daemon.test.ts, and a real
  * container run by apps/backend/tests/container-live-egress-filter.test.ts.
  */
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   fixtureScript,
+  gatewayPolicy,
   read,
   SHELL_FIXTURE_TEST_TIMEOUT_MS,
   statusFile,
+  withDir,
   writeStub,
 } from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
@@ -24,102 +27,6 @@ const NO_GNU_DATE = missingGnuTools("date");
 // The boot and edit cases run the real firewall scripts; see
 // SHELL_FIXTURE_TEST_TIMEOUT_MS.
 setDefaultTimeout(SHELL_FIXTURE_TEST_TIMEOUT_MS);
-
-function withDir(body: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "ork-egress-filter-fw-"));
-  try {
-    body(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The library's view of a gateway: trusted snapshot, policy and record. */
-function gatewayPolicy(
-  dir: string,
-  options: { policy?: string; record?: string | null; trusted?: boolean } = {},
-): void {
-  const policy = join(dir, "policy");
-  mkdirSync(policy, { recursive: true });
-  if (options.trusted !== false) {
-    mkdirSync(join(policy, "trusted-network"), { recursive: true });
-    writeFileSync(join(policy, "trusted-network", "resolv.conf"), "nameserver 127.0.0.11\n");
-    writeFileSync(join(policy, "trusted-network", "host-addresses"), "");
-  }
-  writeFileSync(join(policy, "network-policy"), `${options.policy ?? "3"}\n`);
-  if (options.record !== null) {
-    writeFileSync(join(policy, "egress-filter"), `${options.record ?? "on"}\n`);
-  }
-}
-
-function library(dir: string, code: string, bin?: string): string {
-  fixtureScript(dir, "update-firewall.sh");
-  const result = Bun.spawnSync({
-    cmd: ["bash", "-ec", `source '${join(dir, "lib", "firewall-domains.sh")}'; ${code}`],
-    env: { ...process.env, PATH: bin ? `${bin}:${gnuToolPath}` : gnuToolPath },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return result.stdout.toString();
-}
-
-describe("when the name checks run", () => {
-  test("only in a gateway on policy 3, as the gateway recorded at its first boot", () => {
-    const state = (options: Parameters<typeof gatewayPolicy>[1]) => {
-      let value = "";
-      withDir((dir) => {
-        gatewayPolicy(dir, options);
-        value = library(dir, "ork_filter_state").trim();
-      });
-      return value;
-    };
-    expect(state({})).toBe("enforced");
-    expect(state({ record: "off" })).toBe("off");
-    // An unreadable or unexpected record keeps them on: fail closed.
-    expect(state({ record: "garbage" })).toBe("enforced");
-    // A gateway from an image before the checks never wrote a record.
-    expect(state({ record: null })).toBe("unavailable");
-    expect(state({ policy: "2" })).toBe("unavailable");
-    // No trusted snapshot: the firewall runs in the workload itself.
-    expect(state({ trusted: false })).toBe("unavailable");
-  });
-
-  test("the gateway records the choice once and keeps it across restarts", () => {
-    const gateway = read("docker/orkestrator-egress-gateway.sh");
-    const record = gateway.indexOf("if [ ! -e /etc/orkestrator/egress-filter ]; then");
-    expect(record).toBeGreaterThan(-1);
-    expect(record).toBeLessThan(gateway.indexOf("/usr/local/bin/init-firewall.sh"));
-    expect(gateway).toContain('case "${ORKESTRATOR_EGRESS_FILTER:-on}" in');
-    // The workload's own entrypoint never records or runs them.
-    expect(read("docker/network-policy-entrypoint.sh")).not.toContain("egress-filter");
-  });
-});
-
-describe("the names the daemon allows", () => {
-  test("one line per valid domain and port; invalid entries are left out", () => {
-    withDir((dir) => {
-      gatewayPolicy(dir);
-      library(
-        dir,
-        "ork_write_filter_names 'Registry.npmjs.org,db.example.test:5432,quic.test:443/udp,*.wild.test,bad_name,db.example.test:99999,' ",
-      );
-      expect(readFileSync(join(dir, "run-firewall", "egress-names"), "utf8")).toBe(
-        ["registry.npmjs.org tcp:443", "db.example.test tcp:5432", "quic.test udp:443", ""].join(
-          "\n",
-        ),
-      );
-    });
-  });
-
-  test("an empty list leaves only GitHub's own names, which the daemon knows itself", () => {
-    withDir((dir) => {
-      gatewayPolicy(dir);
-      library(dir, "ork_write_filter_names ''");
-      expect(readFileSync(join(dir, "run-firewall", "egress-names"), "utf8")).toBe("");
-    });
-  });
-});
 
 /** Stubs for one init-firewall.sh boot on policy 3; `daemon` decides the filter. */
 function bootFixture(dir: string, daemon: "ready" | "never") {

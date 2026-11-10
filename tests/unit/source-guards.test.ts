@@ -38,7 +38,6 @@ import {
   emptyFindings,
   listProductionSources,
   listTestSources,
-  scanRepository,
   scanSource,
   type Findings,
 } from "../source-guards/scan";
@@ -58,6 +57,7 @@ import {
   windowOrkestratorDirect,
 } from "../source-guards/window-orkestrator-direct";
 import { parseSync } from "oxc-parser";
+import { RepositoryIndex } from "../source-guards/repository-index";
 
 const ROOT = path.resolve(import.meta.dir, "../..");
 const ADVICE = Object.fromEntries(SOURCE_GUARDS.map((guard) => [guard.id, guard.advice])) as Record<
@@ -72,20 +72,9 @@ function lines(guard: SourceGuard, source: string, file = "fixture.test.ts"): nu
   );
 }
 
-describe("source guards over the repository", () => {
-  test("no file has more findings than the baseline allows, and the baseline is not stale", () => {
-    const findings = scanRepository(ROOT);
-    const baseline = parseBaseline(readFileSync(BASELINE_PATH, "utf8"));
-    const { regressions, stale } = compareWithBaseline(findings, baseline);
-    expect(formatRegressions(regressions, ADVICE)).toBe("");
-    expect(formatStale(stale)).toBe("");
-  }, 30_000);
-
-  test("the committed baseline is in the regenerated form", () => {
-    const text = readFileSync(BASELINE_PATH, "utf8");
-    expect(serializeBaseline(parseBaseline(text))).toBe(text);
-  });
-});
+// The repository itself is scanned once, in the guard stage (`mise run guards`,
+// scripts/guards.ts): the ratchet against baseline.json, the baseline's form, and
+// that each production-source guard reaches the files it exists for.
 
 describe("the source walk", () => {
   test("reads test files and test-support modules once, skipping dependencies and symlinks", () => {
@@ -117,7 +106,7 @@ describe("the source walk", () => {
         writeFileSync(path.join(root, file), "export {};\n");
       }
       symlinkSync(path.join(root, "apps/web/src"), path.join(root, "apps/linked"), "dir");
-      expect(listTestSources(root)).toEqual([...included].sort());
+      expect(listTestSources(RepositoryIndex.fromWalk(root))).toEqual([...included].sort());
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -140,7 +129,9 @@ describe("the source walk", () => {
         mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
         writeFileSync(path.join(root, file), "export {};\n");
       }
-      expect(listProductionSources(root, ["apps/web/src", "apps/web/src"])).toEqual(included);
+      expect(
+        listProductionSources(RepositoryIndex.fromWalk(root), ["apps/web/src", "apps/web/src"]),
+      ).toEqual(included);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -471,21 +462,6 @@ describe("raw-webrequest-listener", () => {
     expect(applies("apps/desktop/tests/artifact-host-manager.test.ts")).toBe(false);
     expect(applies("apps/web/src/App.tsx")).toBe(false);
   });
-
-  test("Electron main has no raw listener, and the scan reaches its listeners", () => {
-    const findings = scanRepository(ROOT, [rawWebRequestListener]);
-    expect(findings["raw-webrequest-listener"]).toEqual({});
-    const installs = listProductionSources(ROOT, RAW_WEBREQUEST_LISTENER_ROOTS).filter((relative) =>
-      /webRequest\.on[A-Z]/.test(readFileSync(path.join(ROOT, relative), "utf8")),
-    );
-    expect(installs).toEqual(
-      expect.arrayContaining([
-        "apps/desktop/electron/artifact-host-session.ts",
-        "apps/desktop/electron/preview-transport-manager.ts",
-        "apps/desktop/electron/renderer-file-policy.ts",
-      ]),
-    );
-  }, 30_000);
 });
 
 describe("window-orkestrator-direct", () => {
@@ -528,28 +504,6 @@ describe("window-orkestrator-direct", () => {
     expect(applies("apps/web/src/test/render-in-node-scope.tsx")).toBe(false);
     expect(applies("apps/backend/src/index.ts")).toBe(false);
   });
-
-  test("a test-source guard never reads production files, and this guard never reads tests", () => {
-    const findings = scanRepository(ROOT, [windowOrkestratorDirect]);
-    const files = Object.keys(findings["window-orkestrator-direct"]);
-    expect(files.length).toBeGreaterThan(0);
-    expect(files.filter((candidate) => /\.(?:test|spec)\./.test(candidate))).toEqual([]);
-  }, 30_000);
-
-  test("no renderer file reads a transport member off window.orkestrator", () => {
-    const offenders: string[] = [];
-    for (const relative of listProductionSources(ROOT, WINDOW_ORKESTRATOR_ROOTS)) {
-      if (!guard.appliesTo({ path: relative, source: "", isBunTest: false })) continue;
-      const source = readFileSync(path.join(ROOT, relative), "utf8");
-      if (!guard.mayOffend(source)) continue;
-      const { program } = parseSync(relative, source, { astType: "js" });
-      for (const offset of transportAccesses(program as never)) {
-        const line = source.slice(0, offset).split("\n").length;
-        offenders.push(`${relative}:${line}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-  }, 30_000);
 
   test("finds the transport members in a snippet", () => {
     const source = [
@@ -644,13 +598,6 @@ describe("direct-transport-import", () => {
     }));
     expect(compareWithBaseline(findings, baseline).regressions).toHaveLength(1);
   });
-
-  test("reads production sources only", () => {
-    const findings = scanRepository(ROOT, [directTransportImport]);
-    const files = Object.keys(findings["direct-transport-import"]);
-    expect(files.length).toBeGreaterThan(0);
-    expect(files.filter((candidate) => /\.(?:test|spec)\./.test(candidate))).toEqual([]);
-  }, 30_000);
 });
 
 describe("renderer module resolution", () => {

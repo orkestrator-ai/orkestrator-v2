@@ -81,7 +81,7 @@ const log = createLogger("web.settings");
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
-const AUTO_SAVE_DEBOUNCE_MS = 400;
+export const AUTO_SAVE_DEBOUNCE_MS = 400;
 
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 

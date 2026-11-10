@@ -292,44 +292,25 @@ describe("shell completion", () => {
   });
 
   test("bash completion completes command words across IDs and flags per command", () => {
-    const script = completionScript("bash", CLIENT_COMMANDS);
-    const run = (words: string[]) => {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `${script}\nCOMP_WORDS=(${words.map((word) => `'${word}'`).join(" ")}); COMP_CWORD=${words.length - 1}; _orkestrator; echo "\${COMPREPLY[*]}"`,
-        ],
-        { encoding: "utf8" },
-      );
-      if (result.status !== 0) throw new Error(result.stderr);
-      return result.stdout.trim().split(/\s+/);
-    };
-    expect(run(["orkestrator", "session", "comm"])).toEqual(["commands", "command"]);
-    for (const option of ["--profile", "--connection"]) {
-      expect(run(["orkestrator", option, "project", "session", "comm"])).toEqual([
-        "commands",
-        "command",
-      ]);
-      expect(run(["orkestrator", `${option}=project`, "session", "comm"])).toEqual([
-        "commands",
-        "command",
-      ]);
-    }
-    expect(run(["orkestrator", "--profile", "=", "project", "session", "comm"])).toEqual([
-      "commands",
-      "command",
-    ]);
-    expect(run(["orkestrator", "session", "--profile", "command", "comm"])).toEqual([
-      "commands",
-      "command",
-    ]);
-    expect(run(["orkestrator", "-h"])).toContain("-h");
-    expect(run(["orkestrator", "--profile", "pro"])).toEqual([""]);
-    expect(run(["orkestrator", "project", "remove", "p-1", "--cas"])).toEqual(["--cascade"]);
-    expect(run(["orkestrator", "--json", "session", "prompt", "ses_1", "--enq"])).toEqual([
-      "--enqueue",
-    ]);
+    const COMMAND = ["commands", "command"];
+    // `expected` may be an asymmetric matcher, which `toEqual` accepts in place of a value.
+    const cases: Array<[words: string[], expected: string[]]> = [
+      [["orkestrator", "session", "comm"], COMMAND],
+      ...["--profile", "--connection"].flatMap((option): Array<[string[], string[]]> => [
+        [["orkestrator", option, "project", "session", "comm"], COMMAND],
+        [["orkestrator", `${option}=project`, "session", "comm"], COMMAND],
+      ]),
+      [["orkestrator", "--profile", "=", "project", "session", "comm"], COMMAND],
+      [["orkestrator", "session", "--profile", "command", "comm"], COMMAND],
+      [["orkestrator", "-h"], expect.arrayContaining(["-h"])],
+      [["orkestrator", "--profile", "pro"], [""]],
+      [["orkestrator", "project", "remove", "p-1", "--cas"], ["--cascade"]],
+      [["orkestrator", "--json", "session", "prompt", "ses_1", "--enq"], ["--enqueue"]],
+    ];
+    const completions = bashCompletions(cases.map(([words]) => words));
+    cases.forEach(([words, expected], index) => {
+      expect({ words, completions: completions[index] }).toEqual({ words, completions: expected });
+    });
   });
 
   test("completion is local and refuses an unknown shell", async () => {
@@ -343,6 +324,31 @@ describe("shell completion", () => {
   });
 });
 
+/** Printed after each batched completion query, so one shell can answer several. */
+const QUERY_END = "@@orkestrator-completion-query-end@@";
+
+function splitQueries(stdout: string, count: number): string[] {
+  const outputs = stdout.split(`${QUERY_END}\n`);
+  // Everything after the last marker is empty.
+  expect(outputs.pop()).toBe("");
+  expect(outputs).toHaveLength(count);
+  return outputs;
+}
+
+/** Each query's COMPREPLY from one bash process, every query in its own subshell. */
+function bashCompletions(queries: string[][]): string[][] {
+  const script = completionScript("bash", CLIENT_COMMANDS);
+  const calls = queries.map(
+    (words) =>
+      `(COMP_WORDS=(${words.map((word) => `'${word}'`).join(" ")}); COMP_CWORD=${words.length - 1}; _orkestrator; echo "\${COMPREPLY[*]}")\necho '${QUERY_END}'`,
+  );
+  const result = spawnSync("bash", ["-c", `${script}\n${calls.join("\n")}`], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) throw new Error(result.stderr);
+  return splitQueries(result.stdout, queries.length).map((output) => output.trim().split(/\s+/));
+}
+
 // CI installs zsh and fish (`.github/workflows/ci.yml`), so both run there;
 // a host without one skips it.
 describe("native shell completion execution", () => {
@@ -350,38 +356,50 @@ describe("native shell completion execution", () => {
     "zsh bashcompinit parses option values and offers short flags",
     () => {
       const script = completionScript("zsh", CLIENT_COMMANDS);
-      for (const args of [
+      const queries = [
         ["--profile", "project", "session", "comm"],
         ["--connection=session", "project", "rem"],
         ["session", "-h"],
-      ]) {
-        const run = spawnSync(
-          "zsh",
-          [
-            "-f",
-            "-c",
-            // `-u` skips compinit's security audit, which aborts without a
-            // terminal when it finds a completion directory it considers
-            // insecure, as on the GitHub Ubuntu runner.
-            `autoload -Uz compinit; compinit -u -D
+      ];
+      // One shell for every query, each in its own subshell so none sees another's state.
+      const run = spawnSync(
+        "zsh",
+        [
+          "-f",
+          "-c",
+          // `-u` skips compinit's security audit, which aborts without a
+          // terminal when it finds a completion directory it considers
+          // insecure, as on the GitHub Ubuntu runner.
+          `autoload -Uz compinit; compinit -u -D
 ${script}
+${queries
+  .map(
+    (args) => `(
 COMP_WORDS=(orkestrator ${args.map((word) => `'${word}'`).join(" ")})
 COMP_CWORD=${args.length}
 _orkestrator
-print -l -- \${COMPREPLY[@]}`,
-          ],
-          { encoding: "utf8" },
-        );
-        expect(run.status).toBe(0);
-        expect(run.stderr).toBe("");
-        expect(run.stdout.trim().split(/\s+/)).toEqual(
-          args.at(-1) === "comm"
-            ? ["commands", "command"]
-            : args.at(-1) === "rem"
-              ? ["remove"]
-              : ["-h"],
-        );
-      }
+print -l -- \${COMPREPLY[@]}
+)
+print -- '${QUERY_END}'`,
+  )
+  .join("\n")}`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(run.status).toBe(0);
+      expect(run.stderr).toBe("");
+      const outputs = splitQueries(run.stdout, queries.length);
+      queries.forEach((args, index) => {
+        expect({ args, completions: outputs[index]!.trim().split(/\s+/) }).toEqual({
+          args,
+          completions:
+            args.at(-1) === "comm"
+              ? ["commands", "command"]
+              : args.at(-1) === "rem"
+                ? ["remove"]
+                : ["-h"],
+        });
+      });
     },
   );
 

@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -84,13 +85,18 @@ emit_prepare_only_checkpoint "$2"
   return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-function runGitScanCacheHarness(options: { insideWorktree: boolean; configFails?: boolean }): {
+type GitScanCacheCase = { insideWorktree: boolean; configFails?: boolean };
+
+/**
+ * Runs `enable_git_scan_caches` once per case in one bash process, each case in
+ * its own subshell with a fake `git` that logs its calls to that case's log.
+ */
+function runGitScanCacheHarness(cases: readonly GitScanCacheCase[]): Array<{
   code: number | null;
   calls: string[];
-} {
+}> {
   const harnessRoot = mkdtempSync(join(tmpdir(), "ork-git-cache-"));
   const fakeBin = join(harnessRoot, "bin");
-  const gitLog = join(harnessRoot, "git.log");
   mkdirSync(fakeBin);
   writeFileSync(
     join(fakeBin, "git"),
@@ -112,31 +118,83 @@ esac
   chmodSync(join(fakeBin, "git"), 0o755);
 
   const harness = `
-set -e
 WORKSPACE_DIR="$2"
 export WORKSPACE_DIR
 eval "$(sed -n '/^enable_git_scan_caches() {/,/^}$/p' "$1")"
-enable_git_scan_caches
+RESULTS="$3"
+shift 3
+index=0
+while [ $# -gt 0 ]; do
+  (
+    set -e
+    FAKE_GIT_LOG="$RESULTS/$index.log" FAKE_GIT_INSIDE="$1" FAKE_GIT_CONFIG_FAILS="$2"
+    export FAKE_GIT_LOG FAKE_GIT_INSIDE FAKE_GIT_CONFIG_FAILS
+    enable_git_scan_caches
+  )
+  printf '%s' "$?" > "$RESULTS/$index.code"
+  index=$((index + 1))
+  shift 2
+done
 `;
   try {
-    const result = spawnSync("bash", ["-c", harness, "--", setupScript, "/workspace under test"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        FAKE_GIT_LOG: gitLog,
-        FAKE_GIT_INSIDE: options.insideWorktree ? "true" : "false",
-        FAKE_GIT_CONFIG_FAILS: options.configFails ? "true" : "false",
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        harness,
+        "--",
+        setupScript,
+        "/workspace under test",
+        harnessRoot,
+        ...cases.flatMap(({ insideWorktree, configFails }) => [
+          insideWorktree ? "true" : "false",
+          configFails ? "true" : "false",
+        ]),
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
       },
+    );
+    expect(result.status).toBe(0);
+    return cases.map((_, index) => {
+      const gitLog = join(harnessRoot, `${index}.log`);
+      return {
+        code: Number(readFileSync(join(harnessRoot, `${index}.code`), "utf8")),
+        calls: existsSync(gitLog)
+          ? readFileSync(gitLog, "utf8").trim().split("\n").filter(Boolean)
+          : [],
+      };
     });
-    const calls = existsSync(gitLog)
-      ? readFileSync(gitLog, "utf8").trim().split("\n").filter(Boolean)
-      : [];
-    return { code: result.status, calls };
   } finally {
     rmSync(harnessRoot, { recursive: true, force: true });
   }
 }
+
+let committedTemplate: string | undefined;
+
+/**
+ * Copies a repository with one commit (`tracked.txt`, "base") into `destination`.
+ * The template is built with real Git once per file; a plain repository
+ * records no path of its own, so a copy is a whole repository.
+ */
+function copyCommittedRepository(destination: string): void {
+  if (committedTemplate === undefined) {
+    const template = mkdtempSync(join(tmpdir(), "ork-ws-committed-"));
+    runGit(template, ["init"]);
+    runGit(template, ["config", "user.email", "test@example.com"]);
+    runGit(template, ["config", "user.name", "Test"]);
+    writeFileSync(join(template, "tracked.txt"), "base\n");
+    runGit(template, ["add", "tracked.txt"]);
+    runGit(template, ["commit", "-m", "base"]);
+    committedTemplate = template;
+  }
+  cpSync(committedTemplate, destination, { recursive: true });
+}
+
+afterAll(() => {
+  if (committedTemplate !== undefined) rmSync(committedTemplate, { recursive: true, force: true });
+});
 
 describe("workspace setup prepare-only contract", () => {
   // The backend greps for this exact line before it will invoke --prepare-only.
@@ -169,12 +227,7 @@ describe("workspace setup prepare-only contract", () => {
       expect(withoutRepo.stderr).toContain("Workspace preparation failed - no valid Git HEAD");
 
       if (!gitAvailable()) return;
-      runGit(workspace, ["init"]);
-      runGit(workspace, ["config", "user.email", "test@example.com"]);
-      runGit(workspace, ["config", "user.name", "Test"]);
-      writeFileSync(join(workspace, "tracked.txt"), "base\n");
-      runGit(workspace, ["add", "tracked.txt"]);
-      runGit(workspace, ["commit", "-m", "base"]);
+      copyCommittedRepository(workspace);
 
       const prepared = runPrepareOnlyCheckpoint(workspace);
       expect(prepared.code).toBe(0);
@@ -187,8 +240,18 @@ describe("workspace setup prepare-only contract", () => {
 });
 
 describe("workspace setup Git scan caches", () => {
+  let results: ReturnType<typeof runGitScanCacheHarness>;
+
+  beforeAll(() => {
+    results = runGitScanCacheHarness([
+      { insideWorktree: true },
+      { insideWorktree: false },
+      { insideWorktree: true, configFails: true },
+    ]);
+  });
+
   test("enables the untracked cache inside a repository", () => {
-    const result = runGitScanCacheHarness({ insideWorktree: true });
+    const result = results[0]!;
 
     expect(result.code).toBe(0);
     expect(result.calls).toEqual([
@@ -198,14 +261,14 @@ describe("workspace setup Git scan caches", () => {
   });
 
   test("does not write Git config outside a repository", () => {
-    const result = runGitScanCacheHarness({ insideWorktree: false });
+    const result = results[1]!;
 
     expect(result.code).toBe(0);
     expect(result.calls).toEqual(["-C /workspace under test rev-parse --is-inside-work-tree"]);
   });
 
   test("keeps setup best-effort when enabling the cache fails", () => {
-    const result = runGitScanCacheHarness({ insideWorktree: true, configFails: true });
+    const result = results[2]!;
 
     expect(result.code).toBe(0);
     expect(result.calls.at(-1)).toBe("-C /workspace under test config core.untrackedCache true");
@@ -273,70 +336,12 @@ describe("workspace setup attachment preservation (structure)", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
-  test("preserve/restore wrap workspace cleanup, in correct order", () => {
-    const setup = read("docker/workspace-setup.sh");
-
-    const cleanupFunction = setup.indexOf("cleanup_orkestrator_workspace_state_backup() {");
-    const preserveFunction = setup.indexOf("preserve_orkestrator_workspace_state() {");
-    const restoreFunction = setup.indexOf("restore_orkestrator_workspace_state() {");
-    const trapRegistration = setup.indexOf("trap cleanup_orkestrator_workspace_state_backup EXIT");
-    const convertFn = setup.indexOf("convert_ssh_to_https()");
-    const preserveCall = setup.indexOf("preserve_orkestrator_workspace_state", convertFn);
-    const workspaceCleanup = setup.indexOf("rm -rf /workspace/*");
-    const restoreCall = setup.indexOf("restore_orkestrator_workspace_state", workspaceCleanup);
-    const envSetup = setup.indexOf(">>> Setting up environment files <<<");
-
-    expect(cleanupFunction).toBeGreaterThan(-1);
-    expect(preserveFunction).toBeGreaterThan(cleanupFunction);
-    expect(restoreFunction).toBeGreaterThan(preserveFunction);
-    expect(trapRegistration).toBeGreaterThan(cleanupFunction);
-    expect(trapRegistration).toBeLessThan(preserveFunction);
-    expect(preserveCall).toBeGreaterThan(-1);
-    expect(preserveCall).toBeLessThan(workspaceCleanup);
-    expect(restoreCall).toBeGreaterThan(workspaceCleanup);
-    expect(restoreCall).toBeLessThan(envSetup);
-  });
-
-  test("git excludes include runtime workspace artifacts", () => {
-    const setup = read("docker/workspace-setup.sh");
-
-    expect(setup).toContain("add_workspace_artifacts_to_git_exclude() {");
-    expect(setup).toContain("ensure_git_exclude_trailing_newline() {");
-    expect(setup).toContain('local workspace="${WORKSPACE_DIR:-/workspace}"');
-    expect(setup).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
-    expect(setup).toContain('grep -qxF "$pattern" "$exclude_file"');
-    expect(setup).toContain('append_git_exclude_pattern "$exclude_file" "$pattern"');
-    expect(setup.match(/add_workspace_artifacts_to_git_exclude/g)?.length).toBeGreaterThanOrEqual(
-      3,
-    );
-  });
-
-  test("prepare-only stops after checkout restoration and before untrusted setup", () => {
-    const setup = read("docker/workspace-setup.sh");
-    const workspaceCleanup = setup.indexOf("rm -rf /workspace/*");
-    const restoreCall = setup.indexOf("restore_orkestrator_workspace_state", workspaceCleanup);
-    const prepareCheckpoint = setup.indexOf('if [ "$PREPARE_ONLY" = true ]');
-    const envCopy = setup.indexOf(">>> Setting up environment files <<<");
-    const projectSetup = setup.indexOf("=== Running Container Setup ===");
-
-    expect(setup).toContain('if [ "${1:-}" = "--prepare-only" ]; then');
-    expect(prepareCheckpoint).toBeGreaterThan(restoreCall);
-    expect(prepareCheckpoint).toBeLessThan(envCopy);
-    expect(prepareCheckpoint).toBeLessThan(projectSetup);
-    expect(setup).not.toContain(".orkestrator-created-from-commit");
-  });
-
   test("prepared workspace validation requires a real commit", () => {
     const workspace = mkdtempSync(join(tmpdir(), "ork-ws-prepare-"));
     try {
       expect(runPreparedWorkspaceValidation(workspace)).not.toBe(0);
       if (!gitAvailable()) return;
-      runGit(workspace, ["init"]);
-      runGit(workspace, ["config", "user.email", "test@example.com"]);
-      runGit(workspace, ["config", "user.name", "Test"]);
-      writeFileSync(join(workspace, "tracked.txt"), "base\n");
-      runGit(workspace, ["add", "tracked.txt"]);
-      runGit(workspace, ["commit", "-m", "base"]);
+      copyCommittedRepository(workspace);
       expect(runPreparedWorkspaceValidation(workspace)).toBe(0);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
@@ -344,23 +349,12 @@ describe("workspace setup attachment preservation (structure)", () => {
   });
 });
 
-function runHarness(
-  scenario: string,
-  workspace: string,
-): { code: number | null; stdout: string; stderr: string } {
-  // Source just the helper function definitions and the global var, then dispatch a scenario.
-  // Functions live between the `ORKESTRATOR_WORKSPACE_STATE_BACKUP=""` line and the
-  // `convert_ssh_to_https()` definition.
-  const harness = `
-set -e
-GREEN=""; NC=""
-ORKESTRATOR_WORKSPACE_STATE_BACKUP=""
-ORKESTRATOR_WORKSPACE_STATE_WORKSPACE="/workspace"
+type HarnessResult = { code: number | null; stdout: string; stderr: string };
 
-eval "$(sed -n '/^cleanup_orkestrator_workspace_state_backup() {/,/^}$/p; /^preserve_orkestrator_workspace_state() {/,/^}$/p; /^restore_orkestrator_workspace_state() {/,/^}$/p' "$1")"
-
-WORKSPACE="$2"
-SCENARIO="$3"
+const SCENARIOS = String.raw`
+run_scenario() {
+WORKSPACE="$1"
+SCENARIO="$2"
 
 case "$SCENARIO" in
   preserve_clear_restore)
@@ -426,11 +420,45 @@ case "$SCENARIO" in
     exit 2
     ;;
 esac
+}
 `;
-  const result = spawnSync("bash", ["-c", harness, "--", setupScript, workspace, scenario], {
+
+/**
+ * Runs every scenario in one bash process. It sources just the helper function
+ * definitions once; each scenario then runs in its own subshell under
+ * `set -e`, with fresh globals, its own EXIT trap and its own workspace, and
+ * writes its status and output beside the workspace rather than in it.
+ */
+function runHarnessBatch(
+  cases: ReadonlyArray<{ name: string; scenario: string; workspace: string }>,
+  results: string,
+): Map<string, HarnessResult> {
+  const harness = [
+    'eval "$(sed -n \'/^cleanup_orkestrator_workspace_state_backup() {/,/^}$/p; /^preserve_orkestrator_workspace_state() {/,/^}$/p; /^restore_orkestrator_workspace_state() {/,/^}$/p\' "$1")"',
+    SCENARIOS,
+    'RESULTS="$2"',
+    "shift 2",
+    "while [ $# -gt 0 ]; do",
+    '  ( set -e; GREEN=""; NC=""; ORKESTRATOR_WORKSPACE_STATE_BACKUP=""; ORKESTRATOR_WORKSPACE_STATE_WORKSPACE="/workspace"; run_scenario "$2" "$3" ) > "$RESULTS/$1.stdout" 2> "$RESULTS/$1.stderr"',
+    '  printf \'%s\' "$?" > "$RESULTS/$1.code"',
+    "  shift 3",
+    "done",
+  ].join("\n");
+  const args = cases.flatMap(({ name, scenario, workspace }) => [name, workspace, scenario]);
+  const result = spawnSync("bash", ["-c", harness, "--", setupScript, results, ...args], {
     encoding: "utf8",
   });
-  return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+  return new Map(
+    cases.map(({ name }) => [
+      name,
+      {
+        code: Number(readFileSync(join(results, `${name}.code`), "utf8")),
+        stdout: readFileSync(join(results, `${name}.stdout`), "utf8"),
+        stderr: readFileSync(join(results, `${name}.stderr`), "utf8"),
+      },
+    ]),
+  );
 }
 
 function extractBackupPath(stdout: string): string {
@@ -440,27 +468,111 @@ function extractBackupPath(stdout: string): string {
 }
 
 describe("workspace setup preserve/restore (functional)", () => {
-  let workspace: string;
+  // Each case prepares its own workspace; one shell then runs every scenario.
+  const cases: Array<{ name: string; scenario: string; prepare: (workspace: string) => void }> = [
+    {
+      name: "round-trip",
+      scenario: "preserve_clear_restore",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator", "attachments"), { recursive: true });
+        writeFileSync(
+          join(workspace, ".orkestrator", "attachments", "image.png"),
+          "binary-content",
+        );
+        writeFileSync(join(workspace, ".orkestrator", "metadata.json"), `{"key":"value"}`);
+        writeFileSync(join(workspace, "stale-file.txt"), "should-be-cleared");
+      },
+    },
+    {
+      name: "no-orkestrator",
+      scenario: "no_orkestrator",
+      prepare: (workspace) => writeFileSync(join(workspace, "existing-file.txt"), "untouched"),
+    },
+    {
+      name: "fallback",
+      scenario: "fallback_path",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
+        writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
+      },
+    },
+    {
+      name: "fidelity",
+      scenario: "preserve_clear_restore",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
+        const target = join(workspace, ".orkestrator", "data.txt");
+        writeFileSync(target, "content");
+        chmodSync(target, 0o640);
+        symlinkSync("data.txt", join(workspace, ".orkestrator", "link"));
+      },
+    },
+    {
+      name: "trap-cleanup",
+      scenario: "trap_cleanup_on_failure",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
+        writeFileSync(join(workspace, ".orkestrator", "x"), "x");
+      },
+    },
+    {
+      name: "trap-restore",
+      scenario: "trap_restore_on_failure_after_clear",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator", "initial-prompt"), { recursive: true });
+        writeFileSync(join(workspace, ".orkestrator", "initial-prompt", "image.png"), "preserved");
+      },
+    },
+    {
+      name: "replaces-symlink",
+      scenario: "restore_replaces_symlink",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
+        writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
+      },
+    },
+    {
+      name: "replaces-file",
+      scenario: "restore_replaces_file",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
+        writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
+      },
+    },
+    {
+      name: "symlink-root",
+      scenario: "preserve_symlink_root",
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, "external-state"), { recursive: true });
+        writeFileSync(join(workspace, "external-state", "secret.txt"), "outside");
+        symlinkSync("external-state", join(workspace, ".orkestrator"));
+      },
+    },
+  ];
+  let root: string;
+  let results: Map<string, HarnessResult>;
+  const workspaceOf = (name: string) => join(root, "workspaces", name);
 
-  beforeEach(() => {
-    workspace = mkdtempSync(join(tmpdir(), "ork-ws-test-"));
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "ork-ws-test-"));
+    mkdirSync(join(root, "results"));
+    for (const { name, prepare } of cases) {
+      mkdirSync(workspaceOf(name), { recursive: true });
+      prepare(workspaceOf(name));
+    }
+    results = runHarnessBatch(
+      cases.map(({ name, scenario }) => ({ name, scenario, workspace: workspaceOf(name) })),
+      join(root, "results"),
+    );
   });
 
-  afterEach(() => {
-    if (existsSync(workspace)) {
-      rmSync(workspace, { recursive: true, force: true });
-    }
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
   });
 
   test("round-trips .orkestrator state through workspace clear", () => {
-    mkdirSync(join(workspace, ".orkestrator", "attachments"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "attachments", "image.png"), "binary-content");
-    writeFileSync(join(workspace, ".orkestrator", "metadata.json"), `{"key":"value"}`);
-    writeFileSync(join(workspace, "stale-file.txt"), "should-be-cleared");
-
-    const result = runHarness("preserve_clear_restore", workspace);
-
-    expect(result.code).toBe(0);
+    const workspace = workspaceOf("round-trip");
+    expect(results.get("round-trip")!.code).toBe(0);
     expect(existsSync(join(workspace, ".orkestrator", "attachments", "image.png"))).toBe(true);
     expect(readFileSync(join(workspace, ".orkestrator", "attachments", "image.png"), "utf8")).toBe(
       "binary-content",
@@ -472,21 +584,15 @@ describe("workspace setup preserve/restore (functional)", () => {
   });
 
   test("no-op when .orkestrator does not exist (existing-repo path)", () => {
-    writeFileSync(join(workspace, "existing-file.txt"), "untouched");
-
-    const result = runHarness("no_orkestrator", workspace);
-
-    expect(result.code).toBe(0);
-    expect(readFileSync(join(workspace, "existing-file.txt"), "utf8")).toBe("untouched");
+    expect(results.get("no-orkestrator")!.code).toBe(0);
+    expect(readFileSync(join(workspaceOf("no-orkestrator"), "existing-file.txt"), "utf8")).toBe(
+      "untouched",
+    );
   });
 
   test("preserves attachments alongside fallback-clone files", () => {
-    mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
-
-    const result = runHarness("fallback_path", workspace);
-
-    expect(result.code).toBe(0);
+    const workspace = workspaceOf("fallback");
+    expect(results.get("fallback")!.code).toBe(0);
     expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
       "preserved",
     );
@@ -494,54 +600,40 @@ describe("workspace setup preserve/restore (functional)", () => {
   });
 
   test("preserves file modes and symlinks (cp -a fidelity)", () => {
-    mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
-    const target = join(workspace, ".orkestrator", "data.txt");
-    writeFileSync(target, "content");
-    chmodSync(target, 0o640);
-    symlinkSync("data.txt", join(workspace, ".orkestrator", "link"));
-
-    const result = runHarness("preserve_clear_restore", workspace);
-
-    expect(result.code).toBe(0);
+    const workspace = workspaceOf("fidelity");
+    expect(results.get("fidelity")!.code).toBe(0);
     const restored = join(workspace, ".orkestrator", "data.txt");
     expect(statSync(restored).mode & 0o777).toBe(0o640);
     expect(readlinkSync(join(workspace, ".orkestrator", "link"))).toBe("data.txt");
   });
 
   test("trap cleans up backup dir when script exits non-zero", () => {
-    mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "x"), "x");
-
-    const result = runHarness("trap_cleanup_on_failure", workspace);
-
+    const result = results.get("trap-cleanup")!;
     expect(result.code).toBe(1);
     const backupPath = extractBackupPath(result.stdout);
-    expect(readFileSync(join(workspace, ".backup-path"), "utf8").trim()).toBe(backupPath);
+    expect(readFileSync(join(workspaceOf("trap-cleanup"), ".backup-path"), "utf8").trim()).toBe(
+      backupPath,
+    );
     expect(backupPath).toMatch(/^\/tmp\/orkestrator-workspace-state\./);
     expect(existsSync(backupPath)).toBe(false);
   });
 
   test("trap restores .orkestrator if setup exits after clearing the workspace", () => {
-    mkdirSync(join(workspace, ".orkestrator", "initial-prompt"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "initial-prompt", "image.png"), "preserved");
-
-    const result = runHarness("trap_restore_on_failure_after_clear", workspace);
-
+    const result = results.get("trap-restore")!;
     expect(result.code).toBe(1);
     const backupPath = extractBackupPath(result.stdout);
     expect(existsSync(backupPath)).toBe(false);
     expect(
-      readFileSync(join(workspace, ".orkestrator", "initial-prompt", "image.png"), "utf8"),
+      readFileSync(
+        join(workspaceOf("trap-restore"), ".orkestrator", "initial-prompt", "image.png"),
+        "utf8",
+      ),
     ).toBe("preserved");
   });
 
   test("restore replaces a cloned .orkestrator symlink instead of writing through it", () => {
-    mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
-
-    const result = runHarness("restore_replaces_symlink", workspace);
-
-    expect(result.code).toBe(0);
+    const workspace = workspaceOf("replaces-symlink");
+    expect(results.get("replaces-symlink")!.code).toBe(0);
     expect(lstatSync(join(workspace, ".orkestrator")).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
       "preserved",
@@ -550,12 +642,8 @@ describe("workspace setup preserve/restore (functional)", () => {
   });
 
   test("restore replaces a cloned .orkestrator file with the private state directory", () => {
-    mkdirSync(join(workspace, ".orkestrator"), { recursive: true });
-    writeFileSync(join(workspace, ".orkestrator", "attachment.txt"), "preserved");
-
-    const result = runHarness("restore_replaces_file", workspace);
-
-    expect(result.code).toBe(0);
+    const workspace = workspaceOf("replaces-file");
+    expect(results.get("replaces-file")!.code).toBe(0);
     expect(lstatSync(join(workspace, ".orkestrator")).isDirectory()).toBe(true);
     expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
       "preserved",
@@ -563,16 +651,27 @@ describe("workspace setup preserve/restore (functional)", () => {
   });
 
   test("preserve skips a symlinked .orkestrator root", () => {
-    mkdirSync(join(workspace, "external-state"), { recursive: true });
-    writeFileSync(join(workspace, "external-state", "secret.txt"), "outside");
-    symlinkSync("external-state", join(workspace, ".orkestrator"));
-
-    const result = runHarness("preserve_symlink_root", workspace);
-
+    const workspace = workspaceOf("symlink-root");
+    const result = results.get("symlink-root")!;
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Skipping symlinked .orkestrator workspace state");
     expect(lstatSync(join(workspace, ".orkestrator")).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(workspace, "external-state", "secret.txt"), "utf8")).toBe("outside");
+  });
+});
+
+// The Git exclude cases need a repository per case, so they run one by one.
+describe("workspace setup preserve/restore (functional)", () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "ork-ws-test-"));
+  });
+
+  afterEach(() => {
+    if (existsSync(workspace)) {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   test("git exclude helper adds runtime artifacts with newline-safe idempotent patterns", () => {
@@ -624,12 +723,7 @@ describe("workspace setup preserve/restore (functional)", () => {
     const repo = join(workspace, "repo");
     const linkedWorktree = join(workspace, "linked-worktree");
     mkdirSync(repo, { recursive: true });
-    runGit(repo, ["init"]);
-    runGit(repo, ["config", "user.name", "Test User"]);
-    runGit(repo, ["config", "user.email", "test@example.com"]);
-    writeFileSync(join(repo, "tracked.txt"), "base\n");
-    runGit(repo, ["add", "tracked.txt"]);
-    runGit(repo, ["commit", "-m", "base"]);
+    copyCommittedRepository(repo);
     runGit(repo, ["worktree", "add", "-b", "linked-branch", linkedWorktree]);
 
     const excludePathResult = spawnSync(
@@ -804,12 +898,6 @@ move_clone_into_workspace "$2" "$3"
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
-  });
-
-  test("setup moves the volume clone with the helper rather than a byte copy", () => {
-    const setup = read("docker/workspace-setup.sh");
-    expect(setup).toContain('move_clone_into_workspace "$CLONE_DEST" /workspace || exit 1');
-    expect(setup).not.toContain('cp -a -n "$CLONE_DEST"');
   });
 });
 

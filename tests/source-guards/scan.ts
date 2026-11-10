@@ -1,5 +1,3 @@
-import { readdirSync, readFileSync } from "node:fs";
-import path from "node:path";
 import { parseSync, Visitor, type VisitorObject } from "oxc-parser";
 import type { AnyNode } from "./ast";
 import { directTransportImport } from "./direct-transport-import";
@@ -11,6 +9,7 @@ import {
   type SourceGuard,
 } from "./guard";
 import { isTestSource } from "./paths";
+import { underDirectoryNamed, type SourceIndex } from "./repository-index";
 import { libBackendCommandDefault } from "./lib-backend-command-default";
 import { rawWebRequestListener } from "./raw-webrequest-listener";
 import { releasedPortRebind } from "./released-port-rebind";
@@ -137,87 +136,64 @@ export function scanSource(
   return findings;
 }
 
+/** Whether a listed file is one of the test sources the test-source guards read. */
+function isScannedTestSource(relative: string): boolean {
+  return (
+    SCANNED_ROOTS.some((sourceRoot) => relative.startsWith(`${sourceRoot}/`)) &&
+    !underDirectoryNamed(relative, EXCLUDED_DIRECTORIES) &&
+    ![...EXCLUDED_PATHS].some((excluded) => relative.startsWith(`${excluded}/`)) &&
+    isTestSource(relative)
+  );
+}
+
 /** Every test source under the scanned roots, repository-relative and sorted. */
-export function listTestSources(root: string): string[] {
-  const files: string[] = [];
-  const visit = (relativeDirectory: string): void => {
-    let entries;
-    try {
-      entries = readdirSync(path.join(root, relativeDirectory), { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    for (const entry of entries) {
-      const relative = `${relativeDirectory}/${entry.name}`;
-      // Dirent reports a symlink as a symlink, so directory symlinks are never followed.
-      if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRECTORIES.has(entry.name) && !EXCLUDED_PATHS.has(relative)) visit(relative);
-      } else if (entry.isFile() && isTestSource(relative)) {
-        files.push(relative);
-      }
-    }
-  };
-  for (const sourceRoot of SCANNED_ROOTS) visit(sourceRoot);
-  return files.sort();
+export function listTestSources(index: SourceIndex): string[] {
+  return index.files.filter(isScannedTestSource).sort();
 }
 
 /**
  * Production sources under `roots`: script files that are neither test
  * sources nor declarations, repository-relative and sorted.
  */
-export function listProductionSources(root: string, roots: readonly string[]): string[] {
-  const files: string[] = [];
-  const visit = (relativeDirectory: string): void => {
-    let entries;
-    try {
-      entries = readdirSync(path.join(root, relativeDirectory), { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    for (const entry of entries) {
-      const relative = `${relativeDirectory}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(relative);
-      } else if (
-        entry.isFile() &&
-        SCRIPT_FILE.test(entry.name) &&
-        !entry.name.endsWith(".d.ts") &&
-        !isTestSource(relative)
-      ) {
-        files.push(relative);
-      }
-    }
-  };
-  for (const sourceRoot of new Set(roots)) visit(sourceRoot);
-  return [...new Set(files)].sort();
+export function listProductionSources(index: SourceIndex, roots: readonly string[]): string[] {
+  const unique = [...new Set(roots)];
+  return index.files
+    .filter(
+      (relative) =>
+        unique.some((sourceRoot) => relative.startsWith(`${sourceRoot}/`)) &&
+        !underDirectoryNamed(relative, EXCLUDED_DIRECTORIES) &&
+        SCRIPT_FILE.test(relative) &&
+        !relative.endsWith(".d.ts") &&
+        !isTestSource(relative),
+    )
+    .sort();
 }
 
 /**
- * Walks the repository's test sources once and runs every test-source guard
+ * Lists the repository's test sources once and runs every test-source guard
  * over them, then the production sources of guards that read those instead.
+ * Each file is read once (through `index`) and parsed at most once.
  */
 export function scanRepository(
-  root: string,
+  index: SourceIndex,
   guards: readonly SourceGuard[] = SOURCE_GUARDS,
 ): Findings {
   const findings = emptyFindings();
   const scanFile = (relative: string, fileGuards: readonly SourceGuard[]) => {
     if (fileGuards.length === 0) return;
-    const file: ScannedFile = {
-      path: relative,
-      source: readFileSync(path.join(root, relative), "utf8"),
-      isBunTest: BUN_TEST_FILE.test(relative),
-    };
+    const source = index.read(relative);
+    // Deleted from the working tree, or a symbolic link: nothing to scan.
+    if (source === null) return;
+    const file: ScannedFile = { path: relative, source, isBunTest: BUN_TEST_FILE.test(relative) };
     for (const finding of scanSource(file, fileGuards))
       (findings[finding.guard][baselineKey(finding)] ??= []).push(finding);
   };
   const testGuards = guards.filter((guard) => !guard.productionRoots);
-  for (const relative of listTestSources(root)) scanFile(relative, testGuards);
+  if (testGuards.length > 0)
+    for (const relative of listTestSources(index)) scanFile(relative, testGuards);
   const productionGuards = guards.filter((guard) => guard.productionRoots);
   const roots = productionGuards.flatMap((guard) => guard.productionRoots ?? []);
-  for (const relative of listProductionSources(root, roots)) {
+  for (const relative of listProductionSources(index, roots)) {
     const under = (sourceRoot: string) => relative.startsWith(`${sourceRoot}/`);
     scanFile(
       relative,

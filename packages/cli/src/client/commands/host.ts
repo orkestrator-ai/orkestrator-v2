@@ -6,7 +6,7 @@ import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
 import type { CommandContext, CommandSpec, OptionSpec } from "../spec.js";
-import { observe, ObservationStopped } from "../wait.js";
+import { observe, ObservationStopped, observationClock } from "../wait.js";
 import {
   DEFAULT_WAIT_MS,
   isTerminalReceipt,
@@ -172,7 +172,7 @@ async function waitForReceipt(
           throw error;
         }
       },
-      { timeoutMs: limit, signal: context.signal },
+      { timeoutMs: limit, signal: context.signal, ...observationClock(context.io) },
     );
   } catch (error) {
     if (error instanceof ObservationStopped) throw stopped(error, action, receipt);
@@ -293,7 +293,7 @@ export const hostCommands: CommandSpec[] = [
                 ? { done: false as const }
                 : { done: true as const, value: latest };
             },
-            { timeoutMs: limit, signal: context.signal },
+            { timeoutMs: limit, signal: context.signal, ...observationClock(context.io) },
           );
         } catch (error) {
           if (error instanceof ObservationStopped) {

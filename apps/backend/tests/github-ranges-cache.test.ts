@@ -55,12 +55,36 @@ describe("GitHub ranges seed", () => {
     expect(seedLiveGithubRanges(dataDir, seed)).toBe(true);
     expect(seedLiveGithubRanges(dataDir, seed)).toBe(false);
     // The backend serves a fresh copied seed without fetching.
+    let calls = 0;
     const fetcher = async () => {
+      calls += 1;
       throw new Error("must not fetch");
     };
     const served = await githubRangesSeed(dataDir, { fetcher });
     expect(served).toBe(path.join(dataDir, "github-ranges.txt"));
     expect((await readGithubRangesSeed(served!))?.ranges).toHaveLength(2);
+    expect(calls).toBe(0);
+  });
+
+  test("an unavailable CI seed falls back to fetching ranges", async () => {
+    const dir = await tempDir("ork-gh-missing-ci-seed-");
+    cleanup.push(dir);
+    // A missing source makes the real copyFileSync throw, without global mocks.
+    expect(seedLiveGithubRanges(dir, path.join(dir, "missing.txt"))).toBe(false);
+    expect(await readGithubRangesSeed(path.join(dir, "github-ranges.txt"))).toBeNull();
+    let calls = 0;
+    const served = await githubRangesSeed(dir, {
+      fetcher: async () => {
+        calls += 1;
+        return new Response(META);
+      },
+    });
+    expect(calls).toBe(1);
+    expect(served).toBe(path.join(dir, "github-ranges.txt"));
+    expect((await readGithubRangesSeed(served!))?.ranges).toEqual([
+      "192.30.252.0/22",
+      "140.82.112.0/20",
+    ]);
   });
 
   test("fetches at most hourly and keeps the last seed while GitHub is unavailable", async () => {

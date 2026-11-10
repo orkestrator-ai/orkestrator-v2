@@ -23,7 +23,7 @@ type Workflow = {
           include?: { shard: string; groups: string; "qualify-claude"?: boolean }[];
         };
       };
-      steps?: { id?: string; run?: string; env?: Record<string, string> }[];
+      steps?: { id?: string; name?: string; run?: string; env?: Record<string, string> }[];
     }
   >;
 };
@@ -162,6 +162,15 @@ describe("CI workflow contracts", () => {
     // unauthenticated one (a spent quota fails restricted firewalls closed).
     expect(source).toContain("apps/backend/scripts/github-ranges-seed.ts");
     expect(source).toContain('ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=${seed}" >> "$GITHUB_ENV"');
+    const parsed = Bun.YAML.parse(source) as Workflow;
+    const unseeded = parsed.jobs.engine?.steps?.find(
+      (step) => step.name === "Live firewall without workflow seed",
+    );
+    expect(unseeded?.env?.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED).toBe("");
+    expect(unseeded?.run).toContain("./tests/container-live-firewall.test.ts --parallel=1");
+    expect(unseeded?.run).toContain(
+      "--test-name-pattern 'restricted boot fetches GitHub ranges without a workflow seed'",
+    );
     expect(source).not.toContain("orkestrator-v2:latest");
   });
 });

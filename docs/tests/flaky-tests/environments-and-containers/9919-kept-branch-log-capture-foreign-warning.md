@@ -40,3 +40,18 @@
   logs into whichever test holds the capture next.
 - **Reproduced:** not the CI warning itself; its source could not be
   recovered from the CI log.
+
+## Review follow-up (2026-11-10)
+
+- Scoped the adjacent `513 kept-branch notices do not consume shared fault
+  keys` assertion to its 513 environment IDs too. Both `scope` and
+  `environmentId` count, so a warning belonging to one of those cleanups still
+  fails the assertion.
+- The test now deliberately emits a foreign `cleanup.step-failed` warning
+  into the shared capture and verifies that it is captured while all 513 own
+  records remain branch-kept notices. This provides a deterministic regression
+  for the cross-capture mechanism without relying on a timed-out predecessor.
+- Focused validation: `mise run test:logged -- --name findings-backend -- bun
+  test --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./tests/github-ranges-cache.test.ts ./src/core/environment-cleanup.test.ts
+  --parallel=1 --only-failures` passed (5.4 s).

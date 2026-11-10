@@ -58,8 +58,13 @@ export function seedLiveGithubRanges(
   if (!seed || !existsSync(dataDir)) return false;
   const target = path.join(dataDir, GITHUB_RANGES_FILE);
   if (existsSync(target)) return false;
-  copyFileSync(seed, target);
-  return true;
+  try {
+    copyFileSync(seed, target);
+    return true;
+  } catch {
+    // Best effort: let the backend fetch ranges when the CI seed is unavailable.
+    return false;
+  }
 }
 
 export function memoryLifecycleContext(

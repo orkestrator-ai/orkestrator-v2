@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { createLogger } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
 import {
   closeEnvironmentCleanupStorage,
@@ -388,10 +389,15 @@ describe("environment cleanup steps", () => {
     const { context, dataDir } = await cleanupContext();
     const { projectPath } = await project();
     const logs = captureLogs();
+    const environmentIds = new Set(Array.from({ length: 513 }, (_, n) => `kept-${n}`));
     try {
-      for (let n = 0; n < 513; n += 1) {
+      // Deterministically reproduce a foreign warning entering the shared sink.
+      createLogger("environment").warn("cleanup.step-failed", {
+        environmentId: "foreign-cleanup",
+      });
+      for (const environmentId of environmentIds) {
         const cleanup = entry({
-          environmentId: `kept-${n}`,
+          environmentId,
           projectPath,
           branch: "invalid..ref",
           pending: ["branch"],
@@ -399,8 +405,19 @@ describe("environment cleanup steps", () => {
         await environmentCleanupLedger(dataDir).record(cleanup);
         expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
       }
-      expect(logs.records()).toHaveLength(513);
-      expect(logs.records().every((record) => record.event === "cleanup.branch-kept")).toBe(true);
+      expect(
+        logs.records().some((record) => record.fields?.environmentId === "foreign-cleanup"),
+      ).toBe(true);
+      // Keep this cleanup's warnings too: filtering by event would hide failures.
+      const own = logs.records().filter((record) => {
+        const fields = record.fields as Record<string, unknown> | undefined;
+        return (
+          environmentIds.has(String(fields?.scope)) ||
+          environmentIds.has(String(fields?.environmentId))
+        );
+      });
+      expect(own).toHaveLength(513);
+      expect(own.every((record) => record.event === "cleanup.branch-kept")).toBe(true);
     } finally {
       logs.restore();
     }

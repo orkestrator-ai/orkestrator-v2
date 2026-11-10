@@ -46,3 +46,31 @@ collision); bridges and the protocol lockfile passed. The complete outer artifac
 is `orkestrator-test-run.d9kd3g/review-default-tests.log.gz`; inner compressed group
 artifacts are in `orkestrator-test-run.LAWw4i`, both under the host temporary
 directory. These failures remain separate from the passing targeted egress work.
+
+
+## Completion Notes validation — 2026-11-10
+
+Observed on `open-notes-tab-0bdba344d18c-r1` at `49bc718245`, base
+`c6de4733c5beb87a578f82a8548725305e1ff254`. The exact command was
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+The workspace group reserved six slots after a 1,016.6 s lease wait; backend
+used two isolated workers, alongside root, bridges and component-browser tests.
+
+`StorageService store writers > no backend class outside the scan calls the store write primitives`
+(`apps/backend/src/core/storage-writer-guards.test.ts`) exceeded its 5,000 ms
+budget at 7,810.10 ms. Backend totals: 17,688 passed, 151 skipped, one failed;
+17,840 tests across 1,211 files in 442.84 s. The workspace's other failure was
+the protocol process-group assertion tracked in case 9840. Root, bridges and
+protocol-lockfile groups passed; the aggregate exited 1 after 1,657.6 s including
+its admission wait.
+
+The unchanged complete owner passed with
+`mise run test:logged -- --name storage-writer-owner-r3 -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts --parallel=1 --only-failures`
+(exit 0, 0.8 s). Passing raw output was deleted; no isolated test count is claimed.
+`mise run flaky:recurrence -- 6150 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports the existing case open. The branch changes storage layout code scanned
+by this guard; the isolated pass does not prove a cause or environmental
+exemption. No scan, test, timeout or assertion was changed, and validation remains red.
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KZbVC6/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and outer log `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.QmChPr/review-default-tests.log.gz`.

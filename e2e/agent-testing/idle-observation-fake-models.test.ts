@@ -112,3 +112,38 @@ test("Pi's fake is added to the profile's own models.json and removed again", as
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("OpenCode's fake provider is merged into the profile's own opencode.json and removed again", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "idle-fake-opencode-"));
+  const file = fakeModelSettingsFile("opencode", directory);
+  // Under the backend's isolated XDG_CONFIG_HOME, never a real ~/.config/opencode.
+  expect(file).toBe(
+    path.join(directory, "agent-credentials", "xdg-config", "opencode", "opencode.json"),
+  );
+  mkdirSync(path.dirname(file), { recursive: true });
+  const original = '{"mcp":{"kept":{"type":"local","command":["true"]}}}\n';
+  writeFileSync(file, original);
+  const { child, spawnModel } = fakeChild("ready");
+  try {
+    const handle = await startLocalFakeModel("opencode", directory, { spawnModel });
+    const written = JSON.parse(readFileSync(file, "utf8")) as {
+      mcp: Record<string, unknown>;
+      provider: Record<string, { npm: string; options: { baseURL: string } }>;
+      model: string;
+      small_model: string;
+      enabled_providers: string[];
+    };
+    expect(Object.keys(written.mcp)).toEqual(["kept"]);
+    expect(written.provider["idleqa-fake"]!.npm).toBe("@ai-sdk/openai-compatible");
+    expect(written.provider["idleqa-fake"]!.options.baseURL).toBe("http://127.0.0.1:1234");
+    // No turn or title request can fall through to a hosted OpenCode model.
+    expect(written.model).toBe("idleqa-fake/idleqa-1");
+    expect(written.small_model).toBe("idleqa-fake/idleqa-1");
+    expect(written.enabled_providers).toEqual(["idleqa-fake"]);
+    await handle.stop();
+    expect(child.killed).toBe(true);
+    expect(readFileSync(file, "utf8")).toBe(original);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

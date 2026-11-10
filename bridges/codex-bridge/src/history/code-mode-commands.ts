@@ -76,3 +76,41 @@ export function rolloutCommandExecutionParts(item: unknown): NormalizedPart[] | 
   });
   return adapted?.type === "command_execution" ? commandExecutionParts(adapted) : null;
 }
+
+/** Turn-local command slots survive cell output so late outcomes replace the same call. */
+export class ReplayCommandSettlement {
+  private slots = new Map<string, { parts: NormalizedPart[]; index: number }>();
+  private terminal = false;
+
+  reset(): void {
+    this.slots.clear();
+    this.terminal = false;
+  }
+
+  settle(): void {
+    this.terminal = true;
+    for (const { parts, index } of this.slots.values()) this.settlePart(parts[index]!);
+  }
+
+  private settlePart(part: NormalizedPart): void {
+    if (this.terminal && part.toolState === "pending") {
+      delete part.toolState;
+      part.toolLeftRunning = true;
+    }
+  }
+
+  update(id: string, incoming: NormalizedPart[]): boolean {
+    const slot = this.slots.get(id);
+    if (!slot) return false;
+    slot.parts[slot.index] = incoming[0]!;
+    this.settlePart(slot.parts[slot.index]!);
+    return true;
+  }
+
+  append(id: string, target: NormalizedPart[], incoming: NormalizedPart[]): void {
+    const index = target.length;
+    target.push(...incoming);
+    this.slots.set(id, { parts: target, index });
+    this.settlePart(target[index]!);
+  }
+}

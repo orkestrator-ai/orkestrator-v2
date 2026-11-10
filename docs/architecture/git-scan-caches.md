@@ -89,6 +89,32 @@ ask Git again, because those files are not watched in a linked worktree. The nex
 index or `.gitignore` change does, and until then a safety scan still reports the
 right list. Events are hints either way.
 
+### A directory the backend may not read
+
+Bun's recursive watch on Linux walks its tree on the event loop. When it meets a
+directory it may not open, it reports an `error` naming that directory (code `EPERM`,
+message `EACCES`) and carries on watching everything else, new directories included.
+A rootless container runtime whose data root is kept in the worktree (the disposable
+Docker daemon's `output/disposable-docker/`) holds hundreds of such directories.
+
+That report is not a failure. The watcher stays open and its events are still hints,
+but it withdraws qualified coverage (calling `onCoverageChange` again) and never
+reports it again, so its owner polls and serves the tree on the unwatched age bound.
+The same applies to a split child whose watch is refused for permission. Should the
+directory later become readable nothing would watch it, which is why the watcher may
+not stay qualified. A watch whose own directory is unreadable still fails, as does any
+error that names no path or a path outside the watch.
+
+Closing the watcher instead, as it once did, had `DiffStatsService` retry it, and each
+retry walked the whole tree again on the event loop. On 2026-11-09 three such data
+roots (14,000 to 30,000 directories each) stalled beelink2's backend for 30 to 60 s
+at a time until it dropped out of the federation. The retry budget had not stopped
+it either: coverage was announced a moment before the error arrived, and announced
+coverage used to grant a fresh budget. A failed watcher now starts a new budget only
+after holding qualified coverage for `WATCHER_STABLE_MS` (ten minutes, the longest
+watcher backoff). The one walk a large ignored tree still costs is to-do
+[7560](../todo/cross-cutting/7560-large-ignored-trees-in-the-worktree-watch.md).
+
 ### Measured
 
 `bun scripts/benchmark-worktree-watch.ts`, workload `watch-nm-4k`: a linked worktree

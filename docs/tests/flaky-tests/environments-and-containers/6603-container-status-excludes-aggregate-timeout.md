@@ -1,7 +1,7 @@
 # Container status: exclude repair timed out in the aggregate suite
 
 - **ID:** 6603
-- **Status:** resolved
+- **Status:** open
 - **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it ([todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md))
 - **Date observed:** 2026-11-05
 - **Test:** `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`
@@ -110,3 +110,17 @@ intermittent observation, not its cause or a fix.
   bun --cwd=apps/backend test ./src/core/commands-files-local-scan.test.ts
   --parallel=4 --rerun-each=20`: PASS in 51.9 s on the shared host at load
   average 20–30.
+
+## Worktree-watcher review recurrence — 2026-11-10
+
+Observed in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name coverage-full-final -- mise run test` at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`, base `08d3da4a23cfe2ecc34fba663ca27e765f7924a9`, macOS arm64/Bun 1.4.4. The workspace reserved six slots (web two, backend four), root one, bridges two and protocol one. The aggregate exited 1 after 2468.77 s; backend has no final counts because the workspace no-progress watchdog fired. Root reported 4274 pass/25 skip/4 fail; web 14336 pass/10 skip/2 fail; Pi 706 pass/1 skip/2 fail.
+
+- `apps/backend/src/core/commands-files-local-scan.test.ts` — `container status > repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping`: Test deadline 30,000 ms exceeded. Observed 30002.16ms. Complete unchanged owner: 10 pass, 0 fail, 0 skip in 13.38 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+```sh
+mise run test:logged -- --name watcher-triage-local-scan -- bun test --cwd apps/backend ./src/core/commands-files-local-scan.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/local-scan.xml
+```
+
+`mise run flaky:recurrence -- 6603 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` found the resolution commit `ee2cc84234` in the base. Reopen the case: the current deadline is already 30 s, and this recurrence does not justify another budget increase.
+
+Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.

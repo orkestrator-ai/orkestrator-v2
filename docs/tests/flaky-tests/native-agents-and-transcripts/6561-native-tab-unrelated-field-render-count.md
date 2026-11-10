@@ -132,3 +132,17 @@ The complete unchanged owner passed alone in 10.9 s:
 Passing counts are unavailable because the logged runner deleted passing output.
 This establishes intermittence, not cause or independence from this branch.
 No assertion, timeout or native-tab implementation changed.
+
+## Worktree-watcher review recurrence — 2026-11-10
+
+Observed in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name coverage-full-final -- mise run test` at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`, base `08d3da4a23cfe2ecc34fba663ca27e765f7924a9`, macOS arm64/Bun 1.4.4. The workspace reserved six slots (web two, backend four), root one, bridges two and protocol one. The aggregate exited 1 after 2468.77 s; backend has no final counts because the workspace no-progress watchdog fired. Root reported 4274 pass/25 skip/4 fail; web 14336 pass/10 skip/2 fail; Pi 706 pass/1 skip/2 fail.
+
+- `apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx` — `an unrelated environment field does not render a tab holding a transcript`: Expected 0 React commits; received 1 (lines 406/903). Observed 842.24ms. Complete unchanged owner: 37 pass, 0 fail, 0 skip in 5.30 s at `8948619686981e7b237f879192ac6ffc86b227c6`.
+
+```sh
+mise run test:logged -- --name watcher-triage-native-tab-render -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/native-tab-render.xml
+```
+
+The recurrence check against `origin/main` at `04639b12b71d4326a3b8941485367aca197f4966` reported this case already open; this branch still had its earlier resolved status. Reopen the local row and preserve the prior resolution as history. The current observation does not prove the old token-fixture cause has returned; the same owner also had a distinct anchor-resize count failure, recorded in case 9926.
+
+Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.

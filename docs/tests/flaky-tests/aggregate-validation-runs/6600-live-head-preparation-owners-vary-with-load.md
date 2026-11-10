@@ -108,3 +108,29 @@ The two backend errors between tests were the same null-exit-code assertions
 from these two timed-out `runEntrypoint` calls, not additional failing owners.
 Their contexts were inspected in the compressed workspace artifact after the
 aggregate completed.
+
+## Worktree-watcher review recurrence — 2026-11-10
+
+Observed in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name coverage-full-final -- mise run test` at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`, base `08d3da4a23cfe2ecc34fba663ca27e765f7924a9`, macOS arm64/Bun 1.4.4. The workspace reserved six slots (web two, backend four), root one, bridges two and protocol one. The aggregate exited 1 after 2468.77 s; backend has no final counts because the workspace no-progress watchdog fired. Root reported 4274 pass/25 skip/4 fail; web 14336 pass/10 skip/2 fail; Pi 706 pass/1 skip/2 fail.
+
+- `apps/backend/tests/portable-inputs-shared-skills.test.ts` — `shared skills root (task 1) > the entrypoint imports it into ~/.agents/skills, from the relay when node cannot read the mount`: Test deadline 5,000 ms exceeded. Observed 5009.88ms. Complete unchanged owner: 21 pass, 0 fail, 0 skip in 6.65 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+```sh
+mise run test:logged -- --name watcher-triage-shared-skills -- bun test --cwd apps/backend ./tests/portable-inputs-shared-skills.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/shared-skills.xml
+```
+
+- `apps/backend/tests/portable-inputs-shared-skills.test.ts` — `linked skill entries (task 2) > the entrypoint imports a linked skill where Claude reads user skills`: Test deadline 5,000 ms exceeded. Observed 5014.14ms. Complete unchanged owner: 21 pass, 0 fail, 0 skip in 6.65 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+```sh
+mise run test:logged -- --name watcher-triage-shared-skills -- bun test --cwd apps/backend ./tests/portable-inputs-shared-skills.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/shared-skills.xml
+```
+
+- `apps/backend/tests/portable-inputs-stamps.test.ts` — `a changed input is reflected at the next start > changing one file in a tree copies that tree alone`: Test deadline 60,000 ms exceeded. Observed 60026.06ms. Complete unchanged owner: 50 pass, 0 fail, 0 skip in 186.11 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+```sh
+mise run test:logged -- --name watcher-triage-portable-stamps -- bun test --cwd apps/backend ./tests/portable-inputs-stamps.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/portable-stamps.xml
+```
+
+`mise run flaky:recurrence -- 6600 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.
+
+Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.

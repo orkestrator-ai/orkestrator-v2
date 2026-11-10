@@ -405,19 +405,35 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     }
   }
 
-  test.each(["EACCES", "EPERM"])("an unreadable child (%s) falls back to polling", async (code) => {
-    const context = standardTree();
-    context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code }));
-    const { watcher, errors } = split(context);
-    await until(() => errors.length === 1);
-    expect(watcher.qualified).toBe(false);
-    expect(watcher.watching).toBe(false);
-    expect(context.live()).toEqual([]);
-    // Restoring permissions cannot leave a qualified watcher with a hole:
-    // its owner has already been told to poll.
-    context.state.refuse.delete("/wt/src");
-    expect(watcher.qualified).toBe(false);
-  });
+  test.each(["EACCES", "EPERM"])(
+    "an unreadable child (%s) is left out and the watcher stays unqualified",
+    async (code) => {
+      const context = standardTree();
+      context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code }));
+      const { watcher, errors, coverage, hints } = split(context);
+      await until(() => context.live().includes("recursive /wt/apps/web/lib"));
+      // Consume the initial plan's unknown-path hint before isolating an edit.
+      await until(() => hints.length > 0);
+      // Not a failure: nothing is torn down, so its owner does not retry and
+      // re-walk the tree. Never qualified, so its owner keeps polling.
+      expect(errors).toEqual([]);
+      expect(watcher.watching).toBe(true);
+      expect(watcher.qualified).toBe(false);
+      expect(coverage()).toBe(0);
+      expect(context.live()).not.toContain("recursive /wt/src");
+      // The rest of the worktree still reports changes as hints.
+      hints.length = 0;
+      context.watchOn("/wt/apps/web/lib").emit("change", "a.ts");
+      await until(() => hints.length === 1);
+      expect(hints[0]!.paths).toEqual(["apps/web/lib/a.ts"]);
+      // Restoring permissions cannot leave a qualified watcher with a hole:
+      // its owner has already been told to poll.
+      context.state.refuse.delete("/wt/src");
+      context.watchOn("/wt").emit("rename", "src");
+      await until(() => context.live().includes("recursive /wt/src"));
+      expect(watcher.qualified).toBe(false);
+    },
+  );
 
   test.each([true, false])(
     "ancestor replacement refreshes proof (split=%s)",
@@ -505,6 +521,62 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
     expect(context.live()).toEqual([]);
   });
 
+  // Bun on Linux reports a directory its recursive walk could not open as an
+  // error naming it (code EPERM, message EACCES), then keeps watching the rest.
+  const unreadable = (where: string, code = "EPERM") =>
+    Object.assign(new Error(`EACCES: permission denied, watch '${where}'`), { code, path: where });
+
+  test.each(["EPERM", "EACCES"])(
+    "an unreadable directory inside a recursive watch (%s) withdraws coverage without failing",
+    async (code) => {
+      const context = standardTree();
+      const { watcher, errors, hints, coverage } = split(context);
+      await until(() => watcher.qualified === true);
+      expect(coverage()).toBe(1);
+      context.watchOn("/wt/src").fail(unreadable("/wt/src/docker/containerd/daemon", code));
+      context.watchOn("/wt/src").fail(unreadable("/wt/src/docker/containerd/other", code));
+      expect(errors).toEqual([]);
+      expect(watcher.watching).toBe(true);
+      expect(watcher.qualified).toBe(false);
+      // Told once that coverage was withdrawn.
+      expect(coverage()).toBe(2);
+      expect(context.live()).toEqual(SPLIT_WATCHES);
+
+      await until(() => hints.length > 0);
+      hints.length = 0;
+      context.watchOn("/wt/src").emit("change", "a.ts");
+      await until(() => hints.length === 1);
+      expect(hints[0]!.paths).toEqual(["src/a.ts"]);
+    },
+  );
+
+  test("a recursive watch refused for its own directory, or for a path outside it, still fails", async () => {
+    for (const where of ["/wt/src", "/wt/apps/web/lib", "/wt/src-other/x", "/elsewhere"]) {
+      const context = standardTree();
+      const { watcher, errors } = split(context);
+      await until(() => watcher.qualified === true);
+      context.watchOn("/wt/src").fail(unreadable(where));
+      expect(errors).toHaveLength(1);
+      expect(watcher.watching).toBe(false);
+    }
+    // A permission error that names no path proves nothing about where it was.
+    const context = standardTree();
+    const { watcher, errors } = split(context);
+    await until(() => watcher.qualified === true);
+    context.watchOn("/wt/src").fail(Object.assign(new Error("denied"), { code: "EACCES" }));
+    expect(errors).toHaveLength(1);
+    expect(watcher.watching).toBe(false);
+  });
+
+  test("a direct watch reporting a permission error still fails", async () => {
+    const context = standardTree();
+    const { watcher, errors } = split(context);
+    await until(() => watcher.qualified === true);
+    context.watchOn("/wt/apps").fail(unreadable("/wt/apps/web"));
+    expect(errors).toHaveLength(1);
+    expect(watcher.watching).toBe(false);
+  });
+
   test("closing during a plan attaches nothing", async () => {
     const context = standardTree();
     let releaseList!: () => void;
@@ -531,6 +603,22 @@ describe("startWorktreeWatcher, platforms with one recursive watch", () => {
     const { watcher } = recursiveRoot(context);
     await until(() => watcher.qualified === true);
     await until(() => context.state.listCalls === 1);
+    expect(context.live()).toEqual(["recursive /wt"]);
+  });
+
+  test("an unreadable directory anywhere below the root keeps the watch, unqualified", async () => {
+    const context = standardTree();
+    const { watcher, errors } = recursiveRoot(context);
+    await until(() => watcher.qualified === true);
+    context.watchOn("/wt").fail(
+      Object.assign(new Error("EACCES: permission denied, watch '/wt/output/data'"), {
+        code: "EPERM",
+        path: "/wt/output/data",
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(watcher.watching).toBe(true);
+    expect(watcher.qualified).toBe(false);
     expect(context.live()).toEqual(["recursive /wt"]);
   });
 

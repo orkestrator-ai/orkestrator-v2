@@ -3,6 +3,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { DIFF_STATS_CHANGED_EVENT } from "@orkestrator/protocol/diff-stats";
 import {
   DiffStatsService,
+  WATCHER_STABLE_MS,
   type DiffScanResult,
   type DiffStatsTarget,
   type DiffStatsWarning,
@@ -376,21 +377,28 @@ describe("DiffStatsService", () => {
     }
   });
 
-  test("qualified recovery resets the watcher retry budget", async () => {
-    const harness = createHarness({ pendingCoverage: true });
-    try {
-      harness.service.track(localTarget());
-      await settle();
-      harness.failWatch("env-local");
-      harness.delayed[0]!.callback();
-      await settle();
-      harness.qualifyWatch("env-local");
-      harness.failWatch("env-local");
-      expect(harness.delayed.map((timer) => timer.delayMs)).toEqual([30_000, 30_000]);
-    } finally {
-      harness.service.shutdown();
-    }
-  });
+  test.each([0, WATCHER_STABLE_MS - 1, WATCHER_STABLE_MS])(
+    "watcher retry budget after %i ms of qualified recovery",
+    async (qualifiedForMs) => {
+      const harness = createHarness({ pendingCoverage: true });
+      try {
+        harness.service.track(localTarget());
+        await settle();
+        harness.failWatch("env-local");
+        harness.delayed[0]!.callback();
+        await settle();
+        harness.qualifyWatch("env-local");
+        harness.clock.value += qualifiedForMs;
+        harness.failWatch("env-local");
+        expect(harness.delayed.map((timer) => timer.delayMs)).toEqual([
+          30_000,
+          qualifiedForMs < WATCHER_STABLE_MS ? 60_000 : 30_000,
+        ]);
+      } finally {
+        harness.service.shutdown();
+      }
+    },
+  );
 
   test("falls back cleanly when watcher setup reports an error synchronously", async () => {
     const harness = createHarness({ watcherStartError: new Error("watch unsupported") });

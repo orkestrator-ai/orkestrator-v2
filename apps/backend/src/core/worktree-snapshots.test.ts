@@ -13,7 +13,9 @@ import {
 } from "@orkestrator/protocol/worktree-snapshots";
 import {
   DiffStatsService,
+  FILE_LIST_MAX_AGE_MS,
   LOCAL_SCAN_MIN_GAP_MS,
+  WATCHER_STABLE_MS,
   type DiffScanResult,
   type DiffStatsServiceOptions,
   type DiffStatsTarget,
@@ -706,12 +708,134 @@ describe("failure, fallback and retry", () => {
     track(owner, local());
     await flushMicrotasks();
     for (let failure = 0; failure < 6; failure += 1) {
+      // Each watcher held qualified coverage long enough to end the streak.
+      await owner.time.advance(WATCHER_STABLE_MS);
       const before = owner.watchers.length;
       owner.failWatcher();
       await owner.time.advance(30_000);
       expect(owner.watchers.length).toBe(before + 1);
       expect(owner.service.isWatching("env-local")).toBe(true);
     }
+  });
+
+  test("a watcher that fails soon after each re-attach stops retrying at the cap", async () => {
+    // As on Linux when Bun's recursive walk reported an unreadable directory a
+    // moment after coverage was announced: every attempt covered the worktree,
+    // failed, and used to win a fresh budget, re-walking the tree forever.
+    const owner = createOwner();
+    owner.autoScan(() => result([]));
+    track(owner, local());
+    await flushMicrotasks();
+    for (const delayMs of [30_000, 60_000, 120_000, 240_000, 480_000]) {
+      const before = owner.watchers.length;
+      owner.failWatcher();
+      await owner.time.advance(delayMs);
+      expect(owner.watchers.length).toBe(before + 1);
+      expect(owner.service.isWatching("env-local")).toBe(true);
+    }
+    const attached = owner.watchers.length;
+    owner.failWatcher();
+    await owner.time.advance(60 * 60_000);
+    expect(owner.watchers.length).toBe(attached);
+    expect(owner.service.isWatching("env-local")).toBe(false);
+    expect(owner.service.status().retryTimers).toBe(0);
+    // Polling carries on without the watcher.
+    const scans = owner.kinds()["diff-scan"]!.started;
+    await owner.time.advance(15_000);
+    expect(owner.kinds()["diff-scan"]!.started).toBe(scans + 1);
+  });
+
+  test("a watcher that withdraws coverage moves the target to polling, without a retry", async () => {
+    const owner = createOwner({ qualified: true });
+    owner.autoScan(() => result([]));
+    track(owner, local());
+    await flushMicrotasks();
+    const watcher = owner.watchers.at(-1)!;
+    watcher.options.onCoverageChange?.();
+    expect(owner.snapshotEvents.at(-1)).toMatchObject({ watched: true });
+    // Safety cadence while qualified.
+    const scans = () => owner.kinds()["diff-scan"]!.started;
+    const qualifiedScans = scans();
+    await owner.time.advance(30_000);
+    expect(scans()).toBe(qualifiedScans);
+
+    // An unreadable directory turned up: still open, no longer qualified.
+    watcher.qualified = false;
+    watcher.options.onCoverageChange?.();
+    expect(owner.snapshotEvents.at(-1)).toMatchObject({ watched: false });
+    const before = scans();
+    await owner.time.advance(15_000);
+    expect(scans()).toBe(before + 1);
+    expect(owner.warnings).toEqual([]);
+    expect(owner.watchers).toHaveLength(1);
+    expect(owner.service.status().retryTimers).toBe(0);
+  });
+
+  test("withdrawing coverage age-bounds file-list and tree bodies cached while qualified", async () => {
+    const owner = createOwner({ qualified: true });
+    let changes = [change("a.ts")];
+    let tree = [{ name: "old" }];
+    owner.autoScan(() => result(changes));
+    owner.autoWalk(() => tree);
+    track(owner, local());
+    await flushMicrotasks();
+    await owner.service.readTree({ lookup: localLookup });
+
+    const reads = () =>
+      Promise.all([readList(owner, localLookup), owner.service.readTree({ lookup: localLookup })]);
+    const counts = () => [
+      owner.kinds()["diff-scan"]!.started,
+      owner.kinds()["file-tree-read"]!.started,
+    ];
+    const before = counts();
+    changes = [change("a.ts", 2)]; // Same membership: no tree invalidation from the list scan.
+    tree = [{ name: "after-permission-change" }];
+    await owner.time.advance(FILE_LIST_MAX_AGE_MS + 1);
+    const [cachedList, cachedTree] = await reads();
+    expect(cachedList.changes).toEqual([change("a.ts")]);
+    expect(cachedTree.tree).toEqual([{ name: "old" }]);
+    expect(counts()).toEqual(before);
+
+    const watcher = owner.watchers.at(-1)!;
+    watcher.qualified = false;
+    watcher.options.onCoverageChange?.();
+    const [freshList, freshTree] = await reads();
+    expect(freshList.changes).toEqual(changes);
+    expect(freshTree.tree).toEqual(tree);
+    expect(counts()).toEqual(before.map((count) => count + 1));
+
+    // Fresh unqualified bodies still share reads within the age bound.
+    await reads();
+    expect(counts()).toEqual(before.map((count) => count + 1));
+    changes = [change("a.ts", 3)];
+    tree = [{ name: "later-unwatched-change" }];
+    await owner.time.advance(FILE_LIST_MAX_AGE_MS + 1);
+    const [laterList, laterTree] = await reads();
+    expect(laterList.changes).toEqual(changes);
+    expect(laterTree.tree).toEqual(tree);
+    expect(counts()).toEqual(before.map((count) => count + 2));
+    expect(owner.watchers).toHaveLength(1);
+    expect(owner.service.status().retryTimers).toBe(0);
+  });
+
+  test("a retarget starts a fresh watcher retry budget", async () => {
+    const owner = createOwner({ overrides: { watcherRetry: { maxAttempts: 1 } } });
+    owner.autoScan(() => result([]));
+    track(owner, local());
+    await flushMicrotasks();
+    owner.failWatcher();
+    await owner.time.advance(30_000);
+    owner.failWatcher();
+    await owner.time.advance(60 * 60_000);
+    expect(owner.service.isWatching("env-local")).toBe(false);
+
+    track(owner, local({ comparisonRef: "release" }));
+    await flushMicrotasks();
+    expect(owner.service.isWatching("env-local")).toBe(true);
+    const before = owner.watchers.length;
+    owner.failWatcher();
+    await owner.time.advance(30_000);
+    expect(owner.watchers.length).toBe(before + 1);
   });
 
   test("the watched tree recovers from a missed hint on the safety tick", async () => {

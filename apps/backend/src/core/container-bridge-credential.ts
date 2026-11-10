@@ -347,11 +347,17 @@ async function bridgeListenerAdmits(
     return false;
   }
   if (verdict.kind === "unrecorded") {
-    await writeContainerBridgeListenerRecord(
-      containerId,
-      containerListenerRecordFile(kind),
-      verdict.identity,
-    );
+    try {
+      await writeContainerBridgeListenerRecord(
+        containerId,
+        containerListenerRecordFile(kind),
+        verdict.identity,
+      );
+    } catch {
+      // Failed publication must never hand out an unrecorded token. All status,
+      // reuse and peek callers share this fail-closed result.
+      return false;
+    }
     log.info("bridge.listener-adopted", { provider: kind });
   }
   return true;
@@ -385,7 +391,7 @@ function bridgeListenerRefusalMessage(
 ): string {
   return reason === "scan-incomplete" || reason === "no-listener"
     ? `Could not confirm which process serves the ${kind} bridge's port; retry the start`
-    : `The ${kind} bridge's port is held by a process the backend did not start; it was stopped, retry the start`;
+    : `The ${kind} bridge's port is held by a process the backend did not start; the start was refused and cleanup was attempted; retry the start`;
 }
 
 /**

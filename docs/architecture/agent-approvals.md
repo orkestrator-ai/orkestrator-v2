@@ -90,13 +90,19 @@ socket, not to a port (`container-bridge-listener.ts`):
   cookie while it runs, and the agent cannot obtain the bridge's socket: the
   bridge is non-dumpable, so `pidfd_getfd` is refused, and it opens the socket
   close-on-exec. A port with no socket or several, or a scan that could not
-  run, fails the start after stopping what listens.
-- **The launcher's session closes the window before the record.** The launcher
-  prints `orkestrator-bridge-session=<id>`, the session `setsid` gave the
-  bridge, and the record is written only while a `bun` lives in that session.
-  No process can join a session later, so a bridge the agent started after
-  killing the launched one is refused. A launcher from before the report
-  prints nothing, and the record is then written without that check.
+  run, refuses the start and attempts listener cleanup. Cleanup is not reported as confirmed.
+- **Initial recording verifies ownership in the launch session.** The launcher
+  prints `orkestrator-bridge-session=<id>`. A fixed root scan checks that a
+  non-stopped, non-zombie `bun` in that session holds the exact listening
+  socket in `/proc/<pid>/fd`, checking state and start time again afterwards.
+  Session liveness alone cannot establish ownership: an unrelated listener
+  must be refused even while the launched Bun remains alive.
+  This one scan uses privileged Docker exec to read non-dumpable processes'
+  descriptors. It runs only trusted system programs from `/` with the fixed
+  root PATH; it never runs bridge or workspace code. Bridge processes and
+  ordinary token reads gain no capabilities. If descriptor access is denied,
+  recording fails closed. Older launchers without a session report and
+  verifier-only images retain their compatibility behavior without this check.
 - **Every read of a running bridge's token compares the socket.**
   `readContainerBridgeToken` scans in the same root exec that reads the token,
   so it costs no extra exec. Start reuse, the `get_*_server_status` commands,
@@ -111,7 +117,7 @@ socket, not to a port (`container-bridge-listener.ts`):
 - **Replacing stops what listens, whatever its command line.** Besides the
   usual `pkill` of the bridge's pattern, the start runs a scan as `node`, with a
   fixed PATH and no login shell, that stops every process whose descriptors hold
-  the port's socket. Root cannot do this: a container exec has no
+  the port's socket. Ordinary root exec cannot do this: it has no
   `CAP_SYS_PTRACE`, so root cannot read another uid's `/proc/<pid>/fd`. A
   process that made itself non-dumpable hides its descriptors from `node` too;
   if it does not match the bridge's pattern either, it survives and the start

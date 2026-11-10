@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -16,6 +16,8 @@ import {
   type BridgeListenerScan,
 } from "../src/core/container-bridge-listener";
 import { runCommand } from "../src/core/shell";
+
+setDefaultTimeout(30_000);
 
 /** One `ss -Hltne` line, as the scan prefixes it. */
 function socketLine(inode: string, cookie: string, address = "0.0.0.0:4101"): string {
@@ -266,4 +268,89 @@ onLinux("the stop script stops a listener of this uid whatever its command line"
   expect(child.signalCode).toBe("SIGTERM");
   // Nothing left to stop is not an error.
   await sh(stopBridgeListenerScript(port));
+});
+
+onLinux(
+  "a live or stopped Bun in the launch session cannot vouch for an unrelated socket",
+  async () => {
+    const launched = await listeningChild();
+    const imposter = await listeningChild();
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-unrelated-"));
+    directories.push(directory);
+    const record = path.join(directory, "pi-listener");
+    await writeFile(record, "pending\n");
+    for (const stopped of [false, true]) {
+      if (stopped) launched.child.kill("SIGSTOP");
+      const scanned = parseBridgeListenerScan(
+        await sh(bridgeListenerScanScript(imposter.port, record, launched.child.pid!)),
+      );
+      expect(bridgeListenerToRecord(scanned, launched.child.pid!)).toEqual({
+        refused: "launch-exited",
+      });
+      expect(judgeBridgeListener(scanned)).toEqual({ kind: "refused", reason: "pending" });
+    }
+  },
+);
+
+onLinux("a stopped socket owner is refused even though its socket remains bound", async () => {
+  const launched = await listeningChild();
+  launched.child.kill("SIGSTOP");
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ork-stopped-"));
+  directories.push(directory);
+  const scanned = parseBridgeListenerScan(
+    await sh(
+      bridgeListenerScanScript(
+        launched.port,
+        path.join(directory, "pi-listener"),
+        launched.child.pid!,
+      ),
+    ),
+  );
+  expect(scanned.sockets).toHaveLength(1);
+  expect(bridgeListenerToRecord(scanned, launched.child.pid!)).toEqual({
+    refused: "launch-exited",
+  });
+});
+
+onLinux("a zombie Bun retained by a stopped launcher cannot vouch for an imposter", async () => {
+  const imposter = await listeningChild();
+  const launcher = spawn(
+    "sh",
+    [
+      "-c",
+      '\"$1\" -e \'console.log(process.pid); setTimeout(() => process.kill(process.pid, "SIGKILL"), 150);\' & kill -STOP $$; wait',
+      "launcher",
+      process.execPath,
+    ],
+    { detached: true, stdio: ["ignore", "pipe", "inherit"] },
+  );
+  children.push(launcher);
+  const pid = await new Promise<number>((resolve) => {
+    launcher.stdout!.once("data", (data: Buffer) => resolve(Number(String(data).trim())));
+  });
+  try {
+    let zombie = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      if (stat.includes(") Z ")) {
+        zombie = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(zombie).toBe(true);
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-zombie-"));
+    directories.push(directory);
+    const record = path.join(directory, "pi-listener");
+    await writeFile(record, "pending\n");
+    const scanned = parseBridgeListenerScan(
+      await sh(bridgeListenerScanScript(imposter.port, record, launcher.pid!)),
+    );
+    expect(bridgeListenerToRecord(scanned, launcher.pid!)).toEqual({ refused: "launch-exited" });
+    expect(judgeBridgeListener(scanned)).toEqual({ kind: "refused", reason: "pending" });
+  } finally {
+    const exited = new Promise((resolve) => launcher.once("exit", resolve));
+    launcher.kill("SIGCONT");
+    await exited;
+  }
 });

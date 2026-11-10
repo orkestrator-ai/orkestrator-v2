@@ -14,20 +14,10 @@ import { runCommand } from "./shell.js";
  * it hands out a running bridge's token it compares the port's socket with
  * that record. A different socket is refused, and the next start replaces it.
  *
- * The record names the socket, not the process: root in a container has no
- * `CAP_SYS_PTRACE`, so it cannot read another uid's `/proc/<pid>/fd` to map a
- * socket to its pid. `ss -e` reads the socket's inode and its cookie over
- * `sock_diag`, which needs no privilege; the kernel never reuses a cookie
- * while it runs, and a process cannot obtain the bridge's socket (the bridge
- * is non-dumpable, so `pidfd_getfd` is refused, and it opens it close-on-exec).
- *
- * A bridge is recorded only once it answers, so a process that replaced it
- * before then would be recorded instead. The launcher
- * (`docker/orkestrator-bridge-launch.sh`) reports the session it started the
- * bridge in, and a new process cannot join a session: the record is written
- * only while a `bun` in that session is alive. A bridge that exits on a port
- * someone else already holds leaves none. An image whose launcher reports
- * nothing, and a `verifier` image, go without that check.
+ * Reuse compares socket cookies without extra privileges. Initial attribution
+ * also checks the live launch process's descriptors, using a fixed privileged
+ * root exec because bridges are non-dumpable. No agent code runs in that exec.
+ * Stopped and zombie processes cannot vouch for a socket.
  */
 
 /** What a record holds before the bridge it was written for answers. */
@@ -46,7 +36,7 @@ export interface BridgeListenerScan {
   /** The record's content, or null when there is no record. */
   record: string | null;
   sockets: BridgeListenerSocket[];
-  /** Whether a `bun` was alive in the launch session asked about. */
+  /** Whether a running Bun in the launch session owns a scanned socket. */
   launchSessionAlive: boolean;
 }
 
@@ -103,12 +93,30 @@ export function bridgeListenerScanScript(
     launchSession === undefined
       ? ""
       : `
-  # A process's session is field 6 of /proc/<pid>/stat, counted after its name.
-  if cat /proc/[0-9]*/stat 2>/dev/null | awk -v session=${checkedSession(launchSession)} '
-    { line = $0; name = line; sub(/^[0-9]+ \\(/, "", name); sub(/\\) [^)]*$/, "", name)
-      sub(/^.*\\) /, "", line); split(line, field, " ")
-      if (name == "bun" && field[4] == session) found = 1 }
-    END { exit found ? 0 : 1 }'; then printf '${LAUNCH_ALIVE}\\n'; fi`;
+  # Only a running Bun in the launched session holding this exact socket
+  # may vouch for it. Do not confuse a stopped or zombie Bun with its listener.
+  inodes=$(printf '%s\\n' "$sockets" | sed -n 's/.*[[:space:]]ino:\\([0-9][0-9]*\\)[[:space:]].*/\\1/p' | sort -u)
+  candidates=$(cat /proc/[0-9]*/stat 2>/dev/null | awk -v session=${checkedSession(launchSession)} '
+    { name = $0; sub(/^[0-9]+ \\(/, "", name); sub(/\\) [^)]*$/, "", name)
+      line = $0; sub(/^.*\\) /, "", line); split(line, field, " ")
+      if (name == "bun" && field[4] == session && field[1] ~ /^[RSDI]$/)
+        print $1 ":" field[20] }')
+  for candidate in $candidates; do
+    stat_file=/proc/\${candidate%%:*}/stat
+    fd_dir=\${stat_file%/stat}/fd
+    for inode in $inodes; do
+      for fd in "$fd_dir"/*; do
+        target=$(readlink "$fd" 2>/dev/null) || continue
+        [ "$target" = "socket:[$inode]" ] || continue
+        after=$(cat "$stat_file" 2>/dev/null) || continue
+        # Recheck start time and session and reject a process stopped meanwhile.
+        if ! printf '%s\\n' "$after" | awk -v session=${checkedSession(launchSession)} -v start="\${candidate#*:}" '
+          { sub(/^.*\\) /, ""); ok = $1 ~ /^[RSDI]$/ && $4 == session && $20 == start }
+          END { exit ok ? 0 : 1 }'; then continue; fi
+        printf '${LAUNCH_ALIVE}\\n'
+      done
+    done
+  done`;
   return `if [ -f ${quoted(recordFile)} ]; then printf 'listener-record %s\\n' "$(head -c 128 ${quoted(recordFile)} | tr -d ' \\n')"; fi
 if command -v ss >/dev/null 2>&1 && sockets=$(${listeningSocketsCommand(port)}); then
   printf '%s\\n' "$sockets" | sed -n 's/^./listener-socket &/p'${session}
@@ -198,10 +206,24 @@ export function writeBridgeListenerRecordCommand(recordFile: string, value: stri
   return `record_tmp=$(mktemp ${file}.XXXXXX) && printf '%s\\n' '${value}' > "$record_tmp" && mv "$record_tmp" ${file}`;
 }
 
-async function rootExec(containerId: string, script: string): Promise<string> {
+async function rootExec(
+  containerId: string,
+  script: string,
+  inspectOwnership = false,
+): Promise<string> {
   const { stdout } = await runCommand(
     "docker",
-    ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "sh", "-c", script],
+    [
+      "exec",
+      ...(inspectOwnership ? ["--privileged"] : []),
+      ...CONTAINER_ROOT_USER_ARGS,
+      "--workdir",
+      "/",
+      containerId,
+      "sh",
+      "-c",
+      script,
+    ],
     { timeoutMs: 30_000 },
   );
   return stdout;
@@ -229,7 +251,11 @@ export async function recordContainerBridgeListener(
   launchSession?: number,
 ): Promise<{ refused?: BridgeListenerRecordRefusal }> {
   const scan = parseBridgeListenerScan(
-    await rootExec(containerId, bridgeListenerScanScript(port, recordFile, launchSession)),
+    await rootExec(
+      containerId,
+      bridgeListenerScanScript(port, recordFile, launchSession),
+      launchSession !== undefined,
+    ),
   );
   const result = bridgeListenerToRecord(scan, launchSession);
   if ("refused" in result) return { refused: result.refused };

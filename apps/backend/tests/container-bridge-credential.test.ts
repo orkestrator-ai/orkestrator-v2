@@ -624,6 +624,21 @@ describe("the listener on a bridge's port", () => {
     );
   });
 
+  test("failed adoption refuses the token without falling back for status, reuse and peek readers", async () => {
+    await withDocker(
+      {
+        FAKE_ROOT_TOKEN: `${TOKEN}\n`,
+        FAKE_NODE_TOKEN: TOKEN,
+        FAKE_LISTENER: listenerScan("7", "a1"),
+        FAKE_DOCKER_FAIL: "record_tmp=",
+      },
+      async (read) => {
+        expect(await readContainerBridgeToken("container", "grok")).toBeNull();
+        expect((await read()).argv.some((line) => line.includes("cat /tmp/"))).toBe(false);
+      },
+    );
+  });
+
   test("OpenCode, which has no bridge of ours, is read as before", async () => {
     await withDocker({ FAKE_ROOT_TOKEN: "r".repeat(43), FAKE_LISTENER: "" }, async (read) => {
       expect(await readContainerBridgeToken("container", "opencode")).toBe("r".repeat(43));
@@ -670,8 +685,13 @@ describe("the listener on a bridge's port", () => {
 
   /** A container whose bridge answers once the launcher ran, with `listener` as root's scan. */
   async function startPi(listener: string) {
-    const hostPort = await reserveFreePort();
-    let bridge: ReturnType<typeof Bun.serve> | undefined;
+    let ready = false;
+    const bridge = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("{}", { status: ready ? 200 : 503 }),
+    });
+    const hostPort = bridge.port;
     const script = `#!/bin/sh
 case "$1" in
   inspect) printf 'running\\n'; exit 0 ;;
@@ -693,13 +713,7 @@ exit 0
     await withFakeDocker(script, async (logs) => {
       const arrive = setInterval(async () => {
         const log = await fs.readFile(logs.exec, "utf8").catch(() => "");
-        if (!bridge && log.includes(CONTAINER_BRIDGE_LAUNCHER)) {
-          bridge = Bun.serve({
-            port: hostPort,
-            hostname: "127.0.0.1",
-            fetch: () => new Response("{}"),
-          });
-        }
+        if (log.includes(CONTAINER_BRIDGE_LAUNCHER)) ready = true;
       }, 50);
       const launch = containerBridgeLaunch("pi", "launcher", TOKEN);
       try {
@@ -727,6 +741,7 @@ exit 0
     expect(outcome).toMatchObject({ wasRunning: false });
     const scan = argv.find((entry) => entry.includes("ss -Hltne") && entry.includes("--user root"));
     expect(scan).toContain("-v session=4242");
+    expect(scan).toContain("--privileged");
     expect(argv.some((entry) => entry.includes(`'31:4f' > "$record_tmp"`))).toBe(true);
   });
 
@@ -735,6 +750,8 @@ exit 0
     expect(outcome).toBeInstanceOf(Error);
     expect((outcome as Error).message).toContain("held by a process the backend did not start");
     expect((outcome as Error).message).not.toContain(TOKEN);
+    expect((outcome as Error).message).toContain("cleanup was attempted");
+    expect((outcome as Error).message).not.toContain("it was stopped");
     expect(argv.some((entry) => entry.includes("'31:4f'"))).toBe(false);
     // The stop runs as node, without a login shell, against the port.
     const stop = argv.find(

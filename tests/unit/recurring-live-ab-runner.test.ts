@@ -162,6 +162,32 @@ describe("live benchmark lifecycle", () => {
     expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
   });
 
+  test("a checkout's busy phase drives that checkout's CLI, which an older backend accepts", async () => {
+    const h = harness();
+    const readStatus = h.runtime.readStatus;
+    h.runtime.readStatus = ((...args: Parameters<typeof readStatus>) => {
+      const current = readStatus(...args);
+      return current?.status === "ready" ? { ...current, dataDir: "/stub/data" } : current;
+    }) as typeof readStatus;
+    const asyncCli = mock(() => async () => ({ status: 0, stdout: "{}" })) as never;
+    h.runtime.asyncCliRunner = asyncCli;
+    h.runtime.busyClients = (() => ({ open: async () => [], close: async () => {} })) as never;
+    h.runtime.measureBusy = mock(async () => ({ windowSamples: [] })) as never;
+    const checkout = "/work/base";
+    const result = await runArm(
+      { ...options(), checkout, busyRounds: 1, busyClients: [0] },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "busy-checkout",
+      h.runtime,
+    );
+    expect(result.error).toBeUndefined();
+    expect(h.runtime.measureBusy).toHaveBeenCalledTimes(1);
+    expect(asyncCli).toHaveBeenCalledWith(result.profile, expect.any(String), checkout);
+  });
+
   test("launcher, mise and both CLI processes use checkout cwd and process-scoped mise trust", async () => {
     const checkout = temporary();
     const child = Object.assign(new EventEmitter(), {

@@ -1199,6 +1199,109 @@ their timing-dependent totals are not WEB-3's refetch cost. The two list
 hydrators are all that remain at the 1202 baseline commit; the original
 report's third list had already been removed there.
 
+#### A claude-tmux tab in a container, and per-item counts on a busy profile
+
+Two drivers took 1202 task 1's Linux counts on 2026-11-10; both read a
+running credential-free profile and record kinds, counts and durations only.
+
+`scripts/container-tmux-tab-live.ts` opens one claude-tmux tab on the
+profile's container fixture environment. Its model is
+`e2e/agent-testing/container-fake-claude-api.ts`, run by the container's own
+Bun on the container's loopback and named in the container's
+`~/.claude/settings.json` (`container-fake-claude-install.ts`), so the image's
+real `claude` takes turns with no login. It measures five windows (no tab; the
+idle tab before its first prompt, when no transcript exists; three queued
+turns; the idle tab with its transcript bound; the container stopped with
+`docker stop` behind the app's back) and, for each, both the backend's
+`recurringWork` counters and every `docker exec` Docker itself reports for
+the container (`docker events --filter event=exec_start`), labelled by
+program only. Use Docker's count to compare commits: the claude-tmux tab
+loop has no recurring kind on any commit so far (`tmux-poll` is the
+per-container Claude state poll), and an older backend leaves more loops
+uncounted. Afterwards it starts the container again, removes the fake model
+and stops the tab.
+
+`scripts/busy-item-counts-live.ts` runs on a profile the 0048 busy driver
+filled and kept (`recurring-live-ab.ts --busy-rounds 3 --busy-clients 0
+--keep-profiles`), restarted with the same `dev:test` flags. It reads two
+windows: everything running, then every `busy-*` environment stopped through
+the public `environment.stop` action (so the presence pass meets stopped
+environments that own mailboxes), and starts them again.
+
+```bash
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ctab --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/container-tmux-tab-live.ts --profile ctab \
+  --out output/benchmarks/ctab.json
+mise run dev:stop --profile ctab && mise run dev:reset --profile ctab
+
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise exec -- bun scripts/recurring-live-ab.ts \
+  --arms candidate --busy-rounds 3 --busy-clients 0 --busy-environments 10 \
+  --fixture-environments local --agent-platforms pi --freshness-probes 0 \
+  --keep-profiles --profile-prefix busy --out output/benchmarks/busy.json
+mise run dev:test --profile <the kept profile> --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms pi --headless
+mise exec -- bun scripts/busy-item-counts-live.ts --profile <the kept profile> \
+  --out output/benchmarks/items.json
+```
+
+The busy driver needs `packages/cli/dist` (`bun run --cwd packages/cli
+build`) in whichever checkout runs the profile; with `--checkout` its busy
+phase uses that checkout's CLI, because today's CLI refuses a backend that
+publishes no Linux process identity. A launcher older than `--headless`
+shows its window on the signed-in desktop. On Linux keep it off with a
+two-line `electron` wrapper that `exec`s the checkout's own Electron binary
+with the switches in `HEADLESS_ELECTRON_SWITCHES`
+(`apps/desktop/electron/runtime-profile.ts`) and no `DISPLAY` or
+`WAYLAND_DISPLAY`, named by `ELECTRON_OVERRIDE_DIST_PATH` for that launcher
+(`bun install.js` in its `electron` package first if `dist/` is missing).
+Run `dev:stop` and `dev:reset` for such a profile from its own checkout.
+
+`container-tmux-tab-live.ts` also records each container change signal's
+state and rings (`tmux-hook-signal` is the claude-tmux doorbell) either side
+of every window. To see the doorbell confirmed on a Linux host whose own
+Docker cannot reach the host, run the same profile on a disposable rootless
+daemon with host loopback: its containers reach the backend through
+`10.0.2.2`, and the app's on-demand reachability check names that address
+on the first container create even with the boot check off.
+
+```bash
+mise run docker:build:dev --profile ctab        # with the qualification shim, as above
+mise run docker:disposable -- start --name ctab --host-loopback \
+  --image orkestrator-v2:dev-<hash>             # the tag docker:build:dev printed
+eval "$(mise run docker:disposable -- env --name ctab)"
+# then the same dev:test, container-tmux-tab-live.ts, dev:stop and dev:reset
+# commands as above, in this shell, so the profile and the driver use that daemon
+mise run docker:disposable -- stop --name ctab
+```
+
+`scripts/human-prompt-reads-live.ts` measures BG-9: one native Claude
+session started through the profile's CLI (`--checkout` for an older
+commit's), the profile's isolated Claude directory pointed at the loopback
+fake Anthropic model, no browser, then 60 s idle and 180 s with a turn held
+at the model. The human-prompt monitor's bridge reads are the unattributed
+`provider-request` counter; the artifact also has each kind's provider
+requests a minute.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile bg9 --fixture \
+  --fixture-environments local --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/human-prompt-reads-live.ts --profile bg9 \
+  --out output/benchmarks/bg9.json
+```
+
+A launch with a cold toolchain page cache needs no root on Linux: with the
+profile stopped, `find <dataDir>/toolchains -type f -exec dd if={} iflag=nocache count=0 status=none \;`
+evicts the toolchain's pages, and `fincore -b` on the same files confirms
+nothing is resident. Delete `<dataDir>/toolchains/.verified-stamps.json` as
+well for a full check. Time the `dev:test` start to its `Live` line (the
+launcher runs the toolchain step before Electron) and read Electron's
+`[toolchain] prepare.ready durationMs` from the profile's `logs/electron.log`,
+which is rewritten on every start.
+
 #### Image and layer sizes
 
 `scripts/docker-image-layers.ts` measures an image on whatever Docker the host

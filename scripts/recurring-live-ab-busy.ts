@@ -458,6 +458,26 @@ function cliJson(result: CliResult): unknown {
   }
 }
 
+/**
+ * Why a CLI call gave no usable answer, without its output: the exit status
+ * and the error code of its JSON envelope, or how many items it listed.
+ */
+export function cliFailure(result: CliResult): string {
+  let code = "no JSON";
+  try {
+    const envelope = JSON.parse(result.stdout) as {
+      error?: { code?: unknown };
+      result?: { items?: unknown };
+    };
+    if (typeof envelope.error?.code === "string") code = envelope.error.code;
+    else if (Array.isArray(envelope.result?.items)) code = `${envelope.result.items.length} listed`;
+    else code = "no error code";
+  } catch {
+    // Not JSON: keep "no JSON".
+  }
+  return `exit ${result.status ?? "signal"}, ${code}`;
+}
+
 /** The session and tab a `session start` reported, from its result or (Pi) its receipt. */
 function startedSession(result: CliResult): { sessionId: string; tabId: string } | null {
   try {
@@ -632,7 +652,9 @@ export async function measureBusy(
       .map((raw) => raw as Record<string, unknown>)
       .find((entry) => entry.environmentType === "local" && entry.ready === true);
     if (!fixture || typeof fixture.id !== "string" || typeof fixture.projectId !== "string")
-      throw new Error("The busy phase needs the fixture's ready local environment");
+      throw new Error(
+        `The busy phase needs the fixture's ready local environment (${cliFailure(listing)})`,
+      );
     const projectId = fixture.projectId;
     const refreshed = await cli(
       ["agent", "options", "--environment", fixture.id, "--refresh", "--json"],

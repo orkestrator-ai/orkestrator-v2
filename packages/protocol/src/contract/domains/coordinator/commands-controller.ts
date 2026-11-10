@@ -545,6 +545,26 @@ export const assertCoordinatorEnvironmentScopeCommand = defineCommand({
   critical: [],
 });
 
+/**
+ * A coordinator's call naming a node was refused because the node is not
+ * connected. Nothing is queued: the backend remembers the attempt (in memory,
+ * bounded) and wakes that conversation once when the node reconnects, so it
+ * can retry from a fresh base (`coordinator-node-reconnect-wakes.ts`).
+ */
+export const noteCoordinatorNodeUnavailableCommand = defineCommand({
+  domain: coordinatorDomain,
+  name: "note_coordinator_node_unavailable",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    scope: arg,
+    nodeId: arg,
+  }),
+  result: Schema.Struct({ noted: Schema.Boolean }),
+  critical: [],
+});
+
 /** Mail from a coordinator to an agent, or the coordinator, on a node. */
 export const sendCoordinatorNodeMailCommand = defineCommand({
   domain: coordinatorDomain,
@@ -701,6 +721,7 @@ export const COORDINATOR_CONTROLLER_COMMANDS = [
   assertCoordinatorNodeDelegationAvailableCommand,
   openCoordinatorNodeDelegationCommand,
   assertCoordinatorEnvironmentScopeCommand,
+  noteCoordinatorNodeUnavailableCommand,
   sendCoordinatorNodeMailCommand,
   transferCoordinatorAttachmentsCommand,
   getCoordinatorNodeMailboxCommand,

@@ -144,7 +144,7 @@ async function remoteNode(
   nodeId: string | undefined,
 ): Promise<CoordinatorNodeTarget | undefined> {
   return nodeId && (await context.nodes?.status())?.nodeId !== nodeId
-    ? coordinatorNodeTarget(context, caller.projectId, nodeId)
+    ? coordinatorNodeTarget(context, caller, nodeId)
     : undefined;
 }
 

@@ -12,7 +12,9 @@ import { CommandFailedError } from "./shell.js";
  * bubblewrap, and Linux hosts whose bubblewrap cannot run) cannot: its command
  * hook refuses every Git command, because a repository's Git configuration can
  * run helpers. The backend already runs Git in the environment to build the
- * package, so it writes the same bytes once here and the reviewer reads them.
+ * package, so it writes the same UTF-8 bytes once here and the reviewer reads them.
+ * Output containing a replacement character is omitted with a limitation: the
+ * text runner may have replaced invalid UTF-8 before this helper received it.
  *
  * Never fatal. A diff that is too large, or that Git or the write could not
  * produce, leaves the package without the file and adds a limitation saying
@@ -46,7 +48,13 @@ export async function sealReviewDiff(input: {
   const maxBytes = input.maxBytes ?? MAX_REVIEW_DIFF_ARTIFACT_BYTES;
   let contents: Buffer;
   try {
-    contents = Buffer.from(await input.diff(), "utf8");
+    const text = await input.diff();
+    if (text.includes("\uFFFD")) {
+      return {
+        limitation: `The reviewed diff contains a UTF-8 replacement character and cannot be sealed faithfully, so ${UNREADABLE}`,
+      };
+    }
+    contents = Buffer.from(text, "utf8");
   } catch (error) {
     if (error instanceof CommandFailedError && error.outputLimitExceeded) {
       return { limitation: tooLarge(maxBytes) };

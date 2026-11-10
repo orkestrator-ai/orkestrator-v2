@@ -1348,8 +1348,9 @@ and digest with the package before each reviewer is dispatched. The
 reviewer instructions say to read that file when the session refuses Git. A
 diff over 16 MiB, or one Git or the write could not produce, is left out
 and the package's limitations say so; the review itself never fails for
-it. The file is decoded and re-encoded as UTF-8, so bytes that are not
-UTF-8 show as replacement characters.
+it. The runner decodes the output as UTF-8. If it contains a replacement
+character (including a literal U+FFFD), the backend leaves the artifact out
+and records a fidelity limitation instead of sealing potentially altered bytes.
 
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of

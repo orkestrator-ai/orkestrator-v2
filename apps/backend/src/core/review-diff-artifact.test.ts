@@ -6,7 +6,12 @@ import path from "node:path";
 import { reviewDiffArtifactPath } from "@orkestrator/protocol/review-artifacts";
 import { isReviewPackage, type ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import { BackendRuntime } from "./backend-runtime.js";
-import { generateReviewPackage, verifyEnvironmentReviewPackage } from "./commands-review.js";
+import {
+  generateReviewPackage,
+  verifyEnvironmentReviewPackage,
+  readEnvironmentWorkspaceFile,
+  writeEnvironmentReviewArtifact,
+} from "./commands-review.js";
 import {
   reviewDiffArgs,
   sealReviewDiff,
@@ -255,4 +260,86 @@ describe("review package diff artifact", () => {
     expect(verification.valid).toBe(false);
     expect(verification.reason).toContain("Review diff byte count changed");
   });
+});
+
+test("non-UTF-8 Git output is omitted with an explicit fidelity limitation", async () => {
+  const { worktree, context } = await reviewedEnvironment();
+  await fs.writeFile(path.join(worktree, "latin.txt"), Buffer.from([0xe9, 10]));
+  await git(worktree, "add", "latin.txt");
+  await git(worktree, "commit", "-m", "non UTF-8 fixture");
+  const reference = await generateReviewPackage("env-1", "latin", 1, "main", [], [], [], context);
+  const written = JSON.parse(
+    await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+  ) as ReviewPackage;
+  expect(written.diffArtifact).toBeUndefined();
+  expect(written.limitations.some((entry) => entry.includes("cannot be sealed faithfully"))).toBe(
+    true,
+  );
+});
+
+test("container artifact verification reads exact decoded bytes and rejects substituted paths", async () => {
+  const contents = Buffer.from("diff\n+container\n");
+  const artifact = {
+    path: reviewDiffArtifactPath("container", sha(contents)),
+    bytes: contents.length,
+    sha256: sha(contents),
+  };
+  const environment = { environmentType: "container", containerId: "fixture-only" } as never;
+  const calls: string[] = [];
+  const runner = async (command: string, args: string[]) => {
+    calls.push(command);
+    expect(args).toContain(`/workspace/${artifact.path}`);
+    return command === "realpath" ? `/workspace/${artifact.path}\n` : contents.toString("base64");
+  };
+  expect(
+    await verifyReviewDiffArtifact(artifact, (file) =>
+      readEnvironmentWorkspaceFile(environment, runner, file),
+    ),
+  ).toBeUndefined();
+  expect(calls).toEqual(["realpath", "base64"]);
+  await expect(
+    readEnvironmentWorkspaceFile(environment, async () => "/elsewhere", artifact.path),
+  ).rejects.toThrow("symbolic links");
+});
+
+test("container artifact writes preserve bytes, mode and exclusion before publication", async () => {
+  const contents = Buffer.from("diff\n+container\n");
+  const file = reviewDiffArtifactPath("container", sha(contents));
+  const environment = { environmentType: "container", containerId: "fixture-only" } as never;
+  const commands: string[] = [];
+  let writes = 0;
+  const runner = async (command: string) => {
+    commands.push(command);
+    return "";
+  };
+  const run = (async (command: string, args: string[], options: { stdin: string }) => {
+    writes++;
+    expect(command).toBe("docker");
+    expect(args.slice(0, 4)).toEqual(["exec", "-i", "fixture-only", "node"]);
+    expect(args.slice(-6)).toEqual([
+      ".orkestrator/review-artifacts/container",
+      path.posix.basename(file),
+      String(contents.length),
+      "",
+      "overwrite",
+      String(0o444),
+    ]);
+    expect(Buffer.from(options.stdin, "base64")).toEqual(contents);
+    return { stdout: "", stderr: "" };
+  }) as never;
+  await writeEnvironmentReviewArtifact(environment, runner, file, contents, { run });
+  expect(commands).toEqual(["bash", "git"]);
+  expect(writes).toBe(1);
+  await expect(
+    writeEnvironmentReviewArtifact(
+      environment,
+      async () => {
+        throw new Error("exclusion failed");
+      },
+      file,
+      contents,
+      { run },
+    ),
+  ).rejects.toThrow("exclusion failed");
+  expect(writes).toBe(1);
 });

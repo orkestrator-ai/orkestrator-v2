@@ -1,4 +1,7 @@
-import { installFakeClaudeApiFixture } from "./container-fake-claude-install";
+import {
+  installFakeClaudeApiFixture,
+  REVIEW_QUALIFICATION_COMMIT,
+} from "./container-fake-claude-install";
 import { expect, test, type TestInfo, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -106,7 +109,27 @@ async function installFakeReviewApi(containerId: string): Promise<() => void> {
     },
   });
   let serverPid = "";
-  const undoInstall = await installFakeClaudeApiFixture({
+  return installFakeClaudeApiFixture({
+    installAdditional: () => {
+      docker(
+        [
+          "exec",
+          "-i",
+          "--user",
+          "root",
+          containerId,
+          "sh",
+          "-c",
+          `mkdir -p ${path.posix.dirname(MANAGED_SETTINGS)} && cat > ${MANAGED_SETTINGS} && chmod 644 ${MANAGED_SETTINGS}`,
+        ],
+        managed,
+      );
+    },
+    undoAdditional: () => {
+      spawnSync("docker", ["exec", "--user", "root", containerId, "rm", "-f", MANAGED_SETTINGS], {
+        timeout: 15_000,
+      });
+    },
     asNode,
     startServer: (args) => {
       // Recorded at spawn, so cleanup signals exactly this process.
@@ -150,25 +173,6 @@ async function installFakeReviewApi(containerId: string): Promise<() => void> {
         .toBe(0);
     },
   });
-  docker(
-    [
-      "exec",
-      "-i",
-      "--user",
-      "root",
-      containerId,
-      "sh",
-      "-c",
-      `mkdir -p ${path.posix.dirname(MANAGED_SETTINGS)} && cat > ${MANAGED_SETTINGS} && chmod 644 ${MANAGED_SETTINGS}`,
-    ],
-    managed,
-  );
-  return () => {
-    spawnSync("docker", ["exec", "--user", "root", containerId, "rm", "-f", MANAGED_SETTINGS], {
-      timeout: 15_000,
-    });
-    undoInstall();
-  };
 }
 
 function stepLog(containerId: string): StepRecord[] {
@@ -227,7 +231,7 @@ test("Docker fixture Multi Review with Claude read-only reviewers runs without t
       containerId,
       "sh",
       "-c",
-      'printf "# Read-only review qualification\\n" > qa-0190.md && git add qa-0190.md && git -c user.name=QA -c user.email=qa@example.invalid commit -qm "Add read-only review qualification note"',
+      REVIEW_QUALIFICATION_COMMIT,
     ]);
     const reviewer = { agent: "claude", model: "haiku" };
     const started = await invoke<MultiReviewWorkflow>("start_multi_review", {

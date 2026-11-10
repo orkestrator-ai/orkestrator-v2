@@ -55,6 +55,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/unit/pi-bridge-vendor.test.ts",
     "tests/unit/playwright-spec-loading.test.ts",
     "tests/unit/release/release-desktop.test.ts",
+    // Runs the real Linux-builder script in bash against a local Git origin.
+    "tests/unit/release/release-linux-remote-script.test.ts",
     "tests/unit/run-logged.test.ts",
     "tests/unit/runtime-env-wiring.test.ts",
     "tests/unit/test-all.test.ts",

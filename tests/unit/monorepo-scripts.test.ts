@@ -5,7 +5,7 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
-type MiseTask = { run?: string | string[]; env?: Record<string, string> };
+type MiseTask = { run?: string | string[]; env?: Record<string, string>; raw_args?: boolean };
 const miseTasks = () =>
   (Bun.TOML.parse(read("mise.toml")) as { tasks: Record<string, MiseTask> }).tasks;
 const BRIDGE_MANIFESTS = [
@@ -332,6 +332,13 @@ describe("monorepo orchestration scripts", () => {
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
       "Bun.resolveSync(specifier, directory)",
     );
+  });
+
+  test("the Linux release build runs from the Mac through release:linux", () => {
+    const tasks = miseTasks();
+    expect(tasks["release:linux"]?.run).toBe("bun scripts/release-linux-remote.ts");
+    // Its mode and flags are passed straight through to the script.
+    expect(tasks["release:linux"]?.raw_args).toBe(true);
   });
 
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {

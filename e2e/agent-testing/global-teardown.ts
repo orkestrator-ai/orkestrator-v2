@@ -9,7 +9,7 @@ const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 
 /** Redacts one suite's artifacts under `output/agent-testing/<run>/<suite>`. */
 export async function sanitizeRunArtifacts(
-  suite: "browser" | "coordinator" | "goals",
+  suite: "browser" | "coordinator" | "goals" | "auto-pipeline",
 ): Promise<void> {
   const statusResult = spawnSync(
     "bun",

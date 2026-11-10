@@ -1,3 +1,5 @@
+import { listen } from "@/lib/native/events";
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "@orkestrator/protocol/agent-account-shared-usage";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
@@ -159,6 +161,39 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("a reading event refreshes only its login and uses retained readings", async () => {
+    const handlers = new Set<(event: { payload: unknown }) => void>();
+    (listen as ReturnType<typeof mock>).mockImplementation(
+      async (event: string, handler: (event: { payload: unknown }) => void) => {
+        if (event === AGENT_USAGE_READINGS_CHANGED_EVENT) handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    );
+    await mount();
+    await screen.findAllByText("40% used");
+    calls.length = 0;
+    usageResult = {
+      ...usage,
+      windows: [{ window: "primary", label: "5-hour limit", usedPercent: 92 }],
+    };
+    await act(async () => {
+      for (const handler of handlers)
+        handler({
+          payload: { platform: "codex", origin: "shared", emails: ["second@example.com"] },
+        });
+    });
+    await screen.findByText("92% used");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toEqual([
+      {
+        command: "get_agent_account_usage",
+        args: { platform: "codex", accountId: ADDED_ID, cacheOnly: true },
+      },
+    ]);
+    expect(
+      within(screen.getByRole("listitem", { name: "Host login" })).getByText("40% used"),
+    ).toBeTruthy();
+  });
+
   test("removes an inactive saved twin while the host login stays active", async () => {
     snapshot.accounts[2] = { ...snapshot.accounts[2]!, identity: { email: "HOST@example.com" } };
     await mount();
@@ -279,10 +314,39 @@ describe("AgentAccountsSection", () => {
     for (const name of ["Host login", "second@example.com"]) {
       const row = await screen.findByRole("listitem", { name });
       expect(await within(row).findByText("40% used")).toBeTruthy();
-      expect(
-        within(row).getByText(/Last known usage, as of 1h ago\. Sign-in expired/),
-      ).toBeTruthy();
+      const age = within(row).getByTestId("usage-reading-age");
+      expect(age.textContent).toMatch(/Updated .+ \(1h ago\)/);
+      expect(within(age).getByText("Stale")).toBeTruthy();
+      expect(within(row).getByText(/Sign-in expired/)).toBeTruthy();
+      expect(within(row).getByTestId("usage-reading-bars").getAttribute("data-stale")).toBe("true");
     }
+  });
+
+  test("a row shows a reading another machine took of the same login, and when", async () => {
+    usageResult = {
+      ...usage,
+      fetchedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      readOn: { nodeId: "bk_beelink", nodeName: "beelink" },
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    const age = await within(row).findByTestId("usage-reading-age");
+    expect(age.textContent).toMatch(/^Updated .+ \(2m ago\) on beelink$/);
+    expect(age.getAttribute("data-stale")).toBe("false");
+  });
+
+  test("a row whose usage was never read says so", async () => {
+    usageResult = {
+      platform: "codex",
+      status: "unavailable",
+      windows: [],
+      message: "This account's sign-in is refreshed while it is in use.",
+      fetchedAt: new Date().toISOString(),
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(await within(row).findByText("Usage has not been read yet.")).toBeTruthy();
+    expect(within(row).getByText(/refreshed while it is in use/)).toBeTruthy();
   });
 
   test("lists only this platform's accounts with their identity and usage", async () => {

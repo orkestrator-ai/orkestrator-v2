@@ -474,6 +474,7 @@ describe("claudeAccountLoginState", () => {
       signedIn: true,
       identity: { email: "me@example.com", organizationName: "Org", plan: "max" },
       identityKey: "claude:acct:org",
+      organizationId: "org",
     });
   });
 
@@ -509,6 +510,7 @@ describe("codexAccountLoginState", () => {
       signedIn: true,
       identity: { email: "me@example.com", plan: "pro" },
       identityKey: "codex:acct:me@example.com",
+      organizationId: "acct",
     });
   });
 

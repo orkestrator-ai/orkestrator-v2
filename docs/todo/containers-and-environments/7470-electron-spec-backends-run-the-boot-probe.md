@@ -2,13 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-06 against main at `c1724ab74`. Found while working on
+Analysed 2026-11-06 against main at `c1724ab74`; re-analysed and both tasks
+done 2026-11-09 against main at `c6de4733c`. Found while working on
 [7041](7041-manual-docker-profiles-on-exhausted-pools.md) task 2.
 
 ### Tasks
 
-1. **Decide whether disposable Electron spec backends skip the boot probe**: open.
-2. **Make a leaked probe network traceable to the run that created it**: open.
+1. **Decide whether disposable Electron spec backends skip the boot probe**: done (2026-11-09).
+2. **Make a leaked probe network traceable to the run that created it**: done (2026-11-09).
 
 ### 1. Decide whether disposable Electron spec backends skip the boot probe
 
@@ -82,7 +83,16 @@ but could not name the harness.
 they must not carry a path, a user name or anything secret. Backend logs under
 a temporary data directory are deleted with it.
 
-**Investigation.** Not started.
+**Investigation.** Done 2026-11-09. `probeLabels()` is the single place the
+probe network and each probe container get their labels (`network create` and
+`docker run`), so one optional dependency covers both. The backend already
+knows its runtime flavor (`production`, `development`, `agent-test`) and its
+data directory, which is enough to tell a temporary one (under `os.tmpdir()`
+or `/tmp`) from a profile's or production's without writing a path into the
+label. `docker network ls --format '{{.Label "<key>"}}'` reads the value
+(checked on beelink's daemon, where unlabelled networks print an empty
+string), so `disk:report` can count by it. `docker events` for a network
+create carries the name but not the labels.
 
 **Decisions.**
 
@@ -105,6 +115,79 @@ Chose to carry the failed or timed-out network-create path from 7041 into this
 follow-up. The historical source is unproven; disabling the probe avoids its
 network creation in disposable backends, but does not repair that cleanup path
 for backends that still run the probe.
+
+### Task 1: every Electron launch builds its env through one helper (2026-11-09)
+
+Chose the recommended option. `electronSpecEnvironment(base, overrides)`
+(`e2e/agent-testing/electron-spec-environment.ts`) copies `base`, applies
+`overrides` (an `undefined` override removes a variable, which replaces the
+specs' own `ELECTRON_RUN_AS_NODE` filters), and sets
+`ORKESTRATOR_HOST_REACHABILITY_CHECK` to the override's value or `off`. A
+value inherited from the runner's own environment is ignored, as the CLI
+scenario helper (`provider-homes.ts`) does, so a shell that happens to carry
+the variable cannot turn the probe back on. `packagedLaunchEnvironment` calls
+it, so the packaged specs are covered too.
+
+All 26 Electron launches under `e2e/agent-testing/` use it: Playwright's
+`electron.launch` in every spec and helper, including the fake-main launches
+that start no backend and the three that passed no `env` at all (which
+inherited the runner's environment), plus the two bare
+`spawn(electronExecutable, …)` launches (the local-gateway CPU spec through
+`local-gateway-transport-stack.ts`, and the renderer-log-boundary lifecycle
+fixture). Covering the fake mains costs nothing and keeps the guard simple.
+`tests/unit/electron-spec-environment.test.ts` scans the directory and fails
+on a launch whose `env` is not built by `electronSpecEnvironment(` or
+`packagedLaunchEnvironment(`, so a new spec cannot repeat the leak.
+
+No spec keeps the probe on. That gives up live coverage of the startup
+dialog in Electron; the dialog is covered by
+`ContainerHostReachabilityNotice.test.tsx` and the browser specs that close
+it, and `dismissStartupDialogs` still closes it for a spec that passes `on`.
+Keeping one Electron spec on would have kept one probe network per run of
+that spec. The specs that already set `off` with a reason
+(`renderer-log-boundary-electron`, `service-preview-electron-launch.ts`) keep
+their explicit value and comment; the others' duplicate `off` was removed.
+The testing guide's disposable-backends paragraph now describes the helper.
+
+Evidence: on beelink, `design-canvas-electron.spec.ts` through
+`playwright.electron-headless.config.ts` with
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, no display variables and the
+scoped Docker shim on `PATH` (so a probe could have created its network on
+the exhausted pools) passed in 48 s (1 expected, 0 unexpected). A
+`docker events` watcher for network creates, running from before the launch
+to after it, recorded none; a network this work then created and removed
+(`todo7470-watcher-check`) did appear, so the watcher was live.
+
+The failed or timed-out network-create path carried over from 7041 is not
+changed: disabling the probe removes it for Electron spec backends, and a
+backend that still runs the probe now labels what it creates (task 2), so a
+leak from that path can at least be attributed. No live run reproduced it.
+
+### Task 2: a coarse `orkestrator-creator` label (2026-11-09)
+
+Chose the recommended option. Probe networks and probe containers carry
+`orkestrator-creator=<runtime flavor>/<temporary|persistent>`
+(`DOCKER_LABEL_CREATOR`; value from `probeCreator` in
+`apps/backend/src/core/container-host-reachability-creator.ts`), for example
+`agent-test/temporary`. The value comes from a fixed set of six, never a path,
+a user name or a spec name, because anyone who can reach the daemon can read
+labels. "Temporary" means the data directory resolves, by path or real path,
+under `os.tmpdir()` or `/tmp`. The service leaves the label off when it is
+given no creator, so test fakes and older call sites are unchanged; the
+reaper and the sweep still select by owner and role, so unlabelled networks
+from before this change are found exactly as before.
+
+`disk:report`'s probe-network row now counts the stale networks by creator
+(`… (by creator: agent-test/temporary 1, unlabelled 1)`); a label value that
+is not one a backend writes is counted as `unlabelled` rather than echoed.
+`disk-usage.md` documents the label. Tests: `probeCreator` and
+`isTemporaryDataDir` (including symlinked roots and prefix-only siblings),
+the label on every `network create` and `docker run` of a check, its absence
+with no creator, and the report's parsing and counts.
+
+Not done live: a backend with the probe on was not run to show the label on a
+real network, because this work's constraints keep the probe off for app runs.
+The unit tests assert the exact Docker arguments.
 
 ## Related
 

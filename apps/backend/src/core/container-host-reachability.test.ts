@@ -665,6 +665,27 @@ describe("ContainerHostReachabilityService.check", () => {
     expect(warnings()).toEqual([]);
   });
 
+  test("probe networks and containers carry the content-free creator label", async () => {
+    const labelled = service({ creator: "agent-test/temporary" });
+    await labelled.svc.check("boot");
+    const created = labelled.runner.calls.filter(
+      (call) => (call[1] === "network" && call[2] === "create") || call[1] === "run",
+    );
+    expect(created.length).toBeGreaterThan(1);
+    for (const call of created) {
+      expect(call).toContain("orkestrator-owner=owner");
+      expect(call).toContain("orkestrator-resource-role=host-reachability-probe");
+      expect(call).toContain("orkestrator-creator=agent-test/temporary");
+    }
+
+    // A backend that names no creator adds no label at all.
+    const unlabelled = service();
+    await unlabelled.svc.check("boot");
+    expect(
+      unlabelled.runner.calls.flat().some((part) => part.includes("orkestrator-creator")),
+    ).toBe(false);
+  });
+
   test("a block on per-environment networks only is still a block", async () => {
     const { svc } = service({
       runner: fakeRunner({

@@ -265,6 +265,23 @@ test("the limits view asks each enabled platform for its plan", async () => {
   expect(screen.getAllByRole("region", { name: "Plan usage" }).length).toBeGreaterThan(0);
 });
 
+test("unavailable plans in Usage limits explicitly say they have never been read", async () => {
+  spyOn(backend, "getPlanUsage").mockResolvedValue({
+    platform: "claude",
+    status: "unavailable",
+    windows: [],
+    fetchedAt: new Date().toISOString(),
+    message: "Sign in to read usage.",
+  });
+  renderInAppCommandScope(<UsageSettings />);
+  await headline();
+  fireEvent.click(screen.getByRole("button", { name: "Limits" }));
+  await waitFor(() =>
+    expect(screen.getAllByText("Usage has not been read yet.").length).toBeGreaterThan(0),
+  );
+  expect(screen.queryByText(/^Updated /) === null).toBe(true);
+});
+
 test("a failed refresh keeps the report that was already on screen", async () => {
   renderInAppCommandScope(<UsageSettings />);
   await headline();

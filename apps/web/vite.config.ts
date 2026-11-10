@@ -28,6 +28,10 @@ export default defineConfig(async () => ({
   server: {
     port,
     strictPort: true,
+    // Launch attempts must not accept an unrelated server on a reserved port.
+    headers: process.env.ORKESTRATOR_RENDERER_INSTANCE
+      ? { "x-orkestrator-renderer-instance": process.env.ORKESTRATOR_RENDERER_INSTANCE }
+      : undefined,
     host: host || "127.0.0.1",
     ws: host
       ? {

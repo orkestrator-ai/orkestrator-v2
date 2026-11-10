@@ -229,6 +229,9 @@ export function registerNativeAgentCommands(
     return session;
   });
 
+  // Not marked spliceable: splicing this whole-session projection measured
+  // slower than `JSON.stringify` ("Response encoding" in
+  // docs/architecture/native-transcripts.md).
   register(getNativeAgentProjectionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

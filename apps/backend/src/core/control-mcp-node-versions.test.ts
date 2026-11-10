@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { BACKEND_HELLO_PATH } from "@orkestrator/protocol/backend-profile";
 import { APP_VERSION, BUILD_COMMIT } from "./constants.js";
 import { registerNodeTools } from "./control-mcp-nodes.js";
-import { settle, TestNodeNetwork, type TestNode } from "./nodes/node-network-test-support.js";
+import {
+  stopTestNodeNetworks,
+  settle,
+  TestNodeNetwork,
+  type TestNode,
+} from "./nodes/node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 
 /**
  * The `version` and `buildCommit` of `list_nodes`, read through the real node links and the real

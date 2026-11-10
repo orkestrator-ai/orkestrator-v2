@@ -74,7 +74,9 @@ describe("ReleasesPage", () => {
         .getAllByRole("listitem")
         .map((item) => item.textContent),
     ).toEqual(["A fixed thing.", "Another fixed thing."]);
-    expect(within(partial).queryByRole("region", { name: "Improved in 9.1.0" })).toBeNull();
+    expect(within(partial).queryByRole("region", { name: "Improved in 9.1.0" }) === null).toBe(
+      true,
+    );
   });
 
   test("renders every curated item under its group for each release", () => {
@@ -93,7 +95,7 @@ describe("ReleasesPage", () => {
           name: `${label} in ${release.version}`,
         });
         if (release[key].length === 0) {
-          expect(region).toBeNull();
+          expect(region === null).toBe(true);
           continue;
         }
         if (!region) throw new Error(`missing ${label} group for ${release.version}`);

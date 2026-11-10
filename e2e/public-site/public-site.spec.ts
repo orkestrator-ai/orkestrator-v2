@@ -65,6 +65,48 @@ for (const pathname of ["/connect", "/connect/"]) {
   });
 }
 
+for (const pathname of ["/releases", "/releases/"]) {
+  test(`direct load and reload of ${pathname} shows the Releases page`, async ({ page }) => {
+    await page.goto(pathname);
+    await expect(
+      page.getByRole("heading", { level: 1, name: /What.s new in Orkestrator/ }),
+    ).toBeVisible();
+    await expect(page).toHaveTitle("Orkestrator · Releases");
+    await expect(
+      page.getByRole("list", { name: "Recent releases, newest first" }).getByRole("article"),
+    ).toHaveCount(5);
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { level: 1, name: /What.s new in Orkestrator/ }),
+    ).toBeVisible();
+    await expect(page).toHaveTitle("Orkestrator · Releases");
+    await expect(page.getByLabel("Backend address")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  });
+}
+
+test("the footer Releases link opens the Releases page and the brand returns home", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Footer" })
+    .getByRole("link", { name: "Releases" })
+    .click();
+  await expect(page).toHaveURL(/\/releases$/);
+  await expect(
+    page.getByRole("heading", { level: 1, name: /What.s new in Orkestrator/ }),
+  ).toBeVisible();
+  await expect(page).toHaveTitle("Orkestrator · Releases");
+
+  await page.getByRole("banner").getByRole("link", { name: "Orkestrator home" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "Copy install command" })).toBeVisible();
+  await expect(page).toHaveTitle("Orkestrator · Contained, graph-based agentic development");
+});
+
 test("copies the displayed install command and resets its confirmation", async ({
   page,
   context,

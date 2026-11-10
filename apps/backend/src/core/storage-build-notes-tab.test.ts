@@ -1,12 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { keyInformationTabId, MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
-import { createEnvironment, type StorageService } from "./storage.js";
+import type { PaneLayoutNode } from "@orkestrator/protocol/pane-layout-merge";
+import { createEnvironment, type PersistedPaneLayout, type StorageService } from "./storage.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 
-type Leaf = { kind: "leaf"; id: string; tabs: Array<Record<string, unknown>>; activeTabId: string };
+type Leaf = {
+  kind: "leaf";
+  id: string;
+  tabs: Array<Record<string, unknown> & { id: string; type: string }>;
+  activeTabId: string;
+};
 
 const NOTES_ID = (environmentId: string) =>
   keyInformationTabId(environmentId, "pipeline-1", "notes");
+
+// Storage accepts unknown persisted roots; these fixtures build valid pane trees.
+function mergeableLayout(layout: PersistedPaneLayout) {
+  return { ...layout, root: layout.root as PaneLayoutNode };
+}
 
 async function seedBuildLayout(storage: StorageService, root?: unknown) {
   const environment = createEnvironment("project-1");
@@ -121,7 +132,7 @@ describe("ensureBuildPipelineNotesTab", () => {
     "preserves completion publication for concurrent same-ID additions: %s",
     async (order) => {
       await withTemporaryStorage(async (storage) => {
-        const base = await seedBuildLayout(storage);
+        const base = mergeableLayout(await seedBuildLayout(storage));
         const desired = structuredClone(base);
         const leaf = desired.root as Leaf;
         leaf.tabs.push({
@@ -174,7 +185,11 @@ describe("ensureBuildPipelineNotesTab", () => {
       (closed.root as Leaf).tabs = (closed.root as Leaf).tabs.filter((tab) => tab.id !== notes.id);
       (closed.root as Leaf).activeTabId = (closed.root as Leaf).tabs[0]!.id as string;
       const removed = await storage.savePaneLayout("env-notes", closed, saved.revision);
-      const reopened = await storage.applyPaneLayoutIntent("env-notes", removed, unmarked);
+      const reopened = await storage.applyPaneLayoutIntent(
+        "env-notes",
+        mergeableLayout(removed),
+        mergeableLayout(unmarked),
+      );
       expect(
         (reopened.root as Leaf).tabs.find((tab) => tab.id === notes.id)?.keyInformationTabData,
       ).not.toHaveProperty("completionPublished");

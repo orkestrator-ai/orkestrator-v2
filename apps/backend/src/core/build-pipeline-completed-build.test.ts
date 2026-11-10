@@ -5,7 +5,12 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
-import { pipeline, startInput, withService } from "./build-pipeline-service-test-support.js";
+import {
+  pipeline,
+  startBuilding,
+  startInput,
+  withService,
+} from "./build-pipeline-service-test-support.js";
 
 function completedBuild(): CompletedBuildAttempt {
   return {
@@ -164,6 +169,70 @@ for (const source of ["kanban", "github"] as const) {
       } finally {
         publication.mockRestore();
         warning.mockRestore();
+      }
+    });
+  });
+}
+
+// Failed runs retain their failure inspector; automatic Notes publication is
+// reserved for successful completion. Terminal ticket updates still follow the
+// durable failure save.
+for (const source of ["kanban", "github"] as const) {
+  test(`a failed pipeline saves before ${source} reconciliation and does not publish Notes`, async () => {
+    await withService(async (service, storage, provider, invocations) => {
+      const { started } = await startBuilding(service, storage, {
+        source:
+          source === "kanban"
+            ? { type: "kanban", taskId: "task-1" }
+            : {
+                type: "github",
+                repositoryOwner: "acme",
+                repositoryName: "repo",
+                issueNumber: 1,
+                issueUrl: "https://github.com/acme/repo/issues/1",
+                status: "open",
+              },
+      });
+      const before = await storage.getPaneLayout("env-1");
+      const events: string[] = [];
+      const save = storage.saveBuildPipeline.bind(storage);
+      const saved = spyOn(storage, "saveBuildPipeline").mockImplementation(async (...args) => {
+        const result = await save(...args);
+        if (isBuildPipeline(args[4]) && args[4].phase === "failed") events.push("saved-failure");
+        return result;
+      });
+      const push = invocations.push.bind(invocations);
+      const invoked = spyOn(invocations, "push").mockImplementation((...entries) => {
+        for (const entry of entries) {
+          if (
+            entry.command === "update_kanban_task" ||
+            entry.command === "post_github_completion_comment"
+          )
+            events.push("reconciled");
+        }
+        return push(...entries);
+      });
+      const publication = spyOn(storage, "ensureBuildPipelineNotesTab");
+      provider.status = async () => {
+        throw new Error("fixture build failed");
+      };
+      try {
+        await service.advanceNow(started.id);
+        const failed = await pipeline(storage, started.id);
+        expect(failed).toMatchObject({
+          phase: "failed",
+          error: "fixture build failed",
+          completionCommentStatus: "posted",
+        });
+        expect(events[0]).toBe("saved-failure");
+        expect(events).toContain("reconciled");
+        expect(publication).not.toHaveBeenCalled();
+        expect(await storage.getPaneLayout("env-1")).toEqual(before);
+        if (source === "github") expect(failed.completionCommentId).toBe("comment-1");
+      } finally {
+        publication.mockRestore();
+        invoked.mockRestore();
+        saved.mockRestore();
       }
     });
   });

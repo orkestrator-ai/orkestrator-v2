@@ -178,7 +178,14 @@ function applyCompletionNotesArrival(
   ) {
     return selected;
   }
-  if (findLeaf(current.root, (candidate) => candidate.tabs.some(({ id }) => id === tab.id))) {
+  if (
+    findLeaf(current.root, (candidate) =>
+      candidate.tabs.some(
+        (previous) =>
+          previous.id === tab.id && previous.keyInformationTabData?.completionPublished === true,
+      ),
+    )
+  ) {
     return selected;
   }
   return activateTabInState(selected, tab.id) ?? selected;

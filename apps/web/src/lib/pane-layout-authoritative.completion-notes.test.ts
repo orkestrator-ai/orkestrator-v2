@@ -141,6 +141,68 @@ describe("completion notes arriving in an Electron window", () => {
     });
   });
 
+  test("an existing manual Notes tab follows its first completion marker only once", () => {
+    const manualNotes: TabInfo = {
+      ...notesTab,
+      keyInformationTabData: { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+    };
+    const before = current(
+      split(
+        leaf("pane-build", [buildTab, manualNotes], buildTab.id),
+        leaf("pane-chat", [chatTab], "chat"),
+      ),
+      "pane-chat",
+    );
+    const after = persisted(
+      split(
+        leaf("pane-build", [buildTab, notesTab], NOTES_ID),
+        leaf("pane-chat", [chatTab], "chat"),
+      ),
+      "pane-build",
+    );
+    const landed = reconcileAuthoritativePaneLayout("env-1", after, before)!;
+    expect(selection(landed)).toEqual({
+      activePaneId: "pane-build",
+      leaves: [
+        { id: "pane-build", activeTabId: NOTES_ID },
+        { id: "pane-chat", activeTabId: "chat" },
+      ],
+    });
+
+    // Install the publication, then let the user return to chat. A repeated
+    // snapshot must retain that choice now the marker has been consumed.
+    const store = appCommandStore(paneLayoutStore);
+    store.setState({ environments: new Map([["env-1", landed]]) });
+    store.getState().setActivePane("pane-chat", "env-1");
+    const chosen = store.getState().environments.get("env-1")!;
+    expect(selection(reconcileAuthoritativePaneLayout("env-1", after, chosen))).toEqual(
+      selection(chosen),
+    );
+  });
+
+  test("a browser adopts the backend completion selection across panes", () => {
+    Object.defineProperty(window, "orkestrator", { configurable: true, value: undefined });
+    const before = current(
+      split(leaf("pane-build", [buildTab], buildTab.id), leaf("pane-chat", [chatTab], "chat")),
+      "pane-chat",
+    );
+    const after = persisted(
+      split(
+        leaf("pane-build", [buildTab, notesTab], NOTES_ID),
+        leaf("pane-chat", [chatTab], "chat"),
+      ),
+      "pane-build",
+    );
+    const expected = {
+      activePaneId: "pane-build",
+      leaves: [
+        { id: "pane-build", activeTabId: NOTES_ID },
+        { id: "pane-chat", activeTabId: "chat" },
+      ],
+    };
+    expect(selection(reconcileAuthoritativePaneLayout("env-1", after, before))).toEqual(expected);
+  });
+
   test.each(["backend-first", "renderer-first"])(
     "a second window follows the completion after concurrent additions: %s",
     (order) => {

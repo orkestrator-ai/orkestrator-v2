@@ -792,7 +792,8 @@ watching it (the app closed, the window on another environment, or the run on
 another node whose pipelines this window had not loaded yet) still lands on
 its notes: a client hydrating the environment adopts the backend's selection.
 An Electron window keeps its own selection, so it follows the notes tab once,
-when a tab marked `completionPublished` first arrives in that window
+when it first sees `completionPublished` on the tab, including a manual Notes
+tab already open in that window
 (`applyCompletionNotesArrival` in
 `apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
 published setup terminal. Manual Notes openings have no completion marker and
@@ -802,7 +803,9 @@ The shared layout merge preserves the completion marker when the backend and
 renderer concurrently add the same Notes tab. Full-layout saves also retain it
 on an existing tab for the same environment and pipeline. Closing Notes removes
 the marker with the tab, so a later manual reopening stays unmarked.
-Completion is the only trigger, so a reload never reopens old notes.
+Successful completion is the only trigger, so a reload never reopens old notes.
+A failed run keeps its failure inspector selected and does not automatically
+open Notes; terminal ticket reconciliation still follows the durable failure save.
 
 The renderer also reacts to a completion it observed
 (`apps/web/src/lib/build-pipeline-completion-notes.ts`): a pipeline the store

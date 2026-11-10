@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { TranscriptScrollController } from "@/lib/transcript-scroll/transcript-scroll-controller";
 import { createRef } from "react";
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type {
@@ -13,6 +13,13 @@ import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { useVirtuosoScrollState } from "@/hooks/useVirtuosoScrollState";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
+import { useCallback, useState } from "react";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  resetConversationScrollTargets,
+  useConversationScrollTargetStore,
+} from "@/stores/conversationScrollTargetStore";
+import { useConversationScrollTarget } from "@/components/native-agent/useConversationScrollTarget";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 let lastVirtualizedMessageListProps: Record<string, any> | null = null;
@@ -187,6 +194,96 @@ describe("NativeChatShell", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search actions" }), { key: "Enter" });
     // The tab's navigation requests this id; its scroll target pages earlier history to reach it.
     expect(targets).toEqual(["old-row"]);
+    cleanup();
+  });
+
+  test("choosing an unloaded action from search pages its history in and scrolls to it", async () => {
+    resetConversationScrollTargets();
+    const props = shellProps();
+    const mark = (id: string, title: string): NativeMessage => ({
+      id,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-11-09",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "orkestrator_mark_question",
+          toolState: "success",
+          toolArgs: { title },
+        },
+      ],
+    });
+    // Oldest first: the chosen action is two history pages away.
+    const history = [mark("old-row", "Archived decision"), mark("newer-row", "Newer note")];
+    const loaded = Array.from({ length: 12 }, (_, i) => mark(`row-${i}`, `Loaded ${i}`));
+    const scrollToIndex = mock(
+      (_index: number, _anchor?: { rowKey?: string }, _owner?: "message-link") => true,
+    );
+    const loadEarlier = mock(async () => {});
+
+    // The tab's wiring, as AgentNativeTab.controller does it: navigation parks
+    // a scroll target in the store, and the scroll-target hook pages earlier
+    // history (one page per read) until the anchor renders, then scrolls to it.
+    function CoordinatorTab() {
+      const nodeId = useScopesWithCommandFallback().scope.nodeId;
+      const [messages, setMessages] = useState<NativeMessage[]>(loaded);
+      const navigate = useCallback(
+        (messageId: string) => {
+          useConversationScrollTargetStore
+            .getState()
+            .request({ nodeId, environmentId: "env-search", tabId: "tab-search" }, { messageId });
+        },
+        [nodeId],
+      );
+      const earlier = useCallback(async () => {
+        await loadEarlier();
+        setMessages((current) => {
+          const missing = history.filter((row) => !current.some((m) => m.id === row.id));
+          // One page per read: the newest history row first.
+          const page = missing.slice(-1);
+          return [...page, ...current];
+        });
+      }, []);
+      useConversationScrollTarget({
+        environmentId: "env-search",
+        tabId: "tab-search",
+        isActive: true,
+        messages,
+        transcriptSettled: true,
+        scrollToIndex,
+        loadEarlier: earlier,
+      });
+      return (
+        <NativeChatShell
+          {...props}
+          messages={messages}
+          coordinatorActionHistory={history}
+          coordinatorNavigate={navigate}
+        />
+      );
+    }
+
+    renderInAppCommandScope(<CoordinatorTab />);
+    fireEvent.focus(screen.getByRole("button", { name: /Actions, \d+ waiting/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Search actions" }));
+    const input = await screen.findByRole("combobox", { name: "Search actions" });
+    fireEvent.change(input, { target: { value: "archived" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The anchor was not loaded: the hook reads pages until the row renders,
+    // then the list scrolls to it under the message-link owner.
+    await waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(0, { rowKey: "old-row" }, "message-link"),
+    );
+    expect(loadEarlier).toHaveBeenCalledTimes(2);
+    expect(
+      lastVirtualizedMessageListProps!.messages.slice(0, 3).map((m: NativeMessage) => m.id),
+    ).toEqual(["old-row", "newer-row", "row-0"]);
+    // The request is consumed once placed.
+    expect(useConversationScrollTargetStore.getState().targets.size).toBe(0);
+    resetConversationScrollTargets();
     cleanup();
   });
 

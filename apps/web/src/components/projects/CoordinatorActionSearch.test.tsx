@@ -140,6 +140,37 @@ test("arrow keys move the selection and Enter navigates to an older action", asy
   );
 });
 
+test("keys an IME is composing with neither move the selection nor choose an action", async () => {
+  const targets: string[] = [];
+  render(
+    <ActionsPanel
+      docked
+      cards={visible}
+      searchCards={all}
+      onNavigate={(anchor) => targets.push(anchor)}
+    />,
+  );
+  const input = await openSearch();
+  expect(selectedName()).toBe("#9 Add search");
+  // Chromium and Firefox: the confirming and candidate keys are flagged as composing.
+  fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  // WebKit ends the composition first; only keyCode 229 marks the confirming key.
+  fireEvent.keyDown(input, { key: "ArrowDown", keyCode: 229 });
+  fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+  expect(selectedName()).toBe("#9 Add search");
+  expect(targets).toEqual([]);
+  expect(screen.getByTestId("coordinator-action-search-dialog")).toBeTruthy();
+
+  // Once the composition is over, the same keys drive the palette again.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(targets).toEqual(["row-12"]);
+  await waitFor(() =>
+    expect(screen.queryByTestId("coordinator-action-search-dialog") === null).toBe(true),
+  );
+});
+
 test("Escape closes the palette and returns focus to the search button", async () => {
   render(<ActionsPanel docked cards={visible} searchCards={all} onNavigate={() => {}} />);
   const button = screen.getByRole("button", { name: "Search actions" });

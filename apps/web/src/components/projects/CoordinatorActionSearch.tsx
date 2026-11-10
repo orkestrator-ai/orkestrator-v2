@@ -71,6 +71,11 @@ export function CoordinatorActionSearchDialog({
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // While an IME is composing, Enter confirms a candidate and the arrows
+    // move through candidates; they belong to the IME, not the palette.
+    // WebKit ends the composition before the confirming keydown, so
+    // `isComposing` is already false there and `keyCode` 229 is the signal.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       moveSelection(1);

@@ -10,6 +10,7 @@ import {
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import type { AgentSession, ContextUsage, SessionStats } from "@earendil-works/pi-coding-agent";
@@ -291,8 +292,10 @@ export async function dispatchPrompt(
     },
   );
 
-  const acceptance = await withinStartupDeadline(accepted, startupDeadlineMs);
-  if (acceptance === "timeout") {
+  // The timer never holds the process open; a late answer is observed by
+  // `abandonStartup`, which owns what is left.
+  const startup = await boundedWait(accepted, startupDeadlineMs);
+  if (!startup.settled) {
     const error = new PromptStartupTimeoutError(startupDeadlineMs);
     abandonStartup(
       state,
@@ -308,7 +311,7 @@ export async function dispatchPrompt(
     throw error;
   }
   if (claim !== undefined && state.promptStartup?.claim === claim) state.promptStartup = undefined;
-  if (!acceptance) {
+  if (!startup.value) {
     // Pi refused the prompt outright. Surface whatever it refused with, rather
     // than a generic rejection: it is the only thing that says why.
     forgetEvidenceTurn(state, evidenceTurnId);
@@ -413,25 +416,6 @@ export async function dispatchPrompt(
       releasePromptClaim(state, claim);
     }),
   };
-}
-
-/** Race Pi's acceptance against the startup deadline. The timer never holds the process open. */
-async function withinStartupDeadline(
-  accepted: Promise<boolean>,
-  deadlineMs: number,
-): Promise<boolean | "timeout"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      accepted,
-      new Promise<"timeout">((resolve) => {
-        timer = setTimeout(() => resolve("timeout"), deadlineMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 /**

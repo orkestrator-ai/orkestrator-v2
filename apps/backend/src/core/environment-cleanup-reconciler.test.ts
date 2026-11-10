@@ -128,10 +128,14 @@ function entry(overrides: Partial<EnvironmentCleanupEntry>): EnvironmentCleanupE
   };
 }
 
-async function makeStateDirectory(directory: string, ageMs: number): Promise<void> {
+async function makeStateDirectory(
+  directory: string,
+  ageMs: number,
+  nowMs: number = Date.now(),
+): Promise<void> {
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "state.json"), "{}\n");
-  const when = new Date(Date.now() - ageMs);
+  const when = new Date(nowMs - ageMs);
   await fs.utimes(directory, when, when);
 }
 
@@ -438,10 +442,19 @@ describe("orphaned environment state sweep", () => {
     await storage.addEnvironment(environment("live"));
     const orphan = environmentStateDirectory(dataDir, "cursor-bridge-state", "deleted");
     const live = environmentStateDirectory(dataDir, "cursor-bridge-state", "live");
-    await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS - 150);
-    await makeStateDirectory(live, ORPHANED_STATE_MIN_AGE_MS * 2);
-    await runStartupEnvironmentCleanup(context, { orphanSweepIntervalMs: 25 });
+    // The sweep reads an injected clock: with the wall clock, fixture set-up
+    // and the first pass under load could cross the age boundary before the
+    // first assertion. The orphan ages only when the test advances the clock.
+    const startedAt = Date.now();
+    let clock = startedAt;
+    await makeStateDirectory(orphan, ORPHANED_STATE_MIN_AGE_MS - 150, startedAt);
+    await makeStateDirectory(live, ORPHANED_STATE_MIN_AGE_MS * 2, startedAt);
+    await runStartupEnvironmentCleanup(context, {
+      orphanSweepIntervalMs: 25,
+      now: () => new Date(clock),
+    });
     expect(await exists(orphan)).toBe(true);
+    clock = startedAt + 1_000;
     await eventually(async () => !(await exists(orphan)));
     expect(await exists(live)).toBe(true);
     cancelScheduledEnvironmentCleanup(dataDir);

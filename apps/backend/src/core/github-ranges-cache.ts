@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { classifyDockerCopyFailure, isDockerCopyRefusedError } from "./docker-copy-refusal.js";
 import { runCommand } from "./shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -62,6 +63,11 @@ export function parseGithubMeta(text: string): string[] | null {
   return unique.length > 0 ? unique : null;
 }
 
+/** A seed file's contents: a dated header line, then one range per line. */
+export function formatGithubRangesSeed(ranges: readonly string[], fetchedAt: number): string {
+  return `# github-ranges ${new Date(fetchedAt).toISOString()}\n${ranges.join("\n")}\n`;
+}
+
 type Fetcher = (url: string, init: { signal: AbortSignal }) => Promise<Response>;
 
 /**
@@ -97,11 +103,7 @@ export async function githubRangesSeed(
     if (!ranges) throw new Error("malformed");
     await mkdir(dataDir, { recursive: true });
     const temporary = `${file}.${process.pid}.tmp`;
-    await writeFile(
-      temporary,
-      `# github-ranges ${new Date(now()).toISOString()}\n${ranges.join("\n")}\n`,
-      { mode: 0o644 },
-    );
+    await writeFile(temporary, formatGithubRangesSeed(ranges, now()), { mode: 0o644 });
     await rename(temporary, file);
     return file;
   } catch {
@@ -141,9 +143,16 @@ export async function copyGithubRangesSeed(
     );
     return true;
   } catch (error) {
+    // A refused copy (a read-only bind on a nosuid/nodev filesystem under
+    // rootless Docker) is named, not left unclassified: every boot of such
+    // a container then fetches GitHub's ranges itself.
+    const refused = isDockerCopyRefusedError(
+      await classifyDockerCopyFailure(containerId, error, "the GitHub ranges seed", run),
+    );
     log.warn("github-ranges.seed-not-copied", {
       containerId: containerId.slice(0, 12),
       ...classifyCommandFailure(error, { tools: ["docker"] }),
+      ...(refused ? { refusal: "read-only-bind-remount" } : {}),
       error: formatLogError(error),
     });
     return false;

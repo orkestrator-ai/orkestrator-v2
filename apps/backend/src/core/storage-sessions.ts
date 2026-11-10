@@ -22,10 +22,10 @@ import {
   paneLayoutAgentHandoffIds,
   paneLayoutDroppedAgentHandoff,
   paneLayoutLeaves,
-  paneLayoutRevisionConflictMessage,
   selectedTabIsSetupHandoffSource,
   suppressLateSetupTabAdditions,
 } from "./storage-shared.js";
+import { paneLayoutRevisionConflict } from "./pane-layout-conflict.js";
 import type { NativeAgentJobCompletionAction } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -385,7 +385,7 @@ export class SessionsRepository {
       previousRoot = previous?.root;
       const currentRevision = previous?.revision ?? 0;
       if (currentRevision !== expectedRevision) {
-        throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
+        throw paneLayoutRevisionConflict(expectedRevision, currentRevision);
       }
       const saved: PersistedPaneLayout = {
         version: layout.version,

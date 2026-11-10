@@ -73,6 +73,7 @@ import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 import { SignInExpiry } from "@/components/native-agent/SignInExpiry";
+import { SessionBranchPicker } from "@/components/native-agent/SessionBranchPicker";
 import { directSteerNotice } from "@/components/native-agent/auto-steer";
 import { AgentInfoAccountSection } from "./AgentInfoAccountSection";
 
@@ -1305,6 +1306,32 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                         <RotateCcw className="h-3.5 w-3.5" />
                         Rewind files
                       </Button>
+                    ) : null}
+
+                    {!isWorkflowSession &&
+                    !isCoordinatorSession &&
+                    currentSessionId &&
+                    sessionActions?.branches ? (
+                      <SessionBranchPicker
+                        key={`${nodeScope.nodeId}:${sessionIdentity}`}
+                        agentLabel={AGENT_PROVIDER_LABELS[activeSession.provider]}
+                        disabled={busyAction !== null || currentSessionLoading}
+                        listBranches={() =>
+                          backendForScope(nodeScope).listNativeAgentBranches({
+                            environmentId: activeSession.environmentId,
+                            agent: activeSession.provider,
+                            logicalSessionKey: activeSession.sessionKey,
+                          })
+                        }
+                        switchBranch={async (entryId) => {
+                          await backendForScope(nodeScope).performNativeAgentSessionAction({
+                            environmentId: activeSession.environmentId,
+                            agent: activeSession.provider,
+                            logicalSessionKey: activeSession.sessionKey,
+                            action: { kind: "switch-branch", entryId },
+                          });
+                        }}
+                      />
                     ) : null}
 
                     {!isWorkflowSession &&

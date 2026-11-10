@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { classifyDockerCopyFailure } from "./docker-copy-refusal.js";
 import { runCommand } from "./shell.js";
 import { validateRelativeFilePath } from "./path-safety.js";
 
@@ -130,7 +131,13 @@ export async function stageConfiguredProjectFilesForContainer(
       "docker",
       ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`],
       { timeoutMs: 120_000 },
-    );
+    ).catch(async (error: unknown) => {
+      throw await classifyDockerCopyFailure(
+        containerId,
+        error,
+        "the configured project files into the container",
+      );
+    });
   } finally {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
   }

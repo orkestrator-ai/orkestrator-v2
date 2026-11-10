@@ -625,8 +625,17 @@ test("a throwing credential lookup still answers both hooks, with no credential 
       received,
     );
     expect(received).toHaveBeenCalledWith({ responseHeaders });
+    // The shared helper names the listener; neither line holds the URL or the error.
     expect(capture.outputs.map(({ method, line }) => [method, line])).toEqual([
+      [
+        "warn",
+        "[desktop.webrequest] listener.failed-closed scope=gateway-request-auth.before-send-headers kind=Error",
+      ],
       ["debug", "[gateway] request-auth.fallback phase=request"],
+      [
+        "warn",
+        "[desktop.webrequest] listener.failed-closed scope=gateway-request-auth.headers-received kind=Error",
+      ],
       ["debug", "[gateway] request-auth.fallback phase=response"],
     ]);
   } finally {

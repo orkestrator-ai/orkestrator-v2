@@ -26,13 +26,22 @@ function pinOrOmit(value: string | undefined): string | undefined {
   return value;
 }
 
-/** OpenCode ids a launcher must keep visible while the project catalogue loads. */
-export function configuredOpenCodeModelIds(defaults: BuildPipelineConfiguredDefaults): string[] {
+/**
+ * OpenCode ids a launcher must keep visible while the project catalogue loads.
+ *
+ * A row names only a model its action chose; one that leaves it out opens on
+ * the platform's own model (`inheritedModel`, the launcher's preferred
+ * OpenCode model), so that id is kept too.
+ */
+export function configuredOpenCodeModelIds(
+  defaults: BuildPipelineConfiguredDefaults,
+  inheritedModel?: string,
+): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
   const consider = (step?: BuildStepConfig) => {
     if (step?.agent !== "opencode") return;
-    const model = pinOrOmit(step.model);
+    const model = pinOrOmit(step.model ?? inheritedModel);
     if (!model || seen.has(model)) return;
     seen.add(model);
     ids.push(model);
@@ -57,6 +66,41 @@ export function buildPipelineConfiguredDefaults(
     agentSettingsTiers(config, projectId || undefined),
     config.global.enabledAgentPlatforms ?? AGENT_PLATFORMS,
   );
+}
+
+/**
+ * The configured workflow as a launcher panel opens it.
+ *
+ * A configured row names only a model its action chose, so the stage can
+ * resolve an inherited default when it starts (to-do 7546). A panel that
+ * resolves each row against the catalogue still has to open an unpinned row
+ * on its platform's own saved model, as the build row does, rather than on the
+ * catalogue's first entry; this fills that model in for display.
+ */
+export function buildPipelineLauncherDefaults(
+  config: AppConfig,
+  projectId: string,
+): BuildPipelineConfiguredDefaults {
+  const tiers = agentSettingsTiers(config, projectId || undefined);
+  const withPlatformModel = (step: BuildStepConfig): BuildStepConfig => {
+    if (pinOrOmit(step.model)) return step;
+    const model = pinOrOmit(resolveAgentPlatformSettings(tiers, step.agent).model);
+    return model ? { ...step, model } : step;
+  };
+  const configured = buildPipelineConfiguredDefaults(config, projectId);
+  const steps: BuildPipelineConfiguredDefaults["steps"] = {};
+  for (const [key, step] of Object.entries(configured.steps) as Array<
+    [keyof BuildPipelineConfiguredDefaults["steps"], BuildStepConfig | undefined]
+  >) {
+    if (step) steps[key] = withPlatformModel(step);
+  }
+  return {
+    steps,
+    reviewers: configured.reviewers.map(withPlatformModel),
+    ...(configured.reviewPreparation
+      ? { reviewPreparation: withPlatformModel(configured.reviewPreparation) }
+      : {}),
+  };
 }
 
 /**

@@ -48,6 +48,7 @@ import {
   type ScopeProofReport,
 } from "./scope-proof-support";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
 const webRoot = path.join(repositoryRoot, "apps", "web");
@@ -282,10 +283,13 @@ test("one Electron renderer holds the command scope and a leaf scope (direct, th
       }),
     });
     const electronApp = app;
+    // Reloads only a load that lost its modules to ERR_NETWORK_CHANGED (flake 2340).
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     const page = await electronApp.firstWindow();
     page.setDefaultTimeout(30_000);
-    await expect(page).toHaveTitle(profile.electronTitle, { timeout: 90_000 });
+    await startup.waitForTitle(page, profile.electronTitle, { timeoutMs: 90_000 });
+    startup.dispose();
 
     // The command node is the command profile's backend: a remote connection.
     // Its token goes only to the renderer's secure connection store, as a user's would.

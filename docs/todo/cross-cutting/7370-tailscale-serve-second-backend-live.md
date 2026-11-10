@@ -149,7 +149,7 @@ works on:
 - [remote-gateway.md](../../architecture/remote-gateway.md#default-gateway-port),
   [host-updates.md](../../architecture/host-updates.md#standalone-service),
   [releasing.md](../../development/releasing.md#pending-release-note-gateway-port-migration).
-- [7041-manual-docker-profiles-on-exhausted-pools.md](../containers-and-environments/7041-manual-docker-profiles-on-exhausted-pools.md):
+- [Exhausted-pool and probe-network evidence](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06):
   why the container run used no Docker network.
 
 ## Replaces

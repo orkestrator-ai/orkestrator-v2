@@ -6,18 +6,20 @@ Checked against `main` at `863b5782` (2026-10-27).
 
 This analysis predates the implementation recorded below. All five surfaces
 are now built; the current state, decisions and remaining qualification below
-supersede the deferred statuses and proposed choices in this snapshot.
+supersede the proposed choices in this snapshot. The task statuses were
+brought up to date on 2026-11-10 (against `main` at `04639b12b`): every task is
+done in code, and only the live runs under Needs verification remain.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Uncommitted root changes in a worker**: let the user hand a chosen patch of the root checkout's uncommitted changes to a new worker. Status: deferred.
-2. **Terminal or tmux launch**: a coordinator tool that opens a terminal, tmux or terminal-agent tab in a worker. Status: deferred.
-3. **Browser launch and navigation**: a coordinator tool that opens or drives a worker's preview. Status: deferred.
-4. **Pane editing**: a coordinator tool that opens, closes or moves a worker's tabs. Status: deferred.
-5. **Multi Review and planning launches**: custom-fix model switches, reviewer subtabs, looped review and feature-plan launch. Status: deferred (choosing a fix model at launch already exists).
-6. **Prioritise or retire the file**: the open question of which surface comes first, given no user request. Status: open.
+1. **Uncommitted root changes in a worker**: let the user hand a chosen patch of the root checkout's uncommitted changes to a new worker. Status: done (2026-10-27, `request_root_changes`); live run only remains.
+2. **Terminal or tmux launch**: a coordinator tool that opens a terminal, tmux or terminal-agent tab in a worker. Status: done (2026-10-27, `launch_terminal`); live run only remains.
+3. **Browser launch and navigation**: a coordinator tool that opens or drives a worker's preview. Status: done (2026-10-27, `open_worker_browser`); live run only remains.
+4. **Pane editing**: a coordinator tool that opens, closes or moves a worker's tabs. Status: done (2026-10-27, `edit_worker_tab`); live run only remains.
+5. **Multi Review and planning launches**: custom-fix model switches, reviewer subtabs, looped review and feature-plan launch. Status: done (2026-10-27, `custom_fix_multi_review`, `open_multi_review` with `reviewerId`, `launch_feature_plan`; the looped review tool was later removed with that feature); live run only remains.
+6. **Prioritise or retire the file**: the open question of which surface comes first, given no user request. Status: done (settled by building all five; Open questions is "None").
 
 ### 1. Uncommitted root changes in a worker
 
@@ -342,6 +344,14 @@ Each records the options, the choice, why, and its pros and cons.
     needs a relayed command on the leaf and an outcome-unknown path; that is
     its own change (0395). The new backend commands are on the node-routing
     exclusion list so they never cross a link meanwhile.
+
+### Task statuses: brought up to date, not re-analysed (2026-11-10 housekeeping)
+
+The "historical" task list still read deferred and open while Current state,
+Outstanding work and the folder index said every surface was built. Chosen:
+set each task's status from Outstanding work (all done in code) and say that
+only the live runs under Needs verification remain, keeping the historical
+per-task sections as the record of the choices.
 
 ## Open questions
 

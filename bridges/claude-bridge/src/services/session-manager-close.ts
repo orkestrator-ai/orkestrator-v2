@@ -7,6 +7,7 @@
 // resume reaches it again. Permanent deletion is `deleteSessionDurably`, which
 // only an explicit DELETE may invoke.
 
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import type { ClaudeQueryControl, SessionState } from "../types/index.js";
 import {
   claimedPromptDispatches,
@@ -158,14 +159,5 @@ async function closeQueryControls(
 
 /** True when `work` settles by `deadline`; rejections propagate. */
 async function settlesBy(work: Promise<unknown>, deadline: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([work.then(() => true as const), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return (await boundedWait(work, Math.max(0, deadline - Date.now()))).settled;
 }

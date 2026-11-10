@@ -94,6 +94,12 @@ export function nestedNames(name: string, marker: string, uid: number) {
   return { container: base, volume: `${base}-data` };
 }
 
+/** The daemon.json keys that select the image store; none for Engine 29's default. */
+export function storageConfig(storage: InstanceSettings["storage"]): Record<string, unknown> {
+  if (storage !== "overlay2") return {};
+  return { features: { "containerd-snapshotter": false }, "storage-driver": "overlay2" };
+}
+
 /** The inner daemon's own configuration. */
 export function nestedDaemonConfig(settings: InstanceSettings): Record<string, unknown> {
   const pools: { base: string; size: number }[] = [
@@ -108,7 +114,7 @@ export function nestedDaemonConfig(settings: InstanceSettings): Record<string, u
     pools.push(NESTED_IPV6_POOL);
     config["default-network-opts"] = { bridge: { "com.docker.network.enable_ipv6": "true" } };
   }
-  return config;
+  return { ...config, ...storageConfig(settings.storage) };
 }
 
 /** Environment for a CLI call that names its daemon with --host: nothing else may select one. */

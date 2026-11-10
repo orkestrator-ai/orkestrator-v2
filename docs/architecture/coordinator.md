@@ -659,6 +659,18 @@ from a stale base commit, and an outcome lost to a disconnect could not be
 resolved without risking running it twice. Retry when the node reconnects
 (`list_nodes`), or use another machine.
 
+**Reconnect wake.** A refusal records only who tried: the coordinator, and
+the node (`note_coordinator_node_unavailable` from the control MCP's node
+gate, or `coordinatorNodeTarget` in the backend). When that node connects
+again (the same transition that collects its mail and syncs its tickets,
+`NodeCoordination.onNodeConnected`), each coordinator that tried it gets one
+system message in its main conversation, "Machine … reconnected", saying
+nothing was started or queued and to take a fresh base from
+`get_launch_options` before retrying (`coordinator-node-reconnect-wakes.ts`).
+The record is in memory and bounded (64 nodes, 32 coordinators each); an
+attempt older than 24 hours is dropped unannounced, and a restart forgets
+them, since the coordinator already holds the refusal it was given.
+
 ## One main coordinator, and side agents
 
 A project has exactly one **main** coordinator conversation
@@ -1604,6 +1616,13 @@ that has begun is finished first, because the turn's admission
 a side agent, a paused coordinator and a steered message (one taken into a
 running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
+
+Both paths are qualified against a slow remote on a real profile by
+`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+[agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
+In that run a worker's mail to a coordinator whose turn is running waits on
+the coordinator's presence (`agent-mail delivery.waiting reason=working`)
+before it reaches this step, and reaches it once the turn has ended.
 
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout

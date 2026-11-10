@@ -147,3 +147,33 @@ ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name e2e-claude-interactions
 No assertion, timeout or skip changed. Evidence:
 `orkestrator-test-run.OyQ3Ys/e2e-interaction-card.log.gz` below the host
 temporary directory.
+
+## Auto-pipeline spinner main merge — 2026-11-10
+
+- **Branch and base:** `autopipeline-text-boxes-7182fc46ef5e-r1`, base `c6fdfb5a4522844b9fd5ecfce468d765084f2792`; merge parents `42e62ee3c9d85bc462b3aaa2423fae55a279d5aa` and `2ffeb36487da625e095ac6bb3daa287da184f3fe`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=15331 ORKESTRATOR_PUBLIC_E2E_PORT=15332 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name merge2-browser -- mise run test:browser`.
+- **Workers and totals:** four Playwright workers; 1,661 passed, 152 skipped, one failed; exit 1 in 1,294.0 s. The default suite was also running on the host and passed.
+- **Exact failure:** `[mobile-chromium] a paused Claude question stays paused across a reload, then resumes and answers`, `e2e/ClaudeInteractions.spec.ts:100:1`; the snapshot route callback at line 107 raised `apiRequestContext.fetch: Request context disposed`.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nyAq4V/merge2-browser.log.gz`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=15333 mise run test:logged -- --name merge2-claude-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output output/agent-testing/merge2-claude-owner` passed in 20.7 s.
+- **Recurrence check:** `mise run flaky:recurrence -- 0252 --base c6fdfb5a4522844b9fd5ecfce468d765084f2792 --registry-ref origin/main` reported `open` (registry ref `7303e60108`).
+- **Assessment:** the unchanged complete owner pass establishes intermittency. The in-flight snapshot/disposal race remains a hypothesis, not a proven cause. No Claude implementation, assertion, retry, timeout or skip changed. The public-site suite, not reached after the component failure, passed separately in 10.5 s.
+
+## Effect adoption validation recurrence — 2026-11-10
+
+Observing branch base: `04639b12b71d4326a3b8941485367aca197f4966`;
+reviewed head: `c6b3ce9792c064bcac5e9eb7a287675fcbe73118`.
+`mise run flaky:recurrence -- 0252` reported open.
+`mise run test:logged -- --name browser -- mise run test:browser` repeated
+the mobile paused-question failure at line 107: the snapshot route callback
+used a disposed request context. The aggregate used eight browser workers.
+
+The complete unchanged owner passed all six cases alone in 84.1 s:
+`mise run test:logged -- --name address-claude-owner -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output=output/playwright/address-claude-owner`.
+This confirms intermittence, not that the branch is unrelated. No assertion,
+timeout or fixture implementation changed. Aggregate evidence and final counts
+are also recorded in the Address Findings result for this validation attempt.
+
+Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
+1,810 cases, with 14 reported failures; no final pass/skip totals and no
+public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.

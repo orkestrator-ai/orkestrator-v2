@@ -8,9 +8,10 @@ remain open.
 ## Task analysis (historical)
 
 This analysis predates the completed code and live checks recorded below.
-The current state and qualification evidence supersede its task statuses
-and proposed choices; Cursor, Grok and OpenCode verification remain as
-listed under Needs verification.
+The current state and qualification evidence supersede its proposed choices.
+The task statuses were brought up to date on 2026-11-10 (against `main` at
+`04639b12b`): every code task is done, and only live runs remain (Cursor,
+Grok and OpenCode, as listed under Needs verification).
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
@@ -18,16 +19,20 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Make Build Pipeline's same-id redispatch at-most-once** (item 3, plus the
    open question): stop a Claude structured stage prompt running twice after
-   an ambiguous send and a bridge restart. Status: open.
+   an ambiguous send and a bridge restart. Status: done (2026-10-27; Outstanding
+   work, code item 3).
 2. **An `absent` dispatch answer** (item 1): let bridges that can prove an id
-   never arrived say so. Status: open.
+   never arrived say so. Status: done (2026-10-27; code item 1).
 3. **Re-send on `absent`** (item 2): move a recovered `dispatching` request
-   back to `prepared` and send it again under the same id. Status: blocked (on
-   task 2).
+   back to `prepared` and send it again under the same id. Status: done
+   (2026-10-27; code item 2).
 4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
-   deduplicate a `promptAsync` that reuses a message id? Status: open.
-5. **Live restart-resend check per bridge** (Qualification). Status: blocked
-   (on tasks 1 to 3 and provider credentials; batched with 0031).
+   deduplicate a `promptAsync` that reuses a message id? Status: open, live run
+   only (no code depends on it: OpenCode never answers `absent`).
+5. **Live restart-resend check per bridge** (Qualification). Status: open,
+   live runs only: Claude, Codex and Pi passed on 2026-10-27; Cursor
+   (its first send failed) and Grok (expired host login) remain, batched
+   with 0031.
 
 ### 1. Make Build Pipeline's same-id redispatch at-most-once
 
@@ -521,6 +526,14 @@ the interrupted handoff. Remaining live checks stay batched with
     `absent`, never `dispatched` or `lost`); the incomplete-journal half is
     each bridge's own tests. The Codex contract test now loads the journal as
     the real bridge does at start.
+
+### Task statuses: brought up to date, not re-analysed (2026-11-10 housekeeping)
+
+The "historical" task list still read open and blocked while the body and the
+folder index said the code was done. Chosen: set each task's status from the
+Outstanding work and Qualification sections (tasks 1 to 3 done, tasks 4 and 5
+live runs only) and keep the historical per-task sections as they are, since
+they record why each choice was made.
 
 ## Open questions
 

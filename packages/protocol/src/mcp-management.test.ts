@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { codedErrorWire, fromCodedWire } from "./contract/errors";
+import { errorCode, ipcErrorMessage } from "./contract/ipc-error";
 
 import {
   MCP_MANAGEMENT_LIMITS,
@@ -29,6 +31,51 @@ describe("mcp-management protocol", () => {
       reload: true,
     });
     expect(mcpManagementErrorFromUnknown(new Error("boom"))).toBeNull();
+  });
+
+  test("carries the registered mcp-management code with its reason over every transport", () => {
+    const failure = mcpFailure("revision-conflict", { correlationId: "ref_1" });
+    expect(errorCode(failure)).toBe("mcp-management");
+    // The gateway body and desktop main's rebuilt error.
+    const wire = codedErrorWire(failure);
+    expect(wire).toEqual({
+      error: failure.message,
+      code: "mcp-management",
+      details: { reason: "revision-conflict" },
+    });
+    const rebuilt = fromCodedWire(JSON.parse(JSON.stringify(wire)));
+    expect(mcpManagementErrorFromUnknown(rebuilt)).toMatchObject({
+      code: "revision-conflict",
+      reload: true,
+      correlationId: "ref_1",
+    });
+    // Electron IPC: only the message crosses, led by the code; the marker still follows it.
+    const overIpc = new Error(ipcErrorMessage(rebuilt) ?? "");
+    expect(overIpc.message).toStartWith(
+      "[mcp-management reason=revision-conflict] McpManagementError:revision-conflict: ",
+    );
+    expect(mcpManagementErrorFromUnknown(overIpc)).toMatchObject({
+      code: "revision-conflict",
+      message: mcpFailure("revision-conflict").detail.message,
+      correlationId: "ref_1",
+    });
+    // The code decides: a reason that disagrees with the text wins, and another
+    // registered code is not an MCP failure even beside the marker.
+    expect(
+      mcpManagementErrorFromUnknown(
+        Object.assign(new Error("McpManagementError:busy: text"), {
+          code: "mcp-management",
+          details: { reason: "internal" },
+        }),
+      )?.code,
+    ).toBe("internal");
+    expect(
+      mcpManagementErrorFromUnknown(
+        Object.assign(new Error("McpManagementError:busy: text"), {
+          code: "pane-layout-revision-conflict",
+        }),
+      ),
+    ).toBeNull();
   });
 
   test("recognises an older backend by its unknown-command error only", () => {

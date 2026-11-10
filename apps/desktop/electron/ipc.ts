@@ -458,7 +458,11 @@ export function registerMainIpc({
   handle("orkestrator:invoke", (event, command: unknown, args?: unknown, options?: unknown) =>
     invokeCommand(event, command, args, options).catch((error: unknown) => {
       const coded = incompatibilityIpcMessage(error) ?? ipcErrorMessage(error);
-      throw coded === null ? error : new Error(coded);
+      // An error already in its message form (main's own `NodeRefusal`) is
+      // sent as it is, keeping its class and `code` for in-process callers.
+      throw coded === null || coded === (error as { message?: unknown }).message
+        ? error
+        : new Error(coded);
     }),
   );
 

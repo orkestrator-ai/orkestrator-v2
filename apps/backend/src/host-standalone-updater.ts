@@ -25,6 +25,7 @@ import {
   type CommandRunner,
   type StandaloneLayout,
 } from "@orkestrator/protocol/node/standalone-service";
+import { abortableSleep } from "./core/abortable-timing.js";
 import type { HostMaintenanceService } from "./core/host-maintenance.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -54,19 +55,6 @@ const IDLE_POLL_MS = 15_000;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve();
-    const timer = setTimeout(done, ms);
-    function done() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-    signal?.addEventListener("abort", done, { once: true });
-  });
 }
 
 export interface StandaloneUpdaterOptions {
@@ -156,7 +144,7 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
     while (!signal.aborted && now() < deadline) {
       const impact = await service.impact();
       if (impact && isHostIdle(impact)) return;
-      await sleep(Math.min(idlePollMs, Math.max(0, deadline - now())), signal);
+      await abortableSleep(Math.min(idlePollMs, Math.max(0, deadline - now())), signal);
     }
   }
 
@@ -210,7 +198,7 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
       });
       // Nobody sits at a standalone backend: the countdown is the window in
       // which a remote client may still cancel.
-      await sleep(Math.max(0, restartAt - now()), signal);
+      await abortableSleep(Math.max(0, restartAt - now()), signal);
       if (signal.aborted) return;
       const recorded = report({ state: "restarting" });
       if (recorded.job?.id !== job.id || recorded.job.state !== "restarting") return;

@@ -1,7 +1,7 @@
 # Agent-account login cancellation misses its spawned child under load
 
 - **ID:** 0770
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Owner:** `apps/backend/src/core/agent-accounts.test.ts`
 - **Test:** `agent accounts > cancellation during login startup still reaches the spawned process`
@@ -17,3 +17,29 @@
 - **Disposition:** open.
 - **Evidence:** the bounded poll `for (let n = 0; n < 100 && !child; n += 1) await Bun.sleep(1);` is still at `agent-accounts.test.ts:296`. The failure took 905 ms, so all 100 sleeps ran out before the spawn. The owner passed alone today (38/38, 5.4 s; Bun 1.4.4).
 - **Next step:** resolve a promise from `spawnImpl` and await it with a bounded deadline, instead of counting sleeps.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** the test waited for the fake login child with a count of
+  100 `Bun.sleep(1)` calls. `startAgentAccountLogin` loads the account store,
+  prepares the account home and writes the browser shim before it spawns,
+  and on a loaded host that took longer than the loop, so `child` was still
+  `undefined`. Nothing in the product raced.
+- **Fix:** `agent-accounts.test.ts` resolves a deferred from `spawnImpl` and
+  waits for it, or for the start to settle without a spawn, with
+  `Promise.race`; the assertion is unchanged.
+- **Reproduced:** yes — with a temporary `await Bun.sleep(500)` before
+  `beginAgentAccountLogin` in `agent-accounts.ts`, the unchanged test (a
+  scratch copy of `HEAD`'s owner) failed with `expect(received).toBeDefined()
+  / Received: undefined` (420.83 ms); the fixed test passed under the same
+  delay (`bun test --preload ../../tests/setup-node.ts
+  ./src/core/agent-accounts.test.ts -t "cancellation during login startup"`
+  from `apps/backend`). The delay and the scratch copy were removed.
+- **Stress:** `mise run test:logged -- --name fixed-accounts -- bun
+  scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload
+  ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts
+  --rerun-each=5` passed (macOS, unpinned burners, host load ~35 to 55).
+  A longer run, `mise run test:logged -- --name fixed-accounts-10 -- bun
+  scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload
+  ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts
+  --rerun-each=10`, also passed.

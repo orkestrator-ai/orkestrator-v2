@@ -9,6 +9,7 @@ import {
   containerProcessesInSessions,
   containerSessionsRunning,
 } from "./container-terminal-processes";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * The Claude terminal state signal (`claude-state-signal=2`) with a real
@@ -204,15 +205,6 @@ async function login(page: Page, testInfo: TestInfo, status: Status): Promise<In
   };
 }
 
-/** Terminal output as plain text, without escape sequences. */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_=>]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-
 /** Poll every 50 ms until `predicate` holds; the host time it first held. */
 async function firstTimeTrue(
   predicate: () => Promise<boolean>,
@@ -342,7 +334,7 @@ test("Docker fixture live terminal Claude turn rings the state signal within bud
     sessionId = ((await (await attached).json()) as { result: { sessionId: string } }).result
       .sessionId;
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     /** The latest screenful, lower-cased without whitespace (cursor moves are stripped). */

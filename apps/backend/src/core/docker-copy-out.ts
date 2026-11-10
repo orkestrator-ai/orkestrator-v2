@@ -1,4 +1,8 @@
-import { isDockerDaemonUnreachable, isDockerPathNotFound } from "./docker-cli-errors.js";
+import {
+  isDockerCopyRemountRefused,
+  isDockerDaemonUnreachable,
+  isDockerPathNotFound,
+} from "./docker-cli-errors.js";
 import { CommandFailedError, runCommandBuffer } from "./shell.js";
 
 /**
@@ -12,6 +16,11 @@ export type CopyOutResult =
   | { kind: "absent" }
   /** The CLI reached no daemon. */
   | { kind: "daemon-unavailable" }
+  /**
+   * The daemon could not remount one of the container's read-only binds, so
+   * it refuses every copy for this container (`docker-copy-refusal.ts`).
+   */
+  | { kind: "refused" }
   | { kind: "failed" }
   | { kind: "oversized" };
 
@@ -37,6 +46,7 @@ export async function copyOutBounded(
     if (error.outputLimitExceeded) return { kind: "oversized" };
     if (isDockerPathNotFound(error.stderr)) return { kind: "absent" };
     if (isDockerDaemonUnreachable(error.stderr)) return { kind: "daemon-unavailable" };
+    if (isDockerCopyRemountRefused(error.stderr)) return { kind: "refused" };
     return { kind: "failed" };
   }
 }

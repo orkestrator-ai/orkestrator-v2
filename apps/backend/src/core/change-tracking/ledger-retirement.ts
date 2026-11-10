@@ -948,16 +948,19 @@ export class LedgerRetirement {
         )
       )
         return false;
-    const [from, to] = under(`turn-start:${turnId}:`);
-    if (
-      !this.drain(
-        "change_capture_attempts",
-        "boundary_key >= ? AND boundary_key < ?",
-        [from, to],
-        budget,
+    // Retried starts and background end recoveries reserve one key per attempt.
+    for (const prefix of [`turn-start:${turnId}:`, `turn-recover:${turnId}:`]) {
+      const [from, to] = under(prefix);
+      if (
+        !this.drain(
+          "change_capture_attempts",
+          "boundary_key >= ? AND boundary_key < ?",
+          [from, to],
+          budget,
+        )
       )
-    )
-      return false;
+        return false;
+    }
     for (const key of [`turnops:${turnId}`, `pturn:${turnId}`])
       if (!this.drain("change_ledger_meta", "key = ?", [key], budget)) return false;
     return true;

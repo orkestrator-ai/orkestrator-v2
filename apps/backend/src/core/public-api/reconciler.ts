@@ -192,6 +192,8 @@ for (const action of [
   "session.config.set",
   "session.resume",
   "session.fork",
+  "session.rewind",
+  "session.branch",
   "session.steer",
   "session.stop",
   "session.interaction.resolve",

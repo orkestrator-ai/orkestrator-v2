@@ -220,6 +220,29 @@ export function restorePreflightDeadlineMs(
   );
 }
 
+/**
+ * How long the apply's recovery checkpoint and result captures may take. The
+ * checkpoint captures the whole worktree just after a bulk turn, which is cold
+ * for every file the turn wrote when the turn's own end capture was the only
+ * earlier publish; a fixed 10 s refused bulk restores on a busy host before
+ * writing anything (todo 7310). The user is already waiting on an explicit
+ * action, and the checkpoint is what makes the apply recoverable, so it gets
+ * at least the turn finalization deadline, more for a large plan as the
+ * preview does, up to the same ceiling.
+ */
+export function restoreCaptureDeadlineMs(
+  paths: number,
+  policy: Pick<
+    ChangeTrackingPolicy,
+    | "finalizationDeadlineMs"
+    | "restorePreflightDeadlineMs"
+    | "restorePreflightPerPathMs"
+    | "restorePreflightMaxDeadlineMs"
+  >,
+): number {
+  return Math.max(policy.finalizationDeadlineMs, restorePreflightDeadlineMs(paths, policy));
+}
+
 function matchesAction(action: RestoreAction, record: ReadRecord | undefined): boolean {
   if (!record) return false;
   if (record.kind === "missing") return action.expectedOid === null && action.expectedMode == null;
@@ -241,6 +264,9 @@ export class ChangeRestoreService {
       tokenTtlMs: () => number;
       /** Destination preflight deadline for a plan of this many paths. */
       preflightDeadlineMs: (paths: number) => number;
+      /** Checkpoint and result capture deadline for an apply of this many paths. */
+      captureDeadlineMs: (paths: number) => number;
+      beforeCheckpoint?: (worktreeId: string) => void;
       onApplied?: (worktreeId: string, environmentId: string | null) => void;
     },
   ) {}
@@ -503,10 +529,12 @@ export class ChangeRestoreService {
     const completed: string[] = [];
     const failed: string[] = [];
     let outcome: ChangesApplyRestoreResult;
+    const captureDeadlineMs = this.deps.captureDeadlineMs(payload.actions.length);
     try {
+      this.deps.beforeCheckpoint?.(payload.worktreeId);
       const checkpoint = await owner.capture({
         purpose: "restore-checkpoint",
-        deadlineMs: 10_000,
+        deadlineMs: captureDeadlineMs,
         boundaryKey: `restore-checkpoint:${operationId}`,
       });
       if (checkpoint.kind !== "published") throw new Error("checkpoint-unavailable");
@@ -582,7 +610,7 @@ export class ChangeRestoreService {
       owner.invalidate(completed);
       await owner.capture({
         purpose: "restore-result",
-        deadlineMs: 10_000,
+        deadlineMs: captureDeadlineMs,
         boundaryKey: `restore-result:${operationId}`,
       });
       outcome = {

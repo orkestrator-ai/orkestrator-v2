@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import os from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
+import { bridgeRestarts } from "../src/core/bridge-restarts.js";
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
 
@@ -2244,6 +2245,7 @@ exit 0
       try {
         await withFakeDocker(dockerScript, async (logs) => {
           const captured = captureLogs();
+          const launchesBefore = bridgeRestarts.snapshot().codex?.containerLaunches ?? 0;
           const result = (await commands.get("start_codex_server")?.(
             { containerId: "container-codex-legacy" },
             context,
@@ -2252,6 +2254,8 @@ exit 0
             .records()
             .filter((record) => record.event === "bridge.launched");
           captured.restore();
+          // The health row counts the relaunch beside its log line.
+          expect(bridgeRestarts.snapshot().codex?.containerLaunches).toBe(launchesBefore + 1);
 
           expect(result).toMatchObject({ hostPort, wasRunning: false });
           expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);

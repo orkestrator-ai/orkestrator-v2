@@ -1680,6 +1680,7 @@ export async function forkSession(
 export async function navigateSessionHistory(
   state: SessionState,
   messageOrEntryId: string,
+  position: "before" | "at" = "before",
 ): Promise<void> {
   if (state.status === "running" || state.dispatching) throw new SessionBusyError();
   const session = await ensureSession(state);
@@ -1692,6 +1693,12 @@ export async function navigateSessionHistory(
   if (!target) throw new HistoryTargetError();
   const result = await session.navigateTree(target, { summarize: false });
   if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
+  // Tree navigation edits user/custom messages by stopping at their parent.
+  // Branch selection must retain the selected leaf, including reply-less prompts.
+  if (position === "at" && session.sessionManager.getLeafId() !== target) {
+    session.sessionManager.branch(target);
+    session.refreshContext();
+  }
   // In memory only until a prompt appends under it; the render below and every
   // later reopen of the file read it from here.
   rememberHistoryLeaf(state, session.sessionManager);

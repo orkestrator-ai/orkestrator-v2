@@ -207,6 +207,18 @@ export function startImageUpdate(
  */
 let imageUpdateInFlight: Promise<Record<string, unknown>> | null = null;
 
+/** Callers parked on an in-flight image update. */
+let imageUpdateWaiters = 0;
+
+/**
+ * How many callers are waiting on an in-flight image update. Lets a caller (a
+ * test) know a start has joined the download before it settles that
+ * download, rather than guessing with a sleep (flake case 6614).
+ */
+export function imageUpdateWaiterCount(): number {
+  return imageUpdateWaiters;
+}
+
 /**
  * Downloads the release image when the default environment image is missing,
  * so a new or reset Docker engine needs no manual build before the first
@@ -235,6 +247,7 @@ export async function ensureEnvironmentImage(
   }
   const download = imageUpdateInFlight;
   if (!download) return;
+  imageUpdateWaiters += 1;
   try {
     await download;
   } catch (error) {
@@ -243,6 +256,8 @@ export async function ensureEnvironmentImage(
       `Environment image download failed: ${releaseImageReference()}: ${message(error)}`,
       { cause: error },
     );
+  } finally {
+    imageUpdateWaiters -= 1;
   }
 }
 

@@ -5,10 +5,11 @@
 Analysed 2026-11-06 against `main` at `c1724ab74`, from the client-side
 latency run of [0048](0048-recurring-work-qualification.md) task 2 (see its
 [macOS evidence](0048-recurring-work-qualification.md#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos)).
+Task 1 done 2026-11-10 against `main` at `04639b12b`.
 
 ### Tasks
 
-1. **Decide the explicit-refresh tail on containers**: about one Changes-tab Refresh in fifteen on a container exceeds the ≤ 1 s budget, because it follows a scan already running. Accept it in the budget table or change how a refresh joins a running scan. Status: open.
+1. **Decide the explicit-refresh tail on containers**: about one Changes-tab Refresh in fifteen on a container exceeds the ≤ 1 s budget, because it follows a scan already running. Accept it in the budget table or change how a refresh joins a running scan. Status: done (2026-11-10: accepted as "≤ 1 s, or one scan longer when a scan is already running", recorded in the budget table; conditional qualification remains unverified).
 
 ### 1. Decide the explicit-refresh tail on containers
 
@@ -21,7 +22,7 @@ latency run of [0048](0048-recurring-work-qualification.md) task 2 (see its
 **Decisions.**
 
 - **What to do about the tail?**
-  - **Accept it: amend the budget row to "≤ 1 s, or one scan longer when a scan is already running" and record the measured p95 (recommended).**
+  - **Accept it: amend the budget row to "≤ 1 s, or one scan longer when a scan is already running" and record the measured p95 (recommended, done).**
     - Pros: no scheduling change; the fence that makes a refresh trustworthy stays; the extra wait is bounded by one scan.
     - Cons: the budget becomes conditional; a slow container makes the tail longer.
   - **Abort the running scan on an explicit refresh and start a fresh one.**
@@ -30,6 +31,39 @@ latency run of [0048](0048-recurring-work-qualification.md) task 2 (see its
   - **Run a second scan concurrently instead of following.**
     - Pros: the refresh starts at once.
     - Cons: two scans of one container at a time, which the admission design avoids (`git-docker-scan` keyed by container).
+
+## Assumptions and decisions
+
+### R1. The budget row and its measurement (task 1)
+
+The Files panel row of the [latency budgets](../../architecture/recurring-work.md#latency-budgets)
+now reads "≤ 6 s; ≤ 1 s after an explicit action, or one scan longer when a
+scan is already running", with the measured figures in its notes (p50 425 to
+543 ms, p95 1.30 s and 2.23 s over two runs of 15; All files max 881 ms). The
+data-saving paragraph below the table says the same for an explicit action.
+No scheduling changed: `ChangeTrackingService.refresh` and
+`DiffStatsService.request(entry, "refresh")` still follow a running scan, so
+a refresh never settles on a scan that may predate the click.
+
+### R2. How the qualification check encodes "one scan longer" (task 1)
+
+The review found that estimating scan duration from the same refresh series'
+median lets uniformly slow refreshes pass. That estimate has been removed.
+The container Changes row is explicitly unverified and cannot pass qualification
+until independent evidence identifies scan overlap and duration for each refresh.
+Other rows retain their base p95 budgets. Tests reject uniformly slow refreshes
+and refuse to qualify the conditional row even when all its samples are fast.
+
+Decision: defer scan instrumentation (recommended) rather than infer an allowance
+from refresh latency. This avoids a false pass but leaves live qualification open.
+Independent backend scan timing would allow exact qualification but requires
+additional instrumentation beyond the existing harness.
+
+## Needs verification
+
+- Neither macOS run proves the conditional budget: their summaries do not
+  establish scan overlap or duration. Container qualification in 0048 task 2
+  also remains open. Measure both independently before applying any allowance.
 
 ## Related
 

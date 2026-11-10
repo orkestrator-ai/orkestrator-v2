@@ -294,6 +294,10 @@ describe("rootful arguments and configuration", () => {
       "live-restore": true,
       "default-network-opts": { bridge: { "com.docker.network.enable_ipv6": "true" } },
     });
+    expect(nestedDaemonConfig({ ...settings, storage: "overlay2" })).toMatchObject({
+      features: { "containerd-snapshotter": false },
+      "storage-driver": "overlay2",
+    });
   });
 
   test("the container is labelled, privileged, pinned, on the default bridge and publishes nothing", () => {

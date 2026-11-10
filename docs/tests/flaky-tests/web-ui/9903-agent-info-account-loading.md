@@ -1,7 +1,7 @@
 # Agent account loading after controls appear
 
 - **ID:** 9903
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-09
 - **File:** `apps/web/src/components/layout/AgentInfoButton.test.tsx:1064`
 
@@ -38,3 +38,23 @@ changed by this branch. No timeout, assertion or production behavior was altered
 Reproduce the competing loading/control renders before changing the test or
 component; determine whether the UI should settle atomically or the test should
 await the completed account read. This is the first recorded observation.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** a race in the test. `AgentInfoAccountSection` renders the
+  settings button ("Add an account") while `session` is still null, alongside
+  "Reading account…", and the account read starts a microtask after mount.
+  The test waited for the button, which is present from the first render, and
+  then asserted synchronously that the loading label was gone. It passed only
+  when Testing Library's post-`findBy` drain happened to let the mocked reads
+  resolve and React commit before the next assertion; under load the commit
+  came later.
+- **Fix:** `apps/web/src/components/layout/AgentInfoButton.test.tsx` now waits
+  for the loading label to disappear (the read settling) and then asserts the
+  button and the remaining placement checks. The assertions are unchanged.
+- **Reproduced:** yes — a temporary `await Bun.sleep(30)` in the
+  `get_native_agent_session_account` mock made both provider cases fail at
+  line 1065 (`Expected: true, Received: false`); with the fix and the same
+  delay both passed (`mise run test:logged -- --name repro-9903-fixed -- bun --cwd=apps/web test src/components/layout/AgentInfoButton.test.tsx --parallel=1 -t "account controls directly below usage"`).
+- **Stress:** `mise run test:logged -- --name stress-9903 -- bun scripts/test-under-contention.ts -- bun --cwd=apps/web test src/components/layout/AgentInfoButton.test.tsx --parallel=1 --rerun-each=10`
+  passed (exit 0, 228 s, host load average about 34).

@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, GitPullRequest, ListTodo, MessageCircle, Minus, Tag } from "lucide-react";
+import { ListTodo, Minus, Search } from "lucide-react";
 import {
   FloatingNoticeSlot,
   useClaimFloatingNoticeColumnShift,
 } from "@/components/ui/floating-notice";
 import type { CoordinatorActionCard } from "./coordinator-action-cards";
+import { coordinatorActionIcon, coordinatorActionStatus } from "./coordinator-action-search";
+import { CoordinatorActionSearchDialog } from "./CoordinatorActionSearch";
 import {
   setCoordinatorActionsDockedOpen,
   useCoordinatorActionsDockedOpen,
@@ -13,9 +15,12 @@ import { cn } from "@/lib/utils";
 
 export function CoordinatorActionsPanel({
   cards,
+  searchCards,
   onNavigate,
 }: {
   cards: readonly CoordinatorActionCard[];
+  /** Every action in the conversation, for search; defaults to `cards`. */
+  searchCards?: readonly CoordinatorActionCard[];
   onNavigate: (anchorId: string) => void;
 }) {
   return (
@@ -27,6 +32,7 @@ export function CoordinatorActionsPanel({
         return (
           <ActionsPanel
             cards={cards}
+            searchCards={searchCards}
             onNavigate={onNavigate}
             docked={layout.placement === "beside" || shift !== null}
             shiftsColumn={shift !== null}
@@ -41,6 +47,7 @@ export function CoordinatorActionsPanel({
 
 export function ActionsPanel({
   cards,
+  searchCards = cards,
   onNavigate,
   docked,
   shiftsColumn = false,
@@ -48,6 +55,11 @@ export function ActionsPanel({
   availableHeight,
 }: {
   cards: readonly CoordinatorActionCard[];
+  /**
+   * Every action in the conversation, older and unloaded ones included. The
+   * panel shows only the newest few; search covers all of these.
+   */
+  searchCards?: readonly CoordinatorActionCard[];
   onNavigate: (anchorId: string) => void;
   /** Room to dock beside the column: the panel stays open until its header folds it. */
   docked: boolean;
@@ -61,6 +73,12 @@ export function ActionsPanel({
   availableHeight?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // The search palette holds a narrow overlay open behind it, so closing it
+  // can hand focus back to the button that opened it.
+  const [searching, setSearching] = useState(false);
+  const searchOrigin = useRef<HTMLButtonElement | null>(null);
+  const searchChose = useRef(false);
+  const [searchedAt, setSearchedAt] = useState(() => new Date());
   const [present, setPresent] = useState(() => cards.map((card) => ({ card, leaving: false })));
   useEffect(() => {
     // Keep only the preceding ten cards during the short exit. Semantic
@@ -146,7 +164,7 @@ export function ActionsPanel({
     [],
   );
   useEffect(() => {
-    if (docked || !expanded) return;
+    if (docked || !expanded || searching) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       suppressed.current = true;
@@ -164,8 +182,8 @@ export function ActionsPanel({
       document.removeEventListener("keydown", escape);
       document.removeEventListener("pointerdown", outside);
     };
-  }, [docked, expanded]);
-  const shown = docked ? dockedOpen : expanded;
+  }, [docked, expanded, searching]);
+  const shown = docked ? dockedOpen : expanded || searching;
   useClaimFloatingNoticeColumnShift(docked && shiftsColumn && shown);
   useLayoutEffect(() => {
     // Shared preference updates and resizing can hide a focused card too.
@@ -241,160 +259,217 @@ export function ActionsPanel({
     current.slice(0, Math.max(0, current.length - fitted)).map(({ card }) => card.id),
   );
 
+  const openSearch = (button: HTMLButtonElement) => {
+    cancel();
+    searchOrigin.current = button;
+    searchChose.current = false;
+    setSearchedAt(new Date());
+    setSearching(true);
+  };
+  const closeSearch = () => {
+    setSearching(false);
+    if (docked) return;
+    // Dismissed: the overlay stays open around the button focus returns to.
+    suppressed.current = false;
+    setExpanded(true);
+  };
+  const chooseAction = (card: CoordinatorActionCard) => {
+    searchChose.current = true;
+    setSearching(false);
+    if (!docked) {
+      // Chosen: the overlay folds so the conversation it moves to is in view,
+      // and stays folded until the pointer or focus leaves it.
+      suppressed.current = true;
+      setExpanded(false);
+    }
+    onNavigate(card.anchorId);
+  };
+  const searchButton = (placement: "header" | "folded") => (
+    <button
+      type="button"
+      aria-label="Search actions"
+      aria-haspopup="dialog"
+      tabIndex={placement === "header" && !shown ? -1 : 0}
+      onClick={(event) => openSearch(event.currentTarget)}
+      className={cn(
+        "flex shrink-0 items-center justify-center focus-hairline",
+        placement === "header"
+          ? "size-6 rounded-md text-muted-foreground hover:bg-elevated hover:text-foreground"
+          : "size-8 rounded-full border border-border bg-panel-surface shadow-lg hover:bg-elevated",
+      )}
+    >
+      <Search className={placement === "header" ? "size-3.5" : "size-4"} aria-hidden="true" />
+    </button>
+  );
+
   const waiting = cards.filter((card) => card.kind !== "topic" && !card.done).length;
   return (
-    <div
-      ref={root}
-      className="pointer-events-auto max-w-full shrink-0"
-      style={{ order: 3, width: shown ? `${width}rem` : "fit-content", position: "relative" }}
-      onPointerEnter={(event) => {
-        if (docked || event.pointerType === "touch") return;
-        pointer.current = true;
-        suppressed.current = false;
-        open();
-      }}
-      onPointerLeave={(event) => {
-        if (docked || event.pointerType === "touch") return;
-        pointer.current = false;
-        suppressed.current = false;
-        leave();
-      }}
-      onFocus={open}
-      onBlur={(event) => {
-        if (docked) return;
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+    <>
+      <div
+        ref={root}
+        className="pointer-events-auto max-w-full shrink-0"
+        style={{ order: 3, width: shown ? `${width}rem` : "fit-content", position: "relative" }}
+        onPointerEnter={(event) => {
+          if (docked || event.pointerType === "touch") return;
+          pointer.current = true;
+          suppressed.current = false;
+          open();
+        }}
+        onPointerLeave={(event) => {
+          if (docked || event.pointerType === "touch") return;
+          pointer.current = false;
           suppressed.current = false;
           leave();
-        }
-      }}
-      onKeyDown={(event) => {
-        if (docked || event.key !== "Escape") return;
-        event.stopPropagation();
-        cancel();
-        suppressed.current = true;
-        setExpanded(false);
-      }}
-    >
-      {(!docked || !shown) && (
-        <button
-          ref={icon}
-          type="button"
-          aria-label={`Actions, ${waiting} waiting`}
-          aria-expanded={shown}
-          className="ml-auto flex h-8 items-center gap-1 rounded-full border border-border bg-panel-surface px-2 shadow-lg focus-hairline"
-          onPointerDown={(event) => {
-            touch.current = event.pointerType === "touch";
-            if (touch.current && !docked) suppressed.current = true;
-          }}
-          onClick={() => {
-            cancel();
-            if (docked) {
-              focusAfter.current = "header";
-              setCoordinatorActionsDockedOpen(true);
-            } else if (touch.current) {
-              setExpanded((value) => !value);
-              suppressed.current = false;
-            } else setExpanded(true);
-          }}
-        >
-          <ListTodo className="size-4" />
-          <span className="text-xs">{waiting}</span>
-        </button>
-      )}
-      <section
-        aria-label="Actions"
-        aria-hidden={!shown}
-        className={cn(
-          "grid origin-top-right transition-[grid-template-rows,opacity,transform] duration-150 motion-reduce:transition-none",
-          shown
-            ? "grid-rows-[1fr] scale-100 opacity-100"
-            : "pointer-events-none grid-rows-[0fr] scale-95 opacity-0",
-        )}
-        style={{
-          width: `${width}rem`,
-          maxWidth: shown ? "100%" : undefined,
-          position: shown ? "relative" : "absolute",
-          right: 0,
+        }}
+        onFocus={open}
+        onBlur={(event) => {
+          if (docked) return;
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            suppressed.current = false;
+            leave();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (docked || event.key !== "Escape") return;
+          event.stopPropagation();
+          cancel();
+          suppressed.current = true;
+          setExpanded(false);
         }}
       >
-        <div className="min-h-0 overflow-hidden">
-          <div
-            ref={box}
-            data-actions-panel-box=""
-            className="mt-1 overflow-hidden rounded-xl border border-border bg-panel-surface/95 p-2 shadow-xl backdrop-blur-sm"
-            style={{ maxHeight: fit?.maxHeight }}
-          >
-            <h2 className="text-xs font-medium text-muted-foreground">
-              <button
-                ref={header}
-                type="button"
-                aria-label="Collapse actions"
-                aria-expanded={shown}
-                tabIndex={shown ? 0 : -1}
-                onClick={collapse}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-elevated hover:text-foreground focus-hairline"
-              >
-                <span className="flex-1">Actions</span>
-                <span>{waiting} waiting</span>
-                <Minus className="size-3.5 shrink-0" aria-hidden="true" />
-              </button>
-            </h2>
-            {cards.length === 0 && (
-              <p className="p-2 text-xs text-muted-foreground">No actions here yet.</p>
-            )}
-            <ol ref={list} className="flex flex-col gap-1">
-              {present.map(({ card, leaving }) => {
-                const Icon = card.done
-                  ? Check
-                  : card.kind === "topic"
-                    ? Tag
-                    : card.kind === "pr"
-                      ? GitPullRequest
-                      : MessageCircle;
-                return (
-                  <li
-                    key={card.id}
-                    hidden={trimmed.has(card.id) || undefined}
-                    data-leaving={leaving || undefined}
-                    aria-hidden={leaving || undefined}
-                    className={cn(
-                      "grid transition-[grid-template-rows,opacity,transform] duration-150 motion-reduce:transition-none",
-                      leaving
-                        ? "grid-rows-[0fr] translate-y-2 opacity-0"
-                        : "grid-rows-[1fr] opacity-100 animate-in fade-in slide-in-from-bottom-1 motion-reduce:animate-none",
-                    )}
-                  >
-                    <div className="min-h-0 overflow-hidden">
-                      <button
-                        type="button"
-                        tabIndex={shown && !leaving ? 0 : -1}
-                        onClick={() => onNavigate(card.anchorId)}
-                        className={cn(
-                          "flex w-full gap-2 rounded-lg border border-border p-2 text-left text-xs hover:bg-elevated focus-hairline",
-                          card.done && "text-muted-foreground opacity-60",
-                        )}
-                        aria-label={`${card.done ? "Done: " : ""}${card.title}`}
-                      >
-                        <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                        <span className="min-w-0">
-                          <span className="line-clamp-2">{card.title}</span>
-                          <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                            {card.done
-                              ? "Done"
-                              : (card.state ??
-                                (card.kind === "topic" ? "Topic" : "Awaiting answer"))}
-                          </span>
-                        </span>
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
+        {(!docked || !shown) && (
+          <div className="ml-auto flex w-fit items-center gap-1">
+            {/* Docked and folded, nothing expands on hover, so search sits beside the icon. */}
+            {docked && searchButton("folded")}
+            <button
+              ref={icon}
+              type="button"
+              aria-label={`Actions, ${waiting} waiting`}
+              aria-expanded={shown}
+              className="flex h-8 items-center gap-1 rounded-full border border-border bg-panel-surface px-2 shadow-lg focus-hairline"
+              onPointerDown={(event) => {
+                touch.current = event.pointerType === "touch";
+                if (touch.current && !docked) suppressed.current = true;
+              }}
+              onClick={() => {
+                cancel();
+                if (docked) {
+                  focusAfter.current = "header";
+                  setCoordinatorActionsDockedOpen(true);
+                } else if (touch.current) {
+                  setExpanded((value) => !value);
+                  suppressed.current = false;
+                } else setExpanded(true);
+              }}
+            >
+              <ListTodo className="size-4" />
+              <span className="text-xs">{waiting}</span>
+            </button>
           </div>
-        </div>
-      </section>
-    </div>
+        )}
+        <section
+          aria-label="Actions"
+          aria-hidden={!shown}
+          className={cn(
+            "grid origin-top-right transition-[grid-template-rows,opacity,transform] duration-150 motion-reduce:transition-none",
+            shown
+              ? "grid-rows-[1fr] scale-100 opacity-100"
+              : "pointer-events-none grid-rows-[0fr] scale-95 opacity-0",
+          )}
+          style={{
+            width: `${width}rem`,
+            maxWidth: shown ? "100%" : undefined,
+            position: shown ? "relative" : "absolute",
+            right: 0,
+          }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div
+              ref={box}
+              data-actions-panel-box=""
+              className="mt-1 overflow-hidden rounded-xl border border-border bg-panel-surface/95 p-2 shadow-xl backdrop-blur-sm"
+              style={{ maxHeight: fit?.maxHeight }}
+            >
+              {/* The search button sits in the header row, beside the fold control. */}
+              <h2 className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                <button
+                  ref={header}
+                  type="button"
+                  aria-label="Collapse actions"
+                  aria-expanded={shown}
+                  tabIndex={shown ? 0 : -1}
+                  onClick={collapse}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-elevated hover:text-foreground focus-hairline"
+                >
+                  <span className="flex-1">Actions</span>
+                  <span>{waiting} waiting</span>
+                  <Minus className="size-3.5 shrink-0" aria-hidden="true" />
+                </button>
+                {searchButton("header")}
+              </h2>
+              {cards.length === 0 && (
+                <p className="p-2 text-xs text-muted-foreground">No actions here yet.</p>
+              )}
+              <ol ref={list} className="flex flex-col gap-1">
+                {present.map(({ card, leaving }) => {
+                  const Icon = coordinatorActionIcon(card);
+                  return (
+                    <li
+                      key={card.id}
+                      hidden={trimmed.has(card.id) || undefined}
+                      data-leaving={leaving || undefined}
+                      aria-hidden={leaving || undefined}
+                      className={cn(
+                        "grid transition-[grid-template-rows,opacity,transform] duration-150 motion-reduce:transition-none",
+                        leaving
+                          ? "grid-rows-[0fr] translate-y-2 opacity-0"
+                          : "grid-rows-[1fr] opacity-100 animate-in fade-in slide-in-from-bottom-1 motion-reduce:animate-none",
+                      )}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <button
+                          type="button"
+                          tabIndex={shown && !leaving ? 0 : -1}
+                          onClick={() => onNavigate(card.anchorId)}
+                          className={cn(
+                            "flex w-full gap-2 rounded-lg border border-border p-2 text-left text-xs hover:bg-elevated focus-hairline",
+                            card.done && "text-muted-foreground opacity-60",
+                          )}
+                          aria-label={`${card.done ? "Done: " : ""}${card.title}`}
+                        >
+                          <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                          <span className="min-w-0">
+                            <span className="line-clamp-2">{card.title}</span>
+                            <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                              {coordinatorActionStatus(card)}
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          </div>
+        </section>
+      </div>
+      <CoordinatorActionSearchDialog
+        open={searching}
+        cards={searchCards}
+        now={searchedAt}
+        onSelect={chooseAction}
+        onClose={closeSearch}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          // A dismissal returns to the button that opened the palette. After a
+          // choice the narrow overlay has folded, so its icon takes focus.
+          const target =
+            searchChose.current && !docked ? icon.current : (searchOrigin.current ?? icon.current);
+          (target?.isConnected ? target : (header.current ?? icon.current))?.focus();
+        }}
+      />
+    </>
   );
 }
 

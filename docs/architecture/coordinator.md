@@ -4093,3 +4093,25 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Searching actions
+
+A magnifying-glass button labelled "Search actions" opens a palette styled and
+driven like the ⌘K project search (`CoordinatorActionSearch.tsx`). It sits in
+the panel's header row, beside the fold control, whenever the panel is open
+(docked, or the narrow overlay once expanded); a folded docked panel shows it
+beside the icon instead, since nothing there expands on hover.
+
+The palette searches every action the shell derives (`actionCards`: recovered
+history plus the loaded transcript), not the ten cards the panel shows. Each
+whitespace-separated term must start a word of the title, the kind ("topic",
+"question", "pr", "pull request") or the state ("open", "merged", "done",
+"awaiting answer"…), case-insensitively; results are newest first, and an empty
+query lists everything. Arrow keys move the selection, Enter or a click
+chooses, and Escape closes with focus back on the button that opened it. While
+it is open the narrow overlay stays expanded behind it; choosing folds the
+overlay and focuses its icon.
+
+Choosing calls the same navigation as a card: a scroll target for the action's
+anchor message, which pages earlier history until a not-yet-loaded anchor is
+rendered. There is no keyboard shortcut for the palette.

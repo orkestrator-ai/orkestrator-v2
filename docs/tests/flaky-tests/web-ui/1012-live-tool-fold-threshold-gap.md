@@ -174,3 +174,14 @@ both reruns, so the one-worker owner did not get the idle host the earlier
 passing reruns had. The cause remains unconfirmed. Status stays open. No
 assertion, timeout or skip changed.
 
+## Action-search review repair — 2026-11-10
+
+Preparation for the coordinator action-search branch (`action-search-modal-1162dc5c0a2a-r1`, base `53340356c`, validated at `300105a39`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 5 failed, 5 flaky, 152 skipped, 1656 passed. The branch changes only the coordinator Actions panel, which renders for coordinator tabs; neither spec opens one. Evidence: `validation-11.stdout.txt` under `.orkestrator/review-artifacts/review-validation-985e2298-c3a5-42bd-bd66-83c90557e178/`. Both mobile-chromium and desktop-chromium failed `expect(received).toBeLessThanOrEqual(2)` (desktop received 8, then 51 on retry).
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 296.8 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

@@ -192,6 +192,25 @@ The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 | 14 | `session goal --wait`: cleared or replaced before it ended, or there is no goal | `goal-gone` |
 | 130 / 143 | Observation stopped by SIGINT / SIGTERM (`observation-interrupted`) | |
 
+`retryable: true` says that trying again may succeed; how depends on the
+code. On `dispatch-unknown` it means retry the same run under the same key
+(`run retry`), because the prompt may have arrived. On `operation-failed` from
+`session start`, `session prompt` or `session command` it means the provider
+refused the prompt as temporarily unavailable before anything was sent (a
+bridge's 503, 404 or 409 on dispatch, an unreachable bridge): the receipt says
+`dispatch: "rejected"`, nothing stays parked, and the same prompt under a
+**new** key may succeed. The same key still replays the failure, without
+`retryable`, as every replay does. A refusal that will not change on its own
+(no input, a removed command, a parked dispatch) has no `retryable`.
+
+For a refused `session start` that already created a provider conversation,
+reuse the failed receipt's `sessionId` with `session prompt` under a new key.
+This sends the initial prompt in the existing tab; repeating `session start`
+under a new key intentionally creates another tab. If provider conversation
+creation itself failed, retry `session start` under a new key and close the
+unused tab from the failed receipt. Failed tabs are retained so their identity
+and failure remain inspectable; retries do not silently remove conversations.
+
 An HTTP 200 carrying a rejected or unknown outcome is never a success. Errors
 are never classified by matching English text; the one gateway message the
 client recognizes is the gateway's own `Unknown backend command:` for a

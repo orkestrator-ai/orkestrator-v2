@@ -368,19 +368,20 @@ const sessionCommand: MutationActionHandler<CommandInput> = {
           stage: "dispatching",
           resources: { dispatchRequestId: requestId },
         });
-        const outcome = await context.invoke<{ outcome: string; error?: string }>(
-          "dispatch_native_agent_intent",
-          {
-            environmentId: session.environment.id,
-            agent: session.agent,
-            logicalSessionKey: session.logicalSessionKey,
-            requestId,
-            prompt: text,
-            command: intent,
-            ...(mode ? { mode } : {}),
-          },
-        );
-        return dispatchOutcome(outcome.outcome, outcome.error, result);
+        const outcome = await context.invoke<{
+          outcome: string;
+          error?: string;
+          transient?: boolean;
+        }>("dispatch_native_agent_intent", {
+          environmentId: session.environment.id,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          requestId,
+          prompt: text,
+          command: intent,
+          ...(mode ? { mode } : {}),
+        });
+        return dispatchOutcome(outcome.outcome, outcome.error, result, outcome.transient);
       },
     };
   },

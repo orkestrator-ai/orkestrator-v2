@@ -198,6 +198,10 @@ ork session interactions resolve "$SESSION" "$INTERACTION" \
 ork run wait "$RUN"
 ```
 
+A command approval has no questions: approve it with `--action answer` and no
+`--choose` or `--text` (or refuse it with `--action deny`). The backend
+refuses an empty answer to an interaction with a required question (exit 2).
+
 `ork session interactions hold "$SESSION" "$INTERACTION"` pauses a countdown
 (`--resume` restarts it); the listing shows the moved deadline and whether it
 is paused.

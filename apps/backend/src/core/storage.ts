@@ -880,6 +880,14 @@ export class StorageService {
     return this.repos.sessions.ensureBuildPipelineTab(input);
   }
 
+  ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+    completionRevision?: number;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.repos.sessions.ensureBuildPipelineNotesTab(input);
+  }
+
   ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureSetupTab(environmentId);
   }

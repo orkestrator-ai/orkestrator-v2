@@ -708,21 +708,42 @@ test("steering a Cursor turn whose steer history is full is refused, the turn ca
   const marker = uniqueMarker(platform);
   const held = `HOLD the harbour ${marker}`;
   const instruction = `/steer turn left at the lighthouse ${marker}`;
-  const requestsBefore = (await bridgeRequests(request, platform)).length;
-  await openEnvironment(page, request, platform);
-  await send(page, platform, held);
-  await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible({ timeout: 30_000 });
-
-  // Stop shows as soon as the dispatch starts, before the bridge has the prompt.
-  const promptRequest = async () =>
-    (await bridgeRequests(request, platform, requestsBefore)).find((line) =>
-      /^POST \/session\/[^/]+\/prompt$/.test(line),
+  let sessionId = "";
+  const runningTurn = async () => {
+    const response = await request.get(
+      `${origin}/cursor-running-turn?sessionId=${encodeURIComponent(sessionId)}`,
     );
-  await expect.poll(promptRequest, { message: "the held turn reached the bridge" }).toBeTruthy();
-  const prompted = await promptRequest();
-  const sessionId = decodeURIComponent(prompted!.split("/")[2]!);
+    expect(response.ok()).toBe(true);
+    return ((await response.json()) as { running: boolean }).running;
+  };
+  await request.post(`${origin}/cursor-prompt-gate`, { data: { held: true } });
+  try {
+    const requestsBefore = (await bridgeRequests(request, platform)).length;
+    await openEnvironment(page, request, platform);
+    await send(page, platform, held);
+    await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible({ timeout: 30_000 });
+
+    // The host logs dispatch before forwarding it. Hold that boundary so an
+    // outgoing request cannot be mistaken for a run the bridge accepted.
+    const promptRequest = async () =>
+      (await bridgeRequests(request, platform, requestsBefore)).find((line) =>
+        /^POST \/session\/[^/]+\/prompt$/.test(line),
+      );
+    await expect
+      .poll(promptRequest, { message: "the host started dispatching the held turn" })
+      .toBeTruthy();
+    const prompted = await promptRequest();
+    sessionId = decodeURIComponent(prompted!.split("/")[2]!);
+    expect(await runningTurn()).toBe(false);
+  } finally {
+    await request.post(`${origin}/cursor-prompt-gate`, { data: { held: false } });
+  }
+  await expect
+    .poll(runningTurn, { message: "the bridge accepted the held turn", timeout: 30_000 })
+    .toBe(true);
+
   // Fill the running turn's steer history straight at the bridge, as a long
-  // turn steered many times would have.
+  // turn steered many times would have. Only readiness reads are retried.
   const filled = (await (
     await request.post(`${origin}/cursor-saturate-steer`, { data: { sessionId } })
   ).json()) as { delivered?: number; refused?: string; error?: string };

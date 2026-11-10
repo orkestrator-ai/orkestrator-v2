@@ -77,6 +77,10 @@ interface PaneActivationSlot {
   // backend does not. Keep only the latest request per environment, so a later
   // foreground action supersedes an earlier one.
   readonly pendingTabActivations: Map<string, string>;
+  readonly completionNotesHandoffs: Map<
+    string,
+    { environmentId: string; completionRevision?: number }
+  >;
   readonly startupAgentActivationCommits: WeakMap<EnvironmentPaneState, string>;
   readonly buildPipelineActivationCommits: WeakMap<
     EnvironmentPaneState,
@@ -86,9 +90,50 @@ interface PaneActivationSlot {
 
 const paneActivations = defineScopedSlot<PaneActivationSlot>("pane-layout-activations", () => ({
   pendingTabActivations: new Map(),
+  completionNotesHandoffs: new Map(),
   startupAgentActivationCommits: new WeakMap(),
   buildPipelineActivationCommits: new WeakMap(),
 }));
+
+/** Window-local acknowledgement shared by the live observer and layout arrival. */
+export function markCompletionNotesHandled(
+  environmentId: string,
+  pipelineId: string,
+  scope: NodeScope,
+  completionRevision?: number,
+): void {
+  const handled = paneActivations(scope).completionNotesHandoffs;
+  const previous = handled.get(pipelineId);
+  if (
+    previous?.environmentId === environmentId &&
+    previous.completionRevision !== undefined &&
+    (completionRevision === undefined || previous.completionRevision >= completionRevision)
+  )
+    return;
+  handled.delete(pipelineId);
+  handled.set(pipelineId, { environmentId, completionRevision });
+  boundActivationMap(handled);
+}
+
+export function clearCompletionNotesHandled(pipelineId: string, scope: NodeScope): void {
+  paneActivations(scope).completionNotesHandoffs.delete(pipelineId);
+}
+
+export function hasCompletionNotesHandled(
+  environmentId: string,
+  pipelineId: string,
+  scope: NodeScope,
+  completionRevision?: number,
+): boolean {
+  const handled = paneActivations(scope).completionNotesHandoffs.get(pipelineId);
+  return (
+    handled?.environmentId === environmentId &&
+    (completionRevision === undefined
+      ? handled.completionRevision === undefined
+      : handled.completionRevision !== undefined &&
+        handled.completionRevision >= completionRevision)
+  );
+}
 
 function environmentById(scope: NodeScope, environmentId: string) {
   return scope.store(environmentStore).getState().getEnvironmentById(environmentId);
@@ -151,6 +196,55 @@ function applySetupTabArrival(
     return selected;
   }
   return activateTabInState(selected, tabId) ?? selected;
+}
+
+/**
+ * A finished build pipeline's notes tab, which the backend publishes and selects
+ * when the run completes (`ensureBuildPipelineNotesTab`), takes focus in a
+ * window the first time that window sees that completion publication. Manual
+ * Notes openings have no completion marker and preserve isolated selection.
+ * Arrival happens once per window,
+ * so a user who then returns to another tab is not pulled back.
+ */
+function applyCompletionNotesArrival(
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+  scope: NodeScope,
+): EnvironmentPaneState {
+  const leaf = findLeaf(
+    authoritative.root,
+    (candidate) => candidate.id === authoritative.activePaneId,
+  );
+  const tab = leaf?.tabs.find((candidate) => candidate.id === leaf.activeTabId);
+  if (
+    tab?.type !== "key-information" ||
+    tab.keyInformationTabData?.view !== "notes" ||
+    tab.keyInformationTabData.completionPublished !== true
+  ) {
+    return selected;
+  }
+  const data = tab.keyInformationTabData;
+  if (
+    hasCompletionNotesHandled(data.environmentId, data.pipelineId, scope, data.completionRevision)
+  ) {
+    return selected;
+  }
+  if (
+    findLeaf(current.root, (candidate) =>
+      candidate.tabs.some(
+        (previous) =>
+          previous.id === tab.id &&
+          previous.keyInformationTabData?.completionPublished === true &&
+          (data.completionRevision === undefined
+            ? previous.keyInformationTabData.completionRevision === undefined
+            : (previous.keyInformationTabData.completionRevision ?? -1) >= data.completionRevision),
+      ),
+    )
+  ) {
+    return selected;
+  }
+  return activateTabInState(selected, tab.id) ?? selected;
 }
 
 /**
@@ -680,14 +774,19 @@ export function reconcileAuthoritativePaneLayout(
   if (!restored) return null;
 
   if (window.orkestrator?.isolatedViewState) {
-    const selected = applySetupTabArrival(
+    const selected = applyCompletionNotesArrival(
       restored,
-      applyStoredPaneSelection(
-        preserveClientPaneSelection(restored, current),
-        environmentId,
-        readWindowPaneSelection(environmentId, scope),
+      applySetupTabArrival(
+        restored,
+        applyStoredPaneSelection(
+          preserveClientPaneSelection(restored, current),
+          environmentId,
+          readWindowPaneSelection(environmentId, scope),
+        ),
+        current,
       ),
       current,
+      scope,
     );
     // Apply the pipeline handoff first so a Start Build during setup wins over
     // the automatic startup-agent landing in the same reconcile frame. A window

@@ -1543,6 +1543,8 @@ export interface BuildPipeline {
   completionCommentError?: string;
   completionCommentId?: string;
   completionCommentPostedAt?: string;
+  /** Revision of the latest successful completion, stable through terminal reconciliation. */
+  completionRevision?: number;
   backendRevision: number;
   /** Identifies snapshots whose state machine is exclusively backend-owned. */
   controller: "backend";
@@ -2398,6 +2400,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     // exceed the bound the gateway enforces on the way in.
     (value.maxIterations as number) > MAX_BUILD_PIPELINE_ITERATIONS ||
     !isNonNegativeInteger(value.backendRevision) ||
+    (value.completionRevision !== undefined && !isNonNegativeInteger(value.completionRevision)) ||
     !isIsoDate(value.createdAt) ||
     (value.cancelledAt !== undefined && !isIsoDate(value.cancelledAt)) ||
     typeof value.taskTitle !== "string" ||

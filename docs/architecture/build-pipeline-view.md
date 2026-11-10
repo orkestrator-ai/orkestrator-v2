@@ -782,16 +782,55 @@ A pipeline has one such tab, separate from its key information tab, which keeps
 showing the brief alone. Both keep only the pipeline id and read the record, so
 they follow every update and survive a reload.
 
-A run seen finishing also opens that tab and activates it
-(`apps/web/src/lib/build-pipeline-completion-notes.ts`), in the pane holding the
-pipeline tab, else the environment's active pane. The trigger is a completion
-the renderer observed: a pipeline the store held in an earlier phase arriving
-as `complete`. A run already complete when first loaded opens nothing, so a
-reload or a new window never reopens old notes. The intent is held outside
-React and waits for the environment's layout to be installed, so a run that
-finishes while another environment is on screen has its notes tab open and
-active on return. An open notes tab is focused rather than duplicated; a full
-layout opens nothing, leaving the Notes step selected.
+A finished run opens that tab and selects it. The backend does this when the
+pipeline completes (`ensureBuildPipelineNotesTab` in
+`apps/backend/src/core/storage-sessions.ts`, called from the recovery
+module's `complete`): it adds the notes tab to the environment's authoritative
+layout, in the pane holding the pipeline tab, else the active pane, and makes it
+that pane's tab and the active pane. So a run that finished while no client was
+watching it (the app closed, the window on another environment, or the run on
+another node whose pipelines this window had not loaded yet) still lands on
+its notes: a client hydrating the environment adopts the backend's selection.
+An Electron window keeps its own selection, so it follows the notes tab once,
+when it first sees `completionPublished` on the tab with a new
+`completionRevision`, including a manual Notes
+tab already open in that window
+(`applyCompletionNotesArrival` in
+`apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
+published setup terminal. Manual Notes openings have no completion marker and
+leave other windows on their selected tab. A user who then picks another tab is
+not pulled back.
+The shared layout merge preserves the completion marker when the backend and
+renderer concurrently add the same Notes tab. Full-layout saves also retain it
+on an existing tab for the same environment and pipeline. Closing Notes removes
+the marker with the tab, so a later manual reopening stays unmarked.
+Successful completion is the only trigger, so a reload never reopens old notes.
+A failed run keeps its failure inspector selected and does not automatically
+open Notes; terminal ticket reconciliation still follows the durable failure save.
+
+The renderer also reacts to a completion it observed
+(`apps/web/src/lib/build-pipeline-completion-notes.ts`): a pipeline the store
+held in an earlier phase arriving as `complete` opens or focuses the same tab
+without waiting for the layout round trip. Both derive the tab id from
+`keyInformationTabId` (`@orkestrator/protocol/pane-layout`), so they merge into
+one tab. An open notes tab is focused rather than duplicated; a full layout
+opens nothing and shows the existing tab-limit notice, leaving the Notes step
+selected without evicting a tab. The observer acknowledges the handoff in a
+bounded, window-local node-scope slot before opening Notes. A later backend
+publication cannot override a newer selection, even if the user closed Notes
+in the interval. A layout-first publication likewise suppresses the later
+observer activation. The successful completion save records its own backend revision as
+`completionRevision` on the pipeline and publishes that same identity on Notes.
+Later terminal reconciliation leaves it unchanged; a restarted attempt gets a
+larger revision when it completes. Both event orders acknowledge that identity,
+including a `complete` to `complete` snapshot when a disconnected window missed
+the intermediate phases. Layout merges and full saves retain the greatest
+published completion revision on a retained tab. An unrelated pipeline update
+cannot clear an acknowledgement. Legacy publications without a revision retain
+the boolean fallback, cleared only by an observed transition out of completion
+or an environment change.
+Publishing the same or an older completion revision again is a backend no-op,
+including after the user has selected another tab.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

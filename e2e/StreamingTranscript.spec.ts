@@ -363,6 +363,10 @@ test("scrollbar departure after find stays put when streaming reapplies highligh
 }) => {
   await page.goto("/streaming-transcript?long=1");
   const scroller = page.locator('[data-transcript-scroller="true"]');
+  // This case measures departure from a completed find, not navigation racing
+  // the cold virtualizer fill. Wait for the real tail and its measured position.
+  await expect(page.locator('[data-chat-message-key="history-79"]')).toBeInViewport();
+  await expect.poll(() => distanceFromBottom(page)).toBeLessThan(2);
   await page.keyboard.press("ControlOrMeta+f");
   await page.getByRole("textbox", { name: "Find in chat" }).fill("History message 75:");
   const match = page.locator('[data-chat-message-key="history-75"]');

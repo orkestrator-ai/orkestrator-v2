@@ -60,6 +60,16 @@ does not replace the failed aggregate or establish an environmental exemption.
 - **Recurrence check:** `mise run flaky:recurrence -- 9840 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
 - **Assessment:** the isolated pass establishes intermittence. The existing hypothesis about the bounded `ps` inspection may also apply here, but no inspection failure or timeout was captured. No process implementation, assertion, timeout or skip changed. The aggregate remains red.
 
+
+## Completion Notes validation — 2026-11-10
+
+- **Observing branch:** `open-notes-tab-0bdba344d18c-r1`, head `49bc718245`, base `c6de4733c5beb87a578f82a8548725305e1ff254`.
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`. After a 1,016.6 s exclusive-lease wait, the workspace group used six slots, root one and bridges two, alongside the component-browser suite. Protocol used two isolated workers.
+- **Failure:** `groupHasLiveMember > sees a running member and ignores an empty group`, `packages/protocol/src/node/shell-process-state.test.ts:96`, expected false for `2 ** 22 + 1`, received true at 403.94 ms. Protocol totals: 5,765 passed, two skipped, one failed; 5,768 tests across 318 files in 47.61 s.
+- **Evidence:** workspace log `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KZbVC6/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer wrapper `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.QmChPr/review-default-tests.log.gz` (compressed at finalization).
+- **Complete unchanged owner:** `mise run test:logged -- --name process-group-owner-r3 -- bun test --cwd packages/protocol ./src/node/shell-process-state.test.ts --parallel=1 --preload ../../tests/setup-node.ts --only-failures` passed, exit 0, in 1.9 s. Passing raw output was deleted by the logged runner; no isolated count is claimed.
+- **Recurrence:** `mise run flaky:recurrence -- 9840 --base c6de4733c5beb87a578f82a8548725305e1ff254` reported the case open and directed recording it. The branch changes pane-layout types, merging and a pipeline log event, but neither the process-inspection implementation nor its test. No inspection failure or timeout was captured; the isolated pass establishes intermittence, not an environmental cause. The aggregate remains red and this case remains open.
+
 ## Resolution (2026-11-10)
 
 - **Root cause:** on macOS `groupHasLiveMember`

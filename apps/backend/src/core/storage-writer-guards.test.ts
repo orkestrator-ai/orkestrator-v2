@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   analyzeStorageService,
   analyzeStorageWriters,
-  backendSourceFiles,
+  backendSources,
   calleePath,
   coreDir,
   identifiersOutside,
@@ -15,6 +14,7 @@ import {
   REPOSITORIES,
   scannedFiles,
   walk,
+  WHOLE_TREE_SCAN_TIMEOUT_MS,
 } from "./storage-writer-guards-test-support.js";
 
 describe("StorageService store writers", () => {
@@ -343,42 +343,46 @@ describe("StorageService store writers", () => {
     );
   });
 
-  test("no backend class outside the scan calls the store write primitives", () => {
-    const { classes } = analyzeStorageService();
-    // StorageContext implements them.
-    const allowed = new Set([...classes, "StorageContext"]);
-    const primitive =
-      /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)$/;
-    const outside: string[] = [];
-    for (const full of backendSourceFiles()) {
-      const source = readFileSync(full, "utf8");
-      if (
-        !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)\s*[<(]/.test(
-          source,
-        )
-      ) {
-        continue;
-      }
-      const file = parse({ file: path.relative(repoRoot, full), source });
-      walk(file.program, (node, ancestors) => {
-        const callee = node.type === "CallExpression" ? calleePath(node) : null;
-        if (!callee || !primitive.test(callee)) return;
-        const owner = ancestors.findLast(
-          (ancestor) => ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression",
-        );
-        const name =
-          owner?.type === "ClassDeclaration" || owner?.type === "ClassExpression"
-            ? (owner.id?.name ?? null)
-            : null;
-        if (!name || !allowed.has(name)) {
-          outside.push(`${file.file}:${lineOf(file, node.start)} ${name ?? "(no class)"}`);
+  test(
+    "no backend class outside the scan calls the store write primitives",
+    () => {
+      const { classes } = analyzeStorageService();
+      // StorageContext implements them.
+      const allowed = new Set([...classes, "StorageContext"]);
+      const primitive =
+        /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)$/;
+      const outside: string[] = [];
+      for (const source of backendSources()) {
+        if (
+          !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)\s*[<(]/.test(
+            source.source,
+          )
+        ) {
+          continue;
         }
-      });
-    }
-    // A class that writes stores outside the scan is invisible to the guard
-    // above; reach it from StorageService through a typed field instead.
-    expect(outside).toEqual([]);
-  });
+        const file = parse(source);
+        walk(file.program, (node, ancestors) => {
+          const callee = node.type === "CallExpression" ? calleePath(node) : null;
+          if (!callee || !primitive.test(callee)) return;
+          const owner = ancestors.findLast(
+            (ancestor) =>
+              ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression",
+          );
+          const name =
+            owner?.type === "ClassDeclaration" || owner?.type === "ClassExpression"
+              ? (owner.id?.name ?? null)
+              : null;
+          if (!name || !allowed.has(name)) {
+            outside.push(`${file.file}:${lineOf(file, node.start)} ${name ?? "(no class)"}`);
+          }
+        });
+      }
+      // A class that writes stores outside the scan is invisible to the guard
+      // above; reach it from StorageService through a typed field instead.
+      expect(outside).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 
   test.each([
     ["StorageContext", "Storage\\u0043ontext"],
@@ -401,41 +405,49 @@ describe("StorageService store writers", () => {
     ).toEqual([`escaped.ts:1 ${name}`, `plain.ts:1 ${name}`]);
   });
 
-  test("only the scanned storage classes hold the StorageContext", () => {
-    // A class that takes a StorageContext writes stores. The scan follows
-    // every class StorageService reaches through a typed field; anything else
-    // naming the context would write where the scan does not look.
-    const allowed = new Set([
-      ...scannedFiles(),
-      ...["storage-context.ts", "storage-changes.ts", "storage-test-support.ts"].map((name) =>
-        path.relative(repoRoot, path.join(coreDir, name)),
-      ),
-    ]);
-    expect(
-      identifiersOutside(
-        allowed,
-        (name) => name === "StorageContext",
-        (source) => source.includes("StorageContext"),
-      ),
-    ).toEqual([]);
-  });
+  test(
+    "only the scanned storage classes hold the StorageContext",
+    () => {
+      // A class that takes a StorageContext writes stores. The scan follows
+      // every class StorageService reaches through a typed field; anything else
+      // naming the context would write where the scan does not look.
+      const allowed = new Set([
+        ...scannedFiles(),
+        ...["storage-context.ts", "storage-changes.ts", "storage-test-support.ts"].map((name) =>
+          path.relative(repoRoot, path.join(coreDir, name)),
+        ),
+      ]);
+      expect(
+        identifiersOutside(
+          allowed,
+          (name) => name === "StorageContext",
+          (source) => source.includes("StorageContext"),
+        ),
+      ).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 
-  test("code outside the storage files reaches the repositories only through StorageService", () => {
-    // Only StorageService's public methods and the members its area fields
-    // pick are entry points, so a caller holding a repository could run a
-    // write path the scan never checked. Callers name the area types instead.
-    const { classes } = analyzeStorageService();
-    const internal = new Set(classes.filter((name) => name !== "StorageService"));
-    const allowed = new Set([
-      ...scannedFiles(),
-      path.relative(repoRoot, path.join(coreDir, "storage-test-support.ts")),
-    ]);
-    expect(
-      identifiersOutside(
-        allowed,
-        (name) => internal.has(name),
-        (source) => [...internal].some((name) => source.includes(name)),
-      ),
-    ).toEqual([]);
-  });
+  test(
+    "code outside the storage files reaches the repositories only through StorageService",
+    () => {
+      // Only StorageService's public methods and the members its area fields
+      // pick are entry points, so a caller holding a repository could run a
+      // write path the scan never checked. Callers name the area types instead.
+      const { classes } = analyzeStorageService();
+      const internal = new Set(classes.filter((name) => name !== "StorageService"));
+      const allowed = new Set([
+        ...scannedFiles(),
+        path.relative(repoRoot, path.join(coreDir, "storage-test-support.ts")),
+      ]);
+      expect(
+        identifiersOutside(
+          allowed,
+          (name) => internal.has(name),
+          (source) => [...internal].some((name) => source.includes(name)),
+        ),
+      ).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 });

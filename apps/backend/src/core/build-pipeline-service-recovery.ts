@@ -3,7 +3,7 @@
  * repair, verification and pull-request outcomes, terminal reconciliation with
  * the Kanban task or issue, and the durable interaction-resolution journal.
  */
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -525,8 +525,32 @@ export class BuildPipelineRecovery {
     delete pipeline.stallWarning;
     this.ctx.provisioningPrompts.delete(pipeline.id);
     this.ctx.lastProviderAgent.delete(pipeline.id);
+    pipeline.completionRevision = pipeline.backendRevision + 1;
     await this.ctx.save(pipeline, pipeline.backendRevision);
+    await this.openCompletionNotes(pipeline);
     await this.reconcileTerminalState(pipeline);
+  }
+
+  /**
+   * Lands the finished run on its notes: the backend publishes the notes tab
+   * and selects it, so a client that did not watch the run finish (closed,
+   * on another environment, or showing another node) still opens on them.
+   * Best effort: the run is complete whatever happens to the layout.
+   */
+  private async openCompletionNotes(pipeline: BuildPipeline): Promise<void> {
+    if (!pipeline.environmentId) return;
+    try {
+      await this.ctx.storage.ensureBuildPipelineNotesTab({
+        pipelineId: pipeline.id,
+        environmentId: pipeline.environmentId,
+        completionRevision: pipeline.completionRevision,
+      });
+    } catch (error) {
+      log.warn("completion-notes.publish-failed", {
+        pipelineId: pipeline.id,
+        error: formatLogError(error),
+      });
+    }
   }
 
   async postCompletionComment(pipeline: BuildPipeline): Promise<void> {

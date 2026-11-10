@@ -130,9 +130,9 @@ test("the database card shows both databases, backups, retention and top tables 
   expect(within(stores).getByText("change-tracking")).toBeTruthy();
   expect(within(stores).getByText("700 KiB · 1200 rows")).toBeTruthy();
   expect(within(stores).getByText("2.0 KiB · 1 row")).toBeTruthy();
-  expect(screen.queryByRole("list", { name: "Largest stores in Change-tracking database" })).toBe(
-    null,
-  );
+  expect(
+    screen.queryByRole("list", { name: "Largest stores in Change-tracking database" }) === null,
+  ).toBe(true);
 
   fireEvent.click(screen.getByRole("button", { name: "Refresh database figures" }));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));

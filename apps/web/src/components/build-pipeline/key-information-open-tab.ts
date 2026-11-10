@@ -1,3 +1,4 @@
+import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
@@ -43,7 +44,7 @@ export function openKeyInformationTab(options: {
     options.activePaneId,
     {
       // All clients opening the same logical view must merge as one tab.
-      id: `key-information:${JSON.stringify([environmentId, target.pipelineId, target.view ?? "information"])}`,
+      id: keyInformationTabId(environmentId, target.pipelineId, target.view),
       type: "key-information",
       keyInformationTabData: {
         environmentId,

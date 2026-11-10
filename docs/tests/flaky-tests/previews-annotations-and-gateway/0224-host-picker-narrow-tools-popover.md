@@ -1,7 +1,7 @@
 # Host picker (narrow): "Repository settings" never became visible after "Open tools" (`e2e/agent-testing/browser-gateway.spec.ts`)
 
 - **ID:** 0224
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `host path browsing › host picker creates and browses folders through the authenticated gateway above fullscreen settings (narrow)`
 - **Owning file:** `e2e/agent-testing/browser-gateway.spec.ts:147`
@@ -673,3 +673,127 @@ config with `testMatch: "browser-gateway.spec.ts"`):
 ```bash
 mise run test:logged -- --name gateway-owner -- bun --eval 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "gateway owner", config: "e2e/agent-testing/playwright.arrival-owner.tmp.config.ts" } });'
 ```
+
+## Notes completion review validation (2026-11-10)
+
+Observed on base `60afa4b715bd465d441d28a4cb9a513928d2ccb8`, profile
+`notes-focus-r1` (`dev:test --fixture --agent-platforms codex --no-agent-credentials`).
+`mise run flaky:recurrence -- 0224 --base 60afa4b715bd465d441d28a4cb9a513928d2ccb8`
+confirmed that this case is already open.
+
+- Original command: `ORKESTRATOR_AGENT_TEST_PROFILE=notes-focus-r1 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-focus-r1 mise run test:logged -- --name notes-focus-agent-browser -- mise run test:agent:browser`.
+  One Playwright worker. The narrow host-picker test failed at line 259 after
+  5 seconds waiting for either drawer toggle; its screenshot was a blank page.
+  This overbroad run was intentionally interrupted through its verified owned
+  Playwright child: 15 passed, 1 failed, 1 interrupted, 10 skipped, 151 not run
+  (628.55 s). Log:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ic4gKn/notes-focus-agent-browser.log.gz`.
+- Targeted rerun: `ORKESTRATOR_AGENT_TEST_PROFILE=notes-focus-r1 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-focus-r1-owner mise run test:logged -- --name notes-focus-gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --grep 'host picker creates.*narrow|real browser gateway exercises an authoritative local environment' --workers=1`.
+  Repeated the same missing drawer assertion; the authoritative local-environment
+  gateway smoke passed (1 passed, 1 failed, 66.87 s). The remaining owning-file
+  cases were not rerun. Log:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.OG0gcW/notes-focus-gateway-owner.log.gz`.
+- Both commands also reported `ArtifactBoundError`: the failing test's expanded
+  `trace/1-trace.trace` exceeded the sanitizer's 67,108,864-byte limit. The
+  sanitizer removed oversized evidence; bounded compressed command logs remain.
+- The Notes-specific custom browser QA passed in this profile, exercising manual
+  arrival, completion while inactive, preserved user selection and reload.
+  These observations do not establish a cause for the blank gateway page or
+  classify it as unrelated to the branch. No picker code or assertion was changed.
+
+## Notes handoff address stage, 2026-11-10
+
+Observed on branch base `c6de4733c5beb87a578f82a8548725305e1ff254`, after
+`1df0ad5b6` (handoff fix) and `395368c5a` (aggregate evidence).
+`mise run flaky:recurrence -- 0224 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports this case open.
+
+The complete gateway owner was run with one worker:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-handoff-r4 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-handoff-r4 mise run test:logged -- --name notes-browser-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts browser-gateway.spec.ts
+```
+
+The initial profile inherited Codex credentials. That run passed the narrow
+picker but failed the signed-out recovery precondition (`signed-in` rather than
+`signed-out` or `needs-auth`), with 14 passed, 11 skipped and one failed in
+277.9 s. Its expanded trace also exceeded the sanitizer's 67,108,864-byte bound.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Kvcc2I/notes-browser-smoke.log.gz`.
+
+After stopping/resetting the profile, it was recreated with
+`dev:test --profile notes-handoff-r4 --fixture --no-agent-credentials --agent-platforms codex`.
+The exact owner command then completed in 510.7 s with 14 passed, 11 skipped,
+one failed and a teardown error. The narrow picker again could not find either
+`Open projects and environments` or `Close projects and environments` at line
+259 within 5,000 ms. The screenshot shows the open, empty project drawer.
+`ArtifactBoundError` again reports an expanded `trace/1-trace.trace` above the
+same sanitizer limit. Bounded evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.AbNiyE/notes-browser-smoke.log.gz`.
+
+The authoritative local-environment gateway smoke passed in both runs. Separate
+fixture-only Notes QA passed on the real renderer at desktop and 390 px,
+including completion while inactive, delayed publication preserving a later
+selection, reload and the full-layout notice. No picker, drawer or sanitizer
+code was changed. The complete gateway owner has not passed in this stage;
+this remains undetermined validation evidence, not an environmental exemption
+or a newly established flake cause. The profile was stopped and reset, retaining
+toolchains.
+
+
+## First-paint readiness repair — 2026-11-10
+
+**Base and recurrence.** Base
+`c98b20e6f6332895320b84b8edfd1f3cc9542ba0`, observed head
+`02b16b3f4ee1c9461fe357e5a4a1f727cd885d26`.
+`mise run flaky:recurrence -- 0224 --base c98b20e6f6332895320b84b8edfd1f3cc9542ba0`
+classified this as an open recurrence. The complete unchanged gateway owner
+ran on a credential-free Codex fixture profile with one worker:
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-generation-r5 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-final-head mise run test:logged -- --name notes-final-head-gateway-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1
+```
+
+**Reproduced: yes.** It reported 13 passed, 11 skipped and two failed in
+542.3 s. The narrow picker could not find either drawer toggle at line 251;
+the 390px maintenance case could not find the drawer or its opener at line
+2872 on its initial `openUpdates` call (line 2908). Both screenshots are
+entirely blank. The sanitizer also rejected the oversized expanded traces,
+removed them and failed teardown; its safety bound is working as intended.
+The compressed log is `orkestrator-test-run.Jr1MU2/notes-final-head-gateway-smoke.log.gz`
+under the host temporary directory; bounded screenshots/context are under
+`output/agent-testing/notes-final-head/browser/artifacts/`.
+
+**Startup boundary and fix.** `main.tsx` starts `bootstrapRenderer()` without
+awaiting it. That function dynamically imports the application; `startApp`
+also restores cached catalogues before the first React render. Navigation
+load events are therefore not application readiness. The picker explicitly
+returned at `DOMContentLoaded` on reload, and the shared sign-in helper
+returned at navigation load. Both could start five-second drawer assertions
+against an empty root.
+
+A controlled browser probe held the `renderer-entry.tsx` request after
+`DOMContentLoaded`, reproduced the blank root and five-second missing-drawer
+assertion, then released the import and verified that first paint and the
+drawer arrived. `gateway-startup-gate` passed (12.9 s). Normal untraced and
+traced startup/reload probes also passed; they do not independently establish
+a product crash or explain every historical picker-layer observation.
+
+`waitForGatewayRenderer` now waits for the application's first root content
+using the existing 30-second cold module-load bound. Sign-in and the affected
+picker/maintenance reload paths await it before their interaction assertions.
+Interaction deadlines, test timeouts, retries, skips and sanitizer bounds
+are unchanged. This separates the expensive asynchronous dev-module bootstrap
+from the drawer behavior being tested rather than extending drawer deadlines.
+
+**Focused verification.** Both previously failing narrow cases passed on a
+fresh credential-free fixture profile (two expected, zero skipped, unexpected
+or flaky results; 17.4 s):
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-generation-r5 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-ready-focused mise run test:logged -- --name gateway-ready-focused -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'host picker creates.*narrow|host maintenance.*390px' --workers=1
+```
+
+Report: `output/agent-testing/notes-ready-focused/browser/results.json`.
+The complete committed-head owner and repository validation are reported in
+the implementation handoff. No picker, drawer or maintenance implementation
+was changed.

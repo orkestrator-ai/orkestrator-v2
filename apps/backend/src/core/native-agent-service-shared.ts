@@ -733,6 +733,22 @@ export const PARKED_DISPATCH_CONFLICT_MESSAGE =
   " Retry or discard it before sending another.";
 
 /**
+ * Whether a refused dispatch was a temporary provider refusal with nothing
+ * sent, so the same prompt may succeed under a new request id (7260).
+ *
+ * Only a `ProviderUnavailableError` that is not ambiguous qualifies: a bridge's
+ * 503 before dispatch, an unreachable bridge, a failed attach. The caller must
+ * also have cleared the request's dispatch record; a recovery retry that keeps
+ * its parked record is not transient, because the parked record still blocks
+ * every new id until it is retried or discarded.
+ */
+export function isTransientDispatchRefusal(error: unknown): boolean {
+  return (
+    error instanceof ProviderUnavailableError && !(error instanceof AmbiguousPromptDispatchError)
+  );
+}
+
+/**
  * How long a parked dispatch gets to confirm itself before it becomes a choice.
  *
  * The common case is a lost acknowledgement, not a lost prompt: the provider

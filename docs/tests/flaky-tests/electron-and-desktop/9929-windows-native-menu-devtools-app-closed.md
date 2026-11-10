@@ -21,6 +21,7 @@ runs passed.
 | --- | --- | --- | --- | --- | --- |
 | 42751443658 | `effect-adoption-abb590f0b0d0-r1` | `962d512b` | `04639b12` | 3 of 5 | 1 failed, 14 passed (1.0 m) |
 | 42811193704 | `electron-sigtrap-crash-15d5092711e3-r1` | `12447425` | `4dc220f7` | 2 of 5 | 1 failed, 14 passed (1.1 m) |
+| 42846589920 | `chore/release-2.37.4-beta` | `28ed0507` | `a57ea870` | 3 of 5 | 1 failed, 14 passed (1.2 m) |
 
 Original command (from the workflow):
 
@@ -41,6 +42,18 @@ and 42782180949 on `effect-adoption-abb590f0b0d0-r1`). Those are reruns of the
 whole job on a later head, not an isolated rerun of the owning file on the
 same host. The failure could not be rerun here: this host is Linux, and the
 spec's DevTools path is only exercised under the Windows job.
+
+## Recurrence (2026-11-10)
+
+Run 42846589920, the release pull request for 2.37.4-beta (merged as
+`53340356c`), failed the same way: repetition 3 of 5 (`-repeat2`), the
+`closeDevTools()` evaluate at line 88 answered `Target page, context or
+browser has been closed`, and the Electron log's last line was the same
+crashpad `not connected`. The release branch changed only version numbers.
+`mise run flaky:recurrence -- 9929 --base 53340356c --registry-ref origin/main`
+answered **open**, so this is counted as a recurrence. Still Windows only;
+the Linux failure of the same test on run 42833338750 has a different
+symptom and is [9935](9935-linux-native-menu-devtools-open-poll.md).
 
 ## Assessment
 

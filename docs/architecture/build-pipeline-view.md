@@ -792,9 +792,12 @@ watching it (the app closed, the window on another environment, or the run on
 another node whose pipelines this window had not loaded yet) still lands on
 its notes: a client hydrating the environment adopts the backend's selection.
 An Electron window keeps its own selection, so it follows the notes tab once,
-when the tab first arrives in that window (`applyCompletionNotesArrival` in
+when a tab marked `completionPublished` first arrives in that window
+(`applyCompletionNotesArrival` in
 `apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
-published setup terminal; a user who then picks another tab is not pulled back.
+published setup terminal. Manual Notes openings have no completion marker and
+leave other windows on their selected tab. A user who then picks another tab is
+not pulled back.
 Completion is the only trigger, so a reload never reopens old notes.
 
 The renderer also reacts to a completion it observed

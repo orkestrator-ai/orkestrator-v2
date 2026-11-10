@@ -23,7 +23,12 @@ const buildTab: TabInfo = {
 const notesTab: TabInfo = {
   id: NOTES_ID,
   type: "key-information",
-  keyInformationTabData: { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+  keyInformationTabData: {
+    environmentId: "env-1",
+    pipelineId: "pipeline-1",
+    view: "notes",
+    completionPublished: true,
+  },
 };
 const chatTab: TabInfo = { id: "chat", type: "plain" };
 
@@ -134,6 +139,56 @@ describe("completion notes arriving in an Electron window", () => {
       ],
     });
   });
+
+  test.each(["open", "reopen"])(
+    "another window's manual Notes %s preserves chat selection",
+    (action) => {
+      const manualNotes: TabInfo = {
+        ...notesTab,
+        keyInformationTabData: { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+      };
+      let before = current(
+        split(leaf("pane-build", [buildTab], buildTab.id), leaf("pane-chat", [chatTab], "chat")),
+        "pane-chat",
+      );
+      if (action === "reopen") {
+        // Receive completion, then close Notes and return to chat before the
+        // other window uses the ordinary manual-open action to recreate it.
+        const landed = reconcileAuthoritativePaneLayout(
+          "env-1",
+          persisted(
+            split(
+              leaf("pane-build", [buildTab, notesTab], NOTES_ID),
+              leaf("pane-chat", [chatTab], "chat"),
+            ),
+            "pane-build",
+          ),
+          before,
+        );
+        expect(selection(landed).activePaneId).toBe("pane-build");
+        const store = appCommandStore(paneLayoutStore);
+        store.setState({ environments: new Map([["env-1", landed!]]) });
+        store.getState().removeTab("pane-build", NOTES_ID, "env-1");
+        store.getState().setActivePane("pane-chat", "env-1");
+        before = store.getState().environments.get("env-1")!;
+      }
+      const after = persisted(
+        split(
+          leaf("pane-build", [buildTab, manualNotes], NOTES_ID),
+          leaf("pane-chat", [chatTab], "chat"),
+        ),
+        "pane-build",
+      );
+      const reconciled = reconcileAuthoritativePaneLayout("env-1", after, before);
+      expect(selection(reconciled)).toEqual({
+        activePaneId: "pane-chat",
+        leaves: [
+          { id: "pane-build", activeTabId: buildTab.id },
+          { id: "pane-chat", activeTabId: "chat" },
+        ],
+      });
+    },
+  );
 
   test("a notes tab the window already holds does not pull the user back", () => {
     // The user has returned to the pipeline tab after the notes landed.

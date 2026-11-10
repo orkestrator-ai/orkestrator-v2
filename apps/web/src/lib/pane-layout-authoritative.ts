@@ -156,7 +156,9 @@ function applySetupTabArrival(
 /**
  * A finished build pipeline's notes tab, which the backend publishes and selects
  * when the run completes (`ensureBuildPipelineNotesTab`), takes focus in a
- * window the first time that window sees it. Arrival happens once per window,
+ * window the first time that window sees that completion publication. Manual
+ * Notes openings have no completion marker and preserve isolated selection.
+ * Arrival happens once per window,
  * so a user who then returns to another tab is not pulled back.
  */
 function applyCompletionNotesArrival(
@@ -169,7 +171,11 @@ function applyCompletionNotesArrival(
     (candidate) => candidate.id === authoritative.activePaneId,
   );
   const tab = leaf?.tabs.find((candidate) => candidate.id === leaf.activeTabId);
-  if (tab?.type !== "key-information" || tab.keyInformationTabData?.view !== "notes") {
+  if (
+    tab?.type !== "key-information" ||
+    tab.keyInformationTabData?.view !== "notes" ||
+    tab.keyInformationTabData.completionPublished !== true
+  ) {
     return selected;
   }
   if (findLeaf(current.root, (candidate) => candidate.tabs.some(({ id }) => id === tab.id))) {

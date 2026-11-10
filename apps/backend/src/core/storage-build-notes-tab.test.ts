@@ -71,6 +71,7 @@ describe("ensureBuildPipelineNotesTab", () => {
           environmentId: "env-notes",
           pipelineId: "pipeline-1",
           view: "notes",
+          completionPublished: true,
         },
       });
       expect(await storage.getPaneLayout("env-notes")).toEqual(saved);
@@ -103,6 +104,7 @@ describe("ensureBuildPipelineNotesTab", () => {
       const leaf = saved!.root as Leaf;
       expect(leaf.tabs.map((tab) => tab.id)).toEqual(["build-pipeline-1", "notes-opened-by-hand"]);
       expect(leaf.activeTabId).toBe("notes-opened-by-hand");
+      expect(leaf.tabs[1]?.keyInformationTabData).toMatchObject({ completionPublished: true });
 
       // Already selected: nothing to write, so no revision churn.
       expect(

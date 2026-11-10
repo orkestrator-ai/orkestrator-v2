@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   isBuildPipeline,
   REVIEW_PACKAGE_SESSION_LABEL,
@@ -95,6 +95,79 @@ test("continues through the normal Review and PR path without a second Build or 
     });
   });
 });
+
+for (const source of ["kanban", "github"] as const) {
+  test(`Notes publication failure preserves completion and ${source} reconciliation`, async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      const warning = spyOn(console, "warn").mockImplementation(() => {});
+      const publication = spyOn(storage, "ensureBuildPipelineNotesTab").mockImplementation(
+        async () => {
+          // Make the terminal transition observable even if Ship already moved
+          // the ticket to review, then fail before completion reconciliation.
+          const task = controls.kanbanTasks.get("task-1");
+          if (task) task.status = "in-progress";
+          throw new Error("fixture layout publication failure");
+        },
+      );
+      try {
+        const started = await service.startFromCompletedBuild(
+          startInput({
+            source:
+              source === "kanban"
+                ? { type: "kanban", taskId: "task-1" }
+                : {
+                    type: "github",
+                    repositoryOwner: "acme",
+                    repositoryName: "repo",
+                    issueNumber: 1,
+                    issueUrl: "https://github.com/acme/repo/issues/1",
+                    status: "open",
+                  },
+          }),
+          completedBuild(),
+        );
+        for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
+        const finished = await pipeline(storage, started.id);
+        expect(publication).toHaveBeenCalledWith({
+          pipelineId: started.id,
+          environmentId: "env-1",
+        });
+        expect(finished.phase).toBe("complete");
+        expect(finished.error).toBeUndefined();
+        expect(finished.completionCommentStatus).toBe("posted");
+        if (source === "kanban") {
+          expect(controls.kanbanTasks.get("task-1")?.status).toBe("review");
+          expect(
+            invocations.some(
+              ({ command, args }) =>
+                command === "update_kanban_task" &&
+                args.status === "review" &&
+                args.preserveDoneStatus === true,
+            ),
+          ).toBe(true);
+        } else {
+          expect(finished.completionCommentId).toBe("comment-1");
+          expect(
+            invocations.some(
+              ({ command, args }) =>
+                command === "post_github_completion_comment" && args.pipelineId === started.id,
+            ),
+          ).toBe(true);
+        }
+        expect(
+          warning.mock.calls.some(
+            ([line]) =>
+              String(line).includes("completion-notes.publish-failed") &&
+              String(line).includes(started.id),
+          ),
+        ).toBe(true);
+      } finally {
+        publication.mockRestore();
+        warning.mockRestore();
+      }
+    });
+  });
+}
 
 test("restarting Build opens a normal attempt and retains the original transcript", async () => {
   await withService(async (service, storage, provider) => {

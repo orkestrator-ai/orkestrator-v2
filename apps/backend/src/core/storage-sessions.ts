@@ -722,8 +722,14 @@ export class SessionsRepository {
             environmentId: input.environmentId,
             pipelineId: input.pipelineId,
             view: "notes",
+            completionPublished: true,
           },
         });
+      }
+      // Mark reused manual tabs too: only this backend completion path publishes
+      // the focus handoff. Ordinary renderer openings carry no such marker.
+      if (existingTab && isRecord(existingTab.keyInformationTabData)) {
+        existingTab.keyInformationTabData.completionPublished = true;
       }
       target.activeTabId = tabId;
       if (

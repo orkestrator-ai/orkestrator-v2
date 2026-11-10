@@ -131,6 +131,8 @@ export interface KeyInformationTabData {
   pipelineId: string;
   /** The Notes step's reading: the brief led by what needs a look. */
   view?: "notes";
+  /** Backend completion publication; manual Notes openings do not request focus. */
+  completionPublished?: true;
 }
 
 export interface MultiReviewTabData {

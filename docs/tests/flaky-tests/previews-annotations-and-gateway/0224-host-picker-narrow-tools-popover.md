@@ -673,3 +673,30 @@ config with `testMatch: "browser-gateway.spec.ts"`):
 ```bash
 mise run test:logged -- --name gateway-owner -- bun --eval 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "gateway owner", config: "e2e/agent-testing/playwright.arrival-owner.tmp.config.ts" } });'
 ```
+
+## Notes completion review validation (2026-11-10)
+
+Observed on base `60afa4b715bd465d441d28a4cb9a513928d2ccb8`, profile
+`notes-focus-r1` (`dev:test --fixture --agent-platforms codex --no-agent-credentials`).
+`mise run flaky:recurrence -- 0224 --base 60afa4b715bd465d441d28a4cb9a513928d2ccb8`
+confirmed that this case is already open.
+
+- Original command: `ORKESTRATOR_AGENT_TEST_PROFILE=notes-focus-r1 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-focus-r1 mise run test:logged -- --name notes-focus-agent-browser -- mise run test:agent:browser`.
+  One Playwright worker. The narrow host-picker test failed at line 259 after
+  5 seconds waiting for either drawer toggle; its screenshot was a blank page.
+  This overbroad run was intentionally interrupted through its verified owned
+  Playwright child: 15 passed, 1 failed, 1 interrupted, 10 skipped, 151 not run
+  (628.55 s). Log:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ic4gKn/notes-focus-agent-browser.log.gz`.
+- Targeted rerun: `ORKESTRATOR_AGENT_TEST_PROFILE=notes-focus-r1 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-focus-r1-owner mise run test:logged -- --name notes-focus-gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --grep 'host picker creates.*narrow|real browser gateway exercises an authoritative local environment' --workers=1`.
+  Repeated the same missing drawer assertion; the authoritative local-environment
+  gateway smoke passed (1 passed, 1 failed, 66.87 s). The remaining owning-file
+  cases were not rerun. Log:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.OG0gcW/notes-focus-gateway-owner.log.gz`.
+- Both commands also reported `ArtifactBoundError`: the failing test's expanded
+  `trace/1-trace.trace` exceeded the sanitizer's 67,108,864-byte limit. The
+  sanitizer removed oversized evidence; bounded compressed command logs remain.
+- The Notes-specific custom browser QA passed in this profile, exercising manual
+  arrival, completion while inactive, preserved user selection and reload.
+  These observations do not establish a cause for the blank gateway page or
+  classify it as unrelated to the branch. No picker code or assertion was changed.

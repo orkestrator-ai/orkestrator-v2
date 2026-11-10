@@ -3661,12 +3661,14 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
+      // Extensions never load in this shared process, so the attach can add
+      // nothing the resource-only read missed: the list is already complete.
       expect(body).toMatchObject({
         catalogueVersion: 1,
-        status: "stale",
-        attachPending: true,
+        status: "ready",
         commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
       });
+      expect(body).not.toHaveProperty("attachPending");
       // Still metadata: the read that started the preview kept no session warm.
       expect(state.lastAccessed).toBe(1);
       // Pushed on the status the backend already polls, so a late read is seen.

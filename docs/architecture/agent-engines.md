@@ -686,6 +686,17 @@ reporting a locked database is retried twice (0.5 s, then 2 s) before the
 dispatch that asked for it is refused with that reason. Container servers have
 their own database and are not serialised.
 
+The locked database names itself only on the server's stderr, and a child's
+`exit` can fire before its last stderr chunk is read. `waitForLocalServerStartup`
+(`commands-servers.ts`) therefore decides an OpenCode exit on `close`, once
+stdio has ended, or `OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS` (1 s) after `exit`
+when a surviving grandchild holds the pipe open, whichever comes first. A
+health result that lands after `exit` does not decide the start: an exited
+server is a failed start. Other server kinds do not read stderr and still
+decide on `exit`. Deciding on `exit` reported a lost database as a plain
+"exited before becoming healthy" and skipped the retry (flake
+[0723](../tests/flaky-tests/backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).
+
 That shared database is the user's, and their own OpenCode 2 may have written
 it. OpenCode 1.x refuses to start on a database whose tables include no
 `session` ("Database is not empty and has no session table"), which is what 2.x

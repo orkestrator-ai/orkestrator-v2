@@ -1461,10 +1461,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
       expect(intervals.filter((interval) => interval.handle === logPolicyExpiryTimer)).toHaveLength(
         1,
       );
-      // The shared usage readings' 60 s fallback is not tab cleanup either,
-      // and a repeated init must not arm it twice.
+      // The shared usage-readings fallback is its own 60 s timer too, and a
+      // repeated `init` must not start a second one either.
       const usageSyncTimer = (backend as unknown as { usageSyncTimer: unknown }).usageSyncTimer;
-      expect(usageSyncTimer).toBeDefined();
+      expect(usageSyncTimer).toBeTruthy();
       expect(intervals.filter((interval) => interval.handle === usageSyncTimer)).toHaveLength(1);
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(

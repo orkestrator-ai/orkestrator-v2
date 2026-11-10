@@ -57,6 +57,24 @@ function pinOrOmit(value: string | undefined): string | undefined {
   return value;
 }
 
+/**
+ * A row pins only a model its action (or saved reviewer) names itself.
+ *
+ * A model inherited from the platform's own setting is that platform's
+ * default, not a choice made for this stage, so the row leaves it out and the
+ * stage resolves it from the same tiers when it starts, exactly as the build
+ * step does. That is what gives a stage the swap a new session gets: a Codex
+ * default the login's live model list does not offer runs on that list's first
+ * model, for that stage only, while settings keep the user's choice. A pinned
+ * row is an explicit choice and is never swapped, so pinning the inherited
+ * default failed every saved-defaults review on a ChatGPT login with "model is
+ * not supported" (to-do 7546). Effort and speed still travel with the row; the
+ * stage resolves the same values when they are absent.
+ */
+function ownModel(value: string | undefined): string | undefined {
+  return pinOrOmit(value);
+}
+
 function actionSelection(
   tiers: AgentSettingsTiers,
   key: ActionDefaultKey,
@@ -71,7 +89,7 @@ function actionSelection(
     enabledAgents,
   });
   const platform = resolveAgentPlatformSettings(tiers, action.agent);
-  const model = pinOrOmit(action.model ?? platform.model);
+  const model = ownModel(action.model);
   const reasoningEffort = pinOrOmit(action.reasoningEffort ?? platform.reasoningEffort);
   const fastMode = action.fastMode ?? platform.fastMode;
   return {
@@ -90,7 +108,7 @@ function configuredReviewer(
 ): BuildStepConfig {
   if (!entry?.platform || !enabledAgents.includes(entry.platform)) return { ...fallback };
   const platform = resolveAgentPlatformSettings(tiers, entry.platform);
-  const model = pinOrOmit(entry.model ?? platform.model);
+  const model = ownModel(entry.model);
   const reasoningEffort = pinOrOmit(entry.reasoningEffort ?? platform.reasoningEffort);
   const fastMode = entry.fastMode ?? platform.fastMode;
   return {

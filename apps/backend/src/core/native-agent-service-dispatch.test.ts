@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 
@@ -40,6 +40,8 @@ import {
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
 
+import { deferred } from "./recurring-test-support.js";
+import { PendingNativeAgentDispatchError } from "./storage-shared-extra.js";
 import { StorageService } from "./storage.js";
 import { collaborators, queueInternals } from "./native-agent-service-test-collaborators.js";
 
@@ -1379,6 +1381,101 @@ describe("NativeAgentService", () => {
       },
     );
   });
+
+  test.each(["cleared", "read-failed", "newer-pending"] as const)(
+    "foreground admission after background settlement: %s",
+    async (scenario) => {
+      let accepted = false;
+      const stub = createProviderStub("cursor", {
+        send: async () => {
+          if (!accepted) throw new AmbiguousPromptDispatchError("Response was lost");
+        },
+        dispatchStatus: async (_session, request) =>
+          accepted && request === "parked" ? "dispatched" : "unknown",
+      });
+      await withService(
+        { prefix: "native-settlement-race-", provider: async () => stub.provider },
+        async ({ service, storage }) => {
+          const base = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Work",
+          };
+          const key = nativeAgentSessionStorageKey(
+            base.environmentId,
+            base.agent,
+            base.logicalSessionKey,
+          );
+          expect(await service.dispatchIntent({ ...base, requestId: "parked" })).toMatchObject({
+            outcome: "unknown",
+          });
+          const refused = deferred<void>();
+          const resume = deferred<void>();
+          const original = storage.dispatchNativeAgentPromptOnce.bind(storage);
+          const admission = spyOn(storage, "dispatchNativeAgentPromptOnce").mockImplementation(
+            async (...args) => {
+              try {
+                return await original(...args);
+              } catch (error) {
+                if (error instanceof PendingNativeAgentDispatchError && args[1] === "second") {
+                  refused.resolve();
+                  await resume.promise;
+                }
+                throw error;
+              }
+            },
+          );
+          let reads: ReturnType<typeof spyOn> | undefined;
+          const next = service.dispatchIntent({ ...base, requestId: "second" });
+          try {
+            await refused.promise;
+            accepted = true;
+            // An independent snapshot/readiness read confirms the older request
+            // while foreground dispatch is paused after the storage refusal.
+            await service.promptReadiness(base);
+            expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+            if (scenario === "newer-pending") {
+              await expect(
+                original(
+                  key,
+                  "newer",
+                  async () => {
+                    throw new AmbiguousPromptDispatchError("lost");
+                  },
+                  { requestId: "newer", prompt: "New work", createdAt: new Date().toISOString() },
+                ),
+              ).rejects.toThrow("lost");
+            }
+            if (scenario === "read-failed") {
+              reads = spyOn(storage, "getNativeAgentSession").mockRejectedValue(
+                new Error("unreadable"),
+              );
+            }
+            resume.resolve();
+            const outcome = await next;
+            expect(outcome.outcome).toBe(scenario === "cleared" ? "accepted" : "rejected");
+            expect(stub.send).toHaveBeenCalledTimes(scenario === "cleared" ? 2 : 1);
+            expect(admission).toHaveBeenCalledTimes(scenario === "read-failed" ? 1 : 2);
+            reads?.mockRestore();
+            if (scenario === "newer-pending")
+              expect((await storage.getNativeAgentSession(key))?.pendingDispatch?.requestId).toBe(
+                "newer",
+              );
+            if (scenario === "cleared")
+              expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds).toEqual(
+                expect.arrayContaining(["parked", "second"]),
+              );
+          } finally {
+            resume.resolve();
+            await next;
+            reads?.mockRestore();
+            admission.mockRestore();
+          }
+        },
+      );
+    },
+  );
 
   test("attaches the provider before the pending dispatch record is written", async () => {
     const order: string[] = [];

@@ -816,7 +816,7 @@ async function routeSession(
     return json(response, 200, await readSessionBranches(state));
   }
   if (action === "branches" && subject && request.method === "POST") {
-    await navigateSessionHistory(state, decodeURIComponent(subject));
+    await navigateSessionHistory(state, decodeURIComponent(subject), "at");
     await persistBarrier();
     return json(response, 200, { switched: true });
   }

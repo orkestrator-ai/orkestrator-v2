@@ -257,7 +257,7 @@ describe("message rewind in the native tab", () => {
     await screen.findByTestId("message-rewind-dialog");
     fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
     await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog") === null).toBe(true));
     expect(draftText(tabId)).toBe("my newer draft");
   });
 

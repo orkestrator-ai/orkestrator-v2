@@ -104,7 +104,7 @@ describe("useMessageRewind", () => {
     expect(performAction).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
-    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog") === null).toBe(true));
     expect(performAction).toHaveBeenCalledWith({ kind: "rewind-messages", messageId: "p1" });
     expect(restored).toEqual([{ text: "first", annotations: [] }] as never);
   });
@@ -117,7 +117,7 @@ describe("useMessageRewind", () => {
     );
     await screen.findByTestId("message-rewind-dialog");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog") === null).toBe(true));
     expect(performAction).not.toHaveBeenCalled();
   });
 
@@ -131,7 +131,7 @@ describe("useMessageRewind", () => {
     );
     await screen.findByTestId("message-rewind-dialog");
     fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
-    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("message-rewind-dialog") === null).toBe(true));
     expect(restored).toEqual([]);
   });
 

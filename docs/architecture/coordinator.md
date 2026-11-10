@@ -2576,7 +2576,13 @@ lock).
   step's selection from then on, as the UI's does.
 - **Refusals.** A cancelled or completed pipeline, a failure in environment
   setup (before any step), a failure with no step, an unknown step and a
-  pipeline of another project are refused before anything changes. A
+  pipeline of another project are refused before anything changes. The
+  cancelled refusal (and `resume_build_pipeline`'s) says the cancel is the
+  user's decision unless the coordinator made it, and not to start another
+  build for the ticket unasked; it used to say "start a new build if the work
+  is still wanted", which a Codex coordinator followed after the user
+  cancelled (to-do 7545 task 4). `get_build_pipeline` shows `cancelledAt`
+  on a cancelled build, whose phase reads `failed`. A
   refused request leaves no receipt, so the same `requestId` can be sent
   again once the cause is fixed.
 - **Once per request.** The command node keeps a coordinator receipt
@@ -2725,11 +2731,12 @@ stable key; a key is sent once, recorded on the association
 | Multi Review | interactive fix turn finished (`fix-done`, with the reason when auto-PR started no PR) or failed (`fix-failed`) | `settled` |
 | Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL) or already `pr-closed`, `pr-merged` or `pr-unknown`, or the launch failed (`pr-failed`) | `settled` |
 | Multi Review | a reviewer, consolidation or Address Findings session `stalled` | `settled` |
-| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
+| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` (stopped on purpose; a cancel the coordinator did not make is the user's decision, so it does not launch it again unasked) | always |
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
 | Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification, acceptance criteria, delivery), `failed` (error, acceptance criteria) | always |
+| Build pipeline | `cancelled` (task; the error only when stopping every agent could not be confirmed), keyed per cancel. Never reported as `failed`: it says the build was stopped on purpose, that a cancel the coordinator did not make itself is the user's decision, and not to restart, resume or rebuild it or start another build for the ticket unless the user asks. It offers only `get_build_pipeline` (to-do 7545 task 4) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |

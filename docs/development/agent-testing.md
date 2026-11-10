@@ -2099,6 +2099,35 @@ e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
 fixture project's Build defaults and leaves its environments behind, so reset
 the profile afterwards.
 
+### Coordinator routing cancel (fake model)
+
+`mise run test:agent:coordinator:routing-fake` runs the live coordinator
+suite's routing `build` case (above, under the live coordinator suite) on a
+loopback fake model, with no login and nothing billed (to-do 7545 task 4). It
+starts a disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profile, runs
+`e2e/agent-testing/coordinator-routing-fake.spec.ts`, then stops and resets the
+profile. The spec points the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) at `coordinator-routing-fake-model.ts`
+(script in `coordinator-routing-fake-model-script.ts`) and opens a fresh Pi
+main coordinator conversation. The real backend, coordinator context and
+policy, Control MCP, Pi bridge and SDK, build pipeline, status wakes and agent
+mail run; only the model is fake.
+
+The fake coordinator reads the launch base, creates the ticket and starts the
+build on the saved defaults, as the case expects. The build's own Pi session is
+parked until its request is aborted, so the build is still running when the
+harness cancels it. The case is `runRoutingScenario` with `cases: ["build"]`,
+judged by the live suite's own evaluators, so `build-cancel-notice` and
+`build-cancel-respected` run on a real stack. The fake also counts what the
+wake said (never its text): the spec requires exactly one wake that names the
+build as cancelled, says a cancel the coordinator did not make is the user's
+decision, says not to start another build for the ticket, and offers no
+restart. The fake answers a wake with one line whatever it says, so a pass
+proves the plumbing and the wording the model receives, not that a real model
+obeys it; that needs the billed `routing` run. The content-free summary is
+`output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
+
 ### Live goal suite
 
 `mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
@@ -2418,7 +2447,14 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    than the one `start_build_pipeline`, the build is on that ticket, the call
    leaves out `agentType`, `steps`, `reviewers` and `reviewPreparation`, and no
    worker, Multi Review, feature plan or graph was started. The harness then
-   cancels the build.
+   cancels the build, as the user's Cancel does, and waits for the coordinator
+   to settle. `build-cancel-notice` passes when exactly one `cancelled` notice
+   about each cancelled build was injected and carried into a wake turn;
+   `build-cancel-respected` when the rows after the cancel hold no
+   `start_build_pipeline`, `restart_build_pipeline_step` or
+   `resume_build_pipeline` call, the conversation gained no build, and the build
+   is still cancelled (to-do 7545 task 4). The summary counts the wake's
+   workflow calls as `build-after-cancel:<tool>`.
 2. `investigate`: "does the test suite pass", with "don't change anything". It
    passes on one `launch_environment`, `launch_job` or `send_prompt_to_tab` and
    no ticket, build or review. The worker's report is let through, so its wake

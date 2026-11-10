@@ -1,7 +1,7 @@
 # Codex escalation restart backstop timing
 
 - **ID:** 0214
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `session lifecycle > a failed escalation restart keeps the guard and re-arms the backstop` in `bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts:907`.
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`.
@@ -34,3 +34,25 @@ The entire Codex package subsequently passed with
 `mise run test:logged -- --name codex-package-rerun -- bun run --cwd bridges/codex-bridge test:bridge`
 (exit 0, 39.0 seconds). The aggregate finished with the backend-only recurrences
 recorded in 0211 and 0247; root/support and protocol passed.
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved.
+- **Root cause:** the test, not the product. It slept a fixed 80 ms and then
+  required a second escalation restart. The second attempt comes from the
+  re-armed ambiguous-recovery backstop, a real timer
+  (`ambiguousRecoveryTimeoutMs: 10`) that follows a failed `thread/resume`
+  and a failed restart. On a loaded host that chain took longer than 80 ms,
+  so the window closed with one attempt (103.8–140.7 ms test durations).
+- **Fix:** `app-server-runtime-lifecycle.test.ts` waits for the condition
+  itself, `restartAttempts > 1`, through `waitUntil` with a 5 s diagnostic
+  deadline, then checks the `recovering` status and the `session.error`
+  event as before. The restored `restartNow` moved into a `finally`.
+- **Reproduced:** yes — raising the backstop to 60 ms (a slower timer
+  delivery) made the unchanged test fail with `restartAttempts` 1, as
+  recorded; the fixed test passes with the same 60 ms backstop.
+- **Stress:** `mise run test:logged -- --name codex-lifecycle-0214-0463-loop -- bun scripts/test-under-contention.ts --burners 4 -- bash -c 'cd bridges/codex-bridge && for i in $(seq 20); do bun test --preload ../../tests/setup-node.ts ./src/app-server-runtime-lifecycle.test.ts -t "a failed escalation restart keeps the guard|overlapping generation changes recover one pass" || exit 1; done'`
+  passed 20 of 20 fresh processes (unpinned burners on macOS). Fresh
+  processes because the owner is not `--rerun-each` safe: case 0463's test
+  sees no recovery pass from the third in-process rerun on, at `HEAD` as
+  well. The complete owner passed alone (`codex-lifecycle-owner`).

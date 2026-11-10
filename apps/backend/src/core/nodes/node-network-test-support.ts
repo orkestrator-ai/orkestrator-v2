@@ -151,12 +151,28 @@ export interface TestNode {
   dropStreams(): void;
 }
 
+/** Networks not yet stopped, so a test file's `afterEach` can stop what a test left. */
+const liveNetworks = new Set<TestNodeNetwork>();
+
+/**
+ * Stops every network a test left running. Each node's portal runs a
+ * recurring summary job registered in the process-wide diagnostics registry;
+ * in a run without file isolation, networks left running filled its 32
+ * scheduler slots and a later test's job was refused (flake 1318). Call from
+ * `afterEach` in every file that creates a {@link TestNodeNetwork}.
+ */
+export async function stopTestNodeNetworks(): Promise<void> {
+  const networks = [...liveNetworks];
+  await Promise.all(networks.map((network) => network.stop()));
+}
+
 export class TestNodeNetwork {
   readonly nodes = new Map<string, TestNode>();
   readonly timers = new ManualTimers();
   private readonly commands = new Map<string, CommandHandler>();
 
   constructor() {
+    liveNetworks.add(this);
     registerNodeCommands(registrarFrom((name, handler) => this.commands.set(name, handler)));
   }
 
@@ -311,6 +327,7 @@ export class TestNodeNetwork {
 
   /** Stops every node's portal and service, so no link outlives the test. */
   async stop(): Promise<void> {
+    liveNetworks.delete(this);
     // Reject even a request that reaches fetch after its link has stopped.
     for (const node of this.nodes.values()) node.online = false;
     const results = await Promise.allSettled(

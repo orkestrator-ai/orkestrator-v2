@@ -8,7 +8,13 @@ import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 import { LeafControllerSettings } from "./node-controller-settings.js";
-import { MemoryNodeStorage, TestNodeNetwork } from "./node-network-test-support.js";
+import {
+  stopTestNodeNetworks,
+  MemoryNodeStorage,
+  TestNodeNetwork,
+} from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 
 const cleanups: Array<() => void | Promise<void>> = [];
 

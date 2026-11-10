@@ -597,14 +597,26 @@ describe("network helpers", () => {
 });
 
 describe("baseline orchestration", () => {
-  for (const handoff of [
+  // `PUBLICATION_PORT` stands for the port of a fixture listener that resets
+  // every connection, so the one handoff that reaches the session exchange
+  // fails at once instead of waiting on DNS or the exchange timeout.
+  for (const fixture of [
     { url: "https://s.preview.test/session", attachmentId: "att-missing-code" },
     { url: "malformed URL", attachmentId: "att-malformed" },
     { attachmentId: "att-missing-url" },
-    { url: "https://s.preview.test/session?code=att-legacy.secret" },
+    { url: "https://s.preview.test:PUBLICATION_PORT/session?code=att-legacy.secret" },
   ]) {
-    test(`releases private-origin attachments after handoff failure (${handoff.attachmentId ?? "legacy"})`, async () => {
+    test(`releases private-origin attachments after handoff failure (${fixture.attachmentId ?? "legacy"})`, async () => {
       const releases: string[] = [];
+      const publication = createServer((socket) => socket.destroy());
+      await new Promise<void>((resolve) => publication.listen(0, "127.0.0.1", resolve));
+      const publicationPort = (publication.address() as AddressInfo).port;
+      const handoff = {
+        ...fixture,
+        ...(fixture.url
+          ? { url: fixture.url.replace("PUBLICATION_PORT", `${publicationPort}`) }
+          : {}),
+      };
       const server = createHttpServer(async (request, response) => {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -631,8 +643,12 @@ describe("baseline orchestration", () => {
           `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
           "--routes",
           "private-origin",
+          "--publication-address",
+          "127.0.0.1",
+          // Every local fixture request shares this budget, so it must not be
+          // the thing a descheduled worker trips over; no step waits on it.
           "--timeout-ms",
-          "100",
+          "5000",
         ]);
         const run = await runBaseline(options);
         expect(run.result.routes["private-origin"].status).toBe("failed");
@@ -640,6 +656,7 @@ describe("baseline orchestration", () => {
         expect(() => assertNoSecrets(JSON.stringify(run.result), run.secrets)).not.toThrow();
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => publication.close(() => resolve()));
       }
     });
   }

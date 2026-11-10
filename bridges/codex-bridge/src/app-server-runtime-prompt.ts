@@ -687,7 +687,13 @@ export class CodexRuntimePrompt {
             this.ctx.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
           ),
         );
-        let liveSession = this.ctx.registry.getSession(session.id);
+        // A DELETE claimed during the delay keeps the session registered until
+        // its removal is published, which can outlast the delay; it is gone.
+        const registeredSession = (): BridgeSession | undefined =>
+          this.sessions.sessionDeleteClaimed(session)
+            ? undefined
+            : this.ctx.registry.getSession(session.id);
+        let liveSession = registeredSession();
         if (
           !this.ctx.stopping &&
           liveSession === session &&
@@ -730,7 +736,7 @@ export class CodexRuntimePrompt {
         // generation recovery, so recreate it and carry the already-published
         // optimistic transcript onto the replacement context.
         await this.ctx.generationRecovery;
-        liveSession = this.ctx.registry.getSession(session.id);
+        liveSession = registeredSession();
         if (
           !this.ctx.stopping &&
           liveSession === session &&

@@ -616,6 +616,11 @@ description = "Build this platform's desktop release and upload it to the draft 
 raw_args = true
 run = "bun scripts/release-desktop.ts build"
 
+[tasks."release:linux"]
+description = "Run the Linux release build on the Linux builder over SSH (check | build [--no-publish] | attach)"
+raw_args = true
+run = "bun scripts/release-linux-remote.ts"
+
 [tasks."release:publish"]
 description = "Publish the draft GitHub release once macOS and Linux are both uploaded"
 run = "bun scripts/release-desktop.ts publish"

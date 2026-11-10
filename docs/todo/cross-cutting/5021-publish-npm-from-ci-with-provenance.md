@@ -31,6 +31,7 @@ This changes how the package is published and needs npm settings changed, so it 
 ## Related
 
 - [Releasing the desktop app](../../development/releasing.md)
+- `publish:cli` can now publish with a stored npm token (`~/.config/orkestrator-release/npm-token`, see "npm authentication" in the releasing guide), added 2026-11-10 so a release needs no browser approval. That token is the kind of long-lived workstation credential task 1 would retire; once CI publishing lands, remove the token path or limit it to CI.
 - [5022](5022-release-chain-live-evidence.md)
 - Security report, §5 Low severity (`git show 413bd6219:docs/reports/2-26-10-27-security.md`) (L6)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the approval and npm setting for task 1) moved there on 2026-11-10.

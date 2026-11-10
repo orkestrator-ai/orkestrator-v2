@@ -116,17 +116,26 @@ Updates → Channel**, then updates as usual.
    mise run release:desktop
    ```
 
-3. **On the Linux machine**, at the same commit:
+3. **From the same Mac**, at the same commit, start the Linux build on the
+   Linux builder (it can run alongside step 2):
 
    ```bash
-   mise run release:desktop
+   mise run release:linux -- build
    ```
+
+   It runs `release:desktop` on the builder over SSH; see
+   [Linux build from the Mac](#linux-build-from-the-mac). An agent cutting a
+   release runs this itself rather than asking the maintainer to.
 
 4. From either machine, once both have finished:
 
    ```bash
    mise run release:publish
    ```
+
+   With an npm token stored (see [npm authentication](#npm-authentication))
+   this needs no one at the keyboard. Without one it needs a single browser
+   approval, and a desktop notification says when.
 
 5. After a **Stable** release only, pin the installer to it and merge the change
    through a pull request:
@@ -185,19 +194,62 @@ with `bun packages/cli/scripts/lock-bridge-runtimes.ts` after changing a
 dependency of `packages/cli`, or to take a transitive security fix;
 `packages/cli/tests/cli.test.ts` fails when it no longer matches the package.
 
-`bun publish` asks for npm web authentication on every publish, even when
-`npm whoami` succeeds. It prints an `https://www.npmjs.com/auth/cli/...` URL
-and polls until someone approves it in a browser. It does not need a TTY. If
-nobody approves within about five minutes, it fails with
-`404 Not Found: .../-/v1/done` and nothing is published. An agent should:
+### npm authentication
+
+`publish:cli` (`scripts/publish-cli.ts`) authenticates in one of two ways.
+
+**A stored token (no browser step).** Create a granular access token on
+npmjs.com with read and write access to the `orkestrator` package only and
+"Bypass two-factor authentication" ticked, then store it on the machine that
+runs `release:publish`:
+
+```bash
+mkdir -p ~/.config/orkestrator-release
+# Paste the token, then Ctrl-D. Nothing else may be in the file.
+cat > ~/.config/orkestrator-release/npm-token
+chmod 600 ~/.config/orkestrator-release/npm-token
+```
+
+The script passes it to `bun publish` as `NPM_CONFIG_TOKEN` and prints only the
+file's path. It refuses a file that other users can read. An exported
+`NPM_CONFIG_TOKEN` (or `BUN_CONFIG_TOKEN`) takes precedence, and
+`ORKESTRATOR_NPM_TOKEN_FILE` moves the file. npm caps a write token's lifetime,
+so renew it when it expires; an expired or under-scoped token falls back to the
+browser approval below. A stored token is a long-lived publish credential on a
+workstation, the risk to-do
+[5021](../todo/cross-cutting/5021-publish-npm-from-ci-with-provenance.md)
+proposes removing by publishing from CI; keep it scoped to this one package.
+
+**Browser approval (no token).** `bun publish` then asks for npm web
+authentication on every publish, even when `npm whoami` succeeds. It prints an
+`https://www.npmjs.com/auth/cli/...` URL and polls until someone approves it in
+a browser; after about five minutes it fails with
+`404 Not Found: .../-/v1/done` and nothing is published. The script watches for
+that URL and, the moment it appears:
+
+- shows a desktop notification ("npm publish is waiting for you"), through
+  `osascript` on macOS or `notify-send` on Linux, and rings the terminal bell;
+- prints the URL in a banner;
+- on macOS, opens it in the default browser, so approving is one click.
+  `ORKESTRATOR_RELEASE_OPEN_APPROVAL=0` keeps the browser closed; `=1` opens it
+  on Linux too.
+
+If the link expires unapproved, the script asks again with a fresh link and a
+new notification, up to `ORKESTRATOR_NPM_AUTH_ATTEMPTS` attempts (default 3).
+An expired sign-in publishes nothing, so a retry cannot publish twice. Any
+other failure is not retried.
+
+An agent running `release:publish` without a token should:
 
 - start `mise run release:publish 2>&1; echo "EXIT=$?"` as a background task;
 - wait for the auth URL with a bounded poll of the output, for example
   `for i in $(seq 1 80); do grep -qE 'npmjs.com/auth|EXIT=' "$F" && break; sleep 3; done`;
-- give the URL to the user straight away, and wait for `EXIT=` with another
-  bounded poll or by ending the turn. A worker under an Orkestrator coordinator
-  sends the URL to the coordinator and ends its turn at once, because mail sent
-  mid-turn is held until the turn ends.
+- give the URL to the user straight away (the desktop notification has already
+  fired on the publishing machine), and wait for `EXIT=` with another bounded
+  poll or by ending the turn. A worker under an Orkestrator coordinator sends
+  the URL to the coordinator and ends its turn at once, because mail sent
+  mid-turn is held until the turn ends. A retried attempt prints a new URL;
+  pass that on too.
 
 Do not pipe input into the command (such as `sleep 900 | mise run
 release:publish`). The pipeline outlives the publish, so `EXIT=` is not written
@@ -282,7 +334,7 @@ the backend. The container image holds no backend; its own `sourceRevision`
 | Machine | Needs |
 | --- | --- |
 | Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials. By default `release:desktop` uses the `orkestrator-notary` keychain profile (`xcrun notarytool store-credentials orkestrator-notary --apple-id <id> --team-id <team>`); setting `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE` overrides it. |
-| Linux | `mise`, `git`, and `bsdtar` (`sudo pacman -S libarchive`). |
+| Linux | `mise`, `git`, `gh` signed in, `bsdtar` (`sudo pacman -S libarchive`), and a checkout of the repository. `mise run release:linux -- check` verifies all of these from the Mac. |
 | Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository. |
 
 macOS auto-update only works for builds signed with a Developer ID, which is why
@@ -359,6 +411,51 @@ validates the actual uploaded feeds before publication, refusing an ungated
 draft left by an old or interrupted build. Existing Electron 42 clients on
 Darwin 21 therefore skip the update and keep their working app; Darwin 22 may
 accept it. Update both the plist floor and feed floor when support changes.
+
+## Linux build from the Mac
+
+The Linux builder is **`omarchy-hp`** (Omarchy, x86_64), reached over
+Tailscale as `ssh omarchy-hp`; the Mac's `~/.ssh/config` supplies the account.
+Its checkout is `~/project/apps/orkestrator-v2`. Other machines on the tailnet
+are not release builders: do not try them in turn.
+
+```bash
+mise run release:linux -- check              # reach the builder and check its tools
+mise run release:linux -- build              # build and upload, following the log
+mise run release:linux -- build --no-publish # rehearse without the tag or GitHub
+mise run release:linux -- attach             # follow a running build again
+```
+
+`build` (`scripts/release-linux-remote.ts`, which sends
+`scripts/release-linux-remote.sh` to the builder) refuses a dirty builder
+checkout, fetches, checks out this Mac's `HEAD` detached, and starts
+`release-desktop.ts build` there under `nohup`. The build's output goes to
+`~/.cache/orkestrator-release/release-desktop-<version>.log` on the builder and
+streams back over SSH; if the connection drops the build carries on, and
+`attach` picks the log up again. The command exits with the build's exit
+status. The checkout is left detached at the release commit.
+
+How it reaches things, so no one has to work them out again:
+
+- **SSH.** Tailscale SSH may ask for a browser check (a
+  `https://login.tailscale.com/a/...` link) the first time in a while. The
+  script raises the same desktop notification as npm's sign-in and keeps
+  waiting; approve it and the build continues. Exit status 255 means ssh could
+  not connect at all.
+- **Git.** An SSH session from the Mac carries no GitHub SSH key, so the
+  builder's `origin` (`git@github.com:...`) cannot be fetched as is. The
+  script rewrites GitHub to HTTPS and authenticates through the builder's
+  signed-in `gh` (`gh auth git-credential`), using `GIT_CONFIG_*` environment
+  variables for that one process tree only; the builder's Git config is never
+  changed. `release-desktop.ts` pushes the tag the same way when Linux runs
+  first.
+- **Another builder.** Set `ORKESTRATOR_RELEASE_LINUX_HOST` (an SSH host,
+  `user@host` allowed) and `ORKESTRATOR_RELEASE_LINUX_CHECKOUT`, or pass
+  `--host`/`--checkout`.
+
+Both machines may build at once: the tag push and the draft release are
+claimed so that concurrent runs agree (see
+[Cutting a release](#cutting-a-release)).
 
 ## Linux and Omarchy
 

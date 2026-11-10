@@ -308,3 +308,37 @@ The full run and remaining undetermined failures are recorded in
   undetermined. The spec, fixture, scroll controller and virtualization code
   were not edited. No assertion, deadline, skip or implementation was changed
   to suppress the failure. No target-branch checkout or baseline run was made.
+
+## Completion Notes handoff validation — 2026-11-10
+
+Observed at `2d43f758a` on base
+`c6de4733c5beb87a578f82a8548725305e1ff254`.
+`mise run flaky:recurrence -- 0767 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports the case open.
+
+The exact recorded browser command,
+`mise run test:logged -- --name browser -- mise run test:browser`, used nine
+workers and finished with exit 1 after 1,249.8 s: 1,651 passed, 152 skipped,
+one failed. The desktop `scrollbar departure after find stays put when streaming reapplies highlights`
+again received `lastOutcome: unresolved` instead of `converged` at
+`e2e/StreamingTranscript.spec.ts:371` after the 5,000 ms polling deadline.
+The originally recorded CoordinatorActions navigation failure did not recur.
+The public-site stage was not reached because the component stage failed.
+Bounded evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.G3sCEC/browser.log.gz`.
+
+The complete unchanged owner then passed alone with one worker (exit 0,
+54.4 s):
+
+```bash
+mise run test:logged -- --name streaming-transcript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1
+```
+
+Passing output was deleted by the logged runner; no isolated case count is
+inferred. No transcript implementation, assertion, timeout or skip was changed.
+The failing fixture directly renders `VirtualizedMessageList` with an 800 px
+container and uses `useVirtuosoScrollState`; it does not render this branch's
+modified `NativeChatShell` compose dock. This inspection did not establish a
+causal link to the Notes handoff changes or a cause for convergence failure.
+The isolated pass confirms intermittence, not a green broad command or an
+environmental exemption. The browser result remains undetermined for verification.

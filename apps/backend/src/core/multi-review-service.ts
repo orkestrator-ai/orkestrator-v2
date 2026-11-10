@@ -193,6 +193,7 @@ import {
   needsAutoPrLaunch,
   needsInteractiveAddressFindingsObservation,
   needsPausedStopReconciliation,
+  resultKeysAwaitingTurnEnd,
   reviewSession,
   stableJitterMs,
   supervisionDemand,
@@ -266,6 +267,13 @@ const READ_ONLY_REPORT_TURN = Object.freeze(multiReviewStepTurnOptions("consolid
 const DEFAULT_POLL_MS = 1_000;
 /** Running provider work is observed every few seconds, with per-workflow jitter. */
 const DEFAULT_OBSERVATION_MS = 3_000;
+/**
+ * Cadence while an accepted result waits for its turn to end (todo 7557).
+ * Nothing announces that end, and it usually follows the acceptance within a
+ * few hundred milliseconds; the window is one observation interval from the
+ * acceptance, after which the ordinary cadence is no slower.
+ */
+const RESULT_SETTLE_POLL_MS = 250;
 const DEFAULT_RECONCILE_MS = 15_000;
 /** Workflows advanced at once; each carries its own bounded reviewer pool. */
 const MAX_CONCURRENT_WORKFLOW_PASSES = 8;
@@ -2908,8 +2916,35 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const observeMs =
       this.options.observationIntervalMs ?? this.options.pollIntervalMs ?? DEFAULT_OBSERVATION_MS;
+    if (await this.acceptedResultAwaitsTurnEnd(workflow, now, observeMs)) {
+      return Math.min(RESULT_SETTLE_POLL_MS, observeMs);
+    }
     // Spread workflows restored together across a third of the interval.
     return observeMs + stableJitterMs(workflowId, observeMs >= 1_000 ? observeMs / 3 : 0);
+  }
+
+  /**
+   * Whether a result this workflow is observing was accepted within the last
+   * `windowMs` and not consumed yet. Its pass consumes it only once the turn
+   * that submitted it has ended, and that end raises no wake, so without a
+   * short follow-up the workflow waited a whole observation interval after
+   * a pass that read the turn still running (todo 7557).
+   */
+  private async acceptedResultAwaitsTurnEnd(
+    workflow: MultiReviewWorkflow,
+    now: number,
+    windowMs: number,
+  ): Promise<boolean> {
+    const results = this.options.workflowResults;
+    if (!results) return false;
+    const scope = { environmentId: workflow.environmentId, projectId: workflow.projectId };
+    for (const resultKey of resultKeysAwaitingTurnEnd(workflow)) {
+      const status = await results.status(scope, resultKey);
+      if (status?.lifecycle !== "accepted") continue;
+      const acceptedAt = Date.parse(status.receipt?.acceptedAt ?? "");
+      if (Number.isFinite(acceptedAt) && now - acceptedAt < windowMs) return true;
+    }
+    return false;
   }
 
   private runLocked(workflowId: string): Promise<void> {

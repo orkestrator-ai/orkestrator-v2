@@ -354,6 +354,22 @@ describe("Orkestrator control MCP server", () => {
     }));
     overrides.set("dispatch_native_agent_intent", () => ({ outcome: "accepted" }));
     const descriptor = coordinatorCredential(["discovery", "jobs"]);
+    // The user's own turn, so the prompt goes as written; a mail turn's frame
+    // is covered in coordinator-delegated-prompt-origin.test.ts.
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            mailboxIncarnationId: "incarnation-1",
+            lastTurnOrigin: "user",
+          },
+        ],
+      },
+    }));
     const sent = await rpc(descriptor.url, descriptor.token, "tools/call", {
       name: "send_prompt_to_tab",
       arguments: {

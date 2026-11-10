@@ -18,6 +18,8 @@ import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
   COORDINATOR_DELEGATION_PRESENTATION,
+  coordinatorDelegationFromMail,
+  parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
@@ -256,6 +258,71 @@ describe("coordinator command registry", () => {
         context,
       ),
     ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  });
+
+  test("a launch's frame says when the turn arose from agent mail", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const setOrigin = (origin: "user" | "mail") =>
+      storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((item) =>
+          item.id === conversation.id ? { ...item, lastTurnOrigin: origin } : item,
+        ),
+      }));
+    const create = mock(async (args: Record<string, unknown>) => {
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+        initialPrompt: String(args.initialPrompt),
+      });
+      environment.status = "creating";
+      environment.delegationBaseBranch = "main";
+      environment.delegationBaseCommit = head;
+      await storage.addEnvironment(environment);
+      return environment;
+    });
+    commands.set("create_environment", create);
+    const launch = (requestId: string, turnOrigin?: "user" | "mail") =>
+      commands.get("launch_coordinator_environment")!(
+        {
+          scope: {
+            projectId: project.id,
+            coordinatorId: snapshot.workspace.id,
+            conversationId: conversation.id,
+            ...(turnOrigin ? { turnOrigin } : {}),
+          },
+          requestId,
+          input: {
+            projectId: project.id,
+            environmentType: "local",
+            delegationBaseBranch: "main",
+            delegationBaseCommit: head,
+            initialPrompt: "Implement it",
+          },
+        },
+        context,
+      );
+    const fromMail = async () => {
+      const prompt = String(create.mock.calls.at(-1)![0]!.initialPrompt);
+      const parsed = parseCoordinatorDelegatedPrompt(prompt);
+      expect(parsed?.source).toBe("Implement it");
+      return coordinatorDelegationFromMail(parsed!.frame);
+    };
+    await setOrigin("mail");
+    await launch("from-mail");
+    expect(await fromMail()).toBe(true);
+    await setOrigin("user");
+    await launch("from-user");
+    expect(await fromMail()).toBe(false);
+    // A scheduled fire carries the origin of the turn that set it.
+    await launch("scheduled-from-mail", "mail");
+    expect(await fromMail()).toBe(true);
+    await setOrigin("mail");
+    await launch("scheduled-from-user", "user");
+    expect(await fromMail()).toBe(false);
   });
 
   test("a defaulted agent replays after the default agent changes", async () => {

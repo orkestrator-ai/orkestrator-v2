@@ -193,6 +193,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-loopback.test.ts --parallel=1
 
+      # Requires a rootless daemon started with host loopback enabled and
+      # ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=enabled. It skips on these
+      # rootful runners; use a disposable --host-loopback daemon for a live run.
+      - name: Live rootless enabled host loopback
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name rootless-host-loopback -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootless-host-loopback.test.ts --parallel=1
+
+      # Requires execution on the rootful daemon's host and an explicit
+      # ORKESTRATOR_LIVE_HOST_FIREWALL=none declaration. Hosted runners do not
+      # guarantee that prerequisite, so leave it unset and skip this case.
+      - name: Live rootful host reach without a host firewall
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name rootful-host-reach -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rootful-host-reach.test.ts --parallel=1
+
       - name: Live readiness faults (C09, C10, C22, C23)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1

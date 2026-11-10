@@ -415,6 +415,57 @@ describe("NativeAgentSessionOperations", () => {
       });
       expect(asked.at(-1)).toBeUndefined();
     });
+
+    test("OpenCode lists archived 2.x rows and keeps each row's archivable marker", async () => {
+      const asked: unknown[] = [];
+      const { operations } = harness({
+        provider: {
+          listResumableSessions: async (options?: unknown) => {
+            asked.push(options);
+            return [
+              { sessionId: "ses_legacy", archivable: false },
+              { sessionId: "opencode2:ses_a", archived: true },
+            ];
+          },
+        },
+      });
+      const entries = await operations.listProjectionResumableSessions({
+        ...identity,
+        agent: "opencode",
+        includeArchived: true,
+      });
+      expect(asked).toEqual([{ includeArchived: true }]);
+      expect(entries).toEqual([
+        { sessionId: "ses_legacy", archivable: false },
+        { sessionId: "opencode2:ses_a", archived: true },
+      ]);
+    });
+
+    test("OpenCode archive reaches the provider", async () => {
+      const calls: unknown[] = [];
+      const { operations } = harness({
+        provider: {
+          setResumableSessionArchived: async (id: string, archived: boolean) => {
+            calls.push([id, archived]);
+          },
+        },
+      });
+      await operations.setProjectionResumableSessionArchived({
+        ...identity,
+        agent: "opencode",
+        resumableSessionId: "opencode2:ses_a",
+        archived: true,
+      });
+      expect(calls).toEqual([["opencode2:ses_a", true]]);
+      await expect(
+        operations.setProjectionResumableSessionArchived({
+          ...identity,
+          agent: "claude",
+          resumableSessionId: "x",
+          archived: true,
+        }),
+      ).rejects.toThrow("cannot archive");
+    });
   });
 
   test("a fork carries the composer's selection into the child's controls", async () => {

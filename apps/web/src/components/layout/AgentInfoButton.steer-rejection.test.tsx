@@ -1,5 +1,6 @@
 /**
- * Steer refusals and steer-history saturation in the agent-information panel.
+ * Steer refusals, steer-history saturation and the runtime generation in the
+ * agent-information panel.
  *
  * Kept apart from `AgentInfoButton.test.tsx`, which is far past the file-size
  * guideline. A definitive refusal means the bridge proved the instruction was
@@ -148,5 +149,29 @@ describe("AgentRuntimePanel steer history", () => {
 
     expect(screen.queryByTestId("agent-runtime-steer-saturated") === null).toBe(true);
     expect(screen.getByText("Cursor does not report runtime details.")).toBeTruthy();
+  });
+});
+
+// 0005 task 8: the warm Claude CLI's generation, shown beside its state.
+describe("AgentRuntimePanel runtime generation", () => {
+  test("shows which process the bridge runs beside the state", () => {
+    renderInAppCommandScope(
+      <AgentRuntimePanel
+        runtime={{ state: "attached", runtimeGeneration: 3 }}
+        providerLabel="Claude"
+        includeMetrics={false}
+      />,
+    );
+
+    expect(screen.getByTestId("agent-runtime-generation").textContent).toBe(" · process 3");
+    expect(screen.getByText("attached", { exact: false })).toBeTruthy();
+  });
+
+  test("shows nothing for a session that has not launched a process", () => {
+    renderInAppCommandScope(
+      <AgentRuntimePanel runtime={{ state: "detached" }} providerLabel="Claude" />,
+    );
+
+    expect(screen.queryByTestId("agent-runtime-generation") === null).toBe(true);
   });
 });

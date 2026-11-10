@@ -14,7 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import {
@@ -23,7 +23,10 @@ import {
 } from "../../../../tests/conformance/execution-policy/vendor-cli.js";
 import { COORDINATOR_PROTECTED_DATA_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { writeHostOpenCodeCredentialPlugin } from "./opencode-host-credential.js";
+import {
+  installHostOpenCodePlugins,
+  writeHostOpenCodeCredentialPlugin,
+} from "./opencode-host-credential.js";
 import { OpenCodeProvider } from "./opencode-provider.js";
 
 const opencode = policyQualificationCli("opencode");
@@ -133,14 +136,41 @@ interface Fixture {
 interface QualifyOptions {
   /** Load the host plugins, as a coordinator's server does. */
   plugin?: boolean;
+  /**
+   * Run with a user's own `OPENCODE_CONFIG_DIR`. With `plugin`, the host
+   * plugins are added the way the launcher adds them beside one.
+   */
+  userConfigDir?: boolean;
   /** Rules appended to the coordinator's own. */
   extraRules?: { permission: string; pattern: string; action: "allow" | "deny" }[];
+}
+
+const USER_PLUGIN_MARKER = "user-plugin-loaded";
+
+/**
+ * A user's own `OPENCODE_CONFIG_DIR`, with a plugin that leaves a marker when
+ * OpenCode loads it, so a run can show the user's directory still applied.
+ */
+async function userConfigDir(root: string): Promise<string> {
+  const directory = join(root, "user-opencode");
+  await mkdir(join(directory, "plugins"), { recursive: true });
+  await writeFile(
+    join(directory, "plugins", "user-marker.js"),
+    `import { writeFileSync } from "node:fs";
+export const UserMarker = async () => {
+  writeFileSync(${JSON.stringify(join(root, USER_PLUGIN_MARKER))}, "loaded");
+  return {};
+};
+`,
+  );
+  return directory;
 }
 
 /** Runs one scripted coordinator turn and returns what each tool answered. */
 async function qualify(
   calls: (fixture: Fixture) => ScriptedCall[],
-  { plugin = true, extraRules = [] }: QualifyOptions = {},
+  { plugin = true, userConfigDir: withUserConfigDir = false, extraRules = [] }: QualifyOptions = {},
+  inspect?: (root: string) => Promise<void>,
 ): Promise<ToolOutcome[]> {
   return withPolicyCliFixture(async (cli) => {
     const root = await realpath(cli.root);
@@ -182,13 +212,23 @@ async function qualify(
     const port = await availableLoopbackPort();
     // The launcher's coordinator environment: the protected directory, and the
     // host configuration directory that carries the plugins.
-    const env: Record<string, string> = {
+    const env: Record<string, string | undefined> = {
       ...cli.env,
       [COORDINATOR_PROTECTED_DATA_DIR_ENV]: dataDir,
-      ...(plugin
+      ...(plugin && !withUserConfigDir
         ? { OPENCODE_CONFIG_DIR: await writeHostOpenCodeCredentialPlugin(join(root, "host")) }
         : {}),
     };
+    if (withUserConfigDir) {
+      env.OPENCODE_CONFIG_DIR = await userConfigDir(root);
+      if (plugin) {
+        // The production launcher path, on a user directory it must keep.
+        const installed = await installHostOpenCodePlugins(env, join(root, "host"), {
+          coordinator: true,
+        });
+        expect(installed).toEqual({ mode: "config-content" });
+      }
+    }
     const child = Bun.spawn(
       [opencode!, "serve", "--hostname", "127.0.0.1", "--port", String(port)],
       { cwd, env, stdout: "ignore", stderr: "ignore" },
@@ -240,6 +280,7 @@ async function qualify(
         ),
       );
       expect(outcomes.map((outcome) => outcome.tool)).toEqual(scripted.map((call) => call.tool));
+      await inspect?.(root);
       return outcomes;
     } finally {
       await provider.dispose();
@@ -295,6 +336,52 @@ describe("OpenCode coordinator read boundary", () => {
       expect(glob.tool).toBe("glob");
       expect(glob.status).toBe("completed");
       expect(glob.output).not.toContain("linked-dir/control-mcp.json");
+    },
+    90_000,
+  );
+
+  // To-do 7402: a user's own OPENCODE_CONFIG_DIR is kept, and the read check
+  // still loads, through OPENCODE_CONFIG_CONTENT's plugin list.
+  (opencode ? test : test.skip)(
+    "refuses a link into the data directory beside a user OPENCODE_CONFIG_DIR",
+    async () => {
+      const outcomes = await qualify(
+        (fixture) => [
+          { tool: "read", args: { filePath: fixture.link } },
+          { tool: "read", args: { filePath: "linked-dir/control-mcp.json" } },
+          { tool: "grep", args: { pattern: "CREDENTIAL", path: join(fixture.cwd, "linked-dir") } },
+          { tool: "read", args: { filePath: fixture.own } },
+        ],
+        { userConfigDir: true },
+        async (root) => {
+          // The user's own plugin loaded too: their directory was not replaced.
+          expect(await readFile(join(root, USER_PLUGIN_MARKER), "utf8")).toBe("loaded");
+        },
+      );
+      for (const outcome of outcomes.slice(0, 3)) {
+        expect(outcome.status).toBe("error");
+        expect(outcome.output).toContain("data directory");
+      }
+      for (const outcome of outcomes) expect(outcome.output).not.toContain(SECRET);
+      expect(outcomes[3]!.status).toBe("completed");
+      expect(outcomes[3]!.output).toContain(OWN);
+    },
+    90_000,
+  );
+
+  // The control for the case above: the user's directory alone does not refuse.
+  (opencode ? test : test.skip)(
+    "with only a user OPENCODE_CONFIG_DIR, reads through a link in the checkout",
+    async () => {
+      const outcomes = await qualify(
+        (fixture) => [{ tool: "read", args: { filePath: fixture.link } }],
+        { plugin: false, userConfigDir: true },
+        async (root) => {
+          expect(await readFile(join(root, USER_PLUGIN_MARKER), "utf8")).toBe("loaded");
+        },
+      );
+      expect(outcomes[0]!.status).toBe("completed");
+      expect(outcomes[0]!.output).toContain(SECRET);
     },
     90_000,
   );

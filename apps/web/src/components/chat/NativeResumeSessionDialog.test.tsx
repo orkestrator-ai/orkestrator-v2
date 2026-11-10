@@ -112,6 +112,35 @@ describe("NativeResumeSessionDialog", () => {
     expect(screen.queryByRole("button", { name: "Remove from list" }) === null).toBe(true);
   });
 
+  test("offers remove only on rows that can be archived in a mixed list", async () => {
+    // An OpenCode list holds 1.x conversations, which cannot be archived,
+    // beside 2.x ones, which can.
+    const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
+    renderDialog(
+      [
+        { id: "legacy", title: "Legacy one", archivable: false },
+        { id: "opencode2:ses_a", title: "New one" },
+      ],
+      { onArchive },
+    );
+    await waitFor(() => expect(screen.getByText("Legacy one")).toBeTruthy());
+    const removes = screen.getAllByRole("button", { name: "Remove from list" });
+    expect(removes).toHaveLength(1);
+    const newRow = screen.getByText("New one").closest(".group") as HTMLElement;
+    expect(within(newRow).getByRole("button", { name: "Remove from list" })).toBe(removes[0]!);
+    const legacyRow = screen.getByText("Legacy one").closest(".group") as HTMLElement;
+    expect(within(legacyRow).queryByRole("button", { name: "Remove from list" }) === null).toBe(
+      true,
+    );
+
+    // The legacy row still resumes.
+    fireEvent.click(within(legacyRow).getAllByRole("button")[0]!);
+    expect(onArchive).not.toHaveBeenCalled();
+
+    fireEvent.click(removes[0]!);
+    await waitFor(() => expect(onArchive).toHaveBeenCalledWith("opencode2:ses_a", true));
+  });
+
   describe("archived rows", () => {
     const rows: ResumableSession[] = [
       { id: "live", title: "Live one", activityAt: "2026-01-01T00:00:00Z" },

@@ -270,6 +270,8 @@ describe("test suite ownership", () => {
       "tests/unit/migrate-copy.test.ts",
       // Deferred backend references must survive the browser's normalization.
       "tests/unit/native-agent-deferred-normalization.test.ts",
+      // The busy driver badge limit must match the backend untracked-file scan cap.
+      "tests/unit/recurring-live-ab-busy.test.ts",
       "tests/unit/test-host-isolation.test.ts",
       // The mail benchmark script reads the agent-accounts store the backend writes.
       "tests/unit/tmux-mail-benchmark.test.ts",

@@ -2425,7 +2425,7 @@
         "schema"
       ],
       "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
-      "resultDigest": "sha256:15067cded47a6b5713a5c7263414063ecc25fef74dc05e3ac3e1553de9648f02"
+      "resultDigest": "sha256:93b752f7664cdedd2e7a6bec3e1faa47dffda408a2e2c3b0aa2e800346d08c70"
     },
     "dispatch_native_agent_prompt": {
       "domain": "native-sessions",
@@ -3235,7 +3235,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b0b5f7fd4242e725c9eec3d77e86de66f36d939b56e687dcacda2757e4f7d6cb"
+      "resultDigest": "sha256:ab757b7afbc066aaa3f2f2c1d77e669a2a952b680be2c0691dd798085a7e95ae"
     },
     "get_docker_system_stats": {
       "domain": "docker",
@@ -4954,7 +4954,7 @@
       "read": false,
       "critical": ["attachments", "conversationMode", "literal", "requestId"],
       "argsDigest": "sha256:5e5df74cb56a66defb9dabc64939bea56ecca3eaf6df8043925bf2b7359cb8e6",
-      "resultDigest": "sha256:8ed067e2a180af2b8232b4470b8db2b6b6d15fc3d6f7bf1b8f19ac24b588a767"
+      "resultDigest": "sha256:b15e5e3eee682225e54c70420e8e90f72a03ff8950c3b938e86652dbebaed0af"
     },
     "launch_controller_multi_review": {
       "domain": "coordinator",
@@ -5052,7 +5052,7 @@
         "tabReuse"
       ],
       "argsDigest": "sha256:b7973d21bb7459524b3435a43b968a9f798b2bd0e57b8e52d487129308fe4bb5",
-      "resultDigest": "sha256:8ed067e2a180af2b8232b4470b8db2b6b6d15fc3d6f7bf1b8f19ac24b588a767"
+      "resultDigest": "sha256:b15e5e3eee682225e54c70420e8e90f72a03ff8950c3b938e86652dbebaed0af"
     },
     "launch_terminal_job": {
       "domain": "terminals",
@@ -7029,7 +7029,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:640c354dcc96ba7e32ecaccec3dcf015e19a8aeb7e7dd24d0cbed8aed5bf2352",
-      "resultDigest": "sha256:15067cded47a6b5713a5c7263414063ecc25fef74dc05e3ac3e1553de9648f02"
+      "resultDigest": "sha256:93b752f7664cdedd2e7a6bec3e1faa47dffda408a2e2c3b0aa2e800346d08c70"
     },
     "retry_prompt_queue_dispatch": {
       "domain": "native-sessions",

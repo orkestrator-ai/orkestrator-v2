@@ -441,6 +441,7 @@ async function launchNativeAgentJobInternal(
             ? "unknown"
             : "rejected",
       ...(outcome.outcome === "rejected" ? { error: outcome.error } : {}),
+      ...(outcome.outcome === "rejected" && outcome.transient ? { transient: true } : {}),
       ...(outcome.outcome === "unknown" && outcome.error ? { error: outcome.error } : {}),
       ...completionActionResult,
     };

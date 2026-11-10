@@ -600,6 +600,8 @@ export const DispatchOutcomeSchema = openRecord({
   error: optionalString,
   instructionsIgnored: optionalBoolean,
   requestIdRetired: optionalBoolean,
+  /** A temporary refusal with nothing sent: a new request id may succeed. */
+  transient: optionalBoolean,
   origin: optionalString,
   /** A retried steer that missed its turn: `new-turn` or `queued`. */
   deliveredAs: optionalString,

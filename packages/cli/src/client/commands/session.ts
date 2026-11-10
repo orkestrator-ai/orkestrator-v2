@@ -892,7 +892,7 @@ export const sessionCommands: CommandSpec[] = [
     inputFields: { revision: "expectedRevision", choose: "answers", text: "answers" },
     summary: "Answer one pending interaction at its current revision.",
     description:
-      "--revision must match the interaction's current revision; a replaced or expired interaction is refused (exit 8), never answered. Nothing is approved implicitly.",
+      "--revision must match the interaction's current revision; a replaced or expired interaction is refused (exit 8), never answered. Nothing is approved implicitly. --action answer without --choose or --text approves an approval that has no questions; the backend refuses it for an interaction with a required question (exit 2).",
     positionals: [
       { name: "session", required: true },
       { name: "interaction", required: true },
@@ -940,9 +940,9 @@ export const sessionCommands: CommandSpec[] = [
         "--action",
       );
       const answers = parseAnswers(options);
-      if (action === "answer" && answers.length === 0) {
-        throw new CliError("invalid-input", "--action answer needs --choose or --text");
-      }
+      // An `answer` with no answers is how an approval with no questions is
+      // approved (7202). Whether an empty answer suits this interaction is the
+      // backend's call: it knows the questions and refuses a required one.
       if (action !== "answer" && answers.length > 0) {
         throw new CliError("invalid-input", "--choose/--text only apply to --action answer");
       }

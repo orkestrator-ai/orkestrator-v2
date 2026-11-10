@@ -73,6 +73,7 @@ import {
   stagePromptImages,
   AmbiguousPromptDispatchError,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
+  isTransientDispatchRefusal,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
   createHash,
@@ -2137,6 +2138,9 @@ export class NativeAgentService {
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
+        ...(!preserveExistingPending && isTransientDispatchRefusal(error)
+          ? { transient: true as const }
+          : {}),
       };
     } finally {
       if (manualClaimSession) {
@@ -2248,6 +2252,10 @@ export class NativeAgentService {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
         ...(retired ? { requestIdRetired: true as const } : {}),
+        // Nothing was sent and no record stays parked: a new id may succeed.
+        ...(!preserveExistingPending && isTransientDispatchRefusal(error)
+          ? { transient: true as const }
+          : {}),
       };
     }
   }

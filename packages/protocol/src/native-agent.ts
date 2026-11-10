@@ -855,6 +855,14 @@ export type NativeAgentDispatchOutcome =
        * parked record for it is cleared; the draft needs a new id to run it.
        */
       requestIdRetired?: true;
+      /**
+       * The provider was temporarily unavailable and nothing was sent (a
+       * bridge's 503 before dispatch, an unreachable bridge, a failed attach):
+       * no record stays parked, so the same prompt may be sent again under a
+       * new request id and may succeed. Never set for an ambiguous dispatch,
+       * a parked conflict or a refusal that will not change on its own.
+       */
+      transient?: true;
     }
   | {
       outcome: "unknown";

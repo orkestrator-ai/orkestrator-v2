@@ -713,6 +713,52 @@ describe("import distance", () => {
     });
   });
 
+  test("a module beyond a distant changed import can still reference a changed fixture", () => {
+    const root = fixture(
+      chain(5, {
+        "src/m4.ts": 'import "./m5";\nexport const data = readFileSync("fixtures/data.json");\n',
+        "fixtures/data.json": "{}",
+      }),
+    );
+    const referenced = {
+      verdict: "related",
+      reasons: ["references-changed-path"],
+      changedPath: "fixtures/data.json",
+    };
+    // Adding a distant changed import must not hide existing reference evidence.
+    expect(
+      failures(classify(root, { output: OUTPUT, changedFiles: ["fixtures/data.json"] }))[0],
+    ).toMatchObject(referenced);
+    expect(
+      failures(
+        classify(root, {
+          output: OUTPUT,
+          changedFiles: ["src/m3.ts", "src/m5.ts", "fixtures/data.json"],
+        }),
+      )[0],
+    ).toMatchObject(referenced);
+  });
+
+  test.each(["truncated", "global"])("a distant hit stays undetermined with %s changes", (kind) => {
+    const root = fixture(chain(5));
+    const [failure] = failures(
+      classify(root, {
+        output: OUTPUT,
+        changedFiles:
+          kind === "global"
+            ? ["src/m3.ts", "src/m5.ts", "package.json"]
+            : ["src/m3.ts", "src/m5.ts"],
+        changedFilesTruncated: kind === "truncated",
+      }),
+    );
+    expect(failure).toMatchObject({
+      verdict: "undetermined",
+      reasons: ["reaches-changed-file-indirectly"],
+      changedPath: "src/m3.ts",
+      changedPathHops: 3,
+    });
+  });
+
   test("a widely shared module reached through layers no longer makes a backend test related", () => {
     // The shape of to-do 4520's owners, had that branch changed web-annotations.ts.
     const root = fixture({

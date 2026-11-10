@@ -616,7 +616,8 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
    * other helpers; a file any of them imports is one hop away. A bunfig
    * preload is itself one hop away, as a file the test imports. The walk is
    * breadth-first by distance, every own file first, so the first changed file
-   * it meets is the closest and the walk stops there.
+   * it meets is the closest. Only a close hit stops the walk; a distant hit
+   * keeps walking within the budget so path references see the full closure.
    */
   function importClosure(
     testFile: string,
@@ -646,10 +647,10 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       const hops = isOwn ? 1 : queue[nextQueued++]!.hops;
       if (seen.has(file)) continue;
       seen.add(file);
-      if (file !== testFile && changed.has(file)) {
+      if (changedHit === null && file !== testFile && changed.has(file)) {
         changedHit = file;
         changedHops = hops;
-        break;
+        if (hops <= MAX_RELATED_IMPORT_HOPS) break;
       }
       if (graphBudget <= 0 || outOfTime()) {
         graphBudgetSpent = true;
@@ -1067,8 +1068,8 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         const closure = importClosure(failure.file, failure.runner === "bun");
         const close =
           closure.changedHit !== null && (closure.changedHops ?? 0) <= MAX_RELATED_IMPORT_HOPS;
-        // A distant import still lets the test's own path references decide;
-        // the walk stopped at the hit, but every own file was read before it.
+        // A distant import still lets path references across the bounded
+        // closure decide, including references in non-helper modules.
         const referenced = close ? null : referencedChange(failure.file, closure.files);
         if (close) {
           reasons.push("imports-changed-file");

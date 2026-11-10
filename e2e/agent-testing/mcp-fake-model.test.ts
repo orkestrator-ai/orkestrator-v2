@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  FAKE_OPENCODE_MODEL_REF,
   FAKE_PI_MODEL_REF,
   fakePiModels,
   insideProfile,
@@ -25,6 +26,7 @@ import { PROBE_UNAVAILABLE, probePrompt, probeResult } from "./mcp-apply-live-su
 import {
   anthropicContent,
   anthropicRequest,
+  bashTakesDescription,
   chatMessage,
   chatRequest,
   responsesOutputItem,
@@ -57,9 +59,15 @@ describe("offeredToolName", () => {
     expect(offeredToolName(["bash", "mcp_mqu0_alpha_probe"], "mqu0_alpha", "probe")).toBe(
       "mcp_mqu0_alpha_probe",
     );
+    // OpenCode 1.19.5: `<server>_<tool>`, both sanitized.
+    expect(offeredToolName(["bash", "mqu0_alpha_probe"], "mqu0_alpha", "probe")).toBe(
+      "mqu0_alpha_probe",
+    );
     // A renamed server's tool does not stand in for the old name.
     expect(offeredToolName(["mcp__mqu0_beta__probe"], "mqu0_alpha", "probe")).toBeUndefined();
     expect(offeredToolName(["mcp__mqu0_alpha2__probe"], "mqu0_alpha", "probe")).toBeUndefined();
+    expect(offeredToolName(["mqu0_beta_probe"], "mqu0_alpha", "probe")).toBeUndefined();
+    expect(offeredToolName(["mqu0_alpha2_probe"], "mqu0_alpha", "probe")).toBeUndefined();
   });
 });
 
@@ -286,6 +294,53 @@ describe("chat-completions adapter", () => {
   });
 });
 
+describe("chat-completions shell calls", () => {
+  const openCodeBash = {
+    function: {
+      name: "bash",
+      parameters: { properties: { command: {}, description: {}, timeout: {} } },
+    },
+  };
+  const piBash = { function: { name: "bash", parameters: { properties: { command: {} } } } };
+
+  test("OpenCode's bash gets the description its schema requires; Pi's does not", () => {
+    expect(bashTakesDescription({ tools: [openCodeBash] })).toBe(true);
+    expect(bashTakesDescription({ tools: [piBash] })).toBe(false);
+    expect(bashTakesDescription({})).toBe(false);
+    const shell = { kind: "shell", command: "sleep 45" } as const;
+    expect(
+      JSON.parse(chatMessage(shell, 2, { describeShell: true }).toolCall!.function.arguments),
+    ).toEqual({ command: "sleep 45", description: "Run the requested command" });
+    expect(JSON.parse(chatMessage(shell, 2).toolCall!.function.arguments)).toEqual({
+      command: "sleep 45",
+    });
+  });
+
+  test("the served stream carries the description when OpenCode offers bash", async () => {
+    const server = serveMcpFakeModel(Response);
+    try {
+      const reply = await fetch(`http://127.0.0.1:${server.port}/v1/chat/completions`, {
+        method: "POST",
+        body: JSON.stringify({
+          stream: true,
+          tools: [openCodeBash],
+          messages: [
+            { role: "user", content: "Please run the command `sleep 1` once, in the foreground." },
+          ],
+        }),
+      });
+      const call = sse(await reply.text())[0].choices[0].delta.tool_calls[0];
+      expect(call.function.name).toBe("bash");
+      expect(JSON.parse(call.function.arguments)).toEqual({
+        command: "sleep 1",
+        description: "Run the requested command",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("Responses adapter", () => {
   const offer = {
     input: [
@@ -508,7 +563,7 @@ function sse(body: string): any[] {
 }
 
 describe("isolated profile wiring", () => {
-  for (const platform of ["claude", "codex", "pi"] as const) {
+  for (const platform of ["claude", "codex", "pi", "opencode"] as const) {
     for (const existing of [false, true]) {
       test(`${platform}: rewrite and restore ${existing ? "existing bytes and mode" : "an absent file"}`, async () => {
         const root = mkdtempSync(path.join(tmpdir(), "mcp-wiring-"));
@@ -518,7 +573,9 @@ describe("isolated profile wiring", () => {
             ? '{ "env": {"KEPT":"yes"}, "permissions": {"allow": []} }\n'
             : platform === "codex"
               ? 'openai_base_url = "http://old.invalid"\n[projects.fixture]\ntrust_level = "trusted"\n'
-              : '{ "providers": {"mcpq-fake": {"old": true}} }\n';
+              : platform === "opencode"
+                ? '{ "mcp": {"kept": {"type": "local", "command": ["true"]}}, "provider": {"other": {"npm": "x"}} }\n'
+                : '{ "providers": {"mcpq-fake": {"old": true}} }\n';
         let handle: Awaited<ReturnType<typeof startMcpFakeModel>> | undefined;
         try {
           if (existing) {
@@ -541,6 +598,18 @@ describe("isolated profile wiring", () => {
             expect(contents.split("\n")[0]).toBe(`openai_base_url = "${handle.origin}/v1"`);
             expect(contents.match(/^openai_base_url/gm)).toHaveLength(1);
             if (existing) expect(contents).toContain('[projects.fixture]\ntrust_level = "trusted"');
+          } else if (platform === "opencode") {
+            expect(handle.model).toBe(FAKE_OPENCODE_MODEL_REF);
+            const configured = JSON.parse(contents);
+            expect(configured.provider["mcpq-fake"].options.baseURL).toBe(`${handle.origin}/v1`);
+            expect(configured.provider["mcpq-fake"].npm).toBe("@ai-sdk/openai-compatible");
+            expect(configured.model).toBe(FAKE_OPENCODE_MODEL_REF);
+            expect(configured.small_model).toBe(FAKE_OPENCODE_MODEL_REF);
+            expect(configured.enabled_providers).toEqual(["mcpq-fake"]);
+            if (existing) {
+              expect(configured.mcp.kept.command).toEqual(["true"]);
+              expect(configured.provider.other).toEqual({ npm: "x" });
+            }
           } else {
             expect(handle.model).toBe(FAKE_PI_MODEL_REF);
             expect(JSON.parse(contents)).toEqual(fakePiModels(`${handle.origin}/v1`));
@@ -574,6 +643,7 @@ describe("isolated profile wiring", () => {
   for (const [platform, original, error] of [
     ["pi", '{"providers":{"someone-else":{"apiKey":"placeholder"}}}\n', "other providers"],
     ["claude", "invalid json\n", "JSON"],
+    ["opencode", '{ // a JSONC comment\n "mcp": {} }\n', "not plain JSON"],
   ] as const) {
     test(`${platform}: configuration refusal restores bytes and stops its model`, async () => {
       const root = mkdtempSync(path.join(tmpdir(), "mcp-refusal-"));
@@ -605,7 +675,9 @@ function platformFile(root: string, platform: string) {
     "agent-credentials",
     ...(platform === "pi"
       ? ["home", ".pi", "agent", "models.json"]
-      : [platform, platform === "claude" ? "settings.json" : "config.toml"]),
+      : platform === "opencode"
+        ? ["xdg-config", "opencode", "opencode.json"]
+        : [platform, platform === "claude" ? "settings.json" : "config.toml"]),
   );
 }
 

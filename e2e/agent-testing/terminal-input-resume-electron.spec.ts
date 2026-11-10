@@ -17,6 +17,7 @@ import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * The desktop half of terminal input recovery
@@ -38,14 +39,6 @@ const editor = ["vim", "nvim"].find(
   (name) => spawnSync("sh", ["-c", `command -v ${name}`]).status === 0,
 );
 const TERMINAL_WRITE = "local_terminal_write";
-
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 async function waitForUrl(url: string): Promise<void> {
   await expect
@@ -255,11 +248,11 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await expect.poll(async () => (await writes()).length, { timeout: 30_000 }).toBeGreaterThan(0);
     const sessionId = String((await writes())[0]!.args.sessionId);
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     const screen = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string } | null>("get_terminal_state_snapshot", { sessionId }))
           ?.output ?? "",
       );

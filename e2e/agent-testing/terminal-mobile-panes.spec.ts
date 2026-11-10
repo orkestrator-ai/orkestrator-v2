@@ -3,6 +3,7 @@ import { expect, test, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * A shell in a split environment on a phone, against the real backend. The
@@ -52,15 +53,6 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
     return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
-
-/** Terminal output as text, without the escape sequences a shell interleaves. */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 /** The page's own backend commands, as sent over the network. */
 function commandOf(request: Request): { command?: string; args?: Record<string, unknown> } {
@@ -194,7 +186,7 @@ test("a shell in a hidden phone pane keeps working and its size while away, and 
     await expect.poll(() => writes().length, { timeout: 30_000 }).toBeGreaterThan(0);
     const sessionId = String(writes()[0]!.args.sessionId);
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     const sizes = async () =>

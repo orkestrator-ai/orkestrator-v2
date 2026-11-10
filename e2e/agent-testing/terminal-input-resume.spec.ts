@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * Terminal input recovery in a real browser against the real backend: a write
@@ -54,15 +55,6 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
     return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
-
-/** Terminal output as text: vim interleaves cursor and mode sequences with what it echoes. */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 /** The page's own backend commands, as sent over the network. */
 function commandOf(request: Request): { command?: string; args?: Record<string, unknown> } {
@@ -179,13 +171,13 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     await expect.poll(() => writes().length, { timeout: 30_000 }).toBeGreaterThan(0);
     const sessionId = String(writes()[0]!.args.sessionId);
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     // What the terminal shows now. An editor may position each cell, so its raw
     // output need not hold a line of text as one run.
     const screen = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string } | null>("get_terminal_state_snapshot", { sessionId }))
           ?.output ?? "",
       );
@@ -501,7 +493,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
       await expect.poll(() => new Set(targetSessions).size).toBe(1);
       const oldSession = targetSessions[0]!;
       const output = async (sessionId: string) =>
-        visibleText(
+        terminalVisibleText(
           (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
         );
       await expect.poll(() => output(oldSession)).toMatch(/READY_PID=\d+/);

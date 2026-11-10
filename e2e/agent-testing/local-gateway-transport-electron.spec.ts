@@ -20,10 +20,10 @@ import {
   packageRoot,
   repositoryRoot,
   startTransportStack,
-  visibleText,
   webRoot,
 } from "./local-gateway-transport-stack";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
@@ -500,7 +500,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       .toBeGreaterThan(0);
     const sessionId = (await writtenSessions())[0]!;
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     await expect.poll(output, { timeout: 30_000 }).toContain("READY-42");
@@ -532,7 +532,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     // authoritative snapshot.
     const reached = async (marker: string) => {
       const seen = await frames();
-      if (visibleText(seen.tail).includes(marker)) return true;
+      if (terminalVisibleText(seen.tail).includes(marker)) return true;
       return seen.desynced > 0 && (await output()).includes(marker);
     };
 

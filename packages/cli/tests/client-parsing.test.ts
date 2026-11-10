@@ -28,7 +28,7 @@ describe("service/client classification", () => {
       classifyInvocation(["--tailscale-serve", "--allowed-origins", "https://orkestrator.dev"])
         .mode,
     ).toBe("serve");
-    expect(classifyInvocation(["--unsafe-allow-non-tailscale-bind"]).mode).toBe("serve");
+    expect(classifyInvocation(["--allow-non-tailscale-bind"]).mode).toBe("serve");
     expect(classifyInvocation(["serve", "--data-dir", "/tmp/x"])).toEqual({
       mode: "serve",
       args: ["--data-dir", "/tmp/x"],

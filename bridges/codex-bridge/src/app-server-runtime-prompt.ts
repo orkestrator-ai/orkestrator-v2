@@ -687,7 +687,7 @@ export class CodexRuntimePrompt {
             this.ctx.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
           ),
         );
-        // A DELETE claimed during the delay keeps the session registered until
+        // A `deleteSession` claimed during the delay keeps the session registered until
         // its removal is published, which can outlast the delay; it is gone.
         const registeredSession = (): BridgeSession | undefined =>
           this.sessions.sessionDeleteClaimed(session)

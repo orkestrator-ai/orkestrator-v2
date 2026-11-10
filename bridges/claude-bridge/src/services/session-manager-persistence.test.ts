@@ -159,13 +159,6 @@ describe("durable shell task enrichment", () => {
 });
 
 describe("reconcilePersistedSessions", () => {
-  test("does nothing when the installed SDK has no listSessions API", async () => {
-    installSdkModuleMock({ listSessions: undefined });
-
-    await expect(reconcilePersistedSessions()).resolves.toBeUndefined();
-    expect(mockSdkListSessions).not.toHaveBeenCalled();
-  });
-
   test("asks the SDK for this directory only and drops worktree siblings", async () => {
     mockSdkListSessions.mockImplementation(async () => [
       sdkSessionInfo({ sessionId: PERSISTED_SDK_ID, cwd: "/repo/env-a" }),
@@ -1915,17 +1908,6 @@ describe("forkPersistedSession", () => {
 
     call.finish();
     await promptPromise;
-  });
-
-  test("throws conflict when the installed SDK cannot fork sessions", async () => {
-    const state = await materializePersistedSession();
-    installSdkModuleMock({ forkSession: undefined });
-
-    await expect(forkPersistedSession(state.id)).rejects.toMatchObject({
-      code: "conflict",
-      message: "Installed Claude Agent SDK does not support session forking",
-    });
-    expect(mockSdkForkSession).not.toHaveBeenCalled();
   });
 
   test("throws invalid for a boundary that is not in the transcript", async () => {

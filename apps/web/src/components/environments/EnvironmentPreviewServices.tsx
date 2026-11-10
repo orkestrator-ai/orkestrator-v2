@@ -42,7 +42,6 @@ export function EnvironmentPreviewServices({
   onAddPortMapping,
 }: EnvironmentPreviewServicesProps) {
   const nodeBackend = useScopeBackend();
-  const status = usePreviewServiceStore((state) => state.status);
   const capabilities = usePreviewServiceStore((state) => state.capabilities);
   const snapshot = usePreviewServiceStore(
     (state) => state.environments[environment.id]?.snapshot ?? null,
@@ -58,13 +57,6 @@ export function EnvironmentPreviewServices({
     void refresh(environment.id, { force: true });
   }, [environment.id, previewScope, refresh]);
 
-  if (status === "unsupported") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        This backend predates preview services. Browser tabs use backend ports directly.
-      </p>
-    );
-  }
   const services = snapshot?.services ?? [];
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);

@@ -347,9 +347,11 @@ describe("supervision workloads", () => {
       singleRequests: 0,
       applied: 100,
     });
+    // A bridge without the batch route is asked again each sweep (two chunks of
+    // 50), then read per session.
     expect(await counters(activitySweepWorkload, "older-bridge-100-x3")).toMatchObject({
-      batchRequests: 2,
-      batchRejected: 2,
+      batchRequests: 6,
+      batchRejected: 6,
       singleRequests: 300,
       applied: 300,
     });

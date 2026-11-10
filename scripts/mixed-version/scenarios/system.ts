@@ -1,9 +1,7 @@
 /**
  * system across versions (plan item 7009): a current renderer's `system`
  * client against each node of the pair, reads only and no agent turn. The
- * version and greeting answer; the resource manifest reconciles (a second read
- * at the known generation and revisions has nothing to send); the scoped
- * manifest answers from cursor 0; worktree locations and the bug report
+ * version and greeting answer; the scoped manifest answers from cursor 0; worktree locations and the bug report
  * snapshot read back. Version 1 decodes each answer with its schema; version 0
  * is today's untyped call, answered as sent.
  */
@@ -14,7 +12,6 @@ import { expectedRendererAdapter, pairNodes, rendererClient } from "./renderer-c
 const COMMANDS = [
   "get_app_version",
   "greet",
-  "get_resource_revision_manifest",
   "get_scoped_resource_revision_manifest",
   "get_worktree_locations",
   "get_bug_report",
@@ -46,20 +43,6 @@ export default defineScenario({
           typeof greeting === "string" &&
           greeting.includes("qualification"),
         `version ${String(appVersion).slice(0, 40)}`,
-      );
-
-      const first = await system.get_resource_revision_manifest({});
-      const again = await system.get_resource_revision_manifest({
-        knownGeneration: first.generation,
-        knownRevisions: first.revisions,
-      });
-      ctx.check(
-        `SY-${tag}3`,
-        "a manifest read at the known generation and revisions has nothing to send",
-        typeof first.generation === "string" &&
-          again.generation === first.generation &&
-          again.reset === false &&
-          Object.keys(again.revisions ?? {}).length === 0,
       );
 
       const scoped = await system.get_scoped_resource_revision_manifest({ cursor: 0 });

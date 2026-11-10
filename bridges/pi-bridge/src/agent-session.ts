@@ -131,7 +131,7 @@ const log = createLogger("bridge.pi");
 const closingSessions = new WeakSet<SessionState>();
 
 /**
- * Whether this bridge session has been permanently closed (DELETE or close).
+ * Whether this bridge session has been permanently closed.
  * Marked synchronously, before the close's first await, so a prompt still
  * preparing can observe it at its next boundary and never reach Pi.
  */
@@ -160,7 +160,7 @@ export function isSessionClosed(state: SessionState): boolean {
 /**
  * Mark a bridge session permanently closed, synchronously.
  *
- * Close and DELETE call this before their first await: from here on no prompt
+ * Close calls this before its first await: from here on no prompt
  * is admitted (409), a prompt already preparing settles at its next boundary,
  * and a cold attach in flight refuses to publish. Idempotent.
  */
@@ -773,7 +773,7 @@ function extensionLabel(pathOrSource: string): string {
 }
 
 function publishAttachedSession(state: SessionState, session: AgentSession): AgentSession {
-  // DELETE can land while createAgentSession is awaiting credentials, resource
+  // A close can land while createAgentSession is awaiting credentials, resource
   // loading or a session-file open. Never publish a session after its bridge
   // owner has gone away: it would sit outside `sessions`, so neither idle
   // detaching nor shutdown could ever release it.
@@ -1297,7 +1297,7 @@ export async function detachSession(state: SessionState): Promise<void> {
  * Permanently close a bridge session, including an attach still in flight.
  *
  * Idle detaching deliberately does not use this path: an idle session is meant
- * to attach again. DELETE does, because a session removed from the registry has
+ * to attach again. Close does, because a session removed from the registry has
  * no future owner. Marking it before the first await closes the cold-attach
  * race; awaiting the shared attach gives the late session a chance to observe
  * the mark and dispose itself before this function returns.

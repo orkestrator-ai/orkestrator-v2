@@ -1,15 +1,11 @@
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   isResourceChange,
   isResourceManifestKind,
-  isResourceRevisionManifest,
   isScopedResourceRevisionManifest,
   isScopedResourceSnapshotBatch,
-  RESOURCE_MANIFEST_KINDS,
   type ResourceChange,
   type ResourceKind,
   type ResourceManifestKind,
-  type ResourceRevisionManifest,
   type ResourceRevisionMap,
   type ScopedResourceRevisionManifest,
   type ScopedResourceSnapshotBatch,
@@ -61,10 +57,6 @@ export interface ResourceResyncRequest {
 type ResourceResyncHandler = (request: ResourceResyncRequest) => void | Promise<void>;
 
 export interface ResourceSyncOptions {
-  loadManifest?: (
-    knownGeneration?: string,
-    knownRevisions?: Partial<ResourceRevisionMap>,
-  ) => Promise<ResourceRevisionManifest>;
   loadScopedManifest?: (
     knownGeneration: string | undefined,
     cursor: number,
@@ -342,7 +334,6 @@ export function startResourceSync(
   };
   const requestViewSafetyChecks = (reason: ViewSafetyCheckReason) =>
     runViewSafetyChecks(feed, reason);
-  const loadManifest = options.loadManifest;
   const loadScopedManifest = options.loadScopedManifest;
   const loadScopedSnapshots = options.loadScopedSnapshots;
   const unlistens: UnlistenFn[] = [];
@@ -354,8 +345,6 @@ export function startResourceSync(
   let knownGeneration: string | undefined;
   let knownRevisions: Partial<ResourceRevisionMap> = {};
   let scopedCursor = 0;
-  let scopedDisabled = false;
-  let scopedSnapshotsDisabled = false;
   let manifestRunning = false;
   let manifestRequested = false;
 
@@ -396,7 +385,7 @@ export function startResourceSync(
     }
     const ordered = Array.from(latest.values()).sort((a, b) => a.revision - b.revision);
     let clearPrefetched: () => void = () => {};
-    if (loadScopedSnapshots && !scopedSnapshotsDisabled && ordered.length > 0) {
+    if (loadScopedSnapshots && ordered.length > 0) {
       const prefetched: Array<{
         command: string;
         args: Record<string, unknown>;
@@ -415,10 +404,6 @@ export function startResourceSync(
             ),
           );
         } catch (error) {
-          if (incompatibility(error, "get_scoped_resource_snapshots")?.code === "unknown-command") {
-            scopedSnapshotsDisabled = true;
-            break;
-          }
           log.warn("snapshots.batch-failed", { error: formatLogError(error) });
         }
       }
@@ -460,7 +445,7 @@ export function startResourceSync(
 
   const requestManifestResync = (): void => {
     if (disposed) return;
-    if (!loadManifest && !loadScopedManifest) {
+    if (!loadScopedManifest) {
       requestResourceResync();
       return;
     }
@@ -471,114 +456,68 @@ export function startResourceSync(
       try {
         do {
           manifestRequested = false;
-          if (loadScopedManifest && !scopedDisabled) {
-            try {
-              let highWater: number | undefined;
-              let pageSucceeded = true;
-              do {
-                const scoped = await loadScopedManifest(
-                  knownGeneration,
-                  scopedCursor,
-                  knownRevisions,
-                  highWater,
-                );
-                if (!isScopedResourceRevisionManifest(scoped)) {
-                  throw new Error("Invalid scoped resource revision manifest");
-                }
-                highWater ??= scoped.highWater;
-                const resetResources = new Set(scoped.resetResources);
-                if (scoped.reset || knownGeneration !== scoped.generation) {
-                  knownRevisions = {};
-                  scopedCursor = 0;
-                }
-                /*
-                 * Only the final page reports project/environment through
-                 * `resetResources`, and it reports them relative to the
-                 * revisions this client has already acknowledged. An owner
-                 * change carried by an intermediate page would therefore be
-                 * delivered to `onResourceChanged` subscribers alone — which no
-                 * unmounted UI has — and then acknowledged, so the
-                 * always-mounted stores would never see it at all. Promote
-                 * those to the same authoritative resync the final page uses.
-                 */
-                const authoritative = new Set(resetResources);
-                if (scoped.hasMore) {
-                  for (const change of scoped.changes) {
-                    if (change.resource === "project" || change.resource === "environment") {
-                      authoritative.add(change.resource);
-                    }
+          try {
+            let highWater: number | undefined;
+            do {
+              const scoped = await loadScopedManifest(
+                knownGeneration,
+                scopedCursor,
+                knownRevisions,
+                highWater,
+              );
+              if (disposed) break;
+              if (!isScopedResourceRevisionManifest(scoped)) {
+                throw new Error("Invalid scoped resource revision manifest");
+              }
+              highWater ??= scoped.highWater;
+              const resetResources = new Set(scoped.resetResources);
+              if (scoped.reset || knownGeneration !== scoped.generation) {
+                knownRevisions = {};
+                scopedCursor = 0;
+              }
+              /*
+               * Only the final page reports project/environment through
+               * `resetResources`, and it reports them relative to the
+               * revisions this client has already acknowledged. An owner
+               * change carried by an intermediate page would therefore be
+               * delivered to `onResourceChanged` subscribers alone — which no
+               * unmounted UI has — and then acknowledged, so the
+               * always-mounted stores would never see it at all. Promote
+               * those to the same authoritative resync the final page uses.
+               */
+              const authoritative = new Set(resetResources);
+              if (scoped.hasMore) {
+                for (const change of scoped.changes) {
+                  if (change.resource === "project" || change.resource === "environment") {
+                    authoritative.add(change.resource);
                   }
                 }
-                if (authoritative.size > 0) {
-                  pageSucceeded = await deliverChangedResources(authoritative);
-                }
-                if (pageSucceeded) {
-                  pageSucceeded = await deliverScopedChanges(
-                    scoped.changes.filter(
-                      (change) =>
-                        !isResourceManifestKind(change.resource) ||
-                        !authoritative.has(change.resource),
-                    ),
-                  );
-                }
-                if (!pageSucceeded) break;
-                knownGeneration = scoped.generation;
-                scopedCursor = scoped.cursor;
-                for (const [resource, revision] of Object.entries(scoped.revisions)) {
-                  knownRevisions[resource as ResourceManifestKind] = revision;
-                }
-                if (!scoped.hasMore) break;
-              } while (!disposed);
-              if (pageSucceeded) continue;
-              continue;
-            } catch (error) {
-              if (
-                incompatibility(error, "get_scoped_resource_revision_manifest")?.code ===
-                "unknown-command"
-              ) {
-                scopedDisabled = true;
-              } else {
-                log.warn("manifest.scoped-check-failed", { error: formatLogError(error) });
-                await deliverResourceResync({ resources: null, reason: "explicit" });
-                continue;
               }
-            }
-          }
-          if (!loadManifest) {
-            await deliverResourceResync({ resources: null, reason: "explicit" });
-            continue;
-          }
-          let manifest: ResourceRevisionManifest;
-          try {
-            manifest = await loadManifest(knownGeneration, knownRevisions);
-            if (!isResourceRevisionManifest(manifest)) {
-              throw new Error("Invalid resource revision manifest");
-            }
+              let pageSucceeded = true;
+              if (authoritative.size > 0) {
+                pageSucceeded = await deliverChangedResources(authoritative);
+              }
+              if (pageSucceeded) {
+                pageSucceeded = await deliverScopedChanges(
+                  scoped.changes.filter(
+                    (change) =>
+                      !isResourceManifestKind(change.resource) ||
+                      !authoritative.has(change.resource),
+                  ),
+                );
+              }
+              if (!pageSucceeded) break;
+              knownGeneration = scoped.generation;
+              scopedCursor = scoped.cursor;
+              for (const [resource, revision] of Object.entries(scoped.revisions)) {
+                knownRevisions[resource as ResourceManifestKind] = revision;
+              }
+              if (!scoped.hasMore) break;
+            } while (!disposed);
           } catch (error) {
             if (disposed) break;
-            log.warn("manifest.check-failed", { error: formatLogError(error) });
+            log.warn("manifest.scoped-check-failed", { error: formatLogError(error) });
             await deliverResourceResync({ resources: null, reason: "explicit" });
-            continue;
-          }
-          if (disposed) break;
-
-          const changed = new Set<ResourceManifestKind>();
-          if (manifest.reset) {
-            for (const resource of RESOURCE_MANIFEST_KINDS) changed.add(resource);
-          }
-          for (const resource of Object.keys(manifest.revisions)) {
-            changed.add(resource as ResourceManifestKind);
-          }
-
-          const succeeded = await deliverChangedResources(changed);
-          if (!succeeded) continue;
-
-          if (manifest.reset || knownGeneration !== manifest.generation) {
-            knownRevisions = {};
-          }
-          knownGeneration = manifest.generation;
-          for (const [resource, revision] of Object.entries(manifest.revisions)) {
-            knownRevisions[resource as ResourceManifestKind] = revision;
           }
         } while (!disposed && manifestRequested);
       } finally {

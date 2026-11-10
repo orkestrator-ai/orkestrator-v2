@@ -175,16 +175,3 @@ export interface ProjectCopyRecord {
   actionRequestId?: string;
   error?: { code: string; message: string };
 }
-
-export function isProjectCopyRecord(value: unknown): value is ProjectCopyRecord {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Partial<ProjectCopyRecord>;
-  return (
-    typeof record.copyId === "string" &&
-    typeof record.requestKey === "string" &&
-    typeof record.stage === "string" &&
-    !!record.source &&
-    !!record.target &&
-    Array.isArray(record.paths)
-  );
-}

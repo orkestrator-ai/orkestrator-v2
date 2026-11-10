@@ -25,6 +25,11 @@ const legacySystemApi = (_call: CommandCall, context: DomainAdapterContext): Sys
   legacyCommandApi(context, SYSTEM_COMMANDS);
 
 export const systemClient = domainClient(systemDomain, {
+  2: systemApi,
+  // Version 2 only removed `get_resource_revision_manifest`, which no
+  // renderer in the support window reaches (2026-11-10), so version 1 peers
+  // take the same API. Adapter 1 goes when the support floor passes the first
+  // Stable release with version 2.
   1: systemApi,
   0: legacySystemApi,
 });

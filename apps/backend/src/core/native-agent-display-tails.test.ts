@@ -2,11 +2,8 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   createNativeAgentDisplayTail,
-  displayTailChecksum,
   isNativeAgentDisplayTail,
-  NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
   preparedDisplayTailPayload,
-  NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
   stripDisplayTailPayload,
   type NativeAgentDisplayTail,
 } from "./native-agent-display-tails.js";
@@ -187,10 +184,10 @@ describe("native agent display tails", () => {
     expect(isNativeAgentDisplayTail({ ...incomplete, historyComplete: true })).toBe(false);
   });
 
-  test("still accepts a legacy v1 tail without remainder metadata", () => {
-    const record: Omit<NativeAgentDisplayTail, "checksum"> = {
-      version: NATIVE_DISPLAY_TAIL_LEGACY_VERSION,
-      schema: NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA,
+  test("rejects a version 1 tail: no stored row can hold one", () => {
+    const record = {
+      version: 1,
+      schema: "native-agent-display-tail-v1",
       environmentId: "env-1",
       agent: "codex",
       logicalSessionKey: "tab-1",
@@ -199,8 +196,7 @@ describe("native agent display tails", () => {
       messages: [{ id: "m1", role: "assistant", content: "hi", parts: [] }],
       updatedAt: "2026-09-09T00:00:00.000Z",
     };
-    const tail = { ...record, checksum: displayTailChecksum(record) };
-    expect(isNativeAgentDisplayTail(tail)).toBe(true);
-    expect(tail.historyComplete).toBeUndefined();
+    const tail = { ...record, checksum: "0".repeat(32) };
+    expect(isNativeAgentDisplayTail(tail)).toBe(false);
   });
 });

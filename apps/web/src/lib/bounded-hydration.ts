@@ -1,4 +1,4 @@
-import type { ViewRevisionStamp, ViewSyncCapability } from "@orkestrator/protocol/view-sync";
+import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { RevisionRanges, approximateJsonBytes } from "./bounded-hydration-primitives";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { reconnectDelayMs } from "@orkestrator/protocol/reconnect-backoff";
@@ -37,9 +37,10 @@ export {
  * - One hydration in flight, at most one queued rerun. Each attempt has an
  *   owned timeout; failures retry with capped jittered backoff and end in an
  *   explicit `degraded` status instead of retrying forever.
- * - Legacy peers (no revision stamps) keep the conservative behaviour: every
- *   buffered update is replayed over the snapshot, and periodic safety checks
- *   are skipped because they would be full snapshot reads.
+ * - Every peer in the support window stamps its snapshots and events (since
+ *   v2.21.0). An unstamped snapshot is invalid; an unstamped update is applied
+ *   as the newest information and, over a revisioned baseline, triggers a
+ *   rehydration.
  *
  * The controller is transport-agnostic: callers validate payloads, translate
  * them into {@link HydrationUpdate}s, and wire reconnect and safety triggers.
@@ -61,16 +62,15 @@ export interface HydrationEntry<V> {
 export interface HydrationUpdate<V> {
   key: string;
   value: V | null;
-  /** Owner stamp; null for a legacy peer. */
+  /** Owner stamp; null only for a malformed peer, which forces a rehydration. */
   stamp: ViewRevisionStamp | null;
 }
 
 /** Normalised answer from a domain snapshot read. */
 export type HydrationFetchResult<V> =
-  | { kind: "snapshot"; stamp: ViewRevisionStamp | null; entries: HydrationEntry<V>[] }
+  | { kind: "snapshot"; stamp: ViewRevisionStamp; entries: HydrationEntry<V>[] }
   | { kind: "unchanged"; stamp: ViewRevisionStamp }
   | { kind: "deleted"; stamp: ViewRevisionStamp }
-  | { kind: "unsupported" }
   | { kind: "invalid" };
 
 export type HydrationReason =
@@ -102,10 +102,8 @@ export interface HydrationFetchRequest {
  *   Live updates still apply.
  * - `degraded`: retries are exhausted. Live updates still apply; the next
  *   reconnect or safety check starts a fresh recovery.
- * - `unsupported`: the peer does not have the snapshot command.
  */
-export type HydrationStatus =
-  "idle" | "hydrating" | "current" | "stale" | "degraded" | "unsupported";
+export type HydrationStatus = "idle" | "hydrating" | "current" | "stale" | "degraded";
 
 export interface BoundedHydrationLimits {
   /** Distinct keys buffered while a snapshot is in flight. */
@@ -153,7 +151,8 @@ const DEFAULT_CLOCK: HydrationClock = {
 
 export interface HydrationDiagnostics {
   status: HydrationStatus;
-  capability: ViewSyncCapability | "unknown";
+  /** `revisioned` once a stamped answer established a baseline. */
+  capability: "revisioned" | "unknown";
   /** Snapshot reads started, including conditional reads. */
   fetches: number;
   /** Reads started, by trigger. Excludes the initial hydration. */
@@ -192,7 +191,7 @@ export interface BoundedHydration<V> {
   request: (reason: HydrationReason) => void;
   /** Transport reconnected: fences in-flight reads and rehydrates. */
   onReconnect: () => void;
-  /** Low-frequency compact check; a no-op for legacy/unsupported peers. */
+  /** Low-frequency compact check. */
   safetyCheck: () => void;
   getStatus: () => HydrationStatus;
   getDiagnostics: () => HydrationDiagnostics;
@@ -210,7 +209,7 @@ interface BufferWindow<V> {
   entries: Map<string, BufferedUpdate<V>>;
   bytes: number;
   overflowed: boolean;
-  /** Highest dropped stamp, in the latest generation seen; null for legacy. */
+  /** Highest dropped stamp, in the latest generation seen; null when none was stamped. */
   highWater: ViewRevisionStamp | null;
   /** Received revisions for `rangesGeneration`, so coalescing loses no evidence. */
   ranges: RevisionRanges;
@@ -246,7 +245,7 @@ export function createBoundedHydration<V>(
 
   let disposed = false;
   let status: HydrationStatus = "idle";
-  let capability: ViewSyncCapability | "unknown" = "unknown";
+  let capability: "revisioned" | "unknown" = "unknown";
   let connectionEpoch = 0;
   let nextAttemptId = 0;
   let inFlight: InFlight | null = null;
@@ -254,7 +253,6 @@ export function createBoundedHydration<V>(
   let rerun: HydrationReason | null = null;
   let retryTimer: unknown = null;
   let failures = 0;
-  let hydratedOnce = false;
   let applied: AppliedPosition | null = null;
   /** Per-key revisions above `applied.contiguous` (only while a gap is open). */
   const keyRevisions = new Map<string, number>();
@@ -419,7 +417,7 @@ export function createBoundedHydration<V>(
       deferNotification(target, notify);
       return;
     }
-    // Re-insert so iteration order is latest-arrival order for legacy replay.
+    // Re-insert so iteration order is latest-arrival order for a replay without a baseline.
     target.entries.delete(update.key);
     target.entries.set(update.key, { value: update.value, stamp, bytes });
     target.bytes = nextBytes;
@@ -438,13 +436,13 @@ export function createBoundedHydration<V>(
   /**
    * Applies a window's buffered bodies over the store: after a snapshot, or in
    * place of one when an attempt failed. Stamped bodies are filtered against
-   * the applied position in revision order; legacy bodies (or bodies with no
-   * baseline to compare against) replay in latest-arrival order. Deferred
-   * notifications run last, after the state they describe.
+   * the applied position in revision order; bodies with no baseline to compare
+   * against replay in latest-arrival order. Deferred notifications run last,
+   * after the state they describe.
    */
-  const drainWindow = (target: BufferWindow<V>, legacy: boolean) => {
+  const drainWindow = (target: BufferWindow<V>, replay: boolean) => {
     const position = applied;
-    if (legacy || !position) {
+    if (replay || !position) {
       for (const [key, buffered] of target.entries) options.applyUpdate(key, buffered.value);
     } else {
       const stamped = Array.from(target.entries)
@@ -472,10 +470,10 @@ export function createBoundedHydration<V>(
     for (const notify of target.notifications.splice(0)) runNotification(notify);
   };
 
-  const closeWindow = (legacy: boolean) => {
+  const closeWindow = (replay: boolean) => {
     const target = window;
     window = null;
-    if (target) drainWindow(target, legacy);
+    if (target) drainWindow(target, replay);
   };
 
   // ---------------------------------------------------------------------
@@ -593,20 +591,10 @@ export function createBoundedHydration<V>(
       afterFailure(attempt);
       return;
     }
-    if (result.kind === "unsupported") {
-      capability = "unsupported";
-      resetPosition(null);
-      rerun = null;
-      failures = 0;
-      closeWindow(true);
-      setStatus("unsupported");
-      return;
-    }
-
     const stamp = result.stamp;
     // Another owner generation appeared while this read was outstanding: the
     // answer may describe a replaced owner. Read again; the window stays open.
-    if (stamp && Array.from(attempt.generations).some((gen) => gen !== stamp.generation)) {
+    if (Array.from(attempt.generations).some((gen) => gen !== stamp.generation)) {
       rerun ??= "generation";
       runQueued();
       return;
@@ -625,33 +613,21 @@ export function createBoundedHydration<V>(
 
     const target = window ?? openWindow();
     window = null;
-    let legacy = false;
-    if (result.kind === "unchanged") {
-      capability = "revisioned";
-    } else if (result.kind === "deleted") {
-      capability = "revisioned";
+    capability = "revisioned";
+    if (result.kind === "deleted") {
       options.replaceAll([]);
       resetPosition({ generation: result.stamp.generation, contiguous: result.stamp.revision });
-    } else if (result.stamp) {
-      capability = "revisioned";
+    } else if (result.kind === "snapshot") {
       options.replaceAll(result.entries);
       resetPosition({ generation: result.stamp.generation, contiguous: result.stamp.revision });
-    } else {
-      capability = "legacy";
-      legacy = true;
-      resetPosition(null);
-      options.replaceAll(result.entries);
     }
-    hydratedOnce = true;
 
     const sufficient =
       !target.overflowed ||
-      (!legacy &&
-        stamp !== null &&
-        target.highWater !== null &&
+      (target.highWater !== null &&
         target.highWater.generation === stamp.generation &&
         stamp.revision >= target.highWater.revision);
-    drainWindow(target, legacy);
+    drainWindow(target, false);
 
     if (!sufficient) {
       // Newer than the store, but updates past its revision were dropped.
@@ -672,7 +648,6 @@ export function createBoundedHydration<V>(
 
   const request = (reason: HydrationReason) => {
     if (disposed) return;
-    if (capability === "unsupported" && reason !== "reconnect" && reason !== "explicit") return;
     if (inFlight) {
       rerun ??= reason;
       return;
@@ -693,10 +668,9 @@ export function createBoundedHydration<V>(
     if (!stamp) {
       options.applyUpdate(update.key, update.value);
       runNotification(notify);
-      if (capability === "revisioned") {
-        // A legacy event from a peer believed revisioned: the transport
-        // reached a different backend. Fall back and re-establish state.
-        capability = "legacy";
+      if (applied) {
+        // An unstamped update cannot be ordered against the baseline; no peer
+        // in the support window sends one, so re-establish state.
         resetPosition(null);
         if (canAutoRecover()) request("generation");
       }
@@ -704,15 +678,6 @@ export function createBoundedHydration<V>(
     }
 
     if (!applied) {
-      if (capability === "legacy" && hydratedOnce && canAutoRecover()) {
-        // A stamped event after a legacy snapshot: the peer changed. Obtain a
-        // revisioned baseline; this update is buffered for it.
-        request("generation");
-        if (window) {
-          buffer(window, update, notify);
-          return;
-        }
-      }
       // No baseline to order against: the update is the newest information.
       options.applyUpdate(update.key, update.value);
       runNotification(notify);
@@ -744,13 +709,11 @@ export function createBoundedHydration<V>(
     connectionEpoch += 1;
     failures = 0;
     cancelRetry();
-    if (capability === "unsupported") capability = "unknown";
     request("reconnect");
   };
 
   const safetyCheck = () => {
     if (disposed || inFlight || retryTimer !== null) return;
-    if (capability === "legacy" || capability === "unsupported") return;
     // A degraded view is recovered by this low-frequency trigger.
     if (status === "degraded") failures = 0;
     request("safety");

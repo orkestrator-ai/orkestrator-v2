@@ -244,10 +244,6 @@ describe("direct backend command registry coverage", () => {
       loadEnvironments: mock(async () => [assigned]),
     });
 
-    // Removal goes through docker_cleanup_preview / docker_cleanup_execute.
-    await expect(invoke("docker_system_prune", {}, context)).rejects.toThrow(
-      "ContainerLifecycleError:invalid-request",
-    );
     await expect(invoke("get_docker_system_stats", {}, context)).resolves.toMatchObject({
       containersTotal: 2,
       imagesTotal: 2,
@@ -307,9 +303,6 @@ describe("direct backend command registry coverage", () => {
         oomEvents: null,
       },
     ]);
-    await expect(invoke("cleanup_orphaned_containers", {}, context)).rejects.toThrow(
-      "ContainerLifecycleError:invalid-request",
-    );
 
     const log = await commandLogContents();
     expect(log).not.toContain("docker container prune");
@@ -388,10 +381,6 @@ describe("direct backend command registry coverage", () => {
       ],
     };
     const getOpenCodeModelCatalog = mock(async () => cached);
-    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
-      ...cached,
-      models,
-    }));
     const cachedAgents = {
       schemaVersion: 1 as const,
       codex: {
@@ -400,12 +389,9 @@ describe("direct backend command registry coverage", () => {
       },
     };
     const getAgentModelCatalogCache = mock(async () => cachedAgents);
-    const cacheAgentModelCatalog = mock(async (_agent: string, _models: unknown[]) => cachedAgents);
     const context = contextWithStorage({
       getOpenCodeModelCatalog,
-      cacheOpenCodeModelCatalog,
       getAgentModelCatalogCache,
-      cacheAgentModelCatalog,
       // The cached-catalogue read filters by the configured OpenCode providers.
       loadConfig: mock(async () => ({ global: {} })),
       // Container bridge locks are keyed by the persisted container ID.
@@ -451,42 +437,10 @@ describe("direct backend command registry coverage", () => {
       ...cached,
       models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
     });
-    // Writes stay the complete durable record; only the reads narrow.
-    const models = [{ id: "opencode/gpt-5", name: "GPT-5", provider: "opencode" }];
-    await expect(
-      invoke("cache_opencode_model_catalog", { projectId: "project-1", models }, context),
-    ).resolves.toEqual({ ...cached, models });
     expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
-    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-1", models);
     await expect(invoke("get_agent_model_catalog_cache", {}, context)).resolves.toEqual(
       cachedAgents,
     );
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "codex",
-          models: [
-            {
-              id: "gpt-cached",
-              name: "GPT Cached",
-              reasoningEfforts: ["medium", "ultra"],
-              defaultReasoningEffort: "medium",
-            },
-          ],
-        },
-        context,
-      ),
-    ).resolves.toEqual(cachedAgents);
-    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("codex", [
-      {
-        id: "gpt-cached",
-        name: "GPT Cached",
-        reasoningEfforts: ["medium", "ultra"],
-        defaultReasoningEffort: "medium",
-      },
-    ]);
-
     const log = await commandLogContents();
     expect(log).toContain("pkill -f '[o]pencode serve'");
     expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js'");
@@ -660,152 +614,6 @@ describe("direct backend command registry coverage", () => {
     expect(connected).toEqual(["opencode-go"]);
   });
 
-  test("validates and delegates host agent model catalogue writes", async () => {
-    const cachedAgents = { schemaVersion: 1 as const };
-    const cacheAgentModelCatalog = mock(async () => cachedAgents);
-    const context = contextWithStorage({ cacheAgentModelCatalog });
-    const claudeModels = [
-      {
-        id: "claude-opus-latest",
-        name: "Claude Opus Latest",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "high"],
-      },
-    ];
-
-    await expect(
-      invoke("cache_agent_model_catalog", { agent: "claude", models: claudeModels }, context),
-    ).resolves.toEqual(cachedAgents);
-    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("claude", claudeModels);
-
-    const piModels = [
-      {
-        platform: "pi",
-        id: "openrouter/anthropic/claude-opus-4-5",
-        label: "Claude Opus 4.5",
-        providerLabel: "OpenRouter",
-        reasoning: [{ id: "high", label: "High" }],
-        defaultReasoningId: "high",
-        supportsSpeed: false,
-        supportsMode: false,
-      },
-    ];
-    await expect(
-      invoke("cache_agent_model_catalog", { agent: "pi", models: piModels }, context),
-    ).resolves.toEqual(cachedAgents);
-    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("pi", piModels);
-
-    await expect(
-      invoke("cache_agent_model_catalog", { agent: "unsupported", models: claudeModels }, context),
-    ).rejects.toThrow("Expected agent to be claude, codex, or pi");
-    await expect(
-      invoke("cache_agent_model_catalog", { agent: "claude", models: [] }, context),
-    ).rejects.toThrow("empty model catalog");
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        { agent: "claude", models: [{ id: "claude-opus-latest" }] },
-        context,
-      ),
-    ).rejects.toThrow("without an id or name");
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "codex",
-          models: [
-            {
-              id: "gpt-latest",
-              name: "GPT Latest",
-              reasoningOptions: [{ effort: "impossible", label: "Invalid" }],
-            },
-          ],
-        },
-        context,
-      ),
-    ).rejects.toThrow("supported reasoning effort");
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "codex",
-          models: [
-            {
-              id: "gpt-latest",
-              name: "GPT Latest",
-              reasoningEfforts: ["medium", "impossible"],
-            },
-          ],
-        },
-        context,
-      ),
-    ).rejects.toThrow("supported reasoning effort");
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "codex",
-          models: [
-            {
-              id: "gpt-latest",
-              name: "GPT Latest",
-              defaultReasoningEffort: "impossible",
-            },
-          ],
-        },
-        context,
-      ),
-    ).rejects.toThrow("supported reasoning effort");
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "claude",
-          models: [
-            {
-              id: "claude-opus-latest",
-              name: "Claude Opus Latest",
-              description: 42,
-            },
-          ],
-        },
-        context,
-      ),
-    ).resolves.toEqual(cachedAgents);
-    expect(cacheAgentModelCatalog).toHaveBeenLastCalledWith("claude", [
-      expect.objectContaining({
-        id: "claude-opus-latest",
-        name: "Claude Opus Latest",
-        description: undefined,
-      }),
-    ]);
-    await expect(
-      invoke(
-        "cache_agent_model_catalog",
-        {
-          agent: "codex",
-          models: [{ id: "gpt-latest", name: "GPT Latest", unexpected: true }],
-        },
-        context,
-      ),
-    ).rejects.toThrow(/[Uu]nexpected/);
-    await expect(
-      invoke("cache_agent_model_catalog", { agent: "codex", models: [] }, context),
-    ).rejects.toThrow("at least one model");
-    // A defined command (plan item 7009) drops an unknown argument key; one the
-    // sender marks critical is refused before the catalogue is written.
-    await expect(
-      (async () =>
-        registry.get("cache_agent_model_catalog")!(
-          { agent: "claude", models: claudeModels, extra: true },
-          context,
-          { critical: ["extra"] },
-        ))(),
-    ).rejects.toMatchObject({ code: "unsupported-field" });
-
-    expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(3);
-  });
-
   test("launches validated browser URLs and returns both DNS resolution outcomes", async () => {
     const context = contextWithStorage({});
     await expect(
@@ -832,12 +640,6 @@ describe("direct backend command registry coverage", () => {
       resolvable: false,
       ips: [],
     });
-    await expect(invoke("validate_domains", { domains: ["localhost"] }, context)).resolves.toEqual([
-      expect.objectContaining({
-        domain: "localhost",
-        resolvable: true,
-      }),
-    ]);
 
     const launcher =
       process.platform === "darwin"
@@ -1063,12 +865,6 @@ describe("direct backend command registry coverage", () => {
         call: { method: "getComposeDraft", args: ["compose-1"] },
       },
       {
-        command: "list_compose_drafts",
-        args: { ownerType: "environment", ownerId: "env-1" },
-        expected: [composeDraft],
-        call: { method: "listComposeDrafts", args: ["environment", "env-1"] },
-      },
-      {
         command: "delete_compose_draft",
         args: { draftKey: "compose-1", expectedRevision: 7 },
         expected: undefined,
@@ -1286,7 +1082,7 @@ describe("direct backend command registry coverage", () => {
     expect((await fs.stat(path.join(worktree, "src", "hooks"))).isDirectory()).toBe(true);
   });
 
-  test("records paused PR watch intent, refreshes safely, and validates modes", async () => {
+  test("records paused PR watch intent and validates modes", async () => {
     const paused = environment({
       environmentType: "local",
       containerId: null,
@@ -1323,24 +1119,6 @@ describe("direct backend command registry coverage", () => {
         checkSummary: null,
       }),
     ]);
-    await expect(
-      invoke("pr_monitor_refresh", { environmentId: paused.id }, context),
-    ).resolves.toBeUndefined();
-    // A paused target cannot schedule external work; refresh preserves the
-    // durable request until the environment becomes ready.
-    expect(
-      (
-        (await invoke("get_pr_monitor_state", {}, context)) as {
-          entries: Array<Record<string, unknown>>;
-        }
-      ).entries[0],
-    ).toMatchObject({
-      environmentId: paused.id,
-      mode: "create-pending",
-      checkInProgress: false,
-      checkSummary: null,
-    });
-
     await expect(
       invoke(
         "pr_monitor_watch",

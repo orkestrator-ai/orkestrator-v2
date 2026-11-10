@@ -76,7 +76,7 @@ describe("describeApproval", () => {
   });
 
   test("a managed-network approval, which has no command, can be approved", () => {
-    // The params real Codex 0.166.0 sent for a blocked host (todo 0160, task 2).
+    // The params real Codex 0.166.0 sent for a blocked host (#1325).
     const params = {
       kind: "command",
       threadId: "thread-1",
@@ -132,7 +132,7 @@ describe("describeApproval", () => {
 
   test("never offers the policy amendments app-server proposes", () => {
     // Accepting one saves a rule in the user's Codex home that Orkestrator
-    // can list read-only but cannot revoke (todo 0160), so the descriptor
+    // can list read-only but cannot revoke (#1325), so the descriptor
     // carries none.
     const approval = describeWith("item/commandExecution/requestApproval", {
       threadId: "thread-1",

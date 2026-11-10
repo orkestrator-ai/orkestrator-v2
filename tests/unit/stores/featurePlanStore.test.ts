@@ -197,7 +197,7 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-const { activeFeaturePlanning, featurePlanStore } = await import("@/stores/featurePlanStore");
+const { featurePlanStore } = await import("@/stores/featurePlanStore");
 const { appCommandStore } = await import("@/test/app-command-store");
 
 describe("featurePlanStore", () => {
@@ -391,28 +391,6 @@ describe("featurePlanStore", () => {
       false,
     );
     expect(mockGetFeaturePlans).not.toHaveBeenCalled();
-  });
-
-  test("activeFeaturePlanning returns only non-terminal records", () => {
-    expect(activeFeaturePlanning(undefined)).toBeUndefined();
-    expect(activeFeaturePlanning(makeFeature())).toBeUndefined();
-
-    const running = makePlanning({ phase: "persisting" });
-    expect(activeFeaturePlanning(makeFeature({ planning: running }))).toBe(running);
-    expect(
-      activeFeaturePlanning(
-        makeFeature({
-          planning: makePlanning({ phase: "complete" }),
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      activeFeaturePlanning(
-        makeFeature({
-          planning: makePlanning({ phase: "failed" }),
-        }),
-      ),
-    ).toBeUndefined();
   });
 
   test("a single-feature response cannot move a planning record backwards", async () => {

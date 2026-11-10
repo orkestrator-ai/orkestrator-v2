@@ -48,7 +48,7 @@
 import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type {
   McpConfigSource,
@@ -766,76 +766,6 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         await trace("online");
         await expect(card).toContainText("Saved and loaded", { timeout: 30_000 });
         await closeSettings();
-      });
-
-      await test.step("a bridge older than the MCP report: said so, and the change still loads", async () => {
-        // Optional: the dist folder of a Claude bridge built before the
-        // `mcpConfigReporting` marker. It stands in for a bridge left running
-        // across a backend upgrade: it is swapped in only to start A's bridge,
-        // and the current build is restored as soon as that bridge is up.
-        const olderDist = process.env.ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE?.trim();
-        if (!olderDist) {
-          record("skip-step", "no ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE build given");
-          return;
-        }
-        const olderBundle = path.join(olderDist, "index.js");
-        expect(readFileSync(olderBundle, "utf8")).not.toContain("mcpConfigReporting");
-        const currentBundle = path.join(
-          repositoryRoot,
-          "bridges",
-          "claude-bridge",
-          "dist",
-          "index.js",
-        );
-        const backup = path.join(runDir, "claude-bridge-index.js");
-        copyFileSync(currentBundle, backup);
-        const restartA = async () => {
-          await invoke("stop_local_claude_server_cmd", { environmentId: envA.id });
-          await invoke("start_local_claude_server_cmd", { environmentId: envA.id });
-          await invoke("await_bridge_ready", {
-            environmentId: envA.id,
-            agent: "claude",
-            timeoutMs: 60_000,
-          });
-        };
-        await openEnvironment(envB.name);
-        const tokenOld = nonce("MCPQOLD");
-        const project = await source(targetA.targetId, "project");
-        const saved = await saveAndApply(targetA.targetId, {
-          kind: "add",
-          sourceId: project.sourceId,
-          expectedRevision: project.revision,
-          definition: stdio("mcpqo", "1", tokenOld),
-        });
-        try {
-          copyFileSync(olderBundle, currentBundle);
-          await restartA();
-        } finally {
-          copyFileSync(backup, currentBundle);
-        }
-        try {
-          // Before it has loaded anything the older bridge reports nothing.
-          await page.waitForTimeout(EVIDENCE_SETTLE_MS);
-          const waiting = runtimeIn(await operation(saved.operation.operationId), envA.id)!;
-          record("older-bridge-before-turn", `${waiting.state}: ${waiting.reason}`);
-          expect(waiting.state).toBe("pending-next-turn");
-          expect(waiting.reason).toContain("older than this backend");
-          await dispatchWhileAway(identityA, toolPrompt("mcpqo"));
-          await replied(identityA, tokenOld);
-          expectCalls("call mcpqo 1", 1, "the older bridge did not load the save");
-          // Bridges since #838 report what they loaded once something has, so
-          // the first query is expected to prove it.
-          const after = await waitForRuntime(
-            saved.operation.operationId,
-            envA.id,
-            "applied",
-            "the older bridge's first query never proved the save",
-          );
-          record("older-bridge-after-turn", `${after.state}: ${after.reason}`);
-        } finally {
-          // Leave A on the current bridge.
-          await restartA();
-        }
       });
 
       await test.step("a shared user-file change reaches both environments", async () => {

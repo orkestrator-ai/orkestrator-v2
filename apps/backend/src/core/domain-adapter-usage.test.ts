@@ -122,7 +122,7 @@ describe("the record_domain_adapter_usage command", () => {
     expect(commands.contracts.get(RECORD_DOMAIN_ADAPTER_USAGE_COMMAND)).toBe(
       recordDomainAdapterUsageCommand as never,
     );
-    expect(commands.helloDomains()).toEqual({ system: { min: 1, max: 1 } });
+    expect(commands.helloDomains()).toEqual({ system: { min: 1, max: 2 } });
     return commands.get(RECORD_DOMAIN_ADAPTER_USAGE_COMMAND)!;
   }
 

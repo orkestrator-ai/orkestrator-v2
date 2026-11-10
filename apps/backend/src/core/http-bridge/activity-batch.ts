@@ -13,34 +13,24 @@ import {
 import { assertOk, boundedJson, bridgeFetch } from "./transport.js";
 
 /**
- * How long a bridge that answered 404/405 on the batch route is assumed not to
- * have it. The provider instance is already scoped to one bridge connection
- * (a restarted bridge gets a new connection and so a fresh reader); the expiry
- * only covers a bridge upgraded in place behind the same coordinates.
- */
-export const ACTIVITY_BATCH_UNSUPPORTED_RECHECK_MS = 5 * 60_000;
-
-/**
- * `POST /sessions/activity` client with per-connection capability detection.
+ * `POST /sessions/activity` client.
  *
- * Only 404/405 is evidence that the route is absent. A timeout, a 5xx or a
- * malformed answer rejects instead and leaves the capability untouched: the
- * caller reads individually for that sweep and tries the batch again next
- * time, rather than concluding anything about the bridge or its sessions.
+ * Every bridge from v2.21.0, the support floor, serves the route, so nothing
+ * remembers a negative answer. A 404/405 (only an unpublished bridge) answers
+ * `unsupported` for this read; a timeout, a 5xx or a malformed answer rejects.
+ * Either way the caller reads individually for that sweep and tries the batch
+ * again next time, rather than concluding anything about the bridge or its
+ * sessions.
  */
 export class HttpBridgeActivityBatchReader {
-  private unsupportedUntil = 0;
-
   constructor(
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
-    private readonly now: () => number = Date.now,
   ) {}
 
   async read(
     sessionIds: readonly string[],
   ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported"> {
-    if (this.now() < this.unsupportedUntil) return "unsupported";
     if (
       sessionIds.length > SESSION_ACTIVITY_BATCH_LIMITS.maxSessions ||
       new Set(sessionIds).size !== sessionIds.length ||
@@ -60,7 +50,6 @@ export class HttpBridgeActivityBatchReader {
     );
     if (response.status === 404 || response.status === 405) {
       await response.body?.cancel().catch(() => undefined);
-      this.unsupportedUntil = this.now() + ACTIVITY_BATCH_UNSUPPORTED_RECHECK_MS;
       return "unsupported";
     }
     const operation = `${this.connection.agent} activity batch read`;

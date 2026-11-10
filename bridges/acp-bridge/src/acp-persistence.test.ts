@@ -783,7 +783,7 @@ describe("ACP bridge", () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
       resolve(stateDirectory, "state.json"),
-      JSON.stringify({ version: 1, provider: "grok", sessions: [] }),
+      JSON.stringify({ version: 3, provider: "grok", sessions: [] }),
     );
     const bridge = await spawnBridge({ stateDirectory });
     expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
@@ -794,16 +794,15 @@ describe("ACP bridge", () => {
     expect(created.status).toBe(201);
   });
 
-  // A v1 file is what every already-installed bridge left on disk. Its parts
-  // use the pre-consolidation `{ type: "reasoning", text }` wire shape, which
-  // the renderer no longer converts, so the load path has to upgrade them or
-  // the restored transcript renders as empty rows.
-  test("upgrades v1 persisted messages to the neutral part shape", async () => {
+  // Parts in the pre-consolidation `{ type: "reasoning", text }` wire shape,
+  // which the renderer no longer converts, are upgraded on load, or the
+  // restored transcript renders as empty rows.
+  test("upgrades persisted messages to the neutral part shape", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
-        version: 1,
+        version: 3,
         provider: "acp-fixture",
         sessions: [
           {
@@ -894,8 +893,10 @@ describe("ACP bridge", () => {
           version: number;
           sessions: Array<{ id: string; messages: Array<{ parts: Array<{ type: string }> }> }>;
         },
-      (value) => value.version === 3,
+      // The rewrite is the one that also carries the session created above.
+      (value) => value.sessions.length === 2,
     );
+    expect(rewritten.version).toBe(3);
     expect(
       rewritten.sessions
         .find((persisted) => persisted.id === "session-v1")

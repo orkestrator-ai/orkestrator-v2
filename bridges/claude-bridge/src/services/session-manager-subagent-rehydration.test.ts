@@ -383,10 +383,6 @@ describe("rehydrateSubagentParts", () => {
         messages,
       ),
     ).resolves.toBeUndefined();
-    // An SDK without the functions is the old behaviour.
-    await expect(rehydrateSubagentParts({}, "sdk-1", "/workspace", messages)).resolves.toBe(
-      undefined,
-    );
   });
 
   test("keeps only the newest parts of a long subagent", async () => {

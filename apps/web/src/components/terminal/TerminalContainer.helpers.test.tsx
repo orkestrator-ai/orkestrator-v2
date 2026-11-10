@@ -134,30 +134,10 @@ const awaitEnvironmentSetupSessionMock = mock(
     getEnvironmentSetupSessionMock(environmentId),
 );
 
-const setEnvironmentPendingAgentLaunchMock = mock(
-  async (environmentId: string, pending: boolean) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    pendingAgentLaunch: pending,
-    ...(pending
-      ? {}
-      : {
-          initialAgentModel: undefined,
-          initialReasoningEffort: undefined,
-        }),
-  }),
-);
-
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
   ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
-
-const setEnvironmentInitialPromptMock = mock(
-  async (environmentId: string, initialPrompt: string) => ({
-    ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-    initialPrompt,
-  }),
-);
 
 const savePaneLayoutMock = mock(
   async (
@@ -257,9 +237,7 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
-  setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
-  setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   deletePaneLayout: deletePaneLayoutMock,
@@ -427,31 +405,11 @@ describe("TerminalContainer", () => {
     awaitEnvironmentSetupSessionMock.mockClear();
     deleteMultiReviewWorkflowMock.mockReset();
     deleteMultiReviewWorkflowMock.mockResolvedValue();
-    setEnvironmentPendingAgentLaunchMock.mockReset();
-    setEnvironmentPendingAgentLaunchMock.mockImplementation(
-      async (environmentId: string, pending: boolean) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        pendingAgentLaunch: pending,
-        ...(pending
-          ? {}
-          : {
-              initialAgentModel: undefined,
-              initialReasoningEffort: undefined,
-            }),
-      }),
-    );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
       ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
-    setEnvironmentInitialPromptMock.mockReset();
-    setEnvironmentInitialPromptMock.mockImplementation(
-      async (environmentId: string, initialPrompt: string) => ({
-        ...appCommandStore(environmentStore).getState().getEnvironmentById(environmentId)!,
-        initialPrompt,
-      }),
-    );
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);

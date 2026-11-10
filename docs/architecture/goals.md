@@ -4,8 +4,7 @@ Status: living. Owner modules:
 [`native-agent-goal.ts`](../../packages/protocol/src/native-agent-goal.ts) (model,
 transitions, carrier, command parsing) and
 [`native-agent-goal-service.ts`](../../apps/backend/src/core/native-agent-goal-service.ts)
-(the loop). The design and decisions are in
-[`plans/goals.md`](../../plans/goals.md).
+(the loop). The design and decisions were in `plans/goals.md` (removed in #1979; git history keeps it).
 
 A goal is a durable objective on one native agent tab. The backend keeps sending
 turns until a check proves the objective, the agent says it needs a person, or a

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
 import { createHostExtensionCommandRunner } from "./commands-agent-support.js";
@@ -29,7 +29,6 @@ import {
   checkPiCliCommand,
   getAvailableAiCliCommand,
   getContainerGithubCredentialStatusCommand,
-  getCredentialStatusCommand,
   getGithubCliLoginCommand,
   getGithubCliStatusCommand,
   hasClaudeCredentialsCommand,
@@ -72,11 +71,7 @@ async function anyPathExists(candidates: string[]): Promise<boolean> {
   return false;
 }
 
-export function registerToolingCommands(
-  register: CommandRegistrar,
-  dependencies: RegistryDependencies,
-): void {
-  const { commands } = dependencies;
+export function registerToolingCommands(register: CommandRegistrar): void {
   register(listAgentSkillsCommand, async (args, context) => {
     const provider = asAgentSkillProvider(args.provider);
     if (context.runtimeFlavor === "agent-test") {
@@ -133,10 +128,6 @@ export function registerToolingCommands(
       path.join(login.home, ".claude.json"),
     ]);
   });
-  register(getCredentialStatusCommand, async (_args, context) => ({
-    available: (await commands.get("has_claude_credentials")?.({}, context)) as boolean | undefined,
-    expiresAt: null,
-  }));
   register(checkClaudeCliCommand, (_args, context) => checkHostTool(context, "claude"));
   register(checkClaudeConfigCommand, (_args, context) => {
     const login = claudeLoginHome(context);

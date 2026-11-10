@@ -6,7 +6,7 @@
  * call. app-server reports nothing for it after `turn/completed`, so a card
  * left at `pending` read "running..." on an idle thread for good. The row that
  * holds it is rendered again when the turn ends, however far back it is, and
- * the card carries `toolLeftRunning` with no tool state (to-do 7522).
+ * the card carries `toolLeftRunning` with no tool state (#2064).
  */
 import { describe, expect, test } from "bun:test";
 import { MAX_TRACKED_ASSISTANT_ROWS } from "./app-server-runtime-base.js";

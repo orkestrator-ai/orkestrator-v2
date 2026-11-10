@@ -350,6 +350,8 @@ export function installSdkModuleMock(overrides: Record<string, unknown> = {}): v
     deleteSession: mockSdkDeleteSession,
     renameSession: mockSdkRenameSession,
     forkSession: mockSdkForkSession,
+    listSubagents: async () => [],
+    getSubagentMessages: async () => [],
     ...overrides,
   }));
 }

@@ -246,19 +246,16 @@ export class HttpBridgeCatalogAdapter {
 
   /**
    * `POST /global/mcp/reload`: reload MCP configuration in an already-running
-   * agent process only. A 404 is a bridge that predates the route.
+   * agent process only. Every Codex bridge from v2.21.0 serves the route, so
+   * any failure, a 404 included, rejects and the apply reports it.
    */
-  async reloadMcpConfiguration(): Promise<"reloaded" | "not-running" | "unsupported"> {
+  async reloadMcpConfiguration(): Promise<"reloaded" | "not-running"> {
     const response = await bridgeFetch(
       this.connection,
       "/global/mcp/reload",
       { method: "POST" },
       this.fetchImpl,
     );
-    if (response.status === 404) {
-      await response.body?.cancel().catch(() => undefined);
-      return "unsupported";
-    }
     await assertOkWithErrorDetail(response, `${this.agent} MCP reload`);
     const body = asRecord(
       await boundedJson(response, `${this.agent} MCP reload`, { remaining: 16 * 1024 }),

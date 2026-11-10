@@ -20,7 +20,7 @@ import { appCommandStore } from "@/test/app-command-store";
 /**
  * The Files panel's event-led reads over the backend's worktree snapshot
  * revisions: an announced revision newer than what the panel shows re-reads
- * exactly that view; duplicates, hidden documents and legacy backends do not.
+ * exactly that view; duplicates and hidden documents do not.
  */
 
 const callbacks = new Map<string, (event: { payload: unknown }) => void>();
@@ -267,14 +267,6 @@ describe("useFilesPanel worktree snapshot revisions", () => {
       await result.current.refresh();
     });
     expect(listSpy.mock.calls.at(-1)).toEqual(["/worktree", "main", "list-1-1", { refresh: true }]);
-  });
-
-  test("a legacy backend (no stamps, no revisions command) keeps polling only", async () => {
-    legacy = true;
-    renderHookInAppCommandScope(() => useFilesPanel());
-    await flush();
-    expect(appCommandStore(worktreeSnapshotStore).getState().syncStatus).toBe("unsupported");
-    expect(listSpy).toHaveBeenCalledTimes(1);
   });
 
   test("an unchanged read with the same stamp does not rewrite the store", async () => {

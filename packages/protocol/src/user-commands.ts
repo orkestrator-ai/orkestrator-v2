@@ -16,9 +16,6 @@ import type { HumanPrompt } from "./human-prompts.js";
 /** The composer prefix that makes a message a user command. */
 export const USER_COMMAND_PREFIX = "!";
 
-/** Resource-change kind; the id is the conversation key (`env-<environment>:<tab>`). */
-export const USER_COMMAND_RESOURCE = "user-command" as const;
-
 export const USER_COMMAND_MAX_COMMAND_CHARS = 8 * 1024;
 /** Output kept per command for display; older output is dropped from the front. */
 export const USER_COMMAND_OUTPUT_TAIL_CHARS = 64 * 1024;

@@ -2,11 +2,9 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import {
   classifyViewSnapshotResponse,
-  isUnknownViewCommandError,
   type ViewRevisionStamp,
 } from "@orkestrator/protocol/view-sync";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
-import * as backend from "@/lib/backend";
 import { onResourceChanged, onViewSafetyCheck } from "@/lib/resource-sync";
 import { readFailuresFreshnessNotice, type FreshnessNotice } from "@/lib/view-freshness";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -17,8 +15,11 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
  * document visible; the read coordinator pauses it otherwise.
  */
 export const GIT_STATUS_PROBE_INTERVAL_MS = 60_000;
-/** Conservative coordinator polling kept for backends without the view command. */
-export const LEGACY_COORDINATOR_POLL_INTERVAL_MS = 60_000;
+/**
+ * Safety-net cadence for the coordinator view while the panel is open. Change
+ * announcements drive every prompt read; this only bounds a missed one.
+ */
+export const COORDINATOR_VIEW_POLL_INTERVAL_MS = 60_000;
 /**
  * Focus and visibility both fire when a window is brought back; one probe per
  * this window serves both, and a read that already ran recently serves them.
@@ -47,8 +48,6 @@ interface CoordinatorViewValue {
   stamp: ViewRevisionStamp | null;
   /** Direct-answer sequence when the read started (see `directSeq`). */
   directSeq: number;
-  /** Legacy reads cannot report a removal; `null` there means "keep". */
-  legacy: boolean;
 }
 
 /**
@@ -67,8 +66,7 @@ interface CoordinatorViewValue {
  * (`get_project_coordinator_view`): an unchanged snapshot costs a bodiless
  * answer and no render. Missed events are recovered by the resource-sync
  * safety cadence (five-minute interval and resource revision gaps), transport
- * reconnects and focus. A backend without the command keeps the previous
- * 60-second full poll.
+ * reconnects and focus, with a 60-second conditional read as the backstop.
  *
  * **Repository status.** Separate: an external Git command does not emit a
  * coordinator event. A 60-second visible-only probe, a guarded focus probe,
@@ -129,14 +127,6 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     setGitFailures(0);
   }
   const ready = readyProject === projectId;
-  /**
-   * The read-coordinator connection generation on which the backend proved it
-   * has no view command, or null. Capability belongs to a server, not to this
-   * mount: after a server switch the next read probes the view command again.
-   */
-  const legacyRef = useRef<number | null>(null);
-  /** Connection generation of the latest read, for the safety-check gate. */
-  const connectionGenerationRef = useRef(0);
   const stampRef = useRef<ViewRevisionStamp | null>(null);
   const directSeqRef = useRef(0);
   const gitRef = useRef<ProjectGitStatus | null>(null);
@@ -187,50 +177,34 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     readOnSubscribe: false,
     demand: {
       active: ready,
-      intervalMs: LEGACY_COORDINATOR_POLL_INTERVAL_MS,
+      intervalMs: COORDINATOR_VIEW_POLL_INTERVAL_MS,
       priority: "standard",
     },
-    read: async (context) => {
+    read: async () => {
       const pid = projectId;
       const sent = stampRef.current;
       const directSeq = directSeqRef.current;
-      connectionGenerationRef.current = context.connectionGeneration;
-      if (legacyRef.current !== context.connectionGeneration) {
-        try {
-          const answer = await nodeBackend.getProjectCoordinatorView(pid, sent);
-          const classified = classifyViewSnapshotResponse(answer, isCoordinatorSnapshot);
-          if (classified.kind === "invalid") {
-            throw new Error("The backend returned an invalid coordinator view");
-          }
-          if (classified.kind !== "outcome") {
-            return {
-              projectId: pid,
-              snapshot: classified.snapshot,
-              stamp: null,
-              directSeq,
-              legacy: false,
-            };
-          }
-          const outcome = classified.outcome;
-          const stamp = { generation: outcome.generation, revision: outcome.revision };
-          if (outcome.status === "unchanged") {
-            // Only meaningful for the exact stamp that was sent.
-            if (!sent || sent.generation !== stamp.generation || sent.revision !== stamp.revision) {
-              throw new Error("The backend confirmed a coordinator view this client did not send");
-            }
-            return { projectId: pid, snapshot: undefined, stamp, directSeq, legacy: false };
-          }
-          if (outcome.status === "deleted") {
-            return { projectId: pid, snapshot: null, stamp, directSeq, legacy: false };
-          }
-          return { projectId: pid, snapshot: outcome.snapshot, stamp, directSeq, legacy: false };
-        } catch (cause) {
-          if (!isUnknownViewCommandError(cause, backend.COORDINATOR_VIEW_COMMAND)) throw cause;
-          legacyRef.current = context.connectionGeneration;
-        }
+      const answer = await nodeBackend.getProjectCoordinatorView(pid, sent);
+      const classified = classifyViewSnapshotResponse(answer, isCoordinatorSnapshot);
+      if (classified.kind === "invalid") {
+        throw new Error("The backend returned an invalid coordinator view");
       }
-      const full = await nodeBackend.getProjectCoordinator(pid);
-      return { projectId: pid, snapshot: full, stamp: null, directSeq, legacy: true };
+      if (classified.kind !== "outcome") {
+        return { projectId: pid, snapshot: classified.snapshot, stamp: null, directSeq };
+      }
+      const outcome = classified.outcome;
+      const stamp = { generation: outcome.generation, revision: outcome.revision };
+      if (outcome.status === "unchanged") {
+        // Only meaningful for the exact stamp that was sent.
+        if (!sent || sent.generation !== stamp.generation || sent.revision !== stamp.revision) {
+          throw new Error("The backend confirmed a coordinator view this client did not send");
+        }
+        return { projectId: pid, snapshot: undefined, stamp, directSeq };
+      }
+      if (outcome.status === "deleted") {
+        return { projectId: pid, snapshot: null, stamp, directSeq };
+      }
+      return { projectId: pid, snapshot: outcome.snapshot, stamp, directSeq };
     },
     onState: (state) => {
       if (state.status === "error") setViewFailures(state.failures);
@@ -247,7 +221,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
       stampRef.current = value.stamp;
       if (value.snapshot === undefined) return;
       if (value.snapshot === null) {
-        if (!value.legacy) setSnapshot(null);
+        setSnapshot(null);
         return;
       }
       if (value.snapshot.workspace.projectId !== projectRef.current) return;
@@ -292,9 +266,7 @@ export function useCoordinatorPanelData(projectId: string): CoordinatorPanelData
     });
     // Provider availability is derived from configuration.
     const offConfig = onResourceChanged("config", () => requestViewRead());
-    const offSafety = onViewSafetyCheck(() => {
-      if (legacyRef.current !== connectionGenerationRef.current) requestViewRead();
-    });
+    const offSafety = onViewSafetyCheck(() => requestViewRead());
     return () => {
       offCoordinator();
       offConfig();

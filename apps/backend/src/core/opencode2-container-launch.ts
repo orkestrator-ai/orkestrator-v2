@@ -1,6 +1,6 @@
 /**
  * The container's OpenCode 2.x server on an `opencode2-launch=1` image
- * (to-do 7550, task 1; docs/architecture/agent-approvals.md): the 2.x twin of `opencode-container-launch.ts`.
+ * (#2091; docs/architecture/agent-approvals.md): the 2.x twin of `opencode-container-launch.ts`.
  *
  * Started from `node`'s login shell, 2.x ran node's own
  * `~/.opencode/bin/opencode2` with `OPENCODE_CONFIG_DIR` in node's home, read

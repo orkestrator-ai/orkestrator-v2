@@ -28,12 +28,10 @@ import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-pol
 import { validatePreviewProfile } from "@orkestrator/protocol/transcript-artifacts-validation";
 import {
   ArtifactFailure,
-  REQUIRED_ARTIFACT_GATES,
   artifactError,
   isTerminalArtifactOperationStatus,
   type ArtifactError,
   type ArtifactPreviewProfile,
-  type ArtifactVerificationGate,
 } from "@orkestrator/protocol/transcript-artifacts";
 import { diagnosticsHash } from "./hashing.js";
 import { logArtifactEvent } from "./metrics.js";
@@ -776,9 +774,4 @@ function cancelView(operation: StoredOperation): Record<string, unknown> {
       ? { alreadyCompleted: true, receiptId: operation.receiptId }
       : {}),
   };
-}
-
-/** Required gates for a kind, for tests and publication checks. */
-export function requiredGates(kind: StoredOperation["kind"]): readonly ArtifactVerificationGate[] {
-  return REQUIRED_ARTIFACT_GATES[kind];
 }

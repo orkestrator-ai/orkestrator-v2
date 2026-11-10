@@ -65,7 +65,7 @@ test("the node stream carries every leaf announcement the command node acts on",
   // The leaf's gateway filters its stream by these prefixes
   // (`eventMatchesSubscription`); the outbox collectors read the same stream
   // (`onNodeEvent`). The ticket-sync announcement was once filtered out, so a
-  // leaf's change waited for the 60 s reconcile (to-do 3800 task 1).
+  // leaf's change waited for the 60 s reconcile (#2059).
   const subscribed = NODE_SUMMARY_EVENT_PREFIXES.join(",").split(",");
   for (const event of [NODE_OUTBOX_READY_EVENT, TICKET_SYNC_OUTBOX_READY_EVENT]) {
     expect({ event, delivered: eventMatchesSubscription(event, subscribed) }).toEqual({
@@ -253,7 +253,7 @@ test("config-only changes invalidate the cached self default branch", async () =
 
 test("a node's project list read is announced when it is first read and when it changes", async () => {
   // Ticket sync pairs boards by this list, and syncs on the announcement
-  // rather than waiting for its reconcile (to-do 3800 task 1).
+  // rather than waiting for its reconcile (#2059).
   const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
   const network = new TestNodeNetwork();
   const command = await network.add("command", { forceRegistration: true });

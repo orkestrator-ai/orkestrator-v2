@@ -313,11 +313,9 @@ at-most-once dispatch.
     owned through `releaseClaudeRuntimeTasks`. Nothing about task ownership is
     kept on the session any more.
   - The model catalogue (`getAvailableModelCatalog` in
-    `claude-model-catalog.ts`), the account (`probeAccount` in
-    `claude-sign-in.ts`) and the plan-usage windows (`readClaudePlanUsage` in
-    `session-manager-catalog.ts`) ask an open runtime first
-    (`live-claude-control.ts`): models and account from its held initialize
-    answer, plan usage over its control channel. A control-only probe runs only
+    `claude-model-catalog.ts`) and the account (`probeAccount` in
+    `claude-sign-in.ts`) ask an open runtime first
+    (`live-claude-control.ts`), from its held initialize answer. A control-only probe runs only
     when no running CLI answers. For models it is shared, bounded and reused
     until the CLI file or the account changes; the static catalogue answers
     only when the probe fails. MCP actions already used the session's live

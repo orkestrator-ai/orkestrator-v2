@@ -26,7 +26,6 @@ import {
   deleteKanbanCommentCommand,
   deleteKanbanImageCommand,
   deleteKanbanTaskCommand,
-  getFeaturePlanningSnapshotCommand,
   getFeaturePlansCommand,
   getKanbanImageDataCommand,
   getKanbanLabelsCommand,
@@ -319,9 +318,6 @@ export function registerKanbanCommands(
   // session, dispatch, reply, parse, persist — happens without it.
   register(startFeaturePlanningCommand, (args, context) => {
     return requireFeaturePlanning(context).start(asStartFeaturePlanningInput(args));
-  });
-  register(getFeaturePlanningSnapshotCommand, (args, context) => {
-    return requireFeaturePlanning(context).snapshot(asNonBlankString(args.projectId, "projectId"));
   });
   register(retryFeaturePlanningCommand, (args, context) => {
     return requireFeaturePlanning(context).retry(asNonBlankString(args.featureId, "featureId"));

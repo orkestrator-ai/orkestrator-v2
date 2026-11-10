@@ -281,7 +281,7 @@ export function effectiveItem(
     case "command_execution": {
       // Still running when the turn ended: a process the model did not wait
       // for. app-server reports nothing for it after the turn, so "running"
-      // would stay on an idle thread for good (to-do 7522).
+      // would stay on an idle thread for good (#2064).
       const settled =
         item.status === "in_progress" && turn.isTerminal()
           ? ({ ...item, left_running: true } as typeof item)

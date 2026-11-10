@@ -1,5 +1,5 @@
 /**
- * Background recovery of turn ends whose capture timed out (todo 7310).
+ * Background recovery of turn ends whose capture timed out (#2047).
  *
  * A turn's end capture has `finalizationDeadlineMs` (30 s). A turn that wrote
  * tens of thousands of files can run past it on a busy host, and then ends as

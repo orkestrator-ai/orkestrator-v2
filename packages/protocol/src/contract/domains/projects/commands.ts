@@ -25,7 +25,6 @@
 import * as Schema from "effect/Schema";
 import { mutableArray } from "../../model-schema.js";
 import { defineCommand } from "../../command.js";
-import { AppConfigSchema } from "../config/models.js";
 import { projectsDomain } from "./domain.js";
 import {
   AgentsMdProposalSchema,
@@ -236,22 +235,6 @@ export const getGitRemoteUrlCommand = defineCommand({
   critical: [],
 });
 
-/** Legacy last-create state; only a cached older renderer still sends it. */
-export const rememberEnvironmentAgentSelectionCommand = defineCommand({
-  domain: projectsDomain,
-  name: "remember_environment_agent_selection",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    projectId: optionalUnknown,
-    platform: optionalUnknown,
-    mode: optionalUnknown,
-  }),
-  result: AppConfigSchema,
-  critical: [],
-});
-
 /** One directory of the backend's host, for the folder picker. */
 export const listHostDirectoryCommand = defineCommand({
   domain: projectsDomain,
@@ -448,7 +431,6 @@ export const PROJECTS_COMMANDS = [
   arrangeProjectsCommand,
   validateGitUrlCommand,
   getGitRemoteUrlCommand,
-  rememberEnvironmentAgentSelectionCommand,
   listHostDirectoryCommand,
   createHostDirectoryCommand,
   findProjectIconsCommand,

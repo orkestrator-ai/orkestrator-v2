@@ -89,18 +89,6 @@ export const testDomainResolutionCommand = defineCommand({
   critical: [],
 });
 
-/** The same check under its older name. */
-export const validateDomainsCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "validate_domains",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ domains: optionalUnknown }),
-  result: Schema.Array(DomainResolutionSchema),
-  critical: [],
-});
-
 /** Records a terminal tab's session. */
 export const createSessionCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -256,18 +244,6 @@ export const reorderSessionsCommand = defineCommand({
   critical: [],
 });
 
-/** Deletes scrollback buffers no session owns; answers their session ids. */
-export const cleanupOrphanedBuffersCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "cleanup_orphaned_buffers",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({}),
-  result: mutableArray(Schema.String),
-  critical: [],
-});
-
 /** The environment's pane layout, or the conditional answer. */
 export const getPaneLayoutCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -336,7 +312,6 @@ export const SESSION_COMMANDS = [
   openInEditorCommand,
   openLocalInEditorCommand,
   testDomainResolutionCommand,
-  validateDomainsCommand,
   createSessionCommand,
   getSessionCommand,
   getSessionsByEnvironmentCommand,
@@ -350,7 +325,6 @@ export const SESSION_COMMANDS = [
   loadSessionBufferCommand,
   syncSessionsWithContainerCommand,
   reorderSessionsCommand,
-  cleanupOrphanedBuffersCommand,
   getPaneLayoutCommand,
   savePaneLayoutCommand,
   applyPaneLayoutIntentCommand,

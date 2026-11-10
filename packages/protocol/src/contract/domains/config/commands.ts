@@ -37,7 +37,6 @@ import {
   DeclinedUpstreamMergeSchema,
   DesktopConnectionsSchema,
   ExternalPermissionRulesSnapshotSchema,
-  GlobalConfigSchema,
   NoticeDismissalSnapshotSchema,
   PermissionRulesSnapshotSchema,
   RepositoryConfigSchema,
@@ -59,30 +58,6 @@ export const getConfigCommand = defineCommand({
     knownResourceRevision: optionalUnknown,
   }),
   result: ConfigReadSchema,
-  critical: [],
-});
-
-/** Replaces the whole config; stored credentials are kept. */
-export const saveConfigCommand = defineCommand({
-  domain: configDomain,
-  name: "save_config",
-  since: 1,
-  access: "admin",
-  read: false,
-  args: Schema.Struct({ config: optionalUnknown }),
-  result: Schema.Void,
-  critical: [],
-});
-
-/** The global settings alone (credentials redacted). */
-export const getGlobalConfigCommand = defineCommand({
-  domain: configDomain,
-  name: "get_global_config",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({}),
-  result: GlobalConfigSchema,
   critical: [],
 });
 
@@ -470,8 +445,6 @@ export const listExternalPermissionRulesCommand = defineCommand({
 /** Every `config` command definition. */
 export const CONFIG_COMMANDS = [
   getConfigCommand,
-  saveConfigCommand,
-  getGlobalConfigCommand,
   updateGlobalConfigCommand,
   patchGlobalConfigCommand,
   updateNotificationSoundSettingsCommand,

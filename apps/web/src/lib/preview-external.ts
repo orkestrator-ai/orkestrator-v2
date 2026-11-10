@@ -105,8 +105,3 @@ export async function openServiceExternally(
     throw error;
   }
 }
-
-/** The clean, shareable private address of a published service (never a grant). */
-export function previewPublicUrl(origin: string, path: string): string {
-  return `${origin.replace(/\/$/, "")}${path}`;
-}

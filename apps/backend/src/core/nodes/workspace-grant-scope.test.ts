@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import { createCommandRegistry } from "../commands.js";
 import { isNodeRoutingExcludedCommand } from "./node-routing.js";
-import { LEGACY_ONLY_ADMITTED, legacyWorkspaceAdmitted } from "./workspace-grant-legacy-check.js";
 import {
   admitsWorkspaceCommand,
   isGlobalConfigEcho,
@@ -13,7 +12,6 @@ import {
 /** The machine's administration, refused to workspace clients since security report I1. */
 const MACHINE_ADMINISTRATION = [
   "public_action",
-  "save_config",
   "update_global_config",
   "patch_global_config",
   "update_notification_sound_settings",
@@ -50,9 +48,7 @@ const MACHINE_ADMINISTRATION = [
 describe("the workspace grant allow-list (plan item 7012)", () => {
   const registry = createCommandRegistry();
   const accessOf = (command: string) => registry.contracts.get(command)?.access;
-  const isRegistered = (command: string) => registry.has(command);
-  const admits = (command: string, path: "grant" | "relay" = "grant") =>
-    admitsWorkspaceCommand(command, path, { accessOf, isRegistered });
+  const admits = (command: string) => admitsWorkspaceCommand(command, { accessOf });
 
   test("every registered command is defined, so every one has an access", () => {
     for (const command of registry.keys()) {
@@ -63,18 +59,15 @@ describe("the workspace grant allow-list (plan item 7012)", () => {
     }
   });
 
-  test("admits every workspace command and refuses every admin and internal one, on both paths", () => {
+  test("admits every workspace command and refuses every admin and internal one", () => {
     const allowList = workspaceAllowList(registry.contracts);
     let workspace = 0;
     for (const [command, def] of registry.contracts) {
       if (def.access === "workspace") workspace += 1;
-      for (const path of ["grant", "relay"] as const) {
-        expect({ command, path, admitted: admits(command, path) }).toEqual({
-          command,
-          path,
-          admitted: def.access === "workspace",
-        });
-      }
+      expect({ command, admitted: admits(command) }).toEqual({
+        command,
+        admitted: def.access === "workspace",
+      });
       expect(allowList.has(command)).toBe(def.access === "workspace");
     }
     expect(allowList.size).toBe(workspace);
@@ -83,15 +76,13 @@ describe("the workspace grant allow-list (plan item 7012)", () => {
 
   test("refuses an unregistered command and a name that is not one", () => {
     for (const command of ["no_such_command", "get_config ", "", "__proto__", "constructor"]) {
-      expect(admits(command, "grant")).toBe(false);
-      expect(admits(command, "relay")).toBe(false);
+      expect(admits(command)).toBe(false);
     }
   });
 
   test("fails closed without the registry's access", () => {
-    expect(admitsWorkspaceCommand("get_config", "grant", {})).toBe(false);
-    expect(admitsWorkspaceCommand("get_config", "relay", { isRegistered })).toBe(false);
-    expect(admitsWorkspaceCommand("get_config", "grant", { accessOf })).toBe(true);
+    expect(admitsWorkspaceCommand("get_config", {})).toBe(false);
+    expect(admitsWorkspaceCommand("get_config", { accessOf })).toBe(true);
   });
 
   test.each(MACHINE_ADMINISTRATION)(
@@ -111,14 +102,12 @@ describe("the workspace grant allow-list (plan item 7012)", () => {
       "local_terminal_resize",
       "close_local_terminal_session",
       "start_terminal_session",
-      "attach_terminal",
       "terminal_write",
       "terminal_resize",
       "dispatch_native_agent_prompt",
       "resolve_native_agent_interaction",
       "create_preview_attachment",
       "get_config",
-      "get_global_config",
       "get_host_maintenance",
       "get_projects",
       "approve_environment_setup",
@@ -127,27 +116,6 @@ describe("the workspace grant allow-list (plan item 7012)", () => {
       expect(registry.has(command)).toBe(true);
       expect(admits(command)).toBe(true);
     }
-  });
-});
-
-describe("the debug cross-check against the old deny-lists", () => {
-  const registry = createCommandRegistry();
-
-  test("names only registered commands the allow-list refuses", () => {
-    for (const command of LEGACY_ONLY_ADMITTED) {
-      expect({ command, registered: registry.has(command) }).toEqual({ command, registered: true });
-      expect({ command, access: registry.contracts.get(command)?.access }).not.toEqual({
-        command,
-        access: "workspace",
-      });
-    }
-  });
-
-  test("the old verdict: the allow-list's, plus those names and every unknown name", () => {
-    expect(legacyWorkspaceAdmitted("get_config", true, true)).toBe(true);
-    expect(legacyWorkspaceAdmitted("update_global_config", false, true)).toBe(false);
-    expect(legacyWorkspaceAdmitted("get_compatibility_path_usage", false, true)).toBe(true);
-    expect(legacyWorkspaceAdmitted("no_such_command", false, false)).toBe(true);
   });
 });
 
@@ -166,8 +134,6 @@ describe("isGlobalConfigEcho", () => {
   test("only the two settings writes are checked", () => {
     expect(isGlobalConfigWriteCommand("update_global_config")).toBe(true);
     expect(isGlobalConfigWriteCommand("patch_global_config")).toBe(true);
-    expect(isGlobalConfigWriteCommand("save_config")).toBe(false);
-    expect(isGlobalConfigEcho("save_config", { config: current }, current)).toBe(false);
   });
 
   test("an older realm's favourite save sends the leaf's settings back unchanged", () => {

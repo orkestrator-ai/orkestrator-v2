@@ -15,7 +15,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 1. **Manual tests and live checks** (288 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (47 items): make each call
+2. **Decisions, approvals and outward actions** (53 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -74,12 +74,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 21 | 9 |
 | Coordinator and Multi Review | 77 | 6 |
-| Cross-cutting | 69 | 14 |
+| Cross-cutting | 69 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 288 | 47 |
+| **Total** | 288 | 53 |
 
 ## Outstanding work
 
@@ -718,6 +718,13 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
   Record: the decision and its reason in 5180's Assumptions and decisions.
 - [ ] **[6303](../cross-cutting/6303-window-close-during-request-throws.md) task 2: provide a host with a disposable display for Electron specs.** Decide whether beelink, or another fleet host, gets Xvfb, and install it if so. Specs must never use the signed-in desktop. The run command is `env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:agent:electron` ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). Record: the host's name, or "no display host", as a reply to the coordinator. This unblocks 6303 task 2 (the earlier spec under Xvfb), 7062 task 1, 7340's two Electron owners and the run of 5460 task 3.
 - [ ] **[7551](../cross-cutting/7551-macos-watch-churn-loses-events.md) task 2: approve and file the Bun upstream report.** Do this once 7551 task 2's draft is in the file. Read the draft and its reproduction (`bun scripts/benchmark-recursive-watch-stall.ts --count=1 --churn=10`). Decide whether to file it; if yes, file it with Bun, asking for a rebuilt FSEvents stream to start from the last delivered event id (`sinceWhen`). Record: the issue URL, or "not filed", in 7551 task 2.
+
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 4: decide the `envFilePatterns` setting.** Settings offers an "Environment Files" field saying matching files are copied into containers, but the backend never reads it; only `.env` and `.env.local` are copied. Choose one: implement the copy (recommended; needs a security review of copying arbitrary patterns into containers) or remove the control and leave the schema key ignored. Record: the choice in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 5: decide the interaction observer switches.** `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY` and `ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH` are set by nothing but a test. Choose one: remove the kill switch now and decide the observer itself in [0001](../agent-engines/0001-agent-interactions-and-permissions.md) (recommended), or remove the whole observer. Record: the choice in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 6: keep or remove the artifact rollout flags.** `ORKESTRATOR_RICH_MARKDOWN` and the three `ORKESTRATOR_ARTIFACT_*` flags default on with no recorded end condition. Choose one: keep them as documented kill switches (recommended) or remove them. Record: the choice in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 7: claim or release the unmounted dialog and uncalled admin commands.** `NetworkWhitelistDialog.tsx` is never mounted; `set_workflow_result_tools_rollout` and `graph_capability_ceiling_set` have never been called by a client. Say whether any of them is wanted; the recommendation is to delete whatever nobody claims within a release. Record: the answer in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 11: keep or delete the root `conductor.json`.** Nothing in the repository references it. Say whether anyone still opens this repository in Conductor; if not, an agent deletes it. Record: the answer in 7571's Assumptions and decisions.
+- [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 13: decide the Linear integration.** `connect_linear` and `disconnect_linear` have no UI caller. Choose one: remove the Linear integration as a whole if nothing uses it (recommended) or keep it and give it UI. Record: the choice in 7571's Assumptions and decisions.
 
 #### MCP
 

@@ -32,11 +32,6 @@ import {
 /** Same bound the normalizer puts on one message's parts. */
 const MAX_PARTS_PER_MESSAGE = 2_048;
 
-/** True for OpenCode's `{ info, parts }` envelope, the only shape normalized here. */
-export function isOpenCodeTranscriptEnvelope(value: unknown): boolean {
-  return asRecord(asRecord(value)?.info) !== null;
-}
-
 function hasVisibleContent(message: Record<string, unknown>): boolean {
   return (
     (Array.isArray(message.parts) && message.parts.length > 0) ||

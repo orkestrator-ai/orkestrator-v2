@@ -59,7 +59,7 @@ describe("merge identity travels with status", () => {
   }
 });
 
-describe("image references (to-do 3800 task 3)", () => {
+describe("image references (#2027)", () => {
   const image = {
     id: "0f5c2a52-1d1e-4a0b-9d8a-3b8f0c7d6e5f",
     filename: "screen.png",

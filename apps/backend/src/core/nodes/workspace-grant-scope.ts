@@ -3,7 +3,6 @@ import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { INHERITED_GLOBAL_SETTING_KEYS } from "@orkestrator/protocol/controller-settings";
 
 import { stripRendererCredentials } from "../commands-validation.js";
-import { crossCheckLegacyWorkspaceScope } from "./workspace-grant-legacy-check.js";
 
 /**
  * The workspace grant allow-list (report §10.2, plan item 7012).
@@ -27,9 +26,6 @@ import { crossCheckLegacyWorkspaceScope } from "./workspace-grant-legacy-check.j
 /** A command's declared access, or `undefined` for one without a definition. */
 export type CommandAccessOf = (command: string) => CommandAccess | undefined;
 
-/** Which workspace path asked: a client grant here, or the relay to a leaf. */
-export type WorkspaceGrantPath = "grant" | "relay";
-
 /** Whether a workspace client may run `command`: only an `access: "workspace"` definition. */
 export function isWorkspaceGrantCommand(command: string, accessOf: CommandAccessOf): boolean {
   return accessOf(command) === "workspace";
@@ -45,22 +41,14 @@ export function workspaceAllowList(
 }
 
 /**
- * The gate the gateway and the relay call. `accessOf` and `isRegistered` read
- * this backend's registry; without them every command is refused. While debug
- * logging is on for `nodes`, each verdict is also checked against the old
- * deny-lists' (`legacyWorkspaceAdmitted`), for one release.
+ * The gate the gateway and the relay call. `accessOf` reads this backend's
+ * registry; without it every command is refused.
  */
 export function admitsWorkspaceCommand(
   command: string,
-  path: WorkspaceGrantPath,
-  registry: {
-    readonly accessOf?: CommandAccessOf | undefined;
-    readonly isRegistered?: ((command: string) => boolean) | undefined;
-  },
+  registry: { readonly accessOf?: CommandAccessOf | undefined },
 ): boolean {
-  const admitted = registry.accessOf ? isWorkspaceGrantCommand(command, registry.accessOf) : false;
-  crossCheckLegacyWorkspaceScope(command, path, admitted, registry.isRegistered);
-  return admitted;
+  return registry.accessOf ? isWorkspaceGrantCommand(command, registry.accessOf) : false;
 }
 
 const GLOBAL_CONFIG_WRITES: ReadonlySet<string> = new Set([

@@ -14,7 +14,7 @@ describe("ScrollArea", () => {
 
     const root = container.firstElementChild as HTMLElement;
     expect(root.tagName).toBe("DIV");
-    // useScrollLock keys off this marker to locate the viewport.
+    // A stable marker for anything that needs to find the viewport element.
     expect(root.getAttribute("data-scroll-viewport")).toBe("true");
     expect(root.getAttribute("data-slot")).toBe("scroll-area");
     expect(root.style.overflow).toBe("auto");

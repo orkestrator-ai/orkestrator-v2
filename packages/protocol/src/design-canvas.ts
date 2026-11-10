@@ -5,15 +5,11 @@ export const DESIGN_MAX_HTML_BYTES = 256 * 1024;
 export const DESIGN_MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
 export const DESIGN_MAX_FRAMES = 64;
 export const DESIGN_MAX_CANVASES = 256;
-export const DESIGN_MAX_ELEMENTS = 5000;
 export const DESIGN_MIN_FRAME_SIZE = 32;
 export const DESIGN_MAX_FRAME_SIZE = 4096;
 export const DESIGN_MAX_COORDINATE = 100_000;
 /** Increment when the sanitizer or runtime changes what a validation proves. */
 export const DESIGN_RUNTIME_VERSION = 2;
-/** Legacy in-memory history bounds, retained for older importers of this module. */
-export const DESIGN_HISTORY_LIMIT = 10;
-export const DESIGN_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Portable version-1 document shape. Never add private fields here. */
 export interface DesignFrame {
@@ -44,12 +40,6 @@ export interface DesignChange {
   statusVersion?: number;
   /** The document's intent queue changed; re-read it with `design_intents`. */
   intents?: true;
-}
-export interface DesignChanges {
-  generation: string;
-  revision: number;
-  reset: boolean;
-  events: DesignChange[];
 }
 export interface DesignHistoryStatus {
   revision: number;

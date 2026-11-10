@@ -25,11 +25,6 @@ export const WORKSPACE_DIALOGS = [
 
 export type WorkspaceDialog = (typeof WORKSPACE_DIALOGS)[number];
 
-/** Whether the dialog is one of an environment's rather than a project's. */
-export function isEnvironmentDialog(dialog: WorkspaceDialog): boolean {
-  return dialog === "environment-settings" || dialog === "environment-rebuild";
-}
-
 /** Work on one node, opened where it runs. */
 export type WorkspaceWorkTarget =
   /** A worker environment, at the delegated tab when known. */

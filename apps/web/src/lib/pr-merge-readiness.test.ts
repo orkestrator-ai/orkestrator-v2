@@ -59,7 +59,7 @@ describe("isLocalEnvironmentReadyToMerge", () => {
   test.each([
     ["the mirror is hydrating", {}, {}, "hydrating"],
     ["the mirror is stale", {}, {}, "stale"],
-    ["the peer has no monitor snapshot", {}, {}, "unsupported"],
+    ["the mirror is degraded", {}, {}, "degraded"],
     ["the last check failed", {}, { consecutiveErrors: 1 }, "current"],
     ["no check answered yet in this backend", {}, { lastSuccessfulCheckAt: null }, "current"],
     ["an older backend without the field", {}, { lastSuccessfulCheckAt: undefined }, "current"],

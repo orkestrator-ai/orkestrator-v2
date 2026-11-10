@@ -224,8 +224,8 @@ The backend merges runtime actions into the provider list
 
 Deduplication is by identity, never by lower-cased display name.
 
-No other shortcuts are planned beyond `/goal`, which has its own plan
-(`plans/goals.md`; decided 2026-10-24 in
+No other shortcuts are planned beyond `/goal`, which has its own design
+([goals.md](goals.md); decided 2026-10-24 in
 [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)),
 and `/subork`, which has its own contract ([suborks.md](suborks.md)).
 Clearing or starting a session, model and permission changes already have

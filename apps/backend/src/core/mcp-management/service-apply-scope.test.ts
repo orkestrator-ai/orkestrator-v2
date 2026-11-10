@@ -307,7 +307,10 @@ describe("apply scope", () => {
     expect(
       (await fixture.service.getOperation({ operationId: idle.operation.operationId })).apply
         .runtimes[0],
-    ).toMatchObject({ state: "restart-required", reason: expect.stringContaining("predates") });
+    ).toMatchObject({
+      state: "restart-required",
+      reason: expect.stringContaining("stop and start the environment"),
+    });
     expect(fixture.reloads).toEqual(["env-1", "env-1"]);
   });
 });

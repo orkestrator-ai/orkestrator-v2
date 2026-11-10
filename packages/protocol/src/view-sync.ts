@@ -226,20 +226,6 @@ export function isViewSnapshotOutcome<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * What a peer supports for one view.
- *
- * - `revisioned`: stamped snapshots/events and conditional reads.
- * - `legacy`: unstamped snapshots and events. Keep conservative reconnect
- *   hydration (and any existing polling) for this peer.
- * - `unsupported`: the snapshot command itself is unknown. Do not retry it on a
- *   timer; wait for a reconnect, which may reach a different peer.
- *
- * Arbitrary network or authentication failures are *not* evidence of either
- * fallback; they are ordinary retryable failures.
- */
-export type ViewSyncCapability = "revisioned" | "legacy" | "unsupported";
-
-/**
  * Classified response to a snapshot command, whichever form the peer used.
  * Domain adapters build this from their own validators so an invalid body is
  * never applied.

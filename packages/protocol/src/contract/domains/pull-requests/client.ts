@@ -37,6 +37,10 @@ const legacyPullRequestsApi = (
 ): PullRequestsApi => legacyCommandApi(context, PULL_REQUESTS_COMMANDS);
 
 export const pullRequestsClient = domainClient(pullRequestsDomain, {
+  2: pullRequestsApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
   1: pullRequestsApi,
   0: legacyPullRequestsApi,
 });

@@ -3,8 +3,6 @@ import { deepFreeze } from "./storage-frozen-snapshot.js";
 
 export const NATIVE_DISPLAY_TAIL_VERSION = 2 as const;
 export const NATIVE_DISPLAY_TAIL_SCHEMA = "native-agent-display-tail-v2";
-export const NATIVE_DISPLAY_TAIL_LEGACY_VERSION = 1 as const;
-export const NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA = "native-agent-display-tail-v1";
 export const NATIVE_DISPLAY_TAIL_MAX_BYTES = 512 * 1024;
 export const NATIVE_DISPLAY_TAIL_MAX_SESSIONS = 128;
 export const NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
@@ -26,8 +24,8 @@ export interface NativeAgentDisplayTailWindow {
 }
 
 export interface NativeAgentDisplayTail {
-  version: typeof NATIVE_DISPLAY_TAIL_VERSION | typeof NATIVE_DISPLAY_TAIL_LEGACY_VERSION;
-  schema: typeof NATIVE_DISPLAY_TAIL_SCHEMA | typeof NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA;
+  version: typeof NATIVE_DISPLAY_TAIL_VERSION;
+  schema: typeof NATIVE_DISPLAY_TAIL_SCHEMA;
   environmentId: string;
   agent: string;
   logicalSessionKey: string;
@@ -35,7 +33,7 @@ export interface NativeAgentDisplayTail {
   historyEpoch: string;
   title?: string;
   messages: unknown[];
-  /** Absent on v1 tails; treat that as unknown rather than complete. */
+  /** Absent means unknown, never complete. */
   historyComplete?: boolean;
   messageWindow?: NativeAgentDisplayTailWindow;
   checksum: string;
@@ -88,32 +86,12 @@ export function displayTailRecoveryWindow(
   };
 }
 
+/**
+ * Version 1 tails (before 2026-09-14) were written only to the pre-database
+ * cache files, which are deleted rather than imported, so no stored row can
+ * hold one; such a row would read as invalid, a cache miss.
+ */
 export function displayTailChecksum(input: Omit<NativeAgentDisplayTail, "checksum">): string {
-  return input.version === NATIVE_DISPLAY_TAIL_LEGACY_VERSION
-    ? displayTailChecksumV1(input)
-    : displayTailChecksumV2(input);
-}
-
-function displayTailChecksumV1(input: Omit<NativeAgentDisplayTail, "checksum">): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        input.version,
-        input.schema,
-        input.environmentId,
-        input.agent,
-        input.logicalSessionKey,
-        input.providerSessionId,
-        input.historyEpoch,
-        input.title ?? "",
-        input.messages,
-      ]),
-    )
-    .digest("hex")
-    .slice(0, 32);
-}
-
-function displayTailChecksumV2(input: Omit<NativeAgentDisplayTail, "checksum">): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -187,14 +165,11 @@ export function createNativeAgentDisplayTail(
 export function isNativeAgentDisplayTail(value: unknown): value is NativeAgentDisplayTail {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  const legacy =
-    candidate.version === NATIVE_DISPLAY_TAIL_LEGACY_VERSION &&
-    candidate.schema === NATIVE_DISPLAY_TAIL_LEGACY_SCHEMA;
   const current =
     candidate.version === NATIVE_DISPLAY_TAIL_VERSION &&
     candidate.schema === NATIVE_DISPLAY_TAIL_SCHEMA;
   if (
-    (!legacy && !current) ||
+    !current ||
     typeof candidate.environmentId !== "string" ||
     candidate.environmentId.length === 0 ||
     typeof candidate.agent !== "string" ||
@@ -213,11 +188,7 @@ export function isNativeAgentDisplayTail(value: unknown): value is NativeAgentDi
   ) {
     return false;
   }
-  if (
-    current &&
-    candidate.historyComplete !== undefined &&
-    typeof candidate.historyComplete !== "boolean"
-  ) {
+  if (candidate.historyComplete !== undefined && typeof candidate.historyComplete !== "boolean") {
     return false;
   }
   if (

@@ -372,6 +372,6 @@ replay shows it as the card, never as a message the user typed. See
 ## Goals stay off
 
 `features.goals=false` stays in `codexAppServerConfigOverrides`. Orkestrator's
-goal loop runs in the backend on every provider (`plans/goals.md`, D1 and D2).
+goal loop runs in the backend on every provider ([goals.md](../../docs/architecture/goals.md)).
 Codex's own loop starts turns with no `turn/start`, which the runtime drops
 because it handles only the turn it dispatched.

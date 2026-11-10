@@ -89,8 +89,6 @@ export interface ComputeContext {
   frameRevision?: number;
 }
 
-const HTML_OPS = new Set(["append_frame_html", "replace_element_html", "move_element"]);
-
 function frameOf(record: DesignPrivateRecord, frameId: string): DesignFrame {
   const frame = record.document.frames.find((candidate) => candidate.id === frameId);
   if (!frame) throw new DesignError("not-found", "Frame not found", { target: { frameId } });
@@ -724,8 +722,4 @@ async function computeRestore(
     scope: result.canvasName ? "canvas" : "frame",
   };
   return result;
-}
-
-export function isHtmlOperation(kind: string) {
-  return HTML_OPS.has(kind);
 }

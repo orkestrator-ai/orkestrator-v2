@@ -207,23 +207,6 @@ export const createTerminalSessionCommand = defineCommand({
   critical: [],
 });
 
-/** Opens a one-off container shell; answers its session id. */
-export const attachTerminalCommand = defineCommand({
-  domain: terminalsDomain,
-  name: "attach_terminal",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    containerId: Schema.String,
-    cols: optionalUnknown,
-    rows: optionalUnknown,
-    user: optionalUnknown,
-  }),
-  result: Schema.String,
-  critical: [],
-});
-
 export const startTerminalSessionCommand = defineCommand({
   domain: terminalsDomain,
   name: "start_terminal_session",
@@ -535,7 +518,6 @@ export const listHumanPromptsCommand = defineCommand({
 export const TERMINALS_COMMANDS = [
   launchTerminalJobCommand,
   createTerminalSessionCommand,
-  attachTerminalCommand,
   startTerminalSessionCommand,
   terminalWriteCommand,
   terminalResizeCommand,

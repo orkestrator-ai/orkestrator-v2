@@ -38,7 +38,7 @@ process.env.PI_BRIDGE_TOKEN = "test-token";
 process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
-const { route, setCancelAckTimeoutForTests, setDeleteCancelTimeoutForTests } =
+const { route, setCancelAckTimeoutForTests, setCloseCancelTimeoutForTests } =
   await import("./http.js");
 const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
@@ -396,7 +396,7 @@ describe("cancel during cold attach", () => {
     }
   });
 
-  test("deleting the session during a cold attach never invokes Pi", async () => {
+  test("closing the session during a cold attach never invokes Pi", async () => {
     const state = seedSession();
     const pi = controlledSession();
     const attachGate = deferred();
@@ -415,14 +415,14 @@ describe("cancel during cold attach", () => {
         requestId: "deleted-during-attach",
       });
       await waitFor(() => attaches === 1);
-      const deletion = call(`/session/${state.id}`, { method: "DELETE" });
+      const closing = post(`/session/${state.id}/close`);
       await waitFor(() => state.cancelRequestedClaim !== undefined);
 
       attachGate.resolve();
-      expect((await deletion).status).toBe(200);
+      expect((await closing).status).toBe(200);
       // The late attach refuses to publish into the closed session. That is
-      // the close winning, so the prompt settles as cancelled before send —
-      // the same answer `/close` gives — never a 500.
+      // the close winning, so the prompt settles as cancelled before send,
+      // never a 500.
       const response = await prompt;
       expect(response.status).toBe(202);
       expect(await response.json()).toEqual({ accepted: true, cancelled: true });
@@ -499,7 +499,7 @@ describe("cancel during the mandatory journal write", () => {
     }
   });
 
-  test("deleting the session while the write is held settles the prompt locally", async () => {
+  test("closing the session while the write is held settles the prompt locally", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-cancel-write-delete-"));
     const writeGate = deferred();
     const state = seedSession();
@@ -514,10 +514,12 @@ describe("cancel during the mandatory journal write", () => {
         requestId: "write-delete",
       });
       await waitFor(() => barriers.held >= 1);
-      expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(200);
-      expect(sessions.has(state.id)).toBe(false);
+      const closing = post(`/session/${state.id}/close`);
+      await waitFor(() => state.cancelRequestedClaim !== undefined);
 
       writeGate.resolve();
+      expect((await closing).status).toBe(200);
+      expect(sessions.has(state.id)).toBe(false);
       const response = await prompt;
       expect(response.status).toBe(202);
       expect(await response.json()).toEqual({ accepted: true, cancelled: true });
@@ -1199,7 +1201,7 @@ describe("a closing session", () => {
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     state.status = "running";
     state.cancelTurn = () => new Promise<void>(() => undefined);
-    setDeleteCancelTimeoutForTests(5);
+    setCloseCancelTimeoutForTests(5);
     try {
       const close = await post(`/session/${state.id}/close`);
       expect(close.status).toBe(503);
@@ -1220,7 +1222,7 @@ describe("a closing session", () => {
       expect(await retry.json()).toEqual({ closed: true, retained: true });
       expect(sessions.has(state.id)).toBe(false);
     } finally {
-      setDeleteCancelTimeoutForTests();
+      setCloseCancelTimeoutForTests();
       sessions.delete(state.id);
       resetHooks();
     }

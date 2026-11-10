@@ -326,7 +326,7 @@ export function restorePreflightDeadlineMs(
  * checkpoint captures the whole worktree just after a bulk turn, which is cold
  * for every file the turn wrote when the turn's own end capture was the only
  * earlier publish; a fixed 10 s refused bulk restores on a busy host before
- * writing anything (todo 7310). The user is already waiting on an explicit
+ * writing anything (#2047). The user is already waiting on an explicit
  * action, and the checkpoint is what makes the apply recoverable, so it gets
  * at least the turn finalization deadline, more for a large plan as the
  * preview does, up to the same ceiling.

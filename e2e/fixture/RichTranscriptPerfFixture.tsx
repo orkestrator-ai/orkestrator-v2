@@ -738,7 +738,9 @@ function installBackend(): void {
           break;
         case "get_file_tree":
         case "get_local_file_tree":
-          result = [];
+          // A conditional read (knownDigest) answers the envelope, as every backend does.
+          result =
+            args?.knownDigest === undefined ? [] : { unchanged: false, digest: "", value: [] };
           break;
         default:
           counters.unexpectedCommands++;

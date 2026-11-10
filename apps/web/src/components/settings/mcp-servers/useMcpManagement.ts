@@ -3,7 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
   mcpManagementErrorFromUnknown,
-  isUnknownMcpManagementCommandError,
   type McpManagementSnapshot,
   type McpManagementTarget,
 } from "@orkestrator/protocol/mcp-management";
@@ -21,7 +20,6 @@ import { mcpErrorReference } from "./McpErrorNotice";
 export type LoadState<T> =
   | { status: "loading"; data: T | null }
   | { status: "ready"; data: T }
-  | { status: "unsupported" }
   | { status: "error"; message: string; reference?: string; code?: string; data: T | null };
 
 export function describeMcpError(error: unknown): string {
@@ -113,14 +111,12 @@ export function useMcpTargets(environmentId: string | null): {
         if (request !== generation.current) return;
         setKeyed((current) => ({
           environmentId,
-          state: isUnknownMcpManagementCommandError(error)
-            ? { status: "unsupported" }
-            : {
-                status: "error",
-                message: describeMcpError(error),
-                reference: mcpErrorReference(error),
-                data: current.environmentId === environmentId ? dataOf(current.state) : null,
-              },
+          state: {
+            status: "error",
+            message: describeMcpError(error),
+            reference: mcpErrorReference(error),
+            data: current.environmentId === environmentId ? dataOf(current.state) : null,
+          },
         }));
       });
   }, [environmentId, machine]);
@@ -189,15 +185,13 @@ export function useMcpSnapshot(targetId: string | null): {
       })
       .catch((error: unknown) => {
         if (request !== generation.current) return;
-        if (isUnknownMcpManagementCommandError(error)) setState({ status: "unsupported" });
-        else
-          setState((current) => ({
-            status: "error",
-            message: describeMcpError(error),
-            code: mcpManagementErrorFromUnknown(error)?.code,
-            reference: mcpErrorReference(error),
-            data: sameTarget(current),
-          }));
+        setState((current) => ({
+          status: "error",
+          message: describeMcpError(error),
+          code: mcpManagementErrorFromUnknown(error)?.code,
+          reference: mcpErrorReference(error),
+          data: sameTarget(current),
+        }));
       });
   }, [targetId, machine]);
   const load = useCallback(() => {

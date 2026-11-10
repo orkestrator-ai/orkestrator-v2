@@ -29,28 +29,11 @@ import {
   PrRefreshArmSchema,
   ReviewPackageReferenceSchema,
   ReviewPackageVerificationSchema,
-  VerifiedEnvironmentPrSchema,
 } from "./schemas.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
 
 // --- Detection and verification -----------------------------------------------
-
-/** Checks that a PR the user attached is open and belongs to the environment's branch. */
-export const verifyEnvironmentPrCommand = defineCommand({
-  domain: pullRequestsDomain,
-  name: "verify_environment_pr",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    environmentId: Schema.String,
-    prUrl: Schema.String,
-    targetBranch: Schema.String,
-  }),
-  result: VerifiedEnvironmentPrSchema,
-  critical: [],
-});
 
 /** The PR of a local environment's branch (a project home follows its own checkout). */
 export const detectPrLocalCommand = defineCommand({
@@ -164,17 +147,6 @@ export const prMonitorWatchCommand = defineCommand({
   critical: [],
 });
 
-export const prMonitorRefreshCommand = defineCommand({
-  domain: pullRequestsDomain,
-  name: "pr_monitor_refresh",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ environmentId: Schema.String }),
-  result: Schema.Void,
-  critical: [],
-});
-
 /** Turns auto-merge on or off; every call restates `cleanupAfterMerge`. */
 export const setEnvironmentAutoMergeCommand = defineCommand({
   domain: pullRequestsDomain,
@@ -282,7 +254,6 @@ export const verifyReviewPackageCommand = defineCommand({
 });
 
 export const ENVIRONMENT_PR_COMMANDS = [
-  verifyEnvironmentPrCommand,
   detectPrLocalCommand,
   detectPrCommand,
   mergePrLocalCommand,
@@ -290,7 +261,6 @@ export const ENVIRONMENT_PR_COMMANDS = [
   mergeEnvironmentPrCommand,
   getPrMonitorStateCommand,
   prMonitorWatchCommand,
-  prMonitorRefreshCommand,
   setEnvironmentAutoMergeCommand,
   armPrRefreshAfterAgentCompletionCommand,
   disarmPrRefreshAfterAgentCompletionCommand,

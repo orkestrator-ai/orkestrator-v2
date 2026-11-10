@@ -15,7 +15,7 @@ const route = (
   detail?: string,
 ): SessionRouteRequest => ({ method, action, subject, detail });
 
-describe("Pi session liveness (todo 7540)", () => {
+describe("Pi session liveness (#2062)", () => {
   test("labels name the route, never an id", () => {
     expect(sessionRouteLabel(route("GET"))).toBe("GET session");
     expect(sessionRouteLabel(route("GET", "mcp"))).toBe("GET mcp");

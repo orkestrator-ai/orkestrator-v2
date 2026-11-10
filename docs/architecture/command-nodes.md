@@ -962,11 +962,9 @@ selected files across every node that has the project:
   ([version-compatibility.md](version-compatibility.md#domain-contracts)).
   The relay applies the command node's own list, so a command a newer leaf
   added is refused through the relay (not through a direct grant, which the
-  leaf checks) until the command node knows it. A refusal is not logged;
-  with `nodes` at `debug`, a verdict the old deny-lists would have given
-  differently logs `nodes grant.scope-disagreement` (no command name unless
-  it is one of the fixed list in `workspace-grant-legacy-check.ts`), for one
-  release. Settings reaches another machine's settings through
+  leaf checks) until the command node knows it. A refusal is not logged.
+  (A debug-only cross-check against the old deny-lists ran for one release
+  and was removed on 2026-11-10.) Settings reaches another machine's settings through
   `invoke_on_node` instead, which routes everything but
   `NODE_ROUTING_EXCLUDED_COMMANDS` (`nodes/node-routing.ts`). The
   first version is a workspace grant: one leaf, one controller and one client

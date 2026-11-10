@@ -31,66 +31,6 @@ describe("Electron backend command registry", () => {
     }
   });
 
-  test("validates and delegates resource revision manifest requests", async () => {
-    const generation = "a".repeat(32);
-    const projectRevision = "b".repeat(32);
-    const response = {
-      generation,
-      reset: false,
-      revisions: { project: projectRevision },
-    };
-    const getResourceRevisionManifest = mock(async () => response);
-    const context = {
-      storage: { getResourceRevisionManifest },
-    } as unknown as CommandContext;
-    const command = createCommandRegistry().get("get_resource_revision_manifest")!;
-
-    await expect(
-      command(
-        {
-          knownGeneration: generation,
-          knownRevisions: { project: projectRevision },
-        },
-        context,
-      ),
-    ).resolves.toEqual(response);
-    expect(getResourceRevisionManifest).toHaveBeenCalledWith(generation, {
-      project: projectRevision,
-    });
-
-    await expect(command({}, context)).resolves.toEqual(response);
-    expect(getResourceRevisionManifest).toHaveBeenLastCalledWith(undefined, {});
-
-    for (const knownRevisions of [null, [], "revisions"]) {
-      expect(() => command({ knownRevisions }, context)).toThrow("knownRevisions");
-    }
-    expect(() =>
-      command(
-        {
-          knownRevisions: { unknown: projectRevision },
-        },
-        context,
-      ),
-    ).toThrow("Unknown manifest resource: unknown");
-    expect(() =>
-      command(
-        {
-          knownRevisions: { project: "invalid" },
-        },
-        context,
-      ),
-    ).toThrow("Invalid manifest revision for project");
-    expect(() =>
-      command(
-        {
-          knownGeneration: "invalid",
-        },
-        context,
-      ),
-    ).toThrow("knownGeneration must be an opaque resource generation");
-    expect(getResourceRevisionManifest).toHaveBeenCalledTimes(2);
-  });
-
   test("requires paired, well-formed conditional snapshot cursors", async () => {
     const generation = "a".repeat(32);
     const revision = "b".repeat(32);

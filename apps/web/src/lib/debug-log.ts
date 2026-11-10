@@ -21,8 +21,8 @@ export const DEBUG_LOG_STORAGE_KEY = "orkestrator:debug";
  * Whether the stored preference enables debug logging.
  *
  * Exported so the parsing is testable without reloading the module. Any value
- * except the conventional "off" spellings enables it, matching the bridge's
- * `CLAUDE_BRIDGE_DEBUG` handling.
+ * except the conventional "off" spellings enables it. (The bridges are
+ * stricter: `ORKESTRATOR_BRIDGE_DEBUG` is enabled only by `1`.)
  */
 export function readDebugPreference(raw: string | null | undefined): boolean {
   const value = raw?.trim().toLowerCase();

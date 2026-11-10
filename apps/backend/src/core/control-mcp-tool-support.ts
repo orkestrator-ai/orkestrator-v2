@@ -134,12 +134,6 @@ export const reviewLensSchema = describe(
   "Optional. This reviewer's focus: a short label (at most 64 characters) and an instruction (at most 4 KiB) saying what to look at hardest. The reviewer still reports critical issues outside it. Omit to use the saved focus for this position (only when reviewers are omitted) or none. Set only when the user asks for a focus.",
 );
 
-/**
- * One build step's harness and model. Unlike a Multi Review row the model is
- * optional: naming only an agent runs that agent's own saved model.
- */
-export const buildStepSchema = strictObject(buildStepFields);
-
 /** A Build Pipeline reviewer row: a step that may also carry a focus. */
 export const buildReviewerSchema = strictObject({
   ...buildStepFields,
@@ -220,12 +214,6 @@ export const agentSelectionSchema = Schema.Struct({
   agent: Schema.Literals(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
   model: str({ trim: true, min: 1, max: 500 }),
   reasoningEffort: Schema.optionalKey(str({ trim: true, min: 1, max: 100 })),
-});
-
-/** A Multi Review reviewer row: a selection that may carry the reviewer's focus. */
-export const reviewerSelectionSchema = Schema.Struct({
-  ...agentSelectionSchema.fields,
-  lens: Schema.optionalKey(reviewLensSchema),
 });
 
 export function readAnnotations() {

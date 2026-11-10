@@ -9,7 +9,7 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
-import { getAvailableModelCatalog, readClaudePlanUsage } from "./session-manager.js";
+import { getAvailableModelCatalog } from "./session-manager.js";
 import { readClaudeAuthStatus } from "./claude-sign-in.js";
 import {
   LIVE_CLAUDE_READ_TIMEOUT_MS,
@@ -251,39 +251,6 @@ describe("bridge-wide reads from a running CLI", () => {
 
     // A login since the CLI launched is visible only to a probe.
     await expect(readClaudeAuthStatus()).resolves.toMatchObject({ state: "signed-in" });
-    await expectControlOnlyPrompt(await nextQueryCall());
-  });
-
-  test("plan usage comes from the running CLI's control channel", async () => {
-    const getStructuredUsage = mock(async () => ({
-      rate_limits_available: true,
-      rate_limits: { five_hour: { utilization: 40 } },
-    }));
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      getStructuredUsage;
-    await warmSession("live plan usage");
-    getStructuredUsage.mockClear();
-
-    await expect(readClaudePlanUsage()).resolves.toEqual([
-      { window: "five_hour", label: "5-hour limit", usedPercent: 40 },
-    ]);
-    expect(getStructuredUsage).toHaveBeenCalledWith({ skipBehaviors: true });
-    await expectNoProbe();
-  });
-
-  test("plan usage probes when the running CLI's answer fails", async () => {
-    let liveControl: unknown;
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
-      async function (this: unknown) {
-        // The running CLI's channel fails; the probe's answers.
-        if (this === liveControl) throw new Error("Query closed before response received");
-        return { rate_limits_available: false, rate_limits: null };
-      },
-    );
-    const { session } = await warmSession("failing live plan usage");
-    liveControl = session.claudeRuntime!.control;
-
-    await expect(readClaudePlanUsage()).resolves.toEqual([]);
     await expectControlOnlyPrompt(await nextQueryCall());
   });
 });

@@ -357,13 +357,6 @@ function sourceDigest(digest: string | null): McpSourceDigest {
   return digest === null ? "absent" : `sha256:${digest}`;
 }
 
-/** Map the legacy boolean form onto a scope, keeping `true` as the default. */
-function normalizeScope(scope: McpSourceScope | boolean): McpSourceScope {
-  if (scope === true) return "all";
-  if (scope === false) return "user";
-  return scope;
-}
-
 /**
  * The MCP source scope a turn under `policy` is allowed to load.
  *
@@ -541,14 +534,13 @@ function revisionFingerprint(sources: McpConfigRevision["sources"]): string {
  * turn. It is the only entry point into this module that `sendPrompt` uses;
  * keep the translation in `toSdkServers` so there is exactly one copy of it.
  *
- * `sources` accepts the older boolean (`true` = all, `false` = user only) so
- * existing callers keep their meaning; pass `"none"` for a coordinator.
+ * `sources` is the policy's scope; pass `"none"` for a coordinator.
  */
 export async function getMcpRuntimeConfig(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
   connection?: AgentMcpConnection,
-  sources: McpSourceScope | boolean = "all",
+  sources: McpSourceScope = "all",
   /** Which configured servers may load (`userMcpServerFilter`); all when absent. */
   allowConfigured?: (name: string) => boolean,
 ): Promise<{
@@ -558,7 +550,7 @@ export async function getMcpRuntimeConfig(
   layers: McpServerLayers;
   revision: McpConfigRevision;
 }> {
-  const scoped = await loadScopedMcpServers(cwd, normalizeScope(sources));
+  const scoped = await loadScopedMcpServers(cwd, sources);
   const { revision } = scoped;
   // A configured server outside the session's selection is never loaded and
   // never named: with `strictMcpConfig` the CLI starts only this inline set.
@@ -600,8 +592,7 @@ export async function getMcpRuntimeConfig(
   // A coordinator loads no configured servers (`none`), only the remote
   // research servers its launcher named as process authority. They come from
   // the environment, never from a file the checkout could edit.
-  const research =
-    normalizeScope(sources) === "none" ? coordinatorResearchMcpServersFromEnv(env) : [];
+  const research = sources === "none" ? coordinatorResearchMcpServersFromEnv(env) : [];
   for (const server of research) servers[server.name] = { type: "http", url: server.url };
 
   // Names come from the merged config, not from `servers`: a server whose

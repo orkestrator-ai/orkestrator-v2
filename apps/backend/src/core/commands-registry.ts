@@ -382,7 +382,7 @@ export function createCommandRegistry(options: CommandRegistryOptions = {}): Com
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);
-  registerToolingCommands(register, dependencies);
+  registerToolingCommands(register);
   registerBugReportCommands(register);
   registerSessionCommands(register, dependencies);
   registerNativeAgentCommands(register, dependencies);

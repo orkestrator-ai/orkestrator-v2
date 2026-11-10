@@ -1222,10 +1222,6 @@ export function validateGraphRun(
   return errors.result(value as unknown as GraphRun);
 }
 
-export function isGraphRun(value: unknown): value is GraphRun {
-  return validateGraphRun(value).ok;
-}
-
 // ---------------------------------------------------------------- artifact
 
 const ARTIFACT_FIELDS = [
@@ -1409,10 +1405,6 @@ export function validateGraphArtifact(value: unknown): FieldValidation<GraphArti
     errors.add("supersededBy", "mismatch", "Only a superseded artifact names a rewind");
   }
   return errors.result(value as unknown as GraphArtifact);
-}
-
-export function isGraphArtifact(value: unknown): value is GraphArtifact {
-  return validateGraphArtifact(value).ok;
 }
 
 /**

@@ -177,17 +177,6 @@ export function ProviderMcpSettings() {
   const selectContext = (next: string) => guardSwitch(() => setContextId(next));
   const liveJoin = current && liveRef ? joinLiveMcpServer(current, liveRef) : null;
 
-  if (targetsState.status === "unsupported" || snapshotState.status === "unsupported") {
-    return (
-      <SettingsPageLayout title="MCP servers for your agents">
-        <div className="rounded-lg border border-zinc-800 p-5 text-sm text-muted-foreground">
-          This backend does not support managing MCP servers yet. Update the backend to edit
-          provider servers from here.
-        </div>
-      </SettingsPageLayout>
-    );
-  }
-
   const writeBlocked = current ? writeBlockedReason(current.target.capabilities) : null;
   const applyBlocked = current ? applyBlockedReason(current.target.capabilities) : null;
   const canAdd =

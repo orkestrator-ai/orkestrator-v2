@@ -78,7 +78,7 @@ function fakeHost() {
       nodes.set(nodeId, existing);
       return existing.api;
     }),
-    nodes: { open: mock(), release, gateway: mock() },
+    nodes: { release, gateway: mock() },
   };
   return {
     api: api as unknown as Api,

@@ -174,7 +174,7 @@ test("a status refresh failure retains the last nodes and recovery clears the er
   await waitFor(() => expect(result.current?.error).toBeUndefined());
 });
 
-describe("the conflict list (to-do 3800 task 4)", () => {
+describe("the conflict list (#2027)", () => {
   const conflict = (id: string, ticketId: string, value: string) => ({
     id,
     at: "2026-11-09T10:00:00.000Z",
@@ -227,7 +227,7 @@ describe("the conflict list (to-do 3800 task 4)", () => {
   });
 });
 
-describe("a leaf board's sync line (to-do 3800 tasks 2, 4 and 5)", () => {
+describe("a leaf board's sync line (#2027)", () => {
   const leaf = {
     projectId: "p1",
     controllers: [
@@ -311,7 +311,7 @@ describe("a leaf board's sync line (to-do 3800 tasks 2, 4 and 5)", () => {
   });
 });
 
-describe("KanbanCard on a leaf board (to-do 3800 tasks 2 and 4)", () => {
+describe("KanbanCard on a leaf board (#2027)", () => {
   const task: KanbanTask = {
     id: "t2",
     projectId: "p1",

@@ -93,7 +93,7 @@ export interface ReadModelPersistence {
  * consumers (`onNodeEvent`) act on: the mail outbox's `node-outbox-ready`
  * (under `node-`) and ticket sync's `ticket-sync-outbox-ready`. The node's
  * gateway sends nothing outside these, so an announcement left off this list
- * is only noticed by the 60 s reconcile (found live, to-do 3800 task 1).
+ * is only noticed by the 60 s reconcile (found live, #2059).
  */
 export const NODE_SUMMARY_EVENT_PREFIXES = [
   AGENT_USAGE_READINGS_CHANGED_EVENT,

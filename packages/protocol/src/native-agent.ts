@@ -1069,7 +1069,7 @@ export interface NativeAgentCapabilities {
     redo?: boolean;
     share?: boolean;
     steer?: boolean;
-    /** The backend's `/goal` loop runs on this platform (`plans/goals.md`). */
+    /** The backend's `/goal` loop runs on this platform (`docs/architecture/goals.md`). */
     goal?: boolean;
     /** `/subork` and the `ask_agents` tool work on this platform (`docs/architecture/suborks.md`). */
     subork?: boolean;

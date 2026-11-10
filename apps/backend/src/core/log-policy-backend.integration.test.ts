@@ -108,14 +108,11 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
 
     const save = async (enabled: boolean, level: "info" | "debug") => {
       const config = await storage.loadConfig();
-      await backend.invoke("save_config", {
-        config: {
-          ...config,
-          global: {
-            ...config.global,
-            debugLogging: enabled,
-            logDetail: { level: "info", areaLevels: { bridge: level } },
-          },
+      await backend.invoke("update_global_config", {
+        global: {
+          ...config.global,
+          debugLogging: enabled,
+          logDetail: { level: "info", areaLevels: { bridge: level } },
         },
       });
     };

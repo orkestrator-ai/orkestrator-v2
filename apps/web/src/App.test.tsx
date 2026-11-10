@@ -276,7 +276,12 @@ mock.module("@/hooks", () => ({
   }),
 }));
 
-const mockCheckDocker = mock<() => Promise<boolean | DockerAvailability>>(async () => true);
+const DOCKER_AVAILABLE: DockerAvailability = { available: true, reason: null };
+const DOCKER_DAEMON_UNAVAILABLE: DockerAvailability = {
+  available: false,
+  reason: "daemon-unavailable",
+};
+const mockCheckDocker = mock<() => Promise<DockerAvailability>>(async () => DOCKER_AVAILABLE);
 const mockSyncAllEnvironmentsWithDocker = mock(async () => [] as string[]);
 const mockCheckClaudeCli = mock(async () => true);
 const mockCheckClaudeConfig = mock(async () => true);
@@ -293,14 +298,17 @@ const defaultGitHubCliStatus = async () => ({
 const mockGetGitHubCliStatus = mock(defaultGitHubCliStatus);
 const mockSetGitHubCliReminderDismissed = mock(async (_dismissed: boolean) => mockConfig);
 const mockGetConfig = mock(async () => mockConfig);
-const mockGetResourceRevisionManifest = mock(async () => ({
+const stableScopedManifest = () => ({
   generation: "a".repeat(32),
+  cursor: 0,
+  highWater: 0,
   reset: false,
+  resetResources: [],
+  changes: [],
   revisions: {},
-}));
-const mockGetScopedResourceRevisionManifest = mock(async () => {
-  throw new Error("Unknown backend command: get_scoped_resource_revision_manifest");
+  hasMore: false,
 });
+const mockGetScopedResourceRevisionManifest = mock(async () => stableScopedManifest());
 const mockGetScopedResourceSnapshots = mock(async () => ({ entries: [] }));
 const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
@@ -378,7 +386,6 @@ mock.module("@/lib/backend", () => ({
   setGitHubCliReminderDismissed: mockSetGitHubCliReminderDismissed,
   getGitHubCliLogin: async () => ({ state: "idle" }),
   getConfig: mockGetConfig,
-  getResourceRevisionManifest: mockGetResourceRevisionManifest,
   getScopedResourceRevisionManifest: mockGetScopedResourceRevisionManifest,
   getScopedResourceSnapshots: mockGetScopedResourceSnapshots,
   getEnvironment: mockGetEnvironment,
@@ -584,7 +591,7 @@ function resetAppMocks() {
   mockExit.mockClear();
   mockRestart.mockClear();
   mockCheckDocker.mockClear();
-  mockCheckDocker.mockImplementation(async () => true);
+  mockCheckDocker.mockImplementation(async () => DOCKER_AVAILABLE);
   mockSyncAllEnvironmentsWithDocker.mockClear();
   mockSyncAllEnvironmentsWithDocker.mockImplementation(async () => []);
   mockCheckClaudeCli.mockClear();
@@ -601,16 +608,8 @@ function resetAppMocks() {
   mockSetGitHubCliReminderDismissed.mockClear();
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
-  mockGetResourceRevisionManifest.mockClear();
-  mockGetResourceRevisionManifest.mockImplementation(async () => ({
-    generation: "a".repeat(32),
-    reset: false,
-    revisions: {},
-  }));
   mockGetScopedResourceRevisionManifest.mockReset();
-  mockGetScopedResourceRevisionManifest.mockImplementation(async () => {
-    throw new Error("Unknown backend command: get_scoped_resource_revision_manifest");
-  });
+  mockGetScopedResourceRevisionManifest.mockImplementation(async () => stableScopedManifest());
   mockGetScopedResourceSnapshots.mockReset();
   mockGetScopedResourceSnapshots.mockResolvedValue({ entries: [] });
   mockGetEnvironment.mockClear();
@@ -870,7 +869,7 @@ describe("App background processing mounts", () => {
     await waitFor(() => {
       expect(appEventCallbacks.has("resource-changed")).toBe(true);
       expect(appEventCallbacks.has("native-event-stream-connected")).toBe(true);
-      expect(mockGetResourceRevisionManifest).toHaveBeenCalledWith(undefined, {});
+      expect(mockGetScopedResourceRevisionManifest).toHaveBeenCalled();
       expect(mockStartBuildPipelinePersistence).not.toHaveBeenCalled();
     });
 
@@ -2102,9 +2101,9 @@ describe("App Docker availability", () => {
   test("retry rechecks Docker and syncs environments after Docker becomes available", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
     // Both confirmed startup probes are unavailable. Retry: Docker is now available.
-    mockCheckDocker.mockImplementationOnce(async () => false);
-    mockCheckDocker.mockImplementationOnce(async () => false);
-    mockCheckDocker.mockImplementationOnce(async () => true);
+    mockCheckDocker.mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE);
+    mockCheckDocker.mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE);
+    mockCheckDocker.mockImplementationOnce(async () => DOCKER_AVAILABLE);
     mockSyncAllEnvironmentsWithDocker.mockImplementation(async () => ["env-stale"]);
 
     resetStores({
@@ -2278,7 +2277,7 @@ describe("App Docker availability", () => {
         .mockImplementationOnce(async () => {
           throw new Error("docker socket unavailable");
         })
-        .mockImplementationOnce(async () => true);
+        .mockImplementationOnce(async () => DOCKER_AVAILABLE);
       resetStores({
         environments: [makeEnvironment("env-unknown", "project-1")],
         selectedProjectId: "project-1",
@@ -2343,8 +2342,8 @@ describe("App Docker availability", () => {
   test("keeps a failed retry non-blocking and lets the user dismiss the warning", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
     const logs = captureLogs();
-    mockCheckDocker.mockImplementationOnce(async () => false);
-    mockCheckDocker.mockImplementationOnce(async () => false);
+    mockCheckDocker.mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE);
+    mockCheckDocker.mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE);
     mockCheckDocker.mockImplementationOnce(async () => {
       throw new Error("retry failed");
     });
@@ -2385,8 +2384,8 @@ describe("App Docker availability", () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
     const logs = captureLogs();
     mockCheckDocker
-      .mockImplementationOnce(async () => false)
-      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
       .mockImplementationOnce(async () => {
         throw new Error("retry failed");
       });
@@ -2421,11 +2420,11 @@ describe("App Docker availability", () => {
       return () => undefined;
     });
     mockCheckDocker
-      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE)
       // Two failures, because one is not enough to declare an outage.
-      .mockImplementationOnce(async () => false)
-      .mockImplementationOnce(async () => false)
-      .mockImplementationOnce(async () => true);
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE);
     resetStores({
       environments: [makeEnvironment("env-visible", "project-1")],
       selectedProjectId: "project-1",
@@ -2486,10 +2485,10 @@ describe("App Docker availability", () => {
       return () => undefined;
     });
     mockCheckDocker
-      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE)
       // `docker info` timed out once under load; the confirming probe succeeds.
-      .mockImplementationOnce(async () => false)
-      .mockImplementationOnce(async () => true);
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE);
     resetStores({
       environments: [makeEnvironment("env-visible", "project-1")],
       selectedProjectId: "project-1",
@@ -2532,7 +2531,7 @@ describe("App Docker availability", () => {
       return () => undefined;
     });
     mockCheckDocker
-      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE)
       .mockImplementationOnce(async () => {
         throw new Error("poll failed");
       });
@@ -2573,8 +2572,8 @@ describe("App Docker availability", () => {
       return () => undefined;
     });
     mockCheckDocker
-      .mockImplementationOnce(async () => true)
-      .mockImplementationOnce(async () => false)
+      .mockImplementationOnce(async () => DOCKER_AVAILABLE)
+      .mockImplementationOnce(async () => DOCKER_DAEMON_UNAVAILABLE)
       .mockImplementationOnce(async () => {
         throw new Error("confirmation failed");
       });
@@ -2606,7 +2605,7 @@ describe("App Docker availability", () => {
 
   test("delays the confirming startup probe without extending the loading overlay", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     try {
@@ -2679,10 +2678,10 @@ describe("App Docker availability", () => {
 
   test("deduplicates Docker polls while an earlier probe is still in flight", async () => {
     const pollCallbacks: Array<() => void> = [];
-    let resolveDocker!: (available: boolean) => void;
+    let resolveDocker!: (availability: DockerAvailability) => void;
     mockCheckDocker.mockImplementationOnce(
       () =>
-        new Promise<boolean>((resolve) => {
+        new Promise<DockerAvailability>((resolve) => {
           resolveDocker = resolve;
         }),
     );
@@ -2706,7 +2705,7 @@ describe("App Docker availability", () => {
       expect(mockCheckDocker).toHaveBeenCalledTimes(1);
 
       await act(async () => {
-        resolveDocker(true);
+        resolveDocker(DOCKER_AVAILABLE);
         await Promise.resolve();
       });
       act(() => pollCallbacks[0]!());
@@ -2845,7 +2844,7 @@ describe("App startup checks and global events", () => {
   });
 
   test("checks host CLIs and shows onboarding after continuing without Docker", async () => {
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
     mockCheckGithubCli.mockImplementation(async () => false);
@@ -2864,7 +2863,7 @@ describe("App startup checks and global events", () => {
   });
 
   test("shows the host GitHub CLI warning after continuing without Docker", async () => {
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     mockCheckGithubCli.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
@@ -2876,7 +2875,7 @@ describe("App startup checks and global events", () => {
   });
 
   test("shows the Claude login warning after continuing without Docker", async () => {
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     mockCheckClaudeConfig.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
@@ -3047,7 +3046,8 @@ describe("App startup checks and global events", () => {
     ["claude", "Claude Code Is Not Logged In"],
     ["github", "GitHub CLI Not Found"],
   ])("wires focus return to the %s startup notice", async (notice, title) => {
-    if (notice === "docker") mockCheckDocker.mockImplementation(async () => false);
+    if (notice === "docker")
+      mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     if (notice === "ai") {
       mockCheckClaudeCli.mockImplementation(async () => false);
       mockGetAvailableAiCli.mockImplementation(async () => null);
@@ -3513,7 +3513,7 @@ describe("App terminal overlay actions", () => {
   });
 
   test("blocks container start and create-script actions while Docker is unavailable", async () => {
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     resetStores({
       environments: [makeEnvironment("env-visible", "project-1")],
       selectedProjectId: "project-1",
@@ -3538,7 +3538,7 @@ describe("App terminal overlay actions", () => {
   });
 
   test("still starts a local environment while Docker is unavailable", async () => {
-    mockCheckDocker.mockImplementation(async () => false);
+    mockCheckDocker.mockImplementation(async () => DOCKER_DAEMON_UNAVAILABLE);
     resetStores({
       environments: [
         {

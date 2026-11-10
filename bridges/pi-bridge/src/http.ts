@@ -125,7 +125,6 @@ import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./tra
 import {
   applyComposerPatch,
   applyComposerToSession,
-  closeSession,
   createSession,
   ensureSession,
   forkSession,
@@ -137,7 +136,6 @@ import {
   resolvePiExecutionPolicy,
   defaultModelIds,
   listResumableSessions,
-  markSessionClosed,
   navigateSessionHistory,
   parseComposerPatch,
   piReadiness,
@@ -151,7 +149,6 @@ import {
 import {
   cancelRequestedFor,
   claimPromptTurn,
-  clientSessionKeys,
   isObject,
   nonBlank,
   piRunId,
@@ -203,7 +200,7 @@ class CancelledBeforeSendError extends Error {
 }
 
 /**
- * Refuse new work on a session whose close (or DELETE) has begun.
+ * Refuse new work on a session whose close has begun.
  *
  * A closing session stays registered until its removal is published, so a
  * retried close can reach it. Admitting a prompt meanwhile would either run a
@@ -226,16 +223,16 @@ interface PromptAdmission {
 /** Sessions a global refresh reloads at once. */
 const GLOBAL_REFRESH_CONCURRENCY = 4;
 
-const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
+const DEFAULT_CLOSE_CANCEL_TIMEOUT_MS = 5_000;
 /** How long `/cancel` waits for an abort to land before answering "pending". */
 const DEFAULT_CANCEL_ACK_TIMEOUT_MS = 5_000;
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
-let deleteCancelTimeoutMs = DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+let closeCancelTimeoutMs = DEFAULT_CLOSE_CANCEL_TIMEOUT_MS;
 let cancelAckTimeoutMs = DEFAULT_CANCEL_ACK_TIMEOUT_MS;
 
-/** Shorten the best-effort DELETE cancellation budget in deterministic tests. */
-export function setDeleteCancelTimeoutForTests(timeoutMs?: number): void {
-  deleteCancelTimeoutMs = timeoutMs ?? DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+/** Shorten the close cancellation budget in deterministic tests. */
+export function setCloseCancelTimeoutForTests(timeoutMs?: number): void {
+  closeCancelTimeoutMs = timeoutMs ?? DEFAULT_CLOSE_CANCEL_TIMEOUT_MS;
 }
 
 /** Shorten how long `/cancel` waits for a hanging abort in deterministic tests. */
@@ -613,7 +610,7 @@ async function routeSession(
   // Liveness: only a person's action (a write route) refreshes the idle
   // clock. Reads never do — the backend's two-second sweep, an open tab's
   // live updates and its 30 s discovery renewals would otherwise keep every
-  // session attached for as long as a tab shows it (todo 7540). Every
+  // session attached for as long as a tab shows it (#2062). Every
   // request is counted by route for the runtime-health body.
   observeSessionRequest(state, { method: request.method, action, subject, detail });
 
@@ -646,13 +643,10 @@ async function routeSession(
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
   }
-  if (!action && request.method === "DELETE") {
-    return await handleDelete(response, state);
-  }
   if (action === "close" && !subject && request.method === "POST") {
-    // Ordinary tab close. Pi's JSONL conversation is kept, exactly as DELETE
-    // keeps it; close additionally refuses to confirm an unproven stop.
-    const outcome = await closeSessionRetaining(state, deleteCancelTimeoutMs);
+    // Ordinary tab close. Pi's JSONL conversation is kept, and close refuses to
+    // confirm an unproven stop. The bridge serves no DELETE.
+    const outcome = await closeSessionRetaining(state, closeCancelTimeoutMs);
     return outcome === "closed"
       ? json(response, 200, { closed: true, retained: true })
       : json(response, 503, {
@@ -709,7 +703,7 @@ async function routeSession(
       mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       ...(mcpConfig ? { mcpConfig } : {}),
       // Which routes reached this session and which kept it attached
-      // (todo 7540). Route labels and counts only.
+      // (#2062). Route labels and counts only.
       liveness: publicLiveness(state),
     });
   }
@@ -850,52 +844,6 @@ async function routeSession(
     return await handlePrompt(request, response, state, clientSignal);
   }
   return json(response, 404, { error: "Not found" });
-}
-
-/**
- * Close one bridge session, which is what a closed tab means.
- *
- * The backend issues this for a torn-down `pi-native` tab and reads a 404 as
- * "already gone", so a bridge without the route leaked every session it ever
- * served — a bounded-but-large transcript retained for the life of the
- * process and rewritten into `state.json` on every persist.
- *
- * Deliberately narrower than it looks: Pi's own JSONL session file is *not*
- * removed. The conversation lives there rather than here, so deleting it would
- * destroy user history that a resume is still entitled to reach. This releases
- * the SDK session, denies anything parked, and drops the bridge's rendered
- * copy.
- */
-async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
-  // Closed before the first await, exactly as `/close` does: no prompt is
-  // admitted from here on, and one still preparing settles as cancelled at
-  // its next boundary instead of reaching Pi for a session that is going away.
-  markSessionClosed(state);
-  // Cancelling first means a turn in flight stops writing into a transcript
-  // nothing will read, rather than running to completion against a detached
-  // session. A prompt in Pi's preflight has its auto-compaction aborted now
-  // and its run aborted on acceptance.
-  const { cancel } = requestTurnCancellation(
-    state,
-    "The session was closed before this request was answered.",
-  );
-  try {
-    if (cancel) {
-      await withTimeout(
-        cancel,
-        deleteCancelTimeoutMs,
-        "Pi cancellation timed out while deleting the session",
-      );
-    }
-  } catch {
-    // Best-effort: a cancel handle that throws must not strand the session in
-    // the map, which is the leak this route exists to close.
-  }
-  await closeSession(state);
-  sessions.delete(state.id);
-  if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
-  schedulePersist();
-  return json(response, 200, { deleted: true });
 }
 
 async function handleConfig(
@@ -1685,7 +1633,7 @@ async function handleAdmittedPrompt(
     // `session.prompt` is synchronous, so a cancel cannot slip in between.
     stopIfCancelled();
   } catch (error) {
-    // A close or DELETE that landed during preparation settles the prompt the
+    // A close that landed during preparation settles the prompt the
     // same way whichever boundary noticed it — including a cold attach that
     // refused to publish into the closed session — so both routes give the
     // prompt one answer: cancelled before send, never a 500.

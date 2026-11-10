@@ -19,7 +19,6 @@ for (const oldPermission of [false, true]) {
   for (const change of [
     "set_github_token",
     "update_global_config",
-    "save_config",
     "propagate_github_token_to_containers",
   ]) {
     test(`${change} refreshes ${oldPermission ? "allowed to denied" : "denied to allowed"} permissions, including an old lookup`, async () => {
@@ -99,14 +98,7 @@ for (const oldPermission of [false, true]) {
             ? { token: "test-new-credential" }
             : change === "update_global_config"
               ? { global: { ...config.global, useHostGitHubCredentials: true } }
-              : change === "save_config"
-                ? {
-                    config: {
-                      ...config,
-                      global: { ...config.global, useHostGitHubCredentials: true },
-                    },
-                  }
-                : {};
+              : {};
         await createCommandRegistry().get(change)!(args, context);
         currentPermission = !oldPermission;
         expect(await detect()).toMatchObject({ viewerCanMerge: !oldPermission });

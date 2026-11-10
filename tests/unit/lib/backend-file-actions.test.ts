@@ -8,7 +8,6 @@ import {
   getEnvironmentDiffStats,
   moveContainerFile,
   moveLocalFile,
-  refreshEnvironmentDiffStats,
   renameContainerFile,
   renameLocalFile,
   revertContainerFile,
@@ -108,7 +107,7 @@ describe("file action backend wrappers", () => {
     });
   });
 
-  test("uses the exact diff-stat snapshot and refresh command contracts", async () => {
+  test("uses the exact diff-stat snapshot command contract", async () => {
     const snapshot = {
       entries: [
         {
@@ -119,14 +118,10 @@ describe("file action backend wrappers", () => {
         },
       ],
     };
-    invokeMock.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(undefined);
+    invokeMock.mockResolvedValueOnce(snapshot);
 
     await expect(getEnvironmentDiffStats()).resolves.toEqual(snapshot);
-    await expect(refreshEnvironmentDiffStats("env-local")).resolves.toBeUndefined();
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "get_environment_diff_stats");
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "refresh_environment_diff_stats", {
-      environmentId: "env-local",
-    });
   });
 });

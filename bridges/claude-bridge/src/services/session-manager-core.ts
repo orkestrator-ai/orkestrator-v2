@@ -111,11 +111,6 @@ export const IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * and bound the one final await when the endpoint stops responding.
  */
 export const STRUCTURED_USAGE_REQUEST_TIMEOUT_MS = 1_000;
-/**
- * The session-less plan probe spawns a whole CLI before it can answer, and no
- * turn is waiting on it, so it gets a longer bound than the in-turn refresh.
- */
-export const PLAN_USAGE_PROBE_TIMEOUT_MS = 10_000;
 
 export class StructuredUsageRequestTimeoutError extends Error {
   constructor(timeoutMs = STRUCTURED_USAGE_REQUEST_TIMEOUT_MS) {
@@ -1477,7 +1472,6 @@ export async function persistedSessionExistsOnDisk(sdkSessionId: string): Promis
   if (memoized !== undefined && memoized > Date.now()) return true;
   try {
     const sdk = await claudeSdk();
-    if (typeof sdk.getSessionInfo !== "function") return true;
     const info = await sdk.getSessionInfo(sdkSessionId, {
       dir: currentWorkingDirectory(),
     });
@@ -1516,16 +1510,10 @@ export function currentWorkingDirectory(): string {
   return process.env.CWD || process.cwd();
 }
 
-/**
- * Rename the session on disk when the installed SDK can.
- *
- * Feature-detected rather than assumed: an older SDK simply has no rename, and
- * a title that only ever lived in memory is not worth failing an operation over.
- */
+/** Rename the session on disk. */
 export async function persistSessionTitle(session: SessionState, title: string): Promise<void> {
   if (!session.sdkSessionId) return;
   const sdk = await claudeSdk();
-  if (typeof sdk.renameSession !== "function") return;
   await sdk.renameSession(session.sdkSessionId, title, {
     dir: currentWorkingDirectory(),
   });

@@ -23,7 +23,7 @@ import {
 import { authToken } from "./config.js";
 import { route } from "./http.js";
 import { useCursorModelsForTests } from "./models.js";
-import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
+import { resetPlanAccountWindowsForTests } from "./plan-usage.js";
 import { useCursorSdkRuntimeForTests } from "./sdk-runtime.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake, fakeAgent, type FakeAgent } from "./testing/fake-agent.js";
@@ -1316,9 +1316,9 @@ describe("cancellation", () => {
 
 describe("closing a session", () => {
   /**
-   * Backend tab teardown DELETEs and treats a 404 as "already gone", so a
-   * bridge that did not answer this leaked a session, its transcript and its
-   * attached agent on every closed tab — silently, and without bound.
+   * Backend tab teardown closes every tab's session, so a bridge that did not
+   * answer this leaked a session, its transcript and its attached agent on
+   * every closed tab — silently, and without bound.
    */
   test("releases the agent and forgets the session", async () => {
     const state = await createSession({ clientSessionKey: "tab-1" });
@@ -1328,9 +1328,9 @@ describe("closing a session", () => {
       disposed += 1;
     };
 
-    const response = await call(`/session/${state.id}`, { method: "DELETE" });
+    const response = await call(`/session/${state.id}/close`, { method: "POST" });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ deleted: true });
+    expect(await response.json()).toEqual({ closed: true, retained: true });
     expect(disposed).toBe(1);
     expect(sessions.has(state.id)).toBe(false);
     expect(clientSessionKeys.has("tab-1")).toBe(false);
@@ -1343,10 +1343,18 @@ describe("closing a session", () => {
     });
   });
 
-  test("deleting the same session twice is not an error the caller must handle", async () => {
+  test("closing the same session twice is not an error the caller must handle", async () => {
     const state = await createSession();
-    expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(200);
-    expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(404);
+    expect((await call(`/session/${state.id}/close`, { method: "POST" })).status).toBe(200);
+    const again = await call(`/session/${state.id}/close`, { method: "POST" });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ closed: true, missing: true });
+  });
+
+  test("serves no DELETE: a live session answers 405", async () => {
+    const state = await createSession();
+    expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(405);
+    expect(sessions.has(state.id)).toBe(true);
   });
 
   /**
@@ -1406,37 +1414,6 @@ describe("response encoding", () => {
       headers: { "accept-encoding": "gzip;q=0, *" },
     });
     expect(response.headers.get("content-encoding")).toBeNull();
-  });
-});
-
-describe("global usage", () => {
-  beforeEach(() => {
-    resetPlanAccountWindowsForTests();
-  });
-
-  test("answers null rather than an empty plan when no credential resolves", async () => {
-    const payload = (await (await call("/global/usage")).json()) as { account: unknown };
-    // The backend reads `null` as unavailable; `[]` would render as "no metered
-    // plan limits" for an account that was never read.
-    expect(payload.account).toBeNull();
-  });
-
-  test("returns an authoritative empty list when the account genuinely reports none", async () => {
-    seedPlanAccountWindowsForTests([]);
-    const payload = (await (await call("/global/usage")).json()) as { account: unknown };
-    expect(payload.account).toEqual([]);
-  });
-
-  test("returns the cached plan windows", async () => {
-    seedPlanAccountWindowsForTests([
-      { window: "billing_cycle", label: "Cursor quota", usedPercent: 42 },
-    ]);
-    const payload = (await (await call("/global/usage")).json()) as {
-      account: Array<Record<string, unknown>>;
-    };
-    expect(payload.account).toEqual([
-      { window: "billing_cycle", label: "Cursor quota", usedPercent: 42 },
-    ]);
   });
 });
 

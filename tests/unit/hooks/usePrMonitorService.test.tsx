@@ -17,9 +17,21 @@ const mockGetPrMonitorState = mock<() => Promise<PrMonitorSnapshot>>(() =>
   Promise.resolve({ entries: [] }),
 );
 
+/**
+ * Every backend in the support window stamps its PR monitor snapshots and
+ * events. Like the real service, a snapshot carries the revision current when
+ * it was requested, and each announced event advances it.
+ */
+const GENERATION = "a".repeat(32);
+let revision = 0;
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  getPrMonitorState: mockGetPrMonitorState,
+  getPrMonitorState: async () => {
+    const stamp = revision;
+    const snapshot = await mockGetPrMonitorState();
+    return { ...snapshot, generation: GENERATION, revision: stamp };
+  },
 }));
 
 /**
@@ -58,7 +70,11 @@ const { environmentStore } = await import("../../../apps/web/src/stores/environm
 const { usePrMonitorService } = await import("../../../apps/web/src/hooks/usePrMonitorService");
 
 function emitEvent(event: string, payload: unknown) {
-  for (const handler of listeners.get(event) ?? []) handler(payload);
+  const stamped =
+    event === PR_MONITOR_CHANGED_EVENT && typeof payload === "object" && payload !== null
+      ? { ...payload, generation: GENERATION, revision: ++revision }
+      : payload;
+  for (const handler of listeners.get(event) ?? []) handler(stamped);
 }
 
 function listenerCount(event: string): number {
@@ -133,6 +149,7 @@ async function flush() {
 describe("usePrMonitorService", () => {
   beforeEach(() => {
     listeners.clear();
+    revision = 0;
     mockListen.mockClear();
     mockListen.mockImplementation(defaultListen);
     mockGetPrMonitorState.mockClear();

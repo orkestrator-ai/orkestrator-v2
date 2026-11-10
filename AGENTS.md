@@ -35,8 +35,6 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
 | Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
-| Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
-| Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
 
 ## Show every visual change as an image in the transcript
 
@@ -600,10 +598,11 @@ session surface. When touching the session catalogue
   the rollout keeps (a task report, an interruption marker) must be produced
   by both the live loop and `normalizePersistedSessionMessages`, or a reload
   will disagree with the live tab.
-- **`DELETE /session/:id` is destructive.** It calls the SDK's
-  `deleteSession`, which removes the `{sessionId}.jsonl` rollout. Tab close
-  uses `POST /session/:id/close` (`closeSessionRetainingHistory`), which stops
-  the query and keeps the rollout; nothing may fall back from close to DELETE.
+- **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`;
+  an older bridge's called the SDK's `deleteSession`, which removes the
+  `{sessionId}.jsonl` rollout. Tab close uses `POST /session/:id/close`
+  (`closeSessionRetainingHistory`), which stops the query and keeps the
+  rollout; nothing may fall back from close to DELETE.
   Close answers 503 pending, keeping the session registered and fenced, when
   it cannot prove the query stopped (`Query.close()` threw or did not settle,
   or a racing dispatch claim did not settle).
@@ -832,7 +831,7 @@ When touching the Pi bridge:
   until Pi settles the prompt — a late acceptance is aborted and observed — so
   every status route reports running while something can still reach Pi.
   Config and compaction take no claim, so a cancel during them cannot stop a
-  later prompt. Close and DELETE mark the session closed before their first
+  later prompt. Close marks the session closed before its first
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
@@ -906,8 +905,8 @@ When touching the SDK bridge:
   workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
   at module load and again from `start()`), which is why `index.ts` exports
   `./config.js` before anything that loads `@cursor/sdk`.
-- Permanent close (`DELETE /session/:id` and `POST /session/:id/close`, which
-  are the same non-destructive operation here) lives in `src/session-close.ts`.
+- Permanent close (`POST /session/:id/close`, non-destructive; the bridge
+  serves no DELETE) lives in `src/session-close.ts`.
   It sets `state.closed` before its first await, and every admission path —
   prompt, attach, config, steer, same-key create, resume — refuses a closed
   session. A late attach is disposed instead of installed, and a late
@@ -990,7 +989,8 @@ When touching any of them:
   periodic reconcile sweep retries. Errors are fixed, content-free strings.
 - **A close never falls back to DELETE.** On 404/405 the teardown stays pending
   with a `bridge-upgrade-required` failure the renderer shows as a restart
-  notice, on every platform. Claude's DELETE deletes the rollout.
+  notice, on every platform. No bridge serves `DELETE /session/:id` any more;
+  an older Claude bridge's DELETE deleted the rollout. Do not add one back.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.

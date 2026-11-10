@@ -281,7 +281,7 @@ function fakeDesktopHost(snapshot: () => unknown) {
     invoke: mock(() => Promise.resolve(null)),
     listen: () => () => {},
     node: () => nodeApi,
-    nodes: { open: async () => null, release: async () => {}, gateway },
+    nodes: { release: async () => {}, gateway },
   } as unknown as Api;
   return {
     api,
@@ -391,7 +391,7 @@ describe("the command NodeClient's hello", () => {
         listeners.set(event, callback);
         return () => listeners.delete(event);
       },
-      nodes: { open: async () => null, release: async () => {}, gateway },
+      nodes: { release: async () => {}, gateway },
     } as unknown as Api;
     const client = track(createWindowOrkestratorClient(COMMAND, () => api));
     await settle();
@@ -411,7 +411,7 @@ describe("the command NodeClient's hello", () => {
     const api = {
       invoke: mock(() => Promise.resolve(null)),
       listen: () => () => {},
-      nodes: { open: async () => null, release: async () => {}, gateway },
+      nodes: { release: async () => {}, gateway },
     } as unknown as Api;
     const client = track(
       createWindowOrkestratorClient("provisional:command-node" as BackendId, () => api),

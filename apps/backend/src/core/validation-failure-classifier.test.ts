@@ -238,7 +238,7 @@ describe("bun output", () => {
 });
 
 /**
- * To-do 4520 changed only `apps/web/src/hooks/` and documents, yet 17 backend
+ * #1867 changed only `apps/web/src/hooks/` and documents, yet 17 backend
  * and CLI failures were triaged `related`: each test's import graph reached
  * `packages/protocol/src/web-annotations.ts`, whose doc comment names
  * `apps/web` as an example.
@@ -760,7 +760,7 @@ describe("import distance", () => {
   });
 
   test("a widely shared module reached through layers no longer makes a backend test related", () => {
-    // The shape of to-do 4520's owners, had that branch changed web-annotations.ts.
+    // The shape of #1867's owners, had that branch changed web-annotations.ts.
     const root = fixture({
       "packages/protocol/package.json": JSON.stringify({ name: "@acme/protocol" }),
       "packages/protocol/src/web-annotations.ts": 'export const SOURCE_HINT_ROOT_META = "root";\n',
@@ -986,7 +986,7 @@ describe("conservative dependency attribution", () => {
     ].join("\n");
     const unknownTest =
       "a sweep's lock > a capture's write finishes while a long sweep is still walking";
-    // The last failure names no file this tree has, as in to-do 4520's
+    // The last failure names no file this tree has, as in #1867's
     // `known-flaky`, `test-file-unknown` row.
     const output = (root: string) =>
       bunAggregate(root, 3).replace(

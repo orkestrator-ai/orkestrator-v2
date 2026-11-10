@@ -30,4 +30,4 @@ Analysed 2026-11-10 against `main` at `9a64641c4`, with 7310's change applied.
 ## Related
 
 - [Change tracking: restore](../../architecture/change-tracking.md#restore): where the window was measured.
-- [7548-restore-apply-throughput.md](7548-restore-apply-throughput.md): the other follow-up from the same qualification.
+- [7550-restore-apply-throughput.md](7550-restore-apply-throughput.md): the other follow-up from the same qualification.

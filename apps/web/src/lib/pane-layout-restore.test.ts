@@ -183,6 +183,7 @@ describe("reconcilePersistedLayout", () => {
               pipelineId: "pipeline-1",
               view: "notes",
               completionPublished: true,
+              completionRevision: 8,
             },
           },
           {
@@ -201,6 +202,7 @@ describe("reconcilePersistedLayout", () => {
         pipelineId: "pipeline-1",
         view: "notes",
         completionPublished: true,
+        completionRevision: 8,
       },
       { environmentId: "env-1", pipelineId: "pipeline-1" },
     ]);

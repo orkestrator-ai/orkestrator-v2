@@ -883,6 +883,7 @@ export class StorageService {
   ensureBuildPipelineNotesTab(input: {
     pipelineId: string;
     environmentId: string;
+    completionRevision?: number;
   }): Promise<PersistedPaneLayout | null> {
     return this.repos.sessions.ensureBuildPipelineNotesTab(input);
   }

@@ -42,7 +42,7 @@ The exact recorded default-suite command was rerun after the Notes repair.
 Its web group passed (14,330 passed, 0 failed, 10 skipped; 984 files, 485.34 s),
 clearing this round's render-count failure. The aggregate still exited 1 because
 of the separate voice-chat fixture readiness failure recorded in case
-[9915](9915-voice-chat-reply-start-readiness.md). This pass does not establish a
+[9927](9927-voice-chat-reply-start-readiness.md). This pass does not establish a
 fix for case 6622's intermittent cause; the case remains open.
 
 ## Resolution of the recurrence (2026-11-10)

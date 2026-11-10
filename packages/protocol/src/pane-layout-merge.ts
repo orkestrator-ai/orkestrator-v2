@@ -90,7 +90,17 @@ export function preserveNotesCompletion<T extends object>(tab: T, previous?: obj
     data.pipelineId === priorData.pipelineId &&
     priorData.completionPublished === true
   ) {
-    return { ...tab, keyInformationTabData: { ...data, completionPublished: true } };
+    const revisions = [data.completionRevision, priorData.completionRevision].filter(
+      (value): value is number => Number.isSafeInteger(value) && (value as number) >= 0,
+    );
+    return {
+      ...tab,
+      keyInformationTabData: {
+        ...data,
+        completionPublished: true,
+        ...(revisions.length ? { completionRevision: Math.max(...revisions) } : {}),
+      },
+    };
   }
   return tab;
 }

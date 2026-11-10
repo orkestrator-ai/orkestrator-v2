@@ -27,6 +27,9 @@ test("a mermaid fence renders as a diagram with its source editable on demand", 
   await page.getByRole("button", { name: "Edit source" }).click();
   await expect(source).toHaveAttribute("data-state", "open");
   await expect(source).toBeVisible();
+  // Opening source updates the node view before Tiptap's scheduled DOM focus.
+  // Typing before that focus lands drops the beginning of the input.
+  await expect(editor).toBeFocused();
   await page.keyboard.type("\n  B --> C[GraphRun]");
   await expect(source).toContainText("B --> C[GraphRun]");
   await page.screenshot({ path: path.join(screenshots, "editing.png") });
@@ -46,11 +49,29 @@ test("arrow keys enter and leave a collapsed diagram fence without losing source
   const original = await source.textContent();
   await editor.getByText("Text after the diagram.").click();
   await editor.evaluate((node) => {
-    node.focus();
-    const paragraph = node.querySelector("p:last-child")!;
-    const selection = window.getSelection()!;
-    selection.collapse(paragraph.firstChild, 0);
+    // Set the editor's selection as well as the DOM selection. A bare
+    // selection.collapse races ProseMirror's selectionchange observer.
+    const instance = (
+      node as HTMLElement & {
+        editor: {
+          state: { doc: { content: { size: number }; lastChild: { nodeSize: number } } };
+          commands: { focus: (position: number) => boolean };
+        };
+      }
+    ).editor;
+    const paragraph = instance.state.doc.lastChild!;
+    instance.commands.focus(instance.state.doc.content.size - paragraph.nodeSize + 1);
   });
+  await expect(editor).toBeFocused();
+  await expect
+    .poll(() =>
+      editor.evaluate((node) => {
+        const paragraph = node.querySelector("p:last-child")!;
+        const selection = window.getSelection();
+        return selection?.anchorNode === paragraph.firstChild && selection.anchorOffset === 0;
+      }),
+    )
+    .toBe(true);
   await page.keyboard.press("ArrowLeft");
   await expect(source).toHaveAttribute("data-state", "open");
   await page.keyboard.press("ArrowRight");

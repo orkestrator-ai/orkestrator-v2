@@ -525,6 +525,7 @@ export class BuildPipelineRecovery {
     delete pipeline.stallWarning;
     this.ctx.provisioningPrompts.delete(pipeline.id);
     this.ctx.lastProviderAgent.delete(pipeline.id);
+    pipeline.completionRevision = pipeline.backendRevision + 1;
     await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.openCompletionNotes(pipeline);
     await this.reconcileTerminalState(pipeline);
@@ -542,6 +543,7 @@ export class BuildPipelineRecovery {
       await this.ctx.storage.ensureBuildPipelineNotesTab({
         pipelineId: pipeline.id,
         environmentId: pipeline.environmentId,
+        completionRevision: pipeline.completionRevision,
       });
     } catch (error) {
       log.warn("completion-notes.publish-failed", {

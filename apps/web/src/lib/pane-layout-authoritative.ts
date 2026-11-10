@@ -77,7 +77,10 @@ interface PaneActivationSlot {
   // backend does not. Keep only the latest request per environment, so a later
   // foreground action supersedes an earlier one.
   readonly pendingTabActivations: Map<string, string>;
-  readonly completionNotesHandoffs: Map<string, string>;
+  readonly completionNotesHandoffs: Map<
+    string,
+    { environmentId: string; completionRevision?: number }
+  >;
   readonly startupAgentActivationCommits: WeakMap<EnvironmentPaneState, string>;
   readonly buildPipelineActivationCommits: WeakMap<
     EnvironmentPaneState,
@@ -97,10 +100,18 @@ export function markCompletionNotesHandled(
   environmentId: string,
   pipelineId: string,
   scope: NodeScope,
+  completionRevision?: number,
 ): void {
   const handled = paneActivations(scope).completionNotesHandoffs;
+  const previous = handled.get(pipelineId);
+  if (
+    previous?.environmentId === environmentId &&
+    previous.completionRevision !== undefined &&
+    (completionRevision === undefined || previous.completionRevision >= completionRevision)
+  )
+    return;
   handled.delete(pipelineId);
-  handled.set(pipelineId, environmentId);
+  handled.set(pipelineId, { environmentId, completionRevision });
   boundActivationMap(handled);
 }
 
@@ -112,8 +123,16 @@ export function hasCompletionNotesHandled(
   environmentId: string,
   pipelineId: string,
   scope: NodeScope,
+  completionRevision?: number,
 ): boolean {
-  return paneActivations(scope).completionNotesHandoffs.get(pipelineId) === environmentId;
+  const handled = paneActivations(scope).completionNotesHandoffs.get(pipelineId);
+  return (
+    handled?.environmentId === environmentId &&
+    (completionRevision === undefined
+      ? handled.completionRevision === undefined
+      : handled.completionRevision !== undefined &&
+        handled.completionRevision >= completionRevision)
+  );
 }
 
 function environmentById(scope: NodeScope, environmentId: string) {
@@ -206,14 +225,20 @@ function applyCompletionNotesArrival(
     return selected;
   }
   const data = tab.keyInformationTabData;
-  if (hasCompletionNotesHandled(data.environmentId, data.pipelineId, scope)) {
+  if (
+    hasCompletionNotesHandled(data.environmentId, data.pipelineId, scope, data.completionRevision)
+  ) {
     return selected;
   }
   if (
     findLeaf(current.root, (candidate) =>
       candidate.tabs.some(
         (previous) =>
-          previous.id === tab.id && previous.keyInformationTabData?.completionPublished === true,
+          previous.id === tab.id &&
+          previous.keyInformationTabData?.completionPublished === true &&
+          (data.completionRevision === undefined
+            ? previous.keyInformationTabData.completionRevision === undefined
+            : (previous.keyInformationTabData.completionRevision ?? -1) >= data.completionRevision),
       ),
     )
   ) {

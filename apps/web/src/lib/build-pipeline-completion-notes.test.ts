@@ -8,6 +8,8 @@ import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode, TabInfo } from "@/types/paneLayout";
 import { startBuildPipelineCompletionNotes } from "./build-pipeline-completion-notes";
 import { appCommandStore } from "@/test/app-command-store";
+import { clearCompletionNotesHandled } from "./pane-layout-authoritative";
+import { appCommandScope } from "./node-scope-slots";
 import { mockToastError } from "../../../../tests/mocks/sonner";
 
 const ENVIRONMENT_ID = "env-1";
@@ -59,6 +61,7 @@ function paneOf(tabId: string) {
 let stop: (() => void) | undefined;
 
 beforeEach(() => {
+  clearCompletionNotesHandled("pipeline-1", appCommandScope());
   mockToastError.mockClear();
   appCommandStore(buildPipelineStore).setState({
     pipelines: new Map(),
@@ -138,6 +141,20 @@ describe("startBuildPipelineCompletionNotes", () => {
       "pane-build",
     );
     expect(notesTabs()).toHaveLength(1);
+  });
+
+  test("a completed snapshot with a new completion revision opens Notes once after a missed rerun", () => {
+    install(buildPipelineFixture({ phase: "complete", backendRevision: 3, completionRevision: 2 }));
+    install(
+      buildPipelineFixture({ phase: "complete", backendRevision: 10, completionRevision: 8 }),
+    );
+    expect(notesTabs()).toHaveLength(1);
+    expect(paneOf(notesTabs()[0]!.id).activeTabId).toBe(notesTabs()[0]!.id);
+    appCommandStore(paneLayoutStore).getState().setActiveTab("pane-build", "build", ENVIRONMENT_ID);
+    install(
+      buildPipelineFixture({ phase: "complete", backendRevision: 11, completionRevision: 8 }),
+    );
+    expect(paneOf("build").activeTabId).toBe("build");
   });
 
   test("waits for the environment's layout before opening the notes", () => {

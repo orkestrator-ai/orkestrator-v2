@@ -76,6 +76,8 @@ test("continues through the normal Review and PR path without a second Build or 
     for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
     const finished = await pipeline(storage, started.id);
     expect(finished.phase).toBe("complete");
+    expect(finished.completionRevision).toBeGreaterThan(0);
+    expect(finished.completionRevision!).toBeLessThanOrEqual(finished.backendRevision);
     expect(finished.sessions.filter((session) => session.phase === "build")).toHaveLength(1);
     expect(finished.sessions[0]?.sdkSessionId).toBe("original-session");
     expect(finished.sessions.some((session) => session.phase === "review")).toBe(true);
@@ -96,7 +98,12 @@ test("continues through the normal Review and PR path without a second Build or 
     expect(leaf.tabs.map((tab) => tab.type)).toEqual(["claude-build", "key-information"]);
     expect(leaf.tabs[1]).toMatchObject({
       id: notesId,
-      keyInformationTabData: { environmentId: "env-1", pipelineId: started.id, view: "notes" },
+      keyInformationTabData: {
+        environmentId: "env-1",
+        pipelineId: started.id,
+        view: "notes",
+        completionRevision: (await pipeline(storage, started.id)).completionRevision,
+      },
     });
   });
 });
@@ -136,6 +143,7 @@ for (const source of ["kanban", "github"] as const) {
         expect(publication).toHaveBeenCalledWith({
           pipelineId: started.id,
           environmentId: "env-1",
+          completionRevision: finished.completionRevision,
         });
         expect(finished.phase).toBe("complete");
         expect(finished.error).toBeUndefined();
@@ -242,6 +250,8 @@ test("restarting Build opens a normal attempt and retains the original transcrip
   await withService(async (service, storage, provider) => {
     const started = await service.startFromCompletedBuild(startInput(), completedBuild());
     for (let pass = 0; pass < 12; pass += 1) await service.advanceNow(started.id);
+    const firstCompletion = (await pipeline(storage, started.id)).completionRevision!;
+    expect(firstCompletion).toBeGreaterThan(0);
     const restarted = await service.restartStep(started.id, "original-session");
     expect(restarted.phase).toBe("building");
     expect(restarted.sessions[0]).toMatchObject({
@@ -257,6 +267,16 @@ test("restarting Build opens a normal attempt and retains the original transcrip
     expect(transcript.status).toBe("found");
     if (transcript.status === "found") expect(transcript.messages).toHaveLength(1);
     expect(provider.sent.every((turn) => turn.sessionId !== "original-session")).toBe(true);
+    for (let pass = 0; pass < 18; pass += 1) await service.advanceNow(started.id);
+    const finished = await pipeline(storage, started.id);
+    expect(finished.phase).toBe("complete");
+    expect(finished.completionRevision!).toBeGreaterThan(firstCompletion);
+    const notes = (
+      (await storage.getPaneLayout("env-1"))!.root as {
+        tabs: Array<{ keyInformationTabData?: { completionRevision?: number } }>;
+      }
+    ).tabs.find((tab) => tab.keyInformationTabData);
+    expect(notes?.keyInformationTabData?.completionRevision).toBe(finished.completionRevision);
   });
 });
 

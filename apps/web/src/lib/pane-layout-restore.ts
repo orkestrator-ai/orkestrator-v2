@@ -394,6 +394,10 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         ...(value.keyInformationTabData.completionPublished === true
           ? { completionPublished: true as const }
           : {}),
+        ...(Number.isSafeInteger(value.keyInformationTabData.completionRevision) &&
+        (value.keyInformationTabData.completionRevision as number) >= 0
+          ? { completionRevision: value.keyInformationTabData.completionRevision as number }
+          : {}),
       },
     };
   }

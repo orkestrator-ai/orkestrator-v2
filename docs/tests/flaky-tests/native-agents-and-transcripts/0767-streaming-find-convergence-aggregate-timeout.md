@@ -1,7 +1,7 @@
 # Streaming transcript find convergence times out in the component aggregate
 
 - **ID:** 0767
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `scrollbar departure after find stays put when streaming reapplies highlights`, desktop Chromium, `e2e/StreamingTranscript.spec.ts:361`.
 - **Merge parents:** `37ecb753fa8da75ae546984af7c72ba5e166d503` and `a3111c7c67e3423b161b77156c070cd105c6a489`.
@@ -342,3 +342,26 @@ modified `NativeChatShell` compose dock. This inspection did not establish a
 causal link to the Notes handoff changes or a cause for convergence failure.
 The isolated pass confirms intermittence, not a green broad command or an
 environmental exemption. The browser result remains undetermined for verification.
+
+## Resolution — 2026-11-10
+
+**Reproduced: yes.** `browser-before-repairs`, selecting diagram editing/arrow
+and streaming-find departure with three repeats and three workers, failed
+the unchanged mobile convergence assertion. Totals were 13 passed, three
+skipped and two failed (the other failure was diagram typing), 18.4 s.
+
+**Test precondition and fix.** The departure case started find immediately
+after navigation, while the cold virtualizer could still be filling and
+measuring its initial tail. It now waits for the actual last history row to
+intersect the viewport and for the measured distance from bottom to be under
+two pixels before starting find. The case still requires find convergence
+and unchanged scroll position/write count after pointer departure and append.
+No controller budget, assertion, retry or test timeout was relaxed. This
+fixes the departure test's readiness; it does not claim that every cold-find
+operation on a contended machine converges.
+
+**Verification.** The same three-repeat selection passed the streaming cases
+after adding readiness. Both complete owners then passed three repeats with
+three workers through `test:logged --name diagram-and-streaming-fixed`
+(92.4 s). Original failure log: `orkestrator-test-run.JxxD2P/browser-before-repairs.log.gz`;
+retained browser evidence: `output/agent-testing/notes-repair-before/`.

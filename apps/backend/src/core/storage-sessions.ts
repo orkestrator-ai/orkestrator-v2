@@ -677,6 +677,7 @@ export class SessionsRepository {
   async ensureBuildPipelineNotesTab(input: {
     pipelineId: string;
     environmentId: string;
+    completionRevision?: number;
   }): Promise<PersistedPaneLayout | null> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(input.environmentId);
@@ -730,6 +731,9 @@ export class SessionsRepository {
             pipelineId: input.pipelineId,
             view: "notes",
             completionPublished: true,
+            ...(input.completionRevision === undefined
+              ? {}
+              : { completionRevision: input.completionRevision }),
           },
         });
       }
@@ -737,6 +741,9 @@ export class SessionsRepository {
       // the focus handoff. Ordinary renderer openings carry no such marker.
       if (existingTab && isRecord(existingTab.keyInformationTabData)) {
         existingTab.keyInformationTabData.completionPublished = true;
+        if (input.completionRevision !== undefined) {
+          existingTab.keyInformationTabData.completionRevision = input.completionRevision;
+        }
       }
       target.activeTabId = tabId;
       if (

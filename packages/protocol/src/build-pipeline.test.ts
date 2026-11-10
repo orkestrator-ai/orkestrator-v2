@@ -192,6 +192,14 @@ describe("build pipeline protocol", () => {
     }
   });
 
+  test("completion identities remain optional for legacy snapshots and validate as revisions", () => {
+    expect(isBuildPipeline(snapshot())).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), phase: "complete", completionRevision: 1 })).toBe(true);
+    for (const completionRevision of [null, "1", -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(isBuildPipeline({ ...snapshot(), completionRevision })).toBe(false);
+    }
+  });
+
   test("accepts a backend-owned snapshot and exposes the current version", () => {
     expect(BUILD_PIPELINE_VERSION).toBe(2);
     expect(isBuildPipeline(snapshot())).toBe(true);

@@ -135,6 +135,45 @@ describe("mergePersistedPaneLayouts", () => {
     expect(tabs(mergePersistedPaneLayouts(base, input(leaf("pane", [])), base).root)).toEqual([]);
   });
 
+  test.each([false, true])(
+    "a stale Notes writer cannot regress the completion revision (reverse=%s)",
+    (reverse) => {
+      const base = input({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "notes",
+        tabs: [
+          {
+            id: "notes",
+            type: "key-information",
+            keyInformationTabData: {
+              environmentId: "env",
+              pipelineId: "pipeline",
+              view: "notes",
+              completionPublished: true,
+              completionRevision: 2,
+            },
+          },
+        ],
+      });
+      const published = structuredClone(base);
+      (
+        asLeaf(published.root).tabs[0]!.keyInformationTabData as Record<string, unknown>
+      ).completionRevision = 8;
+      const stale = structuredClone(base);
+      (
+        asLeaf(stale.root).tabs[0]!.keyInformationTabData as Record<string, unknown>
+      ).completionRevision = 1;
+      const merged = reverse
+        ? mergePersistedPaneLayouts(base, published, stale)
+        : mergePersistedPaneLayouts(base, stale, published);
+      expect(tabs(merged.root)[0]?.keyInformationTabData).toMatchObject({
+        completionPublished: true,
+        completionRevision: 8,
+      });
+    },
+  );
+
   test("keeps a browser navigation's URL and write identity atomic while merging panel edits", () => {
     const browser = (url: string, navigationRequestId?: string, open = false) =>
       input({

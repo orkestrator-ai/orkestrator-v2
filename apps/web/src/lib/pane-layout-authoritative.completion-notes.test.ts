@@ -261,6 +261,140 @@ describe("completion notes arriving in an Electron window", () => {
     },
   );
 
+  test.each([undefined, 2])(
+    "layout-first revision %s survives unrelated updates and closing Notes",
+    (revision) => {
+      const panes = appCommandStore(paneLayoutStore);
+      const pipelines = appCommandStore(buildPipelineStore);
+      pipelines
+        .getState()
+        .replacePipeline(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+      const stop = startBuildPipelineCompletionNotes();
+      try {
+        const publishedNotes = structuredClone(notesTab);
+        publishedNotes.keyInformationTabData!.completionRevision = revision;
+        const before = current(leaf("pane-build", [buildTab, chatTab], "chat"), "pane-build");
+        const after = persisted(
+          leaf("pane-build", [buildTab, chatTab, publishedNotes], NOTES_ID),
+          "pane-build",
+        );
+        const landed = reconcileAuthoritativePaneLayout("env-1", after, before)!;
+        panes.setState({
+          environments: new Map([["env-1", landed]]),
+          hydration: new Map([["env-1", "done"]]),
+        });
+        panes.getState().setActiveTab("pane-build", "chat", "env-1");
+        pipelines
+          .getState()
+          .replacePipeline(buildPipelineFixture({ id: "other", environmentId: "env-other" }));
+        expect(panes.getState().environments.get("env-1")!.root).toMatchObject({
+          activeTabId: "chat",
+        });
+        panes.getState().removeTab("pane-build", NOTES_ID, "env-1");
+        pipelines
+          .getState()
+          .replacePipeline(
+            buildPipelineFixture({ id: "other", environmentId: "env-other", backendRevision: 2 }),
+          );
+        pipelines.getState().replacePipeline(
+          buildPipelineFixture({
+            phase: "complete",
+            backendRevision: 2,
+            completionRevision: revision,
+          }),
+        );
+        expect(
+          panes
+            .getState()
+            .getAllTabs("env-1")
+            .some((tab) => tab.id === NOTES_ID),
+        ).toBe(false);
+        expect(panes.getState().environments.get("env-1")!.root).toMatchObject({
+          activeTabId: "chat",
+        });
+      } finally {
+        stop();
+      }
+    },
+  );
+
+  test.each(["layout-first", "pipeline-first"])(
+    "a missed rerun follows its new completion once (%s)",
+    (order) => {
+      const panes = appCommandStore(paneLayoutStore);
+      const pipelines = appCommandStore(buildPipelineStore);
+      const oldNotes = structuredClone(notesTab);
+      oldNotes.keyInformationTabData!.completionRevision = 2;
+      const before = current(
+        leaf("pane-build", [buildTab, chatTab, oldNotes], "chat"),
+        "pane-build",
+      );
+      panes.setState({
+        environments: new Map([["env-1", before]]),
+        hydration: new Map([["env-1", "done"]]),
+      });
+      pipelines
+        .getState()
+        .replacePipeline(
+          buildPipelineFixture({ phase: "complete", backendRevision: 3, completionRevision: 2 }),
+        );
+      const stop = startBuildPipelineCompletionNotes();
+      try {
+        const newNotes = structuredClone(oldNotes);
+        newNotes.keyInformationTabData!.completionRevision = 8;
+        const after = persisted(
+          leaf("pane-build", [buildTab, chatTab, newNotes], NOTES_ID),
+          "pane-build",
+        );
+        after.revision = 12;
+        const installLayout = () =>
+          panes
+            .getState()
+            .applyAuthoritativeLayout(
+              "env-1",
+              reconcileAuthoritativePaneLayout(
+                "env-1",
+                after,
+                panes.getState().environments.get("env-1")!,
+              )!,
+            );
+        const installPipeline = () =>
+          pipelines.getState().replacePipeline(
+            buildPipelineFixture({
+              phase: "complete",
+              backendRevision: 10,
+              completionRevision: 8,
+            }),
+          );
+        if (order === "layout-first") installLayout();
+        else installPipeline();
+        expect(panes.getState().environments.get("env-1")!.root).toMatchObject({
+          activeTabId: NOTES_ID,
+        });
+        panes.getState().setActiveTab("pane-build", "chat", "env-1");
+        if (order === "layout-first") installPipeline();
+        else installLayout();
+        installLayout();
+        pipelines
+          .getState()
+          .replacePipeline(
+            buildPipelineFixture({ phase: "complete", backendRevision: 11, completionRevision: 8 }),
+          );
+        expect(panes.getState().environments.get("env-1")!.root).toMatchObject({
+          activeTabId: "chat",
+        });
+        expect(
+          panes
+            .getState()
+            .getAllTabs("env-1")
+            .filter((tab) => tab.id === NOTES_ID),
+        ).toHaveLength(1);
+      } finally {
+        stop();
+      }
+    },
+  );
+
   test("a window that did not see the run finish follows the backend onto the new notes tab", () => {
     // The window was on the chat pane; the backend published the notes beside
     // the pipeline tab and selected them when the run completed.

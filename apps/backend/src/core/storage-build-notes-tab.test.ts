@@ -128,6 +128,48 @@ describe("ensureBuildPipelineNotesTab", () => {
     });
   });
 
+  test("a later completion updates the retained tab identity and stale saves cannot regress it", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await seedBuildLayout(storage);
+      const first = (await storage.ensureBuildPipelineNotesTab({
+        pipelineId: "pipeline-1",
+        environmentId: "env-notes",
+        completionRevision: 2,
+      }))!;
+      const second = (await storage.ensureBuildPipelineNotesTab({
+        pipelineId: "pipeline-1",
+        environmentId: "env-notes",
+        completionRevision: 8,
+      }))!;
+      expect(second.revision).toBe(first.revision + 1);
+      expect(
+        (second.root as Leaf).tabs.filter((tab) => tab.id === NOTES_ID("env-notes")),
+      ).toHaveLength(1);
+      expect((second.root as Leaf).tabs.at(-1)?.keyInformationTabData).toMatchObject({
+        completionRevision: 8,
+      });
+      expect(
+        await storage.ensureBuildPipelineNotesTab({
+          pipelineId: "pipeline-1",
+          environmentId: "env-notes",
+          completionRevision: 8,
+        }),
+      ).toBeNull();
+      const stale = await storage.applyPaneLayoutIntent(
+        "env-notes",
+        mergeableLayout(first),
+        mergeableLayout(first),
+      );
+      expect((stale.root as Leaf).tabs.at(-1)?.keyInformationTabData).toMatchObject({
+        completionRevision: 8,
+      });
+      const overwritten = await storage.savePaneLayout("env-notes", first, stale.revision);
+      expect((overwritten.root as Leaf).tabs.at(-1)?.keyInformationTabData).toMatchObject({
+        completionRevision: 8,
+      });
+    });
+  });
+
   test.each(["backend-first", "renderer-first"])(
     "preserves completion publication for concurrent same-ID additions: %s",
     async (order) => {

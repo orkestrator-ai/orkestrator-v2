@@ -133,6 +133,8 @@ export interface KeyInformationTabData {
   view?: "notes";
   /** Backend completion publication; manual Notes openings do not request focus. */
   completionPublished?: true;
+  /** Identity of the successful completion that published this tab. */
+  completionRevision?: number;
 }
 
 export interface MultiReviewTabData {

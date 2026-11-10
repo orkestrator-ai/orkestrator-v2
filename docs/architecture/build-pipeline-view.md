@@ -792,7 +792,8 @@ watching it (the app closed, the window on another environment, or the run on
 another node whose pipelines this window had not loaded yet) still lands on
 its notes: a client hydrating the environment adopts the backend's selection.
 An Electron window keeps its own selection, so it follows the notes tab once,
-when it first sees `completionPublished` on the tab, including a manual Notes
+when it first sees `completionPublished` on the tab with a new
+`completionRevision`, including a manual Notes
 tab already open in that window
 (`applyCompletionNotesArrival` in
 `apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
@@ -818,8 +819,16 @@ selected without evicting a tab. The observer acknowledges the handoff in a
 bounded, window-local node-scope slot before opening Notes. A later backend
 publication cannot override a newer selection, even if the user closed Notes
 in the interval. A layout-first publication likewise suppresses the later
-observer activation. The acknowledgement is cleared when the pipeline leaves
-completion or changes environment, so a new run can perform its own handoff.
+observer activation. The successful completion save records its own backend revision as
+`completionRevision` on the pipeline and publishes that same identity on Notes.
+Later terminal reconciliation leaves it unchanged; a restarted attempt gets a
+larger revision when it completes. Both event orders acknowledge that identity,
+including a `complete` to `complete` snapshot when a disconnected window missed
+the intermediate phases. Layout merges and full saves retain the greatest
+published completion revision on a retained tab. An unrelated pipeline update
+cannot clear an acknowledgement. Legacy publications without a revision retain
+the boolean fallback, cleared only by an observed transition out of completion
+or an environment change.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

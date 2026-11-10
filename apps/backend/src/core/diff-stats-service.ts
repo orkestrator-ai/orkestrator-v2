@@ -205,6 +205,11 @@ export interface DiffStatsServiceOptions {
   adhocTreeCache?: Partial<AdhocTreeCacheLimits>;
   failureRetry?: Partial<RetryPolicy>;
   watcherRetry?: Partial<RetryPolicy>;
+  /**
+   * How long a watcher must keep qualified coverage before its next failure
+   * starts a fresh retry budget; see {@link WATCHER_STABLE_MS}.
+   */
+  watcherStableMs?: number;
   now?: () => string;
   /** Milliseconds from an arbitrary origin; only differences are used. */
   monotonicNow?: () => number;
@@ -299,6 +304,15 @@ export const DEFAULT_WATCHER_RETRY: RetryPolicy = {
   maxMs: 10 * 60_000,
   maxAttempts: 5,
 };
+/**
+ * Qualified coverage a re-attached watcher must hold before a later failure
+ * counts as a new streak rather than the same one. Coverage alone proves
+ * nothing: a watch whose setup keeps failing a moment after it is announced
+ * (on Linux, after Bun has walked the whole tree on the event loop) would
+ * otherwise win a fresh budget every attempt and retry at the base interval
+ * forever. Equal to the longest watcher backoff.
+ */
+export const WATCHER_STABLE_MS = DEFAULT_WATCHER_RETRY.maxMs;
 
 export interface FileListReadRequest {
   lookup: WorktreeLookup;
@@ -385,6 +399,11 @@ interface DiffStatsEntry {
   /** Invalidates callbacks from a watcher that was closed or superseded. */
   watcherGeneration: number;
   watcherFailures: number;
+  /**
+   * `monotonicNow()` when the current watcher's coverage became qualified;
+   * cleared when it fails or is detached.
+   */
+  watcherQualifiedAt?: number;
   watcherRetryTimer?: unknown;
   /** Service-unique lineage; a retarget or resume starts a new one. */
   targetGeneration: number;
@@ -454,6 +473,7 @@ export class DiffStatsService {
   private readonly admission: WorkAdmissionPool | null;
   private readonly failureRetry: RetryPolicy;
   private readonly watcherRetry: RetryPolicy;
+  private readonly watcherStableMs: number;
   private readonly tree: WorktreeTreeSnapshots;
   private readonly adhoc: AdhocWorktreeReads;
   private readonly removalReads = new WorktreeRemovalReads();
@@ -499,6 +519,7 @@ export class DiffStatsService {
     this.admission = options.admission ?? null;
     this.failureRetry = { ...DEFAULT_FAILURE_RETRY, ...options.failureRetry };
     this.watcherRetry = { ...DEFAULT_WATCHER_RETRY, ...options.watcherRetry };
+    this.watcherStableMs = options.watcherStableMs ?? WATCHER_STABLE_MS;
     this.containerTreeMaxAgeMs = options.containerTreeMaxAgeMs ?? CONTAINER_TREE_MAX_AGE_MS;
 
     const walkTree =
@@ -978,6 +999,7 @@ export class DiffStatsService {
     entry.failure = undefined;
     entry.failures = 0;
     entry.watcherFailures = 0;
+    entry.watcherQualifiedAt = undefined;
     entry.lastScanEndedAt = undefined;
     this.cancelRetryTimers(entry);
     this.tree.register(this.treeTarget(entry));
@@ -1048,7 +1070,7 @@ export class DiffStatsService {
       },
       onCoverageChange: () => {
         if (!current()) return;
-        if (this.isQualified(entry)) entry.watcherFailures = 0;
+        this.noteWatcherCoverage(entry);
         this.restartTimer(entry);
         this.publishSnapshot(entry);
       },
@@ -1056,6 +1078,7 @@ export class DiffStatsService {
         if (entry.watcherGeneration !== generation) return;
         failedSynchronously = true;
         this.warn("scan.watcher-failed", entry.target.environmentId, error);
+        this.endWatcherStreakIfStable(entry);
         // The interval is the fallback, so it has to go back to the fast cadence
         // now that change signals will no longer arrive.
         entry.watcher?.close();
@@ -1072,7 +1095,29 @@ export class DiffStatsService {
       return;
     }
     entry.watcher = watcher;
-    if (this.isQualified(entry)) entry.watcherFailures = 0;
+    this.noteWatcherCoverage(entry);
+  }
+
+  /** Records when the current watcher's coverage became qualified. */
+  private noteWatcherCoverage(entry: DiffStatsEntry): void {
+    if (!this.isQualified(entry)) entry.watcherQualifiedAt = undefined;
+    else entry.watcherQualifiedAt ??= this.options.monotonicNow();
+  }
+
+  /**
+   * A failing watcher that had held qualified coverage for
+   * {@link WATCHER_STABLE_MS} ended the previous failure streak, so its retry
+   * budget starts again; one that failed sooner continues the streak.
+   */
+  private endWatcherStreakIfStable(entry: DiffStatsEntry): void {
+    const qualifiedAt = entry.watcherQualifiedAt;
+    entry.watcherQualifiedAt = undefined;
+    if (
+      qualifiedAt !== undefined &&
+      this.options.monotonicNow() - qualifiedAt >= this.watcherStableMs
+    ) {
+      entry.watcherFailures = 0;
+    }
   }
 
   /**
@@ -1111,6 +1156,7 @@ export class DiffStatsService {
 
   private detachWatcher(entry: DiffStatsEntry): void {
     entry.watcherGeneration += 1;
+    entry.watcherQualifiedAt = undefined;
     entry.watcher?.close();
     entry.watcher = undefined;
   }

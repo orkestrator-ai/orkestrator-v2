@@ -100,7 +100,11 @@ export interface WorktreeWatcherOptions {
    */
   resolveGitPaths?: ((worktreePath: string) => Promise<WorktreeGitPaths | undefined>) | null;
   onError?: (error: unknown) => void;
-  /** Called once when {@link WorktreeWatcher.qualified} becomes true. */
+  /**
+   * Called when {@link WorktreeWatcher.qualified} becomes true, and again if a
+   * directory this process may not read turns up after that, which makes it
+   * false for good.
+   */
   onCoverageChange?: () => void;
 }
 
@@ -110,9 +114,10 @@ export interface WorktreeWatcher {
   /**
    * True once the root *and* every Git metadata location that can change the
    * diff (a linked worktree's index/HEAD and the shared refs) are watched.
-   * Until then, and forever when metadata could not be resolved, a quiet
-   * watcher is not evidence that nothing changed. Watchers that omit it
-   * (test doubles) are treated as qualified whenever they are watching.
+   * Until then, and forever when metadata could not be resolved or a directory
+   * in the worktree could not be read, a quiet watcher is not evidence that
+   * nothing changed. Watchers that omit it (test doubles) are treated as
+   * qualified whenever they are watching.
    */
   readonly qualified?: boolean;
   close(): void;
@@ -186,6 +191,38 @@ function isVanishedPath(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+function isPermissionDenied(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  // Bun on Linux reports an inotify EACCES with the code `EPERM`.
+  return code === "EACCES" || code === "EPERM";
+}
+
+/**
+ * A directory below a recursive watch that this process may not read.
+ *
+ * Bun's recursive watch on Linux walks the tree itself. A directory it cannot
+ * open (a rootless container runtime's data root kept in the worktree holds
+ * hundreds) is reported as an `error` naming that directory, after which the
+ * watch carries on and still reports everything else, new directories
+ * included. Treating the report as fatal closed the watcher, and every retry
+ * walked the whole tree again on the event loop, stalling the backend for tens
+ * of seconds each time. The watch is kept instead, but unqualified (see
+ * `unreadable` below). A watch whose own target is unreadable still fails: Bun
+ * throws that synchronously, and an error naming no path is never a descendant.
+ */
+function isUnreadableDescendant(error: unknown, target: string): boolean {
+  if (!isPermissionDenied(error)) return false;
+  const reported = (error as NodeJS.ErrnoException).path;
+  if (typeof reported !== "string") return false;
+  const relative = path.relative(path.resolve(target), path.resolve(reported));
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
 export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeWatcher {
   const settleMs = options.settleMs ?? WATCH_SETTLE_MS;
   const start = options.startWatch ?? defaultStartWatch;
@@ -211,6 +248,13 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   // A split root sees only its direct children until the plan has been applied.
   let treeCovered = !splitting;
   let coverageAnnounced = false;
+  // A directory could not be watched because this process may not read it.
+  // Should it become readable, nothing would watch it, so a quiet watcher
+  // would hide its changes: the watcher stays open, its events still count as
+  // hints, but it never reports qualified coverage again and its owner keeps
+  // polling. Closing it instead had its owner re-walk the whole tree on every
+  // retry, and gave it nothing a polling owner does not already have.
+  let unreadable = false;
   let excluded: readonly string[] = [];
   let replanAtSettle = false;
   let replanQueued = false;
@@ -228,8 +272,22 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     close();
   };
 
+  const noteUnreadable = () => {
+    if (unreadable) return;
+    unreadable = true;
+    // Withdraw coverage already announced; none will be announced from now on.
+    if (coverageAnnounced && !closed) options.onCoverageChange?.();
+  };
+
   const announceCoverage = () => {
-    if (closed || coverageAnnounced || !metadataCovered || !treeCovered || unestablished > 0) {
+    if (
+      closed ||
+      coverageAnnounced ||
+      unreadable ||
+      !metadataCovered ||
+      !treeCovered ||
+      unestablished > 0
+    ) {
       return;
     }
     coverageAnnounced = true;
@@ -290,8 +348,12 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     });
     // A watch can fail asynchronously - the directory is removed, the platform
     // runs out of descriptors or watches. Surfacing it lets the owner fall back
-    // to polling instead of going quiet forever.
-    handle.on("error", fail);
+    // to polling instead of going quiet forever. An unreadable directory inside
+    // a recursive watch is not such a failure (see `isUnreadableDescendant`).
+    handle.on("error", (error: Error) => {
+      if (recursive && isUnreadableDescendant(error, target)) noteUnreadable();
+      else fail(error);
+    });
     if (handle.established) {
       unestablished += 1;
       void handle.established.then(
@@ -458,7 +520,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       } catch (error) {
         // It went away between the listing and the watch, and the event in its
         // parent that says so plans again. The root has no parent to say so.
-        if (target.relative === "" || !isVanishedPath(error)) throw error;
+        if (target.relative === "") throw error;
+        if (isPermissionDenied(error)) noteUnreadable();
+        else if (!isVanishedPath(error)) throw error;
       }
     }
     return added;
@@ -584,7 +648,14 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
       return watchEstablished && !closed;
     },
     get qualified() {
-      return watchEstablished && !closed && metadataCovered && treeCovered && unestablished === 0;
+      return (
+        watchEstablished &&
+        !closed &&
+        !unreadable &&
+        metadataCovered &&
+        treeCovered &&
+        unestablished === 0
+      );
     },
     close,
   };

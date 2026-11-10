@@ -5351,6 +5351,15 @@
       "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
       "resultDigest": "sha256:90611f0df5b38f748408eeaaff2d290c36653ba37d267ed0b62baec222803f53"
     },
+    "list_native_agent_branches": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:7bc67d400b01f6b97cb03ccbdf3bfc35af53ff81155edd958b652186d9e40df2"
+    },
     "list_native_agent_resumable_sessions": {
       "domain": "native-sessions",
       "since": 1,

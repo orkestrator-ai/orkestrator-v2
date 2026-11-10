@@ -491,6 +491,47 @@ describe("NativeAgentSessionOperations", () => {
     });
   });
 
+  describe("branches", () => {
+    const list = { activeEntryId: "e-2", branches: [], truncated: false };
+
+    test("Pi lists its branches through the provider, by provider session", async () => {
+      const asked: string[] = [];
+      const { operations } = harness({
+        provider: {
+          listSessionBranches: async (providerSessionId: string) => {
+            asked.push(providerSessionId);
+            return list;
+          },
+        },
+      });
+      expect(await operations.listProjectionBranches({ ...identity, agent: "pi" })).toEqual(list);
+      expect(asked).toEqual(["provider-session"]);
+    });
+
+    test("a platform without branches is refused before the provider is asked", async () => {
+      let asked = false;
+      const { operations } = harness({
+        provider: {
+          listSessionBranches: async () => {
+            asked = true;
+            return list;
+          },
+        },
+      });
+      await expect(operations.listProjectionBranches(identity)).rejects.toThrow(
+        "codex conversations have no branches",
+      );
+      expect(asked).toBe(false);
+    });
+
+    test("an unknown session is not found", async () => {
+      const { operations } = harness({ session: null });
+      await expect(operations.listProjectionBranches({ ...identity, agent: "pi" })).rejects.toThrow(
+        "Native agent session was not found",
+      );
+    });
+  });
+
   describe("sign-in", () => {
     test("a containerized environment always signs in by device code", async () => {
       const requests: unknown[] = [];

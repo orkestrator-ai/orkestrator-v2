@@ -315,7 +315,7 @@ targets for a live profile; the deterministic harness does not measure them.
 | Mail presence | 2 s refresh, 4 s TTL (B10) | ≤ 4 s | Never inject into an active session |
 | Diff badge, watched local worktree | 400 ms settle plus scan, and at least 2 s from one scan's end to the next hinted one (`LOCAL_SCAN_MIN_GAP_MS`, B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan. Saves less than 2 s apart wait out the gap; back-to-back saves measured 1.6 to 1.7 s after settling in the packaged macOS app (todo 0048, task 7) |
 | Diff badge, container or unwatched | 15 s poll (B03) | ≤ 20 s | |
-| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action | Explicit refresh waits for a read started after the click |
+| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action, or one scan longer when a scan is already running | Explicit refresh waits for a read started after the click, so a Changes refresh that lands while a scan runs waits for that scan and then a fresh one. Accepted 2026-11-10 (todo 7201): a container Changes refresh measured p50 425 to 543 ms and p95 1.30 s and 2.23 s over two runs of 15 on macOS; All files stayed ≤ 1 s (max 881 ms) |
 | PR merge confirmation after merge-pending | 1 s (B01) | ≤ 3 s | |
 | PR created after create-pending | 5 s (B01) | ≤ 10 s | |
 | Open PR state change | 20 s (B01) | ≤ 30 s | Includes jitter |
@@ -330,7 +330,7 @@ With data saving on, the client accepts slower backstops for what it shows
 invalidations that read at once and the responsive backstop is 1 s. The Files
 panel accepts ≤ 2 s after an announced revision on a watched worktree and
 ≤ 11 s on an unwatched target (its 10 s backstop); an explicit action stays
-≤ 1 s. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
+≤ 1 s, or one scan longer behind a running scan. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
 These budgets apply only to the client that turned the preference on.
 
 The container file-list reuse bound stays at 3 s for this reason: with a 5 s

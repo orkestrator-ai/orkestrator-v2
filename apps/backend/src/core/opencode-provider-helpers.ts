@@ -96,6 +96,11 @@ export interface OpenCodeProviderDependencies {
   monitorRetryMaxMs?: number;
   /** Jitter source for the monitor's reconnect backoff; uniform in [0, 1). */
   monitorRetryRandom?: () => number;
+  /**
+   * Longest silence the event monitor accepts once its stream has
+   * heartbeated (`OPENCODE_EVENT_STREAM_SILENCE_MS` by default).
+   */
+  monitorSilenceMs?: number;
   /** Test seam for the monitor's cancellable reconnect wait. */
   waitForMonitorRetry?: (ms: number, signal: AbortSignal) => Promise<void>;
   now?: () => number;

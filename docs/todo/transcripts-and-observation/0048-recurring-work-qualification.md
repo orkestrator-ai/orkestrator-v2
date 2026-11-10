@@ -1420,8 +1420,8 @@ owners: the child's exit is the signal.
 | Desktop relayed stream (`backend-process.ts`) | SSE | 60 s (`GATEWAY_STREAM_SILENCE_LIMIT_MS`) | `ReconnectBackoff` | Covered (part of the Electron client) |
 | Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
 | `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
-| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Mostly covered; a stall while the page stays visible is [7200](7200-event-stream-reader-gaps.md) task 4 |
-| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | **none** | 1 to 30 s, jittered | Gap: 7200 task 1 (needs a live `opencode serve`) |
+| Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was [7200](7200-event-stream-reader-gaps.md) task 4, fixed |
+| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream has none: [7551](7551-opencode2-event-stream-silence.md) |
 | Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
 | Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
 | Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |
@@ -1573,8 +1573,8 @@ credentials or a platform CI lacks are batched in
     detection), for every row of the latency budgets. Done 2026-11-06 on
     macOS for the diff badge and Files panel rows (see
     [macOS evidence](#macos-watcher-change-to-visible-and-remote-freshness-2026-11-06-macos));
-    the container Changes refresh tail needs a decision
-    ([7201](7201-explicit-refresh-behind-running-scan.md)); the turn,
+    the container Changes refresh tail is accepted as one scan longer
+    ([7201](7201-explicit-refresh-behind-running-scan.md), 2026-11-10); the turn,
     approval and mail rows were done 2026-11-06 by the busy
     profile; workflow visibility remains open (only backend state was read);
     the PR rows go with live GitHub;
@@ -2327,7 +2327,10 @@ not collide with other tasks' decisions.
   fifteen took 1.3 to 2.2 s against a 1 s budget. This is deliberate (a
   running scan may predate the click), so it is a budget decision, not a
   defect fixed here: [7201](7201-explicit-refresh-behind-running-scan.md)
-  holds the options, recommending a budget amendment.
+  holds the options, recommending a budget amendment. Accepted 2026-11-10:
+  the budget row reads "≤ 1 s, or one scan longer when a scan is already
+  running", and the spec's check allows one scan (the series' median) on
+  that row only.
 - **M7 Task 1 not attempted.** Extending task 10's fake-model soak driver
   to the busy profile needs a fake-model turn and approval phase, a
   workflow that completes without a provider, 10 environments and attached
@@ -2339,7 +2342,8 @@ not collide with other tasks' decisions.
   half of its rung) and the v2 preview tunnel's ignored pongs (two unanswered
   pings destroy the session). Left: OpenCode's silent stream, which needs a
   live `opencode serve` to see what it sends while idle, and the terminal
-  socket's visible-page stall, a traffic-versus-detection choice.
+  socket's visible-page stall, a traffic-versus-detection choice. Both fixed
+  with tests on 2026-11-10 (7200 tasks 1 and 4).
 - **M9 Long, quiet live specs and `test:logged`.** The runner ends a command
   that prints nothing for 5 min; the container probe loop is quieter than
   that, which is what killed the first two runs. Options: raise

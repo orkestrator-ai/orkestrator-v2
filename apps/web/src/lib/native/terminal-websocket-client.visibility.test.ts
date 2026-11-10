@@ -75,7 +75,7 @@ function pings(socket: MockWebSocket): number[] {
 }
 
 /** `features` is what the server's ready frame advertises; omitted, it predates them. */
-function subscribedHarness(features?: string[]) {
+function subscribedHarness(features?: string[], heartbeatIntervalMs?: number) {
   let now = 1_000_000;
   const sockets: MockWebSocket[] = [];
   const unavailable = mock((_sessionId: string) => undefined);
@@ -87,6 +87,7 @@ function subscribedHarness(features?: string[]) {
     subscriptionRetryDelayMs: 0,
     acknowledgementDelayMs: 0,
     foregroundProbeTimeoutMs: PROBE_TIMEOUT_MS,
+    ...(heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs }),
     reconnectNow: () => now,
     createSocket: () => {
       const socket = new MockWebSocket();
@@ -97,7 +98,7 @@ function subscribedHarness(features?: string[]) {
   });
   clients.push(client);
   const payloads: TerminalSocketPayload[] = [];
-  client.subscribe("session-a", (payload) => {
+  const unsubscribe = client.subscribe("session-a", (payload) => {
     payloads.push(payload);
   });
   const socket = sockets[0]!;
@@ -132,7 +133,7 @@ function subscribedHarness(features?: string[]) {
     now += ms;
     setVisibility("visible");
   };
-  return { client, sockets, socket, payloads, unavailable, hideFor };
+  return { client, sockets, socket, payloads, unavailable, hideFor, unsubscribe };
 }
 
 describe("terminal WebSocket on returning to the page (WEB-11)", () => {
@@ -292,5 +293,110 @@ describe("terminal WebSocket on returning to the page (WEB-11)", () => {
     setVisibility("visible");
     expect(sockets[0]!.closes.at(-1)?.reason).toBe("Foreground reconciliation");
     expect(sockets).toHaveLength(2);
+  });
+});
+
+describe("terminal WebSocket heartbeat while the page stays visible (to-do 7200 task 4)", () => {
+  const INTERVAL_MS = 25;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitFor = async (condition: () => boolean) => {
+    for (let waited = 0; !condition(); waited += 1) {
+      if (waited > 200) throw new Error("condition not reached");
+      await sleep(INTERVAL_MS / 4);
+    }
+  };
+  const visibleHarness = (features: string[] | undefined) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    return subscribedHarness(features, INTERVAL_MS);
+  };
+
+  test("a quiet socket that leaves two pings unanswered is replaced", async () => {
+    const { sockets, socket, payloads, unavailable } = visibleHarness(["ping"]);
+    // The `subscribed` frame was the last thing heard, so the first quiet
+    // interval sends a ping, and the socket survives its first miss.
+    await waitFor(() => pings(socket).length === 1);
+    expect(sockets).toHaveLength(1);
+
+    await waitFor(() => sockets.length === 2);
+    expect(pings(socket)).toHaveLength(2);
+    expect(socket.closes.at(-1)?.reason).toBe("Foreground reconciliation");
+    expect(sockets).toHaveLength(2);
+    expect(unavailable).toHaveBeenCalledWith("session-a");
+    expect(payloads.at(-1)).toMatchObject({ desynced: true });
+  });
+
+  test("a socket that answers its pings is kept", async () => {
+    const { sockets, socket, unavailable } = visibleHarness(["ping"]);
+    for (let answered = 0; answered < 4;) {
+      await sleep(INTERVAL_MS / 2);
+      const sent = pings(socket);
+      if (sent.length > answered) {
+        socket.receive(JSON.stringify({ type: "pong", nonce: sent.at(-1) }));
+        answered = sent.length;
+      }
+    }
+    expect(sockets).toHaveLength(1);
+    expect(socket.closes).toEqual([]);
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  test("a busy socket is never pinged: any frame proves it live", async () => {
+    const { sockets, socket } = visibleHarness(["ping"]);
+    for (let revision = 1; revision <= 40; revision += 1) {
+      socket.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 7,
+          generation: 1,
+          revision,
+          bytes: new TextEncoder().encode("x"),
+        }),
+      );
+      await sleep(INTERVAL_MS / 5);
+    }
+    // Strictly none on an idle host; a stalled test runner may let one tick
+    // pass quietly, which still must not replace a socket this busy.
+    expect(pings(socket).length).toBeLessThanOrEqual(1);
+    expect(sockets).toHaveLength(1);
+    expect(socket.closes).toEqual([]);
+  });
+
+  test("a hidden page sends no heartbeat, so background work keeps its socket", async () => {
+    const { sockets, socket } = visibleHarness(["ping"]);
+    setVisibility("hidden");
+    await sleep(INTERVAL_MS * 5);
+    expect(pings(socket)).toEqual([]);
+    expect(sockets).toHaveLength(1);
+    expect(socket.closes).toEqual([]);
+  });
+
+  test("returning to the page restarts the heartbeat after the foreground probe", async () => {
+    const { sockets, socket, hideFor } = visibleHarness(["ping"]);
+    hideFor(200);
+    const [probe] = pings(socket);
+    socket.receive(JSON.stringify({ type: "pong", nonce: probe }));
+    await sleep(INTERVAL_MS * 6);
+    // The probe's answer is the last frame: the heartbeat pings twice and then replaces.
+    expect(pings(socket).length).toBeGreaterThanOrEqual(3);
+    expect(sockets).toHaveLength(2);
+  });
+
+  test("a server that does not answer pings is never heartbeated", async () => {
+    const { sockets, socket } = visibleHarness(undefined);
+    await sleep(INTERVAL_MS * 5);
+    expect(pings(socket)).toEqual([]);
+    expect(sockets).toHaveLength(1);
+  });
+
+  test("disposing and unsubscribing both stop the heartbeat", async () => {
+    const disposed = visibleHarness(["ping"]);
+    disposed.client.dispose();
+    await sleep(INTERVAL_MS * 4);
+    expect(pings(disposed.socket)).toEqual([]);
+
+    const idle = visibleHarness(["ping"]);
+    idle.unsubscribe();
+    await sleep(INTERVAL_MS * 4);
+    expect(pings(idle.socket)).toEqual([]);
   });
 });

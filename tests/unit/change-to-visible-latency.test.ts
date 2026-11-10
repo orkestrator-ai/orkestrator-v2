@@ -25,29 +25,58 @@ describe("change-to-visible qualification budgets", () => {
     });
   }
 
-  test("the known Changes-refresh exception is visible and cannot exempt other rows", () => {
-    const exception = {
+  test("the Changes refresh may take one scan longer, estimated by its median (7201)", () => {
+    // Shaped like the second macOS run of 0048 task 2 (p50 425 ms; 14 refreshes
+    // of 317 to 635 ms and one of 1,304 ms); the values between the recorded
+    // endpoints and median are illustrative.
+    const samples = [317, 340, 362, 380, 401, 410, 425, 425, 440, 470, 512, 560, 600, 635, 1_304];
+    const changes = {
       label: "container Changes after Refresh",
       budgetMs: 1_000,
-      samples: Array<number>(15).fill(2_230),
+      scanAllowance: true,
+      samples,
     };
-    expect(latencySummary(exception)).toMatchObject({
-      p95Ms: 2_230,
+    expect(latencySummary(changes)).toMatchObject({
+      p50Ms: 425,
+      p95Ms: 1_304,
       budgetMs: 1_000,
-      withinBudget: false,
-      budgetException: expect.stringContaining("7201"),
+      scanAllowanceMs: 425,
+      effectiveBudgetMs: 1_425,
+      withinBudget: true,
     });
-    expect(() => assertLatencyBudgets([exception])).not.toThrow();
-    const other = { ...exception, label: "container All files after Refresh" };
-    expect(latencySummary(other).budgetException).toBeNull();
-    expect(() => assertLatencyBudgets([exception, other])).toThrow(other.label);
+    expect(() => assertLatencyBudgets([changes])).not.toThrow();
+
+    // More than one scan behind is still a failure.
+    const slower = { ...changes, samples: [...samples.slice(0, -1), 1_426] };
+    expect(() => assertLatencyBudgets([slower])).toThrow(
+      "container Changes after Refresh: p95 1426 ms exceeds 1425 ms (1000 ms plus one scan)",
+    );
   });
 
-  test("empty or invalid samples cannot pass qualification, even for the exception", () => {
+  test("the allowance is per series, so no other row inherits it by label or default", () => {
+    const samples = [...Array<number>(14).fill(425), 1_304];
+    const allFiles = { label: "container All files after Refresh", budgetMs: 1_000, samples };
+    expect(latencySummary(allFiles)).toMatchObject({
+      scanAllowanceMs: null,
+      effectiveBudgetMs: 1_000,
+      withinBudget: false,
+    });
+    expect(() => assertLatencyBudgets([allFiles])).toThrow(allFiles.label);
+    // The Changes label alone, without the allowance, is held to 1 s.
+    const unmarked = { ...allFiles, label: "container Changes after Refresh" };
+    expect(() => assertLatencyBudgets([unmarked])).toThrow("exceeds 1000 ms");
+  });
+
+  test("empty or invalid samples cannot pass qualification, even with the allowance", () => {
     for (const samples of [[], [NaN], [Infinity], [-1]]) {
       expect(() =>
         assertLatencyBudgets([
-          { label: "container Changes after Refresh", budgetMs: 1_000, samples },
+          {
+            label: "container Changes after Refresh",
+            budgetMs: 1_000,
+            scanAllowance: true,
+            samples,
+          },
         ]),
       ).toThrow("no valid latency sample set");
     }

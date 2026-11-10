@@ -88,10 +88,10 @@ const evidence: { series: LatencySeries[]; notes: Record<string, unknown> } = {
   notes: {},
 };
 
-function seriesFor(label: string, budgetMs?: number): LatencySeries {
+function seriesFor(label: string, budgetMs?: number, scanAllowance = false): LatencySeries {
   let series = evidence.series.find((entry) => entry.label === label);
   if (!series) {
-    series = { label, budgetMs, samples: [] };
+    series = { label, budgetMs, ...(scanAllowance ? { scanAllowance } : {}), samples: [] };
     evidence.series.push(series);
   }
   return series;
@@ -326,6 +326,9 @@ test("container: badge, Changes row, All files entry and explicit refresh", asyn
             ? "container Changes after Refresh"
             : "container All files after Refresh",
           BUDGET.explicitActionMs,
+          // The Changes refresh follows a scan already running (to-do 7201):
+          // its accepted budget is one scan longer. All files reads directly.
+          tab === "changes",
         ).samples.push(
           await msUntil(at, () => shown(page, file), `refresh ${tab} ${probe}`, 90_000),
         );

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { AmbiguousPromptDispatchError, PromptRejectedError } from "./agent-provider-contract.js";
 import { isDefaultDataDir } from "../data-dir.js";
 
 /**
@@ -53,7 +54,7 @@ export interface DispatchHoldRecord extends DispatchHoldDetail {
   heldAt: string;
   releasedAt?: string;
   /** Why the hold ended: the marker was removed, or the bound ran out. */
-  release?: "marker-removed" | "max-hold";
+  release?: "marker-removed" | "max-hold" | "cancelled";
 }
 
 export function dispatchHoldMarkerName(point: DispatchHoldPoint): string {
@@ -80,11 +81,9 @@ export interface AgentTestDispatchHoldOptions {
 export interface AgentTestDispatchHold {
   /** Resolves at once unless the point's marker exists; then waits for its removal. */
   hold(point: DispatchHoldPoint, detail: DispatchHoldDetail): Promise<void>;
-  /**
-   * Stops every poll. A send still held is left unsettled: the backend is going
-   * away, and neither sending nor failing it would match a kill.
-   */
+  /** Refuses held sends without allowing a new dispatch during shutdown. */
   dispose(): void;
+  cancel(agent: string, sessionId: string): void;
 }
 
 function boundedId(value: string | undefined): string | undefined {
@@ -104,6 +103,7 @@ export function agentTestDispatchHold(
   const pollMs = Math.max(10, options.pollMs ?? DEFAULT_POLL_MS);
   const maxHoldMs = Math.max(pollMs, options.maxHoldMs ?? DEFAULT_MAX_HOLD_MS);
   const timers = new Set<ReturnType<typeof setTimeout>>();
+  const pending = new Map<DispatchHoldDetail, () => void>();
   let disposed = false;
   let sequence = 0;
 
@@ -136,7 +136,23 @@ export function agentTestDispatchHold(
       };
       writeRecord(point, record);
       const startedAt = Date.now();
-      return new Promise<void>((resolve) => {
+      return new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout>;
+        pending.set(detail, () => {
+          clearTimeout(timer);
+          timers.delete(timer);
+          pending.delete(detail);
+          writeRecord(point, {
+            ...record,
+            releasedAt: new Date().toISOString(),
+            release: "cancelled",
+          });
+          reject(
+            point === "before-send"
+              ? new PromptRejectedError("Test dispatch hold cancelled before send")
+              : new AmbiguousPromptDispatchError("Test dispatch hold cancelled after acceptance"),
+          );
+        });
         const poll = () => {
           if (disposed) return;
           const removed = !existsSync(marker);
@@ -147,13 +163,14 @@ export function agentTestDispatchHold(
               releasedAt: new Date().toISOString(),
               release: removed ? "marker-removed" : "max-hold",
             });
+            pending.delete(detail);
             resolve();
             return;
           }
           schedule();
         };
         const schedule = () => {
-          const timer = setTimeout(() => {
+          timer = setTimeout(() => {
             timers.delete(timer);
             poll();
           }, pollMs);
@@ -163,8 +180,14 @@ export function agentTestDispatchHold(
         schedule();
       });
     },
+    cancel(agent, sessionId) {
+      for (const [detail, cancel] of Array.from(pending)) {
+        if (detail.agent === agent && detail.sessionId === sessionId) cancel();
+      }
+    },
     dispose() {
       disposed = true;
+      for (const cancel of Array.from(pending.values())) cancel();
       for (const timer of Array.from(timers)) clearTimeout(timer);
       timers.clear();
     },
@@ -195,4 +218,9 @@ export function promptDispatchHold(
   detail: DispatchHoldDetail,
 ): Promise<void> | undefined {
   return installed?.hold(point, detail);
+}
+
+/** Abort only this session's held sends; other sessions retain their markers. */
+export function cancelPromptDispatchHold(agent: string, sessionId: string): void {
+  installed?.cancel(agent, sessionId);
 }

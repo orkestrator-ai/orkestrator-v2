@@ -69,7 +69,7 @@ import {
 import { HttpBridgeInteractionAdapter } from "./interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
-import { promptDispatchHold } from "../agent-test-dispatch-hold.js";
+import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
 import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
 import {
@@ -1460,6 +1460,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/abort`,
@@ -1470,6 +1471,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async hardAbort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/hard-abort`,

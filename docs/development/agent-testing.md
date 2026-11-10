@@ -1568,7 +1568,12 @@ While a send is parked, `held-<point>.json` beside the marker names its agent,
 session and request ids (never the prompt) and gains `releasedAt` once the
 marker is removed. A backend killed while held never marks its record
 released, so remove the record when you arm the point again. A forgotten
-marker is released after 15 minutes. Results are in
+marker is released after 15 minutes. Abort and hard-abort reject a held send for
+that session, and graceful shutdown rejects all held sends and clears their polls.
+A cancellation before send is a rejection; one after acceptance keeps an ambiguous
+outcome for reconciliation. The live test re-arms the before-send marker after the
+second crash, so even a bridge-deduplicated resend fails the no-resend assertion.
+Results are in
 [0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
 
 A spec that restarts a profile builds the launcher's arguments with

@@ -473,7 +473,10 @@ test.describe("Build pipeline dispatch window under a held send", () => {
       await expect.poll(tagged, { timeout: 60_000 }).toBe(1);
 
       // --- 3. Crash after acceptance; no resend ------------------------------
-      const second = await crashAndRestart(() => disarm(dataDir, "after-response"));
+      const second = await crashAndRestart(async () => {
+        await disarm(dataDir, "after-response");
+        arm(dataDir, "before-send");
+      });
       ({ invoke, status } = await connect(page));
       let settled: BuildPipeline | undefined;
       await expect
@@ -483,6 +486,10 @@ test.describe("Build pipeline dispatch window under a held send", () => {
             if (settled.phase === "failed") {
               throw new Error(`pipeline failed after the second restart: ${settled.error ?? ""}`);
             }
+            const unexpected = await heldRecord(dataDir, "before-send");
+            expect(unexpected?.requestId, "accepted request was resent after restart").not.toBe(
+              firstHold!.requestId,
+            );
             return settled.pendingPromptAttempt?.requestId !== firstHold!.requestId;
           },
           {
@@ -492,6 +499,8 @@ test.describe("Build pipeline dispatch window under a held send", () => {
           },
         )
         .toBe(true);
+      expect((await heldRecord(dataDir, "before-send"))?.requestId).not.toBe(firstHold!.requestId);
+      await disarm(dataDir, "before-send");
       const readyToSettledMs = Date.now() - second.readyAt;
       // The stage goes on to the end of the run on the same session. A
       // commit-only run on the fake model finishes without a pull request.

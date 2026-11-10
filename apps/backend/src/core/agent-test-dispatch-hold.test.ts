@@ -179,23 +179,18 @@ describe("agent-test dispatch hold", () => {
     expect((await readRecord(root, "before-send"))?.release).toBe("max-hold");
   });
 
-  test("dispose stops polling and leaves a held send unsettled", async () => {
+  test("dispose rejects a held send and stops polling", async () => {
     const clock = pollClock();
     const root = await dataDir();
-    const marker = await arm(root, "before-send");
+    await arm(root, "before-send");
     const created = hold(root);
-    let settled = false;
-    void created.hold("before-send", { agent: "pi", sessionId: "s", requestId: "r" }).then(() => {
-      settled = true;
-    });
-    await until(async () => (await readRecord(root, "before-send")) !== undefined);
+    const result = created
+      .hold("before-send", { agent: "pi", sessionId: "s" })
+      .catch((error) => error);
     created.dispose();
-    await fs.rm(marker);
+    expect(await result).toMatchObject({ name: "PromptRejectedError" });
     expect(clock.pendingCount()).toBe(0);
-    expect(clock.advance()).toBe(0);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect((await readRecord(root, "before-send"))?.releasedAt).toBeUndefined();
+    expect((await readRecord(root, "before-send"))?.release).toBe("cancelled");
   });
 
   test("ids are bounded in the record", async () => {
@@ -276,6 +271,37 @@ describe("bridge client dispatch hold", () => {
     ).rejects.toThrow();
     expect(await readRecord(root, "after-response")).toBeUndefined();
   });
+
+  for (const point of ["before-send", "after-response"] as const) {
+    for (const action of ["abort", "hardAbort", "shutdown"] as const) {
+      test(`${action} settles a send held at ${point} without dispatching again`, async () => {
+        const clock = pollClock();
+        const root = await dataDir();
+        await arm(root, point);
+        const uninstall = installAgentTestDispatchHold(hold(root));
+        cleanups.push(uninstall);
+        const { provider, requests } = httpProvider(
+          () => Response.json({ ok: true }),
+          piConnection,
+        );
+        // Install the rejection handler before abort or shutdown can reject.
+        const outcome = provider.send("s", "synthetic", { requestId: "r" }).catch((error) => error);
+        await until(async () => (await readRecord(root, point)) !== undefined);
+        if (action === "shutdown") uninstall();
+        else if (action === "abort") await provider.abort("s");
+        else await provider.hardAbort!("s");
+        expect(await outcome).toMatchObject({
+          name: point === "before-send" ? "PromptRejectedError" : "AmbiguousPromptDispatchError",
+        });
+        expect(clock.pendingCount()).toBe(0);
+        expect(clock.advance()).toBe(0);
+        expect(requests.filter((request) => request.url.endsWith("/prompt"))).toHaveLength(
+          point === "before-send" ? 0 : 1,
+        );
+        expect((await readRecord(root, point))?.release).toBe("cancelled");
+      });
+    }
+  }
 
   test("uninstalling detaches the hold", async () => {
     const root = await dataDir();

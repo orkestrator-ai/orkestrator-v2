@@ -2420,12 +2420,14 @@ describe("backend dispatch hold lifecycle", () => {
         await fs.mkdir(directory, { recursive: true });
         await fs.writeFile(path.join(directory, "hold-before-send"), "");
         const held = promptDispatchHold("before-send", { agent: "pi", sessionId: "s" });
+        const outcome = held?.catch((error) => error);
         expect(held !== undefined).toBe(config.installed);
         expect(await fs.readdir(directory)).toContain("hold-before-send");
         if (config.installed) {
           expect(await fs.readdir(directory)).toContain("held-before-send.json");
         }
         await backend.shutdown();
+        if (config.installed) expect(await outcome).toMatchObject({ name: "PromptRejectedError" });
         expect(promptDispatchHold("before-send", { agent: "pi", sessionId: "s" })).toBeUndefined();
       } finally {
         await backend.shutdown().catch(() => undefined);

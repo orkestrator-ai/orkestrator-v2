@@ -829,6 +829,8 @@ published completion revision on a retained tab. An unrelated pipeline update
 cannot clear an acknowledgement. Legacy publications without a revision retain
 the boolean fallback, cleared only by an observed transition out of completion
 or an environment change.
+Publishing the same or an older completion revision again is a backend no-op,
+including after the user has selected another tab.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

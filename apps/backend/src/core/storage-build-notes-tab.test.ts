@@ -155,6 +155,19 @@ describe("ensureBuildPipelineNotesTab", () => {
           completionRevision: 8,
         }),
       ).toBeNull();
+      const chosen = structuredClone(second);
+      (chosen.root as Leaf).activeTabId = "build-pipeline-1";
+      const selected = await storage.savePaneLayout("env-notes", chosen, second.revision);
+      for (const completionRevision of [2, 8]) {
+        expect(
+          await storage.ensureBuildPipelineNotesTab({
+            pipelineId: "pipeline-1",
+            environmentId: "env-notes",
+            completionRevision,
+          }),
+        ).toBeNull();
+      }
+      expect(await storage.getPaneLayout("env-notes")).toEqual(selected);
       const stale = await storage.applyPaneLayoutIntent(
         "env-notes",
         mergeableLayout(first),

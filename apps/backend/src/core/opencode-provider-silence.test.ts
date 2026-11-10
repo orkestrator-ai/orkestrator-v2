@@ -6,6 +6,10 @@ import {
   OPENCODE_EVENT_STREAM_SILENCE_MS,
   OpenCodeStreamSilenceWatchdog,
 } from "./opencode-observation-stream.js";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../tests/helpers/controlled-timeout.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 
 /**
@@ -18,10 +22,17 @@ const SILENCE_MS = 150;
 
 const providers: NativeAgentRuntimeProvider[] = [];
 const watchdogs: OpenCodeStreamSilenceWatchdog[] = [];
+const controlledTimers: ControlledTimeout[] = [];
+function timer(delay: number) {
+  const control = installControlledTimeout(delay);
+  controlledTimers.push(control);
+  return control;
+}
 
 afterEach(async () => {
   for (const watchdog of watchdogs.splice(0)) watchdog.stop();
   for (const provider of providers.splice(0)) await provider.dispose?.();
+  for (const control of controlledTimers.splice(0).reverse()) expect(control.restore()).toBe(0);
 });
 
 function silenceProvider(fake: OpenCodeFake): NativeAgentRuntimeProvider {
@@ -138,40 +149,44 @@ describe("OpenCodeStreamSilenceWatchdog", () => {
     expect(OPENCODE_EVENT_STREAM_SILENCE_MS).toBe(35_000);
   });
 
-  test("stays unarmed until a heartbeat arrives", async () => {
+  test("stays unarmed until a heartbeat arrives", () => {
+    const control = timer(20);
     let clock = 0;
     const { instance, fired } = watchdog(20, () => clock);
     instance.frame(false);
     clock = 1_000;
-    await sleep(40);
+    expect(control.advance()).toBe(0);
     expect(instance.isArmed).toBe(false);
     expect(fired).toEqual([]);
   });
 
-  test("re-checks elapsed silence instead of firing on the first timer", async () => {
+  test("re-checks elapsed silence instead of firing on the first timer", () => {
+    const firstTimer = timer(30);
+    const remainingTimer = timer(20);
     let clock = 0;
     const { instance, fired } = watchdog(30, () => clock);
     instance.frame(true);
     // A frame 20 ms in moves the deadline; the first timer must re-arm.
-    await sleep(10);
     clock = 20;
     instance.frame(false);
     clock = 30;
-    await sleep(30);
+    expect(firstTimer.advance()).toBe(1);
+    expect(remainingTimer.pendingCount()).toBe(1);
     expect(fired).toEqual([]);
     clock = 60;
-    await waitUntil(() => fired.length === 1);
+    expect(remainingTimer.advance()).toBe(1);
     expect(fired).toEqual([30]);
     expect(instance.isArmed).toBe(false);
   });
 
-  test("stop cancels a pending deadline", async () => {
+  test("stop cancels a pending deadline", () => {
+    const control = timer(10);
     let clock = 0;
     const { instance, fired } = watchdog(10, () => clock);
     instance.frame(true);
     instance.stop();
     clock = 1_000;
-    await sleep(30);
+    expect(control.advance()).toBe(0);
     expect(fired).toEqual([]);
     instance.frame(true);
     expect(instance.isArmed).toBe(false);

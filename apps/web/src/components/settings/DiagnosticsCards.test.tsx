@@ -130,9 +130,9 @@ test("the database card shows both databases, backups, retention and top tables 
   expect(within(stores).getByText("change-tracking")).toBeTruthy();
   expect(within(stores).getByText("700 KiB · 1200 rows")).toBeTruthy();
   expect(within(stores).getByText("2.0 KiB · 1 row")).toBeTruthy();
-  expect(screen.queryByRole("list", { name: "Largest stores in Change-tracking database" })).toBe(
-    null,
-  );
+  expect(
+    screen.queryByRole("list", { name: "Largest stores in Change-tracking database" }) === null,
+  ).toBe(true);
 
   fireEvent.click(screen.getByRole("button", { name: "Refresh database figures" }));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
@@ -334,7 +334,7 @@ test("container logs are opt-in per environment, and choosing rebuilds the bundl
   const rebuild = () =>
     within(dialog).getByRole("button", { name: /Rebuild/ }) as HTMLButtonElement;
   expect(rebuild().disabled).toBe(true);
-  expect(within(dialog).queryByText("logs/containers/env-a/codex-bridge.log")).toBeNull();
+  expect(within(dialog).queryByText("logs/containers/env-a/codex-bridge.log") === null).toBe(true);
 
   fireEvent.click(alpha);
   expect(within(dialog).getByRole("status").textContent).toContain("Not in the bundle yet");
@@ -348,7 +348,7 @@ test("container logs are opt-in per environment, and choosing rebuilds the bundl
     "true",
   );
   expect(rebuild().disabled).toBe(true);
-  expect(within(dialog).queryByRole("status")).toBeNull();
+  expect(within(dialog).queryByRole("status") === null).toBe(true);
 });
 
 test("a backend that offers no container logs shows no choice", async () => {
@@ -356,8 +356,8 @@ test("a backend that offers no container logs shows no choice", async () => {
   mount(<DiagnosticsExportCard />);
   fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).queryByText("Container server logs (optional)")).toBeNull();
-  expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  expect(within(dialog).queryByText("Container server logs (optional)") === null).toBe(true);
+  expect(within(dialog).queryByRole("checkbox") === null).toBe(true);
 });
 
 test("a failed rebuild keeps the old manifest and selection available for retry", async () => {

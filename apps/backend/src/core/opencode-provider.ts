@@ -1,3 +1,4 @@
+import { readOpenCodeRevertMarker } from "./opencode-revert-reader.js";
 import {
   HUMAN_PROMPT_OBSERVATION_ROWS,
   humanPromptObservation,
@@ -961,32 +962,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  /**
-   * OpenCode's pending revert for a transcript read. `session.updated` and the
-   * revert actions keep it current; after a stream gap, or before either has
-   * been seen, it is read from the session. A failed read serves the marker
-   * last seen and leaves it unknown, so the next read asks again.
-   */
-  private async revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
-    if (this.streamState.revertMarkerKnown(sessionId)) {
-      return this.streamState.revertMarker(sessionId);
-    }
-    const version = this.streamState.revertVersion(sessionId);
-    try {
-      const response = await this.client.session.get(
-        { sessionID: sessionId },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode session revert read");
-      const session = asRecord(response.data);
-      const marker = openCodeRevertMarker(session);
-      if (session?.id === sessionId && (session.revert === undefined || marker)) {
-        this.streamState.observeRevert(sessionId, marker, version);
-      }
-    } catch {
-      // The transcript stays readable; only the marker is stale.
-    }
-    return this.streamState.revertMarker(sessionId);
+  private revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
+    return readOpenCodeRevertMarker(this.streamState, sessionId, () =>
+      this.client.session.get({ sessionID: sessionId }, this.requestOptions()),
+    );
   }
 
   /** An action response overtaken by another observation needs an authoritative reread. */

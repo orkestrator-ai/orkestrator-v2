@@ -703,6 +703,19 @@ export class SessionsRepository {
       };
       const existingLeaf = leaves.find((leaf) => leaf.tabs.some(isNotesTab));
       const existingTab = existingLeaf?.tabs.find(isNotesTab);
+      // Replaying an already published completion cannot overwrite a newer
+      // user selection. Older completion attempts cannot regress its identity.
+      const publishedRevision = isRecord(existingTab?.keyInformationTabData)
+        ? existingTab.keyInformationTabData.completionRevision
+        : undefined;
+      if (
+        input.completionRevision !== undefined &&
+        isRecord(existingTab?.keyInformationTabData) &&
+        existingTab.keyInformationTabData.completionPublished === true &&
+        typeof publishedRevision === "number" &&
+        publishedRevision >= input.completionRevision
+      )
+        return null;
       let target = existingLeaf;
       let tabId = typeof existingTab?.id === "string" ? existingTab.id : undefined;
       if (!target || !tabId) {

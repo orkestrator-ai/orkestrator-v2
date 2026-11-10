@@ -214,6 +214,29 @@ To rehearse a build without uploading or needing the tag, run
 The local signed `package:release` task also sets `--publish never`, including
 when a GitHub token is available.
 
+## Website release summaries
+
+The public website's Releases page (`/releases`, `apps/web-public`) shows the
+five most recent published releases in plain language. It renders the
+committed file `apps/web-public/src/releases-data.ts` and never calls the
+GitHub API, so the page only changes when that file does. After publishing a
+release:
+
+1. Read the notes with `gh release list --limit 6` and `gh release view <tag>`.
+   When they are empty or thin, use `git log --oneline <previous-tag>..<tag>`
+   and `gh pr view <number>` for the changes users would notice.
+2. Add the release at the top of `RELEASES` and remove the oldest entry, so
+   exactly five remain, newest first.
+3. Sort each change into `new`, `improved` or `fixed` (an empty group is not
+   shown), merge related changes, and write for users: no pull request numbers,
+   to-do or flake ids, file paths or test-only work. `date` is the GitHub
+   publish date (UTC); `channel` is `stable` for a Latest release, `beta` for a
+   `-beta` tag and `unstable` for an `-alpha` tag.
+4. Run `bun test src/ReleasesPage.test.tsx` from `apps/web-public`. It checks
+   the count, the order, the release-notes links and the wording rules.
+
+The comment at the top of the data file repeats these steps.
+
 ## Build commit
 
 `list_nodes` reports the commit each backend was built from

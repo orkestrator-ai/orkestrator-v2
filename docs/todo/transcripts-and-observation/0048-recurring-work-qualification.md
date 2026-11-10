@@ -2,6 +2,10 @@
 
 ## Task analysis
 
+Analysed 2026-11-10 against main at 04639b12b (tasks 2 and 13; live
+evidence from Linux that day, see
+[Workflow client visibility](#workflow-client-visibility-2026-11-10-linux)).
+
 Analysed 2026-11-06 against main at 37d0966ff9cf02ff55693c21edcd8506a8b8beae.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
@@ -26,10 +30,10 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 ### Tasks
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: done (2026-11-06: `recurring-live-ab.ts --busy-rounds` on Linux with a fake model, keyed and rollback arms, 0 to 2 headless clients; every obligation kept in 17 of 18 rounds, the 18th lost to a client page that never loaded (a harness fault; such a page is now reloaded, and a second run's 12 client rounds all passed); the keyed drivers met every budget row the profile reaches, and the rollback drivers missed workflow progress; decisions B1 to B9, follow-ups in [7202](7202-busy-profile-follow-ups.md)).
-2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open (workflow client visibility and live GitHub remain) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux; workflow client visibility and the four PR rows remain open).
+2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: done (2026-11-10: workflow progress measured in a client's review view on Linux, p50 224 ms and p95 4.27 s against ≤ 3 s; the tail is the backend's, [7551](7551-multi-review-progress-tail.md); the four PR rows need live GitHub and moved to task 5, decision W3) (2026-11-06: the diff badge and Files panel rows measured in a real browser on macOS, `change-to-visible-latency.spec.ts`, all within budget except the tail of a container Changes refresh, [7201](7201-explicit-refresh-behind-running-scan.md); turn completion, activity and queued prompts measured client-side by task 11; the approval and mail rows measured by task 1's busy profile on Linux).
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
 4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
-5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
+5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown, and the four PR rows of the latency budgets as a client sees them (moved from task 2 on 2026-11-10). Status: open (needs GitHub credentials and a disposable repository, which the 2026-11-06 Linux run was not allowed to use; it no longer waits on anything else).
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: done (2026-11-06: real FSEvents bursts up to 50,000 files and a lost watch helper, in `scripts/worktree-watcher-live.ts` (two runs), in a browser on `dev:test` and in the packaged app, `watcher-packaged-electron.spec.ts`; every burst converged, every failure fell back to polling and re-attached).
 8. **iOS hidden pause and resume**: the read coordinator across backgrounding and screen lock in the `apps/ios` wrapper. Status: open (needs macOS with Xcode and an iOS device or simulator; the 2026-11-06 run was on Linux).
@@ -37,7 +41,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: done (2026-11-06: cache gauges in recurring diagnostics, a 60-cycle local soak over more than an hour with fake-model Pi sessions open, and a fix for the one unbounded growth it found, decisions 24 to 28; container lifecycle, a browser reader and three projection maps without eviction moved to [7100](7100-long-soak-follow-ups.md)).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: done (2026-11-06: all qualified on Linux with a fake model, `multi-client-restarts-live.spec.ts`, against v2.21.0 for the older backend; two defects fixed, decisions T11.1 and T11.2; what needs a decision is in [7120](7120-multi-client-restart-follow-ups.md)).
 12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: open (depends on 5) (2026-11-06: the busy profile decided the three it reaches, admission limits, scan re-prioritisation and mail retention, all kept, decision B7; the two PR candidates wait for task 5; the client-only and validation candidates never needed task 1 and are re-scoped to their own runs; the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11)).
-13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (depends on 5) (2026-11-06: the `backend-activity` and `native-queues` domains have busy-profile and soak evidence; Multi Review needs fresh timing after the review repair below (decision B8 is superseded for that domain); `feature-planning`, `build-pipeline` and observation sharing still wait for task 5 and 0049).
+13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: open (`feature-planning` and `build-pipeline` depend on 5; observation sharing on 0049; `multi-review` has its fresh timing but is not removed) (2026-11-10: the `backend-activity` and `native-queues` rollback drivers are removed, decision W2; task 5 never gated them, decision W1; task 2's two busy runs are the fresh keyed Multi Review timing the review repair asked for, every review reaching `ready`, with the tail in [7551](7551-multi-review-progress-tail.md); its removal with `WorkflowDueScheduler` is a separate change).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (2026-11-06: the stale comment is reworded).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
 16. **Client reconnect over a real two-machine link drop**: a client on another machine notices a silent tailnet drop, backs off with spread retries and recovers terminals exactly. Moved from to-do 0051 (deleted 2026-11-06). Status: open (needs two machines and a scoped firewall rule; the 2026-11-06 run could change neither the host's firewall nor its network).
@@ -156,6 +160,37 @@ p95 519 ms and returned in 2.03 s after removal (2.4 s from the write,
 decision M1). See [Busy profile](#busy-profile-2026-11-06-linux). Left: the
 four PR rows, which need task 5's live GitHub.
 
+**Outcome (2026-11-10, Linux).** Rechecked on `04639b12b`: the busy clients
+stayed on the approval tab, so workflow progress had only a backend row
+(Review repair: task 2 workflow visibility). Each busy client now opens a
+review view: a second signed-in context of its own, through the same link,
+on the review environment before the review is launched
+(`recurring-live-ab-busy-clients.ts`, decision W4). After the launch it
+selects the review's tab, whose element id ends with the backend's
+`multi-review:<workflowId>` tab id. A recorder in the page notes each phase
+the review's header shows; the header now carries the phase and workflow id
+as data (`data-testid="multi-review-phase"`, `data-phase`,
+`data-workflow-id` in `MultiReviewTab.tsx`; no visible change). Each result
+is timed from the fake model's submission to the first sighting of the phase
+it leads to or a later one (`clientProgressSample`). A result that reached
+the backend before the view showed the review is counted as not sampled,
+never inflated. The cut client of a two-client round does not watch; the
+hidden one-client round's view is its own, visible document.
+
+Two live runs on a fresh 10-environment profile, keyed drivers, one and two
+clients, three rounds each: every view watched its review from before the
+first result (12 of 12 results timed in each run, none unobserved). Client
+p50 221 and 224 ms; p95 3.90 and 4.27 s against ≤ 3 s. The tail is the
+backend's: the backend row's p95 was 3.71 and 4.08 s for the same results,
+and the client showed each phase 30 to 250 ms after the backend observed
+it. It is always the consolidated result's move to `ready`, three times in
+twelve reviews, and matches the 3 s observation interval plus jitter
+([7551](7551-multi-review-progress-tail.md)). See
+[Workflow client visibility](#workflow-client-visibility-2026-11-10-linux).
+The first run also showed that the repaired harness expected a
+`submit_review_preparation` result Multi Review never sends; fixed (decision
+W5).
+
 ### 3. Container fetch policy live
 
 **Problem.** The container fetch policy and its failure ladder have never run live. New containers never reach the routine policy, so it guards only older records and failed commit captures.
@@ -253,6 +288,11 @@ lost the selection to a seeded terminal; fixed (decision 23). See
   - **Exhaust a real token's limit.**
     - Pros: genuine evidence.
     - Cons: disrupts other work on the account.
+
+**Scope (2026-11-10).** Task 2's four PR rows moved here (decision W3): PR
+merge confirmation after merge-pending (≤ 3 s), PR created after
+create-pending (≤ 10 s), open PR state change (≤ 30 s) and terminal PR
+replacement or reopen (≤ 5 min), each timed to what a client shows.
 
 **Outcome (2026-11-06, not done).** Rechecked on `ee2cc8423`:
 `DEFAULT_PR_MONITOR_POLICY` still holds 5 min, 30 s jitter and a 2 min
@@ -521,6 +561,42 @@ Review with `WorkflowDueScheduler`. Not done here: this change only
 qualifies. `feature-planning` (Codex only) and `build-pipeline` (PR terminal
 effects) wait for task 5 and 0049, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`
 for 0049.
+
+**Outcome (2026-11-10).** Rechecked on `04639b12b`: the task list said
+"depends on 5" while this outcome and the index said the first two domains
+were unblocked. They were: neither driver owns work that live GitHub would
+qualify differently (decision W1). Both are removed (decision W2):
+
+- `backend-activity`: the 2 s bundle and 60 s tab timer that
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity` selected are gone
+  from `index.ts`; the named due jobs (`backend-activity-jobs.ts`) are the
+  only driver. The `keyedActivityJobs` option is gone.
+- `native-queues`: the reconciler's `startTimer` rollback interval is gone;
+  `NativeAgentService.initialize` always starts the keyed launch/queue
+  scheduler. The `keyedQueueScheduling` option is gone.
+- The switch can no longer name either domain
+  (`REVERTIBLE_KEYED_SCHEDULING_DOMAINS`, `workflow-supervisor.ts`); a value
+  that still names one, or `all`, leaves them keyed. Both stay in
+  `KEYED_SCHEDULING_DOMAINS`, which also labels the supervisors.
+- Tests that drove the rollback drivers now drive the keyed ones on a manual
+  clock (`index.test.ts`: tab-resource coalescing, periodic activity and
+  shutdown, a rejected sweep, repeated init, fault wiring;
+  `native-agent-service-dispatch.test.ts`: launch scans and the cadence
+  floor), and `workflow-supervisor.test.ts` pins the revertible list.
+- `recurring-work.md`, `native-agent-service.md`, `testing-guide.md` and the
+  `recurring-live-ab.ts` header describe the change. The catalogue
+  (`RECURRING_JOB_CATALOGUE`) named no rollback for either domain, so it is
+  unchanged.
+
+Not done here: `multi-review` with `WorkflowDueScheduler`, `feature-planning`,
+`build-pipeline` and observation sharing. The desktop allowlist entry stays
+because the switch still serves the other domains. For `multi-review`, task
+2's two busy runs on 2026-11-10 are the fresh keyed timing the review repair
+asked for: twelve reviews reached `ready` with every obligation kept, and
+progress after a result was within budget except a 3.7 to 4.1 s tail on one
+review in four ([7551](7551-multi-review-progress-tail.md)). The runs had no
+rollback arm, so they do not compare the two drivers; removing it is the
+next domain in decision B8's order, in its own change.
 
 ### 14. Metrics switch decision
 
@@ -1549,6 +1625,61 @@ Starts over the busy phase (from the round-boundary samples), per round:
   keeps the model URL it was created with, so the fake model must outlive
   every session that uses it (it does: one per busy phase).
 
+### Workflow client visibility (2026-11-10, Linux)
+
+Task 2. Host: beelink, Linux 7.1.8 x86_64 (16 cores), Bun 1.4.4, headless
+`dev:test` profiles of this branch (based on `main` at `04639b12b`) with the
+reachability check off, on a host shared with other builds (load average
+38 to 52). Each run was a fresh profile with one local fixture environment,
+no agent credentials and only the Pi toolchain; every model call went to the
+driver's loopback fake model; no provider, login, GitHub call, firewall or
+network change. Both profiles were stopped and reset by the driver.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
+  --settle-ms 30000 --window-ms 30000 --sample-ms 30000 --freshness-probes 0 \
+  --fixture-environments local --agent-platforms pi --busy-rounds 3 \
+  --busy-clients 1,2 --busy-environments 10 --profile-prefix q48wfvis \
+  --out output/benchmarks/recurring-busy-workflow-visible-2026-11-10.json
+```
+
+Run 1 used the harness before decision W5 and recorded a false
+`workflow-sample` failure per round (the build pipeline's preparation
+result, which a review never sends); its other samples are valid. Run 2 is
+the same command after the fix.
+
+| | Run 1 | Run 2 |
+| --- | --- | --- |
+| Rounds (1 and 2 clients), failures | 6, the W5 harness fault only | 6, none |
+| Held turns, queued prompts, approvals, mails, reviews to `ready` | 6 each | 6 each |
+| Duplicated dispatches | 0 | 0 |
+| Review views watching, results timed in a view, not sampled | 6, 12, 0 | 6, 12, 0 |
+
+Latency, p50 / p95 / max (samples):
+
+| Row (budget, p95) | Side | Run 1 | Run 2 |
+| --- | --- | --- | --- |
+| Workflow progress visible after a result, review view (≤ 3 s) | client | 221 ms / 3.90 s / 3.90 s (12) | 224 ms / 4.27 s / 4.27 s (12) |
+| Backend phase observed after the same results (≤ 3 s, upper bound) | backend | 143 ms / 3.71 s / 3.71 s (12) | 146 ms / 4.08 s / 4.08 s (12) |
+| Validation plan result to `reviewing` (runs the plan) | backend | 5.52 / 18.3 s (6) | 5.83 / 6.32 s (6) |
+| Multi Review launch to `ready` | backend | 9.37 / 21.5 s (6) | 8.83 / 13.4 s (6) |
+| Pending approval visible (≤ 2 s) | client | 168 / 331 ms (9) | 169 / 257 ms (9) |
+| Queued prompt dispatched after the turn ends (≤ 3 s) | backend | 1.18 / 2.23 s (6) | 903 ms / 1.11 s (6) |
+
+- **Per result.** Report to `consolidating`: 94 to 394 ms in every review,
+  client and backend. Consolidated review to `ready`: about 100 to 300 ms in
+  nine reviews of twelve, and 3.7 to 4.3 s in three (run 1: one; run 2:
+  two), backend and client alike. The client view lagged the backend by 30
+  to 250 ms throughout, so the budget miss is the backend's tail, recorded in
+  [7551](7551-multi-review-progress-tail.md).
+- **Validation.** Each run took 1.13 to 1.19 s; one of run 1's queued 14.9 s
+  in the host-wide test scheduler behind other builds, hence its 18.3 s row.
+  The row is bimodal (about 2.4 s or 6 s) like the `ready` tail.
+- **Other rows.** Unchanged from task 1's run and within budget; the drivers
+  for native queues and backend activity are the keyed ones in both (the
+  rollback drivers are removed, decision W2).
+
 ## Outstanding work
 
 ### Qualification
@@ -1576,8 +1707,10 @@ credentials or a platform CI lacks are batched in
     the container Changes refresh tail needs a decision
     ([7201](7201-explicit-refresh-behind-running-scan.md)); the turn,
     approval and mail rows were done 2026-11-06 by the busy
-    profile; workflow visibility remains open (only backend state was read);
-    the PR rows go with live GitHub;
+    profile; workflow visibility was done 2026-11-10 (a review view per
+    client, over budget at p95 from a backend tail,
+    [7551](7551-multi-review-progress-tail.md)); the PR rows go with live
+    GitHub (task 5);
   - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
     missing-baseline recovery fetch, an explicit refresh and the routine policy
     on a legacy record, all on a real container (see
@@ -1667,8 +1800,9 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
 ### Code: after soak
 
-Removal not started; its preparation is done (2026-10-25: `stableJitterMs`
-moved, the metrics switch decided). The idle A/B on macOS shows the keyed
+Removal started 2026-11-10: the `backend-activity` and `native-queues`
+rollback drivers are gone (task 13, decision W2). Its preparation was done
+on 2026-10-25 (`stableJitterMs` moved, the metrics switch decided). The idle A/B on macOS shows the keyed
 drivers starting no more often than the rollback drivers, with the same
 freshness and no guard lines, and a 10-cycle lifecycle soak left no leaked
 footprint, and on 2026-11-06 a 60-cycle local soak over more than an hour
@@ -1678,6 +1812,8 @@ with fake-model sessions open left none either. The busy profile ran on
 not run, so the `feature-planning` and `build-pipeline` drivers and
 observation sharing stay.
 
+- ~~Remove the `backend-activity` and `native-queues` rollback drivers.~~
+  Done 2026-11-10 (task 13, decision W2).
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
   `multi-review` domain together with `WorkflowDueScheduler`
@@ -2554,7 +2690,59 @@ collide with other tasks' decisions.
 **Problem.** The busy clients stay on the approval tab and do not observe review progress.
 **Context.** Backend `review.get` observations cannot complete a client-visible latency row.
 **Investigation.** The original workflow timings also paired delayed model callbacks with the next timestamp, which could skip or misattribute results.
-**Decisions.** Leave the workflow client row open (recommended): accurately scopes the evidence without adding an unqualified UI path. Adding a review view reader would provide client latency but requires separate live qualification. The historical workflow latency values above are withdrawn as qualification evidence, including their use in decision B8 to unblock Multi Review rollback removal; that domain needs a fresh run. Activity and queue evidence is unchanged.
+**Decisions.** Leave the workflow client row open (recommended): accurately scopes the evidence without adding an unqualified UI path. Adding a review view reader would provide client latency but requires separate live qualification. (Superseded 2026-11-10: the review view reader was added and qualified live, decision W4.) The historical workflow latency values above are withdrawn as qualification evidence, including their use in decision B8 to unblock Multi Review rollback removal; that domain needs a fresh run. Activity and queue evidence is unchanged.
+
+### Tasks 2 and 13 (2026-11-10, Linux)
+
+- **W1 Does task 5 block the `backend-activity` and `native-queues`
+  removals? (task 13)** The task list said "depends on 5"; its outcome,
+  decision B8 and the index said these two were unblocked. Checked in the
+  code: the only GitHub-facing work either driver starts is the coordinator
+  PR-watch poll inside the 60 s `coordinator-repair` maintenance and the
+  activity sweep's PR refresh after an agent finishes. Both drivers call the
+  same functions at the same cadence (2 s; 60 s for maintenance), so live
+  GitHub evidence could not tell them apart. Options: keep task 13 blocked
+  on task 5; or remove the two drivers now. Chosen: remove them. Pros: the
+  evidence decision 1 asked for (busy profile, soak) exists for both, and
+  the review repair withdrew only Multi Review's workflow timings. Cons: no
+  rollback remains for these two domains if a regression appears; one would
+  need a revert.
+- **W2 How to remove them (task 13).** Options: delete the domains from the
+  switch's vocabulary; or keep them as keyed domains (they label the
+  supervisors and the native-queue scheduler's owner) and narrow only what
+  the switch can name. Chosen: the latter, `REVERTIBLE_KEYED_SCHEDULING_DOMAINS`
+  and a `keyedSchedulingEnabled` that accepts only those, so a call for a
+  removed domain fails the typecheck. A stale environment value naming them
+  is ignored rather than refused, so an old desktop configuration still
+  starts. The rollback-only tests were converted to the keyed drivers rather
+  than deleted, where they covered behaviour the keyed tests did not
+  (coalescing, the cadence floor, a rejected sweep, repeated init). The same
+  change makes a repeated backend `init` arm the shared usage-reading timer
+  once: `#2023` re-armed it on every call, which failed the named-jobs test on
+  `main`.
+- **W3 Where the PR rows of task 2 go.** Options: keep task 2 open until task
+  5 runs; or move the four PR client rows into task 5. Chosen: move them.
+  Pros: task 5 already owns live GitHub and the stale-marker run (task 17),
+  and the same run gives both the backend and the client view of each PR
+  row. Cons: task 5 grows.
+- **W4 How a client watches a review (task 2).** Options: switch the busy
+  client's page from the approval tab to the review and back; open a second
+  page in the same context; or open a review view in a context of its own.
+  Chosen: a context of its own, signed in with its own one-shot login and
+  through the same outage link. Pros: the approval, mail and resume rows keep
+  their page; nothing persisted in the browser (selected environment, tab
+  state) is shared between the two views. Cons: one more login and page per
+  client per round; under load it adds browser work to the host. The view is
+  opened before the launch so it watches the first result, and the header's
+  phase is read from data attributes so stalled-session copy cannot break the
+  measurement.
+- **W5 The repaired harness expected a result Multi Review never sends.** The
+  review repair (`#1959`) correlated `submit_review_preparation` with
+  `reviewing`; that result kind is a build pipeline's. Multi Review submits
+  the validation plan, the reviewer reports and the consolidated review. The
+  in-memory test harness mirrored the same wrong flow, so its tests passed.
+  Fixed in both; the live row now has two progress results per review, which
+  is also what the withdrawn 2026-11-06 figures counted (18 for 9 reviews).
 
 ### Review repair: task 1 backend workflow timing and recovery
 

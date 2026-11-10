@@ -49,14 +49,24 @@ of the already-running-profile command `mise run test:agent:docker`:
 mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolated
 ```
 
-It builds the worktree-specific development image, runs the final-image smoke,
-runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
+It builds the worktree-specific development image, then runs three things side
+by side, since each only reads that image: the final-image smoke, the backend
+live image qualifications in `IMAGE_QUALIFICATION_TESTS`
 (`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
 `claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
 starts interactive Claude on it with no network and fake credentials; it fails
-rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok, OpenCode, Cursor and Pi,
-and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
-resets the profile afterwards. The worktree's shared development image is kept
+rather than skips when the image is missing), and the startup of one
+credential-free local/container fixture profile (Codex, Grok, OpenCode, Cursor
+and Pi) per entry of `DOCKER_FIXTURE_SHARDS`. The profiles start one after
+another, because each startup compiles Electron and the bridges into the same
+checkout. The first failure stops the others. Each profile then runs its shard of the same `Docker fixture` selection
+as `test:agent:docker`, one spec at a time, while the other shards run in their
+own profiles; the shards are balanced by measured run time, and
+`isolated-browser.test.ts` fails when a spec with a `Docker fixture` test is in
+no shard or in two. A fixed `--agent-tools-port` can be bound by only one
+backend, so that run keeps every spec in one profile. Results are written per
+profile under `output/agent-testing/<profile>/browser/`. Every started profile
+is stopped and reset afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
 records that it covers `test:agent:docker`; do not schedule the latter separately
 without a running profile. No provider turns are enabled. Linux Electron runs

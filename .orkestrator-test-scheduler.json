@@ -11,8 +11,8 @@
   "commandProfiles": {
     "mise run test:agent:docker:isolated": {
       "resources": ["workspace:*"],
-      "workers": 2,
-      "memoryMiB": 4096,
+      "workers": 4,
+      "memoryMiB": 8192,
       "noProgressTimeoutMs": 600000,
       "covers": ["mise run test:agent:docker"],
       "onDemand": {

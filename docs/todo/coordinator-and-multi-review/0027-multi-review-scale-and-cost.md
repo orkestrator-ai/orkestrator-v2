@@ -20,7 +20,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Mixed real-provider scale run: the harness**: make the scale case run an 8 to 32 reviewer panel across more platforms than Claude and Codex, and record the per-provider cap, tail latency and process-tree peak RSS. The signed-in run itself moved to the manual-test checklist (7568). Status: open.
-2. **Live step reminder and step continuation**: preparation, consolidation and Fix follow-ups are covered only by deterministic tests. Status: deferred (cannot be forced on a real provider).
 3. **Content-addressed evidence store**: a backend-owned, read-only evidence store. Status: deferred (until measured).
 4. **Provider batch status observation**: one bridge call for many reviewers' settlement and usage. Status: deferred (no bridge exposes it).
 5. **Hierarchical consolidation**: map/reduce merges when evidence exceeds `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Status: deferred (no overflow has been observed, and nothing counts one).
@@ -70,24 +69,6 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Backend only, as today.**
     - Pros: simple and already recorded.
     - Cons: misses most of the memory a large panel uses.
-
-### 2. Live step reminder and step continuation
-
-**Problem.** The reminder and restart continuation for preparation, consolidation and Fix have never run on a real provider mid-step. A regression there would fail the whole review rather than one reviewer.
-
-**Context.** Recorded as "Not qualified live" in the 2026-10-17 and 2026-10-18 results. A model forgetting its result tool cannot be forced (1 in 15 preparations on 2026-10-17), and no live restart happened to land mid-step.
-
-**Investigation.** The step paths remain `MultiReviewService.prepareStepFollowUp` and `advanceFixModel` in `apps/backend/src/core/multi-review-service.ts`. `apps/backend/tests/multi-review-claude-bridge-restart.test.ts` drives a real Claude bridge process with a fake CLI through `HttpBridgeProvider` for a step. That is the closest thing to live, and it covers the continuation and the reconnect. The spec's restart case restarts the backend while *reviewers* run. Nothing in it targets preparation or consolidation.
-
-**Decisions.**
-
-- **Is deterministic coverage enough?**
-  - **Yes, keep this out of the outstanding list (recommended).** The real-bridge restart test already crosses the process boundary, and the reminder cannot be triggered honestly.
-    - Pros: no flaky live case built on timing; the contract is already pinned.
-    - Cons: a provider-specific difference in mid-step restarts (for example Codex app-server) is untested live.
-  - **Add a live disruption timed to the preparation or consolidation phase.** The spec already polls `phase`.
-    - Pros: real evidence for the step continuation.
-    - Cons: timing-dependent; another long live case; still cannot cover the reminder.
 
 ### 3. Content-addressed evidence store
 
@@ -1113,7 +1094,7 @@ Taken on 2026-10-25 without stopping to ask, as the delegation required.
   preparation, sealing, the fan-out budgets and dispatch recovery (the two
   bugs the interleaving tests found). No living doc covers fan-out
   supervision or consolidation; the rationale above is its only home.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the signed-in mixed-panel run of task 1) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do moved there on 2026-11-10: the signed-in mixed-panel run of task 1, and task 2 (seeing the step reminder and the restart continuation for preparation, consolidation and Fix on a real provider; deterministic coverage, including the real-bridge restart test, stays the recommended proof).
 
 ## Replaces
 

@@ -331,8 +331,11 @@ can act), just as its rating is, and keep the counts in
   `requires user input` row whose Needs you is `—`, a `blocked` row whose
   Needs you does not start with `Waits on:`, a `Waits on:` note on a row that
   is not `blocked`, or ranks other than `1..n` in row order. It requires
-  `manual-test/` to hold exactly one checklist, every checkbox in it to name
-  its source to-do in bold, and every relative link in it to resolve: the
+  `manual-test/` to hold exactly one checklist, every checkbox in it to open
+  with a closed bold label naming its source to-do, the task (or named check)
+  and a title (`**[NNNN](...) task N: title.**`, or `**NNNN (retired) task N:
+  title.**`) followed by what to do, and every relative link in it to
+  resolve: the
   file must exist, and an `#anchor` must name a heading in it whose text the
   file does not repeat (a repeated heading's bare anchor lands on the first
   one). It also requires every folder to be linked from the top-level index,

@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Tasks 1 to 3 are unchanged. Task 4 still applies, but its realm part is obsolete: plan items 6002 and 6003 deleted workspace realms and their portal (`orkestrator:portal-event`), so main's relayed stream now serves windows only, and another node's workspace is a node scope in the window's own renderer.
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Tasks 1 and 2 are unchanged. Task 3 (a production profile of the frame costs) needs a real multi-client workload on the user's install and moved to 7568 on 2026-11-10. Task 4 still applies, but its realm part is obsolete: plan items 6002 and 6003 deleted workspace realms and their portal (`orkestrator:portal-event`), so main's relayed stream now serves windows only, and another node's workspace is a node scope in the window's own renderer.
 
 Previously analysed 2026-11-05 against `main` at `1e6d56391`.
 
@@ -10,7 +10,6 @@ Previously analysed 2026-11-05 against `main` at `1e6d56391`.
 
 1. **Two-node browser check**: per-node relayed events between two real backends, in a real browser, with a busy leaf and an inactive tab. Status: open.
 2. **Older peers on real releases**: an older renderer on an upgraded command node, and a current renderer on an older command node. Status: open.
-3. **Production profile of the frame costs**: whether the shared frame buffer matters on a real fan-out. Status: open.
 
 ### 1. Two-node browser check
 
@@ -48,26 +47,8 @@ Previously analysed 2026-11-05 against `main` at `1e6d56391`.
     - Pros: no setup.
     - Cons: it shows that the path is used, not that it works.
 
-### 3. Production profile of the frame costs
-
-**Problem.** Part `0280` (GW-5) was rated as something that should wait for a profile, and no production profile was taken.
-
-**Context.** A frame is encoded once and every client is written the same `Buffer` (`encodeGatewayFrame`, `apps/backend/src/gateway-event-replay.ts`). On 2026-11-04 frame measures per emit went from 13 to 0 with 4 subscribers, and the time inside `emit` fell from 433–565 µs to 258–426 µs per 64 KiB event, moving with host load (to-do 1202 task 11 (retired 2026-11-10)).
-
-**Investigation.** The synthetic numbers come from `apps/backend/scripts/gateway-frame-costs.ts`. A production profile needs a real workload with several clients, which this batch did not have.
-
-**Decisions.**
-
-- **Is a profile still needed?**
-  - **Take one only if gateway fan-out shows up in another investigation (recommended).**
-    - Pros: the fix is built, has no downside to undo, and a profile could only confirm it.
-    - Cons: the real saving stays unmeasured.
-  - **Profile a real multi-client session now.**
-    - Pros: a real figure.
-    - Cons: effort with no decision depending on the answer.
-
 ## Related
 
 - to-do 1202 task 11 (retired 2026-11-10)
 - [Command nodes](../../architecture/command-nodes.md)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, the desktop's relay between two real machines) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do moved there on 2026-11-10: task 3 (a production profile of the frame costs, taken only if gateway fan-out shows up in another investigation) and task 4 (the desktop's relay between two real machines).

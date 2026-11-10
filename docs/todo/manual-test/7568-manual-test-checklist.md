@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (286 items): run each check under
+1. **Manual tests and live checks** (288 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (47 items): make each call
@@ -73,13 +73,13 @@ agent can apply it.
 | Agent engines and provider SDKs | 66 | 7 |
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 21 | 9 |
-| Coordinator and Multi Review | 76 | 6 |
-| Cross-cutting | 68 | 14 |
+| Coordinator and Multi Review | 77 | 6 |
+| Cross-cutting | 69 | 14 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 286 | 47 |
+| **Total** | 288 | 47 |
 
 ## Outstanding work
 
@@ -404,6 +404,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 
 - [ ] **[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md) task 1: mixed real-provider Multi Review scale run.** After 0027 task 1's harness change lands (the scale case covers more than Claude and Codex and records the per-provider cap and process-tree RSS), on a host signed in to at least four of Claude, Codex, Cursor, Grok, OpenCode and Pi, start `mise run dev:test --profile qa-multi-review --fixture` with one `--credential-source <platform>` per signed-in platform and a matching `--agent-platforms`. In a second terminal run the scale case at 8, 16 and 32 reviewers: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-multi-review ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE=<n> mise run test:logged -- --name multi-review-live -- mise run test:agent:browser -- e2e/agent-testing/multi-review-live.spec.ts -g scale`, then `mise run dev:stop --profile qa-multi-review` and `mise run dev:reset --profile qa-multi-review`. Batch it with the 0031 mixed-panel row. Record: for each panel size, the platforms, the per-provider maximum concurrent operations, reviewer latency p50, p95 and max, and peak RSS from `scale.json`, plus any failure, in 0027's Qualification section.
+- [ ] **[0027](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md) task 2: live step reminder and step continuation on a real provider (opportunistic).** Background: the result reminder and the restart continuation for Multi Review preparation and consolidation and for Fix follow-ups (`MultiReviewService.prepareStepFollowUp` and `advanceFixModel` in `apps/backend/src/core/multi-review-service.ts`) are proven only by deterministic tests, the closest being `apps/backend/tests/multi-review-claude-bridge-restart.test.ts`, which drives a real Claude bridge with a fake CLI; 0027 recommends treating that as enough, so no dedicated run is required. Tick this when one of these happens on a real provider in a disposable `dev:test` profile (or, if you choose to collect it, on your own install): a preparation, consolidation or Fix step's model ends its turn without calling its result tool, or a backend or bridge restart lands while the workflow's `phase` is preparation or consolidation. To force the second case, start a real-provider Multi Review in a disposable profile, watch the workflow's `phase`, and restart that step's provider bridge while it is in preparation or consolidation. Record in 0027's "Needs verification": the date, the provider and its version, which step, which disruption, whether the reminder or the continuation fired, and whether the step's result was credited without failing the whole review.
 - [ ] **[0223](../coordinator-and-multi-review/0223-provider-non-delivery-proof.md) task 5: Cursor and Grok restart-resend checks.** With a current Grok login and a Cursor login that can complete a prompt, repeat the 2026-10-27 check in a disposable `dev:test` profile with a fixture local environment, one provider at a time:
   1. Create a fresh session and confirm `absent` for an unseen request id.
   2. Send a unique prompt, get the reply, stop the bridge with its `stop_local_*_server_cmd` and start it again.
@@ -513,6 +514,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **5182 (retired) task 2: the ledger move's first-start time on a real database.** (Background: [migrations](../../architecture/storage.md#migrations).) In the backend log of the first start after upgrading to migration 7 (if that log was kept), find the `[storage] ledger.moved` line. Record: its `rows` and `durationMs`, and the size of `change-tracking.sqlite` afterwards, against the generated 666 MB ledger's 8 s. Reply to the coordinator.
 - [ ] **[5180](../cross-cutting/5180-sqlite-durability-tiers.md) task 1 (user part): commits per minute in a busy real session (billed).** Once 5180 task 1's commit counter has landed, approve the spend. Run an isolated profile with several agents taking real provider turns for about 30 minutes. Read the per-connection commit counts from `/metrics` at the start and end. Record in 5180 task 1's Investigation: commits per minute for `orkestrator.sqlite` and for `change-tracking.sqlite`, against the report's estimate of 600 to 1,000 a minute. This feeds the 5180 task 2 decision below.
 - [ ] **[5181](../cross-cutting/5181-sqlite-cache-sizes.md) task 1 (user part): read latency on a busy real profile.** Once 5181 task 1's read timings have landed, run a busy real profile (real agents, real projects) for an hour. Read the read timings and the database waits. Record in 5181 task 1's Investigation: p50 and p95 for the hot reads (environment list, transcript pages, diff pages), and whether any read is slow for want of page cache. This unblocks 5181 task 2.
+- [ ] **[5840](../cross-cutting/5840-relayed-events-live-evidence.md) task 3: production profile of the gateway frame costs (only if needed).** Background: a gateway frame is encoded once and every client is written the same `Buffer` (`encodeGatewayFrame`, `apps/backend/src/gateway-event-replay.ts`). The synthetic measurement (`apps/backend/scripts/gateway-frame-costs.ts`, 2026-11-04) put frame encodes per emit at 0 with 4 subscribers and the time inside `emit` at 258–426 µs per 64 KiB event; no real workload has been profiled. The source recommends taking a profile only if gateway fan-out shows up in another investigation, so leave this unticked until then. When it does, on the install where it showed up, with several clients (desktop windows, browser tabs or a phone) watching busy environments, take a CPU profile of the backend over a few minutes of normal use. Record in 5840's Investigation: the date, the number of clients, events per minute, the share of backend time in the gateway's `emit` and in frame encoding, and how that compares with the synthetic figures. Share no prompts, terminal output or file contents from the profile.
 - [ ] **[5840](../cross-cutting/5840-relayed-events-live-evidence.md) task 4: the desktop's relayed events between two real machines.** Run a desktop window on one machine with a leaf attached from another machine, with `localWindowGatewayTransport` off.
   - Watch the leaf's badges and open a second window that also watches the leaf.
   - Change a fixture environment on the leaf, and check on `/__orkestrator/metrics` that only the watched node's frames are written.

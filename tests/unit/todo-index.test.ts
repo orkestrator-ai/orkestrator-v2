@@ -30,10 +30,16 @@ const MANUAL_TEST = "manual-test";
 const MANUAL_TEST_STATUSES = new Set<string>(["requires user input"]);
 const NONE = "—";
 const WAITS_ON = "Waits on:";
-// A checklist item names its source to-do and task in bold, e.g.
-// `- [ ] **[0040](../mcp/0040-mcp-environment-delivery.md) task 1: ...**`.
+// A checklist item is one top-level checkbox whose bold label names its source
+// to-do, the task or check within it, and a title, followed by the steps and
+// what to record, e.g.
+// `- [ ] **[0040](../mcp/0040-mcp-environment-delivery.md) task 1: title.** Steps. Record: ...`.
+// The label must close, the task identity and title must be non-empty, and at
+// least a short instruction must follow it (longer steps may continue in
+// sub-bullets), so a bare source such as `**0009 (retired) **` is refused.
 const CHECKBOX = /^\s*- \[[ xX]\] /;
-const CHECKLIST_ITEM = /^- \[[ xX]\] \*\*(\[\d{4}\]\([^)]+\)|\d{4} \(retired\)) /;
+const CHECKLIST_ITEM =
+  /^- \[[ xX]\] \*\*(?:\[\d{4}\]\([^)]+\)|\d{4} \(retired\)) [^:*\s][^:*]*: [^\s*].*?\*\* \S.{9,}$/;
 
 // Numbers already shared by more than one todo file when the uniqueness check
 // was added (todo 0732). They keep their numbers, because a todo number is a
@@ -231,7 +237,10 @@ function checkManualTest(todo: string) {
   const items = checklist.split("\n").filter((line) => CHECKBOX.test(line));
   expect(items.length, "the checklist has checkbox items").toBeGreaterThan(0);
   for (const item of items) {
-    expect(item, "a checklist item names its source to-do in bold").toMatch(CHECKLIST_ITEM);
+    expect(
+      item,
+      "a checklist item names its source, task and title in bold, then what to do",
+    ).toMatch(CHECKLIST_ITEM);
   }
   const checklistPath = path.join(directory, files[0]!);
   const broken = [...checklist.matchAll(/\]\(([^)\s]+)\)/g)]
@@ -513,29 +522,44 @@ describe("todo guard negative fixtures", () => {
 
   test.each([
     ["an item without a source", "- [ ] Run the live check and record it."],
+    ["an item that names only its source", "- [ ] **0009 (retired) **"],
+    [
+      "an item that names only its linked source",
+      "- [ ] **[0001](../area/0001-first.md)** Record.",
+    ],
+    [
+      "an item without a task identity",
+      "- [ ] **[0001](../area/0001-first.md): run it.** Record the result.",
+    ],
+    ["an item without a title", "- [ ] **0009 (retired) task 2:** Record the result."],
+    [
+      "an item whose label never closes",
+      "- [ ] **0009 (retired) task 2: run it. Record the result.",
+    ],
+    ["an item with nothing to do after its label", "- [ ] **0009 (retired) task 2: run it.**"],
     [
       "an item with an unresolved link",
-      "- [ ] **[0002](../area/0002-gone.md) task 1: run.** Record.",
+      "- [ ] **[0002](../area/0002-gone.md) task 1: run.** Record the result.",
     ],
     [
       "an unresolved same-folder link",
-      "- [ ] **0009 (retired) task 3: run.** See [notes](0006-gone.md).",
+      "- [ ] **0009 (retired) task 3: run.** See [notes](0006-gone.md) first.",
     ],
     [
       "an anchor no heading has",
-      "- [ ] **[0001](../area/0001-first.md#missing) task 2: run.** Record.",
+      "- [ ] **[0001](../area/0001-first.md#missing) task 2: run.** Record the result.",
     ],
     [
       "an anchor that only a fenced line would produce",
-      "- [ ] **[0001](../area/0001-first.md#fenced) task 2: run.** Record.",
+      "- [ ] **[0001](../area/0001-first.md#fenced) task 2: run.** Record the result.",
     ],
     [
       "the bare anchor of a repeated heading",
-      "- [ ] **[0001](../area/0001-first.md#machines) task 2: run.** Record.",
+      "- [ ] **[0001](../area/0001-first.md#machines) task 2: run.** Record the result.",
     ],
     [
       "a same-file anchor no heading has",
-      "- [ ] **0009 (retired) task 4: run.** See [x](#nowhere).",
+      "- [ ] **0009 (retired) task 4: run.** See [x](#nowhere) first.",
     ],
   ] as const)("rejects a checklist with %s", (_name, line) => {
     const directory = fixture();

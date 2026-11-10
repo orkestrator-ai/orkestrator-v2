@@ -6,6 +6,7 @@ import {
   containerSessionsRunning,
   recordedTerminalShellPids,
 } from "./container-terminal-processes";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * Closing a container terminal ends its shell and everything under it in the
@@ -60,15 +61,6 @@ async function login(page: Page, status: Status): Promise<Invoke> {
   };
 }
 
-/** Terminal output as plain text, without escape sequences. */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_=>]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-
 test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
 
 test("Docker fixture closing a container terminal ends its shell and jobs in the container", async ({
@@ -104,7 +96,7 @@ test("Docker fixture closing a container terminal ends its shell and jobs in the
   try {
     await invoke("start_terminal_session", { sessionId });
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     // The image's zsh prompt ends with ❯; wait for it so no input is lost.

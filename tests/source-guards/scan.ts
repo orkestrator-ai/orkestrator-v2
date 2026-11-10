@@ -12,6 +12,7 @@ import {
 } from "./guard";
 import { isTestSource } from "./paths";
 import { libBackendCommandDefault } from "./lib-backend-command-default";
+import { rawWebRequestListener } from "./raw-webrequest-listener";
 import { releasedPortRebind } from "./released-port-rebind";
 import { sleepBeforeNegativeAssertion } from "./sleep-before-negative-assertion";
 import { smallFakePid } from "./small-fake-pid";
@@ -30,6 +31,7 @@ export const SOURCE_GUARDS: readonly SourceGuard[] = [
   libBackendCommandDefault,
   windowOrkestratorPortal,
   workspaceCommandBoundCall,
+  rawWebRequestListener,
 ];
 
 export const SCANNED_ROOTS = ["tests", "apps", "bridges", "packages", "scripts", "e2e"] as const;

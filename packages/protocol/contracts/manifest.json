@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1017,
-    "defined": 1017,
+    "commands": 1018,
+    "defined": 1018,
     "untyped": 0,
     "events": 45
   },
@@ -2425,7 +2425,7 @@
         "schema"
       ],
       "argsDigest": "sha256:079b8898d504246ade15f9dbe94f2c425b698ecdba2ac140cf800e3783e50013",
-      "resultDigest": "sha256:15067cded47a6b5713a5c7263414063ecc25fef74dc05e3ac3e1553de9648f02"
+      "resultDigest": "sha256:93b752f7664cdedd2e7a6bec3e1faa47dffda408a2e2c3b0aa2e800346d08c70"
     },
     "dispatch_native_agent_prompt": {
       "domain": "native-sessions",
@@ -3235,7 +3235,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:b0b5f7fd4242e725c9eec3d77e86de66f36d939b56e687dcacda2757e4f7d6cb"
+      "resultDigest": "sha256:ab757b7afbc066aaa3f2f2c1d77e669a2a952b680be2c0691dd798085a7e95ae"
     },
     "get_docker_system_stats": {
       "domain": "docker",
@@ -4954,7 +4954,7 @@
       "read": false,
       "critical": ["attachments", "conversationMode", "literal", "requestId"],
       "argsDigest": "sha256:5e5df74cb56a66defb9dabc64939bea56ecca3eaf6df8043925bf2b7359cb8e6",
-      "resultDigest": "sha256:8ed067e2a180af2b8232b4470b8db2b6b6d15fc3d6f7bf1b8f19ac24b588a767"
+      "resultDigest": "sha256:b15e5e3eee682225e54c70420e8e90f72a03ff8950c3b938e86652dbebaed0af"
     },
     "launch_controller_multi_review": {
       "domain": "coordinator",
@@ -5052,7 +5052,7 @@
         "tabReuse"
       ],
       "argsDigest": "sha256:b7973d21bb7459524b3435a43b968a9f798b2bd0e57b8e52d487129308fe4bb5",
-      "resultDigest": "sha256:8ed067e2a180af2b8232b4470b8db2b6b6d15fc3d6f7bf1b8f19ac24b588a767"
+      "resultDigest": "sha256:b15e5e3eee682225e54c70420e8e90f72a03ff8950c3b938e86652dbebaed0af"
     },
     "launch_terminal_job": {
       "domain": "terminals",
@@ -5350,6 +5350,15 @@
       "critical": [],
       "argsDigest": "sha256:0614f0bac598b8660383a0add6be976ec11c6b8f3f2287fd386e1e6d5afcd91f",
       "resultDigest": "sha256:90611f0df5b38f748408eeaaff2d290c36653ba37d267ed0b62baec222803f53"
+    },
+    "list_native_agent_branches": {
+      "domain": "native-sessions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c0468c73ee34dd5490bea392f081c45747c92b68b54a7ac3c77013107fe5415b",
+      "resultDigest": "sha256:7bc67d400b01f6b97cb03ccbdf3bfc35af53ff81155edd958b652186d9e40df2"
     },
     "list_native_agent_resumable_sessions": {
       "domain": "native-sessions",
@@ -5690,6 +5699,15 @@
       "argsDigest": "sha256:06610c9e417111b3d66f0ad12bdc75acfeb126711cc207c03cc9768edd5e9770",
       "resultDigest": "sha256:eef3198599fb5e29764d83044fa54b50098929ddc9865e69a2fd6f8dfea0cb63"
     },
+    "note_coordinator_node_unavailable": {
+      "domain": "coordinator",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:f52a78094e93a4b0db02143a5b888c7e35be3068ea12b5eeaf90e0af012d1e6e",
+      "resultDigest": "sha256:f800bd7461dd77ac49bf74b0c680e39bd2bce575d79e03c00bc8c2f361e3e241"
+    },
     "open_agent_sign_in_terminal": {
       "domain": "accounts",
       "since": 1,
@@ -5931,6 +5949,15 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
+    },
+    "plan_diagnostics_bundle_with_container_logs": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bd5dcbd6f92800592339ed4b0e1987f12cc3abe36615c06f5c6425410ff99011",
       "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
     },
     "post_github_completion_comment": {
@@ -7029,7 +7056,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:640c354dcc96ba7e32ecaccec3dcf015e19a8aeb7e7dd24d0cbed8aed5bf2352",
-      "resultDigest": "sha256:15067cded47a6b5713a5c7263414063ecc25fef74dc05e3ac3e1553de9648f02"
+      "resultDigest": "sha256:93b752f7664cdedd2e7a6bec3e1faa47dffda408a2e2c3b0aa2e800346d08c70"
     },
     "retry_prompt_queue_dispatch": {
       "domain": "native-sessions",

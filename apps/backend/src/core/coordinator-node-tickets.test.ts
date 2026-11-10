@@ -290,6 +290,12 @@ describe("tickets on a leaf", () => {
     const listed = await f.ticketOnNode("list", {});
     expect(String(listed.note)).toContain("Build box is not connected");
     f.state.connected = true;
+    // The refused coordinator hears once that the machine is back (3800 task 8).
+    await f.world.coordinator.nodeConnected("bk_leaf");
+    await f.world.deliver();
+    const reconnected = f.world.received(await f.world.main());
+    expect(reconnected).toHaveLength(1);
+    expect(reconnected[0]).toContain("Build box (nodeId bk_leaf) is connected again");
     await f.ticketSync.sync("bk_leaf");
     expect(await f.leaf.kanban.getKanbanTask(id)).toMatchObject({ title: "Made offline" });
     await f.build("build-online", id);

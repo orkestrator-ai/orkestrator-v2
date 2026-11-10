@@ -15,7 +15,7 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
 3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
-5. **OpenCode steer**: needs OpenCode 2.x. Status: blocked (on [0008](0008-opencode-v2.md) tasks 5 and 10). Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
+5. **OpenCode steer**: needs OpenCode 2.x. Status: done for OpenCode 2.x sessions (built by [0008](0008-opencode-v2.md) task 5 behind its opt-in preview, merged in #2009 on 2026-11-09; 0008 task 10, the steer spike, was done on 2026-11-08). OpenCode 1.x sessions cannot steer and will not. Live qualification of 2.x steer belongs to 0008 task 7. Since task 10 below, an expected-turn precondition is no longer needed: OpenCode 2.x starts a new run for a steer that reaches an idle session, which is the behaviour the owner wants everywhere.
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
@@ -129,7 +129,9 @@ task 10 added and built 2026-11-08 against `02f55ea9b`.
 
 **Investigation.** Still blocked: the SDK and CLI are pinned at `1.19.4` (`packages/toolchain/src/manifest.ts:10`, `@opencode-ai/sdk`). OpenCode's actions remain `{ compact, undo, redo }` (`packages/protocol/src/native-agent.ts`, OpenCode branch).
 
-**Decisions.** None: blocked on 0008 and an upstream precondition; the file already rules out a coordinator-only workaround.
+**Recheck, 2026-11-10** (against `main` at `04639b12b`). The paragraph above is history. 0008 built an `opencode2` provider behind an opt-in preview (#2009). The OpenCode platform table now offers `steer` (`packages/protocol/src/native-agent.ts`, the comment above OpenCode's actions), and each session answers through `steerSupported()`: true for a 2.x session (`apps/backend/src/core/opencode2/provider.ts`, routed by `opencode2/routing-provider.ts`), false for every 1.x session (`apps/backend/src/core/opencode-provider.ts`). The steer guard 0008 task 10 proved on 2.2.6 is `opencode2/steer.ts`, with `opencode2-steer.live.test.ts` against the real binary.
+
+**Decisions.** None: built in 0008 for 2.x sessions; 1.x has no steer to adopt. The file already rules out a coordinator-only workaround.
 
 ### 6. Grok steer
 
@@ -194,9 +196,10 @@ between turns and releases itself after an idle window, so a follow-up is
 written into the running process. Background-task ownership is that
 process's own state, and bridge-wide reads (models, account, plan usage) ask a
 running CLI before spawning a probe. What is left is live qualification
-through the app and the browser. OpenCode and Grok steer are blocked upstream
-and are recorded here; the Cursor `force` send is deferred until a wedged
-agent is seen.
+through the app and the browser. OpenCode steer exists for OpenCode 2.x
+sessions (0008's opt-in preview); 1.x sessions cannot steer. Grok steer is
+blocked upstream and is recorded here; the Cursor `force` send is deferred
+until a wedged agent is seen.
 
 ### 10. A steer that misses its turn starts a new turn
 
@@ -345,7 +348,8 @@ at-most-once dispatch.
   (`bridges/acp-bridge/src/grok-interjection.ts`) runs only with
   `GROK_UNSAFE_EXPERIMENTAL_INTERJECTION=1` (`applyVendorUpdate` in
   `acp-session.ts`).
-- OpenCode: no `steer` in its actions.
+- OpenCode: `steer` for OpenCode 2.x sessions only (0008, opt-in preview); a
+  1.x session answers `steerSupported()` false.
 
 ## Outstanding work
 
@@ -359,14 +363,17 @@ at-most-once dispatch.
 
 ### Blocked
 
-- **OpenCode steer** needs OpenCode 2.x: `POST /api/session/:id/prompt` with
+- ~~**OpenCode steer** needs OpenCode 2.x: `POST /api/session/:id/prompt` with
   `delivery: steer`. Even 2.x has no expected-turn precondition, so a native
-  `/steer` must not be advertised until one exists. See
-  [0008-opencode-v2.md](0008-opencode-v2.md).
+  `/steer` must not be advertised until one exists.~~ No longer blocked
+  (2026-11-10): 0008 built it for OpenCode 2.x sessions behind the opt-in
+  preview (#2009), with the backend-held guard of its task 10 in place of an
+  upstream precondition. 1.x sessions cannot steer. Its live qualification is
+  [0008-opencode-v2.md](0008-opencode-v2.md) task 7.
 - **Grok steer** stays off. ACP v1 has no mid-turn input, and the Grok
   interjection extension stays behind its unsafe flag until an ACP equivalent
   exists.
-- Neither gets a coordinator-only workaround. Coordinators need nothing more:
+- Grok gets no coordinator-only workaround. Coordinators need nothing more:
   they do not opt out of `actions.steer`, so they get steer here once it
   exists. This is the only place the gap is tracked (moved from todo 0028,
   retired on 2026-10-29).
@@ -762,6 +769,16 @@ build had to make inside them.
 - **Not changed.** A `/steer` typed while the composer itself shows no running
   turn is still answered locally (`idleSteerPromptReply`): that steer never
   had a turn to miss. Bridges are unchanged.
+
+### Task 5: OpenCode steer recorded as built for 2.x (2026-11-10 housekeeping)
+
+Checked against `main` at `04639b12b`. Task 5 still said it was blocked on
+0008 tasks 5 and 10, and the folder index still called OpenCode steer
+blocked upstream. 0008 task 10 (the steer spike) was done on 2026-11-08, and
+0008 task 5 built steer for 2.x sessions, merged in #2009. Chosen: mark task 5
+done for 2.x sessions, keep 1.x as "cannot steer", and leave live
+qualification to 0008 task 7 rather than adding a new item here, which the
+to-do rules forbid. Grok steer stays blocked.
 
 ## Needs verification
 

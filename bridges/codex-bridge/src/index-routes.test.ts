@@ -324,6 +324,27 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
+  test("the MCP inventory lists each server's tools in a stable order (todo 7530)", async () => {
+    // app-server reports `tools` as a map whose key order varies per read.
+    const reads = [
+      { zeta: {}, alpha: {}, mid: {} },
+      { mid: {}, zeta: {}, alpha: {} },
+    ];
+    let read = 0;
+    await withRuntimeMethod(
+      "listMcpServers",
+      async () => ({
+        data: [{ name: "orkestrator", runtimeStatus: "connected", tools: reads[read++ % 2] }],
+      }),
+      async () => {
+        const first = await (await app.request("/session/test-session/mcp")).json();
+        const second = await (await app.request("/session/test-session/mcp")).json();
+        expect(first.servers[0].tools).toEqual(["alpha", "mid", "zeta"]);
+        expect(second).toEqual(first);
+      },
+    );
+  });
+
   test("MCP OAuth returns only the authorization URL and never logs it", async () => {
     await withRuntimeMethod(
       "performMcpAction",

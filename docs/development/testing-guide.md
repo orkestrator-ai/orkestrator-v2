@@ -942,7 +942,9 @@ disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues and backend
+activity stay keyed in both arms, since their rollback drivers were removed)
+and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.
 
@@ -1032,17 +1034,23 @@ credential, login or provider: every turn goes to the fake model.
   answered through the public action, the held turn released and the queued
   prompt sent; a Multi Review on `busy-2` with every slot on the fake model
   (it runs `git rev-parse HEAD` through Pi's `bash` for its validation plan,
-  then submits fixed finding-free results) followed to `ready`; and the cut
-  or hidden client restored.
+  then submits fixed finding-free results) followed to `ready`, watched by
+  every client whose link is up from a review view of its own (a second
+  signed-in context opened on `busy-2` before the launch, selecting the
+  review's tab and recording each phase its header shows); and the cut or
+  hidden client restored.
 - Measures: each row of the latency budgets the round reaches, from the
   moment its cause is known (the fake model's arrival times, or the command's
   return) to what each connected client's page showed, plus backend rows
   (the approval in `session.interactions`, the queued prompt reaching the
   model, a Multi Review phase change after its corresponding result submission) and
-  the resumed client's convergence. Workflow timings are backend upper bounds
-  from submission (before acceptance); workflow client-visible latency remains
-  unmeasured. Every scripted result must have exactly one submission and its
-  expected consuming phase. Failed rounds stop their sessions before reuse;
+  the resumed client's convergence. Workflow progress is timed from each
+  result's submission (before acceptance) both to the backend's phase change
+  (an upper bound) and to the review view showing that phase or a later one;
+  a result that reached the backend before the view showed the review is
+  reported as not sampled. Every scripted result (the validation plan, the
+  reviewer report and the consolidated review; a review sends no preparation
+  result) must have exactly one submission and its expected consuming phase. Failed rounds stop their sessions before reuse;
   an uncertain stop aborts the phase. Obligations: each held turn and queued
   prompt reaches the model exactly once, the approval is answered and its
   turn finishes, and every review reaches `ready`. `recurringWork` and

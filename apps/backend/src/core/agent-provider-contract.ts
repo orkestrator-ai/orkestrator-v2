@@ -32,6 +32,7 @@ import type {
   NativeAgentRuntimeSummary,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSlashCommand,
   NativeAgentTurnActivity,
   NativeAgentTurnPhase,
@@ -1112,6 +1113,12 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome>;
+  /**
+   * The conversation's branches other than the active one (Pi only), by the
+   * entry ids `switch-branch` takes. A user-initiated read: it may attach the
+   * session, so nothing polls it.
+   */
+  listSessionBranches?(sessionId: string): Promise<NativeAgentSessionBranchList>;
   /**
    * Bounded inventory, drift and provider diagnostics for one session.
    *

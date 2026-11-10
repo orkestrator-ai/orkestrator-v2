@@ -5,7 +5,6 @@ import {
   type NativeAgentLaunchActivityReconcilerHost,
 } from "./native-agent-launch-activity-reconciler.js";
 import { NativeAgentObservationBroker } from "./native-agent-observation.js";
-import { waitForCondition } from "./native-agent-service-projection-test-support.js";
 import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 import {
   nativeAgentSessionStorageKey,
@@ -159,24 +158,6 @@ describe("NativeAgentLaunchActivityReconciler launch scans", () => {
     const { reconciler, loadEnvironments } = harness({ stopped: () => true });
     await expect(reconciler.countedLaunchScan()).resolves.toBe(0);
     expect(loadEnvironments).not.toHaveBeenCalled();
-  });
-
-  test("the rollback timer runs the launch scan and the queue scan until stopped", async () => {
-    const { reconciler, loadEnvironments } = harness();
-    const queueScan = mock(async () => undefined);
-    reconciler.startTimer(20, queueScan);
-    expect(reconciler.forTesting().launchTimer()).not.toBeNull();
-    await waitForCondition(
-      () => loadEnvironments.mock.calls.length >= 2 && queueScan.mock.calls.length >= 2,
-    );
-    reconciler.stopTimer();
-    expect(reconciler.forTesting().launchTimer()).toBeNull();
-    expect(loadEnvironments.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(queueScan.mock.calls.length).toBeGreaterThanOrEqual(2);
-    const calls = queueScan.mock.calls.length;
-    await Bun.sleep(50);
-    expect(queueScan.mock.calls.length).toBe(calls);
-    expect(reconciler.pendingLaunchTasks()).toEqual([]);
   });
 });
 

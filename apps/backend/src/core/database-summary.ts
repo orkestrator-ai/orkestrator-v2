@@ -56,9 +56,10 @@ function fileSummary(
 
 function validTopTables(value: unknown): DatabaseTopTables | null {
   if (typeof value !== "object" || value === null) return null;
-  const { takenAt, tables } = value as Partial<DatabaseTopTables>;
+  const { takenAt, tables, stores } = value as Partial<DatabaseTopTables>;
   if (typeof takenAt !== "string" || !Array.isArray(tables)) return null;
-  return { takenAt, tables };
+  // A file an older backend wrote has no store families.
+  return Array.isArray(stores) ? { takenAt, tables, stores } : { takenAt, tables };
 }
 
 /**
@@ -66,8 +67,8 @@ function validTopTables(value: unknown): DatabaseTopTables | null {
  * most once a minute: a `stat` per file and three PRAGMAs per database are small
  * but must not run per `/metrics` request. Figures can be a minute old.
  *
- * Top tables come from the backup child (`storage-backups.ts`); this only reads
- * the file it leaves. Nothing here scans a table or writes.
+ * Top tables and store families come from the backup child
+ * (`storage-backups.ts`); this only reads the file it leaves. Nothing here scans a table or writes.
  */
 export class DatabaseSummaryCache {
   private cached: { at: number; summary: DatabaseSummary } | null = null;

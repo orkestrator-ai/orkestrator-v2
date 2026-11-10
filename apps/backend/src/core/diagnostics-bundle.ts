@@ -58,6 +58,17 @@ export interface DiagnosticsJsonSource {
   absentAs: string;
 }
 
+/**
+ * Text already read from somewhere other than this backend's log directory (a
+ * container server's log), passed through the same redaction and check as a
+ * log file before it is written.
+ */
+export interface DiagnosticsTextSource {
+  path: string;
+  description: string;
+  text: string;
+}
+
 export interface DiagnosticsSources {
   now: () => Date;
   appVersion: string;
@@ -68,6 +79,8 @@ export interface DiagnosticsSources {
   logsDir: string;
   debugLogging: boolean;
   json: readonly DiagnosticsJsonSource[];
+  /** Read before the build, chosen by the user; none by default. */
+  texts?: readonly DiagnosticsTextSource[];
   /** Things a reader might expect that a bundle does not hold, and why. */
   notCollected: readonly DiagnosticsManifestAbsent[];
   /**
@@ -258,6 +271,24 @@ function collectJson(
   }
 }
 
+async function collectTexts(
+  sources: DiagnosticsSources,
+  redactor: DiagnosticsRedactor,
+  entries: BuiltEntry[],
+  absent: DiagnosticsManifestAbsent[],
+): Promise<void> {
+  for (const source of sources.texts ?? []) {
+    const { text, redactions } = await redactLines(source.text, redactor);
+    const entry = finishedText(text, {
+      path: source.path,
+      description: source.description,
+      redactions,
+    });
+    if (entry) entries.push(entry);
+    else absent.push({ name: source.path, reason: REFUSED_REASON });
+  }
+}
+
 async function tarGz(
   files: ReadonlyArray<{ path: string; contents: Buffer }>,
   mtime: Date,
@@ -287,6 +318,7 @@ export async function buildDiagnosticsBundle(
   const absent: DiagnosticsManifestAbsent[] = [];
   collectJson(sources, redactor, entries, absent);
   await collectLogs(sources, redactor, entries, absent);
+  await collectTexts(sources, redactor, entries, absent);
   absent.push(...sources.notCollected);
 
   const createdAt = sources.now();
@@ -332,11 +364,12 @@ interface HeldPlan {
 /**
  * Plans held for reading. At most {@link MAX_HELD_PLANS}, each dropped when its
  * time is up, so an abandoned export cannot keep its bytes in memory for long.
- * Requests that arrive while a plan is building join it.
+ * Requests that arrive while a plan with the same choice is building join it.
  */
 export class DiagnosticsBundles {
   private readonly held = new Map<string, HeldPlan>();
-  private building: Promise<DiagnosticsBundlePlan> | null = null;
+  /** Builds in flight, by what they were asked to hold. */
+  private readonly building = new Map<string, Promise<DiagnosticsBundlePlan>>();
 
   constructor(
     private readonly options: {
@@ -346,11 +379,20 @@ export class DiagnosticsBundles {
     } = {},
   ) {}
 
-  plan(sources: () => DiagnosticsSources | Promise<DiagnosticsSources>) {
-    this.building ??= this.buildPlan(sources).finally(() => {
-      this.building = null;
-    });
-    return this.building;
+  /**
+   * `choice` says what the user chose to add (the container environments, in a
+   * canonical order). Only a request for the same choice joins a build in
+   * flight: a plan must hold exactly what its caller asked for.
+   */
+  plan(sources: () => DiagnosticsSources | Promise<DiagnosticsSources>, choice = "") {
+    let building = this.building.get(choice);
+    if (!building) {
+      building = this.buildPlan(sources).finally(() => {
+        this.building.delete(choice);
+      });
+      this.building.set(choice, building);
+    }
+    return building;
   }
 
   private async buildPlan(

@@ -431,6 +431,25 @@ describe("DiagnosticsBundles", () => {
     expect(builds).toBe(1);
     bundles.dispose();
   });
+
+  test("a plan building for another choice is not joined", async () => {
+    let builds = 0;
+    const bundles = new DiagnosticsBundles({
+      build: () => {
+        builds += 1;
+        return built();
+      },
+    });
+    const [none, chosen, same] = await Promise.all([
+      bundles.plan(plainSources),
+      bundles.plan(plainSources, "env-a"),
+      bundles.plan(plainSources, "env-a"),
+    ]);
+    expect(none.planId).not.toBe(chosen.planId);
+    expect(chosen.planId).toBe(same.planId);
+    expect(builds).toBe(2);
+    bundles.dispose();
+  });
 });
 
 test("archives remove generated multiline private keys and truncated blocks", async () => {

@@ -1,6 +1,7 @@
 import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
+import { bridgeRestarts, type BridgeRestartSnapshot } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { DatabaseSummaryCache } from "./database-summary.js";
@@ -16,7 +17,8 @@ const log = createLogger("backend");
  *
  * One row per sample every {@link HEALTH_SAMPLE_INTERVAL_MS}, plus a `started`
  * marker at start and a `clean-exit` marker as the last shutdown step. Rows hold
- * numbers and recurring-work job kinds (a fixed vocabulary) only. The backend's
+ * numbers, recurring-work job kinds and bridge provider names (fixed
+ * vocabularies) only. The backend's
  * identity is its pid and start time, so a row needs no string to say whose it
  * is. Backends sharing a directory each write their own rows, under one bound:
  * a second backend's health can be the thing someone is investigating.
@@ -65,6 +67,12 @@ export interface HealthSample {
   ledgerWalBytes: number | null;
   backupBytes: number | null;
   jobs: Record<string, HealthSampleJob>;
+  /**
+   * Bridge starts, unrequested exits and container launches per provider,
+   * cumulative in this process; providers with no count are left out. Absent
+   * from a row an older backend wrote.
+   */
+  bridges?: BridgeRestartSnapshot;
 }
 
 export type HealthRow =
@@ -194,6 +202,7 @@ export interface HealthSummaryOptions {
   memory?: () => Pick<NodeJS.MemoryUsage, "rss" | "heapUsed" | "heapTotal" | "external">;
   cpu?: () => { user: number; system: number };
   recurringWork?: () => RecurringWorkSnapshot;
+  bridgeRestarts?: () => BridgeRestartSnapshot;
 }
 
 export class HealthSummary {
@@ -288,6 +297,7 @@ export class HealthSummary {
       ledgerWalBytes: summary?.ledger?.walBytes ?? null,
       backupBytes: summary?.backups.bytes ?? null,
       jobs: topJobKinds((this.options.recurringWork ?? (() => recurringWorkMetrics.snapshot()))()),
+      bridges: (this.options.bridgeRestarts ?? (() => bridgeRestarts.snapshot()))(),
     };
   }
 

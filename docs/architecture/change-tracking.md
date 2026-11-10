@@ -324,7 +324,7 @@ after `orphanGraceMs`. A turn's end always publishes.
 The end capture has `finalizationDeadlineMs` (30 s). A turn that wrote tens of
 thousands of files can run past it on a busy host; it then ends on time as
 `end-unavailable` (reason `capture-timeout`) with no after endpoint, so it has
-nothing to restore. `TurnEndRecoveryScheduler` (`end-recovery.ts`, todo 7310)
+nothing to restore. `TurnEndRecoveryScheduler` (`end-recovery.ts`, todo 7310, retired)
 retries that capture in the background, without holding the turn: purpose
 `turn-recovery` (progress priority), `endRecoveryDelayMs` (5 s) after the turn
 ended and between attempts, each with `endRecoveryDeadlineMs` (5 min), at most
@@ -478,8 +478,7 @@ costs about 40 ms per file under load.
 that writes `--restore-files` new files through the whole service on a real
 repository, then times the preview and apply end to end (each plan a delete
 per file). On 2026-11-09 on a shared 16-core Linux host at a load average of
-48 to 60, with the worktree on disk, not tmpfs ([todo 7310](../todo/cross-cutting/7310-bulk-turn-restore-limits.md),
-whose quiet-host and isolated live-profile qualification remains open):
+48 to 60, with the worktree on disk, not tmpfs (todo 7310, retired):
 
 | Files | Turn end | Preview | Checkpoint (deadline) | Apply | Restored |
 | --- | --- | --- | --- | --- | --- |
@@ -494,6 +493,44 @@ old fixed 10 s, so 20,000 or more under heavier load would have been refused.
 `--restore-finalization-ms` shortens the turn's end deadline to exercise the
 recovery; at the real 30 s both sizes published on this host this time,
 although 4960 saw 20,000 time out at a load average of 57 to 63.
+
+The same restores were then driven end to end on 2026-11-10 on an isolated
+`dev:test` profile (`--fixture --no-agent-credentials --agent-platforms claude
+--headless`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) on the same 16-core
+host, by the 4960 method: a new local fixture environment per size, a real
+Claude CLI and bridge answered by the loopback model in
+`e2e/agent-testing/fake-anthropic-model.ts` (no billed turn), N small files
+written under `generated/` while the model held the turn, then
+`changes_prepare_restore` and `changes_apply_restore` through the browser
+gateway, each timed from the driver. Every plan was N deletes. Capture times
+come from the profile's `change_capture_attempts` rows; load is the one-minute
+load average from `/proc/loadavg`.
+
+| Files | Load (at apply → after) | Turn end capture | Preview | Checkpoint (deadline) | Apply | Restored |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 53 → 55 | published, 2.8 s | 0.75 s | published, 0.53 s (50 s) | 304.9 s, 30 ms per file | 10,000 of 10,000 |
+| 20,000 | 57 → 8, the host emptied during the apply | published, 8.1 s | 1.9 s | published, 0.37 s (100 s) | 264.2 s, 13 ms per file | 20,000 of 20,000 |
+| 10,000 | 8 → 10 | published, 1.0 s | 0.61 s | published, 0.17 s (50 s) | 144.2 s, 14 ms per file | 10,000 of 10,000 |
+| 20,000 | 2 → 1 | published, 1.3 s | 0.93 s | published, 0.43 s (100 s) | 210.9 s, 11 ms per file | 20,000 of 20,000 |
+| 10,000 | 1 → 46, the host filled during the apply | published, 0.56 s | 0.66 s | published, 0.49 s (50 s) | 189.1 s, 19 ms per file | 10,000 of 10,000 |
+
+Every checkpoint and result capture published, warm, in under a second, and
+no restored file was left behind in the worktree. The restore-result capture
+took 0.1 to 0.16 s. The gateway held the 305 s apply request open and
+answered it; whether the restore dialog or the desktop IPC path waits as long
+is [todo 7548](../todo/cross-cutting/7548-restore-apply-throughput.md) task 2.
+At a load of 1 to 10 the apply still cost 11 to 14 ms per file, so most of
+the busy-host 30 to 40 ms is the per-file helper process, not only load.
+
+A client that reads `changes_get_history` the moment a bulk turn's lifecycle
+turns `finalized` can still be given the turn's provisional measurement: the
+final one and its selection are written by the publication that follows the
+end capture, 0.9 to 1.4 s later at 10,000 and 20,000 files on the quiet host.
+A preview of the provisional measurement answers
+`changes.restore.no-retained-endpoints`; re-reading the history gives the
+final one, which restores. The restore dialog is gated by the projection's
+`restore` action instead. [Todo 7550](../todo/cross-cutting/7550-history-names-provisional-measurement-after-finalize.md)
+owns the gap.
 
 Apply throughput at bulk sizes is
 [todo 7548](../todo/cross-cutting/7548-restore-apply-throughput.md).

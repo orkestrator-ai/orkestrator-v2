@@ -109,6 +109,72 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
   });
 
+  test("feature rows open on the saved platform model and submit it without customization", async () => {
+    appCommandStore(configStore).setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          enabledAgentPlatforms: ["cursor"],
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            defaultAgent: "cursor",
+            platforms: {
+              ...baseConfig.global.agentSettings?.platforms,
+              cursor: { mode: "native", model: "cursor-saved" },
+            },
+            actionDefaults: {},
+          },
+        },
+      },
+    });
+    appCommandStore(agentModelCatalogStore).setState({
+      cursorModels: [
+        { platform: "cursor", id: "cursor-first", label: "First model" },
+        { platform: "cursor", id: "cursor-saved", label: "Saved model" },
+      ],
+    });
+    const onCreateFeatureBuild = mock(async (_request: unknown) => undefined);
+    renderInAppCommandScope(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={mock(async () => true)}
+          onCreateFeatureBuild={onCreateFeatureBuild}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.change(screen.getByLabelText(/^Description/), {
+      target: { value: "Test inherited defaults" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    const customize = screen.getByRole("switch", { name: "Customize models" });
+    fireEvent.click(customize);
+    const group = screen.getByRole("group", { name: "Pipeline model customization" });
+    for (const picker of within(group).getAllByLabelText(/agent, model and reasoning$/)) {
+      expect(picker.textContent).toContain("Saved model");
+    }
+    fireEvent.click(customize);
+    expect(customize.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]?.[0]).toMatchObject({
+      steps: {
+        review: { agent: "cursor", model: "cursor-saved" },
+        verify: { agent: "cursor", model: "cursor-saved" },
+        pr: { agent: "cursor", model: "cursor-saved" },
+      },
+      reviewers: [
+        { agent: "cursor", model: "cursor-saved" },
+        { agent: "cursor", model: "cursor-saved" },
+      ],
+      reviewPreparation: { agent: "cursor", model: "cursor-saved" },
+    });
+  });
+
   test("labels an unqualified configured OpenCode model across environment and feature pickers", async () => {
     appCommandStore(configStore).setState({
       config: {

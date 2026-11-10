@@ -16,6 +16,7 @@ import type {
   NativeAgentServiceOptions,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentSessionProjection,
   PersistedNativeAgentSession,
   StorageService,
@@ -511,6 +512,24 @@ export class NativeAgentSessionOperations {
     );
     this.host.projections.invalidateProjection(resolved.key);
     return outcome;
+  }
+
+  /**
+   * The conversation's other branches, for a branch picker or the public CLI.
+   * Pi only (`actions.branches`); the entry ids are `switch-branch` targets.
+   */
+  async listProjectionBranches(
+    input: NativeAgentProjectionInput,
+  ): Promise<NativeAgentSessionBranchList> {
+    if (!nativeCapabilities(input.agent).actions?.branches) {
+      throw new Error(`${input.agent} conversations have no branches`);
+    }
+    const resolved = await this.host.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    if (!resolved.provider.listSessionBranches) {
+      throw new Error(`${input.agent} conversations have no branches`);
+    }
+    return resolved.provider.listSessionBranches(resolved.session.providerSessionId);
   }
 
   async performProjectionMcpAction(

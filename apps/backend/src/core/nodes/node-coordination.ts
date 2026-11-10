@@ -207,12 +207,24 @@ export class NodeCoordination {
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
   private unsubscribeKanban: (() => void) | undefined;
+  private unsubscribeProjects: (() => void) | undefined;
   private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
   private coordinatorNotices: NodeCoordinatorNotices | null = null;
   private takingBack: Promise<void> | null = null;
+  private readonly connectListeners = new Set<(nodeId: string) => void>();
 
   setCoordinatorNotices(notices: NodeCoordinatorNotices): void {
     this.coordinatorNotices = notices;
+  }
+
+  /**
+   * A node this one controls connected, or reconnected after a drop: the
+   * same transition that collects its mail and syncs its tickets. Listeners
+   * must not throw; the returned function removes the listener.
+   */
+  onNodeConnected(listener: (nodeId: string) => void): () => void {
+    this.connectListeners.add(listener);
+    return () => this.connectListeners.delete(listener);
   }
 
   /**
@@ -319,9 +331,11 @@ export class NodeCoordination {
     clearInterval(this.ticketSyncTimer);
     this.unsubscribeNodes?.();
     this.unsubscribeKanban?.();
+    this.unsubscribeProjects?.();
     this.collector.dispose();
     this.ticketSync.dispose();
     this.ticketImages.dispose();
+    this.connectListeners.clear();
   }
 
   constructor(
@@ -430,6 +444,7 @@ export class NodeCoordination {
             name: project.name,
             ...(project.repositoryHint ? { repositoryHint: project.repositoryHint } : {}),
           })),
+          ...(node.loadedAt === null ? { summaryPending: true } : {}),
         })),
       localProjects: () => storage.loadProjects(),
       ticketSync: storage.ticketSync,
@@ -442,6 +457,11 @@ export class NodeCoordination {
     portal.readModel.onNodeEvent((event, payload, nodeId) => {
       this.collector.handleNodeEvent(event, payload, nodeId);
       this.ticketSync.handleNodeEvent(event, payload, nodeId);
+    });
+    // A leaf's project list read (its first after attaching, or a new copy
+    // there) is what pairs boards: sync then, not at the next reconcile.
+    this.unsubscribeProjects = portal.readModel.onProjectsChanged?.((nodeId) => {
+      if (nodes.mode?.() === "command") void this.ticketSync.sync(nodeId);
     });
     // A board change here goes to the leaves with the project (command node);
     // a change queued for a command node is announced to it (leaf). Test
@@ -480,6 +500,13 @@ export class NodeCoordination {
               void this.collector.collect(nodeId);
               void this.ticketSync.sync(nodeId);
               this.resumeActions();
+              for (const listener of this.connectListeners) {
+                try {
+                  listener(nodeId);
+                } catch {
+                  // A listener's failure never affects collection or sync.
+                }
+              }
             }
           connected = now;
         })

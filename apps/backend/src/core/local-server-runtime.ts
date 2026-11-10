@@ -15,6 +15,7 @@ import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 import { OpenCode2HostServerState } from "./opencode2/host-server-state.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { bridgeRestarts, type BridgeRestartCounter } from "./bridge-restarts.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("local-server");
@@ -107,6 +108,8 @@ export type LocalServerRuntimeOptions = {
   /** Waits before each retry of a host OpenCode start that lost the database. */
   openCodeLockedStartRetryDelaysMs?: readonly number[];
   piCatalog?: PiCatalogProbesOptions;
+  /** Where bridge starts and unrequested exits are counted; the process-wide counter by default. */
+  bridgeRestarts?: BridgeRestartCounter;
 };
 
 /**
@@ -138,6 +141,7 @@ export class LocalServerRuntime {
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly reapGroup: typeof reapProcessGroup;
+  private readonly restarts: BridgeRestartCounter;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   /** Children the backend asked to stop, so their exit is not reported as a surprise. */
   private readonly stopRequests = new WeakSet<ChildProcessWithoutNullStreams>();
@@ -174,6 +178,7 @@ export class LocalServerRuntime {
   constructor(options: LocalServerRuntimeOptions = {}) {
     this.spawn = options.spawn ?? spawnLowPriority;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
+    this.restarts = options.bridgeRestarts ?? bridgeRestarts;
     // A substituted spawn hands out fake children whose pids name nobody's
     // group; signalling `-pid` for one could reach a real process on the host.
     this.reapGroup =
@@ -289,6 +294,7 @@ export class LocalServerRuntime {
 
   reportBridgeStart(key: string, child: ChildProcessWithoutNullStreams): void {
     log.info("bridge.started", { key, pid: child.pid ?? null });
+    this.restarts.localStarted(key);
   }
 
   /**
@@ -311,6 +317,7 @@ export class LocalServerRuntime {
       signal,
       requested,
     });
+    this.restarts.localExited(key, requested);
   }
 
   /**

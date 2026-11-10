@@ -309,11 +309,13 @@ export function olderLeafTicketMessage(nodeName: string): string {
  * connected. These are refused rather than queued: run hours later, a launch
  * would start from a stale base, and an ambiguous outcome could not be
  * resolved without running it twice. Ticket changes do wait (see above).
+ * The coordinator that was refused is woken once when the machine reconnects
+ * (`coordinator-node-reconnect-wakes.ts` in the backend).
  */
 export function offlineLaunchMessage(nodeName: string): string {
   return (
     `${nodeName} is not connected; changes to it are disabled. Nothing was started there: launches, builds and reviews on another machine are not queued. ` +
-    `Retry when it reconnects (list_nodes), or run the work on another machine. Ticket tools still take its nodeId: their changes wait on this board until it reconnects.`
+    `You will get one message when it reconnects; retry then with a fresh base from get_launch_options, or run the work on another machine now. Ticket tools still take its nodeId: their changes wait on this board until it reconnects.`
   );
 }
 

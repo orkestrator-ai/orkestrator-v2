@@ -40,6 +40,7 @@ import {
   type ExternalForwardUpstream,
 } from "./preview-external-forward.js";
 import { PreviewTunnelConnector } from "./preview-tunnel-session.js";
+import { answering } from "./webrequest-listener.js";
 import { createLogger, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");
@@ -1007,51 +1008,64 @@ export class PreviewTransportManager {
     if (this.hookedSessions.has(session)) return;
     this.hookedSessions.add(session);
     const partition = group.partition;
-    session.webRequest.onBeforeSendHeaders((details, callback) => {
-      const owner = this.partitions.get(partition);
-      const headers = { ...details.requestHeaders };
+    const withoutIngress = (requestHeaders: Record<string, string>): Record<string, string> => {
+      const headers = { ...requestHeaders };
       for (const name of Object.keys(headers)) {
         if (name.toLowerCase() === PREVIEW_INGRESS_HEADER) delete headers[name];
       }
-      try {
-        const url = new URL(details.url);
-        const origin = url.protocol === "ws:" ? `http://${url.host}` : url.origin;
-        if (owner && !owner.disposed && origin === owner.origin)
-          headers[PREVIEW_INGRESS_HEADER] = owner.ingressSecret;
-      } catch {
-        // Unparseable URLs get no credential.
-      }
-      callback({ requestHeaders: headers });
-    });
-    session.webRequest.onBeforeRequest((details, callback) => {
-      const owner = this.partitions.get(partition);
-      let url: URL;
-      try {
-        url = new URL(details.url);
-      } catch {
-        callback({});
-        return;
-      }
-      const origin = url.protocol === "ws:" ? `http://${url.host}` : url.origin;
-      if (owner && origin === owner.origin) {
-        callback({});
-        return;
-      }
-      // A remote service must never silently reach a service on this machine
-      // or its local network: that would bypass the remote transport.
-      const network = /^(https?|wss?):$/.test(url.protocol);
-      if (!network || !this.options.isRemote()) {
-        callback({});
-        return;
-      }
-      const local = this.reachesLocalNetwork(url.hostname);
-      if (typeof local === "boolean") {
-        callback(local ? { cancel: true } : {});
-        return;
-      }
-      // The lookup never rejects: resolution failures resolve to "not local".
-      void (async () => callback((await local) ? { cancel: true } : {}))();
-    });
+      return headers;
+    };
+    // Both hooks always answer (`answering`). Failing closed strips the
+    // ingress credential from the headers and cancels a request whose
+    // local-network check could not run.
+    session.webRequest.onBeforeSendHeaders(
+      answering<
+        { url: string; requestHeaders: Record<string, string> },
+        { requestHeaders?: Record<string, string>; cancel?: boolean }
+      >(
+        "preview-transport.before-send-headers",
+        (details) => {
+          const owner = this.partitions.get(partition);
+          const headers = withoutIngress(details.requestHeaders);
+          try {
+            const url = new URL(details.url);
+            const origin = url.protocol === "ws:" ? `http://${url.host}` : url.origin;
+            if (owner && !owner.disposed && origin === owner.origin)
+              headers[PREVIEW_INGRESS_HEADER] = owner.ingressSecret;
+          } catch {
+            // Unparseable URLs get no credential.
+          }
+          return { requestHeaders: headers };
+        },
+        (details) => ({ requestHeaders: withoutIngress(details.requestHeaders) }),
+      ),
+    );
+    session.webRequest.onBeforeRequest(
+      answering(
+        "preview-transport.before-request",
+        (details: { url: string }): { cancel?: boolean } | Promise<{ cancel?: boolean }> => {
+          const owner = this.partitions.get(partition);
+          let url: URL;
+          try {
+            url = new URL(details.url);
+          } catch {
+            return {};
+          }
+          const origin = url.protocol === "ws:" ? `http://${url.host}` : url.origin;
+          if (owner && origin === owner.origin) return {};
+          // A remote service must never silently reach a service on this machine
+          // or its local network: that would bypass the remote transport.
+          const network = /^(https?|wss?):$/.test(url.protocol);
+          if (!network || !this.options.isRemote()) return {};
+          const local = this.reachesLocalNetwork(url.hostname);
+          if (typeof local === "boolean") return local ? { cancel: true } : {};
+          // Resolution failures resolve to "not local"; anything else that
+          // rejects fails closed through `answering`.
+          return local.then((reaches) => (reaches ? { cancel: true } : {}));
+        },
+        () => ({ cancel: true }),
+      ),
+    );
   }
 
   /**

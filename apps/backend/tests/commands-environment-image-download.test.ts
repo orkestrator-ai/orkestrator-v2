@@ -17,7 +17,7 @@ import { containerAdmissionSnapshot } from "../src/core/container-admission";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
 import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
 import { HostMaintenanceService } from "../src/core/host-maintenance";
-import { startImageUpdate } from "../src/core/host-maintenance-tasks";
+import { imageUpdateWaiterCount, startImageUpdate } from "../src/core/host-maintenance-tasks";
 import { CommandFailedError } from "../src/core/shell";
 import {
   lifecycleEnvironment,
@@ -216,12 +216,13 @@ test("a structured timeout from a joined manual pull persists the timeout classi
     read: async () => null,
     reset: () => undefined,
   });
-  await withDockerScript(scene.script(), async (log) => {
+  await withDockerScript(scene.script(), async () => {
     const pending = startEnvironmentOnce(scene.environment.id, scene.context, () => undefined);
     const outcome = pending.catch((error) => error as Error);
-    await until(async () => (await log.read()).includes("image inspect"));
-    // The child logs before exiting; allow its inspection response to reach the waiter.
-    await Bun.sleep(100);
+    // Settle the manual pull only once the start has joined it. Settling it
+    // while the start's image inspection is still in flight makes the start
+    // begin a download of its own instead (flake case 6614).
+    await until(async () => imageUpdateWaiterCount() === 1);
     reject(new CommandFailedError("Command failed: docker pull", { timedOut: true }));
     expect(await outcome).toBeInstanceOf(Error);
     expect(scene.environments.get(scene.environment.id)?.lifecycleError).toBe(

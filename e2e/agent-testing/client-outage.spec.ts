@@ -27,6 +27,7 @@ import {
   type LinkRequestKind,
   type OutageLink,
 } from "./client-outage-support";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * Client reconnect and freshness under a real outage, against a real backend:
@@ -812,7 +813,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
             lastLines(await renderedTerminal(tab!.page, single.id, "tab-first"), COMPARED_LINES),
           { timeout: 30_000 },
         )
-        .toEqual(lastLines(visibleText(await output()), COMPARED_LINES));
+        .toEqual(lastLines(terminalVisibleText(await output()), COMPARED_LINES));
       const rendered = await renderedTerminal(tab.page, single.id, "tab-first");
       const numbers = rendered
         .split("\n")
@@ -838,15 +839,6 @@ for (const transport of ["http-sse", "websocket"] as const) {
     }
   });
 }
-
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g, "")
-    .replace(/\r/g, "");
 
 /** The last lines holding text; prompts and trailing blanks render differently. */
 function lastLines(text: string, count: number): string[] {

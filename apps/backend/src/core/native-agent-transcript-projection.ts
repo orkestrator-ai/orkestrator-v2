@@ -112,6 +112,7 @@ import {
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
 import { sessionIncompleteTurnNotice } from "./models.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { NativeAgentResumeIdentityObserver } from "./native-agent-resume-identity.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
@@ -192,6 +193,7 @@ import {
   updateHashWithFingerprints,
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
+import { PreviewFillAnswers } from "./native-agent-preview-fill.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { goalPublicView, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
@@ -208,6 +210,8 @@ import {
   attachProgressToToolRows,
   backgroundTaskIdFromProjectedLaunch,
   discoveryAnnouncementKey,
+  discoveryChangedPaths,
+  orderMcpServerTools,
   displayMessage,
   firstNamedCursor,
   firstUserMessageOf,
@@ -555,6 +559,8 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** When the last exact recovery read started, per key; spaces those reads out. */
   private readonly progressiveHydrationReadStarts = new Map<string, number>();
+  /** Whether a view's incomplete preview fills the live window, per provider token. */
+  private readonly progressivePreviewFills = new PreviewFillAnswers();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
   /** What `get_progressive_read_metrics` reports. */
   progressiveReadSamples(): readonly ProgressiveReadMetric[] {
@@ -795,6 +801,7 @@ export class NativeAgentTranscriptProjection {
       progressiveHydrations: this.progressiveHydrations.size,
       progressiveHydrationTimers: this.progressiveHydrationTimers.size,
       progressiveHydrationReadStarts: this.progressiveHydrationReadStarts.size,
+      progressivePreviewFills: this.progressivePreviewFills.size,
       progressiveDiscoveryProviders: this.progressiveDiscoveryJobsByProvider.size,
       interactiveSnapshotShares: this.interactiveSnapshotShares.size,
       projectedMessages: this.projectedMessages.size,
@@ -875,6 +882,7 @@ export class NativeAgentTranscriptProjection {
     );
     this.progressiveHydrations.clear();
     this.progressiveHydrationReadStarts.clear();
+    this.progressivePreviewFills.clear();
     this.progressiveReads.clear();
     this.progressiveTranscriptCache.clear();
     this.transcriptDeltaBases.clear();
@@ -2062,14 +2070,6 @@ export class NativeAgentTranscriptProjection {
     return snapshot;
   }
 
-  private progressivePreviewFillsWindow(
-    snapshot: ProviderTranscriptSnapshot,
-    liveWindow: { messages: number; targetBytes: number },
-  ): boolean {
-    if (snapshot.messages.length >= liveWindow.messages) return true;
-    return Buffer.byteLength(JSON.stringify(snapshot.messages)) >= liveWindow.targetBytes;
-  }
-
   private scheduleIncompleteProgressiveHydration(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
@@ -2112,13 +2112,15 @@ export class NativeAgentTranscriptProjection {
       (snapshot.omittedParts ?? 0) <= 0
     )
       return;
-    if (
-      (snapshot.omittedParts ?? 0) <= 0 &&
-      this.progressivePreviewFillsWindow(snapshot, input.liveWindow)
-    )
-      return;
+    // A recovery already scheduled for this revision settles the question;
+    // asking first spares measuring the raw window.
     const existing = this.progressiveHydrations.get(key);
     if (existing && existing.sourceToken === sourceToken) return;
+    if (
+      (snapshot.omittedParts ?? 0) <= 0 &&
+      this.progressivePreviewFills.fills(key, snapshot, input.liveWindow)
+    )
+      return;
     const previousTimer = this.progressiveHydrationTimers.get(key);
     if (previousTimer) clearTimeout(previousTimer);
     const entry: ProgressiveHydrationEntry = {
@@ -3824,7 +3826,7 @@ export class NativeAgentTranscriptProjection {
       expiresAt: number;
       error?: string;
     },
-  ): { changed: boolean; announce: boolean } {
+  ): { changed: boolean; announce: boolean; changedPaths: string[] } {
     const previous = this.progressiveDiscoveryCache.get(key);
     const semantic = JSON.stringify({
       value: entry.value,
@@ -3868,7 +3870,25 @@ export class NativeAgentTranscriptProjection {
       if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
       this.progressiveDiscoveryCache.delete(oldest);
     }
-    return { changed, announce };
+    // Diagnostic only, and computed only for an announcement: which part of
+    // the value moved (todo 7530). Content-free paths, never values.
+    const changedPaths = !announce
+      ? []
+      : !previous
+        ? ["initial"]
+        : !retainedValue
+          ? ["availability"]
+          : discoveryChangedPaths(previous.value, entry.value);
+    return { changed, announce, changedPaths };
+  }
+
+  /** Count an announced discovery change by section and changed path (todo 7530). */
+  private recordDiscoveryAnnouncement(
+    input: NativeAgentDiscoveryUpdateInput,
+    section: NativeAgentDiscoverySection,
+    changedPaths: readonly string[],
+  ): void {
+    nativeSessionInvalidationMetrics.recordDiscoveryRenewal(section, input.agent, changedPaths);
   }
 
   private scheduleProgressiveDiscovery(
@@ -3906,13 +3926,16 @@ export class NativeAgentTranscriptProjection {
           return this.catalogs.slashCommands(input, provider, providerSessionId);
         case "mcp":
           return provider.mcpServers
-            ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
+            ? orderMcpServerTools((await provider.mcpServers(providerSessionId)).slice(0, 512))
             : [];
         case "runtime": {
           const health = provider.runtimeHealth
             ? await provider.runtimeHealth(providerSessionId)
             : { summary: {}, notices: [], authoritative: true };
-          return { summary: health.summary, notices: health.notices };
+          const summary = health.summary.mcp
+            ? { ...health.summary, mcp: orderMcpServerTools(health.summary.mcp) }
+            : health.summary;
+          return { summary, notices: health.notices };
         }
       }
     };
@@ -3942,13 +3965,14 @@ export class NativeAgentTranscriptProjection {
       )
         return;
       const previous = this.progressiveDiscoveryCache.get(cacheKey);
-      const { announce } = this.storeProgressiveDiscovery(cacheKey, {
+      const { announce, changedPaths } = this.storeProgressiveDiscovery(cacheKey, {
         value: previous?.value,
         availability: previous?.value === undefined ? "unavailable" : "stale",
         expiresAt: this.host.now() + 5_000,
         error: "Discovery timed out",
       });
       if (!announce) return;
+      this.recordDiscoveryAnnouncement(input, section, changedPaths);
       this.storage.announceNativeAgentSessionProjection(input.environmentId, "discovery-deadline", {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
@@ -3959,7 +3983,7 @@ export class NativeAgentTranscriptProjection {
         settled = true;
         clearTimeout(deadline);
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        const { announce } = phases.normalize(() =>
+        const { announce, changedPaths } = phases.normalize(() =>
           this.storeProgressiveDiscovery(cacheKey, {
             value,
             availability: "ready",
@@ -3978,6 +4002,7 @@ export class NativeAgentTranscriptProjection {
         // its quiet backoff) four times per expiry for nothing: a view reads
         // only values, and they did not change.
         if (!announce) return;
+        this.recordDiscoveryAnnouncement(input, section, changedPaths);
         this.storage.announceNativeAgentSessionProjection(
           input.environmentId,
           "discovery-renewal",
@@ -4092,7 +4117,7 @@ export class NativeAgentTranscriptProjection {
           return;
         }
         this.storeProgressiveDiscovery(this.progressiveKey(input, "discovery:mcp"), {
-          value: value.slice(0, 512),
+          value: orderMcpServerTools(value.slice(0, 512)),
           availability: "ready",
           expiresAt: this.host.now() + 30_000,
         });
@@ -5211,6 +5236,7 @@ export class NativeAgentTranscriptProjection {
         this.progressiveHydrationReadStarts.delete(candidate);
       }
     }
+    this.progressivePreviewFills.forgetPrefix(progressivePrefix);
     for (const candidate of Array.from(this.progressiveHydrations.keys())) {
       if (!candidate.startsWith(progressivePrefix)) continue;
       const timer = this.progressiveHydrationTimers.get(candidate);

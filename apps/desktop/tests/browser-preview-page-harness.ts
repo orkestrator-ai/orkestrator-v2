@@ -15,6 +15,36 @@ import { browserPreviewPinsShowScript } from "../electron/browser-preview-pins-s
 export type Json = Record<string, any>;
 export type Mode = "element" | "text" | "region" | "page";
 
+/**
+ * Runs one synchronous page-script call on a stopped clock.
+ *
+ * The anchor kit ends every traversal budget on a visit count or a wall-clock
+ * deadline of a few milliseconds (`createBudget` in
+ * `electron/browser-preview-anchor-script.ts`). happy-dom shares Bun's
+ * process-wide `performance`, so a GC pause or a descheduled test worker
+ * inside a walk spent that deadline and truncated the evidence (flake 0780).
+ * Stopping the clock for the call leaves only the visit counts, which are what
+ * these suites assert. The page and other tests see the real clock again as
+ * soon as the call returns, and asynchronous continuations run on it.
+ */
+export function onStoppedClock<T>(run: () => T): T {
+  const clock = globalThis.performance;
+  // Bun defines `now` on the instance, so restore that exact descriptor.
+  const real = Object.getOwnPropertyDescriptor(clock, "now");
+  const stoppedAt = clock.now();
+  Object.defineProperty(clock, "now", {
+    value: () => stoppedAt,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return run();
+  } finally {
+    if (real) Object.defineProperty(clock, "now", real);
+    else delete (clock as { now?: unknown }).now;
+  }
+}
+
 export function page(html: string, url = "http://localhost:3000/dashboard") {
   const window = new Window({ url, width: 1024, height: 768 });
   const document = window.document;
@@ -29,13 +59,15 @@ export function page(html: string, url = "http://localhost:3000/dashboard") {
     },
     start(mode: Mode, captureId = "capture-1") {
       return JSON.parse(
-        window.eval(
-          browserPreviewCaptureStartScript({ captureId, nonce: "nonce-1", mode }),
+        onStoppedClock(() =>
+          window.eval(browserPreviewCaptureStartScript({ captureId, nonce: "nonce-1", mode })),
         ) as string,
       ) as Json;
     },
     status() {
-      return JSON.parse(window.eval(BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT) as string) as Json;
+      return JSON.parse(
+        onStoppedClock(() => window.eval(BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT)) as string,
+      ) as Json;
     },
     async prepare(captureId = "capture-1") {
       const encoded = await (window.eval(browserPreviewCapturePrepareScript(captureId)) as Promise<
@@ -49,12 +81,14 @@ export function page(html: string, url = "http://localhost:3000/dashboard") {
     ) {
       return (
         JSON.parse(
-          window.eval(
-            browserPreviewPinsShowScript({
-              queries: queries.map((query) => ({ label: "Target", ...query })),
-              focusedAnnotationId,
-              scrollIntoView: false,
-            }),
+          onStoppedClock(() =>
+            window.eval(
+              browserPreviewPinsShowScript({
+                queries: queries.map((query) => ({ label: "Target", ...query })),
+                focusedAnnotationId,
+                scrollIntoView: false,
+              }),
+            ),
           ) as string,
         ) as { results: Json[] }
       ).results;
@@ -97,9 +131,6 @@ export function trusted<T extends Event>(event: T): T {
 export function click(harness: ReturnType<typeof page>, element: Element) {
   const { window } = harness;
   harness.point(element);
-  element.dispatchEvent(
-    trusted(new window.PointerEvent("pointermove", { clientX: 5, clientY: 5, bubbles: true })),
-  );
   const event = trusted(
     new window.MouseEvent("click", {
       clientX: 5,
@@ -108,7 +139,12 @@ export function click(harness: ReturnType<typeof page>, element: Element) {
       cancelable: true,
     }),
   );
-  element.dispatchEvent(event);
+  onStoppedClock(() => {
+    element.dispatchEvent(
+      trusted(new window.PointerEvent("pointermove", { clientX: 5, clientY: 5, bubbles: true })),
+    );
+    element.dispatchEvent(event);
+  });
   return event;
 }
 
@@ -120,7 +156,7 @@ export function key(harness: ReturnType<typeof page>, name: string) {
       cancelable: true,
     }),
   );
-  harness.document.dispatchEvent(event);
+  onStoppedClock(() => harness.document.dispatchEvent(event));
   return event;
 }
 

@@ -20,6 +20,7 @@ import {
   readRemoteRelaunchMarker,
 } from "../../apps/desktop/electron/remote-relaunch";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -260,6 +261,7 @@ async function testIndependentWindows(
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
+    const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
     // Startup can briefly create a bootstrap window, and development opens
     // detached DevTools. Select the application document explicitly.
@@ -271,8 +273,9 @@ async function testIndependentWindows(
     const window = app.windows().find((page) => page.url().startsWith(rendererUrl));
     if (!window) throw new Error("Main renderer window was not created");
     // index.html's title stays until Vite serves and runs renderer-entry; under
-    // host load that startup takes longer than expect's 5 s default.
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // host load that startup takes longer than expect's 5 s default. A start
+    // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     await expect
       .poll(() =>
         app.evaluate(
@@ -701,7 +704,8 @@ print("public.tiff")
       .windows()
       .find((candidate) => candidate !== window && candidate.url().startsWith(rendererUrl));
     if (!secondWindow) throw new Error("New Window accelerator did not open a renderer window");
-    await expect(secondWindow).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(secondWindow, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>

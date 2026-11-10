@@ -33,6 +33,7 @@ import type {
 } from "@orkestrator/protocol/multi-review";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 type Status = {
   status: string;
@@ -127,15 +128,6 @@ async function authenticatedInvoke(page: Page, status: Status) {
     return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
-
-/** Terminal output as text, without the escape sequences a shell interleaves (`PS0`, prompts). */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 // This host-specific notice can arrive after login, on top of any surface.
 // Dismiss it through its public Close control so local-worktree flows run even
@@ -512,7 +504,7 @@ test("project Home retains background work and unread attention beneath the boar
         const snapshot = await invoke<{ output: string }>("get_terminal_output_snapshot", {
           sessionId: terminal.sessionId,
         });
-        return visibleText(snapshot.output)
+        return terminalVisibleText(snapshot.output)
           .split("\n")
           .some((line) => line === "home-background-finished");
       })

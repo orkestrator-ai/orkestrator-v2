@@ -1,4 +1,4 @@
-import { defineLogAreas, ESSENTIAL_ERROR_FIELDS } from "./define.js";
+import { defineLogAreas, ESSENTIAL_ERROR_FIELDS, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const DESKTOP_LOG_AREAS = defineLogAreas({
   desktop: {
@@ -89,6 +89,18 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     description: "Permission requests refused on the renderer's session.",
     events: {
       denied: "A renderer asked for a permission the policy does not grant.",
+    },
+  },
+  "desktop.webrequest": {
+    description:
+      "Main-process webRequest listeners on Electron sessions. Listener names only; never a URL, header or error message.",
+    events: {
+      "listener.failed-closed":
+        "A listener's decision threw or rejected, so it answered with its fail-closed response.",
+      "observer.failed":
+        "A listener with no callback (a redirect observer) threw; its fallback ran.",
+      "callback.failed": "Electron's webRequest callback threw while a listener answered.",
+      ...THROTTLE_LOG_EVENTS,
     },
   },
   "desktop.dialog": {

@@ -10,6 +10,7 @@ export const GUARD_IDS = [
   "lib-backend-command-default",
   "window-orkestrator-portal",
   "workspace-command-bound-call",
+  "raw-webrequest-listener",
 ] as const;
 
 export type GuardId = (typeof GUARD_IDS)[number];

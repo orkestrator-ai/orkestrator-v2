@@ -87,6 +87,15 @@ export class CodexRuntimeSessions {
     private readonly lifecycle: CodexRuntimeLifecycle,
   ) {}
 
+  /**
+   * True from the moment DELETE claims this session. The session stays
+   * registered until its removal is published, so a waiting prompt retry must
+   * read this rather than the registry, or it dispatches into a deleted session.
+   */
+  sessionDeleteClaimed(session: BridgeSession): boolean {
+    return this.deleteClaims.has(session);
+  }
+
   /** True once close fenced this session, or it is no longer the registered object. */
   sessionAdmissionClosed(session: BridgeSession): boolean {
     return (

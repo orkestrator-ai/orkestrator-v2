@@ -9,15 +9,18 @@ import {
   getRecurringWorkDiagnosticsCommand,
   getSystemUsageCommand,
   planDiagnosticsBundleCommand,
+  planDiagnosticsBundleWithContainerLogsCommand,
   readDiagnosticsBundleCommand,
   reconcileWorkflowSchedulingCommand,
   recordDomainAdapterUsageCommand,
   recordRendererErrorsCommand,
 } from "@orkestrator/protocol/contract/domains/system";
 import { APP_VERSION } from "./constants.js";
+import { containerLogOptions, normaliseContainerLogChoice } from "./diagnostics-container-logs.js";
 import { diagnosticsSources } from "./diagnostics-sources.js";
 import { recordRendererDomainAdapterUsage } from "./domain-adapter-usage.js";
 import { RendererErrorRecorder } from "./renderer-error-recorder.js";
+import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import {
   readEnvironmentProcessUsage as defaultReadEnvironmentProcessUsage,
@@ -33,6 +36,20 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { KeyedWorkflowOwner } from "./workflow-supervisor.js";
+
+/**
+ * Builds (or joins) a plan holding `containerLogs`' server logs, and lists the
+ * container environments the dialog can offer next to it.
+ */
+async function planDiagnostics(context: CommandContext, containerLogs: string[]) {
+  if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
+  const plan = await context.diagnostics.bundles.plan(
+    () => diagnosticsSources(context, { containerLogs }),
+    JSON.stringify(containerLogs),
+  );
+  const environments = await context.storage.loadEnvironments().catch(() => []);
+  return { ...plan, containerLogs: containerLogOptions(environments, containerLogs) };
+}
 
 export function registerSystemCommands(
   register: CommandRegistrar,
@@ -126,14 +143,19 @@ export function registerSystemCommands(
   });
   /**
    * Builds a diagnostics bundle and holds it in memory, answering with the
-   * manifest that is byte for byte the bundle's own. Nothing reaches the disk
-   * or the network here; {@link read_diagnostics_bundle} hands the bytes to the
+   * manifest that is byte for byte the bundle's own, and the container
+   * environments whose server logs the user may add by planning again.
+   * Nothing reaches the disk or the network here; {@link read_diagnostics_bundle} hands the bytes to the
    * client that asked. Refused to workspace clients (`workspace-grant-scope.ts`).
    */
-  register(planDiagnosticsBundleCommand, async (_args, context) => {
-    if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
-    return context.diagnostics.bundles.plan(() => diagnosticsSources(context));
-  });
+  register(planDiagnosticsBundleCommand, (_args, context) => planDiagnostics(context, []));
+  /**
+   * The same, with the container server logs of the environments the user
+   * chose: opt-in per environment, read only now (todo 6143).
+   */
+  register(planDiagnosticsBundleWithContainerLogsCommand, async (args, context) =>
+    planDiagnostics(context, normaliseContainerLogChoice(args.containerLogs)),
+  );
   register(readDiagnosticsBundleCommand, (args, context) => {
     if (!context.diagnostics) throw new Error("Diagnostics are not available here.");
     return context.diagnostics.bundles.read(args.planId, Number(args.offset));

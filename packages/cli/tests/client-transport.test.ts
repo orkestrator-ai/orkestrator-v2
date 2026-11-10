@@ -366,6 +366,26 @@ describe("authenticated transport", () => {
     expect(result.code).toBe(7);
   });
 
+  test("a transient prompt refusal keeps exit 1 and says it is retryable", async () => {
+    // 7260: a bridge's 503 before dispatch sent nothing, so a new key may succeed.
+    const { box } = await fixture(
+      defaultResponder({
+        "session.prompt": publicErrorEnvelope("session.prompt", {
+          code: "operation-failed",
+          message: "claude prompt dispatch is temporarily unavailable (HTTP 503)",
+          retryable: true,
+        }),
+      }),
+    );
+    const result = await box.run(["--json", "session", "prompt", "ses_eA", "--prompt", "hello"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out).error).toMatchObject({
+      code: "operation-failed",
+      exitCode: 1,
+      retryable: true,
+    });
+  });
+
   test("an in-progress mutation receipt does not dereference an empty result", async () => {
     const { box } = await fixture(
       defaultResponder({

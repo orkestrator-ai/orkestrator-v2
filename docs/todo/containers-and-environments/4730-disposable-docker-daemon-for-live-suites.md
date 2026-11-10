@@ -207,6 +207,15 @@ No group, sudo or host-daemon configuration change was made. Socket group
 access, real root-owned leftovers, restart and final resource absence on
 a rootful outer daemon still need the recommended host run.
 
+Observed in passing (2026-11-10, to-do
+[6820](6820-agent-tools-peer-gate-linux-evidence.md) task 1, on beelink,
+where this account may use the host's rootful Engine 29.9.2): `start --mode
+rootful --name s6820rf` recorded `outerRootless: false`, started in 12.9 s
+including the dind pull, served two runs of the peer evidence script, and
+`stop` left no labelled container or volume, no dind image and no runtime
+directory. Neither the suites this task names nor the printed restart ran
+there, and no root-owned leftover was checked, so the task stays open.
+
 **Decisions.**
 
 - **Where to run it?**
@@ -402,7 +411,7 @@ task 4's real rootful-host evidence.
 
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: owns the rootless qualification and task 3's result.
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md): its daemon-wide restart could use the same launcher.
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md): an earlier disposable rootless daemon recipe.
+- Todo 0109 (retired on 2026-11-10): an earlier disposable rootless daemon recipe, recorded in [container qualification](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
 - [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md): the pool exhaustion on the shared daemon.
 - [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md): the rootless restart settings task 3 did not run.
 - [6820-agent-tools-peer-gate-linux-evidence.md](6820-agent-tools-peer-gate-linux-evidence.md): Linux Engine evidence that may use either mode.

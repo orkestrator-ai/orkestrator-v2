@@ -8,6 +8,8 @@ import {
   readGithubRangesSeed,
   validIpv4Cidr,
 } from "../src/core/github-ranges-cache";
+import { CommandFailedError } from "../src/core/shell";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { tempDir } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
@@ -84,5 +86,32 @@ describe("GitHub ranges seed", () => {
       throw new Error("No such container");
     }) as unknown as Parameters<typeof copyGithubRangesSeed>[2];
     expect(await copyGithubRangesSeed("gone", seed, failing)).toBe(false);
+  });
+
+  test("a copy the daemon refuses is logged as that refusal, still not fatal", async () => {
+    const dir = await tempDir("ork-github-seed-refused-");
+    cleanup.push(dir);
+    const seed = path.join(dir, "github-ranges.txt");
+    await fs.writeFile(seed, "# github-ranges 2026-10-26T00:00:00.000Z\n192.30.252.0/22\n");
+    const calls: string[][] = [];
+    // The directory copy's own message hides the refusal; the probe shows it.
+    const refused = (async (_command: string, args: string[] = []) => {
+      calls.push(args);
+      const stderr =
+        args[1]?.startsWith("abc123:") === true
+          ? "Error response from daemon: remount-ro /d/rootfs/overlayfs/1/git, flags: 0x1021: operation not permitted"
+          : "no such directory";
+      throw new CommandFailedError(stderr, { stderr });
+    }) as unknown as Parameters<typeof copyGithubRangesSeed>[2];
+    const logs = captureLogs();
+    try {
+      expect(await copyGithubRangesSeed("abc123", seed, refused)).toBe(false);
+    } finally {
+      logs.restore();
+    }
+    expect(calls.map((args) => args[0])).toEqual(["cp", "cp"]);
+    expect(logs.records()).toMatchObject([
+      { event: "github-ranges.seed-not-copied", fields: { refusal: "read-only-bind-remount" } },
+    ]);
   });
 });

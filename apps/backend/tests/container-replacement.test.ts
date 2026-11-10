@@ -123,6 +123,10 @@ exit 125
         "Error response from daemon: Could not find the file /home/node/.pi in container source",
         { absent: true },
       ],
+      [
+        "Error response from daemon: remount-ro /d/rootfs/overlayfs/1/git, flags: 0x1021: operation not permitted",
+        { absent: false, producerFailed: true, daemonUnavailable: false, refused: true },
+      ],
     ] as const) {
       await withDockerScript(
         `#!/bin/sh\nif [ "$1" = cp ]; then printf '%s\\n' '${stderr}' >&2; exit 1; fi\ncat >/dev/null\nexit 1\n`,
@@ -786,6 +790,17 @@ ${probe}
       );
     }, 15_000);
   }
+  test("a refused copy is the topology error and needs no probe", async () => {
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\nexit 99\n',
+      async (log) => {
+        const error = await replacementCopyFailure("source-copy-refused");
+        expect(String(error)).toContain("ContainerLifecycleError:unsupported-topology");
+        expect(String(error)).toContain("kept unchanged");
+        expect(await log.read()).toBe("");
+      },
+    );
+  });
   test("an explicit daemon failure needs no second probe", async () => {
     await withDockerScript("#!/bin/sh\nexit 99\n", async (log) => {
       expect(String(await replacementCopyFailure("daemon-unavailable"))).toContain(

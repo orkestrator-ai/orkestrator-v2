@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { startDockerContainer } from "../src/core/container-start";
+import { PORT_COLLISION_RETRIES, startDockerContainer } from "../src/core/container-start";
 import { runCommand } from "../src/core/shell";
 
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();
@@ -147,7 +147,7 @@ describe("Docker start recovery", () => {
 
   for (const verb of ["start", "restart"] as const) {
     live(
-      `two detached collision failures during ${verb} preserve a later start's ports`,
+      `detached collision failures past the retries during ${verb} preserve a later start's ports`,
       async () => {
         const id = await fixture();
         if (verb === "restart") await startDockerContainer(id);
@@ -157,7 +157,10 @@ describe("Docker start recovery", () => {
         // RootlessKit's automatic-port race. Detach real Docker endpoints at the
         // process boundary exactly as the recorded rootless failure does.
         const run: typeof runCommand = async (command, args = [], options) => {
-          if ((args[0] === "start" || args[0] === "restart") && failures < 2) {
+          if (
+            (args[0] === "start" || args[0] === "restart") &&
+            failures <= PORT_COLLISION_RETRIES
+          ) {
             verbs.push(args[0]);
             failures++;
             if (verb === "restart" && failures === 1) await docker(["stop", "-t", "1", id]);
@@ -169,7 +172,10 @@ describe("Docker start recovery", () => {
         await expect(startDockerContainer(id, { verb, run })).rejects.toThrow(
           "address already in use",
         );
-        expect(verbs).toEqual([verb, "start"]);
+        expect(verbs).toEqual([
+          verb,
+          ...Array.from({ length: PORT_COLLISION_RETRIES }, () => "start"),
+        ]);
         await startDockerContainer(id);
         await assertPublished(id);
       },

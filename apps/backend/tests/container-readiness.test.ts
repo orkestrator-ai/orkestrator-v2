@@ -4,9 +4,11 @@ import { existsSync, promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   emptyContainerLifecycle,
+  parseContainerLifecycleError,
   setupCompletionIsCurrent,
 } from "@orkestrator/protocol/container-lifecycle";
 import {
+  BOOT_RECORD_REFUSED,
   BOOT_STATUS_PATH,
   ContainerInitializationError,
   assertContainerNotDraining,
@@ -132,6 +134,24 @@ esac
         expect((failure as ContainerInitializationError).failureCode).toBe("firewall-missing");
         expect(String(failure)).toContain("firewall-missing");
         expect(await log.read()).toContain("cp container-1:/run/orkestrator/boot-status.json -");
+      },
+    );
+  });
+
+  test("a record Docker refuses to copy out is named, not read as container-exited", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+case "$1" in
+  exec) exit 1 ;;
+  inspect) printf 'false 2026-09-27T10:00:04.5Z\\n' ;;
+  cp) printf 'Error response from daemon: remount-ro /d/rootfs/overlayfs/1/git, flags: 0x1021: operation not permitted\\n' >&2; exit 1 ;;
+esac
+`,
+      async () => {
+        const failure = await waitForContainerBoot("container-1", { pollMs: 1 }).catch((e) => e);
+        expect((failure as ContainerInitializationError).failureCode).toBe(BOOT_RECORD_REFUSED);
+        expect(String(failure)).toContain("nosuid or nodev");
+        expect(parseContainerLifecycleError(failure)?.code).toBe("not-ready");
       },
     );
   });

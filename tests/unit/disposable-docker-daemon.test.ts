@@ -31,6 +31,7 @@ import {
   markedProcesses,
   missingPrerequisites,
   parseArguments,
+  sameImage,
   readRecord,
   readStartTime,
   reapStale,
@@ -123,6 +124,7 @@ describe("arguments", () => {
       addressPool: "172.30.0.0/16",
       poolSize: 24,
       ipv6: false,
+      storage: "containerd",
     });
   });
 
@@ -140,10 +142,35 @@ describe("arguments", () => {
       "only accepted by start",
     );
     expect(() => parseArguments(["start", "--net", "host"], root)).toThrow("--net");
+    expect(parseArguments(["start", "--storage", "overlay2"], root).settings).toEqual({
+      storage: "overlay2",
+    });
+    expect(() => parseArguments(["start", "--storage", "btrfs"], root)).toThrow("--storage");
+    expect(() => parseArguments(["restart", "--storage", "overlay2"], root)).toThrow(
+      "only accepted by start",
+    );
     expect(() => parseArguments(["start", "--address-pool", "10.0.0.0/28"], root)).toThrow();
     expect(() => parseArguments(["start", "--name", "../x"], root)).toThrow("Instance name");
     expect(() => parseArguments(["start", "--surprise"], root)).toThrow("Unknown argument");
     expect(() => parseArguments(["start", "--name"], root)).toThrow("needs a value");
+  });
+});
+
+describe("image identity", () => {
+  const layers = '["sha256:aaa","sha256:bbb"]';
+  const line = (id: string, content = layers) => `${id}\t${content}\t2026-11-10T00:30:04Z\tamd64`;
+
+  test("the same id, or the same content under the other image store, is the same image", () => {
+    expect(sameImage(line("sha256:manifest"), line("sha256:manifest"))).toBe(true);
+    // containerd store (manifest digest) to overlay2 (config digest).
+    expect(sameImage(line("sha256:manifest"), line("sha256:config"))).toBe(true);
+  });
+
+  test("different content, or an unreadable line, is not", () => {
+    expect(sameImage(line("sha256:a"), line("sha256:b", '["sha256:aaa"]'))).toBe(false);
+    expect(sameImage(line("sha256:a"), "")).toBe(false);
+    expect(sameImage("sha256:a", "sha256:b")).toBe(false);
+    expect(sameImage(line("sha256:a", "null"), line("sha256:b", "null"))).toBe(false);
   });
 });
 
@@ -171,6 +198,13 @@ describe("daemon configuration", () => {
     expect(daemonConfig({ ...DEFAULT_SETTINGS, liveRestore: true })).toEqual({
       "default-address-pools": [{ base: "172.30.0.0/16", size: 24 }],
       "live-restore": true,
+    });
+    // overlay2 turns the containerd image store off for this data root only.
+    expect(daemonConfig({ ...DEFAULT_SETTINGS, storage: "overlay2" })).toEqual({
+      "default-address-pools": [{ base: "172.30.0.0/16", size: 24 }],
+      "live-restore": false,
+      features: { "containerd-snapshotter": false },
+      "storage-driver": "overlay2",
     });
   });
 

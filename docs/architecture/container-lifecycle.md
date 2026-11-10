@@ -2137,7 +2137,7 @@ next start. OpenCode has no bridge and takes the plain password, in
 launcher starts it from root's binary and configuration and the backend sends
 the password only to the listening socket it recorded in `opencode-listener`
 ([agent-approvals.md](agent-approvals.md#opencode-under-the-launcher-opencode-launch1),
-follow-ups in [7548](../todo/containers-and-environments/7548-opencode-launch-follow-ups.md));
+follow-ups in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md));
 a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
 `agent-credential-files.ts`). In a container, a server the plugin could not harden
 refuses tools; on a host it only logs, because a host's OpenCode can be any build.

@@ -1119,7 +1119,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         );
         if (boardTicket) {
           // Shown at once; the node then reports the build's own progress.
-          await context.storage.kanban
+          await context.storage.ticketSync
             .recordTicketRemoteWork(String(input.taskId).trim(), {
               nodeId: target.nodeId,
               nodeName: target.nodeName,

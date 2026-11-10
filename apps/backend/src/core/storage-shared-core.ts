@@ -138,6 +138,15 @@ export type KanbanImage = {
   id: string;
   filename: string;
   createdAt: string;
+  /**
+   * The machine holding the bytes, when that is another one: an image on a
+   * ticket synced across machines (docs/architecture/tickets.md, "Sync across
+   * machines"). Absent for an image attached here.
+   */
+  nodeId?: string;
+  nodeName?: string;
+  /** A leaf's own image the command node's board has listed, so its removal there removes it here. */
+  synced?: true;
 };
 
 export type KanbanStatus = "backlog" | "in-progress" | "review" | "done";

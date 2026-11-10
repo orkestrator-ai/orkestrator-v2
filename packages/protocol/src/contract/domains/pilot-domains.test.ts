@@ -93,7 +93,8 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
     "liveIds",
   ],
   get_ticket_sync_cursor: ["controllerId", "projectId"],
-  collect_ticket_sync_outbox: ["controllerId", "after"],
+  // `features` added with images on synced tickets (to-do 3800 task 3).
+  collect_ticket_sync_outbox: ["controllerId", "after", "features"],
   ack_ticket_sync_outbox: ["controllerId", "epoch", "upTo"],
   get_ticket_sync_status: ["projectId"],
   sync_node_tickets: ["nodeId"],
@@ -109,6 +110,12 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
     "attachments",
   ],
   coordinator_node_ticket: ["scope", "nodeId", "action", "input"],
+  // Defined new with the to-do 3800 follow-ups (2026-11-09); they had no strict handler.
+  read_ticket_image: ["controllerId", "imageId"],
+  put_ticket_image: ["controllerId", "imageId", "data"],
+  get_ticket_sync_leaf_status: ["projectId"],
+  share_tickets_with_command_node: ["projectId", "taskIds"],
+  dismiss_ticket_sync_conflicts: ["projectId", "ids"],
 };
 
 const LENIENT = [
@@ -125,7 +132,7 @@ const ALL: readonly AnyCommandDef[] = [
 ];
 
 describe("pilot definitions", () => {
-  it("cover the 24 pilot commands and the 4 lenient neighbours, each in version 1 of its domain", () => {
+  it("cover the 24 pilot commands, the 4 lenient neighbours and the 5 ticket-sync follow-ups, each in version 1 of its domain", () => {
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(FORMER_KEYS).sort());
     for (const def of ALL) {
       expect(def.since).toBe(1);

@@ -15,7 +15,10 @@
  * the Kanban sync strip, plan item 7001's audit on 2026-11-07). It is not
  * gated on `syncs`: a renderer's client often carries no capabilities, and a
  * backend that predates it answers `unknown-command` itself. At version 0 it
- * is today's untyped call, answered as sent.
+ * is today's untyped call, answered as sent. The board's other calls
+ * (`leafStatus`, `share`, `dismissConflicts`, to-do 3800) are the same.
+ * `readImage` and `putImage` are the image calls between machines, gated
+ * like the rest of the sync.
  *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises the `ticket-sync` domain.
@@ -30,8 +33,13 @@ import {
   ackTicketSyncOutboxCommand,
   applyTicketSyncCommand,
   collectTicketSyncOutboxCommand,
+  dismissTicketSyncConflictsCommand,
   getTicketSyncCursorCommand,
+  getTicketSyncLeafStatusCommand,
   getTicketSyncStatusCommand,
+  putTicketImageCommand,
+  readTicketImageCommand,
+  shareTicketsWithCommandNodeCommand,
 } from "./commands.js";
 import { ticketSyncDomain } from "./domain.js";
 
@@ -44,14 +52,29 @@ export interface TicketSyncApi {
   ackOutbox: Call<typeof ackTicketSyncOutboxCommand>;
   cursor: Call<typeof getTicketSyncCursorCommand>;
   apply: Call<typeof applyTicketSyncCommand>;
+  readImage: Call<typeof readTicketImageCommand>;
+  putImage: Call<typeof putTicketImageCommand>;
   /** The command node's per-leaf sync state for one project's board; never gated. */
   status: Call<typeof getTicketSyncStatusCommand>;
+  /** A leaf board's view of its command nodes; never gated. */
+  leafStatus: Call<typeof getTicketSyncLeafStatusCommand>;
+  /** Leaf: share tickets made before sync with the command node; never gated. */
+  share: Call<typeof shareTicketsWithCommandNodeCommand>;
+  /** Command node: dismiss conflicts from a board's list; never gated. */
+  dismissConflicts: Call<typeof dismissTicketSyncConflictsCommand>;
 }
+
+type BoardCalls = Pick<TicketSyncApi, "status" | "leafStatus" | "share" | "dismissConflicts">;
 
 function api(
   call: CommandCall,
   syncs: boolean,
-  status: TicketSyncApi["status"] = (args) => call(getTicketSyncStatusCommand, args),
+  board: BoardCalls = {
+    status: (args) => call(getTicketSyncStatusCommand, args),
+    leafStatus: (args) => call(getTicketSyncLeafStatusCommand, args),
+    share: (args) => call(shareTicketsWithCommandNodeCommand, args),
+    dismissConflicts: (args) => call(dismissTicketSyncConflictsCommand, args),
+  },
 ): TicketSyncApi {
   const run =
     <C extends AnyCommandDef>(def: C): Call<C> =>
@@ -65,19 +88,25 @@ function api(
     ackOutbox: run(ackTicketSyncOutboxCommand),
     cursor: run(getTicketSyncCursorCommand),
     apply: run(applyTicketSyncCommand),
-    status,
+    readImage: run(readTicketImageCommand),
+    putImage: run(putTicketImageCommand),
+    ...board,
   };
+}
+
+/** A board call at version 0: today's untyped call, answered as sent. */
+function untyped<C extends AnyCommandDef>(context: DomainAdapterContext, def: C): Call<C> {
+  return (args) =>
+    context.invoke(def.name, args as Readonly<Record<string, unknown>>) as Promise<ResultOf<C>>;
 }
 
 export const ticketSyncClient = domainClient(ticketSyncDomain, {
   1: (call) => api(call, true),
   0: (call, context: DomainAdapterContext) =>
-    api(
-      call,
-      context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false,
-      (args) =>
-        context.invoke(getTicketSyncStatusCommand.name, args) as ReturnType<
-          TicketSyncApi["status"]
-        >,
-    ),
+    api(call, context.capabilities?.has(BACKEND_CAPABILITIES.ticketSync) ?? false, {
+      status: untyped(context, getTicketSyncStatusCommand),
+      leafStatus: untyped(context, getTicketSyncLeafStatusCommand),
+      share: untyped(context, shareTicketsWithCommandNodeCommand),
+      dismissConflicts: untyped(context, dismissTicketSyncConflictsCommand),
+    }),
 });

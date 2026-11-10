@@ -210,7 +210,7 @@ between a check and the next request still gets that request, until the next
 refresh or start. The agent's uid can still kill the bridge, which it could
 already do. OpenCode has its own socket check on `opencode-launch=1` images
 ([above](#opencode-under-the-launcher-opencode-launch1)); its remaining windows
-are tracked in [7549](../todo/containers-and-environments/7549-opencode-launch-follow-ups.md).
+are tracked in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 
 ## Where an approval is a boundary
 
@@ -254,7 +254,7 @@ need its own uid, and then its tools would too.
   socket check and the requests after it, and the server's first seconds before
   its plugin makes it non-dumpable. The OpenCode 2.x server still starts from
   node's login shell. To-do
-  [7549](../todo/containers-and-environments/7549-opencode-launch-follow-ups.md).
+  [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md).
 - **Stop being asked.** Through the provider rule files above.
 
 Each needs a process or a tool the user already let run. Qualified on a real

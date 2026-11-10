@@ -91,10 +91,12 @@ import {
 
 import { grantCodexProjectTrust, writeRefusal } from "./mcp-apply-live-safety";
 import {
+  FAKE_OPENCODE_PROVIDER,
   isFakeModelPlatform,
   startMcpFakeModel,
   type McpFakeModelHandle,
 } from "./mcp-fake-model-wiring";
+import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 
 type Platform = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 type Status = {
@@ -381,6 +383,8 @@ test.describe("live MCP apply", () => {
       const scratch = mkdtempSync(path.join(os.tmpdir(), `mcpq-${platform}-`));
       const sseServers: ChildProcess[] = [];
       let fake: McpFakeModelHandle | null = null;
+      /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
+      let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       let invoke: Invoke | null = null;
       let environment: Environment | null = null;
       const skip = (reason: string): never => {
@@ -413,6 +417,10 @@ test.describe("live MCP apply", () => {
         }
         invoke = await signIn(page, status);
         const call = invoke;
+        if (fake && platform === "opencode") {
+          // A connected provider outside the allowlist does not count as signed in.
+          restoreOpenCodeAllowlist = await allowOpenCodeFakeProvider(call, FAKE_OPENCODE_PROVIDER);
+        }
         const config = await call<{ global?: { enabledAgentPlatforms?: string[] } }>(
           "get_config",
         ).catch(() => null);
@@ -1337,7 +1345,11 @@ test.describe("live MCP apply", () => {
           );
         }
         rmSync(scratch, { recursive: true, force: true });
-        await fake?.stop();
+        try {
+          await restoreOpenCodeAllowlist?.();
+        } finally {
+          await fake?.stop();
+        }
       }
     });
   }

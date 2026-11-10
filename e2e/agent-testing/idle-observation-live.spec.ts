@@ -97,6 +97,8 @@ import {
   startLocalFakeModel,
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
+import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
+import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 import {
   requireRecoveredBackoff,
   backgroundOutputEvidence,
@@ -529,6 +531,8 @@ test.describe("live idle observation", () => {
       let environmentName = "";
       let containerId: string | null = null;
       const fakeModels: FakeModelHandle[] = [];
+      /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
+      let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -555,6 +559,13 @@ test.describe("live idle observation", () => {
           fakeModels.push(fake);
           summary.fakeModelOrigin = fake.origin;
           progress("loopback model started");
+          if (platform === "opencode") {
+            // A connected provider outside the allowlist does not count as signed in.
+            restoreOpenCodeAllowlist = await allowOpenCodeFakeProvider(
+              (command, args) => client.invoke(command, args),
+              PI_FAKE_PROVIDER,
+            );
+          }
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1933,6 +1944,12 @@ test.describe("live idle observation", () => {
           if (environmentId) {
             await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
             await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
+          }
+          if (restoreOpenCodeAllowlist) {
+            await restoreOpenCodeAllowlist().catch((error: unknown) => {
+              summary.allowlistRestoreError = String(error).slice(0, 300);
+              writeSummary();
+            });
           }
           await client.context.close().catch(() => undefined);
         });

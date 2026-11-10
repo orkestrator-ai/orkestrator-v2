@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import {
+  allowOpenCodeFakeProvider,
+  allowlistWithProvider,
   mergeOpenCodeFakeProvider,
   openCodeModelRef,
   profileOpenCodeConfigFile,
@@ -65,5 +67,66 @@ describe("OpenCode fake provider", () => {
     );
     expect(() => mergeOpenCodeFakeProvider("[]", fake)).toThrow("not a JSON object");
     expect(() => mergeOpenCodeFakeProvider("  ", fake)).not.toThrow();
+  });
+});
+
+describe("OpenCode provider allowlist", () => {
+  test("adds the provider to the managed default, and leaves an admitting list alone", () => {
+    expect(allowlistWithProvider(undefined, "fixture-fake")).toEqual([
+      "opencode",
+      "opencode-go",
+      "fixture-fake",
+    ]);
+    expect(allowlistWithProvider(["opencode"], "Fixture-Fake")).toEqual([
+      "opencode",
+      "fixture-fake",
+    ]);
+    expect(allowlistWithProvider(["fixture-fake"], "fixture-fake")).toBeUndefined();
+    // Empty is the user's opt-in to the full catalogue, which already admits it.
+    expect(allowlistWithProvider([], "fixture-fake")).toBeUndefined();
+  });
+
+  for (const earlier of [undefined, ["opencode"]] as const) {
+    test(`patches the setting and restores ${earlier ? "the earlier value" : "its absence"}`, async () => {
+      const calls: Array<[string, unknown]> = [];
+      const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push([command, args]);
+        return (
+          command === "get_config"
+            ? { global: earlier ? { openCodeModelProviders: earlier } : {} }
+            : {}
+        ) as T;
+      };
+      const restore = await allowOpenCodeFakeProvider(invoke, "fixture-fake");
+      expect(calls[1]).toEqual([
+        "patch_global_config",
+        {
+          patch: {
+            openCodeModelProviders: earlier
+              ? ["opencode", "fixture-fake"]
+              : ["opencode", "opencode-go", "fixture-fake"],
+          },
+        },
+      ]);
+      await restore();
+      expect(calls[2]).toEqual([
+        "patch_global_config",
+        earlier
+          ? { patch: { openCodeModelProviders: ["opencode"] } }
+          : { patch: {}, unset: ["openCodeModelProviders"] },
+      ]);
+    });
+  }
+
+  test("does not patch when the provider is already admitted", async () => {
+    const commands: string[] = [];
+    const invoke = async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      return { global: { openCodeModelProviders: [] } } as T;
+    };
+    await (
+      await allowOpenCodeFakeProvider(invoke, "fixture-fake")
+    )();
+    expect(commands).toEqual(["get_config"]);
   });
 });

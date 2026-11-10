@@ -26,7 +26,10 @@ Tasks 5, 6 (Claude, Codex and Pi), 7, 9 and 13 worked on 2026-11-06 from
 `ee2cc842` (branch `mcp-management-3b93ef501ce9-r1`) with **fake-model runs
 only**: the pinned CLIs, app-server and SDK against a scripted loopback model,
 no login and no billed turn (see
-[Fake-model live record](#fake-model-live-record-2026-11-06)).
+[Fake-model live record](#fake-model-live-record-2026-11-06)). Task 6's
+OpenCode cells worked on 2026-11-10 against `main` at `c98b20e6f`, again on
+the loopback model only, reached through a custom OpenCode provider (see
+[OpenCode on the loopback model](#opencode-on-the-loopback-model-2026-11-10)).
 
 ### Tasks
 
@@ -35,11 +38,11 @@ no login and no billed turn (see
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
 4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun; the 2026-11-06 fake-model work covered only Claude, Codex and Pi and used no login, so Grok stays open).
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
-6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: partly done (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; OpenCode's in-place reload and rename are open because this ticket covered only Claude, Codex and Pi and no OpenCode fake was built; Cursor stays out because it needs a login).
+6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor open: it needs a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
-10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (a release decision for a maintainer; the 2026-11-06 runs are fake-model evidence of the runtime side only, and Grok, Cursor and OpenCode cells remain).
+10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (a release decision for a maintainer; the 2026-11-06 and 2026-11-10 runs are fake-model evidence of the runtime side only, and the Grok and Cursor cells remain).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
 13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's).
@@ -306,6 +309,35 @@ the full matrix.
   and what the probe servers logged, and that the apply outcomes followed;
   they are not evidence of how a real model behaves.
 
+**Outcome (2026-11-10): OpenCode on the loopback model.** Run
+`oc-loop-0039-mcp` on a fresh profile (`oc-loop-0039`, beelink, Linux,
+OpenCode 1.19.5) with the same fake-model mode, now extended to OpenCode
+(record and commands under
+[OpenCode on the loopback model](#opencode-on-the-loopback-model-2026-11-10)).
+It passed in 141 s, with every probe judged from the probe servers' own logs:
+
+- **User scope** (the profile's global `opencode.json`): every save
+  reported `restart-required` ("OpenCode keeps its user configuration until
+  its server restarts"), as task 11 decided; after the restart the spec
+  makes, add, the busy edit (both tabs on v2; the shell `sleep 45` was
+  running before the save and the turn finished `BUSY-DONE`), rename (the
+  new name answered, the old one was not offered) and the bridge restart
+  all passed. Before its restart the removed server still answered one
+  call, which is what `restart-required` says (recorded, not judged); after
+  it both tabs were refused.
+- **Project scope** (`<worktree>/opencode.json`, project resources on):
+  every save went `queued`, then `applied` ("OpenCode rebuilt this
+  worktree's instance from the saved configuration") with no restart, and
+  the next turns saw it: add reached v1, the edit reached v2 on both tabs,
+  the rename's new name answered and the old name was refused, and the
+  removed server was refused on both tabs.
+- **Rename by inventory:** in both scopes the old name was simply not
+  offered after the rename (the fake found no `<server>_probe` tool and the
+  server logged no call), so the inventory rule for a substituted name was
+  not needed.
+- Cursor remains open (needs a Cursor login). These are fake-model
+  observations, not evidence of how a real model behaves.
+
 ### 7. Inactive environment, full mode and process-wide variant
 
 **Problem.** The Claude inactive-environment scenario passed only in apply-only mode; the model's tool calls after an edit, a removal, an older bridge and a shared save are unproven. The process-wide variant (two Codex or two OpenCode sessions sharing one process) has never run.
@@ -445,8 +477,9 @@ two-machine run, so it is not dropped. The stale "every container target
 **Not done (2026-11-06).** A release decision belongs to a maintainer. New
 input for it: Claude, Codex and Pi now pass every probe cell on a fake model
 (task 6), which shows each runtime offers, applies and drops servers as its
-outcome says; it says nothing about real-model behaviour. Grok (task 4),
-Cursor and OpenCode's model-facing cells are still unrun.
+outcome says; it says nothing about real-model behaviour. OpenCode joined
+them on 2026-11-10, also on the loopback model (task 6). Grok (task 4) and
+Cursor's model-facing cells are still unrun.
 
 ### 11. OpenCode user-file apply and sign-in follow-ups
 
@@ -937,7 +970,11 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   the inventory when the model substitutes the new name. Claude, Codex and
   Pi ran on 2026-11-06 on a fake model and passed every cell, busy, negative,
   Claude's warm SSE hook and Codex `applied` included (task 6,
-  [fake-model record](#fake-model-live-record-2026-11-06)); OpenCode, Cursor
+  [fake-model record](#fake-model-live-record-2026-11-06)); OpenCode ran on
+  2026-11-10 on the same fake through a custom provider and passed both
+  scopes: project scope `applied` by the in-place reload, user scope
+  `restart-required`, and the renamed server's old name refused
+  ([OpenCode record](#opencode-on-the-loopback-model-2026-11-10)). Cursor
   and Grok are still to run. Hand-seeding logins is no longer needed (see the
   isolation note in the 2026-10-18 method). The [completion matrix](#completion-matrix)
   retains the original observations and names the cells still unverified;
@@ -1089,12 +1126,62 @@ unavailable. Apply outcomes are per tab A, B.
 | Codex · project `.codex/config.toml` (trusted) | reached | reached v2 both | answers / fails | fails both | — | — | same |
 | Pi · user `~/.pi/agent/mcp.json` (profile home) | reached | reached v2 both | answers / fails | fails both | passed | reached after bridge restart | `pending-next-turn`, then `applied` per tab after its turn |
 | Pi · project `.pi/mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
-| OpenCode, Cursor, Grok | not run: no fake model built for OpenCode in this ticket; Cursor and Grok need a login | | | | | | |
+| OpenCode | run on 2026-11-10: see [OpenCode on the loopback model](#opencode-on-the-loopback-model-2026-11-10) | | | | | | |
+| Cursor, Grok | not run: both need a login | | | | | | |
 
 Evidence: `output/agent-testing/mcp0039-fake-*/mcp-apply-live/<provider>.json`
 and the runs' Playwright reports, in this worktree (git-ignored). The
 profile was stopped and reset afterwards, and every environment the runs
 created was deleted by the specs.
+
+## OpenCode on the loopback model (2026-11-10)
+
+**A fake-model run.** The pinned OpenCode 1.19.5 server, its bridge
+wiring, the backend, the browser UI and the probe servers ran for real; the
+model was `mcp-fake-model.ts` on 127.0.0.1, reached through a custom
+OpenCode provider (`@ai-sdk/openai-compatible`, which OpenCode bundles) that
+`opencode-fake-provider.ts` merges into the profile's own global
+`opencode.json` (`<dataDir>/agent-credentials/xdg-config/opencode/`). The
+merge keeps the file's MCP servers, sets the provider as `model` and
+`small_model`, and limits OpenCode to it (`enabled_providers`), so no turn or
+title request could reach a hosted model. Orkestrator's own provider
+allowlist (`openCodeModelProviders`, default `opencode` and `opencode-go`)
+treats a connected provider outside it as signed out, so the spec adds the
+fake's provider to the profile's setting for the run and restores it after.
+The fake recognises OpenCode's `<server>_<tool>` tool names (read from the
+1.19.5 binary's own sanitizer) and adds the description OpenCode's `bash`
+requires.
+
+Host: beelink (Arch Linux, kernel 7.1.8, no display), Bun 1.4.4, branch
+`20261110-091903-4e2607b3a830` from `c98b20e6f`. One disposable profile,
+`oc-loop-0039`, started with no host credentials and only OpenCode enabled;
+no Docker container was created.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+  PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run dev:test --profile oc-loop-0039 --fixture --no-agent-credentials \
+  --agent-platforms opencode --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=oc-loop-0039 ORKESTRATOR_AGENT_TEST_RUN_ID=oc-loop-0039-mcp \
+  ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=opencode MCPQ_FAKE_SHAPES=1 \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/mcp-apply-live.spec.ts --workers=1 --reporter=line --trace off
+```
+
+| Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenCode · user `opencode.json` (profile `XDG_CONFIG_HOME`) | reached after restart | reached v2 both | answers / fails | one call still answered before the restart (recorded), then fails both | passed: `sleep 45` seen running, turn ended `BUSY-DONE` | reached after bridge restart | `restart-required` at every save, as decided in task 11 |
+| OpenCode · project `opencode.json` | reached | reached v2 both | answers / fails | fails both | — | — | `queued`, then `applied` by the in-place reload, no restart |
+
+Evidence: `output/agent-testing/oc-loop-0039-mcp/mcp-apply-live/opencode.json`
+in the worktree that ran it (git-ignored). One sample. The spec deleted its
+environment, restored the profile's `opencode.json` and allowlist, and the
+profile was stopped and reset afterwards. Its `dev:stop` left a 1 GB
+Electron core file in the worktree, the known
+[7554](../cross-cutting/7554-headless-dev-electron-core-dumps-in-checkout.md);
+it was deleted and not committed.
 
 ## Qualification record: inactive environment (2026-10-18)
 
@@ -1565,6 +1652,46 @@ directory and were deleted with it.
 
 ## Assumptions and decisions
 
+### 2026-11-10: task 6, OpenCode on a loopback model
+
+Made without stopping to ask. No login and no billed turn: the one live run
+used the loopback fake model.
+
+#### Task 6: how OpenCode reaches the fake
+
+Options: (a) a custom provider in the profile's own global `opencode.json`,
+served by the AI SDK `@ai-sdk/openai-compatible` package OpenCode bundles,
+pointing at the fake's existing chat-completions route; (b) the same
+provider in `OPENCODE_CONFIG_CONTENT`, as the backend's OpenCode live tests
+do; (c) a project `opencode.json` in the worktree. Chose (a). Pros: the
+backend starts OpenCode with the profile's `XDG_CONFIG_HOME`, so nothing in
+the launch path changes; it is the file the spec already snapshots for the
+MCP user scope, so one restore covers both; no package download. Cons: it
+shares the file with the user-scope MCP editor, so the merge must keep every
+other key (it refuses a JSONC file rather than drop a comment). (b) would
+need a backend environment change for one test, and the MCP editor would
+then report an extra read-only source; (c) would mix the provider into the
+project scope this task probes.
+
+#### Task 6: the allowlist is opened for the run, not changed in code
+
+The first run skipped: the composer asked for a sign-in, because
+Orkestrator's `openCodeModelProviders` allowlist (default `opencode` and
+`opencode-go`) counts a connected provider outside it as signed out. That is
+the designed behaviour of a setting the user controls, so it is not a
+defect: a user with a custom provider adds it in settings. Options: (a)
+patch the profile's setting for the run through `patch_global_config` and
+restore it; (b) also admit any provider named in the user's `opencode.json`
+automatically. Chose (a): it is what a user does, and (b) would widen a
+deliberate allowlist without a product decision.
+
+#### Task 6: limiting OpenCode to the fake's provider
+
+`enabled_providers` holds only the fake's provider, and it is also the
+`small_model`, so OpenCode's own title and summary requests cannot fall
+through to its hosted free models. Cost: none for the probes, which never
+need another provider.
+
 ### 2026-11-06 review repairs: tasks 7, 13 and qualification harness
 
 **Task 7: count actual reload requests.** The Codex inactive scenario now
@@ -1708,7 +1835,8 @@ browser) into that task as a second check of the same two-machine run.
 
 Task 1 needs an outward-facing report, task 4 a Grok login, task 10 a
 release decision; Cursor needs a login, and no OpenCode fake was built
-because the ticket covered Claude, Codex and Pi.
+because the ticket covered Claude, Codex and Pi (built on 2026-11-10, see
+below).
 
 ### Task 13: retirement pointer (2026-11-06)
 

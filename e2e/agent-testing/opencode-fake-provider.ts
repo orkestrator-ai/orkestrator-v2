@@ -17,8 +17,16 @@
  * title request can reach OpenCode's own hosted models. The key is a literal
  * placeholder. Every file is under the profile's data directory; callers
  * snapshot and restore it.
+ *
+ * Orkestrator also keeps its own OpenCode provider allowlist
+ * (`openCodeModelProviders`, default `opencode` and `opencode-go`): a
+ * connected provider outside it does not count as signed in, and the composer
+ * asks for a sign-in instead of sending. `allowOpenCodeFakeProvider` adds the
+ * fake's provider to the profile's setting for the run, as a user who
+ * configured a custom provider would, and returns the undo.
  */
 import path from "node:path";
+import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 
 /** The profile's global OpenCode configuration file. */
 export function profileOpenCodeConfigFile(dataDir: string): string {
@@ -89,4 +97,43 @@ export function mergeOpenCodeFakeProvider(
     ...added.provider,
   };
   return `${JSON.stringify({ ...earlier, ...added, provider: providers }, null, 2)}\n`;
+}
+
+type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+/**
+ * The `openCodeModelProviders` value that admits `provider`, or `undefined`
+ * when the current one already does (an empty list is OpenCode's full
+ * catalogue).
+ */
+export function allowlistWithProvider(current: unknown, provider: string): string[] | undefined {
+  const providers = normalizeOpenCodeModelProviders(current);
+  if (providers.length === 0 || providers.includes(provider.toLowerCase())) return undefined;
+  return [...providers, provider.toLowerCase()];
+}
+
+/**
+ * Add `provider` to the profile's OpenCode allowlist through the backend
+ * (`patch_global_config`, read per call so it applies at once) and return a
+ * function that puts the earlier value back, or unsets it when there was none.
+ */
+export async function allowOpenCodeFakeProvider(
+  invoke: Invoke,
+  provider: string,
+): Promise<() => Promise<void>> {
+  const config = await invoke<{ global?: Record<string, unknown> }>("get_config");
+  const global = config?.global ?? {};
+  const had = Object.hasOwn(global, "openCodeModelProviders");
+  const original = global.openCodeModelProviders;
+  const next = allowlistWithProvider(original, provider);
+  if (!next) return async () => undefined;
+  await invoke("patch_global_config", { patch: { openCodeModelProviders: next } });
+  return async () => {
+    await invoke(
+      "patch_global_config",
+      had
+        ? { patch: { openCodeModelProviders: original } }
+        : { patch: {}, unset: ["openCodeModelProviders"] },
+    );
+  };
 }

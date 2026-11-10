@@ -8,6 +8,12 @@ import {
 } from "./project-home-environment.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
 import { triageValidationFailures } from "./validation-failure-triage-service.js";
+import {
+  MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+  reviewDiffArgs,
+  sealReviewDiff,
+  verifyReviewDiffArtifact,
+} from "./review-diff-artifact.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -810,6 +816,37 @@ export async function writeEnvironmentReviewPackage(
   return reference;
 }
 
+/**
+ * Writes one backend-sealed file into the round's artifact directory, read-only
+ * and Git-excluded, through the same confined paths as the package itself.
+ */
+export async function writeEnvironmentReviewArtifact(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  filePath: string,
+  contents: Buffer,
+  dependencies: { run?: typeof runCommand; timeoutMs?: number } = {},
+): Promise<void> {
+  await ensureWorkspaceArtifactIsGitExcluded(environment, runner, filePath, "Review artifact path");
+  if (environment.environmentType === "local") {
+    await writeConfinedFile(environment.worktreePath!, filePath, contents, {
+      exclusive: false,
+      label: "review artifact path",
+      maxBytes: MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+      fileMode: 0o444,
+    });
+    return;
+  }
+  await writeContainerReviewPackage(
+    dependencies.run ?? runCommand,
+    environment.containerId!,
+    path.posix.dirname(filePath),
+    path.posix.basename(filePath),
+    contents,
+    dependencies.timeoutMs,
+  );
+}
+
 const CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS = 60_000;
 const MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES = 4_096;
 
@@ -900,6 +937,12 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
+    if (pkg.diffArtifact) {
+      const reason = await verifyReviewDiffArtifact(pkg.diffArtifact, (filePath) =>
+        readEnvironmentWorkspaceFile(environment, runner, filePath),
+      );
+      if (reason) return { valid: false, reason };
+    }
     const artifacts = await verifyValidationArtifacts(environment, runner, pkg.validation);
     return { valid: true, artifacts: artifacts.artifacts, artifactBytes: artifacts.bytes };
   } catch (error) {
@@ -1048,7 +1091,7 @@ export async function generateReviewPackage(
   // reviewer reproduces the diff from them, so the package never has to carry
   // — or the backend to extract — the bytes themselves.
   const range = `${baseRef}...${headRef}`;
-  const diffCommand = `git diff --no-color --no-ext-diff --no-renames ${range}`;
+  const diffCommand = `git ${reviewDiffArgs(range).join(" ")}`;
 
   const artifactDirectory = reviewArtifactDirectory(packageId);
   const artifactPaths = validation.flatMap((entry) =>
@@ -1106,6 +1149,13 @@ export async function generateReviewPackage(
       : limitations;
 
   await verifyValidationArtifacts(environment, runner, validation);
+  // The same bytes for a reviewer whose session refuses Git (to-do 0190).
+  const sealedDiff = await sealReviewDiff({
+    packageId,
+    diff: () => runner("git", reviewDiffArgs(range), 120_000),
+    write: (filePath, contents) =>
+      writeEnvironmentReviewArtifact(environment, runner, filePath, contents),
+  });
   const hydratedValidation = validation.map((entry) => {
     // The preparation agent reports `limitation: null` for a command that ran
     // without one, but the persisted contract is `limitation?: string` and its
@@ -1190,14 +1240,17 @@ export async function generateReviewPackage(
       subject: commitSubject,
     },
     diffCommand,
+    ...(sealedDiff.artifact ? { diffArtifact: sealedDiff.artifact } : {}),
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
     ...(triage.triage ? { failureTriage: triage.triage } : {}),
     uncommittedFiles: recordedUncommittedFiles,
-    limitations: triage.limitation
-      ? [...packageLimitations, triage.limitation]
-      : packageLimitations,
+    limitations: [
+      ...packageLimitations,
+      ...(sealedDiff.limitation ? [sealedDiff.limitation] : []),
+      ...(triage.limitation ? [triage.limitation] : []),
+    ],
     // Deliberately absent rather than `null`. The context is supplied by the
     // workflow, not by package generation, and a null here is not a valid
     // `ReviewPackageContext` — persisting it would make the snapshot fail

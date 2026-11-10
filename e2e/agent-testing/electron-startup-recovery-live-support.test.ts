@@ -161,18 +161,16 @@ describe("serveModuleFanOut", () => {
       expect(page).toContain(JSON.stringify(STARTUP_FAILED_TEXT));
       expect(page).toContain(JSON.stringify("Ready title"));
 
-      let answered = false;
-      const held = get(`${server.url.origin}/entry.js?i=0`).then((body) => {
-        answered = true;
-        return body;
-      });
+      const held = get(`${server.url.origin}/entry.js?i=0`);
       await server.started;
       expect(server.moduleRequests()).toBe(1);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(answered).toBe(false);
+      // The request-arrival barrier lets us inspect the server's response queue
+      // directly, without inferring that it is held from elapsed client time.
+      expect(server.heldModuleResponses()).toBe(1);
 
       server.release();
       expect(await held).toBe("export const ready = true");
+      expect(server.heldModuleResponses()).toBe(0);
       // Released for good: later loads are answered at once.
       expect(await get(`${server.url.origin}/entry.js?i=1`)).toBe("export const ready = true");
       expect(server.moduleRequests()).toBe(2);
@@ -180,7 +178,9 @@ describe("serveModuleFanOut", () => {
       const next = server.nextModuleRequest();
       let nextSeen = false;
       void next.then(() => (nextSeen = true));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Flush an already-resolved promise's reaction: next must not reuse the
+      // previous request's signal. No I/O occurs until we issue the next GET.
+      await Promise.resolve();
       expect(nextSeen).toBe(false);
       await get(`${server.url.origin}/entry.js?i=2`);
       await next;

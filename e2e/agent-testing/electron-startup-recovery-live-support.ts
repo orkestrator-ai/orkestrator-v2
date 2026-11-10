@@ -58,6 +58,8 @@ export interface ModuleFanOutServer {
   readonly url: URL;
   /** Module requests received so far, from every load. */
   moduleRequests(): number;
+  /** Module responses still waiting for release (before any response is written). */
+  heldModuleResponses(): number;
   /** Resolves when the first module request arrives. */
   readonly started: Promise<void>;
   /** Resolves when the next module request from now arrives. */
@@ -76,6 +78,7 @@ export interface ModuleFanOutServer {
  */
 export async function serveModuleFanOut(title: string): Promise<ModuleFanOutServer> {
   let moduleRequests = 0;
+  let heldModuleResponses = 0;
   let moduleStarted!: () => void;
   const started = new Promise<void>((resolve) => (moduleStarted = resolve));
   let waiters: Array<() => void> = [];
@@ -91,10 +94,12 @@ export async function serveModuleFanOut(title: string): Promise<ModuleFanOutServ
   const server = http.createServer((request, response) => {
     if ((request.url ?? "").split("?")[0] === "/entry.js") {
       moduleRequests += 1;
+      heldModuleResponses += 1;
       moduleStarted();
       for (const resolve of waiters) resolve();
       waiters = [];
       void released.then(() => {
+        heldModuleResponses -= 1;
         response.writeHead(200, { "Content-Type": "text/javascript" });
         response.end("export const ready = true");
       });
@@ -111,6 +116,7 @@ export async function serveModuleFanOut(title: string): Promise<ModuleFanOutServ
   return {
     url: new URL(`http://127.0.0.1:${port}/`),
     moduleRequests: () => moduleRequests,
+    heldModuleResponses: () => heldModuleResponses,
     started,
     nextModuleRequest: () => new Promise<void>((resolve) => waiters.push(resolve)),
     release,

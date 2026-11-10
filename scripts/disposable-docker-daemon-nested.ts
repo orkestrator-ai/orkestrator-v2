@@ -94,13 +94,13 @@ export function nestedNames(name: string, marker: string, uid: number) {
   return { container: base, volume: `${base}-data` };
 }
 
-/** The inner daemon's own configuration. */
 /** The daemon.json keys that select the image store; none for Engine 29's default. */
 export function storageConfig(storage: InstanceSettings["storage"]): Record<string, unknown> {
   if (storage !== "overlay2") return {};
   return { features: { "containerd-snapshotter": false }, "storage-driver": "overlay2" };
 }
 
+/** The inner daemon's own configuration. */
 export function nestedDaemonConfig(settings: InstanceSettings): Record<string, unknown> {
   const pools: { base: string; size: number }[] = [
     { base: settings.addressPool, size: settings.poolSize },

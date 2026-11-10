@@ -1012,12 +1012,13 @@ async function stopInstanceUnlocked(name: string, options: LauncherOptions): Pro
 
 /** An image's id, then what identifies its content under either image store. */
 export const IMAGE_IDENTITY_FORMAT =
-  "{{.Id}}\t{{json .RootFS.Layers}}\t{{.Created}}\t{{.Architecture}}";
+  "{{.Id}}\t{{json .RootFS.Layers}}\t{{.Created}}\t{{.Architecture}}\t{{json .Config}}";
 
 /**
  * Whether two `IMAGE_IDENTITY_FORMAT` lines name the same image. The same id
- * does; otherwise the layers' content digests, creation time and architecture
- * must all agree, because the containerd image store's id is the manifest
+ * does; otherwise the layers' content digests, creation time, architecture and
+ * complete execution configuration must all agree, because the containerd image
+ * store's id is the manifest
  * digest while the overlay2 graph driver's is the config digest (`--storage
  * overlay2`).
  */
@@ -1028,10 +1029,43 @@ export function sameImage(source: string, copied: string): boolean {
   if (sourceId === copiedId) return true;
   const layers = sourceContent[0] ?? "";
   return (
-    sourceContent.length === 3 &&
+    sourceContent.length === 4 &&
+    copiedContent.length === 4 &&
     layers.startsWith('["sha256:') &&
-    sourceContent.join("\t") === copiedContent.join("\t")
+    sourceContent.slice(0, 3).join("\t") === copiedContent.slice(0, 3).join("\t") &&
+    sameImageConfig(sourceContent[3]!, copiedContent[3] ?? "")
   );
+}
+
+/** Compare JSON objects independently of Docker's property serialization order. */
+function sameImageConfig(source: string, copied: string): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, canonical(item)]),
+      );
+    }
+    return value;
+  };
+  try {
+    const a: unknown = JSON.parse(source);
+    const b: unknown = JSON.parse(copied);
+    if (
+      !a ||
+      !b ||
+      typeof a !== "object" ||
+      typeof b !== "object" ||
+      Array.isArray(a) ||
+      Array.isArray(b)
+    )
+      return false;
+    return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1094,10 +1128,12 @@ export async function transferImage(
     IMAGE_IDENTITY_FORMAT,
     reference,
   ]).stdout.trim();
+  // Re-inspection checks the loaded reference against the pre-save snapshot,
+  // including configuration: a tag changed during save must not pass on layers alone.
   if (!sameImage(sourceIdentity, copiedIdentity)) {
     throw new Error(`${reference} arrived as ${copiedIdentity.split("\t")[0]}, expected ${id}`);
   }
-  const entry = { reference, id };
+  const entry = { reference, id: copiedIdentity.split("\t")[0]! };
   record.images = [...record.images.filter((image) => image.reference !== reference), entry];
   writeRecord(record);
   return entry;

@@ -158,12 +158,39 @@ describe("arguments", () => {
 
 describe("image identity", () => {
   const layers = '["sha256:aaa","sha256:bbb"]';
-  const line = (id: string, content = layers) => `${id}\t${content}\t2026-11-10T00:30:04Z\tamd64`;
+  const line = (
+    id: string,
+    content = layers,
+    config = '{"Cmd":["sh"],"Env":["A=1"],"User":"node"}',
+  ) => `${id}\t${content}\t2026-11-10T00:30:04Z\tamd64\t${config}`;
 
   test("the same id, or the same content under the other image store, is the same image", () => {
     expect(sameImage(line("sha256:manifest"), line("sha256:manifest"))).toBe(true);
     // containerd store (manifest digest) to overlay2 (config digest).
     expect(sameImage(line("sha256:manifest"), line("sha256:config"))).toBe(true);
+  });
+
+  test("configuration-only changes cannot pass across image stores", () => {
+    for (const changed of [
+      { Cmd: ["other"] },
+      { Env: ["A=2"] },
+      { User: "root" },
+      { Entrypoint: ["other"] },
+    ]) {
+      const config = { Cmd: ["sh"], Env: ["A=1"], User: "node", ...changed };
+      expect(
+        sameImage(line("sha256:manifest"), line("sha256:config", layers, JSON.stringify(config))),
+      ).toBe(false);
+    }
+    expect(
+      sameImage(
+        line("sha256:a"),
+        line("sha256:b", layers, '{"User":"node","Env":["A=1"],"Cmd":["sh"]}'),
+      ),
+    ).toBe(true);
+    for (const config of ["null", "", "[]", "invalid"]) {
+      expect(sameImage(line("sha256:a"), line("sha256:b", layers, config))).toBe(false);
+    }
   });
 
   test("different content, or an unreadable line, is not", () => {
@@ -433,7 +460,10 @@ const destination = args[0] === "--host";
 if (destination) args = args.slice(2);
 const mode = process.env.FAKE_DOCKER_MODE;
 if (args[0] === "info" && mode === "hang") { setInterval(() => {}, 1000); }
-else if (args[0] === "image") { console.log(destination && mode === "mismatch" ? "sha256:other" : "sha256:expected"); }
+else if (args[0] === "image") {
+  const id = destination && (mode === "mismatch" || mode === "config-mismatch") ? "sha256:other" : destination && mode === "cross-store" ? "sha256:destination" : "sha256:expected";
+  console.log(id + '\t["sha256:layer"]\t2026-11-10T00:30:04Z\tamd64\t' + JSON.stringify({ Cmd: [destination && (mode === "config-mismatch" || mode === "mismatch") ? "other" : "sh"] }));
+}
 else if (args[0] === "save") {
   if (mode === "save-fail") process.exit(3);
   const bytes = Buffer.alloc(1024 * 1024);
@@ -461,6 +491,33 @@ else if (args[0] === "save") {
 }
 
 describe("Docker subprocesses", () => {
+  linuxTest("cross-store transfer records the destination identity", async () => {
+    const restore = fakeDocker("cross-store");
+    try {
+      const started = await startInstance("cross-copy", {}, options());
+      expect(await transferImage(started, "fixture:dev")).toEqual({
+        reference: "fixture:dev",
+        id: "sha256:destination",
+      });
+      expect(readRecord(root, "cross-copy")?.images).toEqual([
+        { reference: "fixture:dev", id: "sha256:destination" },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  linuxTest("a reference whose configuration changes during transfer is rejected", async () => {
+    const restore = fakeDocker("config-mismatch");
+    try {
+      const started = await startInstance("changed-copy", {}, options());
+      await expect(transferImage(started, "fixture:dev")).rejects.toThrow("arrived as");
+      expect(readRecord(root, "changed-copy")?.images).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
   linuxTest(
     "successful copy preserves source context and forces the private destination",
     async () => {

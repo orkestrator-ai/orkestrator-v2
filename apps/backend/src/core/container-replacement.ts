@@ -377,7 +377,7 @@ function volumeNamed(storage: ContainerStorageIdentity, role: string): string {
   return volume.name;
 }
 
-async function runCopyStep(
+export async function runCopyStep(
   context: Pick<CommandContext, "storage">,
   imageId: string,
   step: CopyStep,

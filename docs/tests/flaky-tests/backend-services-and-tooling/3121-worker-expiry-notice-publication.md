@@ -1,7 +1,7 @@
 # Pipeline worker expiry notice asserted before publication finished
 
 - **ID:** 3121
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-11-03
 - **Test:** `a claim settling returned after terminal synchronization keeps its outcome`
 - **Owning file:** `apps/backend/src/core/pipeline-worker-mail.test.ts`
@@ -15,3 +15,25 @@
 - **Fix:** the explicit-sync test shuts down and drains the mail service's timers before claiming and terminating the worker. It retains the placement and notice assertions. The separate live steer race tests keep the service running.
 - **Verification:** the original four-worker surrounding command passes after the fixture barrier; focused owner and backend type checks also pass.
 
+
+## Sibling expiry-notice assertion — 2026-11-10 (reopened)
+
+Observing branch base: `04639b12b71d4326a3b8941485367aca197f4966`;
+reviewed head: `c6b3ce9792c064bcac5e9eb7a287675fcbe73118`.
+The repaired default rerun (`mise run test:logged -- --name address-default-repaired -- mise run test`)
+failed the sibling test `mail queued for a worker that ends expires, and the sender is told`
+at line 379 (165.09 ms): expected notice sender `system`, received undefined.
+The backend used two isolated workers. The message had passed its expired-placement
+assertions before the notice lookup. This is the same publication symptom in
+another test; the earlier root cause is not established for this observation.
+
+The complete unchanged owner passed alone in 6.3 s:
+`NODE_ENV=test mise run test:logged -- --name address-worker-mail-owner -- bun test --cwd apps/backend ./src/core/pipeline-worker-mail.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+Counts are unavailable because the passing output was deleted. No mailbox
+implementation, assertion or timeout changed. The recurrence checker reported
+this case resolved before this observation; it is reopened for investigation.
+Final aggregate counts and evidence are recorded in the Address Findings result.
+
+Final rerun evidence: `/tmp/orkestrator-test-run.GX1alI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+backend 17,922 pass, 145 skip, one fail. The root group passed (4,309 pass,
+one skip); other workspace packages, bridges and protocol lockfile passed.

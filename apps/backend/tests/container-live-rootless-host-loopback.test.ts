@@ -233,6 +233,7 @@ async function inContainerFirewallImage(): Promise<string> {
   variantImage = `orkestrator-v2:qualification-in-container-${RUN}`;
   const build = Bun.spawn(["docker", "build", "-q", "-t", variantImage, "-"], {
     stdin: new TextEncoder().encode(dockerfile),
+    timeout: 600_000,
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -5951,6 +5951,15 @@
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
     },
+    "plan_diagnostics_bundle_with_container_logs": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:bd5dcbd6f92800592339ed4b0e1987f12cc3abe36615c06f5c6425410ff99011",
+      "resultDigest": "sha256:cbea6aab68cf5c6f5fab92c851f47985c9e3584c094fe30a31bf169b5444013b"
+    },
     "post_github_completion_comment": {
       "domain": "pull-requests",
       "since": 1,

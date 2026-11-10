@@ -1,3 +1,4 @@
+import type { DiagnosticsContainerLogOption } from "@orkestrator/protocol/backend-diagnostics";
 import { describe, expect, test } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -124,11 +125,114 @@ describe("database and diagnostics commands", () => {
     ).toEqual({ samples });
   });
 
+  test("a plan offers container logs, and only a plan with them reads the chosen ones", async () => {
+    const { DiagnosticsBundles } = await import("../src/core/diagnostics-bundle");
+    const dataDir = await createTempDir("ork-diagnostics-plan-");
+    const built: Array<{ texts: unknown; notCollected: Array<{ name: string; reason: string }> }> =
+      [];
+    const bundles = new DiagnosticsBundles({
+      build: async (sources) => {
+        built.push({ texts: sources.texts, notCollected: [...sources.notCollected] });
+        return {
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-11-05T12:00:00.000Z",
+            entries: [],
+            absent: [],
+          },
+          archive: Buffer.from("bundle"),
+        } as never;
+      },
+    });
+    const environments = [
+      { id: "env-local", name: "Local", status: "running", environmentType: "local" },
+      {
+        id: "env-box",
+        name: "Box",
+        status: "running",
+        environmentType: "containerized",
+        containerId: "container-box",
+      },
+    ];
+    const context = {
+      diagnostics: { bundles },
+      storage: {
+        getDataDir: () => dataDir,
+        getLogDirectory: () => path.join(dataDir, "logs"),
+        loadConfig: async () => ({}),
+        loadEnvironments: async () => environments,
+        getEnvironment: async (id: string) => environments.find((item) => item.id === id) ?? null,
+      },
+      runtime: {},
+    } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    try {
+      const plan = (await commands.get("plan_diagnostics_bundle")?.({}, context)) as {
+        containerLogs: unknown;
+      };
+      expect(plan.containerLogs).toEqual([
+        { environmentId: "env-box", name: "Box", status: "running", included: false },
+      ]);
+      expect(built[0]!.texts).toEqual([]);
+      expect(built[0]!.notCollected.find((item) => item.name === "container server logs")).toEqual({
+        name: "container server logs",
+        reason: expect.stringContaining("Not chosen"),
+      });
+
+      // A local environment has no container: named as absent, and Docker is never asked.
+      const chosen = (await commands.get("plan_diagnostics_bundle_with_container_logs")?.(
+        { containerLogs: ["env-local"] },
+        context,
+      )) as { containerLogs: DiagnosticsContainerLogOption[] };
+      expect(chosen.containerLogs).toEqual([
+        { environmentId: "env-box", name: "Box", status: "running", included: false },
+      ]);
+      expect(built[1]!.notCollected.map((item) => item.name)).toContain(
+        "logs/containers/env-local",
+      );
+      expect(built[1]!.notCollected.map((item) => item.name)).not.toContain(
+        "container server logs",
+      );
+
+      const before = built.length;
+      const choices = [["a,b"], ["a", "b"]];
+      await Promise.all(
+        choices.map((containerLogs) =>
+          commands.get("plan_diagnostics_bundle_with_container_logs")?.({ containerLogs }, context),
+        ),
+      );
+      expect(built).toHaveLength(before + 2);
+      const collectedNames = built
+        .slice(before)
+        .map((item) => item.notCollected.map((entry) => entry.name));
+      expect(collectedNames.some((names) => names.includes("logs/containers/environment-1"))).toBe(
+        true,
+      );
+      expect(
+        collectedNames.some(
+          (names) => names.includes("logs/containers/a") && names.includes("logs/containers/b"),
+        ),
+      ).toBe(true);
+
+      await expect(
+        Promise.resolve(
+          commands.get("plan_diagnostics_bundle_with_container_logs")?.(
+            { containerLogs: Array.from({ length: 9 }, (_, index) => `env-${index}`) },
+            context,
+          ),
+        ),
+      ).rejects.toThrow("Choose at most 8");
+    } finally {
+      bundles.dispose();
+    }
+  });
+
   test("a workspace client cannot read this machine's diagnostics", async () => {
     const { grantAdmits } = await import("../src/core/nodes/workspace-grant-test-support");
     for (const command of [
       "get_database_stats",
       "plan_diagnostics_bundle",
+      "plan_diagnostics_bundle_with_container_logs",
       "read_diagnostics_bundle",
     ]) {
       expect(grantAdmits(command)).toBe(false);

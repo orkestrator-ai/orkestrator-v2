@@ -297,6 +297,32 @@ export function getToolExpansionKey(
   return durableId ? `id:${durableId}` : `part:${partKey}`;
 }
 
+/**
+ * The key a tool call's own disclosure is remembered under.
+ *
+ * A call with a provider id is keyed by that id within the transcript scope,
+ * not the row: the row that holds it is renamed under it. Codex's first
+ * replay after live streaming gives every row a new id while the calls inside
+ * keep theirs, and coalescing renames a row whenever earlier rows merge in
+ * front of it (to-do 7270). The open tool group is keyed the same way. A call
+ * without a provider id falls back to its row-scoped part key.
+ *
+ * No row-scoped alias is kept for an id-keyed call: the store is in memory, so
+ * nothing saved under the old key outlives this code, and an alias the reader's
+ * fold cannot reach (the row's previous id) would reopen the call when history
+ * paging hands the row that id back.
+ */
+export function toolExpansionKey(
+  part: Extract<NativeMessagePart, { type: "tool-invocation" }>,
+  partKey: string,
+  messageScope: string,
+  transcriptScope: string,
+): string {
+  const toolKey = getToolExpansionKey(part, partKey);
+  const scope = toolKey.startsWith("id:") ? JSON.stringify([transcriptScope]) : messageScope;
+  return `native-tool:${scope}:${toolKey}`;
+}
+
 export interface NativeMessagePartRendererProps {
   part: NativeMessagePart;
   partKey: string;

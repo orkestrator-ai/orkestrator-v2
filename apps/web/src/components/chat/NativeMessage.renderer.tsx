@@ -11,9 +11,10 @@ import { PlanToolPart } from "./PlanToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
+  AgentExpansionScopeContext,
   MessageExpansionScopeContext,
   ToolDetailLoaderContext,
-  getToolExpansionKey,
+  toolExpansionKey,
   useToolDetails,
 } from "./NativeMessage.shared";
 import {
@@ -56,8 +57,10 @@ export function DeferredToolMessagePart({
   suppressImageReadPreview?: boolean;
 }) {
   const expansionScope = useContext(MessageExpansionScopeContext);
-  const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
-  const [isOpen] = useMessagePartExpansion(expansionKey);
+  const transcriptScope = useContext(AgentExpansionScopeContext);
+  const [isOpen] = useMessagePartExpansion(
+    toolExpansionKey(part, partKey, expansionScope, transcriptScope),
+  );
   // A mail call is drawn as its message, and a read's message is in the result.
   const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
   const wanted = isOpen || eagerDetails;
@@ -225,6 +228,7 @@ function MessagePartContent({
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
+  const transcriptScope = useContext(AgentExpansionScopeContext);
   // The backend's tool kind for this call, once its presentation is known.
   const changeToolKind = useToolChangeKind(
     part.type === "tool-invocation" ? part.toolUseId : undefined,
@@ -248,9 +252,11 @@ function MessagePartContent({
       />
     );
   }
-  const toolExpansionKey =
+  // Keyed by the call's id within the transcript: a replay that renames the
+  // row must not fold a call the reader opened.
+  const toolKey =
     part.type === "tool-invocation"
-      ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
+      ? toolExpansionKey(part, partKey, expansionScope, transcriptScope)
       : "";
 
   switch (part.type) {
@@ -283,7 +289,7 @@ function MessagePartContent({
       return <NativeAsyncQuestionCard part={part} />;
     case "tool-invocation": {
       const mailCall = part.toolDenied ? null : agentMailToolCall(part);
-      if (mailCall) return <MailToolPart call={mailCall} expansionKey={toolExpansionKey} />;
+      if (mailCall) return <MailToolPart call={mailCall} expansionKey={toolKey} />;
       // File tools render as an edit card when the backend's presentation says
       // so, or — before or without a presentation — when the part structurally
       // carries a diff payload. Provider tool names are never classified here;
@@ -294,7 +300,7 @@ function MessagePartContent({
       ) {
         return (
           <EditToolPart
-            expansionKey={toolExpansionKey}
+            expansionKey={toolKey}
             callId={part.toolUseId}
             occurrenceId={part.sourceMessageId}
             toolName={part.toolName}
@@ -325,7 +331,7 @@ function MessagePartContent({
       if (!part.toolDenied && isTodoTool(part.toolName)) {
         return (
           <TodoToolPart
-            expansionKey={toolExpansionKey}
+            expansionKey={toolKey}
             toolName={part.toolName}
             toolState={part.toolState}
             toolArgs={part.toolArgs}
@@ -342,7 +348,7 @@ function MessagePartContent({
       const imageRead = suppressImageReadPreview ? null : imageReadFromToolPart(part);
       const toolCard = (
         <ToolPart
-          expansionKey={toolExpansionKey}
+          expansionKey={toolKey}
           callId={part.toolUseId}
           occurrenceId={part.sourceMessageId}
           toolName={part.toolName}

@@ -620,6 +620,41 @@ async function expandStop(list: Locator, trail: Trail, stop: number): Promise<vo
 }
 
 /**
+ * Whether the call that read `stop` is expanded, scrolling down from the top
+ * until its row is mounted: each `aria-expanded` trigger naming the stop that
+ * is not a group's head line. Undefined when the row never mounts.
+ */
+async function stopCallExpanded(
+  page: Page,
+  list: Locator,
+  trail: Trail,
+  stop: number,
+): Promise<boolean | undefined> {
+  const name = trail.files[stop - 1]!.replace(".txt", "");
+  await oldestRenderedText(page, list);
+  const box = await list.boundingBox();
+  if (!box) throw new Error("the transcript list is not laid out");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let step = 0; step < 60; step += 1) {
+    const states = await list.evaluate(
+      (element, callName) =>
+        Array.from(element.querySelectorAll<HTMLElement>("button[aria-expanded]"))
+          .filter(
+            (button) =>
+              (button.textContent ?? "").includes(callName) &&
+              !/tool calls:/.test(button.getAttribute("aria-label") ?? ""),
+          )
+          .map((button) => button.getAttribute("aria-expanded") === "true"),
+      name,
+    );
+    if (states.length > 0) return states.some(Boolean);
+    await page.mouse.wheel(0, 300);
+    await page.waitForTimeout(150);
+  }
+  return undefined;
+}
+
+/**
  * Every row and source part the list renders, scanned top to bottom with the
  * wheel, content-free: row keys by index, the first trail stop each part
  * names, and the hidden-call counts folded groups offer. A row shown twice
@@ -1182,6 +1217,14 @@ test.describe("live transcript paging", () => {
         expect(renderedAfter.foldedCalls, "restart: the folded call count changed").toBe(
           renderedBefore.foldedCalls,
         );
+
+        // The call `expandStop` opened keeps its own expansion: the replay
+        // renamed its row, not the call (to-do 7270).
+        expect(
+          await stopCallExpanded(page, list, trail, 2),
+          "restart: the stop 2 call the reader expanded folded again",
+        ).toBe(true);
+        await expect(list.getByText(`Trail stop 2 of ${trail.stops}.`).first()).toBeAttached();
 
         // Miss an entire restart while another environment owns the UI, then
         // recover through the authoritative snapshot rather than live events.

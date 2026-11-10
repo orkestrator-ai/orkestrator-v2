@@ -1,6 +1,6 @@
 # Coordinator actions do not reopen on focus after a reduced-motion resize
 
-- **ID:** 9919
+- **ID:** 9920
 - **Status:** open
 - **Date observed:** 2026-11-10
 - **Test:** `reduced motion shows and hides without a transition in both modes`,

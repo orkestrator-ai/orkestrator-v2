@@ -196,11 +196,16 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
-  runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
-  disables graph runs (launches are refused, nothing advances; stored runs stay
-  readable and can be cancelled).
+  list of `feature-planning`, `build-pipeline`, `multi-review`, `graph-run`, or
+  `all`. A named domain runs its old whole-store driver; `multi-review` falls
+  back to `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling
+  it back disables graph runs (launches are refused, nothing advances; stored
+  runs stay readable and can be cancelled). `native-queues` and
+  `backend-activity` are no longer revertible: their rollback drivers (the
+  2 s timer over every environment and queue, and the 2 s activity bundle
+  with its 60 s tab timer) were removed after the busy live profile and the
+  long soak (todo 0048 task 13), so naming them, or `all`, leaves them on
+  their keyed drivers.
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.

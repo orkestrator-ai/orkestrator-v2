@@ -17,7 +17,7 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentCatalogCache` | `native-agent-catalog-cache.ts` | Per-environment model catalogues and their coalesced refreshes; per-session command catalogues (through `NativeAgentCommandCatalogueCache`). |
 | `NativeAgentTranscriptProjection` | `native-agent-transcript-projection.ts` | The legacy projection cache, sync revisions and history, epochs and in-flight refreshes, tool details, stop notices, pushed titles, the progressive transcript/state/discovery caches and reads, the display-tail scheduler, projected-message and direct-history-page caches, artifact overlays. |
 | `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | Interaction observations, sweep detections, the observe-only monitor timer and its round-robin cursors, per-session retry back-off, the pending-interaction read cache. |
-| `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry, the rollback interval timer. |
+| `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry. |
 | `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
 | `NativeAgentGoalService` | `native-agent-goal-service.ts` | An index of sessions with a running goal, per-session advance tasks, running checks. All durable goal state is on the session record; see [goals.md](goals.md). |
 | `NativeAgentHandoffs` | `native-agent-handoffs.ts` | No state. "Continue in…": the full source-transcript read `create_agent_handoff` builds from, and the pending handoff a dispatch carries. |
@@ -94,9 +94,10 @@ same surface as before.
 ## Lifecycle
 
 `init()` repairs persisted startup tabs, runs one launch scan and one queue
-scan, then starts one driver: the keyed queue scheduler on the dispatcher
-(`startKeyedScheduling`, the default) or the reconciler's rollback interval
-(`startTimer`, under `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=native-queues`).
+scan, then starts the keyed queue scheduler on the dispatcher
+(`startKeyedScheduling`). It is the only driver: the reconciler's rollback
+interval was removed (todo 0048 task 13), and
+`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` no longer names this domain.
 The interaction tracker then starts its observe-only monitor if enabled.
 Background work never depends on a renderer being subscribed.
 

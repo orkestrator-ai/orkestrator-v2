@@ -15,6 +15,8 @@ import {
   type AsyncCli,
   type BusyClient,
   type BusyRuntime,
+  type ReviewSighting,
+  clientProgressSample,
 } from "../../scripts/recurring-live-ab-busy";
 import {
   FAKE_PI_MODEL_REF,
@@ -38,6 +40,14 @@ type Scenario = {
   reviewEnds?: string;
   /** The held turn reaches the model twice. */
   duplicateTurn?: boolean;
+  /** Review views start showing the review only once it is consolidating. */
+  lateView?: boolean;
+  /** Review views never show anything past `preparing`. */
+  stuckView?: boolean;
+  /** Tab selection succeeds but the review header never renders. */
+  emptyView?: boolean;
+  /** Opening a review view throws. */
+  failPrepare?: boolean;
 };
 
 /**
@@ -69,6 +79,19 @@ function busyHarness(scenario: Scenario = {}) {
   let reads = 0;
   let reviewLaunches = 0;
   let replies = 0;
+  /** What the review views show, shared by every view of the one review. */
+  let sightings: ReviewSighting[] = [];
+  let viewPhase: string | null = null;
+  const prepared: string[] = [];
+  const watched: string[] = [];
+  const show = (phase: string) => {
+    if (scenario.emptyView) return;
+    if (scenario.stuckView && phase !== "preparing") return;
+    if (scenario.lateView && (phase === "preparing" || phase === "reviewing")) return;
+    if (viewPhase === phase) return;
+    viewPhase = phase;
+    sightings.push({ phase, at: now });
+  };
   const linkCalls: boolean[] = [];
   const hiddenCalls: boolean[] = [];
   const closed: string[] = [];
@@ -177,6 +200,9 @@ function busyHarness(scenario: Scenario = {}) {
     if (verb === "review launch") {
       reviewReads = 0;
       reviewLaunches += 1;
+      sightings = [];
+      viewPhase = null;
+      if (!scenario.lateView) show("preparing");
       return json({ workflowId: `wf-${now}`, phase: "preparing" });
     }
     if (verb === "review cancel") return json({});
@@ -196,15 +222,20 @@ function busyHarness(scenario: Scenario = {}) {
         });
       if (!scenario.lateResults) entry.resultsAt.push(now);
     };
-    if (reviewReads === 1) {
-      submit("submit_validation_plan");
-      submit("submit_review_preparation");
-    }
+    // Multi Review's own results; `submit_review_preparation` is a build
+    // pipeline's and never comes from a review.
+    if (reviewReads === 1) submit("submit_validation_plan");
     if (reviewReads === 3) submit("submit_review_report");
     if (reviewReads === 5) submit("submit_consolidated_review");
     if (scenario.lateResults && reviewReads === 8) {
       for (const entry of Object.values(workflow)) entry.resultsAt.push(now + 50);
     }
+    // The views render each phase a poll after the backend reaches it.
+    const shown = phase;
+    queueMicrotask(() => {
+      now += 20;
+      show(shown);
+    });
     return phase;
   };
   const gateway = {
@@ -289,6 +320,14 @@ function busyHarness(scenario: Scenario = {}) {
     setLinkUp: (up) => {
       linkCalls.push(up);
     },
+    prepareReview: async (environmentName) => {
+      if (scenario.failPrepare) throw new Error("waitFor: Timeout 30000ms exceeded.\nCall log");
+      prepared.push(`${label}:${environmentName}`);
+    },
+    watchReview: async (workflowId) => {
+      watched.push(`${label}:${workflowId}`);
+    },
+    reviewPhases: async () => sightings.map((sighting) => ({ ...sighting })),
     close: async () => {
       closed.push(label);
     },
@@ -339,6 +378,8 @@ function busyHarness(scenario: Scenario = {}) {
     linkCalls,
     hiddenCalls,
     closed,
+    prepared,
+    watched,
     commits: () => commits,
   };
 }
@@ -401,7 +442,7 @@ describe("busy phase", () => {
       h.runtime,
     );
     expect(result.failures).toEqual([]);
-    expect(result.samples["workflow-progress"]).toHaveLength(3);
+    expect(result.samples["workflow-progress"]).toHaveLength(2);
   });
   test("an observation before its own submission cannot use a later unrelated phase", async () => {
     const h = busyHarness({ reversedSubmission: true });
@@ -412,7 +453,7 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
-    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(3);
     expect(result.samples["workflow-progress"]).toEqual([]);
   });
   test("missing submissions cannot silently qualify", async () => {
@@ -424,7 +465,7 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
-    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(3);
     expect(busyFailed(result)).toBe(true);
   });
   test("an unconfirmed stop refuses session reuse", async () => {
@@ -480,6 +521,14 @@ describe("busy phase", () => {
     expect(result.samples["workflow-progress"].length).toBeGreaterThan(0);
     // The plan's result is followed by its commands, not only a keyed wake: its own row.
     expect(result.samples["workflow-validation"]).toHaveLength(3);
+    // Every client whose link stays up watched the review from its own view:
+    // the hidden single client, and the first of two (the second is cut).
+    expect(h.prepared).toEqual(["c1:busy-2", "c1:busy-2"]);
+    expect(h.watched).toHaveLength(2);
+    expect(result.reviewViews).toEqual({ watched: 2, sampled: 4, unobserved: 0 });
+    expect(result.samples["workflow-progress-visible"]).toHaveLength(4);
+    for (const value of result.samples["workflow-progress-visible"])
+      expect(value).toBeGreaterThanOrEqual(0);
     // One new validation run per review, read from the review environment.
     expect(result.validationRuns).toEqual(
       Array.from({ length: 3 }, () => ({ queuedMs: 5, commandMs: 20, runMs: 900 })),
@@ -507,6 +556,8 @@ describe("busy phase", () => {
     expect(h.calls.every((call) => call.includes("--json"))).toBe(true);
     const lines = busySummaryLines("candidate repeat 1", result).join("\n");
     expect(lines).toContain("3 reviews completed");
+    expect(lines).toContain("Workflow progress visible after a result");
+    expect(lines).toContain("Review views: 2 watched a review, 4 results timed in a view");
     expect(lines).toContain("Pending approval visible");
     expect(lines).toContain("≤ 2000");
     expect(lines).toContain("≤ 2400");
@@ -515,6 +566,104 @@ describe("busy phase", () => {
     expect(pool.granted).toBeGreaterThan(0);
     expect(pool).toMatchObject({ rejected: 0, maxActive: 2, maxWaiting: 1, maxOldestWaitMs: 40 });
     expect(lines).toContain("Admission: workflow-provider");
+  });
+
+  test("a review view that opens late times only the results it could have shown", async () => {
+    const h = busyHarness({ lateView: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    // The report reached the backend before the view showed the review.
+    expect(result.reviewViews).toEqual({ watched: 1, sampled: 1, unobserved: 1 });
+    expect(result.samples["workflow-progress-visible"]).toHaveLength(1);
+    expect(busyFailed(result)).toBe(false);
+  });
+
+  test("a review view that never shows the progress is a timeout, and one that cannot open fails the round", async () => {
+    const stuck = busyHarness({ stuckView: true });
+    const stuckResult = await measureBusy(
+      stuck.gateway,
+      stuck.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      stuck.runtime,
+    );
+    expect(stuckResult.samples["workflow-progress-visible"]).toEqual([]);
+    expect(stuckResult.timeouts["workflow-progress-visible"]).toBe(2);
+    expect(busyFailed(stuckResult)).toBe(true);
+
+    const refused = busyHarness({ failPrepare: true });
+    const refusedResult = await measureBusy(
+      refused.gateway,
+      refused.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      refused.runtime,
+    );
+    expect(refusedResult.failures).toEqual([
+      {
+        clients: 1,
+        round: 1,
+        step: "workflow-visible",
+        detail: "c1: waitFor: Timeout 30000ms exceeded.",
+      },
+    ]);
+    // The review itself still ran and was timed at the backend.
+    expect(refusedResult.obligations.workflows).toBe(1);
+    expect(refusedResult.reviewViews.watched).toBe(0);
+  });
+
+  test("a selected review view that never renders fails qualification", async () => {
+    const h = busyHarness({ emptyView: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      h.runtime,
+    );
+    expect(h.prepared).toHaveLength(1);
+    expect(h.watched).toHaveLength(1);
+    expect(result.reviewViews).toEqual({ watched: 1, sampled: 0, unobserved: 2 });
+    expect(result.samples["workflow-progress-visible"]).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        clients: 1,
+        round: 1,
+        step: "workflow-visible",
+        detail: "c1: review did not show terminal phase ready",
+      },
+    ]);
+    expect(result.obligations.workflows).toBe(1);
+    expect(busyFailed(result)).toBe(true);
+  });
+
+  test("client progress is the first sighting of the phase or a later one, after its result", () => {
+    const sightings = [
+      { phase: "preparing", at: 100 },
+      { phase: "consolidating", at: 900 },
+      { phase: "ready", at: 1_400 },
+    ];
+    // Reviewing was skipped between two renders; consolidating shows it.
+    expect(clientProgressSample(sightings, 400, "reviewing")).toEqual({
+      kind: "sample",
+      ms: 500,
+    });
+    expect(clientProgressSample(sightings, 1_000, "ready")).toEqual({ kind: "sample", ms: 400 });
+    // A view that showed nothing before the result was not watching yet.
+    expect(clientProgressSample(sightings, 50, "reviewing")).toEqual({ kind: "unobserved" });
+    expect(clientProgressSample([], 50, "reviewing")).toEqual({ kind: "unobserved" });
+    // Never shown, shown before its own result, or an unknown phase: missing.
+    expect(clientProgressSample(sightings.slice(0, 1), 400, "ready")).toEqual({
+      kind: "missing",
+    });
+    expect(clientProgressSample(sightings, 1_000, "consolidating")).toEqual({ kind: "missing" });
+    expect(clientProgressSample(sightings, 400, "fixing")).toEqual({ kind: "missing" });
   });
 
   test("records a lost approval, a failed review and a duplicated dispatch as failures", async () => {
@@ -567,6 +716,7 @@ describe("busy phase", () => {
       windowSamples: [],
       admission: {},
       validationRuns: [],
+      reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
       modelRequests: 0,
       durationMs: 0,
     });
@@ -587,6 +737,7 @@ describe("busy phase", () => {
       windowSamples: [],
       admission: {},
       validationRuns: [],
+      reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
       modelRequests: 0,
       durationMs: 0,
     };

@@ -67,6 +67,26 @@ function DatabaseFile({
           ))}
         </ul>
       ) : null}
+      {tables?.stores && tables.stores.length > 0 ? (
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">
+            Inside <span className="font-mono">store_rows</span>, by store
+          </p>
+          <ul aria-label={`Largest stores in ${label}`} className="space-y-0.5">
+            {tables.stores.slice(0, 5).map((store) => (
+              <li
+                key={store.family}
+                className="flex justify-between gap-3 pl-3 text-xs text-muted-foreground"
+              >
+                <span className="min-w-0 truncate font-mono">{store.family}</span>
+                <span className="shrink-0">
+                  {`${formatDiagnosticsBytes(store.bytes)} · ${store.rows} ${store.rows === 1 ? "row" : "rows"}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

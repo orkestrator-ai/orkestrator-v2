@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  DATABASE_COPY_HELPER,
   DATABASE_COPY_SUPERVISOR,
   BACKUP_CHECK_INTERVAL_MS,
   BACKUP_DIRECTORY,
@@ -15,6 +16,7 @@ import {
   KEEP_HOURLY,
   MAX_BACKUP_AGE_MS,
   MAX_BACKUP_FAILURE_BACKOFF_MS,
+  MAX_TOP_STORE_FAMILIES,
   MAX_TOP_TABLES,
   MIN_FREE_BYTES_AFTER_BACKUP,
   STALE_TEMPORARY_MS,
@@ -32,6 +34,7 @@ import {
 } from "./storage-backups.js";
 import { STORAGE_DATABASE_FILE, StorageDatabase } from "./storage-database.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
+import { leaseFamily } from "./storage-lease-metrics.js";
 import { openBackendDatabase, storeLayout } from "./storage-stores.js";
 
 const BACKOFF_FILE = ".hourly-backoff.json";
@@ -596,6 +599,20 @@ describe("database snapshots", () => {
   });
 });
 
+/** Rows under store names no layout registers, written as another process would. */
+function insertRawRows(directory: string, rows: Array<[store: string, value: string]>): void {
+  const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));
+  try {
+    raw.exec("PRAGMA busy_timeout = 5000");
+    const insert = raw.query(
+      "INSERT INTO store_rows (store, collection, key, position, owner, value) VALUES (?, '', ?, 0, NULL, ?)",
+    );
+    rows.forEach(([store, value], index) => insert.run(store, `k${index}`, value));
+  } finally {
+    raw.close();
+  }
+}
+
 describe("top tables from the backup child", () => {
   test("Bun's SQLite has dbstat, so a finished copy is sized by table", async () => {
     const directory = await dataDir();
@@ -637,6 +654,132 @@ describe("top tables from the backup child", () => {
     const helper = await fs.readFile(new URL("./storage-backups.ts", import.meta.url), "utf8");
     expect(helper).toMatch(/copy\s*\.query\(\s*"SELECT name, SUM\(pgsize\)/);
     expect(helper.match(/FROM dbstat/g)).toHaveLength(1);
+  });
+
+  test("a finished copy is also sized by store family, folding ids out of store names", async () => {
+    const directory = await dataDir();
+    const database = backend(directory);
+    database.writeStore("kanban", [{ id: "t1", projectId: "p1", title: "x".repeat(50_000) }]);
+    const environmentId = "0b7c9f4e-2a61-4c7d-9a1e-3f5b8d2c6e10";
+    insertRawRows(directory, [
+      [`web-annotations/${environmentId}`, JSON.stringify({ n: 1 })],
+      ["web-annotations/another-env", JSON.stringify({ n: "ü".repeat(10) })],
+    ]);
+
+    expect(await takeHourlySnapshotIfDue(database, directory)).not.toBeNull();
+    const { main } = readTopTables(directory);
+    const stores = main!.stores!;
+    expect(stores.length).toBeGreaterThan(0);
+    expect(stores.length).toBeLessThanOrEqual(MAX_TOP_STORE_FAMILIES);
+    // Largest first, and the large kanban store leads.
+    expect(stores[0]).toMatchObject({ family: "kanban", rows: 1 });
+    expect(stores[0]!.bytes).toBeGreaterThan(50_000);
+    for (let index = 1; index < stores.length; index += 1) {
+      expect(stores[index - 1]!.bytes).toBeGreaterThanOrEqual(stores[index]!.bytes);
+    }
+    // The ids never leave the child: both stores count under one family.
+    expect(stores.filter((store) => store.family.startsWith("web-annotations"))).toEqual([
+      { family: "web-annotations", bytes: expect.any(Number), rows: 2 },
+    ]);
+    expect(JSON.stringify(main)).not.toContain(environmentId);
+    expect(JSON.stringify(main)).not.toContain("xxxx");
+  });
+
+  test("the child folds store names to the same families as leaseFamily", async () => {
+    const directory = await dataDir();
+    backend(directory);
+    const names = [
+      "kanban",
+      "web-annotations/0b7c9f4e-2a61-4c7d-9a1e-3f5b8d2c6e10",
+      "public-operations/ns-0123456789abcdef0123",
+      "native-agent-session-leases/0123456789abcdef0123456789abcdef",
+      "has space/in-name",
+      "a0b1c2d3e4f5a6b7c8d9-suffix",
+    ];
+    insertRawRows(
+      directory,
+      names.map((name) => [name, JSON.stringify({ v: 1 })]),
+    );
+    const source = path.join(directory, STORAGE_DATABASE_FILE);
+    const target = path.join(directory, "copy.sqlite");
+    let families: string[] = [];
+    await expect(
+      copyDatabaseInChildProcess(source, target, {
+        onTopTables: (_tables, stores) => {
+          families = (stores ?? []).map((store) => store.family);
+        },
+      }),
+    ).resolves.toBe(true);
+    const expected = new Set(names.map(leaseFamily));
+    for (const family of expected) expect(families).toContain(family);
+  });
+
+  test("without octet_length the child measures the same bytes through a blob cast", async () => {
+    const directory = await dataDir();
+    backend(directory).writeStore("kanban", [{ id: "t1", projectId: "p1" }]);
+    insertRawRows(directory, [["web-annotations/env-1", JSON.stringify({ n: "ü".repeat(20) })]]);
+    const source = path.join(directory, STORAGE_DATABASE_FILE);
+
+    const run = (refuseOctetLength: boolean) => {
+      // Called with `new` by the helper; returning an object makes that the instance.
+      function OlderSqlite(file: string, options?: { readonly?: boolean }) {
+        const db = new Database(file, options);
+        const query = db.query.bind(db);
+        db.query = ((sql: string) => {
+          if (refuseOctetLength && sql.includes("octet_length")) {
+            throw new Error("no such function: octet_length");
+          }
+          return query(sql);
+        }) as typeof db.query;
+        return db;
+      }
+      let written = "";
+      const target = path.join(directory, `copy-${refuseOctetLength}.sqlite`);
+      runInNewContext(DATABASE_COPY_HELPER, {
+        require: (name: string) =>
+          name === "bun:sqlite" ? { Database: OlderSqlite } : require(name),
+        process: {
+          argv: ["helper", source, target],
+          stdout: { write: (text: string) => (written += text) },
+          stderr: { write: () => true },
+          exit: () => undefined,
+        },
+        JSON,
+        Map,
+        Number,
+        Object,
+        String,
+        RegExp,
+      });
+      const [verdict, , stores] = written.split("\n");
+      expect(verdict).toBe("sound");
+      return JSON.parse(stores!) as Array<{ family: string; bytes: number; rows: number }>;
+    };
+
+    const modern = run(false);
+    const older = run(true);
+    expect(older).toEqual(modern);
+    expect(older.find((store) => store.family === "web-annotations")).toMatchObject({ rows: 1 });
+  });
+
+  test("a database without store_rows reports tables and no store families", async () => {
+    const directory = await dataDir();
+    const source = path.join(directory, "plain.sqlite");
+    const plain = new Database(source);
+    plain.exec("CREATE TABLE other (value TEXT)");
+    plain.query("INSERT INTO other VALUES (?)").run("y".repeat(10_000));
+    plain.close();
+    let received: { tables: unknown[]; stores: unknown } | null = null;
+    await expect(
+      copyDatabaseInChildProcess(source, path.join(directory, "plain-copy.sqlite"), {
+        onTopTables: (tables, stores) => {
+          received = { tables, stores };
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(received).not.toBeNull();
+    expect(received!.tables.length).toBeGreaterThan(0);
+    expect(received!.stores).toBeNull();
   });
 
   test("a replaced health row alone does not take another hourly copy", async () => {

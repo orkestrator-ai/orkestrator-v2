@@ -1,7 +1,12 @@
 import { useCallback, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
-import type { DiagnosticsBundlePlan } from "@orkestrator/protocol/backend-diagnostics";
+import {
+  DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS,
+  type DiagnosticsBundlePlan,
+  type DiagnosticsContainerLogOption,
+} from "@orkestrator/protocol/backend-diagnostics";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -86,6 +91,100 @@ async function fetchBundle(
   return blob;
 }
 
+function includedIds(plan: DiagnosticsBundlePlan | null): string[] {
+  return (plan?.containerLogs ?? [])
+    .filter((option) => option.included)
+    .map((option) => option.environmentId)
+    .sort();
+}
+
+function sameChoice(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+/**
+ * The opt-in for container server logs: the user picks environments and the
+ * bundle is built again, so the manifest above it always says what this plan
+ * holds. Never ticked by default: these are raw provider lines, and each read is
+ * a `docker exec` per server.
+ */
+function ContainerLogChoice({
+  options,
+  chosen,
+  onChange,
+  onApply,
+  disabled,
+  applying,
+  changed,
+}: {
+  options: DiagnosticsContainerLogOption[];
+  chosen: readonly string[];
+  onChange: (next: string[]) => void;
+  onApply: () => void;
+  disabled: boolean;
+  applying: boolean;
+  changed: boolean;
+}) {
+  const full = chosen.length >= DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS;
+  return (
+    <section aria-labelledby="diagnostics-container-logs" className="space-y-2">
+      <div>
+        <p id="diagnostics-container-logs" className="font-medium text-foreground">
+          Container server logs (optional)
+        </p>
+        <p className="text-muted-foreground">
+          {`Adds the newest output of each agent server in the environments you choose, up to ${DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS}. These are raw provider lines, the riskiest content a bundle can hold: they go through the same redaction, but read them before sharing. Each one is read from its running container.`}
+        </p>
+      </div>
+      <ul aria-label="Environments with container logs" className="space-y-1">
+        {options.map((option) => {
+          const checked = chosen.includes(option.environmentId);
+          const id = `diagnostics-container-${option.environmentId}`;
+          return (
+            <li key={option.environmentId} className="flex min-w-0 items-center gap-2">
+              <Checkbox
+                id={id}
+                checked={checked}
+                disabled={disabled || (!checked && full)}
+                onCheckedChange={(value) =>
+                  onChange(
+                    value === true
+                      ? [...chosen, option.environmentId].sort()
+                      : chosen.filter((environmentId) => environmentId !== option.environmentId),
+                  )
+                }
+              />
+              <label htmlFor={id} className="min-w-0 flex-1 truncate text-foreground">
+                {option.name}
+              </label>
+              <span className="shrink-0 text-muted-foreground">{option.status}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {changed && !applying ? (
+        <p className="text-muted-foreground" role="status">
+          Not in the bundle yet: rebuild it, and the list above will show exactly what it holds.
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onApply}
+        disabled={disabled || !changed}
+      >
+        {applying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null}
+        {applying
+          ? "Rebuilding…"
+          : chosen.length === 0
+            ? "Rebuild without container logs"
+            : "Rebuild with these logs"}
+      </Button>
+    </section>
+  );
+}
+
 /**
  * Two steps, so what is shown is what is saved: the backend builds the bundle and
  * answers with its manifest, and only then does the user choose to save those
@@ -93,11 +192,19 @@ async function fetchBundle(
  */
 export function DiagnosticsExportCard() {
   const { machine, name } = useAccountMachine();
-  const [plan, setPlan] = useState<DiagnosticsBundlePlan | null>(null);
+  const [plan, setPlanState] = useState<DiagnosticsBundlePlan | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
   const [isPlanning, setIsPlanning] = useState(false);
+  const [isReplanning, setIsReplanning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<IncompatibilityNotice | null>(null);
   const [savedName, setSavedName] = useState<string | null>(null);
+
+  // The choice always starts from what the plan on screen holds.
+  const setPlan = useCallback((next: DiagnosticsBundlePlan | null) => {
+    setPlanState(next);
+    setChosen(includedIds(next));
+  }, []);
 
   const startPlan = useCallback(async () => {
     setIsPlanning(true);
@@ -118,7 +225,29 @@ export function DiagnosticsExportCard() {
     } finally {
       setIsPlanning(false);
     }
-  }, [machine, name]);
+  }, [machine, name, setPlan]);
+
+  const replan = useCallback(async () => {
+    setIsReplanning(true);
+    setError(null);
+    try {
+      setPlan(await backend.planDiagnosticsBundle(machine, { containerLogs: chosen }));
+    } catch (planError) {
+      setError(
+        failureNotice(
+          planError,
+          "The diagnostics bundle could not be built with those logs.",
+          machine,
+          name,
+          chosen.length > 0
+            ? "plan_diagnostics_bundle_with_container_logs"
+            : "plan_diagnostics_bundle",
+        ),
+      );
+    } finally {
+      setIsReplanning(false);
+    }
+  }, [chosen, machine, name, setPlan]);
 
   const save = useCallback(async () => {
     if (!plan) return;
@@ -141,7 +270,7 @@ export function DiagnosticsExportCard() {
     } finally {
       setIsSaving(false);
     }
-  }, [machine, name, plan]);
+  }, [machine, name, plan, setPlan]);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
@@ -177,7 +306,7 @@ export function DiagnosticsExportCard() {
       <Dialog
         open={plan !== null}
         onOpenChange={(open) => {
-          if (!open && !isSaving) setPlan(null);
+          if (!open && !isSaving && !isReplanning) setPlan(null);
         }}
       >
         <DialogContent
@@ -228,6 +357,17 @@ export function DiagnosticsExportCard() {
                   </ul>
                 </div>
               ) : null}
+              {plan.containerLogs && plan.containerLogs.length > 0 ? (
+                <ContainerLogChoice
+                  options={plan.containerLogs}
+                  chosen={chosen}
+                  onChange={setChosen}
+                  onApply={() => void replan()}
+                  disabled={isSaving || isReplanning}
+                  applying={isReplanning}
+                  changed={!sameChoice(chosen, includedIds(plan))}
+                />
+              ) : null}
               {error ? <FailureText failure={error} /> : null}
             </div>
           ) : null}
@@ -236,11 +376,11 @@ export function DiagnosticsExportCard() {
               type="button"
               variant="outline"
               onClick={() => setPlan(null)}
-              disabled={isSaving}
+              disabled={isSaving || isReplanning}
             >
               Cancel
             </Button>
-            <Button type="button" onClick={() => void save()} disabled={isSaving}>
+            <Button type="button" onClick={() => void save()} disabled={isSaving || isReplanning}>
               {isSaving ? "Saving…" : "Save bundle"}
             </Button>
           </DialogFooter>

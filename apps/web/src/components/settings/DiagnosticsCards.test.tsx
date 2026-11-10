@@ -69,6 +69,10 @@ const STATS: DatabaseStats = {
         { name: "store_rows", bytes: 1024 * 1024 },
         { name: "stores", bytes: 4096 },
       ],
+      stores: [
+        { family: "change-tracking", bytes: 700 * 1024, rows: 1200 },
+        { family: "web-annotations", bytes: 2048, rows: 1 },
+      ],
     },
     ledger: null,
   },
@@ -121,6 +125,14 @@ test("the database card shows both databases, backups, retention and top tables 
   expect(screen.getByText(/1\.0 MiB stored, 2\.0 KiB removed/)).toBeTruthy();
   const tables = screen.getByRole("list", { name: "Largest tables in Main database" });
   expect(within(tables).getByText("store_rows")).toBeTruthy();
+  // Beside the tables, which store fills store_rows.
+  const stores = screen.getByRole("list", { name: "Largest stores in Main database" });
+  expect(within(stores).getByText("change-tracking")).toBeTruthy();
+  expect(within(stores).getByText("700 KiB · 1200 rows")).toBeTruthy();
+  expect(within(stores).getByText("2.0 KiB · 1 row")).toBeTruthy();
+  expect(screen.queryByRole("list", { name: "Largest stores in Change-tracking database" })).toBe(
+    null,
+  );
 
   fireEvent.click(screen.getByRole("button", { name: "Refresh database figures" }));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
@@ -278,3 +290,72 @@ for (const corrupt of [false, true]) {
     }
   });
 }
+
+test("container logs are opt-in per environment, and choosing rebuilds the bundle", async () => {
+  const offered: DiagnosticsBundlePlan = {
+    ...PLAN,
+    containerLogs: [
+      { environmentId: "env-a", name: "Alpha", status: "running", included: false },
+      { environmentId: "env-b", name: "Beta", status: "stopped", included: false },
+    ],
+  };
+  const withLogs: DiagnosticsBundlePlan = {
+    ...PLAN,
+    planId: "plan-2",
+    manifest: {
+      ...PLAN.manifest,
+      entries: [
+        ...PLAN.manifest.entries,
+        {
+          path: "logs/containers/env-a/codex-bridge.log",
+          bytes: 4096,
+          sha256: "c",
+          description: "Raw output of the codex server.",
+          redactions: 2,
+        },
+      ],
+    },
+    containerLogs: [
+      { environmentId: "env-a", name: "Alpha", status: "running", included: true },
+      { environmentId: "env-b", name: "Beta", status: "stopped", included: false },
+    ],
+  };
+  const plan = spyOn(backend, "planDiagnosticsBundle")
+    .mockResolvedValueOnce(offered)
+    .mockResolvedValueOnce(withLogs);
+  mount(<DiagnosticsExportCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+  const dialog = await screen.findByRole("dialog");
+
+  // Nothing is chosen by default, and the first plan read no container.
+  expect(plan.mock.calls[0]).toEqual(["other"]);
+  const alpha = within(dialog).getByRole("checkbox", { name: "Alpha" });
+  expect(alpha.getAttribute("aria-checked")).toBe("false");
+  const rebuild = () =>
+    within(dialog).getByRole("button", { name: /Rebuild/ }) as HTMLButtonElement;
+  expect(rebuild().disabled).toBe(true);
+  expect(within(dialog).queryByText("logs/containers/env-a/codex-bridge.log")).toBeNull();
+
+  fireEvent.click(alpha);
+  expect(within(dialog).getByRole("status").textContent).toContain("Not in the bundle yet");
+  expect(rebuild().disabled).toBe(false);
+  fireEvent.click(rebuild());
+
+  // The manifest shown is the new plan's, holding exactly the chosen logs.
+  await within(dialog).findByText("logs/containers/env-a/codex-bridge.log");
+  expect(plan.mock.calls[1]).toEqual(["other", { containerLogs: ["env-a"] }]);
+  expect(within(dialog).getByRole("checkbox", { name: "Alpha" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect(rebuild().disabled).toBe(true);
+  expect(within(dialog).queryByRole("status")).toBeNull();
+});
+
+test("a backend that offers no container logs shows no choice", async () => {
+  spyOn(backend, "planDiagnosticsBundle").mockResolvedValue(PLAN);
+  mount(<DiagnosticsExportCard />);
+  fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).queryByText("Container server logs (optional)")).toBeNull();
+  expect(within(dialog).queryByRole("checkbox")).toBeNull();
+});

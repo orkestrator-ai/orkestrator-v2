@@ -182,7 +182,10 @@ export const getArtifactMetricsCommand = defineCommand({
   critical: [],
 });
 
-/** Builds a diagnostics bundle in memory; answers its manifest. */
+/**
+ * Builds a diagnostics bundle in memory; answers its manifest, and the container
+ * environments whose server logs the user may add.
+ */
 export const planDiagnosticsBundleCommand = defineCommand({
   domain: systemDomain,
   name: "plan_diagnostics_bundle",
@@ -190,6 +193,25 @@ export const planDiagnosticsBundleCommand = defineCommand({
   access: "admin",
   read: false,
   args: NoArgs,
+  result: DiagnosticsBundlePlanSchema,
+  critical: [],
+});
+
+/**
+ * `plan_diagnostics_bundle` with the container server logs of the environments
+ * the user chose (opt-in, at most `DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS`).
+ * A command of its own rather than an argument: the plan command's empty
+ * arguments accepted any value, which an argument would narrow, and a backend
+ * without this command answers `unknown-command` rather than quietly building
+ * a bundle without the logs.
+ */
+export const planDiagnosticsBundleWithContainerLogsCommand = defineCommand({
+  domain: systemDomain,
+  name: "plan_diagnostics_bundle_with_container_logs",
+  since: 1,
+  access: "admin",
+  read: false,
+  args: Schema.Struct({ containerLogs: Schema.Array(Schema.String) }),
   result: DiagnosticsBundlePlanSchema,
   critical: [],
 });
@@ -692,6 +714,7 @@ export const SYSTEM_COMMANDS = [
   getProgressiveReadMetricsCommand,
   getArtifactMetricsCommand,
   planDiagnosticsBundleCommand,
+  planDiagnosticsBundleWithContainerLogsCommand,
   readDiagnosticsBundleCommand,
   reconcileWorkflowSchedulingCommand,
   recordRendererErrorsCommand,

@@ -8,7 +8,7 @@ Analysed 2026-11-06 against `main` at `e6c3da899`. Worked 2026-11-06 against
 ### Tasks
 
 1. **Manual container profiles on an exhausted pool**: `mise run dev:test --fixture-environments local,container` fails outright where `test:agent:docker:isolated` falls back. Status: done (2026-11-06).
-2. **Probe networks leaked again**: 29 unattached `ork-*-reach-probe-net` networks from 2026-10-31 to 2026-11-02 filled the pools on beelink after 0241 was closed. Status: open (depends on [7470](7470-electron-spec-backends-run-the-boot-probe.md)). Not traced on 2026-11-06: the teardown that leaked did not reproduce. What was ruled out and the likeliest source are recorded below. 7470 makes the next leak traceable and decides whether Electron spec backends skip the probe.
+2. **Probe networks leaked again**: 29 unattached `ork-*-reach-probe-net` networks from 2026-10-31 to 2026-11-02 filled the pools on beelink after 0241 was closed. Status: closed as untraceable (2026-11-10). The teardown that leaked did not reproduce on 2026-11-06, and the networks' owners belong to temporary data directories that no longer exist, so the harness cannot be named. What was ruled out and the likeliest source are recorded below. The follow-up, [7470](7470-electron-spec-backends-run-the-boot-probe.md), is done and on `main` (#2024, `60c065c36`): Electron spec backends skip the boot probe and every probe network carries an `orkestrator-creator` label, so a new leak names its creator. [3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md) task 1 was the same trace and is closed as a duplicate of this task.
 
 ### 1. Manual container profiles on an exhausted pool
 
@@ -78,6 +78,7 @@ Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattac
 ## Current state
 
 - Manual container profiles work on an exhausted pool with the documented shim invocation (task 1).
+- Task 2 is closed as untraceable (2026-11-10); a leak after 7470 (#2024) carries its creator's label.
 - The 29 networks from task 2 are still on beelink, untouched. Removing them is the user's call: [3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md) task 2, using `mise run disk:report -- --fix probe-networks`.
 - No run in this work left a probe network behind. The `docker events` log showed a destroy for every probe network it created.
 
@@ -98,7 +99,7 @@ Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattac
 - **Chose:** run the candidate harnesses with the probe at its default (on), and, after a first rerun created no probe network, with the shim on PATH.
 - **Why:** the leak can only happen when a probe network is created. On exhausted pools that needs the shim's /29 fallback, since the probe network carries an owner label. Each harness ran on its own temporary data directories, not on a profile or the real data directory.
 
-### Task 2: kept open rather than closed as untraceable (2026-11-06)
+### Task 2: kept open rather than closed as untraceable (2026-11-06; superseded 2026-11-10, see below)
 
 - **Chose:** leave task 2 open, depending on 7470, and re-rate the file Low.
 - **Why:** its goal, naming the leaking harness, was not reached. The ruled-out record here is the evidence 3320 and 7470 rely on, and a finished file would be deleted under the to-do rules. Nothing else in this file is outstanding: the leak's risk now sits in 7470, and clearing the networks in 3320.
@@ -112,6 +113,12 @@ Additional inventory on 2026-11-06: On 2026-11-06 the host still held 29 unattac
 
 - **Chose:** qualify the shutdown claim and carry failed or timed-out network creation into 7470.
 - **Why:** a daemon-side create can outlive a failed client command and escape the recorded cleanup handle. The reruns did not reproduce this path, so it remains a candidate rather than an explanation of the historical clusters.
+
+### Task 2: closed as untraceable (2026-11-10)
+
+- **Chose:** close task 2 as untraceable, mark the file Finished and keep it for its evidence, and mark 3320 task 1, the same trace, as a duplicate of it.
+- **Why:** the earlier reason to keep it open was 7470, which is now done and on `main` (#2024, `60c065c36`, checked against `main` at `04639b12b`). Its creator label applies only to networks created after it, so the 29 networks of 2026-10-31 to 11-02 carry none and their owners' data directories are gone: nothing further can name the harness. The ruled-out record above stays, because 3320, 7470, 0014, 7040 and container qualification link to it, as 7470 and 7081 are kept for theirs. Clearing the networks stays in 3320 task 2.
+- **Alternative:** keep task 2 open until the next leak. That would keep an open item that no work can advance, and a new leak, now labelled, is new work for a new to-do.
 
 ## Related
 

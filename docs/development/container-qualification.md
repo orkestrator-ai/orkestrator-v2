@@ -343,7 +343,8 @@ running at the time was left alone.
 
 ## Rootless re-run on a freshly built image (2026-11-09)
 
-To-do [0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)
+To-do 0109 (retired on 2026-11-10; its decisions are in
+[container lifecycle](../architecture/container-lifecycle.md#portable-inputs-staged-inputs))
 task 5: C20, C22 and readiness on a rootless daemon with an image built from
 current `main`, which the 2026-10-26 review run did not have. Run in worktree
 `orkestrator-v2-20261109-224622-88ac356e9705` at `main` `c6de4733c`.
@@ -505,8 +506,8 @@ RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6d
     port answered here, so the refusals are not just an unreachable host.
   - A full container reaches every service bound to the host's loopback, and
     arrives as `127.0.0.1`. That is the trade the rootless remediation
-    already describes ([0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md)
-    decision 4). The gateway still needs its credential. Its Host check
+    already describes (todo 0109 decision 4, retired on 2026-11-10; now in
+    [container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)). The gateway still needs its credential. Its Host check
     refused the alias, but a client that writes its own Host header gets
     past it, as the check's own comment says.
   - Two gateway paths trust a loopback peer. The agent-test bootstrap
@@ -1801,8 +1802,8 @@ hold when the host user maps to container root?
   | Tailscale Serve, TCP connect to 443 | Rejected | **Connected** |
   | Backend's named service port, by `host.docker.internal` | Exit 7 | Exit 7 |
 
-  Host loopback is off on this daemon, which is the known gap in
-  [todo 0109](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md);
+  Host loopback is off on this daemon, which is the documented rootless limit
+  ([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts); todo 0109, retired on 2026-11-10);
   the named port there cannot serve as a positive control. The `full` column is
   the control: everything it reached, the restricted container could not. The
   gateway's `OUTPUT` `REJECT` counter rose from 2 to 14 over these probes.
@@ -1866,8 +1867,10 @@ The first run on a real rootless Linux daemon, not a nested
 Volume storage, migration, rebuild, restore, capacity and the fault paths all
 pass on rootless. That qualified `volume-v1` there, and
 `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` was removed. The rootless gaps
-this run found are tracked in
-[0109-rootless-linux-runtime-gaps.md](../todo/containers-and-environments/0109-rootless-linux-runtime-gaps.md):
+this run found were tracked in todo 0109, retired on 2026-11-10 once all four
+were fixed and requalified (the 2026-11-09 re-run above); the rootless gaps
+left are [7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
+and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md):
 
 - **Staged inputs are unreadable (C20).** The staged revision is owned by the
   host user and is owner-only (`0700`/`0600`). Under rootless the host user

@@ -191,8 +191,13 @@ Desktop for Linux) provides its own DNS entry.
 
 Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
 4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
-Rootless daemons are supported with gated features but not yet qualified on a
-Linux host. A resource budget axis the daemon reports it cannot enforce is
+Rootless daemons are supported with gated features and were qualified on a
+Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
+2026-11-09 with an image built from `main`; the gaps those runs left are
+[7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
+(host loopback on the gvisor-tap-vsock driver) and
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+(`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
 refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
 and a restricted firewall that cannot be applied fails the boot closed. The
 evidence and what each run covered are in
@@ -787,6 +792,22 @@ daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
 
+Why a root-phase relay (decided 2026-10-26, todo 0109). `docker cp` of the
+revision would put credentials in the container layer, where revocation
+cannot empty them before the next start, and would have to be repeated on
+every start. Writing the revision as the mapped UID (`unshare --map-auto`
+and `chown`) needs `newuidmap` and a subordinate range on the backend host
+and would leave the files unreadable to the backend's own user. The relay
+keeps the bound revision as the single source, so revocation and login
+renewal through `replaceStagedInputFile` keep working, changes nothing on
+the host, and does nothing on a rootful daemon whose host user is UID 1000.
+It is triggered by what `node` can read, not by the backend's topology flag,
+so it needs no creation input a stale runtime could carry and also covers a
+rootful host whose user is not UID 1000. The costs are a new image
+(`staged-inputs=3`; an older image on rootless is flagged, not fixed), a
+relayed copy in `/run` for the container's life, and the explicit removal
+on revocation described above.
+
 - Reading: the host home entry itself is resolved (a dotfiles manager may link
   it, and the bind mount it replaces followed that link); nothing below it is
   followed. Every file is opened `O_NOFOLLOW` and re-checked against the
@@ -1043,6 +1064,18 @@ to mount a read-only file bind from a `nosuid`/`nodev` filesystem; a file
 bind already pinned the seed as it was at creation (the backend replaces it by
 rename), so nothing is lost. A failed copy leaves the container to fetch the
 ranges itself.
+
+Why copy the seed and classify the rest (decided 2026-10-26, todo 0109). The
+GitHub ranges seed is the only single-file bind outside the input revision;
+it is not a secret and nothing revokes it, so copying it in costs nothing a
+bind gave. Staged-input file binds stay binds, because revocation empties
+them in place. Any other refused remount is classified rather than worked
+around, reusing `unsupported-topology` so older clients still parse it. The
+start-time refusal pattern comes from the 2026-10-25 report and has not been
+captured from a start; the 2026-11-09 rootless run captured the same refusal
+from `docker cp`, which, with `docker cp` into a container that is not
+running, is
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md).
 
 Every start of a runtime, rebuild candidate or egress gateway goes through
 `startDockerContainer` (`container-start.ts`). A read-only bind Docker refuses
@@ -1367,6 +1400,18 @@ network pane shows "Agent tools unavailable" for a container environment
 while the verdict is `blocked` (`EnvironmentAgentToolsStatus`). Existing
 gateway runtimes snapshot their host address at gateway boot and need a
 rebuild after host loopback is enabled.
+
+Why detect rather than configure (decided 2026-10-26, todo 0109). Orkestrator
+never owns or restarts the user's daemon, and enabling host loopback lets
+every container of that daemon reach every host loopback service, a security
+trade only the user can make. Publishing the service back through a
+container's forwarded port would need a multiplexing relay in every
+container for one path, and the host's LAN address was tried live and
+refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
+gvisor-tap-vsock driver host loopback is `10.0.2.1` and the check still
+reports `blocked`
+([7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)),
+and other drivers stay `blocked` with the same remediation.
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
 

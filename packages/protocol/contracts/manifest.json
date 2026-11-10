@@ -3235,7 +3235,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:ab757b7afbc066aaa3f2f2c1d77e669a2a952b680be2c0691dd798085a7e95ae"
+      "resultDigest": "sha256:b5e6f162985adfad2d7e0edad0c532fab4c62d1dd510f7a165b8cf96881a5173"
     },
     "get_docker_system_stats": {
       "domain": "docker",

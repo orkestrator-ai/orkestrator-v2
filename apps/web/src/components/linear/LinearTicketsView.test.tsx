@@ -773,6 +773,36 @@ describe("LinearTicketsView", () => {
         }),
       );
     });
+    // A local worktree has no firewall, so the launcher sends no network access.
+    const localCall = startBuildFromLinearIssueMock.mock.calls.at(-1) as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(localCall[3].networkAccessMode).toBeUndefined();
+  });
+
+  test("starts a container build with the network access chosen in the launcher", async () => {
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Build Linear support");
+    fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+    expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /^Container/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Full access/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+
+    await waitFor(() => {
+      expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(
+        issueDetail,
+        "project-1",
+        "containerized",
+        expect.objectContaining({ networkAccessMode: "full" }),
+      );
+    });
   });
 
   test("redirects an open launcher when a build becomes active in the background", async () => {

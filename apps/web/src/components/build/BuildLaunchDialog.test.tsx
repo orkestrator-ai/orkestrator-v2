@@ -268,11 +268,50 @@ describe("BuildLaunchDialog", () => {
       name: "Where it runs",
     });
 
-    expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
+    // Where it runs, and a container's network access; nothing per step.
+    expect(screen.getAllByRole("radiogroup")).toHaveLength(2);
     fireEvent.click(within(environment).getByRole("radio", { name: /^Local/ }));
+    expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
     submit();
 
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
+    expect(onConfirm.mock.calls[0]![0]).not.toHaveProperty("networkAccessMode");
+  });
+
+  describe("Network access", () => {
+    const network = () => screen.getByRole("radiogroup", { name: "Network access" });
+
+    test("a container asks, opening on restricted and saying root setup steps need full", () => {
+      const { onConfirm } = renderDialog();
+      const restricted = within(network()).getByRole("radio", { name: /^Restricted/ });
+      expect((restricted as HTMLInputElement).checked).toBe(true);
+      expect(network().textContent).toContain("Root setup steps");
+      submit();
+      expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("restricted");
+    });
+
+    test("submits full access when chosen", () => {
+      const { onConfirm } = renderDialog();
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      submit();
+      expect(onConfirm.mock.calls[0]![0].networkAccessMode).toBe("full");
+    });
+
+    test("reopening the launcher asks again from restricted", () => {
+      const { rerender } = renderDialog();
+      fireEvent.click(within(network()).getByRole("radio", { name: /^Full access/ }));
+      const props = {
+        onOpenChange: () => undefined,
+        catalog,
+        defaultAgent: "claude" as const,
+        defaultEnvironmentType: "containerized" as const,
+        onConfirm: () => undefined,
+      };
+      rerender(<BuildLaunchDialog {...props} open={false} />);
+      rerender(<BuildLaunchDialog {...props} open />);
+      const restricted = within(network()).getByRole("radio", { name: /^Restricted/ });
+      expect((restricted as HTMLInputElement).checked).toBe(true);
+    });
   });
 
   test("submits the configured default independently for all six steps", () => {
@@ -290,6 +329,7 @@ describe("BuildLaunchDialog", () => {
     };
     expect(onConfirm).toHaveBeenCalledWith({
       environmentType: "containerized",
+      networkAccessMode: "restricted",
       deliveryPolicy: "open-pr",
       steps: {
         build: shared,

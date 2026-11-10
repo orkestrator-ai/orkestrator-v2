@@ -321,6 +321,45 @@ describe("SetupPendingOverlay", () => {
     expect(screen.queryByText("Waiting for setup scripts to complete...") === null).toBe(true);
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
+    expect(screen.queryByTestId("setup-failure-reason") === null).toBe(true);
+  });
+
+  test("says why setup failed when the environment records a reason", () => {
+    const reason = "Root steps only run in containers with full network access.";
+    appCommandStore(environmentStore).setState({
+      environments: [createEnvironment({ setupPhase: "failed", lifecycleError: reason })],
+    });
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />,
+    );
+    expect(screen.getByText("Environment setup failed.")).toBeTruthy();
+    expect(screen.getByTestId("setup-failure-reason").textContent).toBe(reason);
+  });
+
+  test("the transcript layout says why setup failed", () => {
+    const reason = "Root steps only run in containers with full network access.";
+    appCommandStore(environmentStore).setState({
+      environments: [createEnvironment({ setupPhase: "failed", lifecycleError: reason })],
+    });
+    renderInAppCommandScope(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="failed"
+        subtext="x"
+        pendingPrompt={{ text: "Build it", createdAt: new Date().toISOString() }}
+      />,
+    );
+    expect(screen.getByTestId("setup-failure-reason").textContent).toBe(reason);
+  });
+
+  test("a stale reason is not shown while setup runs again", () => {
+    appCommandStore(environmentStore).setState({
+      environments: [createEnvironment({ setupPhase: "running", lifecycleError: "old reason" })],
+    });
+    renderInAppCommandScope(
+      <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
+    );
+    expect(screen.queryByTestId("setup-failure-reason") === null).toBe(true);
   });
 
   test("retries a failed setup and disables duplicate submissions", async () => {

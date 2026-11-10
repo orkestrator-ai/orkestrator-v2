@@ -550,6 +550,7 @@ export function LinearTicketsViewContent({
         reviewPreparation: selection.reviewPreparation,
         includeComments: selection.includeComments ?? true,
         deliveryPolicy: selection.deliveryPolicy,
+        networkAccessMode: selection.networkAccessMode,
       });
     } finally {
       setIsBuildStarting(false);

@@ -3,6 +3,7 @@ import { parseContainerLifecycleError } from "@orkestrator/protocol/container-li
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { sshConnectFailure, type SshConnectFailure } from "./git-ssh-transport.js";
+import { SETUP_FAILURE_REASONS, type SetupFailureReason } from "./container-scripts.js";
 
 const log = createLogger("environment");
 
@@ -34,7 +35,12 @@ export function cleanupErrorMessage(error: unknown): string {
 export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   unknown: "Environment start failed. Check the backend logs and retry.",
   noLocalPath: "Project has no local path - cannot create a local worktree",
-  setupScript: "Environment setup script failed.",
+  setupScript:
+    "A setup command exited with an error. The setup output shows which one; fix it, then retry setup.",
+  rootSetupNeedsFullNetwork:
+    'This project\'s orkestrator-ai.json has "root" setup steps, and root steps only run in containers with full network access. This environment\'s network is restricted. Create the environment again with network access set to Full, or remove the "root" field from orkestrator-ai.json.',
+  setupStillRunning:
+    "The previous setup run's processes did not stop, so setup was not started again. Retry setup in a moment.",
   timedOut: "Environment start timed out. Check the container runtime and retry.",
   runtimeUnavailable: "The container runtime is unavailable. Start it and retry.",
   imageUnavailable:
@@ -125,6 +131,31 @@ export function isGitSshAuthenticationFailure(message: string): boolean {
   return /permission denied \((?:[^(),\s]+,\s*)*publickey(?:\s*,[^(),]+)*\)/i.test(message);
 }
 
+/** The message a failed setup run gets, specific when its script named a reason. */
+export function setupScriptFailedError(reason?: SetupFailureReason): Error {
+  return Object.assign(
+    new Error("Setup script failed"),
+    reason ? { setupFailureReason: reason } : {},
+  );
+}
+
+/** The message of the error a setup retry throws when the previous run's tree survives. */
+export const SETUP_TERMINAL_STILL_RUNNING_MESSAGE = "Previous setup terminal did not stop";
+
+const SETUP_FAILURE_MESSAGES: Record<SetupFailureReason, string> = {
+  "root-steps-need-full-network": ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.rootSetupNeedsFullNetwork,
+};
+
+function setupFailureReasonOf(error: unknown): SetupFailureReason | undefined {
+  const reason =
+    error instanceof Error
+      ? (error as { setupFailureReason?: unknown }).setupFailureReason
+      : undefined;
+  return (SETUP_FAILURE_REASONS as readonly unknown[]).includes(reason)
+    ? (reason as SetupFailureReason)
+    : undefined;
+}
+
 /**
  * Classifies a subprocess/storage failure into a message that is safe to
  * persist and render. Raw command errors can contain clone URLs, host paths,
@@ -172,7 +203,13 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath;
   }
   if (message === "Setup script failed") {
-    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
+    const reason = setupFailureReasonOf(error);
+    return reason
+      ? SETUP_FAILURE_MESSAGES[reason]
+      : ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
+  }
+  if (message === SETUP_TERMINAL_STILL_RUNNING_MESSAGE) {
+    return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupStillRunning;
   }
   if (isGitSshAuthenticationFailure(message)) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication;

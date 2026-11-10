@@ -754,6 +754,28 @@ describe("useBuildPipeline", () => {
     expect(startInput().agentType).toBeUndefined();
   });
 
+  test("a container launch carries the chosen network access to the new environment", async () => {
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "containerized", {
+        networkAccessMode: "full",
+      });
+    });
+
+    expect(startInput().environmentOptions).toEqual({ networkAccessMode: "full" });
+  });
+
+  test("a local launch sends no network access: a worktree has no firewall", async () => {
+    const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local", undefined, { networkAccessMode: "full" });
+    });
+
+    expect(startInput()).not.toHaveProperty("environmentOptions");
+  });
+
   test("sends only the launch's explicit choices, leaving defaults to the backend", async () => {
     const { result } = renderHookInAppCommandScope(() => useBuildPipeline());
 

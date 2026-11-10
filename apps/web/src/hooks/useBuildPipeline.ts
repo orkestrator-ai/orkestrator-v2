@@ -22,7 +22,7 @@ import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
-import type { DefaultAgent, EnvironmentType } from "@/types";
+import type { DefaultAgent, EnvironmentType, NetworkAccessMode } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
@@ -46,6 +46,8 @@ type StartBuildOptions = {
   includeComments?: boolean;
   /** The launch dialog's "When verified" choice. */
   deliveryPolicy?: DeliveryPolicy;
+  /** The container's network access, when the launcher asked. */
+  networkAccessMode?: NetworkAccessMode;
 };
 
 function findBuildTabInTree(
@@ -94,6 +96,11 @@ export function useBuildPipeline() {
           ...(options.reviewers ? { reviewers: options.reviewers } : {}),
           ...(options.reviewPreparation ? { reviewPreparation: options.reviewPreparation } : {}),
           ...(options.deliveryPolicy ? { deliveryPolicy: options.deliveryPolicy } : {}),
+          // Applied only when the pipeline creates its environment. Without it
+          // the backend creates a restricted container.
+          ...(environmentType === "containerized" && options.networkAccessMode
+            ? { environmentOptions: { networkAccessMode: options.networkAccessMode } }
+            : {}),
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,

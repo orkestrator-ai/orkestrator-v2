@@ -1003,9 +1003,10 @@ export async function measureBusy(
             // Correlate by tool and result identity, never the next timestamp.
             // Submission precedes acceptance: this is a conservative upper bound,
             // independent of when the model receives the tool's callback.
+            // Multi Review submits these three; `submit_review_preparation`
+            // belongs to build pipelines, so a review never sends it.
             const expected = {
               submit_validation_plan: "reviewing",
-              submit_review_preparation: "reviewing",
               submit_review_report: "consolidating",
               submit_consolidated_review: "ready",
             };

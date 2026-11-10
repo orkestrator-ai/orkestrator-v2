@@ -40,6 +40,13 @@ const MEASUREMENT_PRUNE_BATCH_FILE_ROWS = 256;
 const MEASUREMENT_PRUNE_BATCH = 64;
 /** Owners read per page of the hourly pass's walk for superseded measurements. */
 const MEASUREMENT_OWNERS_PER_PAGE = 512;
+/**
+ * How long after a turn ends its superseded measurements stay, for a reader
+ * that was paging one or read the history just before the final measurement
+ * was selected (restore tokens last five minutes). Then the hourly pass keeps
+ * only the turn's newest and selected ones (todo 4960).
+ */
+export const FINISHED_TURN_SUPERSEDED_GRACE_MS = 15 * 60_000;
 /** Freed database pages are released in steps of this many 4 KiB pages. */
 const RELEASE_PAGES_PER_STEP = 128;
 /** Ledger rows deleted per transaction by a purge or age-based retention. */
@@ -339,6 +346,37 @@ export class ChangeRetentionService {
     const pruned = await this.pruneBatches(nowMs);
     report.prunedMeasurements += pruned.measurements;
     report.prunedMeasurementFiles += pruned.files;
+    const finished = await this.pruneFinishedTurns(nowMs);
+    report.prunedMeasurements += finished.measurements;
+    report.prunedMeasurementFiles += finished.files;
+  }
+
+  /**
+   * A finished turn keeps two measurements like any owner, but the older one
+   * (its provisional list, up to the file row cap) is never selected again,
+   * and the turn stays for the whole archive window. Past the grace each
+   * finished turn keeps only its newest measurement and any a selection,
+   * restore or reader still holds.
+   */
+  private async pruneFinishedTurns(
+    nowMs: number,
+  ): Promise<{ measurements: number; files: number }> {
+    const total = { measurements: 0, files: 0 };
+    const finishedBefore = new Date(nowMs - FINISHED_TURN_SUPERSEDED_GRACE_MS).toISOString();
+    let after: MeasurementOwnerCursor | null = null;
+    do {
+      if (this.stopped) break;
+      const page: ReturnType<ChangeLedger["finishedTurnOwnersPage"]> =
+        this.deps.ledger.finishedTurnOwnersPage(after, finishedBefore, MEASUREMENT_OWNERS_PER_PAGE);
+      for (const owner of page.owners) {
+        const pruned = await this.pruneOwner(nowMs, owner, 1);
+        total.measurements += pruned.measurements;
+        total.files += pruned.files;
+      }
+      after = page.next;
+      await yieldToEventLoop();
+    } while (after);
+    return total;
   }
 
   /**
@@ -396,11 +434,12 @@ export class ChangeRetentionService {
   private async pruneOwner(
     nowMs: number,
     owner: MeasurementOwnerCursor,
+    keepLatest = MEASUREMENTS_KEPT_PER_OWNER,
   ): Promise<{ measurements: number; files: number }> {
     const total = { measurements: 0, files: 0 };
     while (!this.stopped) {
       const pruned = this.deps.ledger.pruneSupersededMeasurements({
-        keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
+        keepLatest,
         nowIso: new Date(nowMs).toISOString(),
         maxMeasurements: MEASUREMENT_PRUNE_BATCH,
         maxFileRows: MEASUREMENT_PRUNE_BATCH_FILE_ROWS,

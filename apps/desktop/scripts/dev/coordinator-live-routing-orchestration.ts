@@ -27,6 +27,7 @@ import {
   routingEnvironmentName,
   routingInvestigatePrompt,
   routingReviewPrompt,
+  routingRestartCallCounts,
   routingToolCalls,
   workflowCallCounts,
   ROUTING_CASES,
@@ -291,7 +292,7 @@ export async function runRoutingScenario(input: {
       if (fresh.pipelines.length === 0) return;
       const afterCancel = caseRows().filter((row) => !judged.has(row.id));
       for (const [tool, count] of Object.entries(
-        workflowCallCounts(routingToolCalls(afterCancel)),
+        routingRestartCallCounts(routingToolCalls(afterCancel)),
       )) {
         observed[`build-after-cancel:${tool}`] = count;
       }

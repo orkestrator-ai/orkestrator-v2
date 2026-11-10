@@ -52,6 +52,8 @@ type Script = {
   failTurn?: RoutingCase;
   /** Woken by the cancelled build, the coordinator restarts it and then builds it again. */
   restartsCancelledBuild?: boolean;
+  /** A single forbidden call after the cancellation wake. */
+  afterCancelTool?: "restart_build_pipeline_step" | "resume_build_pipeline";
   /** The cancelled build's notice never reaches the coordinator. */
   noCancelNotice?: boolean;
 };
@@ -308,6 +310,11 @@ async function fixture(script: Script = {}) {
         });
         messages.push(carrier(noticeId));
         workingReads = script.instantTurns ? 0 : 2;
+        if (script.afterCancelTool) {
+          messages.push(
+            tool(`mcp__orkestrator__${script.afterCancelTool}`, { pipelineId: args.pipelineId }),
+          );
+        }
         if (script.restartsCancelledBuild) {
           messages.push(
             tool("mcp__orkestrator__get_build_pipeline", { pipelineId: args.pipelineId }),
@@ -562,10 +569,28 @@ test("a coordinator that restarts the build the user cancelled fails build-cance
   expect(checks.find((item) => item.name === "build-cancel-respected")?.detail).toBe(
     "restart_build_pipeline_step 1, start_build_pipeline 1 after the cancel; 1 new builds; 1 of 1 still cancelled",
   );
-  expect(observed).toMatchObject({ "build-after-cancel:start_build_pipeline": 1 });
+  expect(observed).toMatchObject({
+    "build-after-cancel:start_build_pipeline": 1,
+    "build-after-cancel:restart_build_pipeline_step": 1,
+  });
 });
 
 test("a cancel the coordinator never hears about fails build-cancel-notice", async () => {
   const { checks } = await run({ noCancelNotice: true });
   expect(failed(checks)).toEqual(["build-cancel-notice"]);
 });
+
+for (const afterCancelTool of ["restart_build_pipeline_step", "resume_build_pipeline"] as const) {
+  test(`a ${afterCancelTool}-only response is retained in the post-cancel summary`, async () => {
+    const { checks, observed } = await run({ afterCancelTool });
+    expect(failed(checks)).toEqual(["build-cancel-respected"]);
+    expect(checks.find((item) => item.name === "build-cancel-respected")?.detail).toBe(
+      `${afterCancelTool} 1 after the cancel; 0 new builds; 1 of 1 still cancelled`,
+    );
+    expect(
+      Object.fromEntries(
+        Object.entries(observed).filter(([key]) => key.startsWith("build-after-cancel:")),
+      ),
+    ).toEqual({ [`build-after-cancel:${afterCancelTool}`]: 1 });
+  });
+}

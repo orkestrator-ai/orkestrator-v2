@@ -27,6 +27,15 @@ export function reviewPackageArtifactPath(packageId: string, sha256?: string): s
 }
 
 /**
+ * The reviewed diff, sealed by the backend beside the package (to-do 0190).
+ * Like the package, the digest is in the name, so the bytes a persisted
+ * package names can never be replaced.
+ */
+export function reviewDiffArtifactPath(packageId: string, sha256: string): string {
+  return `${reviewArtifactDirectory(packageId)}/review-diff-${sha256}.patch`;
+}
+
+/**
  * The ordinal is the entry's 1-based position in the returned `validation`
  * array, counting skipped commands, so entry N always uses ordinal N. Numbering
  * by execution order instead would shift every artifact after a skipped command.

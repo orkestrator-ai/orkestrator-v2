@@ -10,6 +10,11 @@ type InstallerDependencies = {
   stopServer: () => void;
   waitUntilReady: () => Promise<void>;
   source: string;
+  /**
+   * What follows the script on the server's command line. Defaults to the
+   * signal spec's 3 s reply delay; the Multi Review fake passes `--log`.
+   */
+  serverArgs?: string[];
 };
 
 /** Preserve the first backup across interrupted installs; undo is repeatable. */
@@ -19,6 +24,11 @@ export async function installFakeClaudeApiFixture({
   stopServer,
   waitUntilReady,
   source,
+  serverArgs = [
+    // A turn as long as a short real one, so its `working` edge is visible.
+    "--reply-delay-ms",
+    String(FAKE_API_REPLY_DELAY_MS),
+  ],
 }: InstallerDependencies): Promise<() => void> {
   const undo = () => {
     stopServer();
@@ -28,15 +38,7 @@ export async function installFakeClaudeApiFixture({
   };
   try {
     asNode(`cat > ${FAKE_API_SCRIPT}`, source);
-    startServer([
-      "bun",
-      FAKE_API_SCRIPT,
-      "--port",
-      String(FAKE_API_PORT),
-      // A turn as long as a short real one, so its `working` edge is visible.
-      "--reply-delay-ms",
-      String(FAKE_API_REPLY_DELAY_MS),
-    ]);
+    startServer(["bun", FAKE_API_SCRIPT, "--port", String(FAKE_API_PORT), ...serverArgs]);
     const env = JSON.stringify({
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${FAKE_API_PORT}`,
       ANTHROPIC_AUTH_TOKEN: "orkestrator-qa-fixture",

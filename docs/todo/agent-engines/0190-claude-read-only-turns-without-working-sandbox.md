@@ -6,13 +6,14 @@ Found on 2026-10-26 while doing
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; task 3 re-analysed and
+run 2026-11-10 against `main` at `c98b20e6f`.
 
 ### Tasks
 
 1. **Choose and implement the behaviour**: code item 1, one deliberate behaviour for `readOnly` turns where the CLI sandbox cannot run commands, and where the boundary is shown. Status: done 2026-10-28 (option (b), shown in Agent Info and on the Multi Review reviewer and consolidation step; decisions A1 to A9).
-2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux-only live case is under "Needs verification".
-3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: open. The "before" run was not done (A10); the code answers the open question.
+2. **Test the chosen path**: code item 2, covering the unit, prompt-route and live conformance cases. Status: done 2026-10-28 on macOS; the Linux run, the Linux-only case included, passed 2026-11-10 (A15).
+3. **Container and Ubuntu qualification**: a Multi Review run with a Claude reviewer in a container and on stock Ubuntu, before and after (open question and "Needs verification" included). Status: done for the container and for the Linux live suite on 2026-11-10 (A12 to A17); the run found and fixed two defects. Open: stock Ubuntu with AppArmor and Windows, each needing a host this work did not have (see "Needs verification").
 
 ### 1. Choose and implement the behaviour
 
@@ -71,7 +72,41 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Batched in 0031 (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:202`) with 0145.
 
-**Investigation.** The open question is answered by the code: a container environment's reviewers run in the container. `bridgeConnection` starts `start_claude_server` for any non-local environment (`apps/backend/src/core/multi-review-service.ts:4993-5020`). The image ships neither `bwrap` nor `socat` (no match in `docker/Dockerfile`). So today every Claude read-only report turn in a container environment should be refused by the CLI. That is a user-visible failure in normal use, which is why the file rates High. Nothing in the code suggests these turns run on the host instead.
+**Investigation (2026-11-10).** Run on beelink (Arch Linux, kernel 7.1.8)
+with this branch's dev image (`claude` 2.1.319, no `bwrap` or `socat`) on a
+disposable rootless daemon started with `--host-loopback`, so the
+containers reach the profile's agent tools server past the host firewall
+(ufw drops it from the rootful daemon's ranges, [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+Profile `ro-reviewers-0190`, credential-free, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`,
+a scripted fake Messages API on the container's loopback
+(`e2e/agent-testing/container-fake-claude-review-api.ts`), two Claude
+reviewers and a Claude preparation/consolidation model.
+- Run 1: the reviewers failed "Not logged in": read-only turns load no
+  settings files, so the fake's base URL in `~/.claude/settings.json` never
+  reached them. A fixture limitation here, and a real gap for users who
+  configure Claude that way: [7561](7561-claude-read-only-turns-ignore-settings-env.md).
+  The fake is now staged as managed settings.
+- Run 2: every reviewer turn ran (the sandbox-off note was on both reviewers),
+  but the hook refused the package's `diffCommand`: without the sandbox it
+  refuses every Git command, and the reviewer instructions send reviewers to
+  Git for the diff. A container reviewer could not see the change at all
+  (fixed, A13).
+- Run 3, after the fix: `ready`; both reviewers and consolidation completed
+  with the note on each; in every read-only turn `ls` ran, Git and `touch`
+  were refused by the hook, the reviewers read the sealed diff file, and
+  every submission was accepted. The diff file's SHA-256 matched the
+  package and `diffCommand`'s output; no write reached the checkout.
+- The note told the user to "Install the bubblewrap and socat packages"
+  inside a container (fixed, A14). Run 4, on a rebuilt image with every fix,
+  is the committed `container-multi-review-read-only.spec.ts`: passed in
+  51 s (1 expected, 0 skipped), with the container wording in both
+  inspectors.
+- The Linux live suite (`conformance-coordinator-sandbox-live.test.ts`)
+  passed 19 of 19, none skipped, `read-only-required-refused` included,
+  which reproduces the CLI's refusal of a required sandbox on the old block
+  (the "before", A15).
+
+**Investigation (2026-10-27).** The open question is answered by the code: a container environment's reviewers run in the container. `bridgeConnection` starts `start_claude_server` for any non-local environment (`apps/backend/src/core/multi-review-service.ts:4993-5020`). The image ships neither `bwrap` nor `socat` (no match in `docker/Dockerfile`). So today every Claude read-only report turn in a container environment should be refused by the CLI. That is a user-visible failure in normal use, which is why the file rates High. Nothing in the code suggests these turns run on the host instead.
 
 **Decisions.**
 
@@ -101,8 +136,22 @@ chosen on purpose.
 
 ## Current state
 
-Updated 2026-10-28 on branch `todo-0190-claude-read-only-no-sandbox`, based on
-`main` at `1d1f0a87`.
+Updated 2026-11-10 (task 3); the rest 2026-10-28 on branch
+`todo-0190-claude-read-only-no-sandbox`, based on `main` at `1d1f0a87`.
+
+- **Reviewers without Git get the diff as a file (2026-11-10).** The hook
+  refuses every Git command when the sandbox is off, so the backend seals the
+  package's diff as `review-diff-<sha256>.patch` beside it
+  (`apps/backend/src/core/review-diff-artifact.ts`, `diffArtifact` on
+  `ReviewPackage`), checks it with the package before each dispatch, and the
+  reviewer instructions say to read it when Git is refused
+  (`PACKAGED_REVIEW_WORKING_RULES`). Over 16 MiB, or if it cannot be
+  produced, it is left out with a package limitation. `diffCommand` gained
+  `--no-textconv`, so the file and the command print the same bytes.
+- **The note is worded for a container (2026-11-10).** In a container the
+  probe says "cannot run commands in this container" and that bubblewrap and
+  socat are not in the container's image, without install advice
+  (`probeClaudeLinuxSandbox`, `inContainer`).
 
 - **Done: option (b).** A `readOnly` turn in an ordinary bridge (no launcher
   answer) decides per turn whether to ask the CLI for its sandbox
@@ -184,12 +233,15 @@ Updated 2026-10-28 on branch `todo-0190-claude-read-only-no-sandbox`, based on
 
 ### Qualification
 
-- A Multi Review run with a Claude reviewer in a container environment and on
-  a stock Ubuntu host, before and after the change. Batch with
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-  The "before" half can no longer be run from this branch; `main` before it
-  merges, or the `read-only-required-refused` live case on Linux, stands in
-  for it (A10).
+- [x] A Multi Review with Claude reviewers and a Claude consolidation in a
+  container environment: done 2026-11-10, on a fake Messages API
+  (`container-multi-review-read-only.spec.ts`, A12). The "before" half is
+  the `read-only-required-refused` live case, run on Linux the same day
+  (A15).
+- [ ] The same on a stock Ubuntu host with AppArmor's
+  `bwrap-userns-restrict`, and a read-only turn on Windows. Batched in
+  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md);
+  see "Needs verification" for what each needs.
 
 ## Constraints and rationale
 
@@ -284,7 +336,56 @@ Made 2026-10-28 while implementing.
   rating's container failure is still inferred from code, not observed.
 - **A11. Rating.** Kept High: what is left is qualification of behaviour that
   is on by default for every Claude read-only turn on Linux and has not run
-  on the real stack.
+  on the real stack. Re-rated Medium on 2026-11-10 once the container case
+  and the Linux live suite passed: what is left is a qualification run for
+  two secondary platforms (A17).
+
+- **A12. How the container run reached a model (2026-11-10, task 3).**
+  Options: a real Claude login in the profile; a scripted fake Messages API
+  on the container's loopback. **Chosen: the fake**, because the ticket
+  forbade logins and billed turns. It drives the image's real `claude`, the
+  real bridge, hook and MCP submission tools, and follows the reviewer
+  instructions (read the package, run `ls`, run `diffCommand`, read the diff
+  file, try a write, submit). Pros: free, repeatable, content-free logs.
+  Cons: it proves the boundary and the plumbing, not review quality; a
+  Claude Code release that changes its API use can break the fake.
+- **A13. How a reviewer without Git reads the diff (task 3).** Options: (a)
+  let the hook admit a hardened `git diff` without the sandbox; (b) seal the
+  diff as a file when the package is built and point reviewers at it; (c)
+  only tell reviewers to read the changed files. **Chosen: (b).** Why: (a)
+  reopens the hole the refusal closes (`core.fsmonitor`, filter drivers and
+  other configuration run helpers, and the hook checks commands, not Git's
+  configuration); (c) loses what changed inside each file. The backend
+  already runs Git in the environment to build the package, so (b) costs one
+  more `git diff` and a write per round. Pros: the reviewer sees exactly the
+  reviewed bytes, verified before dispatch, with no new route through the
+  hook. Cons: one more file per round (up to 16 MiB); non-UTF-8 bytes are
+  replaced, since the runner decodes Git's output as text.
+- **A14. The reason's wording in a container (task 3).** Options: keep the
+  host wording; detect a container and drop the install advice. **Chosen:
+  detect it** (`/.dockerenv` or `/run/.containerenv`, injectable for tests).
+  Why: users cannot install packages into an environment's image, and "on
+  this host" pointed them at the wrong machine. Shipping bubblewrap in the
+  image was not chosen: an unprivileged container without user namespaces is
+  not expected to run it, and that was not tested here.
+- **A15. The "before" run (task 3).** Options: run the container case on
+  `main` before this branch; use the Linux live case that pins the CLI's
+  refusal. **Chosen: the live case**, as A10 proposed: on Linux it runs the
+  pinned CLI with the old required block and the staged `PATH`, and passed
+  on 2026-11-10. Cons: still a staged absence rather than a container.
+- **A16. Where the containers reach the agent tools server (task 3).**
+  Options: a ufw rule for the agent-test port range (the user's change to
+  make); a disposable rootless daemon with RootlessKit's host loopback.
+  **Chosen: the disposable daemon**, the only route that needed no host
+  firewall change. Its containers reach the host's loopback, so the
+  reachability check names `10.0.2.2` as `host.docker.internal`; nothing on
+  the host daemon or firewall changed.
+- **A17. Closing the file (task 3).** Options: retire it and move the Ubuntu
+  and Windows checks to 0031; keep it open with only those. **Chosen: keep
+  it open**, re-rated Medium: both are live checks of behaviour already on by
+  default, and 0031 batches the runs but does not own their items. The
+  durable description is in
+  [coordinator.md](../../architecture/coordinator.md).
 
 ## Open questions
 
@@ -294,21 +395,18 @@ Made 2026-10-28 while implementing.
 
 ## Needs verification
 
-- The container case on a real environment, before (on `main` before this
-  merges) and after: a Multi Review with a Claude consolidation model and a
-  Claude reviewer in a packaged review, in an isolated profile with
-  `--fixture-environments local,container` and a throwaway Claude login. After:
-  the reviews complete, the reviewer and consolidation inspectors show the
-  sandbox note, and Agent Info for a running reviewer says "No sandbox".
 - A stock Ubuntu 24.04 or 26.04 host with AppArmor's `bwrap-userns-restrict`:
   the probe answers `nested-user-namespace`, the read-only turn runs Bash
-  commands (no `apply-seccomp` failure) and shows the note.
-- The Linux run of the live suite
-  (`bun test --cwd bridges/claude-bridge ./src/conformance-coordinator-sandbox-live.test.ts --preload ../../tests/setup-node.ts --parallel=1`),
-  including `read-only-required-refused` and the staged `PATH` (a shell and
-  `cat`/`uniq` only) on a real Linux host; on macOS only the two
-  `read-only-unavailable-*` cases ran.
-- Windows (A5): that a read-only turn there runs on the hook alone.
+  commands (no `apply-seccomp` failure) and shows the note. Needs such a host
+  (beelink is Arch without that profile); `container-multi-review-read-only.spec.ts`'s
+  fake and a local environment could drive it.
+- Windows (A5): that a read-only turn there runs on the hook alone. Needs a
+  Windows host.
+- Agent Info saying "No sandbox" while a reviewer turn runs, on the real
+  stack: the fake's turns finish in a few seconds, so it was not caught; the
+  reported policy is pinned by `claude-query-config.reported-policy.test.ts`.
+- Done 2026-11-10: the container case (A12) and the Linux run of the live
+  suite (19 of 19, A15).
 
 ## Related
 
@@ -316,6 +414,10 @@ Made 2026-10-28 while implementing.
   the probe and the refusal this would reuse.
 - [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md):
   the read-only hook and the `unavailable` coordinator path.
+- [7561-claude-read-only-turns-ignore-settings-env.md](7561-claude-read-only-turns-ignore-settings-env.md):
+  found by task 3; read-only turns load no settings files.
+- [7080-linux-host-firewall-blocks-profile-signals.md](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md):
+  why the container run used a disposable rootless daemon.
 
 ## Replaces
 

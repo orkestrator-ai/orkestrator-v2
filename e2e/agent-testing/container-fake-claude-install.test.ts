@@ -140,3 +140,38 @@ test("assertion failure after installation runs the same finally undo as the spe
   await expect(run()).rejects.toThrow("assertion failed");
   f.restored();
 });
+
+test("starts the server with the signal spec's delay by default, or the caller's arguments", async () => {
+  const f = fixture();
+  const started: string[][] = [];
+  const startServer = (args: string[]) => {
+    started.push(args);
+  };
+  (await installFakeClaudeApiFixture({ ...f.deps, startServer }))();
+  (
+    await installFakeClaudeApiFixture({
+      ...f.deps,
+      startServer,
+      serverArgs: ["--log", "/tmp/orkestrator-qa-review-steps.jsonl"],
+    })
+  )();
+  expect(started).toEqual([
+    [
+      "bun",
+      "/tmp/orkestrator-qa-fake-claude-api.ts",
+      "--port",
+      "47123",
+      "--reply-delay-ms",
+      "3000",
+    ],
+    [
+      "bun",
+      "/tmp/orkestrator-qa-fake-claude-api.ts",
+      "--port",
+      "47123",
+      "--log",
+      "/tmp/orkestrator-qa-review-steps.jsonl",
+    ],
+  ]);
+  f.restored();
+});

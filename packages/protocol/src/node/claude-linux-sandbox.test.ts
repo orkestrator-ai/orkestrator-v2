@@ -96,15 +96,43 @@ describe("Claude Linux sandbox probe", () => {
   test("missing programs fail before anything runs", () => {
     for (const missing of CLAUDE_LINUX_SANDBOX_PROGRAMS) {
       const { calls, run } = recordingRunner({ nested: true });
-      const status = probeClaudeLinuxSandbox({ onPath: (name) => name !== missing, run });
+      const status = probeClaudeLinuxSandbox({
+        onPath: (name) => name !== missing,
+        run,
+        inContainer: () => false,
+      });
       expect(status).toMatchObject({ available: false, failure: "missing-programs" });
       if (status.available) throw new Error("expected a failure");
       expect(status.reason).toContain(`${missing} is missing`);
       expect(calls).toHaveLength(0);
     }
-    const status = probeClaudeLinuxSandbox({ onPath: () => false });
+    const status = probeClaudeLinuxSandbox({ onPath: () => false, inContainer: () => false });
     if (status.available) throw new Error("expected a failure");
+    expect(status.reason).toContain("cannot run commands on this host");
     expect(status.reason).toContain("bwrap and socat are missing");
+    expect(status.reason).toContain("Install the bubblewrap and socat packages");
+  });
+
+  test("in a container the reason names the container and gives no install advice", () => {
+    // An environment's bridge: the user does not install packages into
+    // Orkestrator's image, so telling them to was advice they could not take.
+    const status = probeClaudeLinuxSandbox({ onPath: () => false, inContainer: () => true });
+    expect(status).toMatchObject({ available: false, failure: "missing-programs" });
+    if (status.available) throw new Error("expected a failure");
+    expect(status.reason).toBe(
+      "Claude's command sandbox cannot run commands in this container: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and bwrap and socat are not in this container's image.",
+    );
+    const { run } = recordingRunner({ nested: false, outer: false, stderr: "denied\n" });
+    const refused = probeClaudeLinuxSandbox({
+      onPath: () => true,
+      run,
+      appArmorBwrapProfile: () => false,
+      inContainer: () => true,
+    });
+    if (refused.available) throw new Error("expected a failure");
+    expect(refused.reason).toStartWith(
+      "Claude's command sandbox cannot run commands in this container:",
+    );
   });
 
   test("without unshare the nested namespace cannot be checked, so the host fails closed", () => {
@@ -164,7 +192,9 @@ describe.skipIf(!linuxWithBwrap)("Claude Linux sandbox probe on this host", () =
     const started = Date.now();
     const status = probeClaudeLinuxSandbox();
     expect(Date.now() - started).toBeLessThan(15_000);
-    if (!status.available) expect(status.reason).toContain("cannot run commands on this host");
+    if (!status.available) {
+      expect(status.reason).toMatch(/cannot run commands (on this host|in this container)/);
+    }
   });
 
   // bubblewrap 0.8 added the option; an older one cannot stage this failure.

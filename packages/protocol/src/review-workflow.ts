@@ -10,7 +10,7 @@ import { isReviewValidationPlan, type ReviewValidationPlan } from "./review-vali
  */
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
-import { reviewPackageArtifactPath } from "./review-artifacts.js";
+import { reviewDiffArtifactPath, reviewPackageArtifactPath } from "./review-artifacts.js";
 import {
   isValidationFailureSummary,
   isValidationFailureTriage,
@@ -98,6 +98,20 @@ export interface ReviewPackageContext {
 export const REVIEW_PACKAGE_FORMAT = 2;
 
 /**
+ * The reviewed diff as a file in the environment workspace, written and hashed
+ * by the backend from the package's own range (`diffCommand`'s bytes). It is
+ * for a reviewer whose session refuses Git: a read-only turn without the
+ * command sandbox, whose command hook refuses every Git command because Git
+ * configuration can run helpers (to-do 0190).
+ */
+export interface ReviewPackageDiffArtifact {
+  /** Workspace-relative path (`reviewDiffArtifactPath`). */
+  path: string;
+  bytes: number;
+  sha256: string;
+}
+
+/**
  * The backend-owned evidence pointer every reviewer in one round shares.
  *
  * `baseRef` and `headRef` are immutable commit IDs, so `diffCommand` returns
@@ -116,6 +130,11 @@ export interface ReviewPackage {
   commit: { sha: string; subject: string } | null;
   /** The exact command reviewers run to obtain the reviewed diff. */
   diffCommand: string;
+  /**
+   * The same diff as a file. Absent from packages written before it existed,
+   * and when the diff could not be saved (a limitation then says why).
+   */
+  diffArtifact?: ReviewPackageDiffArtifact;
   changedFiles: ReviewPackageFile[];
   validation: ReviewPackageCommandResult[];
   validationPlan?: ReviewValidationPlan;
@@ -335,12 +354,27 @@ function isPackageIdentity(value: Record<string, unknown>, round?: number): bool
   );
 }
 
+function isReviewPackageDiffArtifact(value: unknown): value is ReviewPackageDiffArtifact {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["path", "bytes", "sha256"]) &&
+    isBoundedNonEmptyString(value.path, REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+    isNonNegativeInteger(value.bytes) &&
+    typeof value.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(value.sha256)
+  );
+}
+
 export function isReviewPackage(value: unknown, round?: number): value is ReviewPackage {
   if (
     !isRecord(value) ||
     value.format !== REVIEW_PACKAGE_FORMAT ||
     !isPackageIdentity(value, round) ||
     !isBoundedNonEmptyString(value.diffCommand, REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
+    (value.diffArtifact !== undefined &&
+      (!isReviewPackageDiffArtifact(value.diffArtifact) ||
+        value.diffArtifact.path !==
+          reviewDiffArtifactPath(String(value.id), value.diffArtifact.sha256))) ||
     !Array.isArray(value.changedFiles) ||
     !Array.isArray(value.validation) ||
     (value.validationPlan !== undefined &&

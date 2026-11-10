@@ -1433,8 +1433,10 @@ use loopback only: VM and RootlessKit namespace ranges may overlap host LAN/VPN
 addresses and cannot identify container peers on the host. Missing or malformed
 security options on a non-Desktop daemon revoke subnet permissions. Changing
 from rootful Engine to Desktop or rootless therefore clears any previous list.
-A rootless peer arriving outside loopback stays refused; record its actual
-identity before adding any explicit topology-specific permission (todo 6820).
+A rootless peer arriving outside loopback stays refused. None has been seen:
+through RootlessKit's host loopback (slirp4netns) every container arrives as
+`127.0.0.1` (todo 6820, 2026-11-09), so rootless needs no topology-specific
+permission.
 
 The native Engine subnet list is read with `docker network ls --filter
 label=orkestrator-owner=<owner>` and one `docker network inspect` per network
@@ -1464,7 +1466,8 @@ The peer address a container's call arrives from, by topology:
 | --- | --- | --- | --- |
 | Docker Desktop (macOS) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-05 on Docker Desktop 4.98.0 (Engine 29.9.2, arm64) with `apps/backend/scripts/agent-tools-peer-evidence.ts` |
 | Linux Engine | The container's own address on its network (no NAT for traffic to a host address) | The network's subnet | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
-| Rootless (RootlessKit host loopback `10.0.2.2`) | Expected `127.0.0.1`: the port driver connects from the host's loopback | Loopback | Not run; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) |
+| Rootless, slirp4netns, host loopback on (`10.0.2.2`) | `127.0.0.1`, for the default bridge, an environment network and an unowned network alike | Loopback | Run 2026-11-09 on a disposable rootless daemon (Engine 29.9.2, RootlessKit 3.3.0, slirp4netns 1.3.3, linux/amd64) with the same script; [todo 6820](../todo/containers-and-environments/6820-agent-tools-peer-gate-linux-evidence.md) task 2 |
+| Rootless, `host-gateway` | Nothing: the gateway is RootlessKit's own bridge, which refuses the connection | — | Same run; the host check then switches to `10.0.2.2` |
 
 On Docker Desktop no VM subnet grants admission. This means every container
 on the daemon, owned or not, and every local process can still reach the port, as before; the token remains
@@ -1476,6 +1479,17 @@ tailnet calls closed without bytes. The permitted subnet list stayed empty
 before and after removal, with zero leftover resources. The captured result
 is `output/agent-testing/s0170-address/desktop-peer-evidence.json` (local,
 git-ignored); it does not establish native Linux or rootless behavior.
+
+A host firewall is not part of this boundary. The gate refuses outside peers
+whatever the firewall does, so whether a typical host's firewall would also
+hide the port no longer decides anything (todo 6820 task 5, closed
+2026-11-09). What stays visible without one is the instant open-then-close of
+the TCP handshake: a LAN port scan sees the port as open, and every request
+it sends is closed with no bytes. Binding per-gateway listeners instead, so
+that nothing on the LAN accepts at all, was rejected because listeners would
+have to follow network creation and removal and each port must be free on
+every gateway. A firewall that drops Docker traffic (ufw's default incoming
+policy) still matters for reachability, which is the check above.
 
 The C22 live qualification case passes its scene's owner
 to the filter, because its server's data directory differs from the one that

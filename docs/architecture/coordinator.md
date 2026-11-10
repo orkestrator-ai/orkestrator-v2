@@ -1074,8 +1074,19 @@ OS sandbox).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
-sandbox cannot be enabled. Its reading tools still reach the data directory
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
+sandbox cannot be enabled. `@cursor/sdk` has no per-call hook that sees a
+built-in tool's path, so a coordinator's agent runs `read`, `grep` (which also
+serves `glob`) and `ls` on the bridge's own executors
+(`local.resourceProviderOptions`; `bridges/cursor-bridge/src/read-boundary.ts`
+and `read-tools.ts`). They refuse a path inside the data directory, directly or
+through a link, and check every file a search or listing rooted above it would
+return, since searches follow links; the checkout and the coordinator's
+attachment directory stay readable. The read executor also serves an MCP call's
+`$file:` arguments. The executor shapes are unpublished SDK internals, so this
+is proven only against fakes and the SDK's own message descriptors until a live
+Cursor turn qualifies it
+([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)
+task 2).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`

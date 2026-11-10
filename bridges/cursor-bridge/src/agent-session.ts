@@ -50,6 +50,7 @@ import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { COORDINATOR_SKILLS_SERVER, hostSkillCustomTools } from "./coordinator-skills.js";
+import { cursorCoordinatorReadBoundary, cursorReadBoundaryExecutors } from "./read-boundary.js";
 import {
   cursorMcpServers,
   cursorInlineMcpServers,
@@ -533,6 +534,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   });
   // Without `project` the SDK skips AGENTS.md; `cursorPromptText` sends it.
   state.loadsProjectRules = settingSources.includes("project");
+  // A coordinator's reading tools may not reach the data directory: the SDK
+  // has no per-call hook for a built-in tool's path, so read, grep (and glob)
+  // and ls run on executors that check it (`read-boundary.ts`).
+  const readBoundary = readOnly ? cursorCoordinatorReadBoundary(workingDirectory) : null;
   const options: AgentOptions = {
     apiKey,
     model: modelSelection(state.composer),
@@ -546,6 +551,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
       ...(customTools ? { customTools } : {}),
+      ...(readBoundary
+        ? { resourceProviderOptions: cursorReadBoundaryExecutors(readBoundary, workingDirectory) }
+        : {}),
     },
     ...(readOnly
       ? {

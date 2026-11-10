@@ -5,13 +5,14 @@
 Analysed 2026-11-06 against `main` at `c1724ab74`, from the reader inventory
 of [0048](0048-recurring-work-qualification.md) task 20 (see its
 [Event-stream reader inventory](0048-recurring-work-qualification.md#event-stream-reader-inventory-2026-11-06)).
+Tasks 1 and 4 done 2026-11-10 against `main` at `04639b12b`.
 
 ### Tasks
 
-1. **OpenCode event monitor silence**: the backend's OpenCode event stream has no silence watchdog, so a connection that stays open but goes quiet is never replaced. Status: open.
+1. **OpenCode event monitor silence**: the backend's OpenCode event stream has no silence watchdog, so a connection that stays open but goes quiet is never replaced. Status: done (2026-11-10: `opencode serve` 1.19.5 observed sending `server.heartbeat` every 10 s; a 35 s watchdog armed by the first heartbeat replaces a silent stream).
 2. **Desktop connection retries in lock-step**: the desktop connection manager's reconnect ladder has no jitter. Status: done (2026-11-06: each delay drawn from the upper half of its rung).
 3. **Preview tunnel with no pong deadline**: the desktop preview tunnel pings but never acts on a missing pong. Status: done for the v2 session (2026-11-06: two unanswered pings destroy it); v1 deliberately left (see decision T3).
-4. **Terminal WebSocket stall while the page stays visible**: nothing pings the terminal socket on a timer, so a socket that stalls while the page is visible is noticed only by a 30 s operation timeout or the main stream's watchdog. Status: open.
+4. **Terminal WebSocket stall while the page stays visible**: nothing pings the terminal socket on a timer, so a socket that stalls while the page is visible is noticed only by a 30 s operation timeout or the main stream's watchdog. Status: done (2026-11-10: a ping after each quiet 10 s while the page is visible; two unanswered pings replace the socket).
 
 ### 1. OpenCode event monitor silence
 
@@ -24,7 +25,7 @@ of [0048](0048-recurring-work-qualification.md) task 20 (see its
 **Decisions.**
 
 - **How to detect silence?**
-  - **First check what `opencode serve` sends on an idle `/event` stream; if it sends a periodic frame, add a watchdog like the bridge observation stream's (recommended).**
+  - **First check what `opencode serve` sends on an idle `/event` stream; if it sends a periodic frame, add a watchdog like the bridge observation stream's (recommended, done).**
     - Pros: the same pattern and bounds as the other readers; no extra requests.
     - Cons: needs a live OpenCode server to observe, and depends on OpenCode keeping that frame.
   - **Probe with a cheap SDK request every N seconds and abort the stream when it fails.**
@@ -78,7 +79,7 @@ of [0048](0048-recurring-work-qualification.md) task 20 (see its
 **Decisions.**
 
 - **Detect it?**
-  - **A periodic ping while channels are desired and the page is visible, replacing the socket when two go unanswered (recommended).**
+  - **A periodic ping while channels are desired and the page is visible, replacing the socket when two go unanswered (recommended, done).**
     - Pros: the same probe the visibility path already uses; bounded detection.
     - Cons: one small frame per interval per open terminal page.
   - **Leave it to operation timeouts and the main stream.**
@@ -86,6 +87,54 @@ of [0048](0048-recurring-work-qualification.md) task 20 (see its
     - Cons: an idle terminal can sit on a dead socket until the user types.
 
 ## Assumptions and decisions
+
+### T1a. What `opencode serve` sends while idle (task 1)
+
+Observed 2026-11-10 on beelink2: the pinned `opencode` 1.19.5 from the managed
+toolchain, run as `opencode serve` on a loopback port with a throwaway
+`HOME` and XDG directories, no credentials and no session. `GET /event` sent
+`server.connected` and then one `server.heartbeat` data frame every 10 s for
+70 s, nothing else. The pinned SDK's `Event` union does not declare the
+heartbeat, so until this change every one of them was counted as an
+unknown-event drift kind by `handleRequest`.
+
+### T1b. A deadline armed by the first heartbeat (task 1)
+
+`OpenCodeStreamSilenceWatchdog` (`opencode-observation-stream.ts`) aborts the
+connection's stream controller after `OPENCODE_EVENT_STREAM_SILENCE_MS`
+(35 s: three missed heartbeats plus slack) with no frame; the monitor then
+takes its normal loss path (gap, snapshot reconcile, jittered reconnect) and
+logs `monitor.silent`. It is armed only once the connection has sent a
+heartbeat: an OpenCode that predates the frame (a PATH install outside the
+managed toolchain) is legitimately silent while idle, and an unconditional
+deadline would reconnect it every 35 s forever. The cost is that a stream
+that stalls before its first heartbeat (within 10 s of connecting) is not
+caught; that stays as it was before this change. Heartbeats are consumed in
+the read loop as liveness and never dispatched, so they no longer count as
+drift. The timer re-checks elapsed silence instead of restarting per frame,
+and the loop's `finally` stops it. The 2.x provider
+(`opencode2/provider.ts`) reads a different stream (`/api/event`, whose
+heartbeat is an SSE comment its parser drops) and is not covered:
+[7559](7559-opencode2-event-stream-silence.md). Tests:
+`apps/backend/src/core/opencode-provider-silence.test.ts`.
+
+### T4. Ping only a quiet socket, every 10 s (task 4)
+
+The heartbeat runs while channels are desired, the page is visible, and the
+current socket is ready and advertised the `ping` feature; any other state
+stops it, and `dispose`, a close, a replacement, `dropConnection` and the last
+unsubscribe all cancel it. Every inbound frame counts as an answer, so a busy
+terminal sends no pings at all; a socket heard from nothing for an interval
+(`DEFAULT_TERMINAL_HEARTBEAT_INTERVAL_MS`, 10 s) is pinged, and one that
+leaves two pings unanswered is replaced exactly as the foreground probe does
+(`replaceSocketForForeground`: channels reconcile, the reconnect ladder is
+kept). A stall is noticed 20 to 30 s after the socket's last frame, before
+the 30 s operation timeout. A 10 s interval was chosen over 15 s (30 to 45 s,
+no better than the operation timeout) and 5 s (twice the traffic for an idle
+page). A hidden page sends nothing, so background terminal work is not cut;
+returning to the page runs the existing 2.5 s probe and restarts the
+heartbeat. Tests: the heartbeat block in
+`apps/web/src/lib/native/terminal-websocket-client.visibility.test.ts`.
 
 ### T2. Jitter only shortens a rung (task 2)
 
@@ -109,6 +158,8 @@ answers the close frame; the close event then removes it from the connector.
 Tests: the two heartbeat cases in `apps/desktop/tests/preview-tunnel-session.test.ts`.
 
 ## Related
+
+- [7559](7559-opencode2-event-stream-silence.md): the OpenCode 2.x provider's event stream, found while doing task 1.
 
 - [0048](0048-recurring-work-qualification.md) task 20: the inventory and every reader's disposition.
 - [0049](0049-native-agent-idle-observation.md): OpenCode's live observation runs.

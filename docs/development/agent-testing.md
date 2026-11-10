@@ -1161,6 +1161,24 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+A development window loads its renderer's modules from Vite, and on Linux
+Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
+Docker work changes a host interface (flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+Every spec that waits for a Vite-served window's title therefore calls
+`watchElectronStartup(app)` straight after `electron.launch()` and waits with
+its `waitForTitle(window, title)` (`e2e/agent-testing/electron-startup-recovery.ts`).
+That reloads a window only when its startup failed and that window's own
+console holds both a failed module import and the network-change abort, at
+most three times, and records each recovery as a `startup-recovery`
+annotation and a `[startup-recovery]` line. Cases about startup failure itself
+(`renderer-log-boundary-electron.spec.ts`, the missing-preload case in
+`electron-main.spec.ts`) keep Playwright's plain title wait, and a `file:`
+renderer needs none. Startup recovery does not cover a later lazy load. The
+failure check looks for the startup heading's presence, not its visibility:
+headless Ozone ignores a window's constructor size, so until a spec sizes it
+the window is 1x1 and the heading has no box.
+
 `design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
 with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
@@ -1195,8 +1213,7 @@ outer `unshare` maps you to root.
 Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
 the namespace, because container ports are published in the host's. Run them
 in the host namespace: the spec's launcher reloads a startup that lost its
-modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
-[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, above),
 which is enough for those two cases but not for the whole spec, whose later
 lazy loads can still be aborted. When automatic Docker pools are exhausted,
 put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the

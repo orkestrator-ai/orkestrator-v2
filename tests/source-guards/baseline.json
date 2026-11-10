@@ -481,5 +481,6 @@
     "[projects-environments] apps/web/src/lib/scope-services.ts": 3
   },
   "window-orkestrator-portal": {},
-  "workspace-command-bound-call": {}
+  "workspace-command-bound-call": {},
+  "raw-webrequest-listener": {}
 }

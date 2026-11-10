@@ -95,6 +95,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "coordinator-servers.unavailable": "OpenCode coordinator research servers are unavailable.",
       "monitor.reconnecting":
         "The request monitor lost its stream and is reconnecting. Error class only.",
+      "monitor.silent":
+        "The request monitor's stream stopped heartbeating, so it is replaced. `silenceMs` only.",
       "worker-limit.reached":
         "The bounded request workers are full, so the stream restarts and a snapshot reconciles.",
       "request.failed":

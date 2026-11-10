@@ -2,6 +2,7 @@ import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * A root terminal in the fixture container, opened from the real renderer
@@ -48,16 +49,6 @@ async function login(page: Page, testInfo: TestInfo, status: Status): Promise<In
     return ((await response.json()) as { result: T }).result;
   };
 }
-
-/** Terminal output as plain text, without escape sequences. */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    // Two-character escapes, including the keypad modes (ESC = and ESC >).
-    .replace(/\x1b[@-_=>]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
 
@@ -125,7 +116,7 @@ test("Docker fixture root terminal runs as root and follows the network mode", a
       .sessionId;
     expect(sessionId).toContain(":");
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     // Wait for the shell's prompt (the image's zsh theme ends it with ❯) before

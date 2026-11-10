@@ -91,4 +91,5 @@ disposable display was available.
 - [Flake 2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 - [Flake 0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md),
   [to-do 0042](../previews-and-annotations/0042-service-preview-rollout.md) (task 11, D22),
-  [7060](7060-electron-webrequest-listeners-always-answer.md)
+  every webRequest listener answering (to-do 7060, done 2026-11-10:
+  [renderer-security.md](../../architecture/renderer-security.md#webrequest-listeners))

@@ -10,7 +10,7 @@ import { OrkestratorBackend } from "./index.js";
 import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
 import type { BackendActivityJob } from "./backend-activity-jobs.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { ManualTime, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
@@ -960,13 +960,13 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
   test("coalesces tab-resource sweeps on a one-minute cadence", async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-tab-resource-sweep-"));
+    const time = new ManualTime(0);
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
-      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
-      keyedActivityJobs: false,
+      activityJobClock: { now: time.now, timers: time.timerFactory },
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -999,24 +999,36 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.buildPipelines.init = mock(async () => undefined);
     internals.nativeAgents.init = mock(async () => undefined);
     internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
-    const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
+    const quiet = backend as unknown as {
+      promptQueues: { drainAll: () => Promise<void> };
+      agentMail: { refreshPresence: () => Promise<void>; drainInjects: () => Promise<void> };
+      coordinators: {
+        reconcileWorkflowNotifications: () => Promise<void>;
+        reconcileWorkerDelegations: () => Promise<void>;
+      };
+    };
+    quiet.promptQueues.drainAll = mock(async () => undefined);
+    quiet.agentMail.refreshPresence = mock(async () => undefined);
+    quiet.agentMail.drainInjects = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
 
     try {
       await backend.init();
       expect(reconcileTabTeardowns).toHaveBeenCalledTimes(1);
       expect(reconcileOrphans).toHaveBeenCalledTimes(1);
-      const resourceSweep = intervals.find((interval) => interval.delay === 60_000);
-      expect(resourceSweep).toBeDefined();
 
-      tick(60_000);
-      tick(60_000);
+      // The tab-teardowns and tab-orphans jobs run on an elapsed 60 s
+      // deadline; a pass still in flight holds the next one back.
+      await time.advance(60_000);
+      await time.advance(60_000);
       expect(reconcileTabTeardowns).toHaveBeenCalledTimes(2);
       expect(reconcileOrphans).toHaveBeenCalledTimes(2);
 
       teardownGate.resolve({ completed: 0 });
       orphanGate.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
-      await waitForCondition(() => {
-        tick(60_000);
+      await waitForCondition(async () => {
+        await time.advance(60_000);
         return (
           reconcileTabTeardowns.mock.calls.length === 3 && reconcileOrphans.mock.calls.length === 3
         );
@@ -1025,13 +1037,13 @@ describe("native-agent activity reconciliation lifecycle", () => {
       expect(reconcileOrphans).toHaveBeenCalledTimes(3);
 
       await backend.shutdown();
-      expect(resourceSweep!.active).toBe(false);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(resourceSweep!.handle);
+      await time.advance(180_000);
+      expect(reconcileTabTeardowns).toHaveBeenCalledTimes(3);
+      expect(reconcileOrphans).toHaveBeenCalledTimes(3);
     } finally {
       teardownGate.resolve({ completed: 0 });
       orphanGate.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
       await backend.shutdown().catch(() => undefined);
-      restore();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -1143,15 +1155,15 @@ describe("native-agent activity reconciliation lifecycle", () => {
     }
   });
 
-  test("runs activity reconciliation periodically and clears its interval on shutdown", async () => {
+  test("runs activity reconciliation periodically and stops it on shutdown", async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-activity-sweep-"));
+    const time = new ManualTime(0);
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
-      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
-      keyedActivityJobs: false,
+      activityJobClock: { now: time.now, timers: time.timerFactory },
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1182,55 +1194,53 @@ describe("native-agent activity reconciliation lifecycle", () => {
       reconcilePendingEnvironmentRenames,
     );
 
-    const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
+    const agentMail = (
+      backend as unknown as {
+        agentMail: { refreshPresence: () => Promise<void>; drainInjects: () => Promise<void> };
+      }
+    ).agentMail;
+    agentMail.refreshPresence = mock(async () => undefined);
+    agentMail.drainInjects = mock(async () => undefined);
 
     try {
       await backend.init();
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(1);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(1);
       expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(1);
-      const nativeSweep = intervals.find((interval) => interval.delay === 2_000);
-      expect(nativeSweep).toBeDefined();
-      expect(nativeSweep!.unref).toHaveBeenCalledTimes(1);
 
-      tick(2_000);
-      await Promise.resolve();
+      await time.advance(2_000);
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
       expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(2);
 
       await backend.shutdown();
       expect(internals.promptQueues.shutdown).toHaveBeenCalledTimes(1);
-      expect(nativeSweep!.active).toBe(false);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(nativeSweep!.handle);
 
-      tick(2_000);
-      await Promise.resolve();
+      await time.advance(4_000);
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
       expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(2);
     } finally {
       await backend.shutdown().catch(() => undefined);
-      restore();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
 
   test("isolates a rejected sweep and keeps reconciling on the next tick", async () => {
-    // The interval callback is a separate failure boundary from the awaited
+    // The activity job is a separate failure boundary from the awaited
     // hydration at startup: a bridge that is briefly unreachable rejects here
     // every two seconds, and an unhandled rejection would tear the backend
     // down rather than simply skipping one sweep.
     const dataDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "ork-backend-native-activity-tick-failure-"),
     );
+    const time = new ManualTime(0);
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
-      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
-      keyedActivityJobs: false,
+      activityJobClock: { now: time.now, timers: time.timerFactory },
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1254,37 +1264,48 @@ describe("native-agent activity reconciliation lifecycle", () => {
       // its own test; only the interval callback fails here.
       if (sweeps > 1) throw new Error("activity sweep unavailable");
     });
+    const quiet = backend as unknown as {
+      promptQueues: { drainAll: () => Promise<void> };
+      agentMail: { refreshPresence: () => Promise<void>; drainInjects: () => Promise<void> };
+      coordinators: {
+        reconcileWorkflowNotifications: () => Promise<void>;
+        reconcileWorkerDelegations: () => Promise<void>;
+      };
+    };
+    quiet.promptQueues.drainAll = mock(async () => undefined);
+    quiet.agentMail.refreshPresence = mock(async () => undefined);
+    quiet.agentMail.drainInjects = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    const { tick, restore } = controlledIntervals();
 
     try {
       await backend.init();
       expect(sweeps).toBe(1);
 
-      tick(2_000);
+      await time.advance(2_000);
       await waitForCondition(
         () =>
-          warn.mock.calls.some(([message]) => String(message).includes("native-agent-activity")),
+          warn.mock.calls.some(([message]) =>
+            /job\.failed scope=\S*:activity /.test(String(message)),
+          ),
         "the failed sweep to be reported",
       );
       expect(warn).toHaveBeenCalledWith(
-        expect.stringMatching(
-          /job\.failed scope=.*native-agent-activity .*activity sweep unavailable/,
-        ),
+        expect.stringMatching(/job\.failed scope=\S*:activity .*activity sweep unavailable/),
       );
 
-      // The backend is still serving commands, and the interval survived its
-      // own callback throwing.
+      // The backend is still serving commands, and the job survived its own
+      // run throwing.
       await expect(
         backend.invoke("get_environment_snapshots", {
           projectId: "project-1",
         }),
       ).resolves.toEqual([]);
-      tick(2_000);
+      await time.advance(2_000);
       await waitForCondition(() => sweeps === 3, "a later sweep after the failed one");
     } finally {
       await backend.shutdown().catch(() => undefined);
-      restore();
       warn.mockRestore();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -1292,18 +1313,18 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
   test("arms the activity sweep once across repeated init calls", async () => {
     // `init()` is re-entered by supervisors that retry a partially failed
-    // startup. A second interval would double every bridge poll for the life
-    // of the process, and only the newest handle would be cleared on shutdown.
+    // startup. A second set of activity jobs would double every bridge poll
+    // for the life of the process, and only the newest would stop on shutdown.
     const dataDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "ork-backend-native-activity-idempotent-"),
     );
+    const time = new ManualTime(0);
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
       appRoot: "",
       resourceRoot: "",
-      // The rollback driver (ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=backend-activity).
-      keyedActivityJobs: false,
+      activityJobClock: { now: time.now, timers: time.timerFactory },
       emit: () => undefined,
       agentTools: fakeAgentTools(),
       startupReapers: {
@@ -1326,21 +1347,33 @@ describe("native-agent activity reconciliation lifecycle", () => {
       internals.context.storage,
       "clearBackendTerminalSessionIds",
     );
-    const { intervals, tick, restore } = controlledIntervals();
+    const quiet = backend as unknown as {
+      promptQueues: { drainAll: () => Promise<void> };
+      agentMail: { refreshPresence: () => Promise<void>; drainInjects: () => Promise<void> };
+      coordinators: {
+        reconcileWorkflowNotifications: () => Promise<void>;
+        reconcileWorkerDelegations: () => Promise<void>;
+      };
+    };
+    quiet.promptQueues.drainAll = mock(async () => undefined);
+    quiet.agentMail.refreshPresence = mock(async () => undefined);
+    quiet.agentMail.drainInjects = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+    quiet.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
 
     try {
       await backend.init();
       await backend.init();
 
-      expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(1);
+      const jobs = (backend as unknown as { activityJobs: { jobs: BackendActivityJob[] } })
+        .activityJobs.jobs;
+      expect(jobs.filter((job) => job.name === "activity")).toHaveLength(1);
       expect(clearBackendTerminalSessionIds).toHaveBeenCalledTimes(1);
-      tick(2_000);
-      await Promise.resolve();
-      // Two init calls, one interval: three reconciles, not four.
+      await time.advance(2_000);
+      // Two init calls, one activity job: three reconciles, not four.
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(3);
     } finally {
       await backend.shutdown().catch(() => undefined);
-      restore();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -1359,7 +1392,6 @@ describe("native-agent activity reconciliation lifecycle", () => {
         localServers: async () => [],
         claudeTmuxRuntimes: async () => [],
       },
-      keyedActivityJobs: true,
       activityJobClock: { now: time.now, timers: time.timerFactory },
     });
     const internals = backend as unknown as {
@@ -1498,147 +1530,109 @@ describe("native-agent activity reconciliation lifecycle", () => {
     }
   });
 
-  for (const keyedActivityJobs of [true, false]) {
-    test(`activity fault wiring isolates owners and reports suppression and recovery (keyed=${keyedActivityJobs})`, async () => {
-      const { tick: intervalTick, restore } = controlledIntervals();
-      const create = async () => {
-        const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-jobs-"));
-        const time = new ManualTime(0);
-        const backend = new OrkestratorBackend({
-          dataDir,
-          toolchainBinDir: "",
-          appRoot: "",
-          resourceRoot: "",
-          emit: () => undefined,
-          agentTools: fakeAgentTools(),
-          startupReapers: {
-            localServers: async () => [],
-            claudeTmuxRuntimes: async () => [],
-          },
-          keyedActivityJobs,
-          activityJobClock: { now: time.now, timers: time.timerFactory },
-        });
-        const internals = backend as unknown as {
-          logScope: string;
-          context: { storage: StorageService };
-          commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
-          buildPipelines: { init: () => Promise<void> };
-          nativeAgents: {
-            init: () => Promise<void>;
-            reconcileAgentActivity: () => Promise<void>;
-          };
-          promptQueues: { drainAll: () => Promise<void> };
-          agentMail: {
-            refreshPresence: () => Promise<void>;
-            drainInjects: () => Promise<void>;
-          };
-          coordinators: {
-            reconcileWorkflowNotifications: () => Promise<void>;
-            reconcileWorkerDelegations: () => Promise<void>;
-          };
+  test("activity fault wiring isolates owners and reports suppression and recovery", async () => {
+    const create = async () => {
+      const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-jobs-"));
+      const time = new ManualTime(0);
+      const backend = new OrkestratorBackend({
+        dataDir,
+        toolchainBinDir: "",
+        appRoot: "",
+        resourceRoot: "",
+        emit: () => undefined,
+        agentTools: fakeAgentTools(),
+        startupReapers: {
+          localServers: async () => [],
+          claudeTmuxRuntimes: async () => [],
+        },
+        activityJobClock: { now: time.now, timers: time.timerFactory },
+      });
+      const internals = backend as unknown as {
+        logScope: string;
+        context: { storage: StorageService };
+        commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+        buildPipelines: { init: () => Promise<void> };
+        nativeAgents: {
+          init: () => Promise<void>;
+          reconcileAgentActivity: () => Promise<void>;
         };
-        internals.buildPipelines.init = mock(async () => undefined);
-        internals.nativeAgents.init = mock(async () => undefined);
-        internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
-        internals.promptQueues.drainAll = mock(async () => undefined);
-        internals.agentMail.refreshPresence = mock(async () => undefined);
-        internals.agentMail.drainInjects = mock(async () => undefined);
-        internals.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
-        internals.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
-        const renames = mock(async () => undefined);
-        internals.commands.set("reconcile_pending_environment_renames", renames);
-        const teardowns = mock(async () => ({ completed: 0 }));
-        internals.commands.set("reconcile_tab_teardowns", teardowns);
-        await backend.init();
-        return { backend, dataDir, internals, time };
+        promptQueues: { drainAll: () => Promise<void> };
+        agentMail: {
+          refreshPresence: () => Promise<void>;
+          drainInjects: () => Promise<void>;
+        };
+        coordinators: {
+          reconcileWorkflowNotifications: () => Promise<void>;
+          reconcileWorkerDelegations: () => Promise<void>;
+        };
       };
-      const owners: Awaited<ReturnType<typeof create>>[] = [];
-      const logs = captureLogs();
-      let clock: ReturnType<typeof spyOn> | undefined;
-      try {
-        owners.push(await create());
-        owners.push(await create());
-        const [failed, healthy] = owners;
-        const tick = async () => {
-          if (keyedActivityJobs) {
-            await failed!.time.advance(2_000);
-            await healthy!.time.advance(2_000);
-          } else {
-            intervalTick(2_000);
-            await flushMicrotasks();
-          }
-        };
-        let broken = true;
-        failed!.internals.nativeAgents.reconcileAgentActivity = async () => {
-          if (broken) throw new TypeError("activity unavailable");
-        };
-        let now = Date.now();
-        clock = spyOn(Date, "now").mockImplementation(() => now);
-        const events = () =>
-          logs
-            .records()
-            .filter(
-              (record) =>
-                record.area === "backend.activity" &&
-                owners.some((owner) =>
-                  String(record.fields?.scope).startsWith(`${owner.internals.logScope}:`),
-                ),
-            );
-        for (let pass = 0; pass < 3; pass += 1) {
-          await tick();
-        }
-        expect(events().map((record) => record.event)).toEqual(["job.failed"]);
-        expect(events()[0]?.fields?.scope).toEqual(
-          expect.stringMatching(keyedActivityJobs ? /:activity$/ : /:native-agent-activity$/),
-        );
-        now += 60_000;
-        await tick();
-        expect(events().map((record) => record.event)).toEqual([
-          "job.failed",
-          "throttle.suppressed",
-        ]);
-        broken = false;
-        await tick();
-        expect(events().map((record) => record.event)).toEqual([
-          "job.failed",
-          "throttle.suppressed",
-          "throttle.recovered",
-        ]);
-        expect(events().at(-1)?.fields?.scope).toBe(events()[0]?.fields?.scope);
-        if (!keyedActivityJobs) {
-          failed!.internals.nativeAgents.reconcileAgentActivity = async () => {
-            throw new TypeError("activity unavailable");
-          };
-          failed!.internals.promptQueues.drainAll = async () => {
-            throw new TypeError("queue unavailable");
-          };
-          await tick();
-          const faults = events().filter((entry) => entry.event === "job.failed");
-          expect(faults).toHaveLength(3);
-          expect(new Set(faults.slice(-2).map((entry) => entry.fields?.scope)).size).toBe(2);
-          failed!.internals.nativeAgents.reconcileAgentActivity = async () => {
-            throw new RangeError("new activity failure");
-          };
-          await tick();
-          expect(events().at(-1)?.fields?.kind).toBe("RangeError");
-          failed!.internals.promptQueues.drainAll = async () => undefined;
-          await tick();
-          expect(events().at(-1)?.event).toBe("throttle.recovered");
-          expect(events().at(-1)?.fields?.scope).toEqual(
-            expect.stringMatching(/:tmux-prompt-queues$/),
+      internals.buildPipelines.init = mock(async () => undefined);
+      internals.nativeAgents.init = mock(async () => undefined);
+      internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+      internals.promptQueues.drainAll = mock(async () => undefined);
+      internals.agentMail.refreshPresence = mock(async () => undefined);
+      internals.agentMail.drainInjects = mock(async () => undefined);
+      internals.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+      internals.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
+      const renames = mock(async () => undefined);
+      internals.commands.set("reconcile_pending_environment_renames", renames);
+      const teardowns = mock(async () => ({ completed: 0 }));
+      internals.commands.set("reconcile_tab_teardowns", teardowns);
+      await backend.init();
+      return { backend, dataDir, internals, time };
+    };
+    const owners: Awaited<ReturnType<typeof create>>[] = [];
+    const logs = captureLogs();
+    let clock: ReturnType<typeof spyOn> | undefined;
+    try {
+      owners.push(await create());
+      owners.push(await create());
+      const [failed, healthy] = owners;
+      const tick = async () => {
+        await failed!.time.advance(2_000);
+        await healthy!.time.advance(2_000);
+      };
+      let broken = true;
+      failed!.internals.nativeAgents.reconcileAgentActivity = async () => {
+        if (broken) throw new TypeError("activity unavailable");
+      };
+      let now = Date.now();
+      clock = spyOn(Date, "now").mockImplementation(() => now);
+      const events = () =>
+        logs
+          .records()
+          .filter(
+            (record) =>
+              record.area === "backend.activity" &&
+              owners.some((owner) =>
+                String(record.fields?.scope).startsWith(`${owner.internals.logScope}:`),
+              ),
           );
-        }
-      } finally {
-        clock?.mockRestore();
-        for (const owner of owners) {
-          await owner.backend.shutdown();
-          await fs.rm(owner.dataDir, { recursive: true, force: true });
-        }
-        logs.restore();
-        restore();
+      for (let pass = 0; pass < 3; pass += 1) {
+        await tick();
       }
-    });
-  }
+      expect(events().map((record) => record.event)).toEqual(["job.failed"]);
+      expect(events()[0]?.fields?.scope).toEqual(expect.stringMatching(/:activity$/));
+      now += 60_000;
+      await tick();
+      expect(events().map((record) => record.event)).toEqual(["job.failed", "throttle.suppressed"]);
+      broken = false;
+      await tick();
+      expect(events().map((record) => record.event)).toEqual([
+        "job.failed",
+        "throttle.suppressed",
+        "throttle.recovered",
+      ]);
+      expect(events().at(-1)?.fields?.scope).toBe(events()[0]?.fields?.scope);
+    } finally {
+      clock?.mockRestore();
+      for (const owner of owners) {
+        await owner.backend.shutdown();
+        await fs.rm(owner.dataDir, { recursive: true, force: true });
+      }
+      logs.restore();
+    }
+  });
 
   test("hydrates activity only after native agent launches are restored", async () => {
     // Reconciling first would read an empty launch registry and publish `idle`

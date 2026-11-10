@@ -20,6 +20,7 @@ import path from "node:path";
 import type { RuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const templateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
@@ -90,10 +91,21 @@ export async function openDesignWindow(
   profile: RuntimeProfile,
   { title, timeoutMs }: { title: "document" | "native"; timeoutMs: number },
 ): Promise<Page> {
+  // Only a Vite-served renderer loads modules a network change can abort; the
+  // packaged one loads from file:. Install before firstWindow, whose initial
+  // load reports its aborts before it resolves.
+  const startup = title === "document" ? watchElectronStartup(electronApp) : null;
   dismissStartupDialogs(electronApp);
-  const window = await electronApp.firstWindow({ timeout: 90_000 });
-  if (title === "document") {
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: timeoutMs });
+  const window = await electronApp.firstWindow({ timeout: 90_000 }).catch((error: unknown) => {
+    startup?.dispose();
+    throw error;
+  });
+  if (startup) {
+    try {
+      await startup.waitForTitle(window, profile.electronTitle, { timeoutMs });
+    } finally {
+      startup.dispose();
+    }
   } else {
     const nativeTitle = () =>
       electronApp.evaluate(

@@ -562,6 +562,45 @@ describe("artifact host request policy", () => {
     expect(second.events.at(-1)).toMatchObject({ type: "navigation-blocked", reason: "redirect" });
   });
 
+  test("a decision that throws still answers, cancelling the request (7060)", async () => {
+    const harness = createHarness();
+    const { session, contents } = await openLive(harness);
+    // A destroyed WebContents throws from its getters; the session outlives it.
+    Object.defineProperty(contents, "id", {
+      get() {
+        throw new Error("Object has been destroyed");
+      },
+    });
+    expect(
+      session.request({
+        url: ARTIFACT_SHELL_URL,
+        method: "GET",
+        resourceType: "mainFrame",
+        webContentsId: 1,
+      }),
+    ).toBe(false);
+  });
+
+  test("a redirect whose check throws is still fatal to the host (7060)", async () => {
+    const harness = createHarness();
+    const { session, contents, view } = await openLive(harness);
+    Object.defineProperty(contents, "id", {
+      get() {
+        throw new Error("Object has been destroyed");
+      },
+    });
+    expect(() =>
+      session.beforeRedirect?.({
+        url: CONTENT_URL,
+        method: "GET",
+        resourceType: "subFrame",
+        webContentsId: 1,
+      }),
+    ).not.toThrow();
+    expect(harness.events.at(-1)).toMatchObject({ type: "navigation-blocked", reason: "redirect" });
+    expectTornDown(harness, view, session);
+  });
+
   test("a request from an unknown web contents is cancelled without closing the host", async () => {
     const harness = createHarness();
     const { session, contents } = await openLive(harness);

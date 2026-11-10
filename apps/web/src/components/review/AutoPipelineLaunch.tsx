@@ -1,10 +1,14 @@
 import { AutoPipelineBuildNotes } from "./AutoPipelineBuildNotes";
 import { AutoPipelineDescriptionField } from "./AutoPipelineDescriptionField";
-import { useEffect, useState, useRef } from "react";
-import { Loader2 } from "lucide-react";
+import { AutoPipelineCriteriaField } from "./AutoPipelineCriteriaField";
+import { useEffect, useId, useState, useRef } from "react";
+import { AlertCircle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import type { AutoPipelineDraft, AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
@@ -29,6 +33,7 @@ export function AutoPipelineLaunch({
   onPromoted: () => void;
 }) {
   const backend = useScopeBackend();
+  const fieldId = useId();
   const [sources, setSources] = useState<AutoPipelineSources | null>(null);
   const [tabId, setTabId] = useState("");
   const [draft, setDraft] = useState<AutoPipelineDraft | null>(null);
@@ -82,6 +87,12 @@ export function AutoPipelineLaunch({
     };
   }, [backend, environmentId]);
   const selected = sources?.sources.find((source) => source.tabId === tabId);
+  const confirmBlocked =
+    !draft ||
+    !draft.title.trim() ||
+    !draft.description.trim() ||
+    !draft.acceptanceCriteria.length ||
+    draft.acceptanceCriteria.some((value) => !value.trim());
   async function generate() {
     if (busy || !selected || selected.disabledReason) return;
     const request = ++generation.current;
@@ -107,7 +118,7 @@ export function AutoPipelineLaunch({
     }
   }
   async function confirm() {
-    if (!draft || busy) return;
+    if (!draft || busy || confirmBlocked) return;
     setBusy(true);
     setError(null);
     try {
@@ -117,6 +128,9 @@ export function AutoPipelineLaunch({
         acceptanceCriteria: draft.acceptanceCriteria,
       });
       setOpen(false);
+      toast.success("Auto-pipeline started", {
+        description: "The ticket was created and the pipeline continues from Review.",
+      });
       onPromoted();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -133,10 +147,12 @@ export function AutoPipelineLaunch({
       draftingTab.current = null;
     }
     generation.current++;
+    setDraft(null);
     setOpen(false);
     setBusy(false);
   }
   if (!sources?.available || !sources.sources.length) return null;
+  const promoting = busy && !!draft;
   return (
     <section className="mx-5 mt-5 rounded-lg border border-divider p-4 sm:mx-6">
       <h3 className="text-sm font-semibold">Auto-pipeline</h3>
@@ -145,14 +161,11 @@ export function AutoPipelineLaunch({
         Review the draft before anything is created.
       </p>
       <div className="flex min-w-0 items-center gap-2">
-        <label
-          htmlFor={`auto-pipeline-source-${environmentId}`}
-          className="shrink-0 text-xs font-medium text-zinc-400"
-        >
+        <label htmlFor={`${fieldId}-source`} className="shrink-0 text-xs font-medium text-zinc-400">
           Build transcript
         </label>
         <NativeSelect
-          id={`auto-pipeline-source-${environmentId}`}
+          id={`${fieldId}-source`}
           aria-label="Build transcript"
           size="sm"
           wrapperClassName="flex-1"
@@ -188,7 +201,8 @@ export function AutoPipelineLaunch({
       >
         <DialogContent
           aria-busy={busy}
-          className="max-h-[90vh] overflow-y-auto [--modal-max-width:64rem]"
+          showCloseButton={!promoting}
+          className="flex max-h-[min(56rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 [--modal-max-width:64rem] sm:p-0"
           onEscapeKeyDown={(event) => {
             const editor = descriptionEditor.current;
             if (editor && editor.ownerDocument.activeElement === editor) {
@@ -197,142 +211,116 @@ export function AutoPipelineLaunch({
             }
           }}
         >
-          <DialogHeader>
-            <DialogTitle>Review Auto-pipeline draft</DialogTitle>
+          <DialogHeader className="m-0 shrink-0 px-5 pb-4 pt-5 sm:m-0 sm:px-6">
+            <DialogTitle className="text-base">Review Auto-pipeline draft</DialogTitle>
             <DialogDescription>
               Confirm creates a ticket, commits the listed pending files and adopts this tab as the
               finished Build step.
             </DialogDescription>
           </DialogHeader>
-          {busy && (
-            <p role="status" className="flex items-center gap-2 text-sm">
-              <Loader2
-                aria-hidden="true"
-                data-testid="auto-pipeline-spinner"
-                className="size-4 shrink-0 animate-spin text-primary"
-              />
-              <span>{draft ? "Promoting environment…" : "Drafting ticket and Build notes…"}</span>
-            </p>
-          )}
-          {error && <p role="alert">{error}</p>}
-          {draft && (
-            <fieldset disabled={busy} className="space-y-4">
-              <label className="block text-sm">
-                Title
-                <input
-                  className="mt-1 block w-full rounded border bg-background p-2"
-                  value={draft.title}
-                  maxLength={240}
-                  onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+          <div
+            role="region"
+            aria-label="Auto-pipeline draft"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+          >
+            {busy && !draft && (
+              <p
+                role="status"
+                className="flex items-center gap-2 py-6 text-sm text-muted-foreground"
+              >
+                <Loader2
+                  aria-hidden="true"
+                  data-testid="auto-pipeline-spinner"
+                  className="size-4 shrink-0 animate-spin text-primary"
                 />
-              </label>
-              <Tabs value={tab} onValueChange={(value) => setTab(value as DraftTab)}>
-                <TabsList className="w-full">
-                  <TabsTrigger value="description">Description</TabsTrigger>
-                  <TabsTrigger value="criteria">
-                    Acceptance criteria ({draft.acceptanceCriteria.length})
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="description" className={`${TAB_PANEL} space-y-1`}>
-                  <AutoPipelineDescriptionField
-                    inputRef={descriptionEditor}
-                    value={draft.description}
-                    disabled={busy}
-                    onChange={(description) => setDraft({ ...draft, description })}
+                Drafting ticket and Build notes…
+              </p>
+            )}
+            {!draft && error && (
+              <p className="py-2 text-sm text-muted-foreground">
+                No draft was produced. Retry drafting or continue with a plain Multi Review.
+              </p>
+            )}
+            {draft && (
+              <fieldset disabled={busy} className="min-w-0 space-y-5 border-0">
+                <div className="space-y-1.5">
+                  <Label htmlFor={`${fieldId}-title`}>Title</Label>
+                  <Input
+                    id={`${fieldId}-title`}
+                    value={draft.title}
+                    maxLength={240}
+                    aria-invalid={!draft.title.trim()}
+                    onChange={(event) => setDraft({ ...draft, title: event.target.value })}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Markdown. Click the description to edit it; click away to preview.
-                  </p>
-                </TabsContent>
-                <TabsContent value="criteria" className={TAB_PANEL}>
-                  {draft.acceptanceCriteria.map((criterion, index) => (
-                    <div key={index} className="my-2 flex flex-wrap items-start gap-2">
-                      <div className="min-w-[min(100%,18rem)] flex-1">
-                        <textarea
-                          aria-label={`Criterion ${index + 1}`}
-                          rows={1}
-                          aria-invalid={!criterion.trim()}
-                          aria-describedby={
-                            !criterion.trim() ? `criterion-${index}-error` : undefined
-                          }
-                          className="field-sizing-content min-h-9 w-full resize-none rounded border bg-background p-2 text-sm"
-                          value={criterion}
-                          onChange={(event) =>
-                            setDraft({
-                              ...draft,
-                              acceptanceCriteria: draft.acceptanceCriteria.map((value, i) =>
-                                i === index ? event.target.value.replace(/[\r\n]+/g, " ") : value,
-                              ),
-                            })
-                          }
-                        />
-                        {!criterion.trim() && (
-                          <p
-                            id={`criterion-${index}-error`}
-                            className="mt-1 text-xs text-destructive"
-                          >
-                            Enter an acceptance criterion.
-                          </p>
-                        )}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={index === 0}
-                        aria-label={`Move criterion ${index + 1} up`}
-                        onClick={() => {
-                          const criteria = [...draft.acceptanceCriteria];
-                          [criteria[index - 1], criteria[index]] = [
-                            criteria[index]!,
-                            criteria[index - 1]!,
-                          ];
-                          setDraft({ ...draft, acceptanceCriteria: criteria });
-                        }}
-                      >
-                        ↑
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        aria-label={`Remove criterion ${index + 1}`}
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            acceptanceCriteria: draft.acceptanceCriteria.filter(
-                              (_, i) => i !== index,
-                            ),
-                          })
-                        }
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setDraft({ ...draft, acceptanceCriteria: [...draft.acceptanceCriteria, ""] })
-                    }
-                  >
-                    Add criterion
-                  </Button>
-                </TabsContent>
-              </Tabs>
-              <section>
-                <h3 className="text-sm font-semibold">Build notes (read-only)</h3>
-                <AutoPipelineBuildNotes notes={draft.notes} />
-              </section>
-              <section>
-                <h3 className="text-sm font-semibold">Files to commit</h3>
-                <pre className="whitespace-pre-wrap break-words text-xs">
-                  {draft.uncommittedFiles.join("\n") || "No uncommitted files"}
-                </pre>
-              </section>
-            </fieldset>
+                </div>
+                <Tabs value={tab} onValueChange={(value) => setTab(value as DraftTab)}>
+                  <TabsList className="w-full">
+                    <TabsTrigger value="description">Description</TabsTrigger>
+                    <TabsTrigger value="criteria">
+                      Acceptance criteria ({draft.acceptanceCriteria.length})
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="description" className={`${TAB_PANEL} space-y-1.5 pt-1`}>
+                    <AutoPipelineDescriptionField
+                      inputRef={descriptionEditor}
+                      value={draft.description}
+                      disabled={busy}
+                      onChange={(description) => setDraft({ ...draft, description })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Markdown. Click the description to edit it; click away to preview.
+                    </p>
+                  </TabsContent>
+                  <TabsContent value="criteria" className={`${TAB_PANEL} pt-1`}>
+                    <AutoPipelineCriteriaField
+                      criteria={draft.acceptanceCriteria}
+                      onChange={(acceptanceCriteria) => setDraft({ ...draft, acceptanceCriteria })}
+                    />
+                  </TabsContent>
+                </Tabs>
+                <section className="space-y-1.5">
+                  <h3 className="text-sm font-medium">
+                    Build notes{" "}
+                    <span className="font-normal text-muted-foreground">(read-only)</span>
+                  </h3>
+                  <div className="rounded-md border border-border/70 bg-input-surface px-4 py-3">
+                    <AutoPipelineBuildNotes notes={draft.notes} />
+                  </div>
+                </section>
+                <section className="space-y-1.5">
+                  <h3 className="text-sm font-medium">Files to commit</h3>
+                  <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-input-surface px-3 py-2 font-mono text-xs">
+                    {draft.uncommittedFiles.join("\n") || "No uncommitted files"}
+                  </pre>
+                </section>
+              </fieldset>
+            )}
+          </div>
+          {/* Outcome sits beside the buttons, so a refusal is visible wherever the body is scrolled. */}
+          {(error || promoting) && (
+            <div className="shrink-0 border-t border-divider px-5 py-3 sm:px-6">
+              {error ? (
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                  <span className="min-w-0 break-words">{error}</span>
+                </p>
+              ) : (
+                <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2
+                    aria-hidden="true"
+                    data-testid="auto-pipeline-spinner"
+                    className="size-4 shrink-0 animate-spin text-primary"
+                  />
+                  Promoting environment: committing pending files and starting the pipeline…
+                </p>
+              )}
+            </div>
           )}
-          <DialogFooter className="flex-wrap gap-2">
-            <Button type="button" variant="outline" disabled={busy && !!draft} onClick={closeDraft}>
+          <DialogFooter className="m-0 shrink-0 flex-row flex-wrap justify-end border-t border-divider px-5 py-4 sm:m-0 sm:px-6">
+            <Button type="button" variant="outline" disabled={promoting} onClick={closeDraft}>
               Cancel
             </Button>
             {error && (
@@ -360,15 +348,10 @@ export function AutoPipelineLaunch({
             {draft && (
               <Button
                 type="button"
-                disabled={
-                  busy ||
-                  !draft.title.trim() ||
-                  !draft.description.trim() ||
-                  !draft.acceptanceCriteria.length ||
-                  draft.acceptanceCriteria.some((value) => !value.trim())
-                }
+                disabled={busy || confirmBlocked}
                 onClick={() => void confirm()}
               >
+                {promoting && <Loader2 className="animate-spin" />}
                 Confirm Auto-pipeline
               </Button>
             )}

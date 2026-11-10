@@ -33,6 +33,7 @@ const MACHINE_ADMINISTRATION = [
   "cleanup_logs",
   "get_database_stats",
   "plan_diagnostics_bundle",
+  "plan_diagnostics_bundle_with_container_logs",
   "read_diagnostics_bundle",
   "record_renderer_errors",
   "record_domain_adapter_usage",

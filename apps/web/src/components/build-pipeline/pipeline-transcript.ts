@@ -250,6 +250,7 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     toolName: asString(raw.toolName),
     toolArgs: asRecord(raw.toolArgs) ?? undefined,
     toolState: asToolState(raw.toolState),
+    toolLeftRunning: raw.toolLeftRunning === true ? true : undefined,
     agentState: asAgentState(raw.agentState),
     toolTitle: asString(raw.toolTitle),
     toolOutput: asString(raw.toolOutput),

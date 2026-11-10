@@ -7,7 +7,8 @@ import {
   DESIGN_MAX_HTML_BYTES,
 } from "@orkestrator/protocol/design-canvas";
 import { DESIGN_LIMITS } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./errors.js";
+import { errorCode, ipcErrorMessage } from "@orkestrator/protocol/contract/ipc-error";
+import { DesignError, isDesignError, toDesignFailure } from "./errors.js";
 import {
   createDesignHarness,
   deferred,
@@ -71,6 +72,20 @@ describe("design service (legacy adapters over prepare/execute)", () => {
     expect(rejected).toHaveLength(1);
     expect(rejected[0]!.reason.message).toStartWith(DESIGN_CONFLICT);
     expect(isDesignError(rejected[0]!.reason, "conflict")).toBe(true);
+    // The registered code is what crosses a transport; the marker stays for older readers.
+    expect(errorCode(rejected[0]!.reason)).toBe("design-revision-conflict");
+    const overIpc = new Error(ipcErrorMessage(rejected[0]!.reason) ?? "");
+    expect(overIpc.message).toStartWith(`[design-revision-conflict] ${DESIGN_CONFLICT}`);
+    expect(toDesignFailure(overIpc)).toMatchObject({
+      code: "conflict",
+      message: rejected[0]!.reason.message,
+    });
+    // An older backend's conflict carried no registered code: the marker decides.
+    expect(toDesignFailure(new Error(`${DESIGN_CONFLICT} expected 1, current 2`)).code).toBe(
+      "conflict",
+    );
+    // A conflict that is not a revision conflict keeps its failure code on the wire.
+    expect(new DesignError("conflict", "The frame was deleted").code).toBe("conflict");
     const winner = results[0]!.status === "fulfilled" ? "<p>Human</p>" : "<p>Agent</p>";
     expect((await service().getFrame(canvas.id, "env-1", created.id)).html).toBe(winner);
     await expect(service().createFrame(canvas.id, "env-1", 1, frame)).rejects.toThrow(

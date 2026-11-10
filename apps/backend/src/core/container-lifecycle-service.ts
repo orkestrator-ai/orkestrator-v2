@@ -5,11 +5,10 @@ import {
   TERMINAL_OPERATION_STATUSES,
   containerLifecycleSnapshot,
   createOperationId,
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   operationIdTimestamp,
   parseContainerLifecycle,
   parseContainerLifecycleError,
-  type ContainerLifecycleErrorCode,
   type ContainerLifecycleEvent,
   type ContainerMutationIdentity,
   type ContainerOperationKind,
@@ -54,15 +53,8 @@ const log = createLogger("docker");
 type LifecycleContext = Pick<CommandContext, "storage" | "emit"> &
   Partial<Pick<CommandContext, "strictDockerOwner" | "registryWriterLease">>;
 
-export class ContainerLifecycleError extends Error {
-  constructor(
-    readonly code: ContainerLifecycleErrorCode,
-    message: string,
-  ) {
-    super(formatContainerLifecycleError(code, message));
-    this.name = "ContainerLifecycleError";
-  }
-}
+// The typed refusal lives with the contract (registered code `container-lifecycle`).
+export { ContainerLifecycleError };
 
 /**
  * Operations executing in this process, keyed `${registry}:${operationId}`.
@@ -438,7 +430,7 @@ export function releaseActiveContainerOperation(
 
 /** Maps a thrown error onto a content-free failure code. */
 export function operationFailureCode(error: unknown): ContainerOperationRecord["failureCode"] {
-  if (error instanceof ContainerLifecycleError) return error.code;
+  if (error instanceof ContainerLifecycleError) return error.reason;
   const parsed = parseContainerLifecycleError(error);
   if (parsed) return parsed.code;
   const message = error instanceof Error ? error.message : String(error);

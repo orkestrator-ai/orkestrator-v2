@@ -30,12 +30,6 @@ export const countsDir = path.join(
   "local-transport-counts",
 );
 
-export const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-
 export async function waitForUrl(url: string): Promise<void> {
   await expect
     .poll(

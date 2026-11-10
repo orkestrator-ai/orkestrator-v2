@@ -637,6 +637,12 @@ each of a bounded kind: `text` (at most 64 characters), `range` (`min-max`) or
 | `kanban-request-id-conflict` | `KanbanRequestIdConflictError` (`storage-kanban.ts`): a ticket, comment or image `requestId` reused with different arguments | `record` | `feature-build.ts`, which returns the existing ticket on a retry |
 | `native-job-receipt-capacity` | `NativeJobReceiptCapacityError` (`storage-prompts.ts`): the job queue holds its 256 receipts | `limit` | `native-agent-job-tab-reuse.ts`, which rethrows it rather than falling back |
 | `native-agent-provider-session-missing` | `NativeAgentProviderSessionMissingError` (`native-agent-service-shared.ts`): a provider probe proved the session gone | none | the renderer (`isProviderSessionMissingError` in `useNativeAgentSession.ts`), the only answer that may replace a restored session |
+| `container-lifecycle` | `ContainerLifecycleError` (`container-lifecycle.ts`) and the backend errors that carry its marker: a container lifecycle refusal; message `ContainerLifecycleError:<reason>: text` | `reason` (a `CONTAINER_LIFECYCLE_ERROR_CODES` member) | `parseContainerLifecycleError` (backend operation records, environment settings, rebuild, recovery copies, cleanup review) |
+| `mcp-management` | `McpManagementFailure` (`mcp-management.ts`) and the gateway's oversized-change answer; message `McpManagementError:<reason>: text` | `reason` (a `MCP_MANAGEMENT_ERROR_CODES` member) | `mcpManagementErrorFromUnknown` (the MCP servers settings) |
+| `pane-layout-revision-conflict` | `PaneLayoutRevisionConflictError` (`pane-layout-conflict.ts`): a pane layout save named a stale revision | none | `isPaneLayoutRevisionConflict` (the renderer's rebase-and-retry, worker and workflow tab actions) |
+| `design-revision-conflict` | `DesignError` (`design/errors.ts`) for a conflict led by `Design revision conflict:` | none | `toDesignFailure`, the web design client's `failureOf` |
+| `prompt-queue-message-conflict` | `PromptQueueMessageConflictError` (`storage-prompts.ts`): an idempotent enqueue reused an id for a different body | none | `isPromptQueueMessageConflict` (goal carriers, web annotation dispatch) |
+| `unknown-node`, `node-admin-refused`, `node-scope-closed`, `node-unavailable` | Desktop main's `NodeRefusal` (`node-ipc.ts`), message `[code] text` | none | `nodeRefusalCode` (`contract/node-refusal.ts`) |
 
 Rules:
 
@@ -658,20 +664,31 @@ Rules:
 - **Desktop main.** The backend client rebuilds a registered code with
   `fromCodedWire(body)` (the incompatibility class, else `CodedError`), and
   `orkestrator:invoke` rethrows it as `[code key=value …] text`
-  (`ipcErrorMessage`). The text after the brackets is the thrower's message
+  (`ipcErrorMessage`); an error whose message is already in that form is
+  rethrown unchanged. The text after the brackets is the thrower's message
   unchanged, so an older renderer's text match still finds it; the preload
-  copies `code` and `details`. A renderer that shows such a message uses
-  `ipcErrorText(message)` to drop the prefix.
+  copies `code` and `details`.
+- **The renderer.** The context bridge drops those copies, so the renderer's
+  two desktop invoke clients (`command-client.ts`, `desktop-node-client.ts`)
+  pass every rejection through `readableCodedError`, which moves the prefix
+  onto the error's own `code` and `details` and leaves the thrower's text as
+  its message. A screen that shows `error.message` therefore shows no prefix.
+  Text received any other way uses `ipcErrorText(message)`.
 - **The preload** imports only `contract/ipc-error.ts`, which has no Effect
   import; the classes and Schemas live in `contract/errors.ts`.
 - **Adding a code** is additive: an older reader leaves it in the message and
   still matches the words. Renaming or removing one is not.
 
-Not yet migrated, each still read from its own message marker:
-`ContainerLifecycleError:<code>:`, `McpManagementError:<code>:`,
+The domains that used to put their code only in a message marker
+(`ContainerLifecycleError:<reason>:`, `McpManagementError:<reason>:`,
 `Pane layout revision conflict:`, `Design revision conflict:`,
-`Prompt queue message conflict:` and the node refusal codes. Each can register
-a code here, keeping its marker in the message for older peers.
+`Prompt queue message conflict:` and desktop main's node refusals) are
+registered above and keep the marker in the message for older peers. Their
+readers use `hasErrorCode(error, code, legacyMarker)` or the domain parser,
+which read the registered code first and the marker only when no *registered*
+code is present: an older backend answered any code-form `code` over the
+gateway (a design conflict as `conflict`), and that must not suppress the
+fallback.
 
 Change tracking's internal reasons (`capture-timeout`, `capture-storage-quota`,
 `commit-not-found`, …) are not wire codes. They are one `CaptureError`

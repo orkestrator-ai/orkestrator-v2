@@ -7,10 +7,14 @@
  * older renderer, CLI or automation that still sends the pre-intent request
  * shape from destroying a workspace by default.
  *
- * Errors cross the command transport as message strings, so a typed failure is
- * encoded as `ContainerLifecycleError:<code>: <message>` (the same convention
- * MCP management uses) and parsed back with `parseContainerLifecycleError`.
+ * A typed failure is a {@link ContainerLifecycleError}: the registered error
+ * code `container-lifecycle` with its `reason` (`contract/ipc-error.ts`), which
+ * the gateway and Electron IPC carry. Its message keeps the older
+ * `ContainerLifecycleError:<reason>: <message>` marker, so an older reader still
+ * matches it. Read either with `parseContainerLifecycleError`.
  */
+import { Data } from "effect";
+import { codedErrorParts, type CodedErrorParts } from "./contract/ipc-error.js";
 
 export const CONTAINER_LIFECYCLE_ERROR_PREFIX = "ContainerLifecycleError";
 
@@ -69,20 +73,55 @@ export function formatContainerLifecycleError(
   return `${CONTAINER_LIFECYCLE_ERROR_PREFIX}:${code}: ${message}`;
 }
 
+/**
+ * A typed container lifecycle refusal. Code `container-lifecycle` with its
+ * `reason` as the one bounded detail (`contract/ipc-error.ts`); the message is
+ * `ContainerLifecycleError:<reason>: <message>`, unchanged from before the code
+ * was registered, so an older reader that matches the marker still finds it.
+ */
+export class ContainerLifecycleError extends Data.TaggedError("ContainerLifecycleError")<{
+  readonly message: string;
+  readonly reason: ContainerLifecycleErrorCode;
+}> {
+  readonly code = "container-lifecycle" as const;
+
+  constructor(reason: ContainerLifecycleErrorCode, message: string) {
+    super({ reason, message: formatContainerLifecycleError(reason, message) });
+  }
+}
+
 export interface ParsedContainerLifecycleError {
   code: ContainerLifecycleErrorCode;
   message: string;
 }
 
+const LIFECYCLE_MARKER = /ContainerLifecycleError:([a-z-]+): (.*)$/s;
+
+function fromCoded(coded: CodedErrorParts): ParsedContainerLifecycleError | null {
+  if (coded.code !== "container-lifecycle") return null;
+  const marked = LIFECYCLE_MARKER.exec(coded.message);
+  const reason = coded.details.reason ?? marked?.[1];
+  if (!isContainerLifecycleErrorCode(reason)) return null;
+  return {
+    code: reason,
+    message: marked && marked[1] === reason ? (marked[2] ?? "") : coded.message,
+  };
+}
+
 /**
- * Extracts a typed lifecycle failure from an error message. Transport layers
- * may prefix the message (for example `Error invoking remote method ...:`), so
- * the marker is located anywhere in the string.
+ * Extracts a typed lifecycle failure from an error. The registered code
+ * `container-lifecycle` decides when present, from any transport: its
+ * `reason` detail is the failure code. Without a registered code (an older
+ * backend) the message marker is read; transport layers may prefix the message
+ * (for example `Error invoking remote method ...:`), so the marker is located
+ * anywhere in the string.
  */
 export function parseContainerLifecycleError(value: unknown): ParsedContainerLifecycleError | null {
   const message = value instanceof Error ? value.message : typeof value === "string" ? value : null;
   if (!message) return null;
-  const match = /ContainerLifecycleError:([a-z-]+): (.*)$/s.exec(message);
+  const coded = codedErrorParts(value);
+  if (coded) return fromCoded(coded);
+  const match = LIFECYCLE_MARKER.exec(message);
   if (!match) return null;
   const code = match[1];
   if (!isContainerLifecycleErrorCode(code)) return null;
@@ -118,10 +157,10 @@ const MAX_ID_LENGTH = 256;
 
 function boundedId(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new Error(formatContainerLifecycleError("invalid-request", `Expected ${field}`));
+    throw new ContainerLifecycleError("invalid-request", `Expected ${field}`);
   }
   if (value.length > MAX_ID_LENGTH) {
-    throw new Error(formatContainerLifecycleError("invalid-request", `${field} is too long`));
+    throw new ContainerLifecycleError("invalid-request", `${field} is too long`);
   }
   return value;
 }
@@ -137,9 +176,7 @@ export function parseRecreateEnvironmentRequest(
   const environmentId = boundedId(args.environmentId, "environmentId");
   const rawIntent = args.intent;
   if (rawIntent !== undefined && rawIntent !== "preserve" && rawIntent !== "discard") {
-    throw new Error(
-      formatContainerLifecycleError("invalid-request", "intent must be preserve or discard"),
-    );
+    throw new ContainerLifecycleError("invalid-request", "intent must be preserve or discard");
   }
   const intent: RecreateEnvironmentIntent = rawIntent ?? "preserve";
   const rawExpected = args.expectedContainerId;
@@ -148,22 +185,16 @@ export function parseRecreateEnvironmentRequest(
       ? null
       : boundedId(rawExpected, "expectedContainerId");
   if (intent === "discard" && !expectedContainerId) {
-    throw new Error(
-      formatContainerLifecycleError(
-        "invalid-request",
-        "Discarding a container requires the container id that was reviewed",
-      ),
+    throw new ContainerLifecycleError(
+      "invalid-request",
+      "Discarding a container requires the container id that was reviewed",
     );
   }
   if (args.allowUnknownCapacity !== undefined && typeof args.allowUnknownCapacity !== "boolean") {
-    throw new Error(
-      formatContainerLifecycleError("invalid-request", "allowUnknownCapacity must be a boolean"),
-    );
+    throw new ContainerLifecycleError("invalid-request", "allowUnknownCapacity must be a boolean");
   }
   if (args.keepRecoveryCopy !== undefined && typeof args.keepRecoveryCopy !== "boolean") {
-    throw new Error(
-      formatContainerLifecycleError("invalid-request", "keepRecoveryCopy must be a boolean"),
-    );
+    throw new ContainerLifecycleError("invalid-request", "keepRecoveryCopy must be a boolean");
   }
   return {
     environmentId,
@@ -811,23 +842,17 @@ export function parseContainerMutationIdentity(
   const identity: ContainerMutationIdentity = {};
   if (args.operationId !== undefined && args.operationId !== null) {
     if (!isOperationId(args.operationId)) {
-      throw new Error(
-        formatContainerLifecycleError("invalid-request", "operationId must be a UUIDv7"),
-      );
+      throw new ContainerLifecycleError("invalid-request", "operationId must be a UUIDv7");
     }
     if (operationIdTimestamp(args.operationId) > now + MAX_OPERATION_ID_FUTURE_SKEW_MS) {
-      throw new Error(
-        formatContainerLifecycleError("invalid-request", "operationId is from the future"),
-      );
+      throw new ContainerLifecycleError("invalid-request", "operationId is from the future");
     }
     identity.operationId = args.operationId;
   }
   if (args.expectedRevision !== undefined && args.expectedRevision !== null) {
     const revision = nonNegativeInteger(args.expectedRevision);
     if (revision === undefined) {
-      throw new Error(
-        formatContainerLifecycleError("invalid-request", "expectedRevision must be an integer"),
-      );
+      throw new ContainerLifecycleError("invalid-request", "expectedRevision must be an integer");
     }
     identity.expectedRevision = revision;
   }

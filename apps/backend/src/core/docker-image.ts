@@ -161,7 +161,13 @@ export async function readImageManifest(
     // `legacy` would stick for the life of the process.
     if (copied.kind === "absent") {
       result = { kind: "legacy" };
-    } else if (copied.kind === "failed" || copied.kind === "daemon-unavailable") {
+    } else if (
+      copied.kind === "failed" ||
+      copied.kind === "daemon-unavailable" ||
+      // The probe container has no binds, so this is not expected; it is
+      // still no answer about the image.
+      copied.kind === "refused"
+    ) {
       result = { kind: "unavailable" };
     } else if (copied.kind === "oversized") {
       result = { kind: "invalid", reason: "oversized" };

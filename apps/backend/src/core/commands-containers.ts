@@ -6,6 +6,7 @@ import {
   keepPreviousLogCommand,
   bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
+import { bridgeRestarts } from "./bridge-restarts.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -760,6 +761,7 @@ export async function startContainerServer(
   await ensureCurrentBootReady(containerId);
   const launched = await launchContainerScript(containerId, command, launch);
   dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
+  bridgeRestarts.containerLaunched(processName);
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
     const log = await dockerExec(containerId, boundedTailCommand(logFile), undefined, [
@@ -898,6 +900,7 @@ export async function startContainerOpenCodeServer(
       provider: "opencode",
       containerPort: OPENCODE_SERVER_PORT,
     });
+    bridgeRestarts.containerLaunched("opencode");
     try {
       await waitForOpenCodeHealth(containerId, hostPort, password);
       // Warmed first: loading the plugins makes the server non-dumpable.
@@ -952,6 +955,7 @@ export async function startContainerOpenCodeServer(
     },
   );
   dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
+  bridgeRestarts.containerLaunched("opencode");
   await waitForOpenCodeHealth(containerId, hostPort, authToken);
   await warmContainerOpenCode(containerId, hostPort, authToken);
   return { hostPort, wasRunning: false, authToken };

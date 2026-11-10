@@ -55,10 +55,28 @@ export interface DatabaseTopTable {
   bytes: number;
 }
 
+/**
+ * Bytes of stored values per store family in `store_rows`, the one table nearly
+ * every store shares. A family drops the ids a store name can hold
+ * (`web-annotations/<environmentId>` is `web-annotations`), so it is
+ * content-free.
+ */
+export interface DatabaseStoreFamily {
+  family: string;
+  /** UTF-8 bytes of the family's row values; keys and index pages are not counted. */
+  bytes: number;
+  rows: number;
+}
+
 /** Sampled in the backup child from a finished copy, so as old as that copy. */
 export interface DatabaseTopTables {
   takenAt: string;
   tables: DatabaseTopTable[];
+  /**
+   * The largest store families inside `store_rows`, largest first. Absent for a
+   * database without that table (the ledger), and from an older backend.
+   */
+  stores?: DatabaseStoreFamily[];
 }
 
 export interface DatabaseSummary {
@@ -180,6 +198,23 @@ export interface DiagnosticsManifest {
   absent: DiagnosticsManifestAbsent[];
 }
 
+/** Environments a plan may read container server logs from, chosen per plan. */
+export const DIAGNOSTICS_MAX_CONTAINER_LOG_ENVIRONMENTS = 8;
+
+/**
+ * A container environment whose server logs the user may add to a bundle. Not
+ * part of the archive: it only tells the Export dialog what it can offer.
+ */
+export interface DiagnosticsContainerLogOption {
+  environmentId: string;
+  /** The environment's name, for the dialog. */
+  name: string;
+  /** Its stored status (`running`, `stopped`, …); a container that is not running answers nothing. */
+  status: string;
+  /** Whether this plan holds its logs. */
+  included: boolean;
+}
+
 /** One planned bundle: already built and held until it is read or expires. */
 export interface DiagnosticsBundlePlan {
   planId: string;
@@ -187,6 +222,11 @@ export interface DiagnosticsBundlePlan {
   expiresAt: string;
   archive: { bytes: number; sha256: string };
   manifest: DiagnosticsManifest;
+  /**
+   * Container environments whose server logs can be added, opt-in, by planning
+   * again with their ids. Absent from a backend older than the option.
+   */
+  containerLogs?: DiagnosticsContainerLogOption[];
 }
 
 /** One piece of a planned bundle, in order. Says what the whole must add up to. */

@@ -285,7 +285,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 - [Container lifecycle](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild)
   ("Preserving rebuild"): the legacy migration from todo 0058, this file's
   source, retired on 2026-10-29
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md) (the staged-input relay)
+- Todo 0109 (retired on 2026-11-10): the staged-input relay, described in [container lifecycle](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
 - [Container qualification](../../development/container-qualification.md)
 

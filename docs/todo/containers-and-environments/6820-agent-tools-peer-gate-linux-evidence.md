@@ -113,7 +113,7 @@ now records this.
 
 ### 2. Run it on rootless Docker with host loopback
 
-**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [0109](0109-rootless-linux-runtime-gaps.md)). The peer address the server then sees has not been observed.
+**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts); the gvisor-tap-vsock gap is [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md)). The peer address the server then sees has not been observed.
 
 **Context.** slirp4netns (and pasta) connect to the host from a process in the host's network namespace, so the peer should be `127.0.0.1`, which the gate admits without reading Docker. If it is instead an address in RootlessKit's namespace, the gate refuses it, because no Docker network of the rootless daemon is visible from the host's namespace in that form.
 
@@ -173,7 +173,8 @@ check on that driver, a busybox container calling a plain host listener,
 found its host loopback at `10.0.2.1`, seen by the host as `127.0.0.1` with
 host loopback on and timing out with it off; `10.0.2.2` timed out either
 way. So the gate would admit that driver's peer too, but the backend never
-probes `10.0.2.1`: [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md).
+probed `10.0.2.1`: to-do 7548, done 2026-11-10 (the check now probes it after
+`10.0.2.2`; [container lifecycle](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
 
 ### 3. Run the C22 live qualification case on Linux CI
 
@@ -342,9 +343,8 @@ loopback address is `10.0.2.1`, and through it the peer is `127.0.0.1`, which
 the gate admits without new code. What fails is the backend's reachability
 check, which only tries `10.0.2.2` and then shows a remediation (enable host
 loopback) that cannot help. That is outside this gate and outside tasks 1, 2
-and 5, so it became follow-up
-[7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) rather than a change
-here.
+and 5, so it became follow-up to-do 7548 (done and retired 2026-11-10) rather than
+a change here.
 
 ### Task 1: left open rather than run on a substitute (2026-11-09; superseded 2026-11-10)
 
@@ -401,4 +401,5 @@ outstanding live topology evidence.
 
 - [Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
 - Security index, L15 (`git show 413bd6219:docs/reports/security/0000-index.md`)
-- [Todo 0109](0109-rootless-linux-runtime-gaps.md)
+- [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (decided in the retired to-do 0109)
+- [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) (rootless gvisor-tap-vsock host loopback)

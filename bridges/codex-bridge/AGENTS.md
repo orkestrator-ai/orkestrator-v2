@@ -74,6 +74,18 @@ a running turn is unsettled each publish arms one follow-up publish a probe
 interval later (`scheduleSubagentProbe`); never make a card's hydration wait on
 the next parent event, which may not come until the turn ends.
 
+A command still `in_progress` when its turn ends is left running, not
+running: a unified-exec process the model did not wait for (a dev server, a
+watcher) outlives its `exec_command` call, and app-server reports nothing for
+it after `turn/completed` (verified on 0.166.0), so nothing will settle it.
+`effectiveItem` marks it `left_running` once the turn is terminal and
+`commandExecutionParts` renders it with `toolLeftRunning` and no `toolState`;
+the renderer reads "left running" with no spinner. A reported end still wins.
+`settleEndedAttempt` touches such an item even when app-server had completed
+it while in progress, so its row is tracked again however far back it is.
+Never render a terminal turn's command as `pending`: the card would contradict
+an idle thread for good. Covered by `app-server-runtime-left-running.test.ts`.
+
 A steer goes above every row whose items all followed it — the next response
 can open its row while `turn/steer` is in flight — and never freezes an empty
 row. A row that changes while a newer row follows it is noted in the

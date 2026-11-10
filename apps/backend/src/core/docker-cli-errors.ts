@@ -23,6 +23,20 @@ const DAEMON_UNREACHABLE =
  */
 const DAEMON_PATH_NOT_FOUND = /error response from daemon: could not find the file/i;
 
+/**
+ * The daemon's archive path (`docker cp`, in or out, running or stopped)
+ * could not remount a read-only bind: under rootless Docker, a bind whose
+ * source filesystem is mounted `nosuid`/`nodev` carries flags a user
+ * namespace cannot clear, and the daemon remounts it without them
+ * (`remount-ro <rootfs>/<target>, flags: 0x1021: operation not permitted`,
+ * Engine 29.9.2, to-do 7549). Start and `exec` keep the flags and work.
+ */
+const ARCHIVE_REMOUNT_REFUSED = /remount-ro .*operation not permitted/i;
+
+export function isDockerCopyRemountRefused(text: string): boolean {
+  return ARCHIVE_REMOUNT_REFUSED.test(text);
+}
+
 export function isDockerDaemonUnreachable(text: string): boolean {
   return DAEMON_UNREACHABLE.test(text);
 }

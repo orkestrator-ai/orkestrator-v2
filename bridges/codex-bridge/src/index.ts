@@ -1866,9 +1866,13 @@ app.get("/session/:id/mcp", async (c) => {
               : server.runtimeStatus === "failed" || server.runtimeStatus === "cancelled"
                 ? "failed"
                 : "unknown";
+    // app-server's `tools` is a map whose key order changes from one read to
+    // the next. Sorted before the cut, so an unchanged server reads the same
+    // every time and the backend's 30 s discovery renewal of an idle view
+    // does not announce a reordering as a change (todo 7530).
     const tools =
       server.tools && typeof server.tools === "object"
-        ? Object.keys(server.tools).slice(0, 256)
+        ? Object.keys(server.tools).sort().slice(0, 256)
         : [];
     return [
       {

@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { test, type Page, type Request } from "@playwright/test";
 
 /**
  * A development Electron window loads its renderer's modules from Vite over
@@ -55,9 +55,27 @@ export interface StartupWindow {
   drainConsole(): string[];
 }
 
+/** A console message; `page()` names the window that logged it, when Playwright knows it. */
+export interface StartupConsoleMessage {
+  text(): string;
+  page?(): unknown;
+}
+
 interface ConsoleSource {
-  on(event: "console", listener: (message: { text(): string }) => void): unknown;
-  off(event: "console", listener: (message: { text(): string }) => void): unknown;
+  on(event: "request", listener: (request: Request) => void): unknown;
+  off(event: "request", listener: (request: Request) => void): unknown;
+  on(event: "console", listener: (message: StartupConsoleMessage) => void): unknown;
+  off(event: "console", listener: (message: StartupConsoleMessage) => void): unknown;
+}
+
+export interface StartupConsole {
+  /**
+   * Lines seen since the last drain. With a `page`, only that window's lines
+   * and lines no window claimed; other windows' lines wait for their own drain,
+   * so one window's aborts never license another window's reload.
+   */
+  drain(page?: unknown): string[];
+  dispose(): void;
 }
 
 /**
@@ -65,43 +83,70 @@ interface ConsoleSource {
  * context straight after launch: the first window's initial load reports its
  * aborts before `firstWindow()` resolves.
  */
-export function collectStartupConsole(source: ConsoleSource): {
-  drain(): string[];
-  dispose(): void;
-} {
-  let lines: string[] = [];
-  const listener = (message: { text(): string }) => {
+export function collectStartupConsole(source: ConsoleSource): StartupConsole {
+  let entries: Array<{ page: unknown; text: string }> = [];
+  const listener = (message: StartupConsoleMessage) => {
     const text = message.text();
     const signature = text.includes(MODULE_IMPORT_FAILED)
       ? MODULE_IMPORT_FAILED
       : text.includes(NETWORK_CHANGED)
         ? NETWORK_CHANGED
         : null;
+    if (!signature) return;
+    let page: unknown = null;
+    try {
+      page = message.page?.() ?? null;
+    } catch {
+      // A closed page: keep the line unclaimed.
+    }
     // A module fan-out can emit hundreds of aborts after the import rejection.
-    // Keep one of each signature so the abort burst cannot evict that rejection.
-    if (signature && !lines.some((line) => line.includes(signature))) {
-      lines.push(text.slice(0, 300));
+    // Keep one of each signature per window so the abort burst cannot evict
+    // that rejection.
+    if (!entries.some((entry) => entry.page === page && entry.text.includes(signature))) {
+      entries.push({ page, text: text.slice(0, 300) });
     }
   };
+  const navigationStarted = (request: Request) => {
+    if (!request.isNavigationRequest()) return;
+    try {
+      const frame = request.frame();
+      if (frame.parentFrame()) return;
+      const page = frame.page();
+      // Reset before the new document can log, rather than at waitForTitle:
+      // callers often await reload before starting that wait. Unclaimed lines
+      // cannot safely authorize recovery across a navigation either.
+      entries = entries.filter((entry) => entry.page !== page && entry.page !== null);
+    } catch {
+      // Initial navigation can precede frame creation; no previous document
+      // exists to clear in that case.
+    }
+  };
+  source.on("request", navigationStarted);
   source.on("console", listener);
   return {
-    drain: () => {
-      const drained = lines;
-      lines = [];
+    drain: (page?: unknown) => {
+      const matches = (entry: { page: unknown }) =>
+        page === undefined || entry.page === page || entry.page === null;
+      const drained = entries.filter(matches).map((entry) => entry.text);
+      entries = entries.filter((entry) => !matches(entry));
       return drained;
     },
     dispose: () => {
       source.off("console", listener);
+      source.off("request", navigationStarted);
     },
   };
 }
 
-export function pageStartupWindow(page: Page, console: { drain(): string[] }): StartupWindow {
+export function pageStartupWindow(page: Page, console: StartupConsole): StartupWindow {
   return {
     title: () => page.title(),
-    failureShown: () => page.getByText(STARTUP_FAILED_TEXT).isVisible(),
+    // Present, not "visible": headless Ozone ignores a window's constructor
+    // size, so until a spec sizes it the window is 1x1 and the startup panel's
+    // heading has no box. The renderer adds that heading only when start fails.
+    failureShown: async () => (await page.getByText(STARTUP_FAILED_TEXT).count()) > 0,
     reload: () => page.reload(),
-    drainConsole: () => console.drain(),
+    drainConsole: () => console.drain(page),
   };
 }
 
@@ -113,7 +158,7 @@ export class RendererStartupError extends Error {}
  */
 export async function waitForRendererStart(
   window: StartupWindow,
-  title: string,
+  title: string | RegExp,
   {
     timeoutMs = 60_000,
     pollMs = 250,
@@ -138,7 +183,7 @@ export async function waitForRendererStart(
     const failureShown = await window.failureShown().catch(() => false);
     consoleLines.push(...window.drainConsole());
     const step = nextStartupStep({
-      titleMatches: lastTitle === title,
+      titleMatches: typeof title === "string" ? lastTitle === title : title.test(lastTitle),
       failureShown,
       consoleLines,
       reloads,
@@ -167,4 +212,58 @@ export async function waitForRendererStart(
   throw new RendererStartupError(
     `Renderer title stayed "${lastTitle}" for ${timeoutMs} ms, expected "${title}" (${reloads} reloads)`,
   );
+}
+
+export interface ElectronStartupWatch {
+  /**
+   * Waits for `window` to show `title`, reloading it only after a
+   * network-change module failure (above). A reload is recorded as a
+   * `startup-recovery` annotation on the running test and printed as a
+   * `[startup-recovery]` line, so a passing run still shows it recovered.
+   * Resolves with the number of reloads.
+   */
+  waitForTitle(
+    window: Page,
+    title: string | RegExp,
+    options?: { timeoutMs?: number; maxReloads?: number },
+  ): Promise<number>;
+  /**
+   * Stops collecting. The watch serves later windows and reloads until this is
+   * called; it also ends with the application's context.
+   */
+  dispose(): void;
+}
+
+/** Records a recovered start where a passing run's report shows it. */
+export function noteStartupRecovery(reloads: number): void {
+  if (reloads === 0) return;
+  const description = `renderer start reloaded ${reloads}x after ${NETWORK_CHANGED}`;
+  try {
+    test.info().annotations.push({ type: "startup-recovery", description });
+  } catch {
+    // Outside a running test (a unit test of this module): the line below is enough.
+  }
+  console.log(`[startup-recovery] ${description}`);
+}
+
+/**
+ * One launch's startup recovery for a development Electron app. Call it
+ * straight after `electron.launch()` (before `firstWindow()`), then use
+ * `waitForTitle` wherever the spec waited for a window's first title. Not for
+ * a case that asserts on startup failure itself (a missing preload, the
+ * startup markers a window sends): a reload there would hide what it is about.
+ */
+export function watchElectronStartup(app: { context(): ConsoleSource }): ElectronStartupWatch {
+  const startupConsole = collectStartupConsole(app.context());
+  return {
+    async waitForTitle(window, title, { timeoutMs = 60_000, maxReloads } = {}) {
+      const reloads = await waitForRendererStart(pageStartupWindow(window, startupConsole), title, {
+        timeoutMs,
+        ...(maxReloads === undefined ? {} : { maxReloads }),
+      });
+      noteStartupRecovery(reloads);
+      return reloads;
+    },
+    dispose: () => startupConsole.dispose(),
+  };
 }

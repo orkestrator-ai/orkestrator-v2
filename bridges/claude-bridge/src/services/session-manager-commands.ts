@@ -27,6 +27,7 @@
  * a skill that the SDK already lists as `/<name>` is annotated, never repeated
  * under an invented `/skill:<name>` spelling.
  */
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import { randomUUID } from "node:crypto";
 import { invalidateClaudeModelCatalog } from "./claude-model-catalog.js";
 import { controlOnlyQuery } from "./control-only-query.js";
@@ -493,7 +494,6 @@ async function runDiscoveryProbe(
 ): Promise<DiscoveryProbeResult> {
   const env = await runtimeEnvironmentForAgentQuery();
   let probe: Query | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     probe = controlOnlyQuery({
       cwd: config.cwd,
@@ -515,20 +515,16 @@ async function runDiscoveryProbe(
             .then((result) => result?.claude_code_version)
             .catch(() => undefined)
         : Promise.resolve(undefined);
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("Claude command discovery timed out")),
-        COMMAND_PROBE_TIMEOUT_MS,
-      );
-      timer.unref?.();
-    });
     // The losing side of the race still settles; keep it from surfacing as
     // an unhandled rejection after the probe is closed.
     read.catch(() => undefined);
-    const [commands, cliVersion] = await Promise.race([Promise.all([read, version]), timeout]);
+    const [commands, cliVersion] = await boundedWaitOrThrow(
+      Promise.all([read, version]),
+      COMMAND_PROBE_TIMEOUT_MS,
+      () => new Error("Claude command discovery timed out"),
+    );
     return { commands: sdkRows(commands), ...(cliVersion ? { cliVersion } : {}) };
   } finally {
-    if (timer) clearTimeout(timer);
     await Promise.resolve(probe?.close()).catch(() => undefined);
   }
 }

@@ -66,7 +66,7 @@ export function boundContainerLogTail(output: string, max = CONTAINER_LOG_TAIL_M
 import {
   createOperationId,
   emptyContainerLifecycle,
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   parseContainerMutationIdentity,
 } from "@orkestrator/protocol/container-lifecycle";
 import {
@@ -322,19 +322,15 @@ export function registerDockerCommands(
     const id = asString(containerId, "containerId");
     const outcome = await removeUnclaimedContainer(id, context);
     if (outcome.outcome === "skipped") {
-      throw new Error(
-        formatContainerLifecycleError(
-          outcome.reason === "foreign-owner" ? "not-owned" : "preservation-required",
-          outcome.reason === "foreign-owner"
-            ? "This container is not owned by this Orkestrator installation."
-            : "This container belongs to an environment. Reset or delete the environment instead.",
-        ),
+      throw new ContainerLifecycleError(
+        outcome.reason === "foreign-owner" ? "not-owned" : "preservation-required",
+        outcome.reason === "foreign-owner"
+          ? "This container is not owned by this Orkestrator installation."
+          : "This container belongs to an environment. Reset or delete the environment instead.",
       );
     }
     if (outcome.outcome === "failed") {
-      throw new Error(
-        formatContainerLifecycleError("removal-failed", "Docker did not remove the container."),
-      );
+      throw new ContainerLifecycleError("removal-failed", "Docker did not remove the container.");
     }
   });
   register(dockerContainerStatusCommand, async ({ containerId }) => {
@@ -415,11 +411,9 @@ export function registerDockerCommands(
   // docker_cleanup_execute removes only that selection. These two earlier
   // one-shot commands removed without a review and are refused.
   const reviewedCleanupRequired = async () => {
-    throw new Error(
-      formatContainerLifecycleError(
-        "invalid-request",
-        "Docker cleanup is reviewed first. Open Docker → Review cleanup to see what can be removed.",
-      ),
+    throw new ContainerLifecycleError(
+      "invalid-request",
+      "Docker cleanup is reviewed first. Open Docker → Review cleanup to see what can be removed.",
     );
   };
   register(dockerSystemPruneCommand, reviewedCleanupRequired);
@@ -623,11 +617,9 @@ export function registerDockerCommands(
     const probe = await probeContainer(id);
     if (probe.kind === "missing") throw new Error(`Container not found: ${id}`);
     if (probe.kind !== "present") {
-      throw new Error(
-        formatContainerLifecycleError(
-          "daemon-unavailable",
-          "Docker could not confirm this container's identity. Retry once Docker is reachable.",
-        ),
+      throw new ContainerLifecycleError(
+        "daemon-unavailable",
+        "Docker could not confirm this container's identity. Retry once Docker is reachable.",
       );
     }
     const owner = dockerOwnerNamespace(storage.getDataDir());
@@ -637,11 +629,9 @@ export function registerDockerCommands(
       (ownerLabel !== undefined && ownerLabel !== owner) ||
       (ownerLabel === undefined && context.strictDockerOwner)
     ) {
-      throw new Error(
-        formatContainerLifecycleError(
-          "not-owned",
-          "Refusing Docker operation on a container not owned by this development profile",
-        ),
+      throw new ContainerLifecycleError(
+        "not-owned",
+        "Refusing Docker operation on a container not owned by this development profile",
       );
     }
     const environments = await storage.loadEnvironments();
@@ -649,11 +639,9 @@ export function registerDockerCommands(
       findEnvironmentByContainerId(environments, id) ||
       findEnvironmentByContainerId(environments, probe.containerId)
     ) {
-      throw new Error(
-        formatContainerLifecycleError(
-          "operation-in-progress",
-          "This container is already attached to an environment.",
-        ),
+      throw new ContainerLifecycleError(
+        "operation-in-progress",
+        "This container is already attached to an environment.",
       );
     }
     const labelledEnvironmentId = (await readContainerLabels(id))[DOCKER_LABEL_ENVIRONMENT_ID];
@@ -661,11 +649,9 @@ export function registerDockerCommands(
       labelledEnvironmentId &&
       environments.some((environment) => environment.id === labelledEnvironmentId)
     ) {
-      throw new Error(
-        formatContainerLifecycleError(
-          "operation-in-progress",
-          "This container belongs to an existing environment.",
-        ),
+      throw new ContainerLifecycleError(
+        "operation-in-progress",
+        "This container belongs to an existing environment.",
       );
     }
     const env = createEnvironment(project, {

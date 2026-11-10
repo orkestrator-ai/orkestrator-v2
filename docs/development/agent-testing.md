@@ -1161,6 +1161,24 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+A development window loads its renderer's modules from Vite, and on Linux
+Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
+Docker work changes a host interface (flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+Every spec that waits for a Vite-served window's title therefore calls
+`watchElectronStartup(app)` straight after `electron.launch()` and waits with
+its `waitForTitle(window, title)` (`e2e/agent-testing/electron-startup-recovery.ts`).
+That reloads a window only when its startup failed and that window's own
+console holds both a failed module import and the network-change abort, at
+most three times, and records each recovery as a `startup-recovery`
+annotation and a `[startup-recovery]` line. Cases about startup failure itself
+(`renderer-log-boundary-electron.spec.ts`, the missing-preload case in
+`electron-main.spec.ts`) keep Playwright's plain title wait, and a `file:`
+renderer needs none. Startup recovery does not cover a later lazy load. The
+failure check looks for the startup heading's presence, not its visibility:
+headless Ozone ignores a window's constructor size, so until a spec sizes it
+the window is 1x1 and the heading has no box.
+
 `design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
 with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
@@ -1195,8 +1213,7 @@ outer `unshare` maps you to root.
 Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
 the namespace, because container ports are published in the host's. Run them
 in the host namespace: the spec's launcher reloads a startup that lost its
-modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
-[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, above),
 which is enough for those two cases but not for the whole spec, whose later
 lazy loads can still be aborted. When automatic Docker pools are exhausted,
 put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
@@ -1592,6 +1609,66 @@ ORKESTRATOR_AGENT_TEST_PROFILE=scope-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=sco
 mise run dev:stop --profile scope-cmd && mise run dev:reset --profile scope-cmd
 mise run dev:stop --profile scope-leaf && mise run dev:reset --profile scope-leaf
 ```
+
+### Live fleet ticket sync (two profiles)
+
+`e2e/agent-testing/fleet-ticket-sync-live.spec.ts` qualifies Kanban sync
+between a command node and a leaf over the real gateway, event stream and node
+link of two running `dev:test` profiles, with a real disconnect (to-do 3800
+task 1, [tickets.md](../architecture/tickets.md#sync-across-machines)). It
+renames the profiles "QA command" and "QA leaf", gives both fixture projects
+one repository identity (`gitUrl`), makes a leaf ticket, then attaches the
+leaf. In order it checks: the first sync after attach; a ticket each way
+with no manual sync; Share of the older leaf ticket; an image read each way;
+both boards on screen (the sync line, the synced-from marks); a conflict made
+while the link is disabled (`update_node` `enabled: false`), with its comment,
+the conflict list and dismissal; a real disconnect (`dev:stop` on the leaf),
+edits that wait, a coordinator build with `nodeId` refused and the single
+"Machine … reconnected" message after the leaf is started again
+([coordinator.md](../architecture/coordinator.md#tickets-on-other-machines));
+and a build started on the leaf with `nodeId` for a ticket of the command
+board, linked to the same ticket there, then cancelled. Both profiles run
+without credentials and offer only Pi, whose isolated `models.json` names a
+loopback fake model (`auto-pipeline-fake-model.ts`), so nothing logs in and
+nothing is billed. The profiles must be fresh: reset them before each run.
+
+```bash
+FLAGS="--fixture --headless --no-agent-credentials --agent-platforms pi"
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-cmd $FLAGS    # own terminal
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-leaf $FLAGS   # own terminal
+ORKESTRATOR_AGENT_TEST_FLEET_TICKET_SYNC=1 \
+ORKESTRATOR_AGENT_TEST_PROFILE=fts-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=fts-leaf \
+  mise run test:logged -- --name fleet-ticket-sync -- \
+  bunx playwright test --config e2e/agent-testing/playwright.fleet-ticket-sync.config.ts
+mise run dev:stop --profile fts-leaf && mise run dev:reset --profile fts-leaf
+mise run dev:stop --profile fts-cmd && mise run dev:reset --profile fts-cmd
+```
+
+The spec starts the leaf again itself with the same flags
+(`ORKESTRATOR_AGENT_TEST_LEAF_START_ARGS` overrides them); that launcher keeps
+running until `dev:stop`. Evidence (ids, timings, counts) is written to
+`output/agent-testing/<run>/fleet-ticket-sync/evidence.json`, screenshots to
+`output/visual-previews/fleet-ticket-sync-*.png`.
+
+The first runs (2026-11-10, Linux) found three faults the in-process tests
+could not: the command node did not subscribe to `ticket-sync-outbox-ready`,
+so a leaf edit waited up to the 60 s reconcile (48 s measured) and an image a
+leaf asked for could not arrive within its 20 s wait; and the first sync after
+attaching waited for the reconcile too (37 s), because the leaf's projects
+had not been read yet. With the fixes, the passing run measured: first sync
+0.5 s; a ticket each way 0.5 s; Share 0.5 s; image bytes 20 to 40 ms each way
+once listed; conflict recorded 0.5 s after the link returned; the leaf seen
+as gone 26 s after it stopped; the offline edits on the restarted leaf 0.3 s
+after it reattached; one reconnect message; the remote build linked to the
+leaf's ticket at once and cancelled.
+
+It does not cover what only two hosts can show: an SSH route, the relay, or a
+network partition in which the leaf stays up but unreachable (the link is
+disabled cleanly instead), and it calls the coordinator's backend commands
+(`start_coordinator_node_build_pipeline`) rather than having a model call the
+MCP tool.
 
 ### Live requests of a running agent tab
 

@@ -7,6 +7,7 @@ import path from "node:path";
 import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
 import type {
   DatabaseBackupSummary,
+  DatabaseStoreFamily,
   DatabaseTopTable,
   DatabaseTopTables,
 } from "@orkestrator/protocol/backend-diagnostics";
@@ -15,6 +16,7 @@ import { openCaptureFile, readCaptureFile } from "@orkestrator/protocol/node/com
 import { reapAfterLostExit } from "@orkestrator/protocol/node/lost-exit-reaper";
 import { watchForLostExit } from "@orkestrator/protocol/node/shell-process-state";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
+import { FAMILY_RULES } from "./storage-lease-metrics.js";
 
 const log = createLogger("storage");
 
@@ -107,7 +109,10 @@ const COPY_TIMEOUT_MS = 2 * HOURLY_INTERVAL_MS;
  * backend waits to hear from it before treating the result as unknown.
  */
 const COPY_SETTLE_GRACE_MS = 30_000;
-/** A verdict, and a line of at most {@link MAX_TOP_TABLES} names and sizes. */
+/**
+ * A verdict, a line of at most {@link MAX_TOP_TABLES} names and sizes, and a
+ * line of at most {@link MAX_TOP_STORE_FAMILIES} store families and sizes.
+ */
 const MAX_COPY_OUTPUT_BYTES = 64 * 1024;
 /** Consecutive failures and the earliest next attempt, kept across restarts. */
 const BACKOFF_FILE = ".hourly-backoff.json";
@@ -118,6 +123,9 @@ const TOP_TABLES_FILE = ".top-tables.json";
 /** Enough to show what dominates a file. Bounds the child's reply too. */
 export const MAX_TOP_TABLES = 12;
 const MAX_TABLE_NAME_CHARS = 128;
+/** Store families reported beside the tables; bounds the child's reply the same way. */
+export const MAX_TOP_STORE_FAMILIES = 12;
+const STORE_FAMILY = new RegExp(FAMILY_RULES.safeFamily);
 
 const SNAPSHOT =
   /^(hourly|pre-migration-v\d+|change-tracking-daily|change-tracking-pre-migration-v\d+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.sqlite$/;
@@ -270,9 +278,11 @@ export function removeStaleBackupTemporaries(dataDir: string, now = Date.now()):
  * whether the copy is sound; rejects when the copy fails. Both steps read
  * the whole file; in-process they would block every request for minutes on
  * a large database. A sound copy is also sized by table through `dbstat`, which
- * scans it too; `onTopTables` receives the result. That scan touches only the
- * finished copy, never the live file or this event loop, and SQLite without
- * `dbstat` (Bun on macOS loads the system library) simply reports nothing.
+ * scans it too, and by store family inside `store_rows`, the table nearly every
+ * store shares, with one more pass; `onTopTables` receives both. Those scans
+ * touch only the finished copy, never the live file or this event loop, and
+ * SQLite without `dbstat` (Bun on macOS loads the system library) simply
+ * reports no tables.
  *
  * The verdict comes back through unlinked files, so no pipe reader has to see
  * the end of a stream (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
@@ -285,7 +295,8 @@ export function copyDatabaseInChildProcess(
   target: string,
   options: {
     timeoutMs?: number;
-    onTopTables?: (tables: DatabaseTopTable[]) => void;
+    /** Tables by size (empty without `dbstat`), and store families when there is a `store_rows`. */
+    onTopTables?: (tables: DatabaseTopTable[], stores: DatabaseStoreFamily[] | null) => void;
     /** Starts the supervisor. Tests use this to withhold what the runtime reports. */
     spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
     settleGraceMs?: number;
@@ -296,10 +307,11 @@ export function copyDatabaseInChildProcess(
     spawn: options.spawn,
     settleGraceMs: options.settleGraceMs,
   }).then(({ code, signal, stdout, stderr }) => {
-    const [verdict, tables] = stdout.trim().split("\n", 2);
+    const [verdict, tables, stores] = stdout.trim().split("\n", 3);
     if (code === 0 && verdict === "sound") {
-      const parsed = parseTopTables(tables);
-      if (parsed) options.onTopTables?.(parsed);
+      const parsedTables = parseTopTables(tables);
+      const parsedStores = parseStoreFamilies(stores);
+      if (parsedTables || parsedStores) options.onTopTables?.(parsedTables ?? [], parsedStores);
       return true;
     }
     if (code === 0 && verdict === "unsound") return false;
@@ -451,13 +463,56 @@ worker.on("exit", (code) => { clearTimeout(timer); process.exit(stopped ? 1 : co
 /**
  * Run by {@link copyDatabaseInChildProcess}: `-- <source> <target>`. Prints
  * `sound` or `unsound`, and after `sound` a line of JSON holding the largest
- * tables and indexes by bytes, when this SQLite has `dbstat`. A failed scan
- * never fails the copy.
+ * tables and indexes by bytes, when this SQLite has `dbstat`, then a line of
+ * JSON holding the largest store families in `store_rows` by value bytes.
+ * Store names can hold ids, so they are folded to families here, with
+ * `leaseFamily`'s rules ({@link FAMILY_RULES}), before anything leaves the
+ * child. `octet_length` arrived in SQLite 3.43; an older library measures the
+ * same bytes through a cast to a blob. A failed scan never fails the copy.
  */
-const DATABASE_COPY_HELPER = String.raw`
+export const DATABASE_COPY_HELPER = String.raw`
 const { Database } = require("bun:sqlite");
 const fs = require("node:fs");
 const [source, target] = process.argv.slice(1);
+const ID_LIKE = new RegExp(${JSON.stringify(FAMILY_RULES.idLike)}, "gi");
+const SAFE_FAMILY = new RegExp(${JSON.stringify(FAMILY_RULES.safeFamily)});
+function storeFamily(name) {
+  if (typeof name !== "string") return ${JSON.stringify(FAMILY_RULES.other)};
+  if (name.startsWith("/") || name.startsWith("\\") || /^[A-Za-z]:/.test(name)) {
+    return ${JSON.stringify(FAMILY_RULES.outsideDataDir)};
+  }
+  const first = (name.split("/", 1)[0] || "").replace(ID_LIKE, "*");
+  return SAFE_FAMILY.test(first) ? first : ${JSON.stringify(FAMILY_RULES.other)};
+}
+function storeFamilies(copy) {
+  const table = copy
+    .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'store_rows'")
+    .get();
+  if (!table) return "";
+  let rows;
+  try {
+    rows = copy
+      .query("SELECT store, SUM(octet_length(value)) AS bytes, COUNT(*) AS count FROM store_rows GROUP BY store")
+      .all();
+  } catch {
+    rows = copy
+      .query("SELECT store, SUM(length(CAST(value AS BLOB))) AS bytes, COUNT(*) AS count FROM store_rows GROUP BY store")
+      .all();
+  }
+  const families = new Map();
+  for (const row of rows) {
+    const family = storeFamily(row.store);
+    const total = families.get(family) || { family, bytes: 0, rows: 0 };
+    total.bytes += Number(row.bytes) || 0;
+    total.rows += Number(row.count) || 0;
+    families.set(family, total);
+  }
+  return JSON.stringify(
+    [...families.values()]
+      .sort((left, right) => right.bytes - left.bytes)
+      .slice(0, ${MAX_TOP_STORE_FAMILIES}),
+  );
+}
 try {
   const db = new Database(source, { readonly: true });
   try {
@@ -470,6 +525,7 @@ try {
   const copy = new Database(target, { readonly: true });
   let sound = false;
   let tables = "";
+  let stores = "";
   try {
     const rows = copy.query("PRAGMA quick_check").all();
     sound = rows.length === 1 && Object.values(rows[0])[0] === "ok";
@@ -483,11 +539,16 @@ try {
       } catch {
         // No dbstat in this SQLite: the copy still counts.
       }
+      try {
+        stores = storeFamilies(copy);
+      } catch {
+        // A store scan that fails says nothing, and the copy still counts.
+      }
     }
   } finally {
     copy.close();
   }
-  process.stdout.write(sound ? "sound\n" + tables : "unsound");
+  process.stdout.write(sound ? "sound\n" + tables + "\n" + stores : "unsound");
 } catch (error) {
   process.stderr.write(String(error && error.message ? error.message : error).split("\n")[0]);
   process.exit(1);
@@ -509,6 +570,27 @@ function parseTopTables(line: string | undefined): DatabaseTopTable[] | null {
       )
       .slice(0, MAX_TOP_TABLES)
       .map(({ name, bytes }) => ({ name, bytes }));
+  } catch {
+    return null;
+  }
+}
+
+/** The child's third line: only family names and whole sizes get past here. */
+function parseStoreFamilies(line: string | undefined): DatabaseStoreFamily[] | null {
+  if (!line) return null;
+  try {
+    const rows = JSON.parse(line) as unknown;
+    if (!Array.isArray(rows)) return null;
+    return rows
+      .filter(
+        (row): row is DatabaseStoreFamily =>
+          typeof row?.family === "string" &&
+          STORE_FAMILY.test(row.family) &&
+          Number.isSafeInteger(row?.bytes) &&
+          Number.isSafeInteger(row?.rows),
+      )
+      .slice(0, MAX_TOP_STORE_FAMILIES)
+      .map(({ family, bytes, rows }) => ({ family, bytes, rows }));
   } catch {
     return null;
   }
@@ -589,6 +671,7 @@ function recordTopTables(
   database: keyof TopTablesFile,
   at: number,
   tables: DatabaseTopTable[],
+  stores: DatabaseStoreFamily[] | null,
 ): void {
   try {
     const file = path.join(directory, TOP_TABLES_FILE);
@@ -598,7 +681,7 @@ function recordTopTables(
       temporary,
       JSON.stringify({
         ...current,
-        [database]: { takenAt: new Date(at).toISOString(), tables },
+        [database]: { takenAt: new Date(at).toISOString(), tables, ...(stores ? { stores } : {}) },
       }),
       { mode: 0o600 },
     );
@@ -830,7 +913,7 @@ export async function takeHourlySnapshotIfDue(
       options.copy ??
       ((from: string, to: string) =>
         copyDatabaseInChildProcess(from, to, {
-          onTopTables: (tables) => recordTopTables(backups, "main", at, tables),
+          onTopTables: (tables, stores) => recordTopTables(backups, "main", at, tables, stores),
         }));
     removeStaleBackupTemporaries(dataDir, at);
     // Purge first: a snapshot past the age bound must not stand in for a new one.
@@ -929,7 +1012,7 @@ export async function takeLedgerSnapshotIfDue(
       options.copy ??
       ((from: string, to: string) =>
         copyDatabaseInChildProcess(from, to, {
-          onTopTables: (tables) => recordTopTables(backups, "ledger", at, tables),
+          onTopTables: (tables, stores) => recordTopTables(backups, "ledger", at, tables, stores),
         }));
     removeStaleBackupTemporaries(dataDir, at);
     purgeStorageSnapshots(dataDir, at);

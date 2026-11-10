@@ -1,6 +1,7 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
+import { boundedWaitOrThrow } from "@orkestrator/protocol/node/bounded-wait";
 import type { SDKControlGetContextUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import type {
   SessionState,
@@ -141,25 +142,16 @@ export class ContextUsageRequestTimeoutError extends Error {
 
 /**
  * Race an SDK control request against a deadline. The SDK exposes no way to
- * cancel a pending control request, so a late answer is simply discarded; the
- * timer is unref'd and always cleared so it never holds the process open.
+ * cancel a pending control request, so a late answer is simply discarded (a
+ * late rejection is observed); `boundedWait` unrefs and clears the timer so it
+ * never holds the process open.
  */
-export async function withControlRequestTimeout<T>(
+export function withControlRequestTimeout<T>(
   request: Promise<T>,
   timeoutMs: number,
   createTimeoutError: () => Error,
 ): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(createTimeoutError()), timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    return await Promise.race([request, timeoutPromise]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+  return boundedWaitOrThrow(request, timeoutMs, createTimeoutError);
 }
 
 /** Record that a caller read or hydrated this session's state. */

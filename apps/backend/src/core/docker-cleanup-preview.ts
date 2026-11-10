@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import type {
   CleanupClassification,
   CleanupExecuteResult,
@@ -241,8 +242,9 @@ export async function executeDockerCleanup(
     Date.now(),
   );
   if (!grant) {
-    throw new Error(
-      "ContainerLifecycleError:revision-conflict: The cleanup review expired. Review the resources again.",
+    throw new ContainerLifecycleError(
+      "revision-conflict",
+      "The cleanup review expired. Review the resources again.",
     );
   }
   const outcomes: CleanupResourceOutcome[] = [];

@@ -79,6 +79,8 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
         "The notice that a node has been unreachable for a day could not be sent; the next failed read retries.",
       "node-offline.check-failed":
         "Whether a long-unreachable node's coordinators were told could not be checked; the next read retries.",
+      "node-reconnect.notice-failed":
+        "The message that a node a coordinator tried while it was disconnected is back could not be sent; it is not retried, since the coordinator already holds the refusal.",
       "checkout.merge-followed":
         "After an environment's PR merged, the project checkout was fast-forwarded, or `outcome` says why not.",
       "checkout.merge-follow-failed":

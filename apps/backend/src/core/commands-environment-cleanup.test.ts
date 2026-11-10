@@ -60,6 +60,7 @@ async function withDeleteCommand<T>(
     storage: StorageService,
     context: CommandContext,
   ) => Promise<T>,
+  environmentId = "e1",
 ): Promise<T> {
   const dataDir = await fs.realpath(
     await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-state-")),
@@ -82,7 +83,7 @@ async function withDeleteCommand<T>(
   const invokeDelete = async () => {
     const command = commands.get("delete_environment");
     if (!command) throw new Error("delete_environment is not registered");
-    await command({ environmentId: "e1" }, context);
+    await command({ environmentId }, context);
   };
   try {
     return await run(invokeDelete, storage, context);
@@ -111,6 +112,10 @@ async function seedWorktree(storage: StorageService): Promise<string> {
 
 describe("delete_environment host cleanup", () => {
   test("deletes the local branch in the deletion flow once its worktree is removed", async () => {
+    // Only the branch created for the environment, named with its id prefix,
+    // is the environment's to delete.
+    const environmentId = "e1a2b3c4-d5e6-4f70-8899-aabbccddeeff";
+    const branch = "feature-e1a2b3c4d5e6";
     let projectPath = "";
     let worktreePath = "";
     await withDeleteCommand(
@@ -138,7 +143,7 @@ describe("delete_environment host cleanup", () => {
           "worktree",
           "add",
           "-b",
-          "feature",
+          branch,
           worktreePath,
           base,
         ]);
@@ -151,14 +156,14 @@ describe("delete_environment host cleanup", () => {
           order: 0,
         });
         await storage.addEnvironment(
-          environment({ branch: "feature", worktreePath, createdFromCommit: base }),
+          environment({ id: environmentId, branch, worktreePath, createdFromCommit: base }),
         );
       },
       async (invokeDelete, storage, context) => {
         await invokeDelete();
         expect(await exists(worktreePath)).toBe(false);
         await expect(
-          runCommand("git", ["-C", projectPath, "show-ref", "--verify", "refs/heads/feature"]),
+          runCommand("git", ["-C", projectPath, "show-ref", "--verify", `refs/heads/${branch}`]),
         ).rejects.toThrow();
         expect(await environmentCleanupLedger(storage.getDataDir()).list()).toEqual([]);
         const service = context.runtime.diffStats.service;
@@ -173,13 +178,11 @@ describe("delete_environment host cleanup", () => {
           "worktree",
           "add",
           "-b",
-          "feature",
+          branch,
           worktreePath,
           "main",
         ]);
-        await storage.addEnvironment(
-          environment({ id: "replacement", branch: "feature", worktreePath }),
-        );
+        await storage.addEnvironment(environment({ id: "replacement", branch, worktreePath }));
         await createCommandRegistry().get("start_environment")!(
           { environmentId: "replacement" },
           context,
@@ -199,6 +202,7 @@ describe("delete_environment host cleanup", () => {
         // A later environment still reconciles; replacement tracking did not abort sync.
         expect(service.isTracked("later")).toBe(true);
       },
+      environmentId,
     );
   });
 

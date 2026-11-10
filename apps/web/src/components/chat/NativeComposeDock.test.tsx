@@ -37,9 +37,10 @@ describe("NativeComposeDock", () => {
     const dock = container.firstElementChild as HTMLElement;
     expect(dock.className).toContain("top-full");
     expect(dock.className).toContain("-translate-y-full");
-    expect(
-      screen.getByRole("heading", { name: "Ready to build!" }).parentElement?.className,
-    ).toContain("opacity-0");
+    const heading = screen.getByRole("heading", { name: "Ready to build", hidden: true });
+    expect(heading.parentElement?.className).toContain("opacity-0");
+    // Docked, the faded-out title is hidden from assistive technology too.
+    expect(heading.parentElement?.getAttribute("aria-hidden")).toBe("true");
     expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain(
       "max-h-0",
     );

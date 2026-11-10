@@ -1133,14 +1133,17 @@ describe("process and platform command behavior", () => {
     }
   });
 
-  test("preserves the RootlessKit alias when topology discovery fails", async () => {
-    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.2.2 host.docker.internal\n";
-    process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
-    await __testing.ensureContainerAgentToolsHost("container-existing");
-    const log = await readCommandLog();
-    expect(log).not.toContain("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root");
-    expect(log).not.toContain("docker inspect --format");
-  });
+  // slirp4netns's and gvisor-tap-vsock's host loopback addresses alike.
+  for (const alias of ["10.0.2.2", "10.0.2.1"]) {
+    test(`preserves the RootlessKit alias ${alias} when topology discovery fails`, async () => {
+      process.env.FAKE_DOCKER_HOSTS_OUTPUT = `${alias} host.docker.internal\n`;
+      process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
+      await __testing.ensureContainerAgentToolsHost("container-existing");
+      const log = await readCommandLog();
+      expect(log).not.toContain("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root");
+      expect(log).not.toContain("docker inspect --format");
+    });
+  }
 
   for (const existing of ["10.0.2.2", "172.17.0.1"]) {
     test(`explicit host address overrides the namespace gateway (existing=${existing})`, async () => {

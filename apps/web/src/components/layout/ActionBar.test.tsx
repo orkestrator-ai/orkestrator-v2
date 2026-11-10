@@ -4240,7 +4240,9 @@ describe("ActionBar workflow tabs", () => {
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
     );
-    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("could not be created"),
+    );
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -7085,7 +7087,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(currentSelectedEnvironmentId).toBe("env-2");
   });
 
-  describe("the red trash button", () => {
+  describe("the trash button", () => {
     const trashButton = () => screen.getByRole("button", { name: "Delete environment" });
     const queryTrashButton = () => screen.queryByRole("button", { name: "Delete environment" });
     const withoutPr = () => {
@@ -7097,7 +7099,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
       renderInAppCommandScope(<ActionBar />);
 
       const button = trashButton();
-      expect(button.getAttribute("data-variant")).toBe("destructive");
+      // A quiet ghost at rest; it turns coral only on hover.
+      expect(button.getAttribute("data-variant")).toBe("ghost");
+      expect(button.className).toContain("hover:text-failure");
       const createPr = screen.getByRole("button", { name: "Create PR" });
       const filePanel = screen.getByRole("button", { name: "Show file panel" });
       expect(
@@ -9046,4 +9050,13 @@ describe("ActionBar auto-merge", () => {
     expect(label.className).not.toContain("line-clamp");
     expect(label.className).not.toContain("truncate");
   });
+});
+
+test("merge confirmation explains that an adopted branch is kept", () => {
+  currentEnvironment = { ...selectedEnvironment, branch: "dev", prState: "open" };
+  renderInAppCommandScope(<ActionBar />);
+  fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+  expect(
+    screen.getByText(/The feature branch will be kept because it is not owned by this environment/),
+  ).toBeTruthy();
 });

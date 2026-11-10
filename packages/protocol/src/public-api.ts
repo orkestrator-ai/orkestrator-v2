@@ -364,6 +364,30 @@ export const PUBLIC_ACTIONS = {
     milestone: "C",
     summary: "Fork the conversation into a new public session.",
   },
+  "session.rewind": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "C",
+    summary: "Rewind the conversation to before one of its prompts (Codex, Pi, Cursor).",
+  },
+  "session.branches": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "C",
+    summary: "List the conversation's other branches, such as turns a rewind removed (Pi).",
+  },
+  "session.branch": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "C",
+    summary: "Switch the conversation to another of its branches (Pi).",
+  },
   "session.interactions": {
     version: 1,
     mutation: false,
@@ -1629,6 +1653,10 @@ export interface PublicProviderCapabilities {
   stop: boolean;
   resume: boolean;
   fork: boolean;
+  /** `session.rewind` is available. Absent from older backends: unavailable. */
+  rewind?: boolean;
+  /** `session.branches` and `session.branch` are available. Absent: unavailable. */
+  branches?: boolean;
   queue: boolean;
   interactions: boolean;
   controls: {

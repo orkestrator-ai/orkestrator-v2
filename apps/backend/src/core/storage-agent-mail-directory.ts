@@ -8,6 +8,7 @@ import {
   agentMailCapabilities,
   agentMailNeedsAttention,
   agentMailboxId,
+  isAgentMailBudgetHeld,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
   sharedConnectionMayActAs,
@@ -699,6 +700,15 @@ export class AgentMailboxDirectory {
           // Worker claims remain journaled until their own outcome is known.
           if (mailbox.kind === "pipeline") continue;
           if (message.placement !== "pending-inject" && message.placement !== "inject-held")
+            continue;
+          // A closed main's budget-held mail keeps its hold: the next main
+          // takes it over still held (`moveClosedCoordinatorMail`), so only
+          // the user's Resume releases it, never replacing the main (2900).
+          if (
+            mailbox.ownerKind === "coordinator" &&
+            mailbox.coordinatorRole !== "side" &&
+            isAgentMailBudgetHeld(message)
+          )
             continue;
           message.placement = "undeliverable";
           message.placementReason = "tab-closed";

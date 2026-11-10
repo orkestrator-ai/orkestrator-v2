@@ -200,6 +200,7 @@ async function withService(
     toolDetailCacheMaxBytes?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
     localBridgeAccountId?: NativeAgentServiceOptions["localBridgeAccountId"];
+    openCodeListenerRecheck?: NativeAgentServiceOptions["openCodeListenerRecheck"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -208,6 +209,9 @@ async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
+    ...(setup.openCodeListenerRecheck
+      ? { openCodeListenerRecheck: setup.openCodeListenerRecheck }
+      : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
     ...(setup.interactionMonitorMode
@@ -1719,4 +1723,19 @@ describe("OpenCode MCP listing observation", () => {
       },
     );
   });
+});
+
+test("providerEnvironment forwards the listener check with its environment id", async () => {
+  const recheck = mock(async (_id: string) => "ours" as const);
+  await withService(
+    { prefix: "ork-listener-forward-", openCodeListenerRecheck: recheck },
+    async ({ service }) => {
+      const environment = (
+        service as unknown as { providerEnvironment(id: string): NativeAgentProviderEnvironment }
+      ).providerEnvironment("env-1");
+      expect(recheck).not.toHaveBeenCalled();
+      await expect(environment.openCodeListenerRecheck?.()).resolves.toBe("ours");
+      expect(recheck).toHaveBeenCalledWith("env-1");
+    },
+  );
 });

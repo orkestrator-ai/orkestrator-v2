@@ -142,6 +142,7 @@ supported peer already has the newer behaviour.
 | Leaves without `node-coordinator-build-origin`: new-environment builds are refused before launch | `start_coordinator_node_build_pipeline` | `coordinator-build.origin-upgrade-required` | Leaves predating admission identity (2026-11-05) | The floor includes the first Stable release with admission identity; retain legacy snapshot refusals permanently | X1 |
 | Live prompt-queue claim state (`outstandingClaim`) | `restoreLegacyPromptQueueClaims`, queue mutation and reservation guards | None (read normalization) | Claims from releases through v2.29.0-beta (the last with the claim commands), including external callers. Those releases refuse a schema-5 database (from v2.34.4-beta), so a claim seen here was either carried across the upgrade or written by a backend that opened the database before that migration and is still running | Claim-writing peers can no longer share the database; retain exclusion until settlement or expiry meanwhile | [0078](../todo/cross-cutting/0078-legacy-prompt-queue-claim-state.md) |
 | New names for the Rework and Address Findings steps in stored and transmitted data: this build writes `fix`, `fixing`, `address`, `addressing`, `fixModel` and the rest, and reads the new names as well | `workflow-vocabulary.ts`, run by the renderer's stores and the backend's start commands; `normalizeActionDefaults` reads a saved `addressFindings` key; `workflow-tab-title.ts` reads the former `Fix` tab title; the CLI's former flags | None (renderer side and a read normalization) | Peers on the build that flips the names ([4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md)), and restored tabs with the former title | The floor is at or above the first Stable release with the flip. The user approved flipping before the window ends, once their own machines are updated (2026-11-04); the readers still stay for the window | [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md) |
+| Nodes without shared usage readings: a command node's pass reads `unknown-command` from `collect_shared_usage_readings` as a node that takes no part, and neither sends to it nor retries | `NodeUsageSync.collect` (`apps/backend/src/core/nodes/node-usage-sync.ts`) | None (a node that predates the commands only shows its own readings) | Leaves before shared usage readings (2026-11-09) | The floor is at or above the first Stable release with `collect_shared_usage_readings` | [Agent accounts](agent-accounts.md#shared-readings) |
 | Backends without `launch_build_pipeline`: the renderer merges the saved Build defaults itself and calls `start_build_pipeline` | `legacyBuildPipelineStartInput` (`apps/web/src/lib/build-pipeline-launch-compat.ts`), chosen in `useBuildPipeline.ts` when `incompatibility(error, "launch_build_pipeline")` reads `unknown-command` | None (renderer side) | Backends before the one-request launches (2026-11-01) | The floor is at or above the first Stable release with `launch_build_pipeline` | Build launch |
 | Releases without a published lockfile: `installRelease` installs them with a plain `bun install`, so their transitive dependencies resolve afresh | The `else` branch in `installRelease` (`packages/protocol/src/node/standalone-service.ts`) | None (runs in the service's installing process) | `service install --release` of a release older than `resources/release-runtime/` (2026-11-04), v2.36.3-beta and earlier | The floor is at or above the first Stable release with `resources/release-runtime/` | [5022](../todo/cross-cutting/5022-release-chain-live-evidence.md) |
 | Releases without a published lockfile, first run through the site's `install.sh`: it runs them through `bun x`, so their transitive dependencies resolve afresh | The branch in `main` of `apps/web-public/public/install.sh` that finds no `resources/release-runtime/` in the fetched package | None (runs on the user's host before any backend) | `PINNED_RELEASE` 2.36.1, the pin at the time of writing, and any `ORKESTRATOR_INSTALL_VERSION` older than `resources/release-runtime/` (2026-11-04), v2.36.3-beta and earlier | `PINNED_RELEASE` is a Stable release with `resources/release-runtime/`, and older releases are outside the window | [5022](../todo/cross-cutting/5022-release-chain-live-evidence.md) task 4 |
@@ -636,6 +637,12 @@ each of a bounded kind: `text` (at most 64 characters), `range` (`min-max`) or
 | `kanban-request-id-conflict` | `KanbanRequestIdConflictError` (`storage-kanban.ts`): a ticket, comment or image `requestId` reused with different arguments | `record` | `feature-build.ts`, which returns the existing ticket on a retry |
 | `native-job-receipt-capacity` | `NativeJobReceiptCapacityError` (`storage-prompts.ts`): the job queue holds its 256 receipts | `limit` | `native-agent-job-tab-reuse.ts`, which rethrows it rather than falling back |
 | `native-agent-provider-session-missing` | `NativeAgentProviderSessionMissingError` (`native-agent-service-shared.ts`): a provider probe proved the session gone | none | the renderer (`isProviderSessionMissingError` in `useNativeAgentSession.ts`), the only answer that may replace a restored session |
+| `container-lifecycle` | `ContainerLifecycleError` (`container-lifecycle.ts`) and the backend errors that carry its marker: a container lifecycle refusal; message `ContainerLifecycleError:<reason>: text` | `reason` (a `CONTAINER_LIFECYCLE_ERROR_CODES` member) | `parseContainerLifecycleError` (backend operation records, environment settings, rebuild, recovery copies, cleanup review) |
+| `mcp-management` | `McpManagementFailure` (`mcp-management.ts`) and the gateway's oversized-change answer; message `McpManagementError:<reason>: text` | `reason` (a `MCP_MANAGEMENT_ERROR_CODES` member) | `mcpManagementErrorFromUnknown` (the MCP servers settings) |
+| `pane-layout-revision-conflict` | `PaneLayoutRevisionConflictError` (`pane-layout-conflict.ts`): a pane layout save named a stale revision | none | `isPaneLayoutRevisionConflict` (the renderer's rebase-and-retry, worker and workflow tab actions) |
+| `design-revision-conflict` | `DesignError` (`design/errors.ts`) for a conflict led by `Design revision conflict:` | none | `toDesignFailure`, the web design client's `failureOf` |
+| `prompt-queue-message-conflict` | `PromptQueueMessageConflictError` (`storage-prompts.ts`): an idempotent enqueue reused an id for a different body | none | `isPromptQueueMessageConflict` (goal carriers, web annotation dispatch) |
+| `unknown-node`, `node-admin-refused`, `node-scope-closed`, `node-unavailable` | Desktop main's `NodeRefusal` (`node-ipc.ts`), message `[code] text` | none | `nodeRefusalCode` (`contract/node-refusal.ts`) |
 
 Rules:
 
@@ -657,20 +664,31 @@ Rules:
 - **Desktop main.** The backend client rebuilds a registered code with
   `fromCodedWire(body)` (the incompatibility class, else `CodedError`), and
   `orkestrator:invoke` rethrows it as `[code key=value …] text`
-  (`ipcErrorMessage`). The text after the brackets is the thrower's message
+  (`ipcErrorMessage`); an error whose message is already in that form is
+  rethrown unchanged. The text after the brackets is the thrower's message
   unchanged, so an older renderer's text match still finds it; the preload
-  copies `code` and `details`. A renderer that shows such a message uses
-  `ipcErrorText(message)` to drop the prefix.
+  copies `code` and `details`.
+- **The renderer.** The context bridge drops those copies, so the renderer's
+  two desktop invoke clients (`command-client.ts`, `desktop-node-client.ts`)
+  pass every rejection through `readableCodedError`, which moves the prefix
+  onto the error's own `code` and `details` and leaves the thrower's text as
+  its message. A screen that shows `error.message` therefore shows no prefix.
+  Text received any other way uses `ipcErrorText(message)`.
 - **The preload** imports only `contract/ipc-error.ts`, which has no Effect
   import; the classes and Schemas live in `contract/errors.ts`.
 - **Adding a code** is additive: an older reader leaves it in the message and
   still matches the words. Renaming or removing one is not.
 
-Not yet migrated, each still read from its own message marker:
-`ContainerLifecycleError:<code>:`, `McpManagementError:<code>:`,
+The domains that used to put their code only in a message marker
+(`ContainerLifecycleError:<reason>:`, `McpManagementError:<reason>:`,
 `Pane layout revision conflict:`, `Design revision conflict:`,
-`Prompt queue message conflict:` and the node refusal codes. Each can register
-a code here, keeping its marker in the message for older peers.
+`Prompt queue message conflict:` and desktop main's node refusals) are
+registered above and keep the marker in the message for older peers. Their
+readers use `hasErrorCode(error, code, legacyMarker)` or the domain parser,
+which read the registered code first and the marker only when no *registered*
+code is present: an older backend answered any code-form `code` over the
+gateway (a design conflict as `conflict`), and that must not suppress the
+fallback.
 
 Change tracking's internal reasons (`capture-timeout`, `capture-storage-quota`,
 `commit-not-found`, …) are not wire codes. They are one `CaptureError`

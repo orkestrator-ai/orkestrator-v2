@@ -22,6 +22,7 @@ import {
 } from "./slash-command-live-support";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
+import { devTestRestartArgs } from "./profile-restart-args";
 
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "qa-goal-restart";
 const platform = process.env.ORKESTRATOR_AGENT_TEST_GOAL_PLATFORM ?? "claude";
@@ -97,24 +98,12 @@ async function crashAndRestart(): Promise<void> {
   expect(stop.code, `dev:stop failed: ${stop.stderr}`).toBe(0);
   const output = openSync(test.info().outputPath(`dev-test-restart-${Date.now()}.log`), "a");
   // `--fixture` stays off: it recreates the repository every worktree points at.
-  const launcher = spawn(
-    "bun",
-    [
-      "apps/desktop/scripts/dev-test.ts",
-      "--profile",
-      profile,
-      ...(stored.credentialSources ?? []).flatMap((source) => ["--credential-source", source]),
-      ...(stored.agentPlatforms?.length
-        ? ["--agent-platforms", stored.agentPlatforms.join(",")]
-        : []),
-    ],
-    {
-      cwd: repositoryRoot,
-      detached: true,
-      env: outlivingProcessEnv(),
-      stdio: ["ignore", output, output],
-    },
-  );
+  const launcher = spawn("bun", devTestRestartArgs(profile, stored), {
+    cwd: repositoryRoot,
+    detached: true,
+    env: outlivingProcessEnv(),
+    stdio: ["ignore", output, output],
+  });
   launcher.unref();
   await expect
     .poll(

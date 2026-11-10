@@ -2,11 +2,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { COORDINATOR_DELEGATION_PRESENTATION } from "@orkestrator/protocol/review-evidence-frames";
+import { COORDINATOR_MAIL_ORIGIN_NOTE } from "@orkestrator/protocol/agent-mail";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  coordinatorDelegationFromMail,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { parseForkWorkerLaunch } from "./coordinator-fork-worker.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { ControlMcpServer } from "./control-mcp-server.js";
+import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
@@ -104,6 +111,54 @@ afterEach(async () => {
 });
 
 describe("fork_coordinator_worker", () => {
+  test("fork_worker MCP preserves scheduled origin over the newest conversation turn", async () => {
+    // This fixture's source worker was created outside the coordinator.
+    await storage.patchRepositorySettings(scope.projectId, { coordinatorOtherEnvironments: true });
+    const mcp = new ControlMcpServer(
+      root,
+      async <T>(command: string, args = {}) => (await commands.get(command)!(args, context)) as T,
+      { port: 0 },
+    );
+    try {
+      for (const origin of ["mail", "user"] as const) {
+        const workspace = await storage.coordinators.mutateCoordinatorWorkspace(
+          scope.projectId,
+          (current) => ({
+            ...current!,
+            conversations: current!.conversations.map((conversation) =>
+              conversation.id === scope.conversationId
+                ? { ...conversation, lastTurnOrigin: origin === "mail" ? "user" : "mail" }
+                : conversation,
+            ),
+          }),
+        );
+        const result = await mcp.callCoordinatorTool(
+          {
+            ...scope,
+            role: "coordinator",
+            mailboxIncarnationId: workspace!.conversations[0]!.mailboxIncarnationId!,
+            capabilities: coordinatorRoleCapabilities("main"),
+            turnOrigin: origin,
+          },
+          "fork_worker",
+          { requestId: `scheduled-mcp-${origin}`, environmentId: workerId, prompt: "Try it" },
+        );
+        expect({ isError: result.isError, text: result.isError ? result.text : "ok" }).toEqual({
+          isError: false,
+          text: "ok",
+        });
+        const environment = await storage.getEnvironment(started.at(-1)!);
+        expect(environment).toBeDefined();
+        const parsed = parseCoordinatorDelegatedPrompt(environment!.initialPrompt ?? "");
+        expect(parsed?.source).toBe("Try it");
+        expect(environment!.initialPromptPresentation?.frame).toBe(parsed!.frame);
+        expect(coordinatorDelegationFromMail(parsed!.frame)).toBe(origin === "mail");
+      }
+    } finally {
+      await mcp.stop();
+    }
+  });
+
   test("a prompted fork is a delegated coordinator worker from the worker's last commit", async () => {
     const prompt = "Try the other approach.\n\nCommit and report back.";
     const result = await fork({ requestId: "alt-1", environmentId: workerId, prompt });
@@ -161,6 +216,38 @@ describe("fork_coordinator_worker", () => {
     await expect(
       fork({ requestId: "alt-1", environmentId: workerId, prompt: "Something else" }),
     ).rejects.toThrow("different payload");
+  });
+
+  test("a fork's frame says when the turn arose from agent mail", async () => {
+    const setOrigin = (origin: "user" | "mail") =>
+      storage.coordinators.mutateCoordinatorWorkspace(scope.projectId, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((item) =>
+          item.id === scope.conversationId ? { ...item, lastTurnOrigin: origin } : item,
+        ),
+      }));
+    const frameFromMail = async (result: Record<string, unknown>) => {
+      const environment = (await storage.getEnvironment(result.environmentId as string))!;
+      const parsed = parseCoordinatorDelegatedPrompt(environment.initialPrompt ?? "");
+      expect(parsed?.source).toBe("Try it");
+      expect(environment.initialPromptPresentation?.frame).toBe(parsed!.frame);
+      return coordinatorDelegationFromMail(parsed!.frame);
+    };
+    await setOrigin("mail");
+    const fromMail = await fork({ requestId: "mail", environmentId: workerId, prompt: "Try it" });
+    expect(await frameFromMail(fromMail)).toBe(true);
+    await setOrigin("user");
+    const fromUser = await fork({ requestId: "user", environmentId: workerId, prompt: "Try it" });
+    expect(await frameFromMail(fromUser)).toBe(false);
+    // A scheduled fire's recorded origin wins over the newest turn.
+    const scheduled = (await commands.get("fork_coordinator_worker")!(
+      {
+        scope: { ...scope, turnOrigin: "mail" },
+        input: { requestId: "scheduled", environmentId: workerId, prompt: "Try it" },
+      },
+      context,
+    )) as Record<string, unknown>;
+    expect(await frameFromMail(scheduled)).toBe(true);
   });
 
   test("a supported model and reasoning override is recorded as requested", async () => {
@@ -344,6 +431,15 @@ test("a lost remote fork response recovers project mapping, origin, association 
         delegation: expect.objectContaining({ state: "running", workerTabId: "startup-agent" }),
       }),
     ]);
+    // The coordinator's conversation has no recorded user turn, so the note
+    // travels inside the instruction, which a node that predates it copies.
+    const sentInstruction = routed.find((call) => call.command === "fork_controller_environment")
+      ?.args.delegation as { instruction?: string } | undefined;
+    expect(sentInstruction?.instruction?.endsWith(`\n${COORDINATOR_MAIL_ORIGIN_NOTE}`)).toBe(true);
+    const leafPrompt = (await storage.getEnvironment(forkId))?.initialPrompt ?? "";
+    expect(coordinatorDelegationFromMail(parseCoordinatorDelegatedPrompt(leafPrompt)!.frame)).toBe(
+      true,
+    );
     expect(await invoke()).toMatchObject({ environmentId: forkId, replayed: true });
     expect(started).toHaveLength(1);
   } finally {

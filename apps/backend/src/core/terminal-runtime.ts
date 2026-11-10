@@ -93,6 +93,20 @@ export type TerminalRuntimeOptions = {
   closeContainerShell?: (shell: ContainerTerminalShell, signal: AbortSignal) => Promise<void>;
 };
 
+type TerminalBootstrapResult = {
+  bootstrapped: boolean;
+  delivered: boolean;
+  duplicate: boolean;
+  matchesExisting?: boolean;
+};
+
+type PendingTerminalBootstrap = {
+  process: PtyProcess;
+  config: TerminalSessionConfig;
+  hash: string;
+  promise: Promise<TerminalBootstrapResult>;
+};
+
 /**
  * The PTYs, replay buffers, stable tab identities, activity tracking, durable
  * history and launched account homes of one backend instance. Owned by
@@ -103,6 +117,7 @@ export class TerminalRuntime {
   readonly history: TerminalHistory;
   private readonly processes = new Map<string, PtyProcess>();
   private readonly sessionConfigs = new Map<string, TerminalSessionConfig>();
+  private readonly pendingBootstraps = new Map<string, PendingTerminalBootstrap>();
   private readonly outputBuffers = new Map<string, TerminalOutputBuffer>();
   private readonly outputRevisions = new Map<string, number>();
   private readonly outputGenerations = new Map<string, number>();
@@ -412,6 +427,63 @@ export class TerminalRuntime {
     return this.sessionConfigs.get(id)?.bootstrapped === true;
   }
 
+  /** Preparation reserves this PTY, but only a successful write publishes bootstrap success. */
+  bootstrapSession(
+    id: string,
+    hash: string,
+    prepare: () => string | Promise<string>,
+    context: CommandContext,
+  ): TerminalBootstrapResult | Promise<TerminalBootstrapResult> {
+    const process = this.processes.get(id);
+    const config = this.sessionConfigs.get(id);
+    const unavailable = (): TerminalBootstrapResult => ({
+      bootstrapped: false,
+      delivered: false,
+      duplicate: false,
+    });
+    if (!process || !config) return unavailable();
+    const duplicate = (existingHash: string | undefined): TerminalBootstrapResult => ({
+      bootstrapped: true,
+      delivered: false,
+      duplicate: true,
+      matchesExisting: existingHash === hash,
+    });
+    const pending = this.pendingBootstraps.get(id);
+    if (pending?.process === process && pending.config === config) {
+      return pending.promise.then((result) =>
+        result.bootstrapped ? duplicate(pending.hash) : unavailable(),
+      );
+    }
+    if (config.bootstrapped) return duplicate(config.bootstrapDataHash);
+    const deliver = (data: string): TerminalBootstrapResult => {
+      if (this.processes.get(id) !== process || this.sessionConfigs.get(id) !== config) {
+        return unavailable();
+      }
+      process.write(data);
+      config.bootstrapped = true;
+      config.bootstrapDataHash = hash;
+      this.recordInputActivity(id, data, context);
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    };
+    const prepared = prepare();
+    // Keep synchronous writes synchronous, including their existing error behavior.
+    if (typeof prepared === "string") return deliver(prepared);
+    const attempt: PendingTerminalBootstrap = {
+      process,
+      config,
+      hash,
+      promise: prepared
+        .then((data) =>
+          this.pendingBootstraps.get(id) === attempt ? deliver(data) : unavailable(),
+        )
+        .finally(() => {
+          if (this.pendingBootstraps.get(id) === attempt) this.pendingBootstraps.delete(id);
+        }),
+    };
+    this.pendingBootstraps.set(id, attempt);
+    return attempt.promise;
+  }
+
   rememberStableSession(
     id: string,
     config: TerminalSessionConfig,
@@ -508,6 +580,7 @@ export class TerminalRuntime {
   }
 
   cleanupSession(id: string, options: { explicit?: boolean } = {}): void {
+    this.pendingBootstraps.delete(id);
     this.orphanedMissingSince.delete(id);
     const activityTimer = this.activityTimers.get(id);
     if (activityTimer) clearTimeout(activityTimer);
@@ -854,6 +927,7 @@ export class TerminalRuntime {
 
   /** Clears every timer this runtime owns; called once on backend shutdown. */
   shutdown(): void {
+    this.pendingBootstraps.clear();
     for (const timer of this.outputRetentionTimers.values()) clearTimeout(timer);
     this.outputRetentionTimers.clear();
     for (const timer of this.activityTimers.values()) clearTimeout(timer);

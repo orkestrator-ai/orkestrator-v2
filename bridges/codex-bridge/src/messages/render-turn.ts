@@ -67,6 +67,8 @@ export interface TurnRenderState {
     {
       source: EngineItem | null;
       commandChanges?: MeasuredWorkspaceChange;
+      /** Rendered as left running; see `CommandExecutionItem.left_running`. */
+      leftRunning?: true;
       parts: NormalizedPart[];
     }
   >;
@@ -277,10 +279,17 @@ export function effectiveItem(
      * than an empty box that fills in at the end.
      */
     case "command_execution": {
-      if (item.aggregated_output && item.aggregated_output.length > 0) return item;
-      if (accumulator.outputDelta.length === 0) return item;
+      // Still running when the turn ended: a process the model did not wait
+      // for. app-server reports nothing for it after the turn, so "running"
+      // would stay on an idle thread for good (to-do 7522).
+      const settled =
+        item.status === "in_progress" && turn.isTerminal()
+          ? ({ ...item, left_running: true } as typeof item)
+          : item;
+      if (settled.aggregated_output && settled.aggregated_output.length > 0) return settled;
+      if (accumulator.outputDelta.length === 0) return settled;
       return {
-        ...item,
+        ...settled,
         aggregated_output:
           accumulator.outputDelta + (accumulator.outputTruncated ? TRUNCATION_NOTICE : ""),
       } as EngineItem;
@@ -885,10 +894,14 @@ export async function renderTurn(
           item,
           structuredOutputItemId,
         );
+        // An item app-server completed while still `in_progress` renders
+        // differently once the turn ends, from the same source item.
+        const leftRunning = item.type === "command_execution" && item.left_running === true;
         if (
           accumulator?.completed &&
           cached?.source === accumulator.item &&
-          cached.commandChanges === accumulator.commandChanges
+          cached.commandChanges === accumulator.commandChanges &&
+          (cached.leftRunning === true) === leftRunning
         ) {
           if (!suppressDraft) parts.push(...cached.parts);
         } else {
@@ -923,6 +936,7 @@ export async function renderTurn(
                 ...(accumulator.commandChanges
                   ? { commandChanges: accumulator.commandChanges }
                   : {}),
+                ...(leftRunning ? { leftRunning: true as const } : {}),
                 parts: stampedParts,
               });
             } else {

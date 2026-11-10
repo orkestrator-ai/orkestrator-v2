@@ -41,6 +41,9 @@ describe("host OpenCode database", () => {
     try {
       database.run("PRAGMA journal_mode = WAL");
       for (const table of tables) database.run(`CREATE TABLE \`${table}\` (id TEXT PRIMARY KEY)`);
+      // Materialise the WAL header even when the fixture has no schema writes.
+      // Otherwise macOS SQLite cannot reopen that empty WAL database read-only.
+      database.run("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally {
       database.close();
     }
@@ -84,6 +87,32 @@ describe("host OpenCode database", () => {
   test("shares a database OpenCode 2 created or migrated that kept `session`", () => {
     writeDatabase(shared, ["migration", "session", "session_v2", "session_message"]);
     expect(hostOpenCodeDatabaseEnvironment(env)).toEqual({});
+  });
+
+  test("reads schema committed only in a live WAL instead of the checkpointed database", () => {
+    writeDatabase(shared, ["session_v2"]);
+    const writer = new Database(shared);
+    try {
+      writer.run("PRAGMA wal_autocheckpoint = 0");
+      writer.run("CREATE TABLE session (id TEXT PRIMARY KEY)");
+      expect(inspectSharedOpenCodeDatabase(shared)).toBe("compatible");
+      writer.run("DROP TABLE session");
+      expect(inspectSharedOpenCodeDatabase(shared)).toBe("incompatible");
+    } finally {
+      writer.close();
+    }
+  });
+
+  test("escapes URI metacharacters in an immutable database path", async () => {
+    const file = path.join(dataDirectory, "space ? #.db");
+    writeDatabase(file, ["session_v2"]);
+    // macOS's system SQLite keeps an empty `-wal` and the `-shm` after the
+    // last close (persistent WAL); a clean OpenCode close on Linux removes
+    // them. Remove them so the assertion below sees only what the read left.
+    await fs.rm(`${file}-wal`, { force: true });
+    await fs.rm(`${file}-shm`, { force: true });
+    expect(inspectSharedOpenCodeDatabase(file)).toBe("incompatible");
+    expect(await fs.readdir(dataDirectory)).toEqual(["space ? #.db"]);
   });
 
   test("uses its own database beside one OpenCode 2 renamed `session` in, leaving it untouched", async () => {

@@ -391,6 +391,13 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
         environmentId: context.environmentId,
         pipelineId,
         ...(value.keyInformationTabData.view === "notes" ? { view: "notes" as const } : {}),
+        ...(value.keyInformationTabData.completionPublished === true
+          ? { completionPublished: true as const }
+          : {}),
+        ...(Number.isSafeInteger(value.keyInformationTabData.completionRevision) &&
+        (value.keyInformationTabData.completionRevision as number) >= 0
+          ? { completionRevision: value.keyInformationTabData.completionRevision as number }
+          : {}),
       },
     };
   }

@@ -16,6 +16,10 @@
 #      and sits in root-owned directories outside those trees.
 #   3. Root zsh's completion directories (fpath) are outside those trees.
 #   4. sudo resets PATH (secure_path) to root-owned directories.
+#   5. What `orkestrator-bridge-launch` runs as node, and the directory it
+#      gives OpenCode for configuration, are root-owned all the way up: the
+#      agent's uid must not be able to change the code a bridge or OpenCode
+#      server loads before it starts.
 set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -112,6 +116,12 @@ IFS=: read -r -a secure_dirs <<<"$secure_path"
 for dir in "${secure_dirs[@]}"; do
     [ -d "$dir" ] || continue
     root_owned_chain "$(readlink -f "$dir")" || fail "sudo secure_path entry $dir is node-writable"
+done
+
+# 5. The launcher's programs and OpenCode's root configuration directories.
+for path in /usr/local/bin/bun /opt/opencode/bin/opencode /opt/opencode/bin/opencode2 /run/orkestrator-opencode /run/orkestrator-opencode2; do
+    [ -e "$path" ] || fail "$path is missing"
+    root_owned_chain "$(readlink -f "$path")" || fail "$path is node-writable"
 done
 
 echo "verify-root-boundary: ok"

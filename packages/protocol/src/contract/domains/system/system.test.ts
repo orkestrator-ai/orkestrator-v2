@@ -37,6 +37,7 @@ const ADMIN = new Set([
   "record_renderer_errors",
   "get_database_stats",
   "plan_diagnostics_bundle",
+  "plan_diagnostics_bundle_with_container_logs",
   "read_diagnostics_bundle",
   "request_host_update_check",
   "request_host_update",
@@ -64,10 +65,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("system definitions", () => {
-  it("defines the domain's 52 commands once each, at version 1", () => {
+  it("defines the domain's 53 commands once each, at version 1", () => {
     const names = SYSTEM_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(52);
-    expect(new Set(names).size).toBe(52);
+    expect(names).toHaveLength(53);
+    expect(new Set(names).size).toBe(53);
     expect(systemDomain).toMatchObject({ name: "system", version: 1, min: 1 });
     for (const def of SYSTEM_COMMANDS) {
       expect(def.domain).toBe(systemDomain);

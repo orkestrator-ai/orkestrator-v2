@@ -252,3 +252,17 @@ The unchanged complete owner passed with
 (exit 0, 9.6 s). Passing output was deleted by the runner; no isolated total
 is claimed. No readiness source, timeout or assertion changed. The cause is
 unconfirmed, and the isolated pass does not replace the aggregate failure.
+
+## Worktree-watcher review recurrence — 2026-11-10
+
+Observed in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name coverage-full-final -- mise run test` at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`, base `08d3da4a23cfe2ecc34fba663ca27e765f7924a9`, macOS arm64/Bun 1.4.4. The workspace reserved six slots (web two, backend four), root one, bridges two and protocol one. The aggregate exited 1 after 2468.77 s; backend has no final counts because the workspace no-progress watchdog fired. Root reported 4274 pass/25 skip/4 fail; web 14336 pass/10 skip/2 fail; Pi 706 pass/1 skip/2 fail.
+
+- `apps/backend/src/core/commands-files-delete-folder.test.ts` — `container removal safety and shared revert behavior > revert restores a tracked file from the base`: Test deadline 5,000 ms exceeded. Observed 6123.11ms. Complete unchanged owner: 25 pass, 0 fail, 0 skip in 18.14 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+
+```sh
+mise run test:logged -- --name watcher-triage-delete-folder -- bun test --cwd apps/backend ./src/core/commands-files-delete-folder.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/delete-folder.xml
+```
+
+`mise run flaky:recurrence -- 9839 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.
+
+Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.

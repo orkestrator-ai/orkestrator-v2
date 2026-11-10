@@ -253,14 +253,14 @@ platforms than Claude and Codex.
   the provider's `transcriptSnapshot`; a provider without it fails the read
   (the count-bounded compatibility read was retired on 2026-10-25).
 - **Scheduling.** `KeyedWorkflowSupervisor` (`workflow-supervisor.ts`) is the
-  default. `wakeWorkflows` in `index.ts` delivers provider-transition wakeups
-  to `MultiReviewService.wakeEnvironment`. `WorkflowDueScheduler`
-  (`multi-review-scheduler.ts`) runs only when
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` names `multi-review` or `all`, and
-  goes with that switch
-  ([0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)).
-  Both drivers share one relative due-time policy (`nextDelayMs`) and take
-  the `schedulerClock` test seam. The legacy 1 s tick
+  only driver. `wakeWorkflows` in `index.ts` delivers provider-transition
+  wakeups to `MultiReviewService.wakeEnvironment`. Its rollback,
+  `WorkflowDueScheduler` (`multi-review-scheduler.ts`), was removed on
+  2026-11-10
+  ([0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
+  task 13), so `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` no longer names
+  `multi-review`. The due-time policy is `nextDelayMs`, with the
+  `schedulerClock` test seam. The legacy 1 s tick
   (`adaptiveScheduling: false`) and the `evidencePermits` gate are gone.
 - **Payload budgets.** `packages/protocol/src/structured-review/budgets.ts`
   (`STRUCTURED_REVIEW_MAX_*`) bounds each report. `CONSOLIDATION_MAX_EVIDENCE_BYTES`
@@ -337,7 +337,8 @@ All done on 2026-10-25; evidence in
    - ~~`adaptiveScheduling` and the legacy `setInterval` / `requestTick`
      tick~~: removed; `DEFAULT_POLL_MS` stays. The B16 comment in
      `packages/protocol/src/recurring-work.ts` is updated.
-   - `WorkflowDueScheduler`, `multi-review-scheduler.ts` and its test stay,
+   - (Removed 2026-11-10 by 0048 task 13; kept below as written then.)
+     `WorkflowDueScheduler`, `multi-review-scheduler.ts` and its test stay,
      as the `multi-review` domain's rollback under
      `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Their removal is owned by
      [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)

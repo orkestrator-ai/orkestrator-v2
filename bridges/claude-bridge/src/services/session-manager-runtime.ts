@@ -12,6 +12,7 @@
 // its frames. Turns are what `sendPrompt` creates: each one handles the frames
 // routed to it, and the newest one owns the root conversation.
 
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { createHash } from "node:crypto";
 import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
 import type {
@@ -303,6 +304,12 @@ export async function assertClaudeRuntimeAccepts(
 
 export interface ClaudeRuntime {
   readonly session: SessionState;
+  /**
+   * Which CLI this is, from a counter this bridge process never reuses: a
+   * prompt written into a warm CLI keeps it, a launch takes the next. Served,
+   * as a bare number, in `/session/:id/runtime-health` (0005 task 8).
+   */
+  readonly generation: number;
   /** The query, and the session's control handle while a turn runs. */
   readonly control: NonNullable<SessionState["queryControl"]>;
   readonly input: HeldSdkPrompt;
@@ -348,6 +355,17 @@ export const MAX_RUNTIME_TOOL_OWNERS = 4_096;
  */
 export const DRAINING_RUNTIME_EXIT_WAIT_MS = 5_000;
 
+/**
+ * The last runtime generation handed out by this bridge process.
+ *
+ * Bridge-wide rather than per session so a session record that is dropped
+ * and rebuilt in the same process (close, then a resume) can never show a
+ * number an earlier CLI already had. A bridge restart starts again at 1, but
+ * it also takes every CLI with it (decision 5), so no live process is ever
+ * confused with another.
+ */
+let lastClaudeRuntimeGeneration = 0;
+
 export function createClaudeRuntime(input: {
   session: SessionState;
   control: NonNullable<SessionState["queryControl"]>;
@@ -364,8 +382,14 @@ export function createClaudeRuntime(input: {
   const ended = new Promise<void>((resolve) => {
     markEnded = resolve;
   });
+  lastClaudeRuntimeGeneration += 1;
+  const generation = lastClaudeRuntimeGeneration;
+  // Kept on the session too, so health still names the last CLI once the
+  // idle window has released it and `claudeRuntime` is gone.
+  input.session.claudeRuntimeGeneration = generation;
   const runtime: ClaudeRuntime = {
     session: input.session,
+    generation,
     control: input.control,
     input: input.heldInput,
     abortController: input.abortController,
@@ -537,21 +561,8 @@ export async function retireDrainingClaudeRuntime(
   const runtime = session.claudeRuntime;
   if (!runtime || runtime.state === "ended") return;
   if (runtime.state === "open") drainClaudeRuntime(runtime);
-  const waitForEnd = async () => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        runtime.ended.then(() => true),
-        new Promise<false>((resolve) => {
-          timer = setTimeout(() => resolve(false), waitMs);
-          // A bounded wait, not work: it must not keep the process alive.
-          timer.unref?.();
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  // A bounded wait, not work: its timer must not keep the process alive.
+  const waitForEnd = async () => (await boundedWait(runtime.ended, waitMs)).settled;
   if (await waitForEnd()) return;
   // close may throw, reject or never settle. Only the consumer's ended signal
   // proves that this writer is gone; observe close failures without awaiting it.

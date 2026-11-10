@@ -9,6 +9,7 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type RefObject,
@@ -28,6 +29,7 @@ import {
 } from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { TranscriptPromptNavigator } from "@/components/chat/TranscriptPromptNavigator";
+import { useChatColumnShiftStyle } from "@/components/chat/chat-column-shift";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
@@ -284,8 +286,12 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     ],
   );
   const [showLog, setShowLog] = useState(false);
+  // A coordinator's docked Actions panel can move the column left to fit.
+  const columnShiftStyle = useChatColumnShiftStyle();
   const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
   const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
+  /** The height last committed to state, so an unchanged measurement queues nothing. */
+  const composeDockHeightRef = useRef<number | null>(null);
   const composeDockRef = useCallback((element: HTMLDivElement | null) => {
     setComposeDockElement(element);
   }, []);
@@ -297,9 +303,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
     const syncHeight = () => {
       const nextHeight = Math.ceil(composeDockElement.getBoundingClientRect().height);
-      setComposeDockHeight((currentHeight) =>
-        currentHeight === nextHeight ? currentHeight : nextHeight,
-      );
+      // Every pane resize fires this. Returning the current value from an
+      // updater is not enough: React only drops a same-value update before
+      // rendering when the component has no other pending work, and otherwise
+      // renders and commits the shell once before bailing out. So an unchanged
+      // height must not queue an update at all.
+      if (composeDockHeightRef.current === nextHeight) return;
+      composeDockHeightRef.current = nextHeight;
+      setComposeDockHeight(nextHeight);
     };
 
     syncHeight();
@@ -428,7 +439,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 {elapsedStartedAt !== undefined ? (
                   <LiveElapsed startedAt={elapsedStartedAt} />
                 ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
-                  <span className="text-xs text-muted-foreground/50">
+                  <span className="text-xs text-muted-foreground">
                     {formatElapsed(elapsedSeconds)}
                   </span>
                 ) : null}
@@ -440,7 +451,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {!isLoading && finalElapsedSeconds !== null && (
           <div className="px-2 @sm:px-4">
             <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-              <span className="text-[10px] text-muted-foreground/40">
+              <span className="text-[11px] text-muted-foreground">
                 Completed in {formatElapsed(finalElapsedSeconds)}
               </span>
             </div>
@@ -606,7 +617,10 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     ) : null;
 
   return (
-    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+    <div
+      className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      style={columnShiftStyle}
+    >
       {/*
         The region itself never unmounts, so it is already a live region before
         any text arrives. Only its child is keyed on `seq`, which replaces the

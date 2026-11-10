@@ -95,6 +95,8 @@ export interface ClaudeLinuxSandboxProbeDependencies {
   run?: (command: string, args: readonly string[]) => ClaudeLinuxSandboxProbeResult;
   /** Whether AppArmor is enabled and Ubuntu's bwrap profile is installed. */
   appArmorBwrapProfile?: () => boolean;
+  /** Whether this process runs in a container (an Orkestrator environment's bridge). */
+  inContainer?: () => boolean;
 }
 
 /** Whether `name` is an executable file in one of `PATH`'s directories. */
@@ -145,7 +147,14 @@ function probeDetail(stderr: string): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
-const UNAVAILABLE = "Claude's command sandbox cannot run commands on this host";
+/**
+ * Docker always creates `/.dockerenv`, Podman `/run/.containerenv`. A bridge
+ * there runs in an environment's container, whose image the user does not
+ * install packages into, so its reason must not tell them to (to-do 0190).
+ */
+function runningInContainer(): boolean {
+  return existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+}
 
 /** Run the probe now. Prefer {@link claudeLinuxSandboxStatus}, which caches it. */
 export function probeClaudeLinuxSandbox(
@@ -154,13 +163,18 @@ export function probeClaudeLinuxSandbox(
   const onPath = dependencies.onPath ?? ((name: string) => executableOnPath(name));
   const run = dependencies.run ?? runProbeCommand;
   const appArmorBwrapProfile = dependencies.appArmorBwrapProfile ?? appArmorBwrapProfileInstalled;
+  const container = (dependencies.inContainer ?? runningInContainer)();
+  const UNAVAILABLE = `Claude's command sandbox cannot run commands ${container ? "in this container" : "on this host"}`;
 
   const missing = CLAUDE_LINUX_SANDBOX_PROGRAMS.filter((name) => !onPath(name));
   if (missing.length > 0) {
+    const absent = `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"}`;
     return {
       available: false,
       failure: "missing-programs",
-      reason: `${UNAVAILABLE}: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} missing. Install the bubblewrap and socat packages.`,
+      reason: container
+        ? `${UNAVAILABLE}: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and ${absent} not in this container's image.`
+        : `${UNAVAILABLE}: the Claude CLI's Linux sandbox needs bubblewrap and socat on PATH, and ${absent} missing. Install the bubblewrap and socat packages.`,
     };
   }
   if (!onPath("unshare")) {

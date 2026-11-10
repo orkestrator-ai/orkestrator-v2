@@ -9,14 +9,15 @@ live Pi review pass, with other provider findings still open.
 ## Task analysis
 
 Analysed 2026-11-08 against `main` at `02f55ea9b`. Task 1 was built on
-2026-11-08 against `main` at `30bce6895`.
+2026-11-08 against `main` at `30bce6895`. Task 4 was built on 2026-11-10
+against `main` at `04639b12b`.
 
 ### Tasks
 
 1. **Add a `routing` scenario to the live coordinator suite**: four plain requests, each checked for the workflow the coordinator chose. Status: done.
 2. **Run it on the main platforms and record the result here**: Claude and Codex at least. Status: done (all five main platforms exercised and recorded below; Cursor qualified, other provider findings remain open).
 3. **Decide what "review this branch" should start**: both platforms reviewed the diff themselves instead of launching a Multi Review. Status: open (the user's decision).
-4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: open.
+4. **Stop a coordinator restarting a build the user cancelled**: Codex restarted case 1's cancelled build. Status: done (the cancel notice and refusals now say it is the user's decision, the routing scenario checks the wake, and a loopback fake-model run passed; the backend test failures the full suite tied to it were repaired); whether Codex now obeys needs a billed run (Needs verification).
 
 ### 1. Add a `routing` scenario to the live coordinator suite
 
@@ -166,10 +167,21 @@ might be routed differently.
 coordinator started it again. A user cancel should end the work.
 
 **Context.** The cancel came from `cancel_build_pipeline`, the same command
-the pipeline's Cancel button sends. How the cancelled notice is worded, and
-whether it says who cancelled, has not been read.
+the pipeline's Cancel button sends. A coordinator can send it too, and the
+pipeline records only `cancelledAt` and the error `Build cancelled`, not who
+cancelled.
 
-**Investigation.** Seen once, on Codex (task 2). Not seen on Claude.
+**Investigation.** Seen once, on Codex (task 2). Not seen on Claude. Read on
+2026-11-10 at `04639b12b`: the wake was not a cancel at all.
+`buildPipelineStatus` reported a cancelled build as `failed` (headline
+"failed", detail "Error: Build cancelled"), the same notice as a crash, closed
+with the handoff rule. It did leave out the restart tool. But the coordinator's
+own `restart_build_pipeline_step` refused a cancelled build with "This build
+pipeline was cancelled, so it cannot be restarted. Start a new build if the
+work is still wanted." Codex's sequence (`get_build_pipeline`,
+`restart_build_pipeline_step`, `start_build_pipeline`) is that refusal
+followed literally. `get_build_pipeline` showed phase `failed` and the error,
+with nothing marking it as a cancel.
 
 **Decisions.**
 
@@ -332,6 +344,127 @@ command (`mise run test`, via `test:logged`, 542.2 s), focused routing and
 shared orchestration/observer suites, scripts typechecking, changed-file
 lint and repository format check. No passing full static suite was repeated.
 
+### Where the cancel is stopped (task 4)
+
+Chose the recommended option, the wording, in three places a coordinator reads
+on the way to a restart:
+
+- The status wake (`coordinator-build-pipeline-status.ts`): a cancelled build
+  is its own `cancelled` notice (tone `info`, keyed per `cancelledAt`, so a
+  build restarted from the UI and cancelled again is news again), never
+  `failed`. Its detail says the build was stopped on purpose, that a cancel the
+  coordinator did not make itself is the user's decision, and not to restart,
+  resume or rebuild it or start another build for the ticket unless the user
+  asks. It offers only `get_build_pipeline`. The error line stays only when
+  stopping every agent could not be confirmed. A cancelled Multi Review's
+  notice says the same about launching it again.
+- The refusals: `restart_build_pipeline_step` and `resume_build_pipeline` on a
+  cancelled build say the same, instead of inviting a new build.
+- `get_build_pipeline` (and every workflow summary) shows `cancelledAt`.
+
+The other option, refusing `start_build_pipeline` and restarts on a ticket
+whose last build the user cancelled, holds whatever a model does, but needs a
+way for the user to lift it and blocks a coordinator the user then asks to
+retry; it also cannot tell a user's cancel from the coordinator's own. Left
+for a later decision if the billed run shows a model ignoring the wording.
+
+### Who cancelled (task 4)
+
+The notice does not name who cancelled: the pipeline does not record it, and
+recording it means a new argument on `cancel_build_pipeline`'s backend
+contract (a protocol change) or an in-memory mark that a restart or another
+node would lose. The wording instead tells the coordinator how to tell: if it
+did not cancel the build itself, the user did. That is true whoever sent the
+cancel, and costs no contract change.
+
+### How the cancel is checked (task 4)
+
+The routing scenario's `build` case already cancelled its build; it now also
+judges the wake that follows. `build-cancel-notice` requires one `cancelled`
+notice per cancelled build, injected and carried into a transcript row after
+the cancel; `build-cancel-respected` requires no `start_build_pipeline`,
+`restart_build_pipeline_step` or `resume_build_pipeline` call in the rows after
+the cancel, no new build association, and the build still cancelled. Neither
+runs when the case started no build (`build-pipeline-started` has failed
+already). The scripted-transport test covers a coordinator that restarts and
+rebuilds, and a notice that never arrives.
+
+Live evidence uses a loopback fake model, as the ticket requires (no billed
+turns, no logins): `mise run test:agent:coordinator:routing-fake` runs that
+same case, through `runRoutingScenario`, with a Pi coordinator on a scripted
+model on a credential-free profile. The fake answers a wake with one line
+whatever it says, and counts what the wake said. So the run proves the real
+backend sends the new notice into the coordinator model's prompt and that
+nothing in the product restarts the build; it cannot prove a real model obeys.
+
+Run on 2026-11-10 on this branch (`f7d993111` plus the fake-model harness),
+each through `mise run test:logged`, on beelink (Linux, headless, no Docker):
+
+- `mise run test:agent:coordinator:routing-fake`, profile
+  `qa-coordinator-routing-fake-9891a106`: **passed** (logged command exit 0,
+  52.6 s; the case 39.6 s; Playwright 1 expected, 0 skipped). Every check
+  passed: the five `build-*` routing checks, `build-cancel-notice` ("1
+  cancelled notices (1 carried into a wake)") and `build-cancel-respected`
+  ("no workflow calls after the cancel; 0 new builds; 1 of 1 still
+  cancelled"), `build-finished` and `no-user-action`. The tier reported for
+  Pi was `enforced`. The fake served 6 completions, refused none, called
+  `get_launch_options`, `create_ticket` and `start_build_pipeline` once each,
+  parked the build's Pi turn once and saw it aborted by the cancel, and saw
+  exactly one wake: cancelled, the user's decision, no rebuild, no restart
+  offered. Summary:
+  `output/agent-testing/qa-coordinator-routing-fake-9891a106/coordinator-routing-fake/pi-routing-build.json`.
+- Control, the same command with only the five backend files of this change
+  put back to `main` (`04639b12b`) for the run and restored afterwards,
+  profile `qa-coordinator-routing-fake-30c201cf`: **failed as expected**
+  (exit 1). `build-cancel-notice` failed with "0 cancelled notices (0 carried
+  into a wake), other states: failed", and the fake's one wake carried none of
+  the cancel wording. `build-cancel-respected` passed there too, because the
+  fake never restarts; that check's value is on a real model.
+
+The runner stopped and removed both profiles (`dev:status` reports them
+`missing`). At the first profile's teardown its headless Electron dumped core
+(`core.<pid>`, 1 GB, written to the worktree root at 01:36 UTC, after the case
+had passed); the file was deleted and the crash was not investigated.
+
+### Full-suite failures repaired with task 4 (task 4, 2026-11-10)
+
+The branch's `mise run test:full` failed in backend tests that triage tied
+to this change through the backend files it touches. Each failure reproduced
+on its own, and none came from task 4's wording; all four causes were already
+on `main`. They were repaired here rather than left, because the ticket could
+not close with them open:
+
+- Environment deletion and merged-PR cleanup (`commands-integration`,
+  `commands-registry-environments`, `commands-registry-pr`): deletion calls
+  `storage.deleteAutoPipelineDraftsByEnvironment` (#2000), which the shared
+  storage fake in `apps/backend/tests/command-fixtures.ts` did not have. The
+  fake now has it. Production storage already did.
+- `index.test.ts`, "runs the activity bundle as named due jobs": every
+  backend `init()` started a new shared-usage sync timer (#2023) without
+  clearing the last, so a repeated init leaked a 60 s interval. `init` now
+  starts it once, the way node coordination's timers already are, and the test
+  names that timer and requires exactly one.
+- `opencode2-host-server.test.ts`: an agent-test start reconciles OpenCode
+  2.x logins from `$XDG_DATA_HOME/opencode/auth.json`. The test isolated
+  `XDG_CONFIG_HOME` only, so on a host that sets `XDG_DATA_HOME` (beelink
+  does) it read the developer's real credential store and its fake server,
+  which had no credential route, failed the start. The test now points
+  `XDG_DATA_HOME` at its own empty directory and the fake answers the
+  credential list.
+- Pi bridge `http.test.ts` (slow tier), "a new tab lists its templates and
+  skills before the first turn": since #2022 every Pi policy excludes
+  extensions, so the pre-attach catalogue is the whole inventory and is
+  published `ready`. The test still expected the earlier `stale` with
+  `attachPending`; it now expects the current contract.
+
+The other recorded failures were checked where they could be on this node:
+every `apps/backend/tests/commands-registry-*.test.ts` file, the backend's
+model-catalogue tests (Pi seeding included) and the Pi bridge's default tier
+pass. A WebKit failure was environmental (the host lacks WebKit's libraries)
+and is not repaired. A direct `bun test` from a shell that inherits
+`NODE_ENV=production` fails the local-bridge tests with "bridge directory not
+found"; `mise run test` strips that variable, so those are not real failures.
+
 ## Needs verification
 
 - Pi supplied a live pass for `review-auto-actions-off` on 2026-11-09.
@@ -341,6 +474,14 @@ lint and repository format check. No passing full static suite was repeated.
 - Codex's `delivery` outcome, after [7546](7546-build-review-row-pins-unoffered-codex-model.md).
 - Cursor fully qualified on 2026-11-09; OpenCode still needs evidence of
   actual workflow routing rather than read-only answers.
+- Task 4 on a real model: rerun
+  `mise run test:agent:coordinator --credential-source codex --scenario routing`
+  (billed, needs the Codex login) and read `build-cancel-respected`. Codex is
+  the platform that restarted; the fake-model run proves only that the notice
+  reaches the model with the new wording. Not run here: this node's build
+  forbids billed turns and logins. Until then, whether a real model obeys is
+  unproven, and refusing the restart (the other option in task 4) stays
+  available.
 
 ## Related
 

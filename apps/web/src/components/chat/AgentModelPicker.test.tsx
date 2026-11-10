@@ -202,7 +202,7 @@ describe("AgentModelPicker", () => {
     const { container } = renderPicker();
 
     const trigger = screen.getByRole("button", {
-      name: "A model name that can become very long (High ⚡)",
+      name: "A model name that can become very long · High ⚡",
     });
     expect(trigger.querySelector(".truncate")).toBeTruthy();
     fireEvent.pointerDown(trigger);
@@ -423,7 +423,7 @@ describe("AgentModelPicker", () => {
     // The icon is decorative; the accessible name already names the model.
     expect(getTriggerPlatformIcon("codex")?.getAttribute("aria-hidden")).toBe("true");
     expect(
-      screen.getByRole("button", { name: "A model name that can become very long (High ⚡)" }),
+      screen.getByRole("button", { name: "A model name that can become very long · High ⚡" }),
     ).toBeTruthy();
   });
 
@@ -1541,7 +1541,7 @@ describe("AgentModelPicker", () => {
       selectedReasoningLabel: "Default",
     });
     const trigger = screen.getByRole("button", {
-      name: "A model name that can become very long (Default)",
+      name: "A model name that can become very long · Default",
     });
     expect(trigger.textContent).toContain("Default");
     expect(trigger.textContent).not.toContain("speed");

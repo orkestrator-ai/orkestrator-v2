@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {
@@ -2155,14 +2156,23 @@ describe("native agent progressive remainder", () => {
             if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
             return update.value.sections.runtime;
           };
-          if (cached) {
-            await section();
-            await waitForCondition(async () => (await section())?.availability === "ready");
-            now += 31_000;
-          }
+          const wasEnabled = nativeSessionInvalidationMetrics.enabled;
+          nativeSessionInvalidationMetrics.setEnabled(true);
+          nativeSessionInvalidationMetrics.reset();
+          const renewals = () => nativeSessionInvalidationMetrics.snapshot().discoveryRenewals;
           const announced = spyOn(storage, "announceNativeAgentSessionProjection");
-          held = true;
           try {
+            if (cached) {
+              await section();
+              await waitForCondition(async () => (await section())?.availability === "ready");
+              expect(renewals()).toEqual({
+                cursor: { runtime: { count: 1, changed: { initial: 1 } } },
+              });
+              nativeSessionInvalidationMetrics.reset();
+              now += 31_000;
+            }
+            announced.mockClear();
+            held = true;
             await section();
             await Bun.sleep(2_100);
             const first = await section();
@@ -2174,6 +2184,13 @@ describe("native agent progressive remainder", () => {
             // A retained value that only went stale shows the same content, so
             // it is stored for the next read but not announced (0049 item 5).
             expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
+            expect(renewals()).toEqual(
+              cached
+                ? {}
+                : {
+                    cursor: { runtime: { count: 1, changed: { initial: 1 } } },
+                  },
+            );
 
             // Finish the timed-out read with the same error, then expire its
             // fallback so a second actual read reaches the deadline too.
@@ -2186,6 +2203,13 @@ describe("native agent progressive remainder", () => {
             await Bun.sleep(2_100);
             const repeated = await section();
             expect(repeated).toEqual(first);
+            expect(renewals()).toEqual(
+              cached
+                ? {}
+                : {
+                    cursor: { runtime: { count: 1, changed: { initial: 1 } } },
+                  },
+            );
             expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
 
             // A late successful result changes availability and contents and
@@ -2197,6 +2221,13 @@ describe("native agent progressive remainder", () => {
             expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
             expect(recovered?.error).toBeUndefined();
             expect(announced).toHaveBeenCalledTimes(cached ? 1 : 2);
+            expect(renewals()).toEqual({
+              cursor: {
+                runtime: cached
+                  ? { count: 1, changed: { "summary.state": 1 } }
+                  : { count: 2, changed: { initial: 1, availability: 1 } },
+              },
+            });
             expect(announced).toHaveBeenLastCalledWith("env-1", "discovery-renewal", {
               agent: "cursor",
               logicalSessionKey: input.logicalSessionKey,
@@ -2204,6 +2235,8 @@ describe("native agent progressive remainder", () => {
           } finally {
             release(health);
             announced.mockRestore();
+            nativeSessionInvalidationMetrics.reset();
+            nativeSessionInvalidationMetrics.setEnabled(wasEnabled);
           }
         },
       );

@@ -627,6 +627,9 @@ async function sweepProjectBranches(
           lastError: null,
         },
         run,
+        // The branch's own namespace, belonging to an environment that no
+        // longer exists: only branches named for some environment get here.
+        namespace,
       );
       if (outcome === "deleted") counts.deleted += 1;
       else if (outcome === "kept") counts.kept += 1;
@@ -900,7 +903,7 @@ export function cancelScheduledEnvironmentCleanup(dataDir: string): void {
  */
 export async function runStartupEnvironmentCleanup(
   context: CommandContext,
-  options: { orphanSweepIntervalMs?: number } = {},
+  options: { orphanSweepIntervalMs?: number; now?: () => Date } = {},
 ): Promise<void> {
   scheduleEnvironmentCleanupReconcile(context);
   const state = scheduled.get(path.resolve(context.storage.getDataDir()))!;
@@ -911,7 +914,7 @@ export async function runStartupEnvironmentCleanup(
     if (state.cancelled) return;
     try {
       try {
-        const removed = await sweepOrphanedEnvironmentState(context);
+        const removed = await sweepOrphanedEnvironmentState(context, { now: options.now });
         if (removed > 0) {
           log.info("orphan-state.removed", { removed });
         }
@@ -935,7 +938,10 @@ export async function runStartupEnvironmentCleanup(
         }
       }
       if (!state.cancelled) {
-        await sweepPreLedgerDiskState(context, { isCancelled: () => state.cancelled });
+        await sweepPreLedgerDiskState(context, {
+          isCancelled: () => state.cancelled,
+          now: options.now,
+        });
       }
     } finally {
       if (!state.cancelled) {

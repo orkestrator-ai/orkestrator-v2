@@ -154,6 +154,6 @@ alone the offer did not appear after a restart.
 
 ## Related
 
-- [7521-container-terminal-shells-outlive-a-backend-exit.md](7521-container-terminal-shells-outlive-a-backend-exit.md) (a backend that exits never closes its container terminals, so their shells outlive it).
+- to-do 7521 (retired on 2026-11-10; see [container-lifecycle.md](../../architecture/container-lifecycle.md#terminal-close)) (a backend that exits never closes its container terminals, so their shells outlive it).
 - [0020-container-state-observation.md](0020-container-state-observation.md) (task 4, where the offer was first noted).
 - [7080-linux-host-firewall-blocks-profile-signals.md](7080-linux-host-firewall-blocks-profile-signals.md) (the run that found both).

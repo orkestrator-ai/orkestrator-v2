@@ -5,7 +5,8 @@ import {
   type CoordinatorLiveCheck,
   type CoordinatorTranscriptMessage,
 } from "./coordinator-live.js";
-import { statusReviewAgentSettings } from "./coordinator-live-status.js";
+import type { DelegationMailMessage } from "./coordinator-live-delegation.js";
+import { carrierRowIndex, statusReviewAgentSettings } from "./coordinator-live-status.js";
 
 /**
  * The live coordinator suite's `routing` scenario (todo 7545): plain user
@@ -17,7 +18,9 @@ import { statusReviewAgentSettings } from "./coordinator-live-status.js";
  * 1. `build`: a small, fully specified change with a done condition. Expected:
  *    `create_ticket` with acceptance criteria, then `start_build_pipeline` for
  *    that ticket with no `agentType`, `steps`, `reviewers` or
- *    `reviewPreparation`. The harness cancels the build once the turn ends.
+ *    `reviewPreparation`. The harness cancels the build once the turn ends,
+ *    as the user's Cancel does; the coordinator must hear a `cancelled`
+ *    notice and, woken by it, neither restart, resume nor rebuild it.
  * 2. `investigate`: a question that needs a run, with "don't change
  *    anything". Expected: a worker (`launch_environment`, `launch_job` or
  *    `send_prompt_to_tab`) and no ticket, build or Multi Review. The worker's
@@ -350,6 +353,71 @@ export function evaluateRoutingBuild(input: RoutingBuildInput): CoordinatorLiveC
   const others = named(calls, [...REVIEW_TOOLS, ...WORKER_TOOLS, ...OTHER_WORKFLOW_TOOLS]);
   checks.push(check(`${prefix}-no-other-workflow`, others.length === 0, describeCounts(counts)));
   return checks;
+}
+
+/** Calls that would carry on a build the user cancelled (to-do 7545 task 4). */
+const RESTART_TOOLS = [
+  "start_build_pipeline",
+  "restart_build_pipeline_step",
+  "resume_build_pipeline",
+];
+
+/** Keep cancellation verdicts and observed summaries on the same set of tools. */
+export function routingRestartCallCounts(
+  calls: readonly RoutingToolCall[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const call of named(calls, RESTART_TOOLS)) {
+    counts[call.tool] = (counts[call.tool] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export interface RoutingCancelInput {
+  /** The coordinator's rows that arrived after the harness cancelled the build. */
+  messages: readonly CoordinatorTranscriptMessage[];
+  /** System notices to the coordinator about the cancelled pipelines. */
+  notices: readonly DelegationMailMessage[];
+  /** Build associations the conversation gained after the cancel. */
+  newPipelineIds: readonly string[];
+  /** The cancelled pipelines, read once the coordinator settled. */
+  cancelled: readonly (RoutingPipeline | undefined)[];
+}
+
+/**
+ * Case 1's end (to-do 7545 task 4): the harness cancels the build as the
+ * user's Cancel does; the coordinator hears it as a cancel and, woken by it,
+ * neither restarts, resumes nor rebuilds it.
+ */
+export function evaluateRoutingCancel(input: RoutingCancelInput): CoordinatorLiveCheck[] {
+  const cancels = input.notices.filter((notice) => notice.notice?.state === "cancelled");
+  const others = input.notices.filter((notice) => notice.notice?.state !== "cancelled");
+  const carried = cancels.filter(
+    (notice) => notice.placement === "injected" && carrierRowIndex(input.messages, notice.id) >= 0,
+  );
+  const restartCounts = routingRestartCallCounts(routingToolCalls(input.messages));
+  const stillCancelled = input.cancelled.filter(
+    (pipeline) => pipeline?.phase === "failed" && pipeline.cancelledAt !== undefined,
+  ).length;
+  return [
+    check(
+      "build-cancel-notice",
+      input.cancelled.length > 0 &&
+        cancels.length === input.cancelled.length &&
+        carried.length === input.cancelled.length,
+      `${cancels.length} cancelled notices (${carried.length} carried into a wake), other states: ${
+        others.map((notice) => notice.notice?.state ?? "unknown").join(", ") || "none"
+      }`,
+    ),
+    check(
+      "build-cancel-respected",
+      input.cancelled.length > 0 &&
+        Object.keys(restartCounts).length === 0 &&
+        input.newPipelineIds.length === 0 &&
+        stillCancelled === input.cancelled.length,
+      `${describeCounts(restartCounts)} after the cancel; ${input.newPipelineIds.length} new builds; ${stillCancelled} of ${input.cancelled.length} still cancelled`,
+    ),
+  ];
 }
 
 export interface RoutingDeliveryOutcomeInput {

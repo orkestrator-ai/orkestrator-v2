@@ -12,6 +12,7 @@ import {
   freshToolStates,
   shellOutputContainsMarker,
   gapHistogram,
+  discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
   readGaps,
@@ -45,12 +46,14 @@ describe("idle observation live support", () => {
           { type: "text", content: "IDLEQA-BG-1" },
           { type: "tool-invocation", toolName: "bash", toolState: "pending", toolOutput: "secret" },
           { type: "subagent", toolState: "success", subagentPrompt: "secret" },
+          { type: "tool-invocation", toolName: "bash", toolLeftRunning: true },
         ],
       },
     ];
     expect(freshToolStates(messages, new Set(["old"]))).toEqual([
       "bash:pending",
       "subagent:success",
+      "bash:left-running",
     ]);
     expect(selectedCases("async-question")).toEqual(["async-question"]);
   });
@@ -74,6 +77,29 @@ describe("idle observation live support", () => {
     });
     // An older backend reports no counters: nothing moved.
     expect(invalidationCauseDelta(undefined, undefined, "codex")).toEqual({ total: 0 });
+  });
+
+  test("discovery renewal deltas name the section and the changed paths that moved", () => {
+    const before = {
+      codex: { runtime: { count: 1, changed: { "summary.notices[count]": 1 } } },
+      claude: { mcp: { count: 2, changed: { "value[count]": 2 } } },
+    };
+    const after = {
+      codex: {
+        runtime: {
+          count: 4,
+          changed: { "summary.notices[count]": 1, "summary.notices[].occurrences[count]": 3 },
+        },
+        models: { count: 1, changed: { "value[order]": 1 } },
+        mcp: { count: 0, changed: {} },
+      },
+      claude: { mcp: { count: 3, changed: { "value[count]": 3 } } },
+    };
+    expect(discoveryRenewalDelta(before, after, "codex")).toEqual({
+      runtime: { count: 3, changed: { "summary.notices[].occurrences[count]": 3 } },
+      models: { count: 1, changed: { "value[order]": 1 } },
+    });
+    expect(discoveryRenewalDelta(undefined, undefined, "codex")).toEqual({});
   });
 
   test("read cadence counts reads and the largest gap inside the window", () => {
@@ -222,6 +248,8 @@ test("fake Pi overrides cannot escape loopback and real runs preserve overrides"
   expect(idleObservationModel("pi", true)).toBe("idleqa-fake/idleqa-1");
   expect(idleObservationModel("pi", false, "openai/real")).toBe("openai/real");
   expect(idleObservationModel("codex", true, "custom")).toBe("custom");
+  expect(idleObservationModel("opencode", true, "opencode/real")).toBe("idleqa-fake/idleqa-1");
+  expect(idleObservationModel("opencode", false, "opencode/real")).toBe("opencode/real");
 });
 test("async question prompt requests both replies the watcher expects", () => {
   const prompt = asyncQuestionPrompt("Choose a codeword", "IDLEQA-ASKED-1");

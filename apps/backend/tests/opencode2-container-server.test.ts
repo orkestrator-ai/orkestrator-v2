@@ -14,6 +14,9 @@ import {
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
   OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT_FILE,
 } from "../src/core/opencode2/container-server";
+import { OPENCODE2_LAUNCH_FINGERPRINT } from "../src/core/opencode2-container-launch";
+import { OPENCODE2_LAUNCH_ROOT } from "../src/core/agent-credential-files";
+import { OPENCODE2_LISTENER_RECORD } from "../src/core/opencode-listener-identity";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createCommandFixtures } from "./command-fixtures";
@@ -202,6 +205,229 @@ describe("startContainerOpenCode2Server", () => {
       await expect(
         startContainerOpenCode2Server(context, "container-1", async () => "launcher"),
       ).rejects.toThrow("rebuild it to use OpenCode 2");
+    });
+  });
+});
+
+/**
+ * The fake Docker of an `opencode2-launch=1` image: root's read also prints
+ * the listener lines in \`FAKE_LISTENER\`, and the record script answers
+ * \`recorded\`.
+ */
+const FAKE_DOCKER_LAUNCHER = FAKE_DOCKER.replace(
+  `  *"--user root"*"cat /run/orkestrator-bridge/opencode2-token"*) printf '%s' "$FAKE_ROOT_TOKEN" ;;`,
+  `  *"--user root"*"echo recorded"*) printf 'recorded\\n' ;;
+  *"--user root"*"cat /run/orkestrator-bridge/opencode2-token"*) printf '%s\\n\\n%b\\n' "$FAKE_ROOT_TOKEN" "$FAKE_LISTENER" ;;`,
+);
+
+/** A 2.x stand-in that appends each request path to the exec log, after the launcher ran. */
+async function serveAfterLaunch(log: () => string, warmStatus = 200, delayedPolls = 0) {
+  let launched = false;
+  const server = createHttpServer(async (request, response) => {
+    if (!launched)
+      launched = (await fs.readFile(log(), "utf8").catch(() => "")).includes(
+        "orkestrator-bridge-launch opencode2",
+      );
+    if (!launched) {
+      request.socket.destroy();
+      return;
+    }
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    await fs.appendFile(log(), `HTTP:${url.pathname}\n`);
+    response.setHeader("content-type", "application/json");
+    if (url.pathname === "/api/info") {
+      if (delayedPolls-- > 0) {
+        request.socket.destroy();
+        return;
+      }
+      return response.end(JSON.stringify({ version: "2.2.6" }));
+    }
+    response.statusCode = warmStatus;
+    if (url.pathname === "/api/agent") return response.end(JSON.stringify({ data: [] }));
+    response.statusCode = 404;
+    response.end("{}");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  return { port, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+}
+
+describe("startContainerOpenCode2Server on an opencode2-launch image", () => {
+  test("starts 2.x through the launcher, warms it, then records its socket", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile);
+    held.push(holder);
+    setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      const started = await startContainerOpenCode2Server(
+        context,
+        "container-1",
+        async () => "opencode2-launcher",
+      );
+      const password = started.connection.password;
+      const raw = await fs.readFile(logs.exec, "utf8");
+      const { argv, stdin } = await readLog(logs.exec);
+      expect(started.wasRunning).toBe(false);
+      expect(password).toMatch(/^okb_/);
+      // Root's configuration, then the launcher, never the login-shell start.
+      expect(argv).toContain(`root=${OPENCODE2_LAUNCH_ROOT}`);
+      expect(argv).toMatch(
+        /orkestrator-bridge-launch opencode2 \/tmp\/\.orkestrator-bridge-env-opencode2-[0-9a-f]{32}/,
+      );
+      expect(argv).not.toContain("exec -d ");
+      expect(argv).not.toContain(OPENCODE2_CONTAINER_CLI_PATH);
+      // The password: root's file and the launcher's stdin, never a command line.
+      expect(argv).not.toContain(password);
+      expect(stdin).toContain(`STDIN:${password}`);
+      expect(stdin).toContain(`OPENCODE_PASSWORD=${password}`);
+      // Warmed (plugins loaded, non-dumpable) before the socket is recorded.
+      const warmed = raw.indexOf("HTTP:/api/agent");
+      const recorded = raw.indexOf(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      expect(warmed).toBeGreaterThan(-1);
+      expect(recorded).toBeGreaterThan(warmed);
+    });
+  });
+
+  for (const failure of ["http", "timeout"] as const) {
+    test(`refuses startup and cleans up after warm-up ${failure}`, async () => {
+      let logFile = "";
+      const holder = await serveAfterLaunch(() => logFile, 500);
+      held.push(holder);
+      setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+      const { context } = createContext(containerEnvironment());
+      await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+        logFile = logs.exec;
+        await expect(
+          startContainerOpenCode2Server(
+            context,
+            "container-1",
+            async () => "opencode2-launcher",
+            failure === "timeout" ? 0 : 30_000,
+          ),
+        ).rejects.toThrow();
+        const { argv } = await readLog(logs.exec);
+        const launch = argv.indexOf("orkestrator-bridge-launch opencode2");
+        expect(launch).toBeGreaterThan(-1);
+        expect(argv.indexOf("find /proc/[0-9]*/fd", launch)).toBeGreaterThan(launch);
+        expect(argv).toContain(`rm -f ${containerCredentialFile("opencode2")}`);
+        expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      });
+    });
+  }
+
+  for (const cleanup of ["find /proc/[0-9]*/fd", `rm -f ${containerCredentialFile("opencode2")}`]) {
+    test(`preserves warm-up errors when cleanup fails: ${cleanup}`, async () => {
+      let logFile = "";
+      const holder = await serveAfterLaunch(() => logFile, 500);
+      held.push(holder);
+      setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+      const { context } = createContext(containerEnvironment());
+      const failingDocker = FAKE_DOCKER_LAUNCHER.replace(
+        'case "$1" in',
+        `case "$*" in *'${cleanup}'*) exit 1 ;; esac\ncase "$1" in`,
+      );
+      await withFakeDocker(failingDocker, async (logs) => {
+        logFile = logs.exec;
+        await expect(
+          startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher"),
+        ).rejects.toThrow("500");
+        const { argv } = await readLog(logs.exec);
+        expect(argv).toContain(`rm -f ${containerCredentialFile("opencode2")}`);
+        expect(argv).not.toContain(`mv "$tmp" ${OPENCODE2_LISTENER_RECORD}`);
+      });
+    });
+  }
+
+  test("delayed startup polls do not scan a listener before it is recorded", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile, 200, 3);
+    held.push(holder);
+    setEnv({ FAKE_DOCKER_PORT: String(holder.port), FAKE_ROOT_TOKEN: "", FAKE_LISTENER: "" });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      await startContainerOpenCode2Server(context, "container-1", async () => "opencode2-launcher");
+      const raw = await fs.readFile(logs.exec, "utf8");
+      const between = raw.slice(
+        raw.indexOf("orkestrator-bridge-launch opencode2"),
+        raw.indexOf("HTTP:/api/agent"),
+      );
+      expect(between.match(/HTTP:\/api\/info/g)?.length).toBeGreaterThanOrEqual(4);
+      expect(between).not.toContain("opencode2-listener");
+    });
+  });
+
+  test("reuses a launched server only while its recorded socket is the listener", async () => {
+    const server = serve(ROOT_TOKEN);
+    servers.push(server);
+    setEnv({
+      FAKE_DOCKER_PORT: String(server.port),
+      FAKE_ROOT_TOKEN: ROOT_TOKEN,
+      FAKE_FINGERPRINT: OPENCODE2_LAUNCH_FINGERPRINT,
+      FAKE_LISTENER: "record 4242\\nsocket 4242\\nlaunch-required",
+    });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      const started = await startContainerOpenCode2Server(context, "container-1", async () => {
+        throw new Error("a recorded server needs no credential mode");
+      });
+      expect(started.wasRunning).toBe(true);
+      expect(started.connection.password).toBe(ROOT_TOKEN);
+      const { argv } = await readLog(logs.exec);
+      expect(argv).not.toContain("orkestrator-bridge-launch opencode2 ");
+      expect(argv).not.toContain("find /proc/[0-9]*/fd");
+    });
+  });
+
+  test("a replaced listener is stopped by its socket and a new server launched", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile);
+    held.push(holder);
+    setEnv({
+      FAKE_DOCKER_PORT: String(holder.port),
+      FAKE_ROOT_TOKEN: ROOT_TOKEN,
+      FAKE_FINGERPRINT: OPENCODE2_LAUNCH_FINGERPRINT,
+      FAKE_LISTENER: "record 4242\\nsocket 9999\\nlaunch-required",
+    });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      const started = await startContainerOpenCode2Server(
+        context,
+        "container-1",
+        async () => "opencode2-launcher",
+      );
+      expect(started.wasRunning).toBe(false);
+      expect(started.connection.password).not.toBe(ROOT_TOKEN);
+      const { argv } = await readLog(logs.exec);
+      const stopped = argv.indexOf("find /proc/[0-9]*/fd");
+      expect(stopped).toBeGreaterThan(-1);
+      expect(argv.indexOf("orkestrator-bridge-launch opencode2")).toBeGreaterThan(stopped);
+    });
+  });
+
+  test("a login-shell server is replaced once the image can launch one", async () => {
+    let logFile = "";
+    const holder = await serveAfterLaunch(() => logFile);
+    held.push(holder);
+    setEnv({
+      FAKE_DOCKER_PORT: String(holder.port),
+      FAKE_ROOT_TOKEN: ROOT_TOKEN,
+      FAKE_FINGERPRINT: OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT,
+      FAKE_LISTENER: "",
+    });
+    const { context } = createContext(containerEnvironment());
+    await withFakeDocker(FAKE_DOCKER_LAUNCHER, async (logs) => {
+      logFile = logs.exec;
+      const started = await startContainerOpenCode2Server(
+        context,
+        "container-1",
+        async () => "opencode2-launcher",
+      );
+      expect(started.wasRunning).toBe(false);
+      expect((await readLog(logs.exec)).argv).toContain("orkestrator-bridge-launch opencode2");
     });
   });
 });

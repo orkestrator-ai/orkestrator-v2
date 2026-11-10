@@ -19,9 +19,11 @@ import {
 } from "./constants.js";
 import {
   dockerDaemonUnreachableNow,
+  isDockerCopyRemountRefused,
   isDockerDaemonUnreachable,
   isDockerPathNotFound,
 } from "./docker-cli-errors.js";
+import { COPY_REFUSED_REMEDY } from "./docker-copy-refusal.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand, spawnCommand } from "./shell.js";
 import {
@@ -127,6 +129,10 @@ const PIPE_SETTLE_GRACE_MS = 5_000;
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
 
 class ReplacementCancelled extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "operation-unknown" } as const;
+
   constructor() {
     super(formatContainerLifecycleError("operation-unknown", "The rebuild was cancelled."));
   }
@@ -282,7 +288,14 @@ export async function pipeContainerPath(
   options: { timeoutMs?: number; settleGraceMs?: number } = {},
 ): Promise<
   | { absent: true }
-  | { absent: false; output: string; producerFailed: boolean; daemonUnavailable: boolean }
+  | {
+      absent: false;
+      output: string;
+      producerFailed: boolean;
+      daemonUnavailable: boolean;
+      /** The daemon refused the copy: a read-only bind it cannot remount (`docker-copy-refusal.ts`). */
+      refused?: boolean;
+    }
 > {
   return new Promise((resolve) => {
     const producer = spawnCommand("docker", ["cp", `${containerId}:${sourcePath}`, "-"]);
@@ -336,6 +349,7 @@ export async function pipeContainerPath(
         daemonUnavailable:
           (producerCode !== 0 && isDockerDaemonUnreachable(producerErr)) ||
           (consumerCode !== 0 && isDockerDaemonUnreachable(consumerErr)),
+        refused: producerCode !== 0 && isDockerCopyRemountRefused(producerErr),
       });
     };
     producer.on("close", (code) => {
@@ -367,7 +381,7 @@ function volumeNamed(storage: ContainerStorageIdentity, role: string): string {
   return volume.name;
 }
 
-async function runCopyStep(
+export async function runCopyStep(
   context: Pick<CommandContext, "storage">,
   imageId: string,
   step: CopyStep,
@@ -413,15 +427,25 @@ async function runCopyStep(
   );
   if (piped.absent) return { ok: true, files: 0, bytes: 0, absent: true };
   if (piped.daemonUnavailable) return DAEMON_UNAVAILABLE_COPY;
+  if (piped.refused) return COPY_REFUSED;
   if (piped.producerFailed) return { ok: false, reason: "source-read-failed" };
   return parseCopyOutput(piped.output);
 }
 
 /** A copy step that failed because Docker went away, not because of the files. */
 const DAEMON_UNAVAILABLE_COPY = { ok: false, reason: "daemon-unavailable" } as const;
+/** A copy step Docker refused: the source container has a bind it cannot remount. */
+const COPY_REFUSED = { ok: false, reason: "source-copy-refused" } as const;
 
 /** Classify a failed copy before rollback, including a stream cut without daemon wording. */
 export async function replacementCopyFailure(reason: string): Promise<ContainerLifecycleError> {
+  // The daemon said why: no outage probe.
+  if (reason === COPY_REFUSED.reason) {
+    return lifecycleError(
+      "unsupported-topology",
+      `Docker refused to copy the environment's files out of its container (operation not permitted while remounting a read-only bind). The original container was kept unchanged. ${COPY_REFUSED_REMEDY}`,
+    );
+  }
   if (reason === DAEMON_UNAVAILABLE_COPY.reason || (await dockerDaemonUnreachableNow())) {
     return lifecycleError(
       "daemon-unavailable",

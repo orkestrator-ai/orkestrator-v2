@@ -1,4 +1,4 @@
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { ContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { runCommand } from "./shell.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -12,12 +12,13 @@ const log = createLogger("docker");
  *   Rootless dockerd picks the host port inside RootlessKit's namespace,
  *   which cannot see host listeners, and RootlessKit's own bind on the host
  *   then fails with `address already in use`. Docker draws a fresh port on
- *   the next start, so the start is retried once. A collision on a port the
+ *   the next start, so the start is retried, up to
+ *   {@link PORT_COLLISION_RETRIES} times. A collision on a port the
  *   user fixed is theirs to resolve and is never retried. The failed start
  *   also detaches the container from its network (Docker 29.9, observed
  *   live), and a bare second start would run it with no network and no
- *   published ports, so the network is connected again first and the retry
- *   is refused, stopped, if the container still has none.
+ *   published ports, so the network is connected again before every retry
+ *   and the started container is stopped if it still has none.
  * - A read-only bind Docker cannot mount (`remount-ro … operation not
  *   permitted`): a user namespace cannot clear the locked `nosuid`/`nodev`
  *   flags of the source filesystem. It becomes a typed error naming the mount.
@@ -106,11 +107,9 @@ export function bindMountRefusedError(message: string): Error | null {
   const target = /to rootfs at "([^"]+)"/i.exec(message)?.[1];
   const mount =
     source && target ? `${source} at ${target}` : target ? `at ${target}` : "a read-only bind";
-  return new Error(
-    formatContainerLifecycleError(
-      "unsupported-topology",
-      `Docker refused to mount ${mount} read-only (operation not permitted), so nothing was started. Under rootless Docker this happens when the filesystem holding it is mounted nosuid or nodev, flags a user namespace cannot clear: keep Orkestrator's data directory on a filesystem mounted without them, or run Docker rootful.`,
-    ),
+  return new ContainerLifecycleError(
+    "unsupported-topology",
+    `Docker refused to mount ${mount} read-only (operation not permitted), so nothing was started. Under rootless Docker this happens when the filesystem holding it is mounted nosuid or nodev, flags a user namespace cannot clear: keep Orkestrator's data directory on a filesystem mounted without them, or run Docker rootful.`,
   );
 }
 
@@ -185,6 +184,14 @@ async function restoreNetwork(
   }
 }
 
+/**
+ * How many times a start that collided on an automatic port is retried.
+ * Rootless dockerd hands out automatic ports in sequence, so a retry draws
+ * the next port in the same busy neighbourhood; short-lived outbound sockets
+ * held two consecutive ports in a 2026-11-09 run (to-do 7549 task 3).
+ */
+export const PORT_COLLISION_RETRIES = 3;
+
 export async function startDockerContainer(
   containerId: string,
   options: {
@@ -199,44 +206,36 @@ export async function startDockerContainer(
   const timeoutMs = options.timeoutMs ?? 60_000;
   const attempt = (verb: "start" | "restart") =>
     run("docker", [verb, containerId], { timeoutMs }).then(() => undefined);
-  let collision: unknown;
+  let collision: unknown = null;
   let network: string | null = null;
-  try {
-    await attempt(options.verb ?? "start");
-    return;
-  } catch (error) {
-    const message = messageOf(error);
-    const refused = bindMountRefusedError(message);
-    if (refused) throw refused;
-    if (!ADDRESS_IN_USE.test(message)) throw error;
-    const inspection = await inspectForStart(containerId, run);
-    if (!inspection) throw error;
-    // Restore the endpoint even when a fixed-port failure cannot be retried.
-    // Otherwise a later start can succeed without networking or published ports.
-    await restoreNetwork(containerId, inspection, run).catch(() => {
-      throw error;
-    });
-    if (!shouldRetryPortCollision(message, inspection.bindings)) throw error;
-    collision = error;
-    network = inspection.network;
-    log.warn("start.port-collision-retrying", {
-      container: containerId.slice(0, 12),
-      port: collidingHostPort(message) ?? null,
-    });
-  }
-  try {
-    await attempt("start");
-  } catch (error) {
-    if (ADDRESS_IN_USE.test(messageOf(error))) {
+  for (let retry = 0; ; retry += 1) {
+    try {
+      await attempt(retry === 0 ? (options.verb ?? "start") : "start");
+      break;
+    } catch (error) {
+      const message = messageOf(error);
+      const refused = bindMountRefusedError(message);
+      if (refused) throw refused;
+      if (!ADDRESS_IN_USE.test(message)) throw error;
       const inspection = await inspectForStart(containerId, run);
-      if (inspection) {
-        await restoreNetwork(containerId, inspection, run).catch(() => {
-          throw error;
-        });
-      }
+      if (!inspection) throw error;
+      // Restore the endpoint even when a fixed-port failure cannot be retried.
+      // Otherwise a later start can succeed without networking or published ports.
+      await restoreNetwork(containerId, inspection, run).catch(() => {
+        throw error;
+      });
+      if (retry >= PORT_COLLISION_RETRIES) throw error;
+      if (!shouldRetryPortCollision(message, inspection.bindings)) throw error;
+      collision = error;
+      network = inspection.network;
+      log.warn("start.port-collision-retrying", {
+        container: containerId.slice(0, 12),
+        port: collidingHostPort(message) ?? null,
+        retry: retry + 1,
+      });
     }
-    throw bindMountRefusedError(messageOf(error)) ?? error;
   }
+  if (collision === null) return;
   // Never leave a container running without the network it was created on.
   const after = await inspectForStart(containerId, run);
   if (network && !after?.attached.includes(network)) {

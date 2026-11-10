@@ -14,16 +14,39 @@ import { quoteShell } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { dockerExecDetached } from "./commands-server-health.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
+import {
+  bridgeListenerScanScript,
+  judgeBridgeListener,
+  parseBridgeListenerScan,
+  PENDING_LISTENER_RECORD,
+  recordContainerBridgeListener,
+  stopContainerBridgeListener,
+  writeBridgeListenerRecordCommand,
+  writeContainerBridgeListenerRecord,
+  type BridgeListenerRecordRefusal,
+  type BridgeListenerScan,
+} from "./container-bridge-listener.js";
 import { boundedBackgroundLaunch } from "./container-log-bounds.js";
 import {
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
+  OPENCODE2_SERVER_PORT,
+  OPENCODE_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { BRIDGE_TOKEN_PATTERN, type LocalServerKind } from "./local-server-runtime.js";
+import {
+  judgeOpenCodeListener,
+  listOpenCodeListenersScript,
+  openCodeListenerRecord,
+  parseOpenCodeListeners,
+  type OpenCodeListenerJudgement,
+  type OpenCodeServerKind,
+} from "./opencode-listener-identity.js";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
 
 /**
@@ -86,6 +109,8 @@ const TOKEN_ENV: Record<ContainerBridgeKind, string> = {
  */
 const VERIFIER_BUN = "bun --config=/dev/null";
 
+const log = createLogger("docker");
+
 export function containerCredentialFile(kind: ContainerCredentialKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-token`;
 }
@@ -93,6 +118,19 @@ export function containerCredentialFile(kind: ContainerCredentialKind): string {
 /** The private half of a launcher-mode bridge's authority key, beside its token. */
 export function containerAuthorityKeyFile(kind: ContainerCredentialKind): string {
   return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-authority`;
+}
+
+/**
+ * Which process the backend recorded as a bridge's listener
+ * (`container-bridge-listener.ts`): `pid:starttime`, or `pending` from the
+ * moment a new token is written until the bridge it was minted for answers.
+ */
+export function containerListenerRecordFile(kind: ContainerBridgeKind): string {
+  return `${CONTAINER_BRIDGE_CREDENTIAL_DIR}/${kind}-listener`;
+}
+
+export function isContainerBridgeKind(kind: ContainerCredentialKind): kind is ContainerBridgeKind {
+  return kind !== "opencode" && kind !== "opencode2";
 }
 
 /** What a start script needs to hand a fresh token to the bridge it launches. */
@@ -112,9 +150,13 @@ export interface ContainerBridgeLaunch {
   start(entry: string, logFile: string): string;
 }
 
-/** A bridge {@link launchContainerScript} starts through `orkestrator-bridge-launch`. */
+/**
+ * A bridge, or on an `opencode-launch=1` (`opencode2-launch=1`) image the
+ * OpenCode 1.x (2.x) server, that {@link launchContainerScript} starts through
+ * `orkestrator-bridge-launch`.
+ */
 export interface ContainerBridgeLauncherStart {
-  kind: ContainerBridgeKind;
+  kind: ContainerBridgeKind | OpenCodeServerKind;
   /** Where the start script records its environment; the bridge removes it. */
   snapshot: string;
   /** The backend's own values, passed to the launcher on stdin. */
@@ -229,6 +271,16 @@ export async function writeContainerBridgeCredential(
     `rm -f ${containerAuthorityKeyFile(kind)}`,
     'printf \'%s\' "$token" > "$credential_tmp"',
     `if [ -n "$key" ]; then printf '%s' "$key" > "$key_tmp"; mv "$key_tmp" ${containerAuthorityKeyFile(kind)}; fi`,
+    // Until the new bridge answers and is recorded, no listener is trusted
+    // with the token: a record of the bridge before would vouch for it.
+    ...(isContainerBridgeKind(kind)
+      ? [
+          writeBridgeListenerRecordCommand(
+            containerListenerRecordFile(kind),
+            PENDING_LISTENER_RECORD,
+          ),
+        ]
+      : []),
     `mv "$credential_tmp" ${containerCredentialFile(kind)}`,
     "trap - EXIT",
     'rm -f "$key_tmp"',
@@ -259,32 +311,187 @@ export async function removeContainerBridgeCredential(
       "-f",
       containerCredentialFile(kind),
       containerAuthorityKeyFile(kind),
+      // The listener record says which process the password belongs to.
+      ...(kind === "opencode" || kind === "opencode2" ? [openCodeListenerRecord(kind)] : []),
+      ...(isContainerBridgeKind(kind) ? [containerListenerRecordFile(kind)] : []),
     ],
     { timeoutMs: 30_000 },
   );
 }
 
-/** The token and, on a second line, the authority key, in one root exec. */
+/** OpenCode's password in root's file, and whether the port's listener is the server it was given to. */
+export interface ContainerOpenCodeCredential {
+  requiresRecordedListener: boolean;
+  token: string | null;
+  listener: OpenCodeListenerJudgement;
+}
+
+/** Each OpenCode server's port inside the container. */
+export const OPENCODE_CONTAINER_PORTS: Record<OpenCodeServerKind, number> = {
+  opencode: OPENCODE_SERVER_PORT,
+  opencode2: OPENCODE2_SERVER_PORT,
+};
+
+/** The launcher's marker for the capability that records each server's socket. */
+const OPENCODE_LAUNCH_CAPABILITY: Record<OpenCodeServerKind, string> = {
+  opencode: "opencode-launch=1",
+  opencode2: "opencode2-launch=1",
+};
+
+/**
+ * Root's OpenCode password and, in the same root exec, a judgement of the
+ * sockets listening on that server's port against the one the backend
+ * recorded when it launched the server (`opencode-listener-identity.ts`).
+ * Only a server started on an `opencode-launch=1` (1.x) or
+ * `opencode2-launch=1` (2.x) image has a record; for anything else the
+ * listener is `unrecorded` and the listing is skipped.
+ */
+export async function readContainerOpenCodeCredential(
+  containerId: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  kind: OpenCodeServerKind = "opencode",
+): Promise<ContainerOpenCodeCredential> {
+  const record = openCodeListenerRecord(kind);
+  const script = [
+    `cat ${containerCredentialFile(kind)} 2>/dev/null || true; echo`,
+    `cat ${containerAuthorityKeyFile(kind)} 2>/dev/null || true; echo`,
+    `if [ -s ${record} ]; then`,
+    `printf 'record %s\n' "$(cat ${record})"`,
+    listOpenCodeListenersScript(OPENCODE_CONTAINER_PORTS[kind]),
+    "fi",
+    `if grep -q '^# ORKESTRATOR_CAPABILITY ${OPENCODE_LAUNCH_CAPABILITY[kind]}$' ${CONTAINER_BRIDGE_LAUNCHER} 2>/dev/null; then echo launch-required; fi`,
+  ].join("\n");
+  const { stdout } = await runCommand(
+    "docker",
+    ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "sh", "-c", script],
+    { timeoutMs: options.timeoutMs ?? 120_000, signal: options.signal },
+  );
+  const [token = "", , ...rest] = stdout.split("\n");
+  const listener = judgeOpenCodeListener(parseOpenCodeListeners(rest.join("\n")));
+  return {
+    token: BRIDGE_TOKEN_PATTERN.test(token.trim()) ? token.trim() : null,
+    listener,
+    requiresRecordedListener: rest.includes("launch-required"),
+  };
+}
+
+/**
+ * Which socket listens on an OpenCode server's port now, against the record:
+ * the re-check after a failed or unexpected answer
+ * (`opencode-listener-recheck.ts`). Undefined when root could not be asked.
+ */
+export async function recheckContainerOpenCodeListener(
+  containerId: string,
+  kind: OpenCodeServerKind,
+): Promise<OpenCodeListenerJudgement | undefined> {
+  try {
+    return (await readContainerOpenCodeCredential(containerId, { timeoutMs: 15_000 }, kind))
+      .listener;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The token and, on a second line, the authority key, in one root exec. For a
+ * bridge the same exec reads which process listens on its port and which one
+ * the backend recorded there.
+ */
 async function readRootCredential(
   containerId: string,
   kind: ContainerCredentialKind,
   timeoutMs: number,
   signal?: AbortSignal,
-): Promise<{ token: string; authorityKey: string }> {
+): Promise<{ token: string; authorityKey: string; listener?: BridgeListenerScan }> {
+  const read = `cat ${containerCredentialFile(kind)} 2>/dev/null || true; echo; cat ${containerAuthorityKeyFile(kind)} 2>/dev/null || true`;
+  const script = isContainerBridgeKind(kind)
+    ? `${read}; echo\n${bridgeListenerScanScript(CONTAINER_BRIDGE_PORTS[kind], containerListenerRecordFile(kind))}`
+    : read;
   const { stdout } = await runCommand(
     "docker",
-    [
-      "exec",
-      ...CONTAINER_ROOT_USER_ARGS,
-      containerId,
-      "sh",
-      "-c",
-      `cat ${containerCredentialFile(kind)} 2>/dev/null || true; echo; cat ${containerAuthorityKeyFile(kind)} 2>/dev/null || true`,
-    ],
+    ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "sh", "-c", script],
     { timeoutMs, signal },
   );
-  const [token = "", authorityKey = ""] = stdout.split("\n", 2);
-  return { token: token.trim(), authorityKey: authorityKey.trim() };
+  const [token = "", authorityKey = "", ...rest] = stdout.split("\n");
+  return {
+    token: token.trim(),
+    authorityKey: authorityKey.trim(),
+    ...(isContainerBridgeKind(kind) ? { listener: parseBridgeListenerScan(rest.join("\n")) } : {}),
+  };
+}
+
+/**
+ * Whether the bridge on `kind`'s port is the one the backend started, so the
+ * token may be handed to whoever asked for it. A bridge from before records is
+ * recorded now: it is the process an older backend already trusted.
+ */
+async function bridgeListenerAdmits(
+  containerId: string,
+  kind: ContainerBridgeKind,
+  scan: BridgeListenerScan,
+): Promise<boolean> {
+  const verdict = judgeBridgeListener(scan);
+  if (verdict.kind === "refused") {
+    log.warn("bridge.listener-refused", { provider: kind, reason: verdict.reason });
+    return false;
+  }
+  if (verdict.kind === "unrecorded") {
+    try {
+      await writeContainerBridgeListenerRecord(
+        containerId,
+        containerListenerRecordFile(kind),
+        verdict.identity,
+      );
+    } catch {
+      // Failed publication must never hand out an unrecorded token. All status,
+      // reuse and peek callers share this fail-closed result.
+      return false;
+    }
+    log.info("bridge.listener-adopted", { provider: kind });
+  }
+  return true;
+}
+
+/**
+ * Record the listener on a bridge's port as the bridge just launched, once it
+ * answers. When the listener cannot be it, stop it and fail the start: the
+ * token now in root's file must not reach a process the agent started.
+ */
+export async function recordLaunchedContainerBridge(
+  containerId: string,
+  kind: ContainerBridgeKind,
+  session?: number,
+): Promise<void> {
+  const { refused } = await recordContainerBridgeListener(
+    containerId,
+    CONTAINER_BRIDGE_PORTS[kind],
+    containerListenerRecordFile(kind),
+    session,
+  );
+  if (!refused) return;
+  log.warn("bridge.listener-unrecorded", { provider: kind, reason: refused });
+  await stopContainerBridgeProcess(containerId, kind).catch(() => undefined);
+  throw new Error(bridgeListenerRefusalMessage(kind, refused));
+}
+
+function bridgeListenerRefusalMessage(
+  kind: ContainerBridgeKind,
+  reason: BridgeListenerRecordRefusal,
+): string {
+  return reason === "scan-incomplete" || reason === "no-listener"
+    ? `Could not confirm which process serves the ${kind} bridge's port; retry the start`
+    : `The ${kind} bridge's port is held by a process the backend did not start; the start was refused and cleanup was attempted; retry the start`;
+}
+
+/**
+ * Stop what listens on a bridge's port: a process the agent's uid started
+ * there need not match the bridge's command line.
+ */
+export function stopContainerBridgeProcess(
+  containerId: string,
+  kind: ContainerBridgeKind,
+): Promise<void> {
+  return stopContainerBridgeListener(containerId, CONTAINER_BRIDGE_PORTS[kind]);
 }
 
 /**
@@ -299,8 +506,37 @@ export async function readContainerBridgeToken(
   options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 120_000;
-  const root = await readRootCredential(containerId, kind, timeoutMs, options.signal);
+  if (kind === "opencode" || kind === "opencode2") {
+    const opencode = await readContainerOpenCodeCredential(containerId, options, kind);
+    // The root-owned launcher is image-local evidence even when image metadata is unavailable.
+    // Incomplete launches must never expose either root or node credentials.
+    if (opencode.requiresRecordedListener && opencode.listener !== "ours") return null;
+    if (opencode.listener === "stopped") return null;
+    if (opencode.token) {
+      // The password would go to whatever answers the port now.
+      if (opencode.listener === "replaced") {
+        log.warn("opencode.listener-replaced", { provider: kind });
+        return null;
+      }
+      return opencode.token;
+    }
+    // 2.x has no node-readable password file to fall back to.
+    if (opencode.requiresRecordedListener || kind === "opencode2") return null;
+  }
+  const root =
+    kind === "opencode"
+      ? { token: "", authorityKey: "" }
+      : await readRootCredential(containerId, kind, timeoutMs, options.signal);
   if (BRIDGE_TOKEN_PATTERN.test(root.token)) {
+    // The token belongs to the bridge the backend started, not to whatever
+    // listens on its port now.
+    if (
+      isContainerBridgeKind(kind) &&
+      root.listener &&
+      !(await bridgeListenerAdmits(containerId, kind, root.listener))
+    ) {
+      return null;
+    }
     // Signed requests to this bridge use the key that was minted with it.
     if (isBridgeAuthorityKey(root.authorityKey)) {
       rememberBridgeAuthorityKey(root.token, root.authorityKey);
@@ -309,7 +545,6 @@ export async function readContainerBridgeToken(
     }
     return root.token;
   }
-  if (kind === "opencode2") return null;
   const token = (
     await dockerExec(
       containerId,
@@ -345,12 +580,18 @@ async function deliverStartSecrets(
   return { file, source: `. ${file}\nrm -f ${file}\n` };
 }
 
+/** What a launch knows about the process it started. */
+export interface ContainerScriptLaunched {
+  /** The session the launcher started the bridge in, when it reports one. */
+  session?: number;
+}
+
 /** Run a detached start script, with its secrets off the command line. */
 export async function launchContainerScript(
   containerId: string,
   script: string,
   launch: ContainerScriptLaunch = {},
-): Promise<void> {
+): Promise<ContainerScriptLaunched> {
   const secrets = Object.fromEntries(
     Object.entries(launch.secrets ?? {}).filter((entry): entry is [string, string] =>
       Boolean(entry[1]),
@@ -385,10 +626,10 @@ export async function launchContainerScript(
         CONTAINER_PREPARE_TIMEOUT_MS,
         redactValues,
       );
-      await startContainerBridgeWithLauncher(containerId, launch.launcher);
-    } else {
-      await dockerExecDetached(containerId, `${delivered?.source ?? ""}${script}`, redactValues);
+      return await startContainerBridgeWithLauncher(containerId, launch.launcher);
     }
+    await dockerExecDetached(containerId, `${delivered?.source ?? ""}${script}`, redactValues);
+    return {};
   } catch (error) {
     if (delivered) await dockerExec(containerId, `rm -f ${delivered.file}`).catch(() => undefined);
     if (launch.launcher) {
@@ -413,6 +654,17 @@ export function containerBridgeLauncherInput(env: Record<string, string>): strin
 }
 
 /**
+ * The session id the launcher reports for the bridge it started
+ * (`orkestrator-bridge-session=<pid>`). An image's launcher from before the
+ * report prints nothing.
+ */
+export function parseContainerBridgeLauncherSession(stdout: string): number | undefined {
+  const match = /^orkestrator-bridge-session=(\d+)$/m.exec(stdout);
+  const session = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(session) && session > 1 ? session : undefined;
+}
+
+/**
  * Start a prepared bridge through the image's root-owned launcher, as `node`,
  * with no login shell: a fixed PATH and working directory, and the backend's
  * values on stdin rather than in argv.
@@ -420,8 +672,8 @@ export function containerBridgeLauncherInput(env: Record<string, string>): strin
 async function startContainerBridgeWithLauncher(
   containerId: string,
   launcher: ContainerBridgeLauncherStart,
-): Promise<void> {
-  await runCommand(
+): Promise<ContainerScriptLaunched> {
+  const { stdout } = await runCommand(
     "docker",
     [
       "exec",
@@ -437,6 +689,12 @@ async function startContainerBridgeWithLauncher(
       launcher.kind,
       launcher.snapshot,
     ],
-    { stdin: containerBridgeLauncherInput(launcher.env), timeoutMs: 30_000 },
+    {
+      stdin: containerBridgeLauncherInput(launcher.env),
+      timeoutMs: 30_000,
+      // OpenCode's launch carries its password.
+      redactValues: Object.values(launcher.env),
+    },
   );
+  return { session: parseContainerBridgeLauncherSession(stdout) };
 }

@@ -1689,6 +1689,61 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("lists the branches a rewind left, by Pi entry id, and switches back to one", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-branches-state-"));
+    process.env.PI_BRIDGE_STATE_DIR = stateDir;
+    const state = seedSession();
+    const manager = SessionManager.inMemory("/workspace");
+    const ids: string[] = [];
+    for (const text of ["first", "second"]) {
+      ids.push(manager.appendMessage({ role: "user", content: text, timestamp: 0 }));
+      ids.push(
+        manager.appendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `reply ${text}` }],
+          stopReason: "stop",
+          timestamp: 0,
+        } as never),
+      );
+    }
+    let navigatedTo: string | undefined;
+    state.session = fakeAgentSession({
+      sessionManager: manager,
+      navigateTree: async (entryId: string) => {
+        navigatedTo = entryId;
+        manager.branch(entryId);
+        return { cancelled: false, aborted: false };
+      },
+    });
+    try {
+      // The rewind itself moved Pi's leaf back to the first reply.
+      manager.branch(ids[1]!);
+      const listed = await call(`/session/${state.id}/branches`);
+      expect(listed.status).toBe(200);
+      expect(await listed.json()).toEqual({
+        activeEntryId: ids[1]!,
+        branches: [
+          { entryId: ids[3]!, prompt: "second", entries: 4, updatedAt: expect.any(String) },
+        ],
+        truncated: false,
+      });
+      const switched = await call(`/session/${state.id}/branches/${ids[3]!}`, { method: "POST" });
+      expect(switched.status).toBe(200);
+      expect(navigatedTo).toBe(ids[3]!);
+      const after = (await (await call(`/session/${state.id}/branches`)).json()) as {
+        activeEntryId: string;
+        branches: unknown[];
+      };
+      expect(after.activeEntryId).toBe(ids[3]!);
+      expect(after.branches).toEqual([]);
+      expect((await call("/session/not-held/branches")).status).toBe(404);
+    } finally {
+      sessions.delete(state.id);
+      resetTestDependencies();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   test("forks through a new persisted Pi conversation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-"));
     const forkedFile = join(directory, "forked.jsonl");
@@ -1824,7 +1879,48 @@ describe("session routes", () => {
     expect(state.lastAccessed).toBe(0);
 
     await call(`/session/${state.id}/status`);
+    expect(state.lastAccessed).toBe(0);
+  });
+
+  test("an open idle tab's reads never keep the session attached (todo 7540)", async () => {
+    const state = seedSession();
+    state.lastAccessed = 0;
+    // Everything an open, idle tab reaches through the backend: the live
+    // update, the session-state and transcript reads, and the four discovery
+    // sections' 30 s renewals.
+    for (const path of [
+      "",
+      "/status",
+      "/config",
+      "/messages",
+      "/transcript?version=2",
+      "/approvals",
+      "/interactions",
+      "/queue",
+      "/human-prompts",
+      "/mcp",
+      "/commands",
+      "/runtime-health",
+      "/activity",
+    ]) {
+      expect((await call(`/session/${state.id}${path}`)).status).toBe(200);
+    }
+    expect(state.lastAccessed).toBe(0);
+
+    // A person's action does keep it warm.
+    await call(`/session/${state.id}/cancel`, { method: "POST", body: "{}" });
     expect(state.lastAccessed).toBeGreaterThan(0);
+
+    // Every route is counted, by label only, with whether it touched.
+    const body = await (await call(`/session/${state.id}/runtime-health`)).json();
+    expect(body.liveness.routes).toMatchObject({
+      "GET session": { requests: 1, touches: 0 },
+      "GET mcp": { requests: 1, touches: 0 },
+      "GET transcript": { requests: 1, touches: 0 },
+      "GET runtime-health": { requests: 2, touches: 0 },
+      "POST cancel": { requests: 1, touches: 1 },
+    });
+    expect(JSON.stringify(body.liveness)).not.toContain(state.id);
   });
 
   test("reports the attached generation's MCP configuration without touching liveness", async () => {
@@ -3661,12 +3757,15 @@ describe("command catalogue routes", () => {
       state.lastAccessed = 1;
 
       const body = await (await call(`/session/${sessionId}/commands`)).json();
+      // Every policy excludes extensions (`projectResourceDiscoveryOptions`),
+      // so nothing can add a command at attach: the preview is the whole
+      // inventory and is published `ready`, with no attach pending.
       expect(body).toMatchObject({
         catalogueVersion: 1,
-        status: "stale",
-        attachPending: true,
+        status: "ready",
         commands: [{ name: "/review", id: "pi:template:review", source: "template" }],
       });
+      expect(body).not.toHaveProperty("attachPending");
       // Still metadata: the read that started the preview kept no session warm.
       expect(state.lastAccessed).toBe(1);
       // Pushed on the status the backend already polls, so a late read is seen.

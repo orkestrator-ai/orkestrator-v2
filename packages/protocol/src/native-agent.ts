@@ -855,6 +855,14 @@ export type NativeAgentDispatchOutcome =
        * parked record for it is cleared; the draft needs a new id to run it.
        */
       requestIdRetired?: true;
+      /**
+       * The provider was temporarily unavailable and nothing was sent (a
+       * bridge's 503 before dispatch, an unreachable bridge, a failed attach):
+       * no record stays parked, so the same prompt may be sent again under a
+       * new request id and may succeed. Never set for an ambiguous dispatch,
+       * a parked conflict or a refusal that will not change on its own.
+       */
+      transient?: true;
     }
   | {
       outcome: "unknown";
@@ -1245,9 +1253,12 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
       // `steer` is what the platform *may* offer: only an OpenCode 2.x session
       // steers (its inbox `delivery: "steer"`), and the per-session
       // `steerSupported()` answers false for every 1.x session, which clears
-      // the action from that session's projection. Compact, undo and redo are
-      // 1.x actions a 2.x session narrows away (`capabilityLimits`).
-      actions: { compact: true, undo: true, redo: true, steer: true },
+      // the action from that session's projection. Compact, undo and redo
+      // work on both lines. `archive` is the resume picker's remove/restore,
+      // also what the platform *may* offer: 2.x conversations archive through
+      // `PATCH /api/session/:id`, while every 1.x row in the same list carries
+      // `archivable: false` and the router refuses a 1.x id.
+      actions: { compact: true, undo: true, redo: true, steer: true, archive: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses. Every OpenCode
       // permission, a bash or edit approval included, is mapped as
@@ -1826,6 +1837,13 @@ export interface NativeAgentRuntimeSummary {
   mcp?: NativeAgentMcpServer[];
   /** Steer-history occupancy, counts and limits only (Cursor today). */
   steer?: NativeAgentRuntimeSteerJournal;
+  /**
+   * Which agent process the bridge runs for the session (Claude today): the
+   * same number while turns, setting changes and approvals go to one warm
+   * process, a higher one after the bridge starts another. A counter, not a
+   * PID; it restarts with the bridge. Absent before the first launch.
+   */
+  runtimeGeneration?: number;
 }
 
 export type NativeAgentMcpServerAction = "reconnect" | "enable" | "disable" | "sign-in";
@@ -2255,6 +2273,12 @@ export interface NativeAgentResumeEntry {
    * is restored.
    */
   archived?: boolean;
+  /**
+   * `false` when this row cannot be archived although its platform offers
+   * `archive`: an OpenCode list mixes 1.x conversations, which cannot, with
+   * 2.x ones, which can. Absent means the platform's `archive` action decides.
+   */
+  archivable?: boolean;
 }
 
 export interface NativeAgentForkOutcome {
@@ -2264,6 +2288,38 @@ export interface NativeAgentForkOutcome {
   title?: string;
   /** Provider-selected editable prompt when a fork begins before a user entry. */
   draft?: string;
+}
+
+/** Bounds of {@link NativeAgentSessionBranchList}, shared by the bridge and its readers. */
+export const NATIVE_AGENT_BRANCH_LIST_LIMITS = Object.freeze({
+  branches: 50,
+  promptChars: 280,
+  entryIdChars: 512,
+});
+
+/**
+ * Another branch of one conversation (Pi's session tree), named by the entry
+ * id `switch-branch` takes. Only Pi has branches inside one conversation
+ * (`actions.branches`).
+ */
+export interface NativeAgentSessionBranch {
+  /** Provider entry id of the branch's newest entry: the switch target. */
+  entryId: string;
+  /** The prompt that starts the branch (bounded; may be empty). */
+  prompt: string;
+  /** Entries from the conversation's start to the branch's end. */
+  entries: number;
+  /** When the branch's newest entry was written (ISO 8601). */
+  updatedAt: string;
+}
+
+/** The branches of one conversation other than the active one, newest first. */
+export interface NativeAgentSessionBranchList {
+  /** The active branch's newest entry; null when it holds no entry yet. */
+  activeEntryId: string | null;
+  branches: NativeAgentSessionBranch[];
+  /** More branches exist than were listed. */
+  truncated: boolean;
 }
 
 /**

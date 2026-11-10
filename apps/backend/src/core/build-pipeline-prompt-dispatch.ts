@@ -185,8 +185,13 @@ export class BuildPipelinePromptDispatch {
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
+          // The key names this attempt, so a bridge that gates tools itself
+          // (Pi, Cursor, Grok) lets a read-only Review submit its own result.
           ...(agentMcp && resultKind
-            ? { workflowResultTool: workflowResultToolName(resultKind) }
+            ? {
+                workflowResultTool: workflowResultToolName(resultKind),
+                workflowResultKey: attempt.requestId,
+              }
             : {}),
         },
       );

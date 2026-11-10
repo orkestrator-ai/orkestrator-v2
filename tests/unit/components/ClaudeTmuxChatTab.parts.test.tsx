@@ -1418,7 +1418,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => expect(getStatusMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default.*· High/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
@@ -2715,7 +2715,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /· High/ }));
     const maxOption = await screen.findByText("Max");
     await act(async () => {
       fireEvent.click(maxOption);
@@ -2786,7 +2786,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     expect(await screen.findByRole("button", { name: /Sonnet/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· Low/ })).toBeTruthy();
   });
 
   test("holds a one-shot model that only the live SDK catalog knows, then applies it", async () => {
@@ -2901,7 +2901,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     const effortButton = screen.getByRole("button", {
-      name: /\(High\)/,
+      name: /· High/,
     }) as HTMLButtonElement;
     expect(effortButton.disabled).toBe(false);
 
@@ -2916,7 +2916,7 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(switchEffortMock).toHaveBeenCalledWith("tab-1", "low", "env-1");
     });
-    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· Low/ })).toBeTruthy();
   });
 
   test("keeps the previous effort and shows an error when effort switching fails", async () => {
@@ -2936,7 +2936,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /· High/ }));
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
@@ -2945,8 +2945,8 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\(Low\)/ }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: /· High/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /· Low/ }) === null).toBe(true);
   });
 
   test("switches fast mode through Claude's explicit /fast command", async () => {
@@ -2979,7 +2979,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     const fastItem = await screen.findByRole("menuitemradio", {
       name: /^Fast Lower latency/,
     });
@@ -2994,7 +2994,7 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", true, "env-1");
     });
-    expect(screen.getByRole("button", { name: /Default.*\(High ⚡\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default.*· High ⚡/ })).toBeTruthy();
   });
 
   test("switches a running tmux session back to Normal", async () => {
@@ -3047,7 +3047,7 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", false, "env-1");
     });
-    expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default.*· High/ })).toBeTruthy();
   });
 
   test("renders an unknown speed from the authoritative hydration snapshot", async () => {
@@ -3119,7 +3119,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     fireEvent.click(
       await screen.findByRole("menuitemradio", {
         name: /^Fast Lower latency/,
@@ -3173,7 +3173,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    const picker = screen.getByRole("button", { name: /Default.*\(High\)/ });
+    const picker = screen.getByRole("button", { name: /Default.*· High/ });
     expect(picker.hasAttribute("disabled")).toBe(true);
     fireEvent.pointerDown(picker);
     expect(switchFastModeMock).not.toHaveBeenCalled();
@@ -3212,7 +3212,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3224,7 +3224,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     expect(await screen.findByText("Error: fast mode unavailable")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default.*· High/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
@@ -3266,7 +3266,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3325,7 +3325,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3381,7 +3381,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*· High/ }));
     await act(async () => {
       fireEvent.click(
         await screen.findByRole("menuitemradio", {
@@ -3400,7 +3400,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByText("Error: model switch failed")).toBeTruthy();
     expect(switchFastModeMock).toHaveBeenLastCalledWith("tab-1", false, "env-1");
-    expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default.*· High/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /⚡/ }) === null).toBe(true);
   });
 
@@ -3435,7 +3435,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· High/ })).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
     const haikuOption = await screen.findByText("Haiku");
@@ -3444,7 +3444,7 @@ describe("ClaudeTmuxChatTab", () => {
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
-    expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /· High/ }) === null).toBe(true);
   });
 
   test("resets effort to the default when the new model doesn't support the chosen level", async () => {
@@ -3488,13 +3488,13 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /· High/ }));
     const xhighOption = await screen.findByText("Extra High");
     await act(async () => {
       fireEvent.click(xhighOption);
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
-    expect(screen.getByRole("button", { name: /\(Extra High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· Extra High/ })).toBeTruthy();
 
     // This SDK-provided Sonnet entry has no xhigh level, so the preference
     // snaps back to the default.
@@ -3505,7 +3505,7 @@ describe("ClaudeTmuxChatTab", () => {
       fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
-    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /· High/ })).toBeTruthy();
   });
 
   test("rehydrates the environment-scoped authoritative model catalog", async () => {
@@ -3667,7 +3667,7 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /· High/ }));
 
     expect(await screen.findByText("Low")).toBeTruthy();
     expect(screen.getByText("Medium")).toBeTruthy();
@@ -3714,8 +3714,8 @@ describe("ClaudeTmuxChatTab", () => {
 
     // "high" isn't in Mini's level list, so the stored preference snaps to
     // the first supported level instead of an unsupported default.
-    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: /· Low/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /· High/ }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
@@ -3755,7 +3755,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(screen.getByRole("button", { name: "Build" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: /Sonnet/ })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: /\(High\)/ })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: /· High/ })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty("disabled", true);
     expect(screen.getByPlaceholderText(/Ask Claude anything/)).toHaveProperty("disabled", true);

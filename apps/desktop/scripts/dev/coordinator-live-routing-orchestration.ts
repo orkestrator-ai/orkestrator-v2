@@ -16,6 +16,7 @@ import { coordinatorTurn } from "./coordinator-live-orchestration.js";
 import {
   createRoutingRows,
   evaluateRoutingBuild,
+  evaluateRoutingCancel,
   evaluateRoutingDeliveryOutcome,
   evaluateRoutingInteractions,
   evaluateRoutingInvestigate,
@@ -26,6 +27,7 @@ import {
   routingEnvironmentName,
   routingInvestigatePrompt,
   routingReviewPrompt,
+  routingRestartCallCounts,
   routingToolCalls,
   workflowCallCounts,
   ROUTING_CASES,
@@ -36,7 +38,7 @@ import {
   type RoutingReviewTarget,
   type RoutingTicket,
 } from "./coordinator-live-routing.js";
-import { STATUS_REVIEWEE_FILE } from "./coordinator-live-status.js";
+import { noticesAbout, STATUS_REVIEWEE_FILE } from "./coordinator-live-status.js";
 
 type Watch = ReturnType<typeof createDelegationWatch>;
 
@@ -275,13 +277,40 @@ export async function runRoutingScenario(input: {
   }
 
   const steps: Record<RoutingCase, () => Promise<void>> = {
-    // 1. A specified change: ticket, then build. Cancelled once the call is judged.
+    // 1. A specified change: ticket, then build. Cancelled once the call is
+    // judged, as the user's Cancel does; the wake that follows must not
+    // restart it (to-do 7545 task 4).
     async build() {
       const { fresh } = await buildCase("build");
+      const judged = new Set(caseRows().map((row) => row.id));
+      const knownPipelines = new Set(await reads.associated("build-pipeline"));
       for (const pipelineId of fresh.pipelines) {
         await invoke("cancel_build_pipeline", { pipelineId });
       }
       await settle("the coordinator after the build was cancelled");
+      // With no build there is no cancel to respect; `build-pipeline-started` already failed.
+      if (fresh.pipelines.length === 0) return;
+      const afterCancel = caseRows().filter((row) => !judged.has(row.id));
+      for (const [tool, count] of Object.entries(
+        routingRestartCallCounts(routingToolCalls(afterCancel)),
+      )) {
+        observed[`build-after-cancel:${tool}`] = count;
+      }
+      const cancelled = new Set(fresh.pipelines);
+      checks.push(
+        ...evaluateRoutingCancel({
+          messages: afterCancel,
+          notices: noticesAbout(
+            (await watch.observe()).mail,
+            coordinatorEnvironmentId,
+            (resource) => resource?.kind === "build-pipeline" && cancelled.has(resource.id ?? ""),
+          ),
+          newPipelineIds: (await reads.associated("build-pipeline")).filter(
+            (id) => !knownPipelines.has(id),
+          ),
+          cancelled: await Promise.all(fresh.pipelines.map((id) => reads.pipeline(id))),
+        }),
+      );
     },
 
     // 2. A question that needs a run: a worker, and its report let through.

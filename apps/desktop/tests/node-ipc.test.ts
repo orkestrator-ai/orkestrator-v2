@@ -7,6 +7,7 @@ import {
 import { MAX_INVOKE_ENVELOPE_LENGTH, parseInvokeOptions, registerMainIpc } from "../electron/ipc";
 import {
   DesktopNodeIpc,
+  NodeRefusal,
   NODE_EVENT_CHANNEL,
   NODE_SCOPE_RELEASED_EVENT,
   nodeRefusal,
@@ -297,6 +298,26 @@ function harness() {
 }
 
 describe("node-addressed invoke and events through main", () => {
+  test("main rethrows an already coded refusal without replacing its instance", async () => {
+    const h = harness();
+    const w = h.renderer(1);
+    const refusal = nodeRefusal("node-unavailable", "Machine is offline.");
+    h.commandInvoke.mockRejectedValueOnce(refusal);
+
+    // Call main directly: preload reconstructs errors, so it cannot establish
+    // that the main handler preserves the original instance and tagged class.
+    const error = await Promise.resolve(w.raw("orkestrator:invoke", "get_projects", {})).catch(
+      (error: unknown) => error,
+    );
+    expect(error).toBe(refusal);
+    expect(error).toBeInstanceOf(NodeRefusal);
+    expect(error).toMatchObject({
+      _tag: "NodeRefusal",
+      code: "node-unavailable",
+      message: "[node-unavailable] Machine is offline.",
+    });
+  });
+
   test("a renderer invokes and listens on two nodes at once", async () => {
     const h = harness();
     const w = h.renderer(1);

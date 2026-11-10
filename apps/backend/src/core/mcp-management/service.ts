@@ -40,6 +40,7 @@ import {
   type McpTargetCapabilities,
   type McpTargetList,
   type McpValidationResult,
+  mcpManagementErrorFromUnknown,
 } from "@orkestrator/protocol/mcp-management";
 
 import { containerSafeClaudeDefaults } from "../claude-container-config.js";
@@ -2088,12 +2089,17 @@ function mcpFailureDetail(error: unknown): {
   code: NonNullable<McpOperationSnapshot["errorCode"]>;
   message: string;
 } {
-  const message = error instanceof Error ? error.message : "";
-  const match = /McpManagementError:([a-z-]+): (.*)$/s.exec(message);
-  if (match)
+  // The registered code decides (`mcpManagementErrorFromUnknown`); the
+  // message keeps the correlation reference the flattened form carried.
+  const known = error instanceof Error ? mcpManagementErrorFromUnknown(error) : null;
+  if (known)
     return {
-      code: match[1] as NonNullable<McpOperationSnapshot["errorCode"]>,
-      message: match[2]!.slice(0, 512),
+      code: known.code,
+      message:
+        `${known.message}${known.correlationId ? ` [ref:${known.correlationId}]` : ""}`.slice(
+          0,
+          512,
+        ),
     };
   return { code: "internal", message: "The change could not be saved." };
 }

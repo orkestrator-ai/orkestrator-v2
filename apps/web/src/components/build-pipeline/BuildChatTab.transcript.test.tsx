@@ -573,7 +573,7 @@ test("moves the review report out of the footer exactly once when wide and back 
     });
     expect(screen.getAllByRole("article").length).toBe(1);
     expect(footer.querySelectorAll("article").length).toBe(1);
-    expect(screen.queryByTestId("pipeline-report-beside")).toBeNull();
+    expect(screen.queryByTestId("pipeline-report-beside") === null).toBe(true);
     expect(screen.getByTestId("transcript-row")).toBe(row);
     view.unmount();
   } finally {

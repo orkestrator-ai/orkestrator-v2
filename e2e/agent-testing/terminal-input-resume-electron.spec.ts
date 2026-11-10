@@ -16,6 +16,9 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment } from "./electron-spec-environment";
+import { terminalVisibleText } from "./terminal-visible-text";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The desktop half of terminal input recovery
@@ -37,14 +40,6 @@ const editor = ["vim", "nvim"].find(
   (name) => spawnSync("sh", ["-c", `command -v ${name}`]).status === 0,
 );
 const TERMINAL_WRITE = "local_terminal_write";
-
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 async function waitForUrl(url: string): Promise<void> {
   await expect
@@ -148,22 +143,23 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     await installFetchFault(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
     // index.html's title stays until Vite serves and runs renderer-entry; under
-    // host load that startup takes longer than expect's 5 s default.
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // host load that startup takes longer than expect's 5 s default. A start
+    // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
         ({ command, args }) =>
@@ -230,6 +226,8 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     expect(worktree).toBeTruthy();
 
     await window.reload();
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     const openEnvironment = async (page: Page, name: string) => {
       const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
       const entry = page.getByText(name, { exact: true }).first();
@@ -255,11 +253,11 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await expect.poll(async () => (await writes()).length, { timeout: 30_000 }).toBeGreaterThan(0);
     const sessionId = String((await writes())[0]!.args.sessionId);
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     const screen = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string } | null>("get_terminal_state_snapshot", { sessionId }))
           ?.output ?? "",
       );

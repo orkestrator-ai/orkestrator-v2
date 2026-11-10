@@ -277,6 +277,46 @@ describe("OpenCodeRoutingProvider", () => {
     );
   });
 
+  test("the resume picker archives and restores a 2.x conversation, never a 1.x one", async () => {
+    const { server, legacy, router } = setup();
+    const id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+    const legacyList = mock(async (_options?: unknown) => [
+      { sessionId: "ses_legacy_9", archivable: false },
+    ]);
+    (legacy as { listResumableSessions?: unknown }).listResumableSessions = legacyList;
+
+    // Held by its tab: refused, as Codex and Cursor refuse it.
+    await expect(
+      router.setResumableSessionArchived(`opencode2:${id}`, true),
+    ).rejects.toBeInstanceOf(PromptRejectedError);
+    expect(server.sessions.get(id)?.archived).toBeFalsy();
+    await router.closeSession(id);
+    await router.setResumableSessionArchived(`opencode2:${id}`, true);
+    expect(server.sessions.get(id)?.archived).toBe(true);
+    // The default list leaves the archived 2.x row out.
+    expect((await router.listResumableSessions()).map((entry) => entry.sessionId)).toEqual([
+      "ses_legacy_9",
+    ]);
+    // The picker's list includes it, marked, beside the 1.x row it cannot archive.
+    const withArchived = await router.listResumableSessions({ includeArchived: true });
+    expect(withArchived).toEqual([
+      { sessionId: "ses_legacy_9", archivable: false },
+      expect.objectContaining({ sessionId: `opencode2:${id}`, archived: true }),
+    ]);
+    expect(withArchived[1]?.archivable).toBeUndefined();
+    // 1.x has no archive, so it is never asked for archived rows.
+    expect(legacyList.mock.calls.every((call) => call[0] === undefined)).toBe(true);
+    await expect(router.resumeSession(`opencode2:${id}`)).rejects.toThrow("archived");
+
+    await router.setResumableSessionArchived(`opencode2:${id}`, false);
+    expect(server.sessions.get(id)?.archived).toBe(false);
+    expect(await router.resumeSession(`opencode2:${id}`)).toBe(id);
+
+    await expect(router.setResumableSessionArchived("ses_legacy_9", true)).rejects.toBeInstanceOf(
+      PromptRejectedError,
+    );
+  });
+
   test("a 2.x session's cards, rule details, pages and usage come from the 2.x provider", async () => {
     const { server, legacy, router, state } = setup();
     const id = await router.createSession("build", "b", { openCodeProtocol: "v2" });
@@ -419,4 +459,21 @@ describe("a coordinator's 2.x server through the router", () => {
       router.synchronizeSessionPolicy(id, { ...openCode2CoordinatorPolicy("off"), id: "pipeline" }),
     ).rejects.toThrow(PromptRejectedError);
   });
+});
+
+test("closed routing history is not registered on a replacement generation", async () => {
+  const { router, server, state } = setup();
+  const closed = await router.createSession("build", "a", { openCodeProtocol: "v2" });
+  const open = await router.createSession("build", "b", { openCodeProtocol: "v2" });
+  // Resume replacement closes the old session without calling releaseSession.
+  await router.closeSession(closed);
+  // A metadata lookup must not reacquire ownership.
+  expect(await router.sessionProtocol(closed)).toBe("v2");
+  state.generation = "g2";
+  await router.setResumableSessionArchived(`opencode2:${closed}`, true);
+  expect(server.sessions.get(closed)?.archived).toBe(true);
+  await expect(router.setResumableSessionArchived(`opencode2:${open}`, true)).rejects.toThrow(
+    "open in a tab",
+  );
+  expect(server.sessions.get(open)?.archived).toBeFalsy();
 });

@@ -5,7 +5,8 @@ import { StoreCorruptError } from "./storage-database.js";
 import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
 import type { UsageEnvironmentLabel } from "./usage-history-record.js";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
-import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { keyInformationTabId, MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { preserveNotesCompletion } from "@orkestrator/protocol/pane-layout-merge";
 import {
   AGENT_HANDOFF_PRUNE_GRACE_MS,
   MAX_SESSIONS_PER_ENVIRONMENT,
@@ -22,10 +23,10 @@ import {
   paneLayoutAgentHandoffIds,
   paneLayoutDroppedAgentHandoff,
   paneLayoutLeaves,
-  paneLayoutRevisionConflictMessage,
   selectedTabIsSetupHandoffSource,
   suppressLateSetupTabAdditions,
 } from "./storage-shared.js";
+import { paneLayoutRevisionConflict } from "./pane-layout-conflict.js";
 import type { NativeAgentJobCompletionAction } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -159,8 +160,13 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-/** Renderer renames and moves cannot remove a backend-owned job marker. */
-function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unknown {
+/** Renderer saves cannot remove backend metadata from a retained tab. */
+function preserveBackendTabMetadata(root: unknown, previousRoot: unknown): unknown {
+  const previousTabs = new Map(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .map((tab) => [tab.id, tab]),
+  );
   const actions = new Map(
     paneLayoutLeaves(previousRoot)
       .flatMap((leaf) => leaf.tabs)
@@ -175,6 +181,7 @@ function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unk
   );
   const next = structuredClone(root);
   for (const leaf of paneLayoutLeaves(next)) {
+    leaf.tabs = leaf.tabs.map((tab) => preserveNotesCompletion(tab, previousTabs.get(tab.id)));
     for (const tab of leaf.tabs) {
       if (consumedHandoffs.has(tab.id)) tab.setupHandoffConsumed = true;
       if (tab.type === "agent-native" && actions.has(tab.id))
@@ -385,7 +392,7 @@ export class SessionsRepository {
       previousRoot = previous?.root;
       const currentRevision = previous?.revision ?? 0;
       if (currentRevision !== expectedRevision) {
-        throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
+        throw paneLayoutRevisionConflict(expectedRevision, currentRevision);
       }
       const saved: PersistedPaneLayout = {
         version: layout.version,
@@ -394,7 +401,7 @@ export class SessionsRepository {
         activePaneId: layout.activePaneId,
         root:
           previous?.containerId === layout.containerId
-            ? preserveJobCompletionActions(layout.root, previous.root)
+            ? preserveBackendTabMetadata(layout.root, previous.root)
             : layout.root,
         updatedAt: nowIso(),
         revision: currentRevision + 1,
@@ -530,7 +537,7 @@ export class SessionsRepository {
       if (sameGeneration)
         next = {
           ...next,
-          root: preserveJobCompletionActions(
+          root: preserveBackendTabMetadata(
             next.root,
             previous.root,
           ) as PaneLayoutMergeInput["root"],
@@ -647,6 +654,125 @@ export class SessionsRepository {
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish a finished build pipeline's notes tab and select it, so the run
+   * lands on its notes in every client, including one that was closed, on
+   * another environment or another node when the run finished.
+   *
+   * The tab opens in the pane holding the pipeline's own tab, else the active
+   * pane; an open notes tab is selected rather than duplicated. Its id is the
+   * one every renderer derives (`keyInformationTabId`), so a renderer that
+   * opens the same tab merges with this one. A full layout, or an environment
+   * with no layout yet, is left as it is. Returns null when nothing changed.
+   */
+  async ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+    completionRevision?: number;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) return null;
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      if (!previous) return null;
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) return null;
+
+      const isNotesTab = (tab: Record<string, unknown>): boolean => {
+        const data = tab.keyInformationTabData;
+        return (
+          tab.type === "key-information" &&
+          isRecord(data) &&
+          data.pipelineId === input.pipelineId &&
+          data.view === "notes"
+        );
+      };
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some(isNotesTab));
+      const existingTab = existingLeaf?.tabs.find(isNotesTab);
+      // Replaying an already published completion cannot overwrite a newer
+      // user selection. Older completion attempts cannot regress its identity.
+      const publishedRevision = isRecord(existingTab?.keyInformationTabData)
+        ? existingTab.keyInformationTabData.completionRevision
+        : undefined;
+      if (
+        input.completionRevision !== undefined &&
+        isRecord(existingTab?.keyInformationTabData) &&
+        existingTab.keyInformationTabData.completionPublished === true &&
+        typeof publishedRevision === "number" &&
+        publishedRevision >= input.completionRevision
+      )
+        return null;
+      let target = existingLeaf;
+      let tabId = typeof existingTab?.id === "string" ? existingTab.id : undefined;
+      if (!target || !tabId) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        // A full layout keeps the pipeline tab, where the Notes step is selected.
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) return null;
+        target =
+          leaves.find((leaf) =>
+            leaf.tabs.some((tab) => {
+              const build = tab.buildTabData;
+              return (
+                tab.type === "claude-build" &&
+                isRecord(build) &&
+                build.pipelineId === input.pipelineId
+              );
+            }),
+          ) ??
+          leaves.find((leaf) => leaf.id === previous.activePaneId) ??
+          leaves[0]!;
+        tabId = keyInformationTabId(input.environmentId, input.pipelineId, "notes");
+        target.tabs.push({
+          id: tabId,
+          type: "key-information",
+          keyInformationTabData: {
+            environmentId: input.environmentId,
+            pipelineId: input.pipelineId,
+            view: "notes",
+            completionPublished: true,
+            ...(input.completionRevision === undefined
+              ? {}
+              : { completionRevision: input.completionRevision }),
+          },
+        });
+      }
+      // Mark reused manual tabs too: only this backend completion path publishes
+      // the focus handoff. Ordinary renderer openings carry no such marker.
+      if (existingTab && isRecord(existingTab.keyInformationTabData)) {
+        existingTab.keyInformationTabData.completionPublished = true;
+        if (input.completionRevision !== undefined) {
+          existingTab.keyInformationTabData.completionRevision = input.completionRevision;
+        }
+      }
+      target.activeTabId = tabId;
+      if (
+        previous.activePaneId === target.id &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return null;
+      }
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        environmentId: input.environmentId,
+        activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous.revision ?? 0) + 1,
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;

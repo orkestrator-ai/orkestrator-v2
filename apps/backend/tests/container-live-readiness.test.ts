@@ -44,6 +44,7 @@ import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
+import { restartRuntime } from "./container-live-start";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -1001,7 +1002,10 @@ describe("C10 setup interrupted after a possible side effect", () => {
         "-c",
         "ps -eo args= | grep -c '^sleep 600$' || true",
       ]);
-      await docker(["restart", "-t", "5", containerId]);
+      // Through the backend's start path: this full-mode runtime publishes
+      // automatic ports, which a rootless daemon can hand out already taken
+      // on the host, and only that path retries the collision (0109 task 5).
+      await restartRuntime(containerId);
       await waitForContainerBoot(containerId);
       await Bun.sleep(10_000);
       expect(await sideEffects()).toBe(1);

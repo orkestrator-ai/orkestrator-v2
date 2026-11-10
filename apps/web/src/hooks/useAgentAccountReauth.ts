@@ -39,7 +39,13 @@ export function useAgentAccountReauth(
   }
 
   const adopt = useCallback(
-    (next: AgentAccountLoginProgress) => {
+    async (next: AgentAccountLoginProgress) => {
+      const version = epoch.current;
+      if (next.operationId && next.accountId) {
+        const accounts = await nodeBackend.listAgentAccounts(machine);
+        if (epoch.current !== version) return;
+        if (accounts.active[platform] !== next.accountId) next = IDLE;
+      }
       if (next.platform !== platform || next.mode !== "reauthenticate") {
         // A result remains visible after another reader dismisses it.
         if (current.current.state === "succeeded" || current.current.state === "failed") return;
@@ -51,7 +57,7 @@ export function useAgentAccountReauth(
       // Keep terminal results in the backend so every remounted card can recover
       // them. A successful poll must never cancel a different operation.
     },
-    [platform],
+    [platform, machine, nodeBackend],
   );
 
   useEffect(() => {
@@ -76,11 +82,7 @@ export function useAgentAccountReauth(
             Date.parse(existing.completedAt) < failureTime
           )
             return;
-          if (existing.operationId && existing.accountId && existing.state !== "pending") {
-            const accounts = await nodeBackend.listAgentAccounts(machine);
-            if (accounts.active[platform] !== existing.accountId) return;
-          }
-          if (epoch.current === version) adopt(existing);
+          if (epoch.current === version) await adopt(existing);
         })
         .catch(() => undefined);
     }
@@ -97,7 +99,7 @@ export function useAgentAccountReauth(
     const poll = async () => {
       try {
         const next = await nodeBackend.getAgentAccountLogin(machine);
-        if (active && epoch.current === version) adopt(next);
+        if (active && epoch.current === version) await adopt(next);
       } catch {
         /* Retry transient read failures while pending. */
       }
@@ -125,7 +127,7 @@ export function useAgentAccountReauth(
         { reauthenticate: true },
         machine,
       );
-      if (epoch.current === version) adopt(next);
+      if (epoch.current === version) await adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     } finally {
@@ -142,7 +144,7 @@ export function useAgentAccountReauth(
     setError(null);
     try {
       const next = await nodeBackend.cancelAgentAccountLogin(operationId, machine);
-      if (epoch.current === version) adopt(next);
+      if (epoch.current === version) await adopt(next);
     } catch (cause) {
       if (epoch.current === version) setError(messageOf(cause));
     }

@@ -42,6 +42,46 @@ function shellArg(value: string): string {
   return `"${escaped}"`;
 }
 
+/** The inverse of {@link shellArg}: the four characters it escapes, unescaped. */
+function unquoteShellArg(quoted: string): string {
+  return quoted.replace(/\\([\\"$`])/g, "$1");
+}
+
+// A double-quoted shellArg: any character but `"` and `\`, or one escaped by it.
+const QUOTED_ARG = String.raw`"((?:[^"\\]|\\[\\"$\x60])*)"`;
+const OPENCODE_LAUNCH_PATTERN = new RegExp(
+  "^" +
+    Object.entries(OPENCODE_PINNED_RUNTIME_ENV)
+      .map(([name, value]) => `${name}=${value} `)
+      .join("") +
+    `opencode(?: --model ${QUOTED_ARG})?(?: --prompt ${QUOTED_ARG})?(\\r?\\n)?$`,
+);
+
+/**
+ * The model and prompt of a launch line {@link buildTerminalAgentLaunchCommand}
+ * produced for an OpenCode tab, or null for anything else (including a line a
+ * user typed with other flags). The backend reads it to start the same tab on
+ * OpenCode 2, whose TUI takes no `--model` (`opencode2/terminal-launch.ts`).
+ */
+export function parseTerminalOpenCodeLaunchCommand(
+  data: string,
+): { model?: string; initialPrompt?: string; lineEnding: string } | null {
+  const match = OPENCODE_LAUNCH_PATTERN.exec(data);
+  if (!match) return null;
+  const [, model, initialPrompt, lineEnding] = match;
+  const launch = {
+    ...(model !== undefined ? { model: unquoteShellArg(model) } : {}),
+    ...(initialPrompt !== undefined ? { initialPrompt: unquoteShellArg(initialPrompt) } : {}),
+    lineEnding: lineEnding ?? "",
+  };
+  // Shape alone also accepts shell expansions the builder would have escaped.
+  // Rewriting those would turn an expression into literal prompt/model text.
+  return data ===
+    `${buildTerminalAgentLaunchCommand({ tabType: "opencode", ...launch })}${launch.lineEnding}`
+    ? launch
+    : null;
+}
+
 /** Build the exact one-shot command used to start an agent inside a PTY. */
 export function buildTerminalAgentLaunchCommand(options: {
   tabType: TerminalAgentTabType;

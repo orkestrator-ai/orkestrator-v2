@@ -1058,6 +1058,48 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID }],
     },
+    "session.rewind": {
+      capability: "sessions.control",
+      // Codex and Cursor cannot bring the removed turns back.
+      confirmation: "always",
+      input: schema(
+        {
+          sessionId,
+          messageId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description:
+              "A prompt (user message) ID from session.transcript. The conversation is cut before it.",
+          },
+        },
+        ["sessionId", "messageId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID, messageId: "message-1" }],
+    },
+    "session.branches": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema({ sessionId }, ["sessionId"]),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
+    },
+    "session.branch": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          entryId: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description: "Branch entry ID from session.branches.",
+          },
+        },
+        ["sessionId", "entryId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID, entryId: "entry-1" }],
+    },
     "session.interactions": {
       capability: "sessions.read",
       confirmation: "never",

@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import { copyProjectSeedFilesIntoContainer } from "./container-project-seed-files.js";
+import { withDockerScript } from "../../tests/container-lifecycle-fixtures.js";
+import {
+  copyConfiguredProjectFilesToDirectory,
+  stageConfiguredProjectFilesForContainer,
+} from "./commands-project-files.js";
 
 const directories: string[] = [];
 async function tempDir(): Promise<string> {
@@ -52,4 +57,53 @@ test("a branch's link in place of a directory above it is not written through", 
     copyConfiguredProjectFilesToDirectory(project, worktree, ["config/secrets.env"]),
   ).rejects.toThrow("written through a link");
   await expect(readFile(path.join(outside, "secrets.env"), "utf8")).rejects.toThrow();
+});
+
+for (const hidden of [false, true]) {
+  test(`configured container files map copy refusal to unsupported-topology (hidden=${hidden})`, async () => {
+    const project = await projectWithSecret();
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$2" in
+  container:/.orkestrator-copy-probe-absent) echo 'remount-ro /rootfs/git, flags: 0x1021: operation not permitted' >&2 ;;
+  *) echo '${hidden ? "destination must be a directory" : "remount-ro /rootfs/git, flags: 0x1021: operation not permitted"}' >&2 ;;
+esac
+exit 1
+`,
+      async (log) => {
+        await expect(
+          stageConfiguredProjectFilesForContainer("container", project, ["config/secrets.env"]),
+        ).rejects.toThrow("ContainerLifecycleError:unsupported-topology");
+        const calls = await log.read();
+        expect(calls).toContain("container:/project-files");
+        expect(calls.includes("container:/.orkestrator-copy-probe-absent")).toBe(hidden);
+      },
+    );
+  });
+}
+
+test("seed archive copy maps a hidden remount refusal to unsupported-topology", async () => {
+  await withDockerScript(
+    `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$2" = container:/.orkestrator-copy-probe-absent ]; then
+  echo 'remount-ro /rootfs/git, flags: 0x1021: operation not permitted' >&2
+else
+  cat >/dev/null
+  echo 'destination must be a directory' >&2
+fi
+exit 1
+`,
+    async (log) => {
+      await expect(
+        copyProjectSeedFilesIntoContainer("container", [
+          { name: ".env", target: "project-env/.env", contents: Buffer.from("VALUE=fixture") },
+        ]),
+      ).rejects.toThrow("ContainerLifecycleError:unsupported-topology");
+      const calls = await log.read();
+      expect(calls).toContain("cp -a - container:/");
+      expect(calls).toContain("cp container:/.orkestrator-copy-probe-absent -");
+    },
+  );
 });

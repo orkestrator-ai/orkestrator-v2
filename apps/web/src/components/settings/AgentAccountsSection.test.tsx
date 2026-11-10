@@ -1,3 +1,5 @@
+import { listen } from "@/lib/native/events";
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "@orkestrator/protocol/agent-account-shared-usage";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
@@ -22,6 +24,7 @@ const usage: PlanUsageSnapshot = {
   fetchedAt: new Date(0).toISOString(),
 };
 let usageResult: PlanUsageSnapshot = usage;
+let usageRead: (() => Promise<PlanUsageSnapshot>) | undefined;
 
 function answer(command: string, args: Record<string, unknown>): Promise<unknown> {
   calls.push({ command, args });
@@ -30,12 +33,23 @@ function answer(command: string, args: Record<string, unknown>): Promise<unknown
       case "list_agent_accounts":
         return Promise.resolve(snapshot);
       case "get_agent_account_usage":
-        return Promise.resolve(usageResult);
+        return usageRead ? usageRead() : Promise.resolve(usageResult);
       case "get_agent_account_login":
         return Promise.resolve(login);
       case "start_agent_account_login":
         login = startResult;
         return Promise.resolve(startResult);
+      case "reauthenticate_agent_account":
+        login = {
+          state: "pending",
+          operationId: "renew-one",
+          platform: "claude",
+          mode: "reauthenticate",
+          accountId: String(args.accountId),
+          url: "https://claude.com/cai/oauth/authorize?code=true",
+          needsCode: true,
+        };
+        return Promise.resolve(login);
       case "set_active_agent_account":
         snapshot = {
           active: { ...snapshot.active, codex: String(args.accountId) },
@@ -113,6 +127,7 @@ beforeEach(() => {
   calls.length = 0;
   onAccountsChanged.mockClear();
   usageResult = usage;
+  usageRead = undefined;
   login = { state: "idle" };
   snapshot = {
     active: { claude: "default", codex: "default" },
@@ -146,6 +161,39 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("a reading event refreshes only its login and uses retained readings", async () => {
+    const handlers = new Set<(event: { payload: unknown }) => void>();
+    (listen as ReturnType<typeof mock>).mockImplementation(
+      async (event: string, handler: (event: { payload: unknown }) => void) => {
+        if (event === AGENT_USAGE_READINGS_CHANGED_EVENT) handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    );
+    await mount();
+    await screen.findAllByText("40% used");
+    calls.length = 0;
+    usageResult = {
+      ...usage,
+      windows: [{ window: "primary", label: "5-hour limit", usedPercent: 92 }],
+    };
+    await act(async () => {
+      for (const handler of handlers)
+        handler({
+          payload: { platform: "codex", origin: "shared", emails: ["second@example.com"] },
+        });
+    });
+    await screen.findByText("92% used");
+    expect(calls.filter((call) => call.command === "get_agent_account_usage")).toEqual([
+      {
+        command: "get_agent_account_usage",
+        args: { platform: "codex", accountId: ADDED_ID, cacheOnly: true },
+      },
+    ]);
+    expect(
+      within(screen.getByRole("listitem", { name: "Host login" })).getByText("40% used"),
+    ).toBeTruthy();
+  });
+
   test("removes an inactive saved twin while the host login stays active", async () => {
     snapshot.accounts[2] = { ...snapshot.accounts[2]!, identity: { email: "HOST@example.com" } };
     await mount();
@@ -266,10 +314,39 @@ describe("AgentAccountsSection", () => {
     for (const name of ["Host login", "second@example.com"]) {
       const row = await screen.findByRole("listitem", { name });
       expect(await within(row).findByText("40% used")).toBeTruthy();
-      expect(
-        within(row).getByText(/Last known usage, as of 1h ago\. Sign-in expired/),
-      ).toBeTruthy();
+      const age = within(row).getByTestId("usage-reading-age");
+      expect(age.textContent).toMatch(/Updated .+ \(1h ago\)/);
+      expect(within(age).getByText("Stale")).toBeTruthy();
+      expect(within(row).getByText(/Sign-in expired/)).toBeTruthy();
+      expect(within(row).getByTestId("usage-reading-bars").getAttribute("data-stale")).toBe("true");
     }
+  });
+
+  test("a row shows a reading another machine took of the same login, and when", async () => {
+    usageResult = {
+      ...usage,
+      fetchedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      readOn: { nodeId: "bk_beelink", nodeName: "beelink" },
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    const age = await within(row).findByTestId("usage-reading-age");
+    expect(age.textContent).toMatch(/^Updated .+ \(2m ago\) on beelink$/);
+    expect(age.getAttribute("data-stale")).toBe("false");
+  });
+
+  test("a row whose usage was never read says so", async () => {
+    usageResult = {
+      platform: "codex",
+      status: "unavailable",
+      windows: [],
+      message: "This account's sign-in is refreshed while it is in use.",
+      fetchedAt: new Date().toISOString(),
+    };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(await within(row).findByText("Usage has not been read yet.")).toBeTruthy();
+    expect(within(row).getByText(/refreshed while it is in use/)).toBeTruthy();
   });
 
   test("lists only this platform's accounts with their identity and usage", async () => {
@@ -455,5 +532,150 @@ describe("AgentAccountsSection", () => {
         code: "code#state",
       }),
     );
+  });
+
+  test("a signed-out Claude account is signed in again from its own row, without a switch", async () => {
+    const { clock } = installFakeReadCoordinator();
+    snapshot.accounts[0] = { ...snapshot.accounts[0]!, label: "Claude host" };
+    snapshot.accounts.push(
+      account({
+        id: ADDED_ID,
+        platform: "claude",
+        label: "lapsed@example.com",
+        isDefault: false,
+        isActive: false,
+        signedIn: false,
+        identity: { email: "lapsed@example.com", plan: "max" },
+      }),
+    );
+    await act(async () => {
+      render(<AgentAccountsSection platform="claude" onAccountsChanged={onAccountsChanged} />);
+      await clock.advance(0);
+    });
+    const host = await screen.findByRole("listitem", { name: "Claude host" });
+    expect(within(host).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+    const lapsed = screen.getByRole("listitem", { name: "lapsed@example.com" });
+    expect(within(lapsed).getByText("Signed out")).toBeTruthy();
+    // A signed-out account has no usage to refresh.
+    expect(within(lapsed).queryByRole("button", { name: /Refresh usage/ }) === null).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(within(lapsed).getByRole("button", { name: /Sign in/ }));
+    });
+    expect(calls).toContainEqual({
+      command: "reauthenticate_agent_account",
+      args: { platform: "claude", accountId: ADDED_ID },
+    });
+    const panel = await within(lapsed).findByLabelText("Account sign-in");
+    expect(within(panel).getByLabelText("Sign-in code")).toBeTruthy();
+    expect(within(lapsed).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /Add account/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/Another account sign-in is in progress/) === null).toBe(true);
+    expect(calls.some((call) => call.command === "set_active_agent_account")).toBe(false);
+
+    snapshot = {
+      ...snapshot,
+      accounts: snapshot.accounts.map((a) => (a.id === ADDED_ID ? { ...a, signedIn: true } : a)),
+    };
+    login = { ...login, state: "succeeded" };
+    await act(async () => {
+      await clock.advance(2_000);
+    });
+    await waitFor(() => expect(screen.queryByLabelText("Account sign-in") === null).toBe(true));
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
+    const renewed = screen.getByRole("listitem", { name: "lapsed@example.com" });
+    expect(within(renewed).queryByText("Signed out") === null).toBe(true);
+    await within(renewed).findByText("5-hour limit");
+  });
+
+  test("a signed-out Codex account offers no sign-in in place", async () => {
+    snapshot.accounts[2] = { ...snapshot.accounts[2]!, signedIn: false };
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    expect(within(row).getByText("Signed out")).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: /Sign in/ }) === null).toBe(true);
+  });
+
+  test("row refresh suppresses duplicate probes and recovers after a rejection", async () => {
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    await within(row).findByText("5-hour limit");
+    const refresh = within(row).getByRole("button", {
+      name: "Refresh usage for second@example.com",
+    }) as HTMLButtonElement;
+    let reject!: (cause: Error) => void;
+    usageRead = () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      });
+    const count = () => calls.filter((c) => c.command === "get_agent_account_usage").length;
+    const before = count();
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    expect(refresh.disabled).toBe(true);
+    fireEvent.click(refresh);
+    expect(count()).toBe(before + 1);
+    await act(async () => {
+      reject(new Error("Probe unavailable"));
+    });
+    await within(row).findByText("Probe unavailable");
+    expect(refresh.disabled).toBe(false);
+    usageRead = undefined;
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    await within(row).findByText("5-hour limit");
+    expect(refresh.disabled).toBe(false);
+    expect(count()).toBe(before + 2);
+  });
+
+  test("row refresh shows provider cooldown and allows a later retry", async () => {
+    await mount();
+    const row = await screen.findByRole("listitem", { name: "second@example.com" });
+    await within(row).findByText("5-hour limit");
+    const refresh = within(row).getByRole("button", {
+      name: "Refresh usage for second@example.com",
+    }) as HTMLButtonElement;
+    usageResult = {
+      ...usage,
+      status: "error",
+      windows: [],
+      message: "HTTP 429: usage is cooling down",
+    };
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    await within(row).findByText("HTTP 429: usage is cooling down");
+    expect(refresh.disabled).toBe(false);
+    usageResult = usage;
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    await within(row).findByText("5-hour limit");
+    expect(refresh.disabled).toBe(false);
+  });
+
+  test("an account's refresh button reads its usage afresh, and only its own", async () => {
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2),
+    );
+    const refresh = within(added).getByRole("button", {
+      name: "Refresh usage for second@example.com",
+    });
+    await act(async () => {
+      fireEvent.click(refresh);
+    });
+    await waitFor(() =>
+      expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(3),
+    );
+    expect(calls.filter((call) => call.command === "get_agent_account_usage").at(-1)?.args).toEqual(
+      { platform: "codex", accountId: ADDED_ID, force: true },
+    );
+    await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
   });
 });

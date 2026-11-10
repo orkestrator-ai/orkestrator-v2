@@ -28,6 +28,7 @@ import type {
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   NativeAgentCommandRefreshOutcome,
+  NativeAgentExecutionPolicy,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
@@ -52,6 +53,7 @@ import {
 import { assertAuthenticated, NOT_AUTHENTICATED_MESSAGE, PI_SIGN_IN } from "./credentials.js";
 import { piWithheldGitHubCredential, withheldShellToolDefinitions } from "./github-credential.js";
 import { requestToolApproval } from "./interactions.js";
+import { excludeConfiguredPackages } from "./project-extensions.js";
 import {
   closePiMcp,
   mcpConfigNeedsRefresh,
@@ -563,8 +565,15 @@ export async function createPiSessionServices(
   >,
 ): ReturnType<typeof createAgentSessionServices> {
   const loaderPolicy = piResourceLoaderPolicy(state, options.cwd);
+  const settingsManager =
+    options.settingsManager ??
+    SettingsManager.create(options.cwd, options.agentDir, {
+      projectTrusted: loaderPolicy.projectTrusted,
+    });
+  excludeConfiguredPackages(settingsManager);
   const services = await createAgentSessionServices({
     ...options,
+    settingsManager,
     resourceLoaderOptions: {
       // Project resources can execute arbitrary code or replace built-in tools.
       // Read-only sessions exclude them even inside trusted containers.
@@ -948,6 +957,7 @@ export async function runDeferredCommandReload(state: SessionState): Promise<voi
 export function projectResourceDiscoveryOptions(
   enabled = false,
   readOnly = false,
+  _approvals?: NativeAgentExecutionPolicy["approvals"],
 ): {
   noExtensions: boolean;
   noSkills: boolean;
@@ -961,7 +971,8 @@ export function projectResourceDiscoveryOptions(
   // with extensions because they are repository-controlled instructions too.
   const discoverProjectResources = enabled && !readOnly;
   return {
-    noExtensions: !discoverProjectResources,
+    // Every policy shares this process, including future ask sessions.
+    noExtensions: true,
     noSkills: !discoverProjectResources,
     noPromptTemplates: !discoverProjectResources,
     // Branch-controlled instructions must not steer a read-only review.
@@ -996,6 +1007,7 @@ export function piResourceLoaderPolicy(
   const discovery = projectResourceDiscoveryOptions(
     state.policy?.projectResources,
     state.readOnly === true,
+    state.policy?.approvals,
   );
   // A coordinator loads the user's skills (`~/.pi/agent/skills`,
   // `~/.agents/skills`) and the checkout's, the way the other platforms'
@@ -1668,6 +1680,7 @@ export async function forkSession(
 export async function navigateSessionHistory(
   state: SessionState,
   messageOrEntryId: string,
+  position: "before" | "at" = "before",
 ): Promise<void> {
   if (state.status === "running" || state.dispatching) throw new SessionBusyError();
   const session = await ensureSession(state);
@@ -1680,6 +1693,12 @@ export async function navigateSessionHistory(
   if (!target) throw new HistoryTargetError();
   const result = await session.navigateTree(target, { summarize: false });
   if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
+  // Tree navigation edits user/custom messages by stopping at their parent.
+  // Branch selection must retain the selected leaf, including reply-less prompts.
+  if (position === "at" && session.sessionManager.getLeafId() !== target) {
+    session.sessionManager.branch(target);
+    session.refreshContext();
+  }
   // In memory only until a prompt appends under it; the render below and every
   // later reopen of the file read it from here.
   rememberHistoryLeaf(state, session.sessionManager);

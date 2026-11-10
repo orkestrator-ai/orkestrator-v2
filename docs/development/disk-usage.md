@@ -128,7 +128,7 @@ ignored files. The project home cannot be moved.
 ## Project Git mirrors
 
 Each project with a container environment gets one bare mirror of its branches,
-at `<data dir>/git-mirrors/<project id>/mount/mirror.git`, so that later
+at `<data dir>/git-mirrors/<project id>/mount-<access kind>/mirror.git`, so that later
 environments do not download the repository again
 ([container-lifecycle.md](../architecture/container-lifecycle.md#project-git-mirror)).
 
@@ -160,16 +160,17 @@ What it costs, on the two repositories measured:
   without a checkout, 36 s and 55 s with one, one run each. It was not measured
   against a real network remote. It runs in the background either way.
 - **It is only a cache.** To reclaim it by hand, delete only
-  `<project id>/mount/mirror.git`, keeping the project directory and `mount/`.
+  `<project id>/mount-<kind>/mirror.git` (or `mount/mirror.git`, left by an
+  older version), keeping the project directory and every `mount*/` directory.
   Existing clones are self-contained and the next creation rebuilds the mirror.
-  Removing `mount/` also permits automatic recovery while its project parent
+  Removing a `mount-<kind>/` directory also permits automatic recovery while its project parent
   remains writable by the backend.
   Do not delete the project parent while containers still reference it: rootful
   Docker recreates missing bind sources and parents as root on restart. Existing
   environments still start and new ones fall back to remote clones, but refresh
   and cleanup then need host operator intervention. Restore ownership of that
   exact `git-mirrors/<project id>` tree to the backend user's uid and gid
-  (including `mount/`), and restore the project directory to mode `0700`.
+  (including every `mount*/` directory), and restore the project directory to mode `0700`.
   The next creation can then rebuild; the orphan sweep can retry cleanup.
   Permission failures log this remediation hint. The backend does not elevate
   privileges to change ownership.
@@ -241,7 +242,14 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   counts them, and `mise run disk:report -- --fix probe-networks` removes,
   one at a time by network id, only those with no container in any state and
   created more than a day ago, whatever their owner. A check lasts seconds, so such a network
-  cannot belong to a running one (todo 0241).
+  cannot belong to a running one (todo 0241). Each probe network and container
+  also carries an `orkestrator-creator` label, `<runtime flavor>/<temporary|persistent>`
+  (for example `agent-test/temporary` for a disposable test backend), and the
+  row counts the stale ones by it; `unlabelled` ones predate the label
+  (todo 7470). The value never names a path, a user or a spec, because anyone
+  who can reach the daemon can read it. Electron specs and the CLI harnesses
+  run their backends with the boot probe off, so a new `…/temporary` leak
+  points at a harness that does not.
 
 ## Commands
 

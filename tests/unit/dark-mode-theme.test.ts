@@ -107,7 +107,7 @@ describe("forced dark mode theming", () => {
     expect(css).toMatch(/color-scheme:\s*dark/);
   });
 
-  test("shared form controls use the same raised surface as agent compose bars", () => {
+  test("shared form controls share one raised surface; the compose bar's is opaque", () => {
     const formControlSources = [
       "apps/web/src/components/ui/input.tsx",
       "apps/web/src/components/ui/textarea.tsx",
@@ -118,7 +118,14 @@ describe("forced dark mode theming", () => {
       expect(read(source)).toContain("bg-input-surface");
     }
 
-    expect(read("apps/web/src/components/chat/NativeComposeBar.tsx")).toContain("bg-input-surface");
+    // The compose bar floats over a transcript that scrolls beneath it, so it
+    // uses the opaque variant of the same surface rather than the translucent one.
+    const composeBar = read("apps/web/src/components/chat/NativeComposeBar.tsx");
+    expect(composeBar).toContain("bg-compose-surface");
+    expect(composeBar).not.toContain("bg-input-surface");
+    expect(read("apps/web/src/index.css")).toContain(
+      "--color-compose-surface: var(--color-zinc-900);",
+    );
   });
 
   test("form controls use the shared focus hairline", () => {

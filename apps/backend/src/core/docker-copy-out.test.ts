@@ -55,6 +55,10 @@ describe.skipIf(process.platform === "win32")("copyOutBounded", () => {
     expect(await copyOutBounded("c1", "/f", 16)).toEqual({ kind: "absent" });
     await fakeDocker(`echo 'Cannot connect to the Docker daemon at unix:///x.' >&2; exit 1`);
     expect(await copyOutBounded("c1", "/f", 16)).toEqual({ kind: "daemon-unavailable" });
+    await fakeDocker(
+      `echo 'Error response from daemon: remount-ro /d/rootfs/overlayfs/1/ro, flags: 0x1021: operation not permitted' >&2; exit 1`,
+    );
+    expect(await copyOutBounded("c1", "/f", 16)).toEqual({ kind: "refused" });
     await fakeDocker(`echo 'something else' >&2; exit 1`);
     expect(await copyOutBounded("c1", "/f", 16)).toEqual({ kind: "failed" });
   });

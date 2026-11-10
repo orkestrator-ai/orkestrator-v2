@@ -1,7 +1,12 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ActionsPanel, fitNewestCards } from "./CoordinatorActionsPanel";
+import { ActionsPanel, CoordinatorActionsPanel, fitNewestCards } from "./CoordinatorActionsPanel";
+import {
+  FloatingNoticeLayer,
+  TRANSCRIPT_COLUMN_REM,
+  useFloatingNoticeColumnShift,
+} from "@/components/ui/floating-notice";
 import {
   setCoordinatorActionsDockedOpen,
   COORDINATOR_ACTIONS_DOCKED_KEY,
@@ -653,5 +658,38 @@ test("notice insertion, resizing and removal re-fit cards and preserve tiny-pane
     if (top) Object.defineProperty(HTMLElement.prototype, "offsetTop", top);
     HTMLElement.prototype.getBoundingClientRect = rect;
     globalThis.ResizeObserver = originalResize;
+  }
+});
+
+test("where only a shifted column leaves room, the open panel docks and moves the column", () => {
+  const rect = HTMLElement.prototype.getBoundingClientRect;
+  // An 80rem pane: too narrow to dock beside the centred column.
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    return { width: 1280, height: 600, top: 0, left: 0, right: 1280, bottom: 600 } as DOMRect;
+  };
+  function Shift() {
+    return <span data-testid="shift">{useFloatingNoticeColumnShift()}</span>;
+  }
+  try {
+    render(
+      <FloatingNoticeLayer columnRem={TRANSCRIPT_COLUMN_REM}>
+        <Shift />
+        <CoordinatorActionsPanel cards={cards} onNavigate={() => {}} />
+      </FloatingNoticeLayer>,
+    );
+    const shift = () => screen.getByTestId("shift").textContent;
+    expect(shift()).toBe("7.5");
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(region().style.width).toBe("18rem");
+    // Folding the panel lets the column slide back to the centre.
+    fireEvent.click(header());
+    expect(shift()).toBe("0");
+    expect(localStorage.getItem(COORDINATOR_ACTIONS_DOCKED_KEY)).toBe("collapsed");
+    // Reopening it moves the column left again.
+    fireEvent.click(screen.getByRole("button", { name: "Actions, 1 waiting" }));
+    expect(shift()).toBe("7.5");
+  } finally {
+    cleanup();
+    HTMLElement.prototype.getBoundingClientRect = rect;
   }
 });

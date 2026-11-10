@@ -4,6 +4,7 @@ import type { CoordinatorTranscriptMessage } from "./coordinator-live.js";
 import {
   createRoutingRows,
   evaluateRoutingBuild,
+  evaluateRoutingCancel,
   evaluateRoutingDeliveryOutcome,
   evaluateRoutingInvestigate,
   evaluateRoutingReview,
@@ -417,4 +418,47 @@ test("a backend request cannot excuse a failed worker tool or a mismatched reuse
       }),
     ),
   ).toContain("investigate-delegated");
+});
+
+describe("cancel verdict (to-do 7545 task 4)", () => {
+  const cancelled = { id: "p1", taskId: "t1", phase: "failed", cancelledAt: "now" };
+  const notice = (placement: string) => ({
+    id: "n1",
+    createdAt: "now",
+    from: { kind: "system" },
+    toEnvironmentId: "coordinator",
+    toTabId: "tab",
+    placement,
+    notice: { resource: { kind: "build-pipeline", id: "p1" }, state: "cancelled", tone: "info" },
+  });
+  const carrier: CoordinatorTranscriptMessage = {
+    role: "user",
+    content: '<orkestrator-peer-message version="1">{"messageId":"n1"}</orkestrator-peer-message>',
+  };
+
+  test("a carried cancel notice and a quiet wake pass", () => {
+    expect(
+      failedNames(
+        evaluateRoutingCancel({
+          messages: [carrier, { role: "assistant", content: "Noted." }],
+          notices: [notice("injected")],
+          newPipelineIds: [],
+          cancelled: [cancelled],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a notice still queued, a restart call or a build no longer cancelled fail", () => {
+    const checks = evaluateRoutingCancel({
+      messages: [row("mcp__orkestrator__resume_build_pipeline", { pipelineId: "p1" })],
+      notices: [notice("pending-inject")],
+      newPipelineIds: [],
+      cancelled: [{ ...cancelled, phase: "building", cancelledAt: undefined }],
+    });
+    expect(failedNames(checks)).toEqual(["build-cancel-notice", "build-cancel-respected"]);
+    expect(checks[1]?.detail).toBe(
+      "resume_build_pipeline 1 after the cancel; 0 new builds; 0 of 1 still cancelled",
+    );
+  });
 });

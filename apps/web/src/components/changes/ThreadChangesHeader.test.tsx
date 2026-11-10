@@ -123,6 +123,100 @@ function resetStore() {
 }
 
 describe("ThreadChangesHeader", () => {
+  test.each([false, null])(
+    "zero-file projection only reports known absence (%s)",
+    async (hasFileChanges) => {
+      installBackend({
+        thread: { segmentId: "seg-1", resourceKey: THREAD_KEY },
+        projections: new Map([
+          [
+            THREAD_KEY,
+            projection(THREAD_KEY, {
+              state: hasFileChanges === null ? "partial" : "ready",
+              coverageState: hasFileChanges === null ? "partial" : "complete",
+              hasFileChanges,
+              badge: { visible: false, mode: "counts" },
+              counters: { additions: count(0), deletions: count(0), changedFiles: 0 },
+              reasonKeys: hasFileChanges === null ? ["changes.reason.omitted-unverified"] : [],
+            }),
+          ],
+        ]),
+        pages: new Map(),
+      });
+      renderInAppCommandScope(
+        <ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive={false} />,
+      );
+      const summary = await screen.findByTestId("thread-changes-summary");
+      expect(summary.textContent?.includes("No file changes")).toBe(hasFileChanges === false);
+      if (hasFileChanges === null) {
+        expect(summary.title).toContain("omitted unverified");
+        expect(within(summary).getByTestId("change-state-tag").classList.contains("hidden")).toBe(
+          false,
+        );
+      }
+    },
+  );
+
+  test.each([
+    { state: "stale", reasonKeys: [] },
+    { state: "loading", reasonKeys: [] },
+    { state: "unavailable", reasonKeys: [] },
+    { state: "ready", reasonKeys: ["changes.reason.interrupted"] },
+  ] as const)(
+    "retains $state/$reasonKeys states in narrow panes",
+    async ({ state, reasonKeys }) => {
+      installBackend({
+        thread: { segmentId: "seg-1", resourceKey: THREAD_KEY },
+        projections: new Map([
+          [THREAD_KEY, projection(THREAD_KEY, { state, reasonKeys: Array.from(reasonKeys) })],
+        ]),
+        pages: new Map(),
+      });
+      renderInAppCommandScope(
+        <ThreadChangesHeader environmentId={ENV} logicalSessionKey={SESSION} turnActive={false} />,
+      );
+      const tag = await screen.findByTestId("change-state-tag");
+      expect(tag.classList.contains("hidden")).toBe(false);
+      expect(tag.getAttribute("aria-hidden")).not.toBe("true");
+    },
+  );
+
+  test.each([false, true])("containment placement with a thread segment=%s", async (withThread) => {
+    installBackend({
+      thread: withThread ? { segmentId: "seg-1", resourceKey: THREAD_KEY } : null,
+      projections: new Map([[THREAD_KEY, projection(THREAD_KEY)]]),
+      pages: new Map(),
+    });
+    renderInAppCommandScope(
+      <ThreadChangesHeader
+        environmentId={ENV}
+        logicalSessionKey={SESSION}
+        turnActive={false}
+        containment={<span data-testid="containment">worktree · host network</span>}
+      />,
+    );
+    if (withThread) {
+      const toggle = await screen.findByTestId("turn-changes-toggle");
+      const containment = screen.getByTestId("containment");
+      expect(containment.parentElement?.nextElementSibling).toBe(toggle);
+      expect(toggle.classList.contains("shrink-0")).toBe(true);
+      expect(toggle.parentElement?.classList.contains("gap-2")).toBe(true);
+      expect(containment.parentElement?.classList.contains("min-w-0")).toBe(true);
+    } else {
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("changes_get_thread", {
+          environmentId: ENV,
+          logicalSessionKey: SESSION,
+        }),
+      );
+      expect(
+        within(screen.getByTestId("environment-containment-row")).getByTestId("containment")
+          .textContent,
+      ).toContain("host network");
+      expect(screen.queryByTestId("turn-changes-toggle") === null).toBe(true);
+    }
+  });
+
   beforeEach(() => {
     resetChangeSubscriptionsForTests();
     resetStore();

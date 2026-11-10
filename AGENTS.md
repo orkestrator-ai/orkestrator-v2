@@ -835,8 +835,11 @@ When touching the Pi bridge:
   pending otherwise).
 - Project-local `.pi/` resources load only when the session's execution
   policy turns `projectResources` on, on both host and container runs. Host
-  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
-  (arbitrary TypeScript) to run on the host.
+  project resources are off by default. Enabling them permits repository MCP processes to run on the host.
+  Every policy excludes discovered extensions and configured packages (`src/project-extensions.ts`): they
+  run inside the bridge process, where persistent hooks could answer another session’s approvals.
+  Its skills and prompt templates still load, and the reported policy's
+  note says why the extensions did not.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
@@ -1965,3 +1968,5 @@ Operating decisions the user approved in Orkestrator coordinator conversations. 
 - The two kinds of environment are called pipeline environment (created through the build pipeline, which builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own) and prompt environment (runs a prompt; review and PR are started separately).
 - Coordinators use a pipeline environment by default whenever what is being built is known (a ticket, or settled with the user), and a prompt environment for investigation or interactive work that may stop or need back-and-forth; for a prompt environment the coordinator launches Multi Review when the work is ready and sees it through fix, PR and conflict resolution.
 - Group related fixes into as few tickets, pipelines and PRs as possible: every pipeline runs the full validation, which takes a long time and uses a lot of machine resources.
+- Every docs/todo folder index gives each to-do a Status of `backlog` (an agent can work on it alone now, or it is only blocked), `requires user input` (nothing left in it can go ahead without the user) or `done`, plus a Needs you note naming what the user must provide; update the status in the same change that alters a file's tasks.
+- Every docs/todo folder index gives each to-do a Status of `backlog` (an agent can work on it alone now), `blocked` (it waits on another to-do, a release or a recurrence, not on the user), `requires user input` (nothing left in it can go ahead without the user) or `done`, plus a Needs you note naming what the user must provide; update the status in the same change that alters a file's tasks.

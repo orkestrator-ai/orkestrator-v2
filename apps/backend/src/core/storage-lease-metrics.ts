@@ -20,6 +20,18 @@ const OUTSIDE_DATA_DIR = "outside-data-dir";
 const ID_LIKE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}/gi;
 const SAFE_FAMILY = /^[A-Za-z0-9._*-]{1,64}$/;
 
+/**
+ * {@link leaseFamily}'s rules as data, for code that runs where this module
+ * cannot be imported: the backup child sizes stores by family with them
+ * (`storage-backups.ts`), and a test holds the two to the same answers.
+ */
+export const FAMILY_RULES = {
+  idLike: ID_LIKE.source,
+  safeFamily: SAFE_FAMILY.source,
+  other: OTHER_FAMILY,
+  outsideDataDir: OUTSIDE_DATA_DIR,
+} as const;
+
 export function leaseFamily(name: string): string {
   if (name.startsWith("/") || name.startsWith("\\") || /^[A-Za-z]:/.test(name)) {
     return OUTSIDE_DATA_DIR;

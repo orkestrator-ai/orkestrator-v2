@@ -5,6 +5,11 @@ import path from "node:path";
 import * as shell from "./shell.js";
 import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
 import { resolveRemoteWorktreeStartPoint } from "./commands-files.js";
+import {
+  ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
+  environmentLifecycleErrorMessage,
+  MissingRemoteBaseBranchError,
+} from "./commands-error-text.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -16,7 +21,12 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** A credential-free Git fixture that can exercise the selected SSH command. */
 async function useRecordingGit(
-  options: { sshCommandConfig?: string; variantConfig?: string; fetchScript?: string } = {},
+  options: {
+    sshCommandConfig?: string;
+    variantConfig?: string;
+    fetchScript?: string;
+    missingRef?: boolean;
+  } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-remote-fetch-"));
   const record = path.join(root, "fetch-env.txt");
@@ -39,7 +49,7 @@ for arg in "$@"; do
         esac
       done
       exit 1 ;;
-    rev-parse) exit 0 ;;
+    rev-parse) exit ${options.missingRef ? 1 : 0} ;;
   esac
 done
 exit 0
@@ -264,6 +274,23 @@ describe("remote fetch failure outcomes", () => {
   });
 });
 
+test("a base branch missing on origin names the branch and the fix, not git's own text", async () => {
+  const git = await useRecordingGit({
+    fetchScript: 'printf "fatal: couldn\'t find remote ref dev\\n" >&2; exit 128',
+  });
+  const failure = await resolveRemoteWorktreeStartPoint(git.root, "dev").catch(
+    (error: unknown) => error,
+  );
+  expect(failure).toBeInstanceOf(MissingRemoteBaseBranchError);
+  expect((failure as Error).message).toBe(
+    'Base branch "dev" does not exist on origin. It may have been deleted or renamed. ' +
+      'Choose another base branch in the project settings, or recreate "dev" on the remote.',
+  );
+  expect(environmentLifecycleErrorMessage(failure)).toBe(
+    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.baseBranchMissing,
+  );
+});
+
 test("preserves an exit-zero fetch output-close failure", async () => {
   const failure = new CommandFailedError("output transport lost", {
     timedOut: true,
@@ -278,4 +305,17 @@ test("preserves an exit-zero fetch output-close failure", async () => {
   } finally {
     run.mockRestore();
   }
+});
+
+test("reports a missing remote base when fetch succeeds but origin/base is still absent", async () => {
+  const git = await useRecordingGit({ missingRef: true });
+  const failure = await resolveRemoteWorktreeStartPoint(git.root, "dev").catch(
+    (error: unknown) => error,
+  );
+  expect(await git.recorded()).toContain("prompt=0");
+  expect(failure).toBeInstanceOf(MissingRemoteBaseBranchError);
+  expect((failure as Error).message).toContain('Base branch "dev" does not exist on origin');
+  expect(environmentLifecycleErrorMessage(failure)).toBe(
+    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.baseBranchMissing,
+  );
 });

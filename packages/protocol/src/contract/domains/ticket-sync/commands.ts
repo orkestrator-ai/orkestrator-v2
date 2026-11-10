@@ -77,12 +77,20 @@ export const collectTicketSyncOutboxCommand = defineCommand({
   since: 1,
   access: "internal",
   read: false,
-  args: Schema.Struct({ controllerId: optionalUnknown, after: optionalUnknown }),
+  args: Schema.Struct({
+    controllerId: optionalUnknown,
+    after: optionalUnknown,
+    // What the command node can apply (`TICKET_SYNC_FEATURES`). A leaf that
+    // ignores it never queues a change the command node cannot read.
+    features: optionalUnknown,
+  }),
   result: Schema.Struct({
     epoch: Schema.optionalKey(Schema.NullOr(Schema.String)),
     // Each item is parsed by the command node (`parseTicketSyncOutboxItem`).
     items: Schema.optionalKey(Schema.Array(Schema.Unknown)),
     more: Schema.optionalKey(Schema.Boolean),
+    // Images a board here shows whose bytes the command node delivers (`put_ticket_image`).
+    wantedImages: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   critical: [],
 });
@@ -120,6 +128,94 @@ export const getTicketSyncStatusCommand = defineCommand({
     // `TicketSyncNodeState` and `TicketSyncConflict` from `ticket-sync.ts`.
     nodes: Schema.Array(Schema.Unknown),
     conflicts: Schema.Array(Schema.Unknown),
+    conflictCount: optionalSequence,
+  }),
+  critical: [],
+});
+
+/**
+ * An image's bytes, read by the command node from the leaf that holds them
+ * (leaf side, over the link only). No `data` when the leaf does not have them
+ * or the image is not on a board that command node syncs.
+ */
+export const readTicketImageCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "read_ticket_image",
+  since: 1,
+  access: "internal",
+  read: true,
+  args: Schema.Struct({ controllerId: optionalUnknown, imageId: optionalUnknown }),
+  result: Schema.Struct({ data: Schema.optionalKey(Schema.String) }),
+  critical: [],
+});
+
+/**
+ * An image the leaf asked for (`wantedImages`), delivered by the command node
+ * (leaf side, over the link only). No `data`: the image is unavailable.
+ */
+export const putTicketImageCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "put_ticket_image",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    controllerId: optionalUnknown,
+    imageId: optionalUnknown,
+    data: optionalUnknown,
+  }),
+  result: Schema.Struct({ stored: Schema.Boolean }),
+  critical: [],
+});
+
+/**
+ * A leaf board's sync line (`TicketSyncLeafStatus`): the command nodes it
+ * holds copies from, the tickets Share would send, and the copy of the
+ * repository that syncs when this one does not. `workspace`: the board reads
+ * it through a workspace grant too.
+ */
+export const getTicketSyncLeafStatusCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "get_ticket_sync_leaf_status",
+  since: 1,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({ projectId: optionalUnknown }),
+  result: Schema.Struct({
+    projectId: Schema.String,
+    controllers: Schema.Array(Schema.Unknown),
+    unshared: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    syncedCopy: Schema.optionalKey(Schema.Unknown),
+  }),
+  critical: [],
+});
+
+/**
+ * Leaf: sends tickets made here before sync began to the command node
+ * (`taskIds`, or every one). Only the user's explicit action calls it.
+ */
+export const shareTicketsWithCommandNodeCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "share_tickets_with_command_node",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ projectId: optionalUnknown, taskIds: optionalUnknown }),
+  result: Schema.Struct({ shared: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) }),
+  critical: [],
+});
+
+/** Command node: removes conflicts from a board's list (`ids`, or all); their ticket comments stay. */
+export const dismissTicketSyncConflictsCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "dismiss_ticket_sync_conflicts",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({ projectId: optionalUnknown, ids: optionalUnknown }),
+  result: Schema.Struct({
+    dismissed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    remaining: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   }),
   critical: [],
 });
@@ -181,4 +277,9 @@ export const TICKET_SYNC_COMMANDS = [
   getTicketSyncStatusCommand,
   syncNodeTicketsCommand,
   coordinatorNodeTicketCommand,
+  readTicketImageCommand,
+  putTicketImageCommand,
+  getTicketSyncLeafStatusCommand,
+  shareTicketsWithCommandNodeCommand,
+  dismissTicketSyncConflictsCommand,
 ] as const;

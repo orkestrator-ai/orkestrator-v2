@@ -181,7 +181,11 @@ test("remote row arming expires and child-frame focus revokes it", async ({ page
   await page.clock.fastForward(1600);
   await page.keyboard.press("Control+Backspace");
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: "Editing surface" })).toHaveValue("existing ");
+  // Control+Backspace is the app shortcut on every OS; when it expires,
+  // Chromium's native editor deletes one character on macOS, a word elsewhere.
+  await expect(page.getByRole("textbox", { name: "Editing surface" })).toHaveValue(
+    process.platform === "darwin" ? "existing tex" : "existing ",
+  );
   await remote.click();
   await page.frameLocator('iframe[title="Child workspace"]').getByRole("textbox").focus();
   await page.keyboard.press("Control+Backspace");

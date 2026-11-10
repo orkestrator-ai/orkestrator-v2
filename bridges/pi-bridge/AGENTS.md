@@ -103,6 +103,13 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   (`historyLeaf`, persisted in `state.json`) and every reopen re-applies it
   until something is appended under it. Render a rewound branch from that
   leaf, never from the file's own.
+- **Other branches are listed by leaf entry id.** `GET /session/:id/branches`
+  (`session-branches.ts`) is the only way a client learns an entry id of a
+  branch it is not on: a rewind replaces the rendered rows. It reads the live
+  `SessionManager`, lists leaves off the active path that hold conversation
+  the active branch does not share, and is bounded by
+  `NATIVE_AGENT_BRANCH_LIST_LIMITS`. It is a user-initiated read (it may
+  attach the session), so nothing polls it.
 
 ## When touching the Pi bridge
 
@@ -203,6 +210,21 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   `withdrawPromptJournal`, for an attempt that provably never reached Pi (a
   rollback before the hand-over, or a preflight refusal). The write is not
   fsync'd: the guarantee covers a bridge restart, not an OS crash.
+- Only a person's action keeps a session attached (`liveness.ts`): a write
+  route (prompt, the pre-dispatch `/attach`, config, cancel, compaction, an
+  approval answer, …) or a resume refreshes `lastAccessed`; no `GET` ever
+  does, nor the backend's title write or an approval hold. Releasing the
+  owning prompt claim and ending compaction also refresh the clock, so a long
+  operation gets a full idle interval after settlement. An open tab keeps
+  reading (live updates, transcript pages, and every discovery section's
+  30 s renewal, `/mcp` included), and while those reads counted an idle tab
+  held its Pi session and MCP processes for as long as it was open (todo
+  7540). The bridge cannot tell a read for a tab just opened from a
+  background renewal, so none counts; the next prompt's `/attach`
+  re-attaches. Every session request is counted by route label and whether
+  it touched, on the runtime-health body (`liveness.routes`; labels only,
+  ids as `:id`). A new route that a person's action calls with `GET`, or a
+  background `POST`, needs an explicit case in `touchesLiveness`.
 - Before a session attaches, `command-preview.ts` lists its templates and
   skills from a resource-only `DefaultResourceLoader`: never an extension
   (`noExtensions`, no inline factories, no `resolveProjectTrust` pass), never
@@ -222,8 +244,11 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   the credential; say so rather than claiming otherwise.
 - Project-local `.pi/` resources load only when the session's execution
   policy turns `projectResources` on, on both host and container runs. Host
-  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
-  (arbitrary TypeScript) to run on the host.
+  project resources are off by default. Enabling them permits repository MCP processes to run on the host.
+  Every policy excludes discovered extensions and configured packages (`src/project-extensions.ts`): they
+  run inside the bridge process, where persistent hooks could answer another session’s approvals.
+  Its skills and prompt templates still load, and the reported policy's
+  note says why the extensions did not.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,

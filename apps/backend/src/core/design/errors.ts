@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { schemaErrorIssues } from "../tool-schema.js";
+import { hasErrorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-error";
 import { DESIGN_CONFLICT } from "@orkestrator/protocol/design-canvas";
 import type {
   DesignFailure,
@@ -26,9 +27,17 @@ const DEFAULT_RETRY: Record<DesignFailureCode, DesignRetryClass> = {
   "history-ineligible": "review",
 };
 
+/** The registered wire code of a revision conflict (`contract/ipc-error.ts`). */
+export const DESIGN_REVISION_CONFLICT_CODE = "design-revision-conflict" as const;
+
 /**
  * A typed, content-free design failure. The message is safe to show and log;
  * `details` carries only names, counts and reason codes.
+ *
+ * `code` is what a transport carries: the registered `design-revision-conflict`
+ * for a revision conflict (a `conflict` led by `Design revision conflict:`),
+ * otherwise the failure code. Code in the backend branches on `failure.code`
+ * (`isDesignError`).
  */
 export class DesignError extends Error {
   readonly failure: DesignFailure;
@@ -41,8 +50,10 @@ export class DesignError extends Error {
     this.name = "DesignError";
     this.failure = { code, message, retry: extra.retry ?? DEFAULT_RETRY[code], ...extra };
   }
-  get code(): DesignFailureCode {
-    return this.failure.code;
+  get code(): DesignFailureCode | typeof DESIGN_REVISION_CONFLICT_CODE {
+    return this.failure.code === "conflict" && this.message.startsWith(DESIGN_CONFLICT)
+      ? DESIGN_REVISION_CONFLICT_CODE
+      : this.failure.code;
   }
 }
 
@@ -101,8 +112,8 @@ export function toDesignFailure(error: unknown): DesignFailure {
     };
   }
   const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith(DESIGN_CONFLICT))
-    return { code: "conflict", message, retry: "after-refresh" };
+  if (hasErrorCode(error, DESIGN_REVISION_CONFLICT_CODE, DESIGN_CONFLICT))
+    return { code: "conflict", message: ipcErrorText(message), retry: "after-refresh" };
   if (/has been closed|browser has disconnected|Target closed/i.test(message))
     return {
       code: "renderer-unavailable",
@@ -119,5 +130,5 @@ export function toDesignFailure(error: unknown): DesignFailure {
 }
 
 export function isDesignError(error: unknown, code?: DesignFailureCode): error is DesignError {
-  return error instanceof DesignError && (code === undefined || error.code === code);
+  return error instanceof DesignError && (code === undefined || error.failure.code === code);
 }

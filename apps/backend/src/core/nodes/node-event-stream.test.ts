@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
@@ -7,7 +7,15 @@ import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries
 
 import { NodeEventStream } from "./node-event-stream.js";
 import { NodeReadModel } from "./node-read-model.js";
-import { settle, TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
+import {
+  settle,
+  stopTestNodeNetworks,
+  TestNodeNetwork,
+  type TestNode,
+} from "./node-network-test-support.js";
+
+// Stop every node a test left running; see `stopTestNodeNetworks`.
+afterEach(stopTestNodeNetworks);
 
 async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 3_000) {
   const deadline = Date.now() + timeoutMs;

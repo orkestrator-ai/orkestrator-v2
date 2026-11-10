@@ -5,6 +5,11 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
 import { validateGitRefName } from "./commands-agent-support.js";
 import {
+  environmentBranchNamespace,
+  isBranchInEnvironmentNamespace,
+  isEnvironmentOwnedBranch,
+} from "@orkestrator/protocol/environment-branch";
+import {
   assertDockerContainerOwned,
   getWorktreeBaseDir,
   isMissingDockerObjectError,
@@ -73,7 +78,9 @@ const DOCKER_TIMEOUT_MS = 60_000;
 /**
  * Describes what deleting `environment` must remove from the host. Branch
  * cleanup is only scheduled for a local environment with a worktree, because
- * only that path created the branch in the project checkout.
+ * only that path created the branch in the project checkout, and only when the
+ * branch carries this environment's namespace: a branch the environment did not
+ * create (a base branch, one picked by hand) is never the environment's to delete.
  */
 export function buildEnvironmentCleanupEntry(
   environment: Environment,
@@ -91,7 +98,7 @@ export function buildEnvironmentCleanupEntry(
     environment.environmentType === "local" &&
     !!projectPath &&
     !!worktreePath &&
-    !!environment.branch;
+    isEnvironmentOwnedBranch(environment.id, environment.branch);
   const pending: EnvironmentCleanupStep[] = [];
   const retainedContainers = retainedContainerIds(environment);
   if (environment.containerId || retainedContainers.length > 0) pending.push("container");
@@ -437,18 +444,24 @@ async function branchCheckedOut(
 export type BranchCleanupOutcome = "deleted" | "kept" | "absent";
 
 /**
- * Deletes the environment's local branch only when no work would be lost:
+ * Deletes the environment's local branch only when it is the branch created
+ * for that environment (its name carries `ownerNamespace`, the environment's
+ * id prefix) and no work would be lost:
  * - its PR was merged, and the branch tip is proven to be pushed;
  * - its tip is already contained in a merge target such as `origin/HEAD`; or
  * - it has no commits beyond the one the environment was created from.
- * Anything else is kept.
+ * Anything else is kept. The ownership test runs here, not only when the entry
+ * is recorded, so a ledger entry written by an older backend cannot name a
+ * branch the environment did not create.
  */
 export async function cleanupEnvironmentBranch(
   entry: EnvironmentCleanupEntry,
   run: CleanupCommandRunner = runCommand,
+  ownerNamespace: string = environmentBranchNamespace(entry.environmentId),
 ): Promise<BranchCleanupOutcome> {
   const projectPath = entry.projectPath;
   if (!projectPath || !entry.branch) return "absent";
+  if (!isBranchInEnvironmentNamespace(ownerNamespace, entry.branch)) return "kept";
   if (!(await pathExists(projectPath)))
     throw new CleanupRefusedError("project checkout unavailable");
   let branch: string;

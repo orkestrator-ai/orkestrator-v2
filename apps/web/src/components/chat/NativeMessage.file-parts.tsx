@@ -444,7 +444,7 @@ export function FilePart({
         {loadError && !onLoadUnavailable && (
           <span
             className={cn(
-              "text-destructive text-[10px]",
+              "text-destructive text-[11px]",
               showThumbnailTile &&
                 "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
             )}

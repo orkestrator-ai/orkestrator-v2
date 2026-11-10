@@ -45,7 +45,7 @@ const builds = await Promise.all([
     target: "bun",
     format: "esm",
     external: ["sharp", "playwright-core"],
-    define: buildCommitDefine(),
+    define: { ...buildCommitDefine(), __ORKESTRATOR_DISPATCH_HOLD__: "false" },
   }),
   ...[...BUNDLED_BRIDGES, ...ON_DEMAND_BRIDGES].map((bridge) =>
     Bun.build({

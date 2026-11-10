@@ -2623,13 +2623,18 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    // Each save waits out the 400 ms draft debounce; control it instead.
-    const saveDebounce = installControlledTimeout(400, { label: "native compose draft save" });
+    // Both the shell's initial settle and the draft debounce take 400 ms.
+    // Advance both explicitly; revision checks below prove the save also ran.
+    const saveDebounce = installControlledTimeout(400, {
+      label: "native compose draft save and column settle",
+      maxPending: 2,
+    });
     const flushSave = async () => {
-      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(1));
+      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(2));
       await act(async () => {
-        saveDebounce.advance();
+        expect(saveDebounce.advance()).toBe(2);
       });
+      saveDebounce.assertDrained();
     };
     try {
       const first = renderInAppCommandScope(
@@ -2734,7 +2739,7 @@ describe("AgentNativeTab", () => {
     expect(input.style.minHeight).toBe("28px");
     expect(screen.getByText("Ask an agent anything…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Add attachment" })).toBeTruthy();
-    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.getByText("Ready to build")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
@@ -4274,6 +4279,35 @@ describe("AgentNativeTab", () => {
       }
     },
   );
+
+  test("the OpenCode picker archives 2.x rows and offers no remove on 1.x rows", async () => {
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          { sessionId: "ses_legacy", title: "Legacy request", archivable: false },
+          { sessionId: "opencode2:ses_new", title: "New request" },
+        ] as never,
+    );
+    seedUnassignedResumeTab("tab-opencode-archive");
+    renderInAppCommandScope(<PaneBackedAgentNativeTab tabId="tab-opencode-archive" />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /OpenCode/ }));
+    const picker = await screen.findByRole("dialog", { name: "Resume Session" });
+    expect(await within(picker).findByText("Legacy request")).toBeTruthy();
+    expect(listNativeAgentResumableSessionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "opencode",
+      includeArchived: true,
+    });
+    const removes = within(picker).getAllByRole("button", { name: /Remove.*list/ });
+    expect(removes).toHaveLength(1);
+    fireEvent.click(removes[0]!);
+    await waitFor(() => expect(setNativeAgentResumableSessionArchivedMock).toHaveBeenCalled());
+    expect(setNativeAgentResumableSessionArchivedMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "opencode",
+      resumableSessionId: "opencode2:ses_new",
+      archived: true,
+    });
+  });
 
   test("a tab opened only to resume creates no session before the choice", async () => {
     const calls: string[] = [];
@@ -13069,7 +13103,8 @@ describe("AgentNativeTab", () => {
       );
 
       const trigger = await screen.findByRole("button", { name: "Approvals: Bypass" });
-      expect(trigger.textContent).toBe("");
+      // A mode that skips asking is named in words, not only by its icon.
+      expect(trigger.textContent).toBe("Bypass");
       fireEvent.pointerDown(trigger);
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "Ask" }));
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());

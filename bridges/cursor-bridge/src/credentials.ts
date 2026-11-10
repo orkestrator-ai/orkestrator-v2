@@ -11,6 +11,7 @@
  */
 import { Cursor, FileCredentialStore, type SdkCredentialStore } from "@cursor/sdk";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
+import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { ACCOUNT_LOOKUP_TIMEOUT_MS, credentialFile, LOGIN_TIMEOUT_MS } from "./config.js";
 
 export type CredentialSource = "api-key-env" | "stored-login" | "none";
@@ -213,22 +214,10 @@ async function lookUpAccount(
   // Once the retry window expires, a later read can replace it even if it never settles.
   if (entry.timedOut) return { settled: false, account: undefined };
   const active = entry;
-  const { result } = entry;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      result.then((account) => ({ settled: true, account })),
-      new Promise<{ settled: boolean; account: undefined }>((resolve) => {
-        timer = setTimeout(() => {
-          active.timedOut = true;
-          resolve({ settled: false, account: undefined });
-        }, accountLookupTimeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  const outcome = await boundedWait(entry.result, accountLookupTimeoutMs);
+  if (outcome.settled) return { settled: true, account: outcome.value };
+  active.timedOut = true;
+  return { settled: false, account: undefined };
 }
 
 export interface LoginHandle {

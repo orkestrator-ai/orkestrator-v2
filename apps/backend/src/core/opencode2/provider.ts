@@ -73,6 +73,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import { OpenCode2TurnGrants, openCode2CreateMetadata } from "./turn-grants.js";
 import { OpenCode2WorkflowTurns, openCode2StructuredResult } from "./workflow-results.js";
 import { OpenCode2SessionFeatures, type OpenCode2PreparedSend } from "./features.js";
+import { openCode2ResumeSessionId } from "./sessions.js";
 import { openCode2TurnConnections, type OpenCode2WorkerMailbox } from "./turn-connections.js";
 import {
   OPENCODE2_COORDINATOR_AGENT,
@@ -537,8 +538,20 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.features.listResumable(options);
   }
 
-  setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
-    return this.features.setArchived(resumableSessionId, archived);
+  /**
+   * The resume picker's remove/restore. A conversation this server still holds
+   * for a tab or a run is refused, as Codex and Cursor refuse one (409): 2.x
+   * would go on accepting turns for it while the picker reports it archived.
+   * Restoring is always allowed.
+   */
+  async setResumableSessionArchived(resumableSessionId: string, archived: boolean): Promise<void> {
+    const sessionId = openCode2ResumeSessionId(resumableSessionId) ?? resumableSessionId;
+    await this.grants.runExclusive(sessionId, async () => {
+      if (archived && this.sessions.has(sessionId)) {
+        throw new PromptRejectedError("This conversation is open in a tab");
+      }
+      await this.features.setArchived(resumableSessionId, archived);
+    });
   }
 
   /**
@@ -546,12 +559,13 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
    * exist. On a coordinator's server the launch's rules are restated first.
    */
   async resumeSession(resumableSessionId: string): Promise<string> {
-    const sessionId = await this.features.resumableSession(resumableSessionId);
-    if (this.coordinator) {
-      await this.grants.runExclusive(sessionId, () => this.grants.restate(sessionId));
-    }
-    this.registerSession(sessionId);
-    return sessionId;
+    const key = openCode2ResumeSessionId(resumableSessionId) ?? resumableSessionId;
+    return this.grants.runExclusive(key, async () => {
+      const sessionId = await this.features.resumableSession(resumableSessionId);
+      if (this.coordinator) await this.grants.restate(sessionId);
+      this.registerSession(sessionId);
+      return sessionId;
+    });
   }
 
   /**

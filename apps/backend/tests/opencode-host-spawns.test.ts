@@ -12,6 +12,7 @@ const {
   createEnvironment,
   createTempDir,
   createCommandRegistry,
+  createDeferred,
   fs,
   path,
   ptySpawn,
@@ -34,7 +35,7 @@ describe("host OpenCode database at spawn boundaries", () => {
     database.close();
   });
   afterEach(() => {
-    for (const name of ["XDG_DATA_HOME", "OPENCODE_DB"]) {
+    for (const name of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "OPENCODE_DB"]) {
       if (previous[name] === undefined) delete process.env[name];
       else process.env[name] = previous[name];
     }
@@ -70,6 +71,202 @@ describe("host OpenCode database at spawn boundaries", () => {
       expect(ptyProcesses.at(-1)!.write).toHaveBeenLastCalledWith("opencode\n");
     },
   );
+
+  test.each([
+    { setting: "v2", installed: true, expected: "v2" },
+    { setting: "v2", installed: false, expected: "missing" },
+    { setting: "legacy", installed: true, expected: "1.x" },
+  ] as const)(
+    "a new OpenCode tab follows the OpenCode 2 setting: %p",
+    async ({ setting, installed, expected }) => {
+      process.env.XDG_CONFIG_HOME = path.join(root, "xdg-config");
+      const bin = path.join(root, "toolchain bin");
+      await fs.mkdir(bin, { recursive: true });
+      if (installed) {
+        await fs.writeFile(path.join(bin, "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+      const dataDir = path.join(root, "data");
+      const environment = createEnvironment({ worktreePath: root });
+      const { context } = createContext(environment, {
+        dataDir,
+        globalConfig: { openCodeProtocol: setting },
+      });
+      context.toolchainBinDir = bin;
+      const commands = createCommandRegistry();
+      const { sessionId } = terminalSessionResult(
+        await commands.get("create_local_terminal_session")!(
+          { environmentId: environment.id, cols: 80, rows: 24 },
+          context,
+        ),
+      );
+      await commands.get("start_local_terminal_session")!({ sessionId }, context);
+      const data = `${buildTerminalAgentLaunchCommand({
+        tabType: "opencode",
+        model: "opencode-go/claude-haiku-5-5",
+        initialPrompt: "Hi",
+      })}\n`;
+      expect(
+        await commands.get("bootstrap_terminal_session")!({ sessionId, data }, context),
+      ).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+      const written = ptyProcesses.at(-1)!.write.mock.calls[0]?.[0] as string;
+      expect(written).toEndWith("\n");
+      if (expected === "v2") {
+        expect(written).toContain("env -u OPENCODE_CONFIG ");
+        expect(written).toContain(
+          `OPENCODE_DB='${path.join(dataDir, "opencode2", "opencode.db")}'`,
+        );
+        expect(written).toContain('model: "opencode-go/claude-haiku-5-5"');
+        expect(written).toEndWith(
+          `'${path.join(bin, "opencode2")}' --standalone --prompt 'Hi' )\n`,
+        );
+        expect(written).not.toContain("--model");
+        // The tab's 2.x shares the host 2.x servers' configuration directory.
+        expect(
+          await fs.stat(path.join(dataDir, "opencode2", "config")).then((s) => s.isDirectory()),
+        ).toBe(true);
+      } else if (expected === "missing") {
+        expect(written).toStartWith("printf '%s\\n' 'OpenCode 2 is not installed yet.");
+      } else {
+        // The private 1.x database applies exactly as before.
+        expect(written).toBe(`OPENCODE_DB='${ORKESTRATOR_OPENCODE_DB_FILE}' ${data}`);
+      }
+      // A replay is a duplicate of the original launch data, not of the rewrite.
+      expect(
+        await commands.get("bootstrap_terminal_session")!({ sessionId, data }, context),
+      ).toMatchObject({ duplicate: true, matchesExisting: true });
+      expect(ptyProcesses.at(-1)!.write).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  async function pausedBootstrap() {
+    const environment = createEnvironment({ worktreePath: root });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const { sessionId } = terminalSessionResult(
+      await commands.get("create_local_terminal_session")!(
+        { environmentId: environment.id, terminalKey: "opencode-tab", cols: 80, rows: 24 },
+        context,
+      ),
+    );
+    await commands.get("start_local_terminal_session")!({ sessionId }, context);
+    const loadConfig = context.storage.loadConfig;
+    const config = await loadConfig();
+    const gate = createDeferred<typeof config>();
+    context.storage.loadConfig = () => gate.promise;
+    const data = `${buildTerminalAgentLaunchCommand({ tabType: "opencode" })}\n`;
+    const args = { sessionId, data };
+    const bootstrap = () => commands.get("bootstrap_terminal_session")!(args, context);
+    const snapshot = () => commands.get("get_terminal_session")!({ sessionId }, context);
+    return { context, commands, sessionId, config, gate, args, bootstrap, snapshot, loadConfig };
+  }
+
+  test("rehydration and concurrent retries wait for delivery before reporting bootstrap success", async () => {
+    const f = await pausedBootstrap();
+    const first = f.bootstrap();
+    // Another renderer/registry rehydrates while the initiating renderer is gone.
+    expect(f.snapshot()).toMatchObject({ bootstrapped: false });
+    const retry = createCommandRegistry().get("bootstrap_terminal_session")!(f.args, f.context);
+    const different = f.commands.get("bootstrap_terminal_session")!(
+      { sessionId: f.sessionId, data: "other command\n" },
+      f.context,
+    );
+    let retrySettled = false;
+    void Promise.resolve(retry).then(() => {
+      retrySettled = true;
+    });
+    await Promise.resolve();
+    expect(retrySettled).toBe(false);
+    expect(ptyProcesses.at(-1)!.write).not.toHaveBeenCalled();
+    f.gate.resolve(f.config);
+    expect(await first).toMatchObject({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(await retry).toMatchObject({
+      bootstrapped: true,
+      duplicate: true,
+      matchesExisting: true,
+    });
+    expect(await different).toMatchObject({ duplicate: true, matchesExisting: false });
+    expect(f.snapshot()).toMatchObject({ bootstrapped: true });
+    expect(ptyProcesses.at(-1)!.write).toHaveBeenCalledTimes(1);
+  });
+
+  test("overlapping requests share a write failure and can retry after it", async () => {
+    const f = await pausedBootstrap();
+    ptyProcesses.at(-1)!.write.mockImplementationOnce(() => {
+      throw new Error("PTY write failed");
+    });
+    const results = Promise.allSettled([f.bootstrap(), f.bootstrap()]);
+    f.gate.resolve(f.config);
+    for (const result of await results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect(result.reason.message).toBe("PTY write failed");
+    }
+    expect(f.snapshot()).toMatchObject({ bootstrapped: false });
+    f.context.storage.loadConfig = f.loadConfig;
+    expect(await f.bootstrap()).toMatchObject({ bootstrapped: true, delivered: true });
+  });
+
+  test("configuration preparation failure rejects every waiter without consuming bootstrap", async () => {
+    const f = await pausedBootstrap();
+    process.env.XDG_CONFIG_HOME = path.join(root, "xdg-config");
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(path.join(bin, "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    f.context.toolchainBinDir = bin;
+    const blocker = path.join(f.context.storage.getDataDir(), "opencode2");
+    await fs.mkdir(path.dirname(blocker), { recursive: true });
+    await fs.writeFile(blocker, "not a directory");
+    const v2 = { ...f.config, global: { ...f.config.global, openCodeProtocol: "v2" as const } };
+    const results = Promise.allSettled([f.bootstrap(), f.bootstrap()]);
+    f.gate.resolve(v2);
+    expect((await results).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(f.snapshot()).toMatchObject({ bootstrapped: false });
+    expect(ptyProcesses.at(-1)!.write).not.toHaveBeenCalled();
+    await fs.rm(blocker);
+    f.context.storage.loadConfig = async () => v2;
+    expect(await f.bootstrap()).toMatchObject({ bootstrapped: true, delivered: true });
+    expect(ptyProcesses.at(-1)!.write).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["resolve", "reject"])(
+    "a replaced PTY keeps its own bootstrap when old preparation ends: %s",
+    async (outcome) => {
+      const f = await pausedBootstrap();
+      const oldProcess = ptyProcesses.at(-1)!;
+      const first = f.bootstrap();
+      const retry = f.bootstrap();
+      oldProcess.emitExit({ exitCode: 0 });
+      f.context.storage.loadConfig = f.loadConfig;
+      await f.commands.get("start_local_terminal_session")!({ sessionId: f.sessionId }, f.context);
+      const replacement = ptyProcesses.at(-1)!;
+      expect(replacement).not.toBe(oldProcess);
+      const replacementArgs = { sessionId: f.sessionId, data: "codex\n" };
+      expect(
+        await f.commands.get("bootstrap_terminal_session")!(replacementArgs, f.context),
+      ).toMatchObject({ bootstrapped: true, delivered: true });
+      if (outcome === "resolve") f.gate.resolve(f.config);
+      else f.gate.reject(new Error("Configuration read failed"));
+      for (const result of await Promise.all([first, retry])) {
+        expect(result).toMatchObject({ bootstrapped: false, delivered: false });
+      }
+      expect(oldProcess.write).not.toHaveBeenCalled();
+      expect(replacement.write).toHaveBeenCalledTimes(1);
+      expect(f.snapshot()).toMatchObject({ bootstrapped: true });
+      expect(
+        await f.commands.get("bootstrap_terminal_session")!(replacementArgs, f.context),
+      ).toMatchObject({ duplicate: true, matchesExisting: true });
+    },
+  );
+
+  test("closing during preparation prevents delivery and does not resurrect the terminal", async () => {
+    const f = await pausedBootstrap();
+    const process = ptyProcesses.at(-1)!;
+    const first = f.bootstrap();
+    await f.commands.get("close_local_terminal_session")!({ sessionId: f.sessionId }, f.context);
+    f.gate.resolve(f.config);
+    expect(await first).toMatchObject({ bootstrapped: false, delivered: false });
+    expect(process.write).not.toHaveBeenCalled();
+    expect(f.context.runtime.terminals.sessionConfig(f.sessionId)).toBeUndefined();
+  });
 
   test("setup shell excludes the override but supports managed OpenCode handoff", async () => {
     const environment = createEnvironment({ worktreePath: root });

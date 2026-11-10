@@ -25,7 +25,7 @@ export function AgentThinkingIndicator({
     <span role="status" className={cn("agent-thinking-shimmer text-xs", className)}>
       {agentName} is thinking...
       {thinkingTokens !== undefined && thinkingTokens > 0 && (
-        <span className="text-muted-foreground/60"> ~{formatThinkingTokens(thinkingTokens)}</span>
+        <span className="text-muted-foreground"> ~{formatThinkingTokens(thinkingTokens)}</span>
       )}
     </span>
   );

@@ -32,6 +32,7 @@ import {
   artifactShellHeaders,
   artifactShellThemeExpression,
 } from "./artifact-host-shell.js";
+import { answering, observing } from "./webrequest-listener.js";
 
 /** Nonpersistent: no `persist:` prefix, so nothing reaches disk and nothing is shared. */
 export const ARTIFACT_HOST_PARTITION_PREFIX = "artifact-host-";
@@ -480,10 +481,24 @@ export class ArtifactHostSession {
    * else ever receives this randomly named session, so these are the only ones.
    */
   private installRequestPolicy(electronSession: Session): void {
-    electronSession.webRequest.onBeforeRequest((details, callback) => {
-      callback(this.decideRequest(details) ? {} : { cancel: true });
-    });
-    electronSession.webRequest.onBeforeRedirect((details) => this.observeRedirect(details));
+    // Fail closed: a decision that throws (a destroyed view's getters, a
+    // teardown failing part way) cancels the request, and a redirect whose
+    // check throws is still fatal to the host.
+    electronSession.webRequest.onBeforeRequest(
+      answering(
+        "artifact-host.before-request",
+        (details: OnBeforeRequestListenerDetails) =>
+          this.decideRequest(details) ? {} : { cancel: true },
+        () => ({ cancel: true }),
+      ),
+    );
+    electronSession.webRequest.onBeforeRedirect(
+      observing(
+        "artifact-host.before-redirect",
+        (details: OnBeforeRedirectListenerDetails) => this.observeRedirect(details),
+        () => this.block("redirect"),
+      ),
+    );
   }
 
   /** Exposed for tests: true admits the request, false cancels it. */
@@ -925,8 +940,12 @@ export class ArtifactHostSession {
     if (electronSession) {
       // Keep the private session fail-closed after disposal, then forget it.
       try {
-        electronSession.webRequest.onBeforeRequest((_details, callback) =>
-          callback({ cancel: true }),
+        electronSession.webRequest.onBeforeRequest(
+          answering(
+            "artifact-host.disposed",
+            () => ({ cancel: true }),
+            () => ({ cancel: true }),
+          ),
         );
         electronSession.webRequest.onBeforeRedirect(null);
       } catch {

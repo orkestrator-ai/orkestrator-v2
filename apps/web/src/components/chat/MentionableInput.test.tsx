@@ -1,7 +1,11 @@
 import { createRef, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { MentionableInput, type MentionableInputRef } from "./MentionableInput";
+import {
+  MentionableInput,
+  isEditorVisuallyEmpty,
+  type MentionableInputRef,
+} from "./MentionableInput";
 import type { FileMention } from "@/types";
 
 describe("MentionableInput", () => {
@@ -43,7 +47,7 @@ describe("MentionableInput", () => {
   });
 
   test("clearing the editor restores the placeholder but preserves deliberate line breaks", () => {
-    const onChange = mock(() => {});
+    const onChange = mock((_text: string, _mentions: FileMention[]) => {});
     function Composer() {
       const [value, setValue] = useState("Draft");
       return (
@@ -60,7 +64,7 @@ describe("MentionableInput", () => {
     const { getByRole, container } = render(<Composer />);
     const input = getByRole("textbox");
     input.replaceChildren(document.createElement("br"));
-    fireEvent.input(input);
+    fireEvent.input(input, { inputType: "deleteContentBackward" });
     expect(onChange).toHaveBeenLastCalledWith("", []);
     expect(container.querySelector("[data-native-compose-placeholder]")?.textContent).toBe(
       "Type a message...",
@@ -1435,5 +1439,86 @@ describe("MentionableInput", () => {
     fireEvent.input(input);
 
     expect(onChange).toHaveBeenCalledWith("Please Check @utils.ts", [mention]);
+  });
+});
+
+describe("isEditorVisuallyEmpty", () => {
+  afterEach(() => {
+    cleanup();
+    window.getSelection()?.removeAllRanges();
+  });
+  const editor = (html: string) => {
+    const element = document.createElement("div");
+    element.innerHTML = html;
+    return element;
+  };
+
+  test("treats the browser's leftover line-break placeholder as empty", () => {
+    expect(isEditorVisuallyEmpty(editor("<br>"))).toBe(true);
+    expect(isEditorVisuallyEmpty(editor("<div><br></div>"))).toBe(true);
+    expect(isEditorVisuallyEmpty(editor(""))).toBe(true);
+    expect(isEditorVisuallyEmpty(editor("<br><br>"))).toBe(false);
+    expect(isEditorVisuallyEmpty(editor("<div><br><br></div>"))).toBe(false);
+  });
+
+  test("keeps text and mentions", () => {
+    expect(isEditorVisuallyEmpty(editor("hi<br>"))).toBe(false);
+    expect(isEditorVisuallyEmpty(editor('<span data-mention="true"></span><br>'))).toBe(false);
+  });
+
+  test("Shift+Enter input preserves authored breaks and the caret when text follows", () => {
+    const onChange = mock(() => {});
+    const ref = createRef<MentionableInputRef>();
+    const { getByRole } = render(
+      <MentionableInput ref={ref} value="" mentions={[]} onChange={onChange} />,
+    );
+    const input = getByRole("textbox");
+    input.focus();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    input.innerHTML = "<br>";
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.input(input, { inputType: "insertLineBreak" });
+    expect(onChange).toHaveBeenLastCalledWith("\n", []);
+    expect(ref.current!.getCursorPosition()).toBe(1);
+    input.append("Hello");
+    range.selectNodeContents(input);
+    range.collapse(false);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.input(input, { inputType: "insertText", data: "Hello" });
+    expect(onChange).toHaveBeenLastCalledWith("\nHello", []);
+    expect(ref.current!.getCursorPosition()).toBe(6);
+  });
+
+  test("IME completion preserves authored breaks and subsequent deletion clears the draft", () => {
+    const onChange = mock(() => {});
+    const { getByRole } = render(<MentionableInput value="" mentions={[]} onChange={onChange} />);
+    const input = getByRole("textbox");
+    fireEvent.compositionStart(input);
+    input.innerHTML = "<br>文";
+    fireEvent.input(input, { inputType: "insertCompositionText", isComposing: true });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    expect(onChange).toHaveBeenLastCalledWith("\n文", []);
+    input.innerHTML = "<div><br></div>";
+    fireEvent.input(input, { inputType: "deleteContentForward" });
+    expect(onChange).toHaveBeenLastCalledWith("", []);
+    expect(input.childNodes.length).toBe(0);
+  });
+
+  test("a cleared editor reports an empty draft, not a newline", () => {
+    const onChange = mock((_text: string) => {});
+    const { container } = render(
+      <MentionableInput value="hello" mentions={[]} onChange={onChange} placeholder="Message" />,
+    );
+    const input = container.querySelector('[contenteditable="true"]') as HTMLElement;
+    input.innerHTML = "<br>";
+    fireEvent.input(input, { inputType: "deleteContentBackward" });
+    expect(onChange).toHaveBeenLastCalledWith("", []);
+    expect(input.childNodes.length).toBe(0);
   });
 });

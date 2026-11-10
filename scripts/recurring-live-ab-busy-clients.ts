@@ -15,7 +15,11 @@ import { FAKE_REPLY } from "./recurring-live-ab-fake-model";
  * without touching the host's network. Every client shows the approval
  * environment's Pi tab, so the approval card and the mail chip are in its
  * active view; the sidebar shows every environment's activity marker and
- * change badge.
+ * change badge. A client's review view is a second context of its own,
+ * signed in the same way and through the same link, opened on the review
+ * environment so the Multi Review tab can be watched from its launch; a
+ * recorder in that page notes each phase its header shows
+ * (`data-phase`, `data-workflow-id` on `multi-review-phase`) and when.
  *
  * Browsers are launched headless with no display, so nothing opens on the
  * host's desktop.
@@ -50,6 +54,79 @@ function markerStateIn(environmentName: string): string | null {
     if (marker) return marker.getAttribute("data-state");
   }
   return null;
+}
+
+/**
+ * Records each phase the named review's header shows, and when (wall clock),
+ * into `window.__busyReviewPhases` (runs in the page). A mutation observer
+ * catches React's commit; a 25 ms check catches a header that only becomes
+ * visible. Only a visible header of this workflow counts.
+ */
+function recordReviewPhasesIn(workflowId: string) {
+  type Recorder = {
+    __busyReviewPhases?: Array<{ phase: string; at: number }>;
+    __busyReviewStop?: () => void;
+  };
+  const target = window as unknown as Recorder;
+  target.__busyReviewStop?.();
+  const sightings: Array<{ phase: string; at: number }> = [];
+  target.__busyReviewPhases = sightings;
+  const read = () => {
+    for (const element of Array.from(
+      document.querySelectorAll('[data-testid="multi-review-phase"]'),
+    )) {
+      if (element.getAttribute("data-workflow-id") !== workflowId) continue;
+      const visible =
+        typeof element.checkVisibility === "function"
+          ? element.checkVisibility()
+          : (element as HTMLElement).offsetParent !== null;
+      if (!visible) continue;
+      const phase = element.getAttribute("data-phase");
+      if (phase && sightings.at(-1)?.phase !== phase) sightings.push({ phase, at: Date.now() });
+      return;
+    }
+  };
+  const observer = new MutationObserver(read);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["data-phase", "data-workflow-id", "class", "style", "hidden"],
+  });
+  const timer = window.setInterval(read, 25);
+  target.__busyReviewStop = () => {
+    observer.disconnect();
+    window.clearInterval(timer);
+  };
+  read();
+}
+
+function reviewPhasesIn(): Array<{ phase: string; at: number }> {
+  return (
+    (window as unknown as { __busyReviewPhases?: Array<{ phase: string; at: number }> })
+      .__busyReviewPhases ?? []
+  ).slice();
+}
+
+/**
+ * Moves wall-clock sightings from the page onto this process's monotonic
+ * clock (`performance.now()`, the busy runtime's clock). Page and process
+ * share the host's clock.
+ */
+export function toProcessClock(
+  sightings: ReadonlyArray<{ phase: string; at: number }>,
+  wallNow = Date.now(),
+  processNow = performance.now(),
+): Array<{ phase: string; at: number }> {
+  return sightings.map((sighting) => ({
+    phase: sighting.phase,
+    at: processNow - (wallNow - sighting.at),
+  }));
+}
+
+/** The element id suffix of a review's root tab (`createPaneTabElementId`). */
+export function reviewTabIdSuffix(workflowId: string): string {
+  return `:${encodeURIComponent(`multi-review:${workflowId}`)}`;
 }
 
 /** Every sidebar row's change-badge additions, by environment name (runs in the page). */
@@ -98,7 +175,8 @@ function setHiddenIn(hidden: boolean) {
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-async function openApprovalTab(page: Page, environmentName: string): Promise<void> {
+/** Dismisses startup notices and selects an environment in the sidebar. */
+async function selectEnvironment(page: Page, environmentName: string): Promise<void> {
   const expand = page.getByRole("button", { name: /^Expand project / });
   // The sidebar row, by its accessible name ("<name>, on <host>, <activity>"):
   // the bare name also appears in notices and mail.
@@ -141,6 +219,10 @@ async function openApprovalTab(page: Page, environmentName: string): Promise<voi
   }
   if (await expand.first().isVisible()) await expand.first().click({ timeout: 10_000 });
   await entry.click({ timeout: 30_000 });
+}
+
+async function openApprovalTab(page: Page, environmentName: string): Promise<void> {
+  await selectEnvironment(page, environmentName);
   const tab = page.getByRole("tab", { name: /^Pi \d/ }).first();
   await tab.click({ timeout: 60_000 });
   await page
@@ -162,6 +244,7 @@ export function playwrightBusyClients(
     launch(): Promise<Browser>;
     loginPath(profile: string): string;
     openTab(page: Page, environment: string): Promise<void>;
+    selectEnvironment?(page: Page, environment: string): Promise<void>;
   },
 ) {
   let failures = 0;
@@ -186,18 +269,20 @@ export function playwrightBusyClients(
             })
           : undefined;
         let context: BrowserContext | undefined;
-        try {
-          context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-          const page = await context.newPage();
+        const base = link?.url ?? status.browserUrl;
+        const signIn = async (target: BrowserContext): Promise<Page> => {
+          const page = await target.newPage();
           page.setDefaultTimeout(30_000);
-          const base = link?.url ?? status.browserUrl;
           const response = await page.goto(
             new URL((dependencies?.loginPath ?? loginPath)(profile), base).href,
-            {
-              waitUntil: "domcontentloaded",
-            },
+            { waitUntil: "domcontentloaded" },
           );
           if (!response?.ok()) throw new Error(`${label}: sign-in failed`);
+          return page;
+        };
+        try {
+          context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+          const page = await signIn(context);
           try {
             await (dependencies?.openTab ?? openApprovalTab)(page, openEnvironment);
           } catch (error) {
@@ -212,7 +297,40 @@ export function playwrightBusyClients(
                 .catch(() => undefined);
             throw error;
           }
-          clients.push(pageClient(label, page, context, link));
+          const shared = browser;
+          clients.push(
+            pageClient(label, page, context, link, {
+              async open(environmentName) {
+                const reviewContext = await shared.newContext({
+                  viewport: { width: 1440, height: 1000 },
+                });
+                try {
+                  const reviewPage = await signIn(reviewContext);
+                  await (dependencies?.selectEnvironment ?? selectEnvironment)(
+                    reviewPage,
+                    environmentName,
+                  );
+                  return { page: reviewPage, context: reviewContext };
+                } catch (error) {
+                  if (artifactDir) {
+                    const pages = reviewContext.pages();
+                    await pages[pages.length - 1]
+                      ?.screenshot({
+                        path: path.join(
+                          artifactDir,
+                          `${profile}-${label}-review-open-failure-${++failures}.png`,
+                        ),
+                      })
+                      .catch(() => undefined);
+                  }
+                  await reviewContext.close().catch(() => undefined);
+                  throw error;
+                }
+              },
+              reopen: (reviewPage, environmentName) =>
+                (dependencies?.selectEnvironment ?? selectEnvironment)(reviewPage, environmentName),
+            }),
+          );
         } catch (error) {
           await context?.close().catch(() => undefined);
           await link?.close().catch(() => undefined);
@@ -234,14 +352,26 @@ export function playwrightBusyClients(
   };
 }
 
+/** How a client opens its review view: a signed-in page on an environment. */
+export type ReviewViewOpener = {
+  open(environmentName: string): Promise<{ page: Page; context: BrowserContext }>;
+  /** Reloads and selects the environment again (a tab that never arrived). */
+  reopen(page: Page, environmentName: string): Promise<void>;
+};
+
+/** A review's tab is in the layout once the launch returns; allow it to arrive. */
+const REVIEW_TAB_WAIT_MS = 15_000;
+
 export function pageClient(
   label: string,
   page: Page,
   context: BrowserContext,
   link: OutageLink | undefined,
+  reviewViews?: ReviewViewOpener,
 ): BusyClient {
   // A page that is navigating or closed answers "not yet", never a throw.
   const read = async <T>(fallback: T, run: () => Promise<T>) => run().catch(() => fallback);
+  let review: { page: Page; context: BrowserContext; environment: string } | undefined;
   return {
     label,
     linked: Boolean(link),
@@ -261,11 +391,43 @@ export function pageClient(
     setHidden: async (hidden) => {
       await page.evaluate(setHiddenIn, hidden);
     },
+    prepareReview: async (environmentName) => {
+      if (!reviewViews) throw new Error(`${label} has no review view`);
+      if (review?.environment === environmentName) return;
+      await review?.context.close().catch(() => undefined);
+      review = { ...(await reviewViews.open(environmentName)), environment: environmentName };
+    },
+    watchReview: async (workflowId) => {
+      if (!review || !reviewViews) throw new Error(`${label}: no review view is open`);
+      const view = review;
+      // Recording starts before the tab is selected, so the first sighting
+      // is the moment the review's header first shows.
+      await view.page.evaluate(recordReviewPhasesIn, workflowId);
+      const tab = view.page.locator(`[role="tab"][id$="${reviewTabIdSuffix(workflowId)}"]`).first();
+      const arrived = await tab
+        .waitFor({ state: "visible", timeout: REVIEW_TAB_WAIT_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!arrived) {
+        await view.page.reload({ waitUntil: "domcontentloaded" });
+        await reviewViews.reopen(view.page, view.environment);
+        await view.page.evaluate(recordReviewPhasesIn, workflowId);
+        await tab.waitFor({ state: "visible", timeout: 2 * REVIEW_TAB_WAIT_MS });
+      }
+      if ((await tab.getAttribute("aria-selected")) !== "true")
+        await tab.click({ timeout: 10_000 });
+    },
+    reviewPhases: async () =>
+      toProcessClock(
+        await read([], () => review?.page.evaluate(reviewPhasesIn) ?? Promise.resolve([])),
+      ),
     setLinkUp: (up) => {
       if (!link) throw new Error(`${label} has no link to cut`);
       link.setMode(up ? "up" : "reset");
     },
     close: async () => {
+      await review?.context.close().catch(() => undefined);
+      review = undefined;
       await context.close().catch(() => undefined);
       await link?.close().catch(() => undefined);
     },

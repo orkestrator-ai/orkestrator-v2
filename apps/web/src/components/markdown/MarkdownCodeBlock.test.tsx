@@ -179,6 +179,53 @@ describe("diagram fences through Tiptap", () => {
     expect(sourceBlock(element).querySelector("[data-node-view-content]")).toBeTruthy();
   });
 
+  test.each(["mermaid", "chart"])(
+    "arrow keys cross collapsed %s source boundaries through editor selection",
+    async (language) => {
+      const element = await mountFence(language, language === "chart" ? CHART : MERMAID);
+      const { from, to } = fenceRange(element);
+      await act(async () => element.editor.commands.setTextSelection(to + 2));
+      expect(sourceBlock(element).dataset.state).toBe("collapsed");
+      await act(async () => {
+        fireEvent.keyDown(element, { key: "ArrowLeft" });
+      });
+      expect(element.editor.state.selection.from).toBe(to);
+      expect(sourceBlock(element).dataset.state).toBe("open");
+      await act(async () => {
+        fireEvent.keyDown(element, { key: "ArrowRight" });
+      });
+      expect(element.editor.state.selection.from).toBe(to + 2);
+      expect(sourceBlock(element).dataset.state).toBe("collapsed");
+      await act(async () => element.editor.commands.setTextSelection(from - 2));
+      await act(async () => {
+        fireEvent.keyDown(element, { key: "ArrowRight" });
+      });
+      expect(element.editor.state.selection.from).toBe(from);
+      expect(sourceBlock(element).dataset.state).toBe("open");
+      await act(async () => {
+        fireEvent.keyDown(element, { key: "ArrowLeft" });
+      });
+      expect(element.editor.state.selection.from).toBe(from - 2);
+      expect(sourceBlock(element).dataset.state).toBe("collapsed");
+      expect(element.editor.getMarkdown()).toContain(language === "chart" ? CHART : MERMAID);
+    },
+  );
+
+  test("diagram boundary shortcuts leave ranges and ordinary caret movement to the editor", async () => {
+    const element = await mountFence();
+    const { from, to } = fenceRange(element);
+    for (const selection of [from + 1, { from, to }]) {
+      await act(async () => {
+        element.editor.commands.setTextSelection(selection);
+      });
+      const previous = element.editor.state.selection;
+      await act(async () => {
+        fireEvent.keyDown(element, { key: "ArrowLeft" });
+      });
+      expect(element.editor.state.selection.eq(previous)).toBe(true);
+    }
+  });
+
   test("clearing and retyping before settling never renders stale or empty source", async () => {
     const element = await mountFence();
     await screen.findByRole("img", { name: /^Mermaid flowchart diagram/ });

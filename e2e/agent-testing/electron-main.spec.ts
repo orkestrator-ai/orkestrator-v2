@@ -19,6 +19,8 @@ import {
   writeRemoteRelaunchMarker,
   readRemoteRelaunchMarker,
 } from "../../apps/desktop/electron/remote-relaunch";
+import { electronSpecEnvironment } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -168,15 +170,11 @@ test("real invoke rejections keep only the handler message across the context br
       });
     `,
     );
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") env[key] = value;
-    }
     app = await electron.launch({
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, main],
       cwd: root,
-      env,
+      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
     });
     recordElectronDiagnostics(app);
     const window = await app.firstWindow();
@@ -208,7 +206,8 @@ test("real invoke rejections keep only the handler message across the context br
   }
 });
 
-type DesktopRecoveryScenario = "close" | "restart" | "remote" | "planned" | "renderer";
+type DesktopRecoveryScenario =
+  "close" | "restart" | "remote" | "planned" | "renderer" | "headless-dialog";
 
 async function testIndependentWindows(
   nicknamesOnly = false,
@@ -251,19 +250,35 @@ async function testIndependentWindows(
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(failure === "headless-dialog" ? ["--ozone-platform=headless", "--disable-gpu"] : []),
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         APPIMAGE: "",
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
+    if (failure === "headless-dialog") {
+      const result = await app.evaluate(async ({ app, dialog }) => ({
+        ozone: app.commandLine.getSwitchValue("ozone-platform"),
+        answer: await dialog.showMessageBox({
+          message: "Headless cancellation regression",
+          buttons: ["Continue", "Cancel"],
+          cancelId: 1,
+        }),
+      }));
+      expect(result).toEqual({
+        ozone: "headless",
+        answer: { response: 1, checkboxChecked: false },
+      });
+      return;
+    }
+    const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
     // Startup can briefly create a bootstrap window, and development opens
     // detached DevTools. Select the application document explicitly.
@@ -275,8 +290,9 @@ async function testIndependentWindows(
     const window = app.windows().find((page) => page.url().startsWith(rendererUrl));
     if (!window) throw new Error("Main renderer window was not created");
     // index.html's title stays until Vite serves and runs renderer-entry; under
-    // host load that startup takes longer than expect's 5 s default.
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // host load that startup takes longer than expect's 5 s default. A start
+    // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     await expect
       .poll(() =>
         app.evaluate(
@@ -705,7 +721,8 @@ print("public.tiff")
       .windows()
       .find((candidate) => candidate !== window && candidate.url().startsWith(rendererUrl));
     if (!secondWindow) throw new Error("New Window accelerator did not open a renderer window");
-    await expect(secondWindow).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(secondWindow, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>
@@ -973,6 +990,7 @@ test("a real window with a missing preload reaches recovery without mounting the
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, entrypoint],
       cwd: repositoryRoot,
+      env: electronSpecEnvironment(process.env),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
@@ -1042,6 +1060,7 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
         entrypoint,
       ],
       cwd: repositoryRoot,
+      env: electronSpecEnvironment(process.env),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
@@ -1055,4 +1074,9 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
     await closeElectronWithin(launchedApp).catch(() => undefined);
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+});
+
+test("real headless Electron activates the native dialog cancellation guard", async () => {
+  test.skip(process.platform !== "linux", "Linux headless Ozone regression");
+  await testIndependentWindows(false, "headless-dialog");
 });

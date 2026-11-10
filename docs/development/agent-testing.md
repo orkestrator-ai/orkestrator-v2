@@ -155,8 +155,13 @@ through the command scope's client. It is off by default.
 loopback, so on Linux both suites run through `scripts/loopback-network.ts` in a
 private user and network namespace with only loopback raised, where no host
 interface change can reach Chromium. A host that cannot create the namespace
-(no unprivileged user namespaces, or no `ip`) runs them on the host network and
-prints why; `ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose.
+runs them on the host network and prints one `[loopback-network]` line naming
+the reason: `unshare` is not installed, `ip` (iproute2) is not installed, or the
+host refused the namespace, with the kernel's own message (for example Ubuntu
+24.04's AppArmor restriction or a container's seccomp profile).
+`ORKESTRATOR_E2E_HOST_NETWORK=1` does that on purpose. Read that line first when
+`test:browser` fails on a Linux host other than the one it was qualified on
+(to-do 7020 task 2).
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli:test`, which sets no build commit and so
@@ -545,7 +550,11 @@ launcher prints when this mode is on and why.
 - **Linux** starts Electron on Chromium's headless Ozone platform, with the GPU
   off, `--password-store=basic` (so `safeStorage` never reaches the signed-in
   user's keyring, and the desktop's remote connection tokens last only for the
-  session) and neither display variable.
+  session) and neither display variable. There is no display for a native
+  dialog: Electron's GTK message box fails a `CHECK` there and kills the
+  process with SIGTRAP, so the main process answers every dialog as
+  cancelled instead (`desktop.dialog` `no-display-cancelled`, source and
+  response only) unless a test has replaced `dialog.showMessageBox`.
 - **macOS** has no Ozone, so Electron runs normally with
   `ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS=1`: the app takes the `accessory`
   activation policy (no Dock icon, no menu bar, never the active app), every
@@ -580,6 +589,33 @@ accepted and change nothing; when anything above would have made Linux headless
 (the flag, a variable, or no terminal), the launcher says that Electron opens a
 window and which input it ignored, so an agent's run there does open a window
 on the desktop.
+
+##### Stopping a profile, and core dumps
+
+The launcher's stop, and `dev:stop` when the launcher is already gone, send
+SIGTERM to Electron's top process only and let Chromium shut down its own
+children; only the SIGKILL sent to whatever outlives the grace period (3 s in
+the launcher) takes Electron's whole process group. A SIGTERM to the whole
+group killed Chromium's GPU process and its zygote under a running browser,
+whose relaunch of the GPU process then failed; with `--disable-gpu` there is
+no GPU mode left to fall back to, so the browser died on
+`FATAL ... gpu_data_manager_impl_private.cc:389] GPU process isn't usable.
+Goodbye.` with SIGTRAP and a 1 GB core dump (to-dos 7552 and 7554, retired
+2026-11-10; the symbolised stack is in
+[process-crashes-and-kills.md](../debugging/process-crashes-and-kills.md#5-headless-dev-profile-electron-sigtrap)).
+A stopped headless profile now logs `[backend] shutdown.finished code=0`.
+
+On Linux an agent-test profile's Electron, and everything it starts, also runs
+with a core file size limit of 0, set by the launcher for that process tree
+only. A host whose `kernel.core_pattern` is a relative name such as `core`
+writes a crashing process's dump into its working directory, which for a
+profile is the checkout: untracked, one `git add -A` from a commit. A crash
+still shows in `electron.log` (Chromium's `FATAL` line, and
+`.../electron exited with signal SIGTRAP`), and systemd-coredump still records
+it in the journal. To keep the dumps for a diagnosis, start the profile with
+`ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1`; they then land in the checkout root as
+`core.<pid>`, so move them out before any `git add`. `headless-profile.spec.ts`
+checks the limit on each run. `mise run dev` and macOS keep their usual limit.
 
 Do not use a headless profile for native-window, menu or clipboard QA:
 `capturePage` hangs in this mode on Linux, and on macOS the menu bar and the
@@ -898,11 +934,16 @@ credentials of the
 are no longer needed. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
 
-`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs the probe for Claude, Codex or
-Pi against a scripted loopback model (`e2e/agent-testing/mcp-fake-model.ts`)
+`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1` runs the probe for Claude, Codex,
+Pi or OpenCode against a scripted loopback model (`e2e/agent-testing/mcp-fake-model.ts`)
 instead of a provider: the spec points the profile's own Claude settings,
-Codex `config.toml` or Pi `models.json` at it before the environment starts,
-and restores them afterwards. The real CLI, app-server or SDK, bridge and
+Codex `config.toml`, Pi `models.json` or global OpenCode `opencode.json` at
+it before the environment starts, and restores them afterwards. OpenCode
+reaches it through a custom `@ai-sdk/openai-compatible` provider (bundled
+with OpenCode) that becomes its default, small and only enabled model
+(`e2e/agent-testing/opencode-fake-provider.ts`); the spec also adds that
+provider to the profile's `openCodeModelProviders` allowlist for the run,
+since a connected provider outside the allowlist reads as signed out. The real CLI, app-server or SDK, bridge and
 probe servers run; only the model is fake, and no login is used. The fake
 calls a probed tool whenever the runtime offers it (Codex's code mode looks it
 up in `ALL_TOOLS` from a code cell), so a fake-model pass proves what the
@@ -935,8 +976,9 @@ product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
 `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
 cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
-Claude and Codex against scripted loopback models instead, with no login and
-nothing billed (the profile setup is in the spec's header), and
+Claude, Codex, Pi and OpenCode (the last through the same custom provider)
+against scripted loopback models instead, with no login and nothing billed
+(the profile setup is in the spec's header), and
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
@@ -1156,6 +1198,24 @@ spec report a launch timeout. The Wayland rendering case in
 run under that command. The packaged-app specs are always headless on Linux (see
 [Packaged-app Electron spec](#packaged-app-electron-spec)).
 
+A development window loads its renderer's modules from Vite, and on Linux
+Chromium aborts them with `net::ERR_NETWORK_CHANGED` when another build's
+Docker work changes a host interface (flake
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)).
+Every spec that waits for a Vite-served window's title therefore calls
+`watchElectronStartup(app)` straight after `electron.launch()` and waits with
+its `waitForTitle(window, title)` (`e2e/agent-testing/electron-startup-recovery.ts`).
+That reloads a window only when its startup failed and that window's own
+console holds both a failed module import and the network-change abort, at
+most three times, and records each recovery as a `startup-recovery`
+annotation and a `[startup-recovery]` line. Cases about startup failure itself
+(`renderer-log-boundary-electron.spec.ts`, the missing-preload case in
+`electron-main.spec.ts`) keep Playwright's plain title wait, and a `file:`
+renderer needs none. Startup recovery does not cover a later lazy load. The
+failure check looks for the startup heading's presence, not its visibility:
+headless Ozone ignores a window's constructor size, so until a spec sizes it
+the window is 1x1 and the heading has no box.
+
 `design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
 with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
@@ -1190,8 +1250,7 @@ outer `unshare` maps you to root.
 Its container cases (`ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`) cannot use
 the namespace, because container ports are published in the host's. Run them
 in the host namespace: the spec's launcher reloads a startup that lost its
-modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, to-do
-[7062](../todo/cross-cutting/7062-electron-specs-recover-network-changed-startup.md)),
+modules to `ERR_NETWORK_CHANGED` (`waitForRendererStart`, above),
 which is enough for those two cases but not for the whole spec, whose later
 lazy loads can still be aborted. When automatic Docker pools are exhausted,
 put `apps/desktop/scripts/dev/docker-qualification-bin` first on `PATH`, as the
@@ -1506,6 +1565,59 @@ The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
 restart, so the spec falls back to the profile's seeded copy.
 
+### Live dispatch hold
+
+`e2e/agent-testing/dispatch-hold-live.spec.ts` kills the backend inside the
+build pipeline's prompt dispatch window, at both of its backend-side points,
+and checks that the restart resends a journaled prompt once under its
+original request id and never resends one the bridge already accepted. It
+runs Pi against the Auto-pipeline loopback model (`auto-pipeline-fake-model.ts`),
+so it needs no login and bills nothing. Its opt-in is
+`ORKESTRATOR_AGENT_TEST_DISPATCH_HOLD=1`; it restarts the profile twice, so
+run it on its own against a credential-free, Pi-only profile you started by
+hand:
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile qa-dispatch-hold --fixture --no-agent-credentials --agent-platforms pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-dispatch-hold ORKESTRATOR_AGENT_TEST_DISPATCH_HOLD=1 \
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run test:logged -- --name dispatch-hold-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/dispatch-hold-live.spec.ts
+mise run dev:stop --profile qa-dispatch-hold
+mise run dev:reset --profile qa-dispatch-hold
+```
+
+The window is made deterministic by a test-only hold in the backend's bridge
+client (`apps/backend/src/core/agent-test-dispatch-hold.ts`). It exists only
+in a source-run agent-test backend (flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`
+and a non-default data directory). Shipping backend and CLI bundles hard-disable
+the hold at build time, regardless of runtime switches. It is armed by marker files in
+`<data dir>/agent-test-fixtures/dispatch-hold/`:
+
+- `hold-before-send` parks every prompt send after its caller journaled it
+  and before the request leaves the backend;
+- `hold-after-response` parks a send after the bridge answered 2xx and before
+  the caller records it.
+
+While a send is parked, `held-<point>.json` beside the marker names its agent,
+session and request ids (never the prompt) and gains `releasedAt` once the
+marker is removed. A backend killed while held never marks its record
+released, so remove the record when you arm the point again. A forgotten
+marker is released after 15 minutes. Abort and hard-abort reject a held send for
+that session, and graceful shutdown rejects all held sends and clears their polls.
+A cancellation before send is a rejection; one after acceptance keeps an ambiguous
+outcome for reconciliation. The live test re-arms the before-send marker after the
+second crash, so even a bridge-deduplicated resend fails the no-resend assertion.
+Results are in
+[0050](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md#qualification-results-2026-11-10-pre-acceptance-dispatch-window).
+
+A spec that restarts a profile builds the launcher's arguments with
+`devTestRestartArgs` (`e2e/agent-testing/profile-restart-args.ts`): a
+credential-free profile records an empty credential list, which the launcher
+would otherwise read as "every host credential".
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
@@ -1587,6 +1699,66 @@ ORKESTRATOR_AGENT_TEST_PROFILE=scope-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=sco
 mise run dev:stop --profile scope-cmd && mise run dev:reset --profile scope-cmd
 mise run dev:stop --profile scope-leaf && mise run dev:reset --profile scope-leaf
 ```
+
+### Live fleet ticket sync (two profiles)
+
+`e2e/agent-testing/fleet-ticket-sync-live.spec.ts` qualifies Kanban sync
+between a command node and a leaf over the real gateway, event stream and node
+link of two running `dev:test` profiles, with a real disconnect (to-do 3800
+task 1, [tickets.md](../architecture/tickets.md#sync-across-machines)). It
+renames the profiles "QA command" and "QA leaf", gives both fixture projects
+one repository identity (`gitUrl`), makes a leaf ticket, then attaches the
+leaf. In order it checks: the first sync after attach; a ticket each way
+with no manual sync; Share of the older leaf ticket; an image read each way;
+both boards on screen (the sync line, the synced-from marks); a conflict made
+while the link is disabled (`update_node` `enabled: false`), with its comment,
+the conflict list and dismissal; a real disconnect (`dev:stop` on the leaf),
+edits that wait, a coordinator build with `nodeId` refused and the single
+"Machine … reconnected" message after the leaf is started again
+([coordinator.md](../architecture/coordinator.md#tickets-on-other-machines));
+and a build started on the leaf with `nodeId` for a ticket of the command
+board, linked to the same ticket there, then cancelled. Both profiles run
+without credentials and offer only Pi, whose isolated `models.json` names a
+loopback fake model (`auto-pipeline-fake-model.ts`), so nothing logs in and
+nothing is billed. The profiles must be fresh: reset them before each run.
+
+```bash
+FLAGS="--fixture --headless --no-agent-credentials --agent-platforms pi"
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-cmd $FLAGS    # own terminal
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile fts-leaf $FLAGS   # own terminal
+ORKESTRATOR_AGENT_TEST_FLEET_TICKET_SYNC=1 \
+ORKESTRATOR_AGENT_TEST_PROFILE=fts-cmd ORKESTRATOR_AGENT_TEST_LEAF_PROFILE=fts-leaf \
+  mise run test:logged -- --name fleet-ticket-sync -- \
+  bunx playwright test --config e2e/agent-testing/playwright.fleet-ticket-sync.config.ts
+mise run dev:stop --profile fts-leaf && mise run dev:reset --profile fts-leaf
+mise run dev:stop --profile fts-cmd && mise run dev:reset --profile fts-cmd
+```
+
+The spec starts the leaf again itself with the same flags
+(`ORKESTRATOR_AGENT_TEST_LEAF_START_ARGS` overrides them); that launcher keeps
+running until `dev:stop`. Evidence (ids, timings, counts) is written to
+`output/agent-testing/<run>/fleet-ticket-sync/evidence.json`, screenshots to
+`output/visual-previews/fleet-ticket-sync-*.png`.
+
+The first runs (2026-11-10, Linux) found three faults the in-process tests
+could not: the command node did not subscribe to `ticket-sync-outbox-ready`,
+so a leaf edit waited up to the 60 s reconcile (48 s measured) and an image a
+leaf asked for could not arrive within its 20 s wait; and the first sync after
+attaching waited for the reconcile too (37 s), because the leaf's projects
+had not been read yet. With the fixes, the passing run measured: first sync
+0.5 s; a ticket each way 0.5 s; Share 0.5 s; image bytes 20 to 40 ms each way
+once listed; conflict recorded 0.5 s after the link returned; the leaf seen
+as gone 26 s after it stopped; the offline edits on the restarted leaf 0.3 s
+after it reattached; one reconnect message; the remote build linked to the
+leaf's ticket at once and cancelled.
+
+It does not cover what only two hosts can show: an SSH route, the relay, or a
+network partition in which the leaf stays up but unreachable (the link is
+disabled cleanly instead), and it calls the coordinator's backend commands
+(`start_coordinator_node_build_pipeline`) rather than having a model call the
+MCP tool.
 
 ### Live requests of a running agent tab
 
@@ -2061,6 +2233,167 @@ the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
 
+### Auto-pipeline flow (fake model)
+
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
+end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
+then stops and resets the profile. The real backend, Pi bridge, Pi SDK
+sessions, Git worktree, ticket store and renderer all run; only the model is
+fake. The spec points the profile's isolated Pi `models.json` at a loopback
+model (`auto-pipeline-fake-model.ts`, script in
+`auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
+defaults as Pi on that model with one reviewer. The fake answers each stage's
+result tool with a fixed, valid, finding-free result, keeps only counts, and
+parks Verify until the spec releases it.
+
+The one case walks the user's path: an interactive Pi tab writes a file and
+goes idle; in the browser the user right-clicks **Multi Review**, chooses
+**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+then checks the ticket, the promotion commit and its trailer, and the adopted
+Build; sets the ticket's delivery to commit-only while Verify is parked;
+switches to another environment, releases Verify, and waits for the pipeline
+to finish unwatched. Back on the environment, and again after a reload and at
+a 390 px viewport, the graph must show the commit-only completion from backend
+state, and the source tab must have received no further turn. Screenshots go to
+`output/visual-previews/auto-pipeline-live-*.png`.
+
+To run the spec against a profile you started yourself, start it with the same
+flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_AUTO_PIPELINE=1` to `bunx playwright test --config
+e2e/agent-testing/playwright.auto-pipeline.config.ts`. It changes the
+fixture project's Build defaults and leaves its environments behind, so reset
+the profile afterwards.
+
+### Coordinator routing cancel (fake model)
+
+`mise run test:agent:coordinator:routing-fake` runs the live coordinator
+suite's routing `build` case (above, under the live coordinator suite) on a
+loopback fake model, with no login and nothing billed (to-do 7545 task 4). It
+starts a disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profile, runs
+`e2e/agent-testing/coordinator-routing-fake.spec.ts`, then stops and resets the
+profile. The spec points the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) at `coordinator-routing-fake-model.ts`
+(script in `coordinator-routing-fake-model-script.ts`) and opens a fresh Pi
+main coordinator conversation. The real backend, coordinator context and
+policy, Control MCP, Pi bridge and SDK, build pipeline, status wakes and agent
+mail run; only the model is fake.
+
+The fake coordinator reads the launch base, creates the ticket and starts the
+build on the saved defaults, as the case expects. The build's own Pi session is
+parked until its request is aborted, so the build is still running when the
+harness cancels it. The case is `runRoutingScenario` with `cases: ["build"]`,
+judged by the live suite's own evaluators, so `build-cancel-notice` and
+`build-cancel-respected` run on a real stack. The fake also counts what the
+wake said (never its text): the spec requires exactly one wake that names the
+build as cancelled, says a cancel the coordinator did not make is the user's
+decision, says not to start another build for the ticket, and offers no
+restart. The fake answers a wake with one line whatever it says, so a pass
+proves the plumbing and the wording the model receives, not that a real model
+obeys it; that needs the billed `routing` run. The content-free summary is
+`output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
+
+### Coordinator node mail between two profiles (fake model)
+
+`mise run test:agent:coordinator:node-mail-fake` qualifies mail between a
+command node's main coordinator and a leaf's main coordinator on two real
+backends, with no login and nothing billed (to-do 2900). It starts two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms pi` profiles, the second as a companion profile of the
+isolated runner (`companionProfiles` in `isolated-browser.ts`), with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-node-mail-fake.spec.ts`, then stops and resets
+both.
+
+The spec adds a checkout of one shared repository to each profile, because
+the fixture projects' local-path origins give a command node nothing to
+match. The command node then attaches the leaf with `add_node` over the
+leaf's real gateway origin. The leaf's gateway token is read in memory from
+its auth file and handed to the product, never printed. Each profile's
+isolated Pi `models.json` names `coordinator-node-mail-fake-model.ts` (one
+loopback server, base paths `/desk/v1` and `/leaf/v1`; script in
+`coordinator-node-mail-fake-model-script.ts`). Both profiles' unattended
+budget is set to 3. Then:
+
+- **Round trip.** The command node's coordinator calls `list_mailboxes` with
+  the leaf's `nodeId` (reachable), then `send_message` with `nodeId` and
+  `toEnvironmentId: "coordinator"`. The leaf's coordinator answers with
+  `replyToMessageId`. The answer must come back through the leaf's outbox
+  from a `node` sender with role `agent`, and wake the command node's
+  coordinator with the answer framing.
+- **Loop bound.** The command node's coordinator asks a new question on every
+  answer. Three answers must wake it, the fourth must be `inject-held` with
+  `loop-budget-exhausted`, one budget notice must reach its model, the leaf
+  must be woken four times, and then nothing more.
+- **Replacing the main.** The command node's main is closed and a new one
+  opened. The held answer must arrive there still held and wake neither
+  model.
+
+The fake model counts facts about each wake (sender kind and role, trust,
+framing, question and answer numbers, the budget notice), never its text. A
+pass proves the plumbing, not a real model's choices. Both backends share one
+kernel and loopback, so a cross-machine, SSH-forwarded or dropped link is not
+exercised. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-node-mail-fake/summary.json`.
+To run the spec against two profiles you started yourself, start both with
+the same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
+It attaches the leaf, adds projects and changes both profiles' messaging and
+Pi settings, so reset both afterwards.
+
+### Coordinator checkout sync with a slow remote (fake model)
+
+`mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
+fast-forward to an already fetched upstream when the remote is slow (to-do
+4720, retired 2026-11-10), without a login, a billed turn or the network. It starts a disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profile, runs `e2e/agent-testing/coordinator-slow-remote-live.spec.ts`, then
+stops and resets the profile. The real backend, project Git service, Pi
+bridge, agent mail and renderer run; the model is
+`coordinator-slow-remote-fake-model.ts` on loopback, named in the profile's
+isolated Pi `models.json` and `settings.json`.
+
+The spec adds two disposable projects under the profile's fixture directory,
+each a checkout of its own local bare repository. Each checkout's origin is
+`ssh://git@slow.invalid/repo.git` with a checkout-local `core.sshCommand`
+shim and `ssh.variant simple`; the shim runs `git-upload-pack` on its own bare
+repository, records only a start time per invocation, and sleeps 15 s while a
+delay marker exists. No host SSH or global Git configuration changes. With the
+delay off, a direct and a backend fetch through each shim must succeed. The
+mail project's main coordinator then starts a turn that the fake model parks,
+both remotes gain two commits that each checkout fetches without merging, and
+the delay markers are created. Then:
+
+- **Typed.** Once the backend's 60 s fetch cooldown has passed, a message typed
+  in the browser to the first project's main coordinator must log
+  `checkout.message-check outcome=fast-forwarded fetch=timed-out` with
+  `durationMs` of at least 3000, move `HEAD` to the recorded upstream with one
+  new reflog entry before the late fetch can finish, and turn the toolbar's
+  "2 commits behind" into "Up to date".
+- **Mail.** A Pi worker tab in the second project sends its coordinator a
+  report through Orkestrator's `send_message` tool (same-project trust,
+  `coordinator` route). The mail must wait behind the running turn
+  (`delivery.waiting reason=working`) with the checkout still behind. When the
+  turn is released, with the delay still on, the redelivery must log
+  `checkout.mail-follow outcome=fast-forwarded-fetched` at least 5 s after the
+  shim started and before it could finish, move `HEAD` to the upstream with
+  one new reflog entry, and be injected.
+
+The content-free summary is
+`output/agent-testing/<profile>/coordinator-slow-remote/summary.json`, and
+screenshots are `output/visual-previews/coordinator-slow-remote-*.png`. To run
+the spec against a profile you started yourself, use the same flags and pass
+`ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SLOW_REMOTE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-slow-remote.config.ts`. It
+reads backend log lines from the profile's `logs/electron.log`, so it needs a
+`dev:test` profile rather than a standalone backend. The shim's timestamps use
+GNU `date`, so the spec runs on Linux.
+
 ### Live goal suite
 
 `mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
@@ -2380,7 +2713,14 @@ mise run test:agent:coordinator --credential-source codex --scenario routing
    than the one `start_build_pipeline`, the build is on that ticket, the call
    leaves out `agentType`, `steps`, `reviewers` and `reviewPreparation`, and no
    worker, Multi Review, feature plan or graph was started. The harness then
-   cancels the build.
+   cancels the build, as the user's Cancel does, and waits for the coordinator
+   to settle. `build-cancel-notice` passes when exactly one `cancelled` notice
+   about each cancelled build was injected and carried into a wake turn;
+   `build-cancel-respected` when the rows after the cancel hold no
+   `start_build_pipeline`, `restart_build_pipeline_step` or
+   `resume_build_pipeline` call, the conversation gained no build, and the build
+   is still cancelled (to-do 7545 task 4). The summary counts the wake's
+   workflow calls as `build-after-cancel:<tool>`.
 2. `investigate`: "does the test suite pass", with "don't change anything". It
    passes on one `launch_environment`, `launch_job` or `send_prompt_to_tab` and
    no ticket, build or review. The worker's report is let through, so its wake

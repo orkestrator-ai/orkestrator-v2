@@ -1,7 +1,16 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+  setSystemTime,
+} from "bun:test";
 import { useEffect, useState } from "react";
-import { cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -19,6 +28,7 @@ import {
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
+import { formatTranscriptTimestamp } from "@/lib/format-transcript-timestamp";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { createPeerMailNativeMessage, ERROR_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -88,12 +98,9 @@ function makeMessage(
   };
 }
 
-/** Mirrors `formatTime` in NativeMessage.tsx, which is module-private. */
+/** The footer label NativeMessage renders for `isoString`, relative to now. */
 function expectedTimeLabel(isoString: string): string {
-  return new Date(isoString).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatTranscriptTimestamp(isoString);
 }
 
 function getClassTokens(element: Element | null | undefined): string[] {
@@ -1428,6 +1435,75 @@ describe("NativeMessage task list rendering", () => {
     expect(container.firstElementChild?.className).toContain("py-3");
     expect(container.firstElementChild?.className).not.toContain("pt-0");
   });
+
+  test("shows only the time for a block from today", () => {
+    const today = new Date();
+    today.setHours(9, 5, 0, 0);
+    const createdAt = today.toISOString();
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "text", content: "Fresh" }], { createdAt })} />,
+    );
+    const timeOnly = today.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    expect(expectedTimeLabel(createdAt)).toBe(timeOnly);
+    expect(screen.getByText(timeOnly)).toBeTruthy();
+  });
+
+  test("adds the date for a block from an earlier day", () => {
+    const earlier = new Date();
+    earlier.setDate(earlier.getDate() - 3);
+    earlier.setHours(9, 5, 0, 0);
+    const createdAt = earlier.toISOString();
+    renderInAppCommandScope(
+      <NativeMessage message={makeMessage([{ type: "text", content: "Older" }], { createdAt })} />,
+    );
+    const day = earlier.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      ...(earlier.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+    });
+    const time = earlier.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    expect(screen.getByText(`${day}, ${time}`)).toBeTruthy();
+  });
+
+  for (const trigger of ["midnight", "focus", "visibilitychange"] as const) {
+    test(`refreshes an unchanged mounted row on ${trigger}`, () => {
+      const before = new Date(2026, 10, 9, 23, 59, 59);
+      setSystemTime(before);
+      let midnightCallback: (() => void) | undefined;
+      const realSetTimeout = globalThis.setTimeout;
+      const timerSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+        delay: number,
+        ...args: unknown[]
+      ) => {
+        if (delay === 1000) midnightCallback = callback;
+        return realSetTimeout(callback, delay, ...args);
+      }) as typeof setTimeout);
+      try {
+        const message = makeMessage([{ type: "text", content: "Overnight" }], {
+          createdAt: before.toISOString(),
+        });
+        renderInAppCommandScope(<NativeMessage message={message} />);
+        const time = before.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+        expect(screen.getByText(time)).toBeTruthy();
+        expect(midnightCallback).toBeDefined();
+        act(() => {
+          setSystemTime(new Date(2026, 10, 10, 8));
+          if (trigger === "midnight") midnightCallback!();
+          else if (trigger === "focus") window.dispatchEvent(new Event("focus"));
+          else document.dispatchEvent(new Event("visibilitychange"));
+        });
+        const date = before.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        expect(screen.getByText(`${date}, ${time}`)).toBeTruthy();
+        const staleLabel = screen.queryByText(time);
+        expect(staleLabel).toBeNull();
+      } finally {
+        cleanup();
+        timerSpy.mockRestore();
+        setSystemTime();
+      }
+    });
+  }
 
   test("survives a platform time formatter failure", () => {
     const original = Date.prototype.toLocaleTimeString;
@@ -6878,7 +6954,12 @@ describe("NativeMessage permission-denied tool rows", () => {
 });
 
 describe("NativeMessage shell command changes", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    // Every test reuses one call id, and a call's expansion is remembered by
+    // its id within the transcript: each test starts collapsed.
+    useMessagePartExpansionStore.getState().reset();
+  });
 
   const command = (commandChanges?: NativeMessagePart["commandChanges"]): NativeMessagePart => ({
     type: "tool-invocation",

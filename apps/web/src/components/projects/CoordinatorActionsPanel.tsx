@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, GitPullRequest, ListTodo, MessageCircle, Minus, Tag } from "lucide-react";
-import { FloatingNoticeSlot } from "@/components/ui/floating-notice";
+import {
+  FloatingNoticeSlot,
+  useClaimFloatingNoticeColumnShift,
+} from "@/components/ui/floating-notice";
 import type { CoordinatorActionCard } from "./coordinator-action-cards";
 import {
   setCoordinatorActionsDockedOpen,
@@ -17,15 +20,21 @@ export function CoordinatorActionsPanel({
 }) {
   return (
     <FloatingNoticeSlot>
-      {(layout) => (
-        <ActionsPanel
-          cards={cards}
-          onNavigate={onNavigate}
-          docked={layout.placement === "beside"}
-          width={layout.cardRem}
-          availableHeight={layout.heightPx}
-        />
-      )}
+      {(layout) => {
+        // Where the centred column leaves no room, the panel still docks if
+        // moving the column left makes room for it.
+        const shift = layout.placement === "beside" ? null : layout.columnShift;
+        return (
+          <ActionsPanel
+            cards={cards}
+            onNavigate={onNavigate}
+            docked={layout.placement === "beside" || shift !== null}
+            shiftsColumn={shift !== null}
+            width={shift?.cardRem ?? layout.cardRem}
+            availableHeight={layout.heightPx}
+          />
+        );
+      }}
     </FloatingNoticeSlot>
   );
 }
@@ -34,6 +43,7 @@ export function ActionsPanel({
   cards,
   onNavigate,
   docked,
+  shiftsColumn = false,
   width = 18,
   availableHeight,
 }: {
@@ -41,6 +51,11 @@ export function ActionsPanel({
   onNavigate: (anchorId: string) => void;
   /** Room to dock beside the column: the panel stays open until its header folds it. */
   docked: boolean;
+  /**
+   * The room to dock exists only once the column moves left, so the open
+   * panel moves it there and folding the panel lets it slide back.
+   */
+  shiftsColumn?: boolean;
   width?: number;
   /** The notice stack's height in px, from its top to the pane's bottom margin. */
   availableHeight?: number;
@@ -151,6 +166,7 @@ export function ActionsPanel({
     };
   }, [docked, expanded]);
   const shown = docked ? dockedOpen : expanded;
+  useClaimFloatingNoticeColumnShift(docked && shiftsColumn && shown);
   useLayoutEffect(() => {
     // Shared preference updates and resizing can hide a focused card too.
     if (!shown && box.current?.contains(document.activeElement)) {

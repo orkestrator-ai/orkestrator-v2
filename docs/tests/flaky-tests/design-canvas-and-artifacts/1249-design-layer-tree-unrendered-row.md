@@ -239,3 +239,15 @@ The run was based on `main` at `7329d2490b05113bcc3c47fdb49812552b8bb4ea`;
 `mise run flaky:recurrence -- 1249 --base 7329d2490b05113bcc3c47fdb49812552b8bb4ea`
 reported the case open. No test or product source changed. This is another
 aggregate-only observation; the cause remains unestablished.
+
+
+## Native chat review repair validation — 2026-11-09
+
+- **Observing branch base:** `448e9fffb992c3b6306aa6562c88e23c59fb74d8`. The aggregate began at `17e6e6e93`; the unchanged design owner was rerun at `08d1f507b`.
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`, nine component-browser workers. No other validation jobs from this task were running when this case failed.
+- **Failure:** mobile `Enter on a layer of an unrendered frame announces the wait and selects once it renders` timed out after five seconds waiting for the Layers tree's `plans (h2)` treeitem at line 613 after End.
+- **Aggregate result:** 1,586 passed, 152 skipped and two failed across 1,740 component cases in 1,281.6 seconds. The other failure was case 1310; the public-site stage did not run.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fSAO2z/browser.log.gz`.
+- **Complete unchanged owner:** `mise run test:logged -- --name design-accessibility-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1 --output output/playwright/design-accessibility-owner` passed both viewport projects, exit 0, in 68.6 seconds. Passing raw output was deleted by the logged runner.
+- **Recurrence check:** `mise run flaky:recurrence -- 1249 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
+- **Assessment:** confirmed intermittent recurrence; the cause remains unconfirmed. The design owner and its components, assertions, deadlines and skips were unchanged.

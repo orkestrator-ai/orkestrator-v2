@@ -831,6 +831,13 @@ export interface SessionState {
    */
   claudeRuntime?: import("../services/session-manager-runtime.js").ClaudeRuntime;
   /**
+   * The generation of the newest CLI this bridge process launched for the
+   * session (`ClaudeRuntime.generation`), kept after that CLI ends. Absent
+   * until the first launch. Runtime-only: a restarted bridge has launched
+   * nothing yet. Served by `/session/:id/runtime-health`.
+   */
+  claudeRuntimeGeneration?: number;
+  /**
    * The session CLI's control once its input is closed and it is shutting down
    * (`drainClaudeRuntime`).
    *
@@ -1201,6 +1208,12 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
    * publishes it as the shared request's `humanRequired`.
    */
   humanRequired?: true;
+  /**
+   * For an `mcp__*` tool, the safety hints its server declares for it, read
+   * from the CLI's MCP status when the call was parked. Self-declared by the
+   * server: display only, never a reason to set `ruleEligible`.
+   */
+  toolHints?: import("@orkestrator/protocol/agent-interactions").AgentInteractionToolHints;
   /** `WebFetch` only: the host of the URL it fetches. */
   networkHost?: string;
   /**

@@ -53,6 +53,8 @@ export function workflowSummary(
     presentationError: workflow.presentationError,
     addressPromptPending: workflow.addressPromptPending,
     fixTabId: workflow.fixTabId,
+    // A cancelled build reads as `failed`; this says it was stopped on purpose.
+    ...(typeof workflow.cancelledAt === "string" ? { cancelledAt: workflow.cancelledAt } : {}),
     ...("delivery" in workflow ? { delivery: workflow.delivery } : {}),
     // Build pipelines: one mailbox per worker; send_message with toTabId set
     // to `address` reaches that worker only.

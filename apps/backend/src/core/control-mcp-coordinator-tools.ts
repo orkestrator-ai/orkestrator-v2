@@ -62,6 +62,7 @@ import {
 } from "@orkestrator/protocol/scheduled-jobs";
 import {
   COORDINATOR_MAIL_ADDRESS,
+  coordinatorCallTurnOrigin,
   coordinatorDelegationBucket,
   coordinatorDelegationSummary,
   coordinatorRuntimeId,
@@ -729,6 +730,9 @@ function coordinatorScheduleBackend(
         coordinatorId: scope.coordinatorId,
         conversationId: scope.conversationId,
         role,
+        // A schedule's fires are framed from the turn that set it.
+        turnOrigin:
+          coordinatorCallTurnOrigin(conversation.lastTurnOrigin, scope.turnOrigin) ?? "user",
       },
       record: conversation,
       workspace,
@@ -841,7 +845,7 @@ export function resumeRefusal(workflow: Record<string, unknown>): string {
   const phase = typeof workflow.phase === "string" ? workflow.phase : "unknown";
   const error = typeof workflow.error === "string" ? workflow.error : "";
   if (phase === "failed" && error.startsWith(BUILD_CANCELLED_ERROR)) {
-    return "This build pipeline was cancelled, not paused, so it cannot be resumed or restarted.";
+    return "This build pipeline was cancelled, not paused, so it cannot be resumed or restarted. If you did not cancel it yourself, the user did: do not start another build for this ticket unless the user asks you to.";
   }
   if (phase === "failed") {
     return "This build pipeline is failed, not paused, so resume does nothing. To restart the step it failed in, call restart_build_pipeline_step with this pipelineId (omit stepId).";

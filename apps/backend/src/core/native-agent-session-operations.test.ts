@@ -415,6 +415,57 @@ describe("NativeAgentSessionOperations", () => {
       });
       expect(asked.at(-1)).toBeUndefined();
     });
+
+    test("OpenCode lists archived 2.x rows and keeps each row's archivable marker", async () => {
+      const asked: unknown[] = [];
+      const { operations } = harness({
+        provider: {
+          listResumableSessions: async (options?: unknown) => {
+            asked.push(options);
+            return [
+              { sessionId: "ses_legacy", archivable: false },
+              { sessionId: "opencode2:ses_a", archived: true },
+            ];
+          },
+        },
+      });
+      const entries = await operations.listProjectionResumableSessions({
+        ...identity,
+        agent: "opencode",
+        includeArchived: true,
+      });
+      expect(asked).toEqual([{ includeArchived: true }]);
+      expect(entries).toEqual([
+        { sessionId: "ses_legacy", archivable: false },
+        { sessionId: "opencode2:ses_a", archived: true },
+      ]);
+    });
+
+    test("OpenCode archive reaches the provider", async () => {
+      const calls: unknown[] = [];
+      const { operations } = harness({
+        provider: {
+          setResumableSessionArchived: async (id: string, archived: boolean) => {
+            calls.push([id, archived]);
+          },
+        },
+      });
+      await operations.setProjectionResumableSessionArchived({
+        ...identity,
+        agent: "opencode",
+        resumableSessionId: "opencode2:ses_a",
+        archived: true,
+      });
+      expect(calls).toEqual([["opencode2:ses_a", true]]);
+      await expect(
+        operations.setProjectionResumableSessionArchived({
+          ...identity,
+          agent: "claude",
+          resumableSessionId: "x",
+          archived: true,
+        }),
+      ).rejects.toThrow("cannot archive");
+    });
   });
 
   test("a fork carries the composer's selection into the child's controls", async () => {
@@ -488,6 +539,47 @@ describe("NativeAgentSessionOperations", () => {
         action: { kind: "compact", instructions: "keep the plan" },
       });
       expect(actions).toEqual([{ kind: "compact", instructions: "keep the plan" }]);
+    });
+  });
+
+  describe("branches", () => {
+    const list = { activeEntryId: "e-2", branches: [], truncated: false };
+
+    test("Pi lists its branches through the provider, by provider session", async () => {
+      const asked: string[] = [];
+      const { operations } = harness({
+        provider: {
+          listSessionBranches: async (providerSessionId: string) => {
+            asked.push(providerSessionId);
+            return list;
+          },
+        },
+      });
+      expect(await operations.listProjectionBranches({ ...identity, agent: "pi" })).toEqual(list);
+      expect(asked).toEqual(["provider-session"]);
+    });
+
+    test("a platform without branches is refused before the provider is asked", async () => {
+      let asked = false;
+      const { operations } = harness({
+        provider: {
+          listSessionBranches: async () => {
+            asked = true;
+            return list;
+          },
+        },
+      });
+      await expect(operations.listProjectionBranches(identity)).rejects.toThrow(
+        "codex conversations have no branches",
+      );
+      expect(asked).toBe(false);
+    });
+
+    test("an unknown session is not found", async () => {
+      const { operations } = harness({ session: null });
+      await expect(operations.listProjectionBranches({ ...identity, agent: "pi" })).rejects.toThrow(
+        "Native agent session was not found",
+      );
     });
   });
 

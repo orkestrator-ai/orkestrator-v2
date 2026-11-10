@@ -133,6 +133,41 @@ export function invalidationCauseDelta(
   return { ...delta, total };
 }
 
+/**
+ * The backend's per-section discovery announcement counters
+ * (`sessionInvalidations.discoveryRenewals`, todo 7530): per scope, per
+ * section, a count and the content-free value paths that changed.
+ */
+export type DiscoveryRenewalCounts = Record<
+  string,
+  Record<string, { count?: number; changed?: Record<string, number> } | undefined> | undefined
+>;
+
+/**
+ * Which discovery sections of `scope` announced during a window, and which
+ * of their value paths changed: `{ runtime: { count: 2, changed: {...} } }`.
+ * Sections that did not move are omitted.
+ */
+export function discoveryRenewalDelta(
+  before: DiscoveryRenewalCounts | undefined,
+  after: DiscoveryRenewalCounts | undefined,
+  scope: string,
+): Record<string, { count: number; changed: Record<string, number> }> {
+  const delta: Record<string, { count: number; changed: Record<string, number> }> = {};
+  for (const [section, end] of Object.entries(after?.[scope] ?? {})) {
+    const start = before?.[scope]?.[section];
+    const count = (end?.count ?? 0) - (start?.count ?? 0);
+    if (count <= 0) continue;
+    const changed: Record<string, number> = {};
+    for (const [path, total] of Object.entries(end?.changed ?? {})) {
+      const moved = total - (start?.changed?.[path] ?? 0);
+      if (moved > 0) changed[path] = moved;
+    }
+    delta[section] = { count, changed };
+  }
+  return delta;
+}
+
 export type SidebarActivity = "working" | "waiting" | "idle" | "stopped" | "unknown";
 
 /**
@@ -230,7 +265,9 @@ export function freshToolStates(
     for (const part of message.parts as Array<Record<string, unknown>>) {
       if (part?.type === "subagent") states.push(`subagent:${String(part.toolState ?? "?")}`);
       if (part?.type !== "tool-invocation") continue;
-      states.push(`${String(part.toolName ?? "?")}:${String(part.toolState ?? "?")}`);
+      // A command its turn ended around has no state, only the flag (to-do 7522).
+      const state = part.toolLeftRunning === true ? "left-running" : (part.toolState ?? "?");
+      states.push(`${String(part.toolName ?? "?")}:${String(state)}`);
     }
   }
   return states;
@@ -295,7 +332,8 @@ export function idleObservationModel(
   fake: boolean,
   override?: string,
 ): string | undefined {
-  return fake && platform === "pi" ? PI_FAKE_MODEL_REF : override;
+  // Pi and OpenCode name the fake's provider the same way (todo 0049 tasks 6, 7).
+  return fake && (platform === "pi" || platform === "opencode") ? PI_FAKE_MODEL_REF : override;
 }
 
 export function asyncQuestionPrompt(title: string, word: string): string {

@@ -182,6 +182,27 @@ export function buildOpenCode2ContainerUserConfigScript(
   quote: (value: string) => string,
 ): string {
   const mirror = path.posix.join(configDir, OPENCODE2_USER_CONFIG_MIRROR_FILE);
+  return [
+    `for entry in ${OPENCODE2_LINKED_USER_ENTRIES.join(" ")}; do`,
+    `      if [ -L ${configDir}/"$entry" ]; then rm -f ${configDir}/"$entry"; fi`,
+    `      if [ -e ${userDir}/"$entry" ]; then ln -s ${userDir}/"$entry" ${configDir}/"$entry" || true; fi`,
+    `    done`,
+    `    rm -f ${configDir}/opencode.json`,
+    `    ${buildOpenCode2UserConfigMergeCommand(userDir, mirror, quote, OPENCODE2_CONTAINER_BUN)} || rm -f ${mirror}`,
+  ].join("\n");
+}
+
+/**
+ * One shell command that writes the merged mirror of `userDir`'s files to
+ * `mirror` (owner-only), with `bun` running {@link mergeOpenCodeUserConfig}'s
+ * own source. Removes `mirror` when no file could be read.
+ */
+export function buildOpenCode2UserConfigMergeCommand(
+  userDir: string,
+  mirror: string,
+  quote: (value: string) => string,
+  bun: string,
+): string {
   const program = `const fs = require("node:fs");
 const path = require("node:path");
 const merge = (${mergeOpenCodeUserConfig.toString()});
@@ -205,14 +226,7 @@ if (result.text === undefined) {
   fs.renameSync(staged, target);
 }
 `;
-  return [
-    `for entry in ${OPENCODE2_LINKED_USER_ENTRIES.join(" ")}; do`,
-    `      if [ -L ${configDir}/"$entry" ]; then rm -f ${configDir}/"$entry"; fi`,
-    `      if [ -e ${userDir}/"$entry" ]; then ln -s ${userDir}/"$entry" ${configDir}/"$entry" || true; fi`,
-    `    done`,
-    `    rm -f ${configDir}/opencode.json`,
-    `    ORK_OPENCODE_USER_DIR=${quote(userDir)} ORK_OPENCODE_MIRROR=${quote(mirror)} ${OPENCODE2_CONTAINER_BUN} -e ${quote(program)} || rm -f ${mirror}`,
-  ].join("\n");
+  return `ORK_OPENCODE_USER_DIR=${quote(userDir)} ORK_OPENCODE_MIRROR=${quote(mirror)} ${bun} -e ${quote(program)}`;
 }
 
 /** `$XDG_CONFIG_HOME/opencode`, the directory a 1.x server reads as global. */

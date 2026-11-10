@@ -183,13 +183,14 @@ export function createAgentAccountsApi(client: BackendClient) {
   async function getAgentAccountUsage(
     platform: AgentAccountPlatform,
     accountId: string,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; cacheOnly?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
     return on(machine).get_agent_account_usage({
       platform,
       accountId,
       ...(options.force ? { force: true } : {}),
+      ...(options.cacheOnly ? { cacheOnly: true } : {}),
     });
   }
 
@@ -207,6 +208,27 @@ export function createAgentAccountsApi(client: BackendClient) {
       platform,
       ...(options.reauthenticate ? { reauthenticate: true } : {}),
     });
+  }
+
+  /**
+   * Sign one existing Claude account in again by id, without making it the
+   * active account. A machine that predates the command is told to update.
+   */
+  async function reauthenticateAgentAccount(
+    platform: AgentAccountPlatform,
+    accountId: string,
+    machine?: AccountMachine,
+  ): Promise<AgentAccountLoginProgress> {
+    try {
+      return await on(machine).reauthenticate_agent_account({ platform, accountId });
+    } catch (error) {
+      if (incompatibility(error, "reauthenticate_agent_account")?.code === "unknown-command") {
+        throw new Error(
+          "This machine's Orkestrator is too old to sign an account in from here. Update it, or switch to the account and sign in from its agent tab.",
+        );
+      }
+      throw error;
+    }
   }
 
   async function getAgentAccountLogin(
@@ -269,6 +291,7 @@ export function createAgentAccountsApi(client: BackendClient) {
     removeAgentAccount,
     getAgentAccountUsage,
     startAgentAccountLogin,
+    reauthenticateAgentAccount,
     getAgentAccountLogin,
     submitAgentAccountLoginCode,
     cancelAgentAccountLogin,
@@ -293,6 +316,7 @@ export const {
   removeAgentAccount,
   getAgentAccountUsage,
   startAgentAccountLogin,
+  reauthenticateAgentAccount,
   getAgentAccountLogin,
   submitAgentAccountLoginCode,
   cancelAgentAccountLogin,

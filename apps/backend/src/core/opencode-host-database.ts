@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { constants, Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,24 +87,39 @@ export function inspectSharedOpenCodeDatabase(file: string): SharedOpenCodeDatab
 
 /**
  * The user tables in `file`, read without writing anything beside it. A
- * read-only connection to a WAL database needs its `-shm` file, and OpenCode
- * removes the `-wal` and `-shm` files when it closes cleanly, so reading a
- * database it created and closed fails with `SQLITE_CANTOPEN`. With no
- * write-ahead log left to read, an `immutable` open reads exactly what is on
- * disk and creates no files. A non-empty `-wal` would be ignored by
- * `immutable`, so then the original error stands.
+ * read-only connection can CREATE `-wal` and `-shm` on Linux, while on a
+ * read-only directory it fails with `SQLITE_CANTOPEN`. Try an immutable read
+ * first only when there is no WAL to ignore. Since another process can open
+ * the database meanwhile, accept that snapshot only if its file metadata and
+ * absent WAL stayed stable; otherwise use SQLite's normal locking and WAL.
  */
 function readTableNames(file: string): string[] {
-  try {
-    return queryTableNames(new Database(file, { readonly: true }));
-  } catch (error) {
-    if ((error as { code?: unknown }).code !== "SQLITE_CANTOPEN" || hasWriteAheadLog(file)) {
-      throw error;
+  if (!hasWriteAheadLog(file)) {
+    const before = statSync(file, { bigint: true });
+    try {
+      const tables = queryTableNames(
+        new Database(
+          `${pathToFileURL(file).href}?immutable=1`,
+          constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+        ),
+      );
+      const after = statSync(file, { bigint: true });
+      if (
+        !hasWriteAheadLog(file) &&
+        before.dev === after.dev &&
+        before.ino === after.ino &&
+        before.size === after.size &&
+        before.mtimeNs === after.mtimeNs &&
+        before.ctimeNs === after.ctimeNs
+      ) {
+        return tables;
+      }
+    } catch {
+      // A concurrent write can invalidate an immutable snapshot. Re-read with
+      // normal locking instead of classifying a transient schema as final.
     }
-    return queryTableNames(
-      new Database(`${pathToFileURL(file).href}?immutable=1`, { readonly: true }),
-    );
   }
+  return queryTableNames(new Database(file, { readonly: true }));
 }
 
 function queryTableNames(database: Database): string[] {
@@ -123,8 +138,9 @@ function queryTableNames(database: Database): string[] {
 function hasWriteAheadLog(file: string): boolean {
   try {
     return statSync(`${file}-wal`).size > 0;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 

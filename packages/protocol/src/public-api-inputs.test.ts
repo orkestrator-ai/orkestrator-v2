@@ -229,6 +229,8 @@ describe("public action input contract", () => {
       "environment.delete": "always",
       "environment.exec": "voice",
       "session.interaction.resolve": "voice:approval",
+      // Codex and Cursor cannot bring rewound turns back.
+      "session.rewind": "always",
       // A goal can run many unattended turns, and resuming can raise its limits.
       "session.goal.set": "voice",
       "session.goal.resume": "voice",

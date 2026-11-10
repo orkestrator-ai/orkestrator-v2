@@ -12,6 +12,8 @@ import { StorageService } from "../storage.js";
 import { ScheduledJobExecutor } from "./executor.js";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { ScheduledJobService } from "./service.js";
+import { COORDINATOR_MAIL_ORIGIN_NOTE } from "@orkestrator/protocol/agent-mail";
+import { createCoordinatorMailOriginPrompt } from "@orkestrator/protocol/review-evidence-frames";
 
 /**
  * Coordinator schedules over the real Control MCP endpoint: the coordinator's
@@ -229,6 +231,8 @@ describe("coordinator schedules", () => {
       coordinatorId: "coordinator-1",
       conversationId: "main-1",
       role: "main",
+      // No turn recorded yet: not the user's.
+      turnOrigin: "mail",
     });
     clock.now = Date.parse("2026-10-26T03:12:00Z");
     await fire();
@@ -699,5 +703,93 @@ describe("coordinator schedule edits", () => {
       action: { type: "remind_me", body: "Just a reminder." },
     });
     expect(plain.structuredContent?.carriesAccountSwitchPermission).toBeUndefined();
+  });
+});
+
+describe("the turn a schedule's fires are framed from (to-do 6080 task 5)", () => {
+  const setOrigin = (origin: "user" | "mail") =>
+    Object.assign(
+      currentWorkspace.conversations.find((item) => item.id === "main-1")!,
+      {
+        lastTurnOrigin: origin,
+      },
+    );
+  const createPrompt = (requestId: string) =>
+    call("main", "create_schedule", {
+      requestId,
+      at: "+1m",
+      action: {
+        type: "send_prompt_to_tab",
+        environmentId: "env-worker",
+        tabId: "worker-tab",
+        prompt: "audit",
+      },
+    });
+  const firedPrompt = async () => {
+    clock.now += 60_000;
+    await fire();
+    const dispatched = invocations.filter(
+      (item) => item.command === "dispatch_native_agent_intent",
+    );
+    expect(dispatched).toHaveLength(1);
+    return String(dispatched[0]!.args.prompt);
+  };
+  const owner = (id: string) => service.get({ kind: "operator" }, id).owner;
+
+  test("set in a mail turn, it fires as mail after the user's own turn", async () => {
+    setOrigin("mail");
+    const created = await createPrompt("from-mail");
+    expect(owner(String(created.structuredContent!.scheduleId))).toMatchObject({
+      kind: "coordinator",
+      turnOrigin: "mail",
+    });
+    setOrigin("user");
+    expect(await firedPrompt()).toBe(createCoordinatorMailOriginPrompt("audit").source);
+  });
+
+  test("set in the user's turn, it fires as the user's after a mail turn", async () => {
+    setOrigin("user");
+    const created = await createPrompt("from-user");
+    expect(owner(String(created.structuredContent!.scheduleId))).toMatchObject({
+      turnOrigin: "user",
+    });
+    setOrigin("mail");
+    expect(await firedPrompt()).toBe("audit");
+  });
+
+  test("an older schedule without a recorded origin reads the newest turn", async () => {
+    setOrigin("user");
+    const created = await createPrompt("older");
+    const id = String(created.structuredContent!.scheduleId);
+    const stored = storage.scheduledJobStore().get(id)!;
+    const { turnOrigin: _dropped, ...legacyOwner } = stored.owner as { turnOrigin?: string };
+    storage.scheduledJobStore().mutate(id, () => ({
+      result: null,
+      value: { ...stored, owner: legacyOwner as typeof stored.owner },
+    }));
+    setOrigin("mail");
+    expect(await firedPrompt()).toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+  });
+
+  test("a change or resume from a mail turn marks it, and a user turn does not clear it", async () => {
+    setOrigin("user");
+    const created = await createPrompt("changed");
+    const id = String(created.structuredContent!.scheduleId);
+    setOrigin("mail");
+    await call("main", "update_schedule", { scheduleId: id, name: "Changed by mail" });
+    expect(owner(id)).toMatchObject({ turnOrigin: "mail" });
+    setOrigin("user");
+    await call("main", "update_schedule", { scheduleId: id, name: "Renamed by the user" });
+    expect(owner(id)).toMatchObject({ turnOrigin: "mail" });
+    expect(await firedPrompt()).toContain(COORDINATOR_MAIL_ORIGIN_NOTE);
+
+    const second = await createPrompt("resumed");
+    const resumedId = String(second.structuredContent!.scheduleId);
+    await call("main", "pause_schedule", { scheduleId: resumedId });
+    // Pausing changes nothing a fire sends.
+    expect(owner(resumedId)).toMatchObject({ turnOrigin: "user" });
+    setOrigin("mail");
+    await call("main", "resume_schedule", { scheduleId: resumedId });
+    expect(owner(resumedId)).toMatchObject({ turnOrigin: "mail" });
   });
 });

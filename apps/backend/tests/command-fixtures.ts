@@ -335,6 +335,17 @@ export async function createCommandFixtures() {
       order: 0,
       environmentType: "local",
       worktreePath: "/tmp/worktree",
+      // These pre-created fixture worktrees are explicitly owned outside the
+      // context's allocation root, just like environments with a saved root.
+      worktreeBaseDir:
+        overrides.worktreePath &&
+        tempDirs.some(
+          (directory) =>
+            overrides.worktreePath === directory ||
+            overrides.worktreePath?.startsWith(`${directory}${path.sep}`),
+        )
+          ? path.dirname(overrides.worktreePath)
+          : undefined,
       ...overrides,
     };
   }
@@ -672,6 +683,7 @@ export async function createCommandFixtures() {
         deleteMultiReviewWorkflowsByEnvironment: mock(async () => undefined),
         deleteBuildPipelinesByEnvironment: mock(async () => [] as string[]),
         deletePromptQueuesByEnvironment: mock(async () => [] as string[]),
+        // Synchronous in `StorageService`; environment deletion calls it unguarded.
         deleteAutoPipelineDraftsByEnvironment: mock(() => undefined),
         deleteComposeDraftsByEnvironment: mock(async () => undefined),
         deleteFileDraftsByEnvironment: mock(async () => undefined),

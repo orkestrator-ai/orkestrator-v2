@@ -18,6 +18,7 @@ import {
   Eye,
 } from "lucide-react";
 import { toast } from "sonner";
+import { hasEnvironmentBranchOwnership } from "@orkestrator/protocol/environment-branch";
 import {
   gitHubPullRequestUrl,
   type GitHubPullRequestDetail,
@@ -50,6 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { openInBrowser } from "@/lib/backend";
 import type { GitHubPullRequestStateAction } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePullRequestsStore } from "@/stores/pullRequestsStore";
 import {
   MERGE_METHOD_LABELS,
@@ -88,8 +90,15 @@ export function MergeButton({
   const [chosen, setChosen] = useState<GitHubPullRequestMergeMethod | null>(null);
   const method =
     chosen && allowed.includes(chosen) ? chosen : defaultMergeMethod(detail.allowedMergeMethods);
+  // Only a branch Orkestrator created for an environment may be deleted; a
+  // release branch such as `dev`, or any branch made by hand, is always kept.
+  // The backend applies the same rule whatever this sends.
+  const environments = useEnvironmentStore((state) => state.environments);
+  const canDeleteBranch =
+    !detail.isCrossRepository &&
+    hasEnvironmentBranchOwnership(pullRequest, detail.headRef, environments);
   const [deleteBranch, setDeleteBranch] = useState(true);
-  const shouldDeleteBranch = deleteBranch && !detail.isCrossRepository;
+  const shouldDeleteBranch = deleteBranch && canDeleteBranch;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [merging, setMerging] = useState(false);
   const blocked = mergeBlockedReason(detail);
@@ -185,13 +194,23 @@ export function MergeButton({
             <DropdownMenuSeparator />
             <DropdownMenuCheckboxItem
               checked={shouldDeleteBranch}
-              disabled={detail.isCrossRepository}
+              disabled={!canDeleteBranch}
               onCheckedChange={(checked) => setDeleteBranch(checked === true)}
               onSelect={(event) => event.preventDefault()}
               className="text-xs"
             >
               Delete branch after merge
             </DropdownMenuCheckboxItem>
+            {!canDeleteBranch && (
+              <p
+                className="px-2 pb-1.5 pl-8 text-[11px] leading-snug text-muted-foreground"
+                data-testid="merge-keeps-branch-reason"
+              >
+                {detail.isCrossRepository
+                  ? "Branches in a fork are never deleted."
+                  : "Only branches created for an environment can be deleted."}
+              </p>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -211,7 +230,9 @@ export function MergeButton({
                 <p>
                   {shouldDeleteBranch
                     ? `The ${detail.headRef} branch will be deleted after merging.`
-                    : "The head branch will be kept."}
+                    : canDeleteBranch || detail.isCrossRepository
+                      ? "The head branch will be kept."
+                      : `The ${detail.headRef} branch will be kept: environment ownership could not be verified.`}
                 </p>
                 {warning && (
                   <p className="flex items-start gap-1.5 text-amber-300">

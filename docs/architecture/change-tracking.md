@@ -136,6 +136,7 @@ Backend services (one composition root, `service.ts`):
 | `ChangeResourcePublisher` | `publisher.ts` | Outbox drain, coalesced delivery |
 | `EnvironmentChangeProjector` | `environment-projector.ts` | `environment-net` from the shared scan |
 | `TurnBoundaryService` | `turn-boundaries.ts` | Pre-dispatch starts, segments, end captures |
+| `TurnEndRecoveryScheduler` | `end-recovery.ts` | Background retries of turn end captures that timed out |
 | `DiffBodyService` | `diff-bodies.ts` | Immutable bodies, live detail resolution |
 | `ChangeHandoffSerializer` | `handoff.ts` | Agent handoff text |
 | `ChangeRestoreService` | `restore.ts` | Conditional restore |
@@ -320,6 +321,28 @@ every capture has a new snapshot id, so a publish would store the whole file
 list again. Its snapshot row is unreferenced and goes with the retention sweep
 after `orphanGraceMs`. A turn's end always publishes.
 
+The end capture has `finalizationDeadlineMs` (30 s). A turn that wrote tens of
+thousands of files can run past it on a busy host; it then ends on time as
+`end-unavailable` (reason `capture-timeout`) with no after endpoint, so it has
+nothing to restore. `TurnEndRecoveryScheduler` (`end-recovery.ts`, todo 7310, retired)
+retries that capture in the background, without holding the turn: purpose
+`turn-recovery` (progress priority), `endRecoveryDelayMs` (5 s) after the turn
+ended and between attempts, each with `endRecoveryDeadlineMs` (5 min), at most
+`endRecoveryAttempts` (3) times. A publish appends a superseding final
+measurement whose after boundary is `later-recovery` and whose reason is
+`end-captured-later`, as the late settlement of an interrupted turn does; the
+turn row keeps its unavailable end. The retry runs only while the turn's known
+writers have settled (a turn whose writers were unresolved is offered again
+when they settle) and gives way for good once a later turn of the thread, or
+any other turn on the worktree, has run since the turn ended, whose writes a
+capture would now absorb. It re-checks that inside the publication
+transaction, and a new turn's start cancels a running retry instead of queuing
+behind it. When every attempt runs out the turn's reason becomes
+`capture-timeout-unrecovered`; a restart re-offers the newest turns still at
+`capture-timeout`. Edits made outside any turn between the end and the retry
+are still absorbed; the `later-recovery` boundary says so, and restore stays
+conditional on each file still holding the measured after-state.
+
 A thread moving to a different worktree lineage opens a new segment; segments
 are never compared to each other as one history.
 
@@ -406,7 +429,9 @@ captures; 10 s foreground boundary; 100,000 candidates; 16 MiB/file and
 coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 2,000 file rows per measurement; 1 GiB soft / 4 GiB hard snapshot
 storage; 30-day archived retention (a maximum subject to quota, not a
 guarantee); restore preflight 5 ms per planned path, at least 10 s and at most
-5 min. Capture policy changes affect future work; the archive window applies
+5 min; restore checkpoint and result captures the larger of that and the 30 s
+finalization deadline; three background end-capture retries, 5 s apart, 5 min
+each. Capture policy changes affect future work; the archive window applies
 to existing history on the next retention pass.
 
 ## Restore
@@ -426,7 +451,7 @@ turn, so its deadline grows with the plan: 5 ms per path with a 10 s floor
 and a 5 minute ceiling (`restorePreflightDeadlineMs`). A preflight that still
 runs out answers `changes.restore.runtime-unavailable`, never a partly checked
 plan. Measured on 2026-11-06 on an isolated profile, every plan a delete per
-file ([todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md)):
+file (todo 4960, retired 2026-11-10; its per-run tables are in Git history):
 
 | Files | Quieter host | Load average 50 to 63 on 18 cores |
 | --- | --- | --- |
@@ -436,8 +461,161 @@ file ([todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md)):
 
 Past about 20,000 files under that load, and at 60,000 written at once on a
 quieter host, the turn's own end capture ran out of its 30 s deadline, so the
-turn had no restorable measurement
-([todo 7310](../todo/cross-cutting/7310-bulk-turn-restore-limits.md)).
+turn had no restorable measurement. Such a turn is now captured again in the
+background (see [Turn and thread boundaries](#turn-and-thread-boundaries)).
+
+The apply's recovery checkpoint and its result capture used a fixed 10 s; a
+checkpoint that does not publish refuses the apply with
+`changes.restore.checkpoint-unavailable` before writing anything. The
+checkpoint is what makes an apply recoverable, and the user is already
+waiting on an explicit action, so both now get the larger of the turn
+finalization deadline (30 s) and the preview's plan-scaled deadline
+(`restoreCaptureDeadlineMs`). The apply writes through one conditional-write
+helper process per batch of up to 500 groups (a file, or both ends of a
+rename) and 32 MiB of content (`RESTORE_WRITE_BATCH_GROUPS`,
+`RESTORE_WRITE_BATCH_BYTES`); see [Batched apply](#batched-apply) below.
+
+`bun scripts/benchmark-change-tracking.ts --only=restore-apply` runs one turn
+that writes `--restore-files` new files through the whole service on a real
+repository, then times the preview and apply end to end (each plan a delete
+per file). On 2026-11-09 on a shared 16-core Linux host at a load average of
+48 to 60, with the worktree on disk, not tmpfs (todo 7310, retired):
+
+| Files | Turn end | Preview | Checkpoint (deadline) | Apply | Restored |
+| --- | --- | --- | --- | --- | --- |
+| 10,000 | end capture published, 12.5 s | 2.1 s | 0.6 s warm (50 s) | 390.7 s, 39 ms per file | 10,000 of 10,000 |
+| 20,000 | end capture published, 18.0 s | 4.7 s | 1.2 s warm (100 s) | 847.9 s, 42 ms per file | 20,000 of 20,000 |
+| 10,000, finalization deadline cut to 2 s, stat cache dropped before the apply | timed out at 2.0 s; background recovery published in 6.9 s | 1.0 s | 3.3 s cold (50 s) | 442.4 s, 44 ms per file | 10,000 of 10,000 |
+
+A warm checkpoint follows a published end capture, whose stat cache it
+reuses. A cold one (`--restore-cold`, as after the idle owner was swept)
+read and hashed every generated file: 3.3 s for 10,000 files is a third of the
+old fixed 10 s, so 20,000 or more under heavier load would have been refused.
+`--restore-finalization-ms` shortens the turn's end deadline to exercise the
+recovery; at the real 30 s both sizes published on this host this time,
+although 4960 saw 20,000 time out at a load average of 57 to 63.
+
+The same restores were then driven end to end on 2026-11-10 on an isolated
+`dev:test` profile (`--fixture --no-agent-credentials --agent-platforms claude
+--headless`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`) on the same 16-core
+host, by the 4960 method: a new local fixture environment per size, a real
+Claude CLI and bridge answered by the loopback model in
+`e2e/agent-testing/fake-anthropic-model.ts` (no billed turn), N small files
+written under `generated/` while the model held the turn, then
+`changes_prepare_restore` and `changes_apply_restore` through the browser
+gateway, each timed from the driver. Every plan was N deletes. Capture times
+come from the profile's `change_capture_attempts` rows; load is the one-minute
+load average from `/proc/loadavg`.
+
+| Files | Load (at apply → after) | Turn end capture | Preview | Checkpoint (deadline) | Apply | Restored |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 53 → 55 | published, 2.8 s | 0.75 s | published, 0.53 s (50 s) | 304.9 s, 30 ms per file | 10,000 of 10,000 |
+| 20,000 | 57 → 8, the host emptied during the apply | published, 8.1 s | 1.9 s | published, 0.37 s (100 s) | 264.2 s, 13 ms per file | 20,000 of 20,000 |
+| 10,000 | 8 → 10 | published, 1.0 s | 0.61 s | published, 0.17 s (50 s) | 144.2 s, 14 ms per file | 10,000 of 10,000 |
+| 20,000 | 2 → 1 | published, 1.3 s | 0.93 s | published, 0.43 s (100 s) | 210.9 s, 11 ms per file | 20,000 of 20,000 |
+| 10,000 | 1 → 46, the host filled during the apply | published, 0.56 s | 0.66 s | published, 0.49 s (50 s) | 189.1 s, 19 ms per file | 10,000 of 10,000 |
+
+Every checkpoint and result capture published, warm, in under a second, and
+no restored file was left behind in the worktree. The restore-result capture
+took 0.1 to 0.16 s. The gateway held the 305 s apply request open and
+answered it; whether the restore dialog or the desktop IPC path waits as long
+was todo 7555 task 2, answered under [Batched apply](#batched-apply).
+At a load of 1 to 10 the apply still cost 11 to 14 ms per file, so most of
+the busy-host 30 to 40 ms is the per-file helper process, not only load.
+
+A client that reads `changes_get_history` the moment a bulk turn's lifecycle
+turns `finalized` can still be given the turn's provisional measurement: the
+final one and its selection are written by the publication that follows the
+end capture, 0.9 to 1.4 s later at 10,000 and 20,000 files on the quiet host.
+A preview of the provisional measurement answers
+`changes.restore.no-retained-endpoints`; re-reading the history gives the
+final one, which restores. The restore dialog is gated by the projection's
+`restore` action instead. [Todo 7556](../todo/cross-cutting/7556-history-names-provisional-measurement-after-finalize.md)
+owns the gap.
+
+Those apply times are from before the batched apply below.
+
+### Batched apply
+
+Until todo 7555 (retired 2026-11-10) the apply started one helper process per
+file, which cost 11 to 14 ms per file on a quiet host and 30 to 40 ms under
+load. The helper now reads a batch and answers one line per action, in order,
+written synchronously as each action finishes. Nothing about a single write
+changed: each action pins the root and every ancestor directory, re-checks
+the destination's content and mode immediately before it renames a temporary
+sibling over it, and a group stops at its first write that is not applied, so
+a rename's second end is never touched when the first failed. Around the
+helper:
+
+- Every endpoint of every group in a batch is described before any write in
+  the batch; a group whose destination moved since the preview is skipped
+  whole, as before. Host destination reads run one path at a time and discard
+  file bodies before retaining precondition metadata, bounding destination-body
+  retention independently of the 500-group write batch. Container destination
+  checks remain batched because they return metadata only.
+- The owner fence is asserted before each helper call, so an owner replaced
+  mid-apply stops at the next batch instead of the next file.
+- A helper that dies part-way has already reported every write it finished;
+  an action without a result line counts as failed, and the result capture
+  records what is really on disk (`restore-apply-batch.test.ts` kills the
+  helper before its third delete and checks the outcome names exactly the
+  first two).
+
+`bun scripts/benchmark-change-tracking.ts --only=restore-apply --restore-cold`
+on the same 16-core Linux host on 2026-11-10, worktree on disk, the stat cache
+dropped before the apply (`checkpointStatCache: cold`, as after an idle owner
+was swept). Each row restored every file:
+
+| Files | Code | Load (at apply → after) | Turn end capture | Preview | Cold checkpoint (deadline) | Apply | Writes per file |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | one helper per file | 1.8 → 3.6 | 3.3 s | 0.49 s | 1.25 s (50 s) | 121.0 s | 12.0 ms |
+| 20,000 | one helper per file | 3.3 → 4.7 | 7.3 s | 1.0 s | 2.1 s (100 s) | 252.1 s | 12.5 ms |
+| 10,000 | batched | 11.9 → 17.1 | 7.2 s | 1.6 s | 2.2 s (50 s) | 8.2 s | 0.54 ms |
+| 20,000 | batched | 36.6 → 39.2 | 22.6 s | 4.2 s | 4.8 s (100 s) | 14.6 s | 0.48 ms |
+
+The first two rows are the quiet-host cold checkpoint 7310 left open: 1.25 s
+and 2.1 s, well inside the 50 s and 100 s deadlines. The batched rows ran
+while other work, this change's own lint run included, filled the host, and
+still wrote 22 to 26 times faster per file than the quiet per-file run.
+
+Driven through the app the same day: an isolated `dev:test` profile
+(`--fixture --no-agent-credentials --agent-platforms claude --headless`,
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), a real Claude CLI and bridge
+answered by the loopback model, N files written under `generated/` while the
+model held the turn, then the turn's restore button under "Turn changes",
+the preview dialog and its Restore button in Chromium, timed from the click
+until the dialog reported the outcome
+(`e2e/agent-testing/restore-apply-bulk-live.spec.ts`, opt-in with
+`ORKESTRATOR_AGENT_TEST_LIVE_BULK_RESTORE=1`). Capture times come from the
+profile's `change_capture_attempts` rows:
+
+| Files | Load at apply | Turn end capture | Preview (dialog shown) | Checkpoint | Apply (outcome shown) | Restored |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 52.5 | published, 4.0 s | 2.1 s | 0.20 s | 3.7 s | 10,000 of 10,000 |
+| 20,000 | 54.2 | published, 8.7 s | 4.0 s | 0.43 s | 6.8 s | 20,000 of 20,000 |
+| 60,000 | 55.9 | timed out (`capture-timeout`); background recovery published in 6.8 s | 11.5 s | 1.75 s (300 s) | 22.5 s | 60,000 of 60,000 |
+
+The 60,000-file turn is a live end-capture timeout that recovered: its turn
+is recorded `end-unavailable` with reason `end-captured-later`, the restore
+was offered once the recovery published (about 49 s after the answer appeared),
+and the restore from the recovered measurement removed every file. The
+preview dialog lists every planned file (60,000 rows) and stayed usable.
+
+Client waits. `changes_apply_restore` is still one request that answers when
+the apply is done. The browser gateway has no request timeout of its own and
+held a 305 s apply open under 7310. On the desktop, the renderer's
+`orkestrator:invoke` reaches the backend through the main process's built-in
+`fetch` with no signal (`BackendProcess.request` in
+`apps/desktop/electron/backend-process.ts`), so undici's default 300 s headers
+timeout applies: a loopback request whose response took 310 s failed after
+301.7 s with `UND_ERR_HEADERS_TIMEOUT` (Node 26.13, undici 8.12; Electron's
+own runtime and window were not driven, since this host runs headless). With
+the batched apply that limit is far away: 60,000 files took 22.5 s at a load
+of 56. A dialog whose request fails says the result is unknown and keeps the
+preview, and pressing Restore again sends the same idempotency key, which
+answers `changes.restore.in-progress` while the apply runs and the recorded
+outcome after it. Returning an operation id at once and polling it was
+therefore not built.
 
 ## Retention and backup
 
@@ -515,7 +693,15 @@ logged and left to the retention pass. The retention pass (two minutes after
 start, then hourly) prunes any other backlog the same way: it walks the owner
 index 512 owners a page (`supersededOwnersPage`, which reads only that covering
 index), yielding between pages, and prunes each owner with more than it keeps
-through its own index range. It then releases free pages in 128-page steps,
+through its own index range. A finished turn goes further: its turn stays for
+the whole archive window, but once it has been finished for
+`FINISHED_TURN_SUPERSEDED_GRACE_MS` (15 minutes) the pass keeps only its newest
+measurement and any a selection, restore or reader holds
+(`finishedTurnOwnersPage`, which reads the owner index for `turn` owners and
+each boundary row by key). Before this a bulk turn kept its superseded
+provisional list, up to 2,000 rows nothing selects again, beside the final one
+for 30 days. A turn whose end recovery is pending is left alone, since a
+recovery capture can still publish for it. It then releases free pages in 128-page steps,
 whoever freed them. One query over every measurement used to find the backlog;
 at 85,000 measurements it took 24 s with a cold page cache, once per batch
 ([0741](../todo/cross-cutting/0741-backend-responsiveness-under-load.md) task 6). Existing databases created
@@ -690,8 +876,68 @@ retention pass" include the backlog the hourly pass would clear.
 The 12,000 is the bound: three owners (turn, segment, environment), two kept
 measurements each, 2,000 rows each. It does not grow with the bulk size. At
 58,051 files two provisional passes published nothing on either side; why was
-not investigated. Proof on a real busy profile is
-[todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md).
+not investigated. The busy live soak below is the proof on a real profile.
+
+### Busy live soak of the row cap (2026-11-10)
+
+Todo 4960 (retired 2026-11-10) soaked the cap on the busy profile of
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 1, long enough to include the hourly retention pass. Its pass criterion
+was row count per owner and scope against the bound (two measurements of at
+most 2,000 rows), not the report's whole-database target of under 100 MB,
+which depends on how many turns a history holds.
+
+Method: `scripts/recurring-live-ab.ts --busy-rounds 50 --busy-clients 0,1,2
+--busy-environments 10 --busy-burst-files 2500 --busy-turn-files 2500
+--fixture-environments local --agent-platforms pi --keep-profiles` on a
+headless `dev:test` profile with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, on
+beelink (Linux, 16 cores) on `main` at `c98b20e6f` with this branch's
+finished-turn pruning (above) and driver changes applied, every model call on the driver's loopback fake model. A
+throwaway sampler read the profile's `change-tracking.sqlite` read-only once a
+minute (rows per owner and scope, page and free-list counts, `dbstat` every
+five minutes) and the `/metrics` retention block. The host's load average was
+about 13 at the start and 50 to 64 for most of the run, partly from the run.
+
+The busy phase ran 150 rounds over 97 minutes: every round wrote 2,500 files
+into each of 10 environments and removed them, wrote 2,500 files while the
+held turn ran (147 rounds), and kept 443 turns in all. Each round left two bulk
+turns (the held one, and the queued one, which was still running when the
+files were removed and so measured 2,500 deletions).
+
+| Sample | File | File rows | Measurements (capped) | Turns | Note |
+| --- | --- | --- | --- | --- | --- |
+| 09:46, 11 min in | 40.7 MiB | 156,318 | 225 (76) | 71 | |
+| 10:34:43 | 151.3 MiB | 555,456 | 928 (272) | 325 | peak, before the hourly pass |
+| 10:35:44 | 91.9 MiB | 328,916 | 822 (162) | 329 | the pass at 10:35:17 pruned 117 measurements, 232,540 rows |
+| 11:13, end | 133.9 MiB | 478,916 | 1,129 (237) | 443 | |
+
+- **Per owner and scope the bound held at all 97 samples**: at most 4,000 file
+  rows (two measurements of 2,000), and no measurement over 2,000 rows. One
+  sample caught an environment with a third, transient measurement inside
+  that bound. Ten environments together held 16,726 to 40,000 rows, two
+  thread segments at most 4,000.
+- **The total grows with bulk turns, by design.** A finished turn keeps its
+  measurement for the 30-day archive window, so every turn past the cap costs
+  about 2,000 rows. The file row and its primary-key index take about 270
+  bytes, so a bulk turn costs about 0.5 MiB for 30 days; file rows and that
+  index were 92 to 95% of the file.
+- **What the soak fixed.** The 2026-11-10 trial run before it showed each
+  finished bulk turn keeping its superseded provisional list beside the final
+  one, 4,000 rows instead of 2,000, for the whole window. The hourly pass now
+  prunes a finished turn to its newest and selected measurement after
+  15 minutes (above); in the soak that pass removed 232,540 rows and the file
+  shrank by 59 MiB.
+
+What it unblocks: [4961](../todo/cross-cutting/4961-measurement-directory-rows.md)
+now has its measurement (capped lists are common under bulk work, and they
+dominate the ledger's size), and
+[4962](../todo/cross-cutting/4962-provisional-capture-spacing.md) task 1 no
+longer waits on it and has a first count from this run.
+
+The soak also found, outside the cap: Multi Review launches refused after the
+ninth round because each review left its tab open (a driver fault, fixed: the
+busy driver closes each finished review's tabs), and backend event-loop stalls
+that grew over the run ([7562](../todo/cross-cutting/7562-busy-soak-event-loop-stall-growth.md)).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose

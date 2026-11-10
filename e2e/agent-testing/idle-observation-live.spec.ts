@@ -62,7 +62,11 @@
  * would: each case, sub-agents and approvals included, gets the tool call it
  * asks for. Pi runs the same way against `idle-observation-fake-pi.ts`, added
  * to the profile's own Pi `models.json` (todo 0049 task 7); Pi needs no
- * credential source.
+ * credential source. OpenCode reaches the same endpoint through a custom
+ * provider merged into the profile's own global `opencode.json`
+ * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
+ * so no turn or title request can reach a hosted model; it needs no
+ * credential source either.
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -93,6 +97,8 @@ import {
   startLocalFakeModel,
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
+import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
+import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
 import {
   requireRecoveredBackoff,
   backgroundOutputEvidence,
@@ -101,12 +107,14 @@ import {
   freshToolResults,
   freshToolStates,
   gapHistogram,
+  discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
   selectedCases,
   shellOutputContainsMarker,
   type CaseRecord,
   type IdleObservationCase,
+  type DiscoveryRenewalCounts,
   type InvalidationCounts,
 } from "./idle-observation-live-support";
 import { sidebarActivity } from "./sidebar-activity";
@@ -482,8 +490,12 @@ test.describe("live idle observation", () => {
       expect(status.status, `profile "${profile}" is not running`).toBe("ready");
 
       test.skip(
-        FAKE_MODELS && platform !== "claude" && platform !== "codex" && platform !== "pi",
-        "the loopback models stand in for Claude, Codex and Pi only",
+        FAKE_MODELS &&
+          platform !== "claude" &&
+          platform !== "codex" &&
+          platform !== "pi" &&
+          platform !== "opencode",
+        "the loopback models stand in for Claude, Codex, Pi and OpenCode only",
       );
       test.skip(
         IN_CONTAINER && platform !== "claude",
@@ -519,6 +531,8 @@ test.describe("live idle observation", () => {
       let environmentName = "";
       let containerId: string | null = null;
       const fakeModels: FakeModelHandle[] = [];
+      /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
+      let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -539,12 +553,19 @@ test.describe("live idle observation", () => {
         if (FAKE_MODELS && !IN_CONTAINER) {
           expect(status.dataDir, "dev:status names no data directory").toBeTruthy();
           const fake = await startLocalFakeModel(
-            platform as "claude" | "codex" | "pi",
+            platform as "claude" | "codex" | "pi" | "opencode",
             status.dataDir!,
           );
           fakeModels.push(fake);
           summary.fakeModelOrigin = fake.origin;
           progress("loopback model started");
+          if (platform === "opencode") {
+            // A connected provider outside the allowlist does not count as signed in.
+            restoreOpenCodeAllowlist = await allowOpenCodeFakeProvider(
+              (command, args) => client.invoke(command, args),
+              PI_FAKE_PROVIDER,
+            );
+          }
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -783,13 +804,17 @@ test.describe("live idle observation", () => {
             metrics?: {
               kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
             };
-            sessionInvalidations?: { byScope?: InvalidationCounts };
+            sessionInvalidations?: {
+              byScope?: InvalidationCounts;
+              discoveryRenewals?: DiscoveryRenewalCounts;
+            };
           } | null;
           const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
           return {
             skipped: sweep?.cacheHits ?? 0,
             read: sweep?.cacheMisses ?? 0,
             invalidations: diagnostics?.sessionInvalidations?.byScope,
+            discoveryRenewals: diagnostics?.sessionInvalidations?.discoveryRenewals,
           };
         };
 
@@ -1612,9 +1637,16 @@ test.describe("live idle observation", () => {
             // 20 s command has surely ended, with no further turn.
             const endedBy = sentAt + 30_000 - Date.now();
             if (endedBy > 0) await sleep(endedBy);
+            const afterEnd = freshToolStates((await projection())?.messages ?? [], before);
             record.notes.push(
-              `tool calls after the command ended: ${freshToolStates((await projection())?.messages ?? [], before).join(", ") || "none"}`,
+              `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
+            // Nothing reports the end of a command the turn left running, so its
+            // card must not keep claiming to run on an idle thread (to-do 7522).
+            expect(
+              afterEnd.filter((state) => state.endsWith(":pending")),
+              "a tool call still reads running on the idle thread",
+            ).toEqual([]);
             record.notes.push(
               `late output in a tool result: ${await freshToolOutputContains(before, marker)}`,
             );
@@ -1840,6 +1872,16 @@ test.describe("live idle observation", () => {
           );
           record.timings.idleInvalidations = invalidations.total ?? 0;
           record.notes.push(`idle invalidations by cause: ${JSON.stringify(invalidations)}`);
+          // Todo 7530: which discovery section announced, and which paths moved.
+          record.notes.push(
+            `idle discovery announcements by section: ${JSON.stringify(
+              discoveryRenewalDelta(
+                sweepsBefore.discoveryRenewals,
+                sweepsAfter.discoveryRenewals,
+                platform,
+              ),
+            )}`,
+          );
           await expect
             .poll(runtimeState, { timeout: 40_000, intervals: [500] })
             .not.toBeUndefined();
@@ -1902,6 +1944,12 @@ test.describe("live idle observation", () => {
           if (environmentId) {
             await client.invoke("stop_environment", { environmentId }).catch(() => undefined);
             await client.invoke("delete_environment", { environmentId }).catch(() => undefined);
+          }
+          if (restoreOpenCodeAllowlist) {
+            await restoreOpenCodeAllowlist().catch((error: unknown) => {
+              summary.allowlistRestoreError = String(error).slice(0, 300);
+              writeSummary();
+            });
           }
           await client.context.close().catch(() => undefined);
         });

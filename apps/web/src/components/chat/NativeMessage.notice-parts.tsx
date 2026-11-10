@@ -56,9 +56,7 @@ export function CompactionPart({
       >
         {label}
       </span>
-      {detail ? (
-        <span className="truncate text-[10px] text-muted-foreground/70">{detail}</span>
-      ) : null}
+      {detail ? <span className="truncate text-[11px] text-muted-foreground">{detail}</span> : null}
     </div>
   );
 
@@ -78,7 +76,7 @@ export function CompactionPart({
         <div className="h-px flex-1 bg-border/60" />
         <CollapsibleTrigger className="flex min-w-0 items-center gap-2 rounded px-1 py-0.5 hover:bg-elevated-hover">
           {header}
-          <span className="shrink-0 text-[10px] text-muted-foreground/70">
+          <span className="shrink-0 text-[11px] text-muted-foreground">
             {failed
               ? isOpen
                 ? "Hide details"
@@ -130,9 +128,7 @@ export function RetryPart({ part }: { part: Extract<NativeMessagePart, { type: "
         aria-hidden="true"
       />
       <span className="shrink-0">{label}</span>
-      {part.content ? (
-        <span className="truncate text-muted-foreground/70">{part.content}</span>
-      ) : null}
+      {part.content ? <span className="truncate text-muted-foreground">{part.content}</span> : null}
     </div>
   );
 }
@@ -212,7 +208,7 @@ export function ImagePart({
   const hasBytes = Boolean(part.fileUrl || part.detailRef);
   return (
     <div className="my-1 space-y-1">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
+      <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {IMAGE_SOURCE_LABELS[source]}
       </div>
       <FilePart

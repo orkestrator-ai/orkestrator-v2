@@ -37,6 +37,7 @@ import type {
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -68,6 +69,7 @@ import {
 import { HttpBridgeInteractionAdapter } from "./interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
 import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
+import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
 import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage-cache.js";
 import {
@@ -101,6 +103,7 @@ import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
+import { readBridgeSessionBranches } from "./session-branches.js";
 import { HttpBridgeSteerQualification } from "./steer-qualification.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
@@ -359,6 +362,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.agent,
       await resolvePromptAttachments(options, this.stageImages),
     );
+    // Agent-test profiles only (to-do 0050 task 3): a spec can stop the
+    // backend here, after the caller journaled the attempt and before the
+    // request leaves. Production installs no hold, so this is `undefined`.
+    const holdDetail = { agent: this.agent, sessionId, requestId: options.requestId };
+    const heldBeforeSend = promptDispatchHold("before-send", holdDetail);
+    if (heldBeforeSend) await heldBeforeSend;
     let response: Response;
     try {
       response = await bridgeFetch(
@@ -438,6 +447,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
     }
+    // The bridge accepted; the caller has not recorded it yet. Same seam.
+    const heldAfterResponse = promptDispatchHold("after-response", holdDetail);
+    if (heldAfterResponse) await heldAfterResponse;
   }
 
   /**
@@ -1282,6 +1294,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
+  async listSessionBranches(sessionId: string): Promise<NativeAgentSessionBranchList> {
+    // Only Pi keeps branches inside one conversation.
+    if (this.agent !== "pi") {
+      throw new PromptRejectedError(`${this.agent} conversations have no branches`);
+    }
+    return readBridgeSessionBranches(this.connection, this.fetchImpl, sessionId);
+  }
+
   async performSessionAction(
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
@@ -1440,6 +1460,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async abort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/abort`,
@@ -1450,6 +1471,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async hardAbort(sessionId: string): Promise<void> {
+    cancelPromptDispatchHold(this.agent, sessionId);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/hard-abort`,

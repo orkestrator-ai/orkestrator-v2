@@ -12,6 +12,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "git-mirror.mount-withheld":
         "A new restricted container gets no project Git mirror because its firewall would not let it reach the project's remote, so it cannot read what the remote serves through the mirror either.",
       "git-mirror.refreshed": "A project's Git mirror was built or updated.",
+      "git-mirror.access-changed":
+        "A project's Git mirror was withdrawn because containers are now given a different credential (another access kind, or a token acting as another or an unreadable account), so no reader keeps what it could not fetch itself.",
       "git-mirror.seeded":
         "A project's Git mirror was built from its host checkout and only what the remote added to it.",
       "git-mirror.seed-skipped":
@@ -31,6 +33,12 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "project-seed.refused":
         "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
+      "opencode.listener-replaced":
+        "The process on a container's OpenCode port (`provider`: `opencode` or `opencode2`) is not the server the backend launched and recorded, so its password was withheld and the next start replaces it. `stage` is `request` when the re-check after a refused connection or an unexpected answer found it (to-do 7550); that connection then sends nothing more.",
+      "opencode.project-config-too-large":
+        "A checkout's opencode.json or opencode.jsonc was larger than the limit, so a launched OpenCode server does not read it. File name only.",
+      "opencode.project-config-filtered":
+        "Values were left out of a checkout's OpenCode configuration before a launched server reads it (to-do 7550): counts of plugin keys, `{env:}` and `{file:}` references and dropped instructions (including separate instructionGlob and instructionUrl counts), and the names of files that were not a JSONC object. Never values.",
       "log-driver.unbounded":
         "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":
@@ -81,6 +89,20 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
           "A bridge process was launched in a container, for the first time there or as a relaunch; `provider` names it. A relaunch keeps the run before it in the previous log.",
         essential: true,
         fields: { provider: "label", containerPort: "number" },
+      },
+      "bridge.listener-refused": {
+        description:
+          "The socket listening on a container bridge's port is not the one the bridge the backend started opened (to-do 7250), so its token is not handed out and the next start replaces it. `reason` is a fixed label: `different-socket`, `several-sockets`, `pending` (a start has not recorded its bridge yet, or failed before it did) or `scan-incomplete`.",
+        essential: true,
+        fields: { provider: "label", reason: "label" },
+      },
+      "bridge.listener-adopted":
+        "A running container bridge had no listener record, because a backend from before the record started it, so the socket on its port was recorded as the bridge's; `provider` names it.",
+      "bridge.listener-unrecorded": {
+        description:
+          "A bridge the backend just launched could not be recorded as its port's listener, for the fixed `reason` given (`no-listener`, `several-sockets`, `launch-exited` or `scan-incomplete`); what listens on the port is stopped and the start fails.",
+        essential: true,
+        fields: { provider: "label", reason: "label" },
       },
     },
   },

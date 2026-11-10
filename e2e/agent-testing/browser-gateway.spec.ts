@@ -1,3 +1,4 @@
+import { waitForGatewayRenderer } from "./gateway-renderer-ready";
 import { ensureProjectExpanded } from "./sidebar-project";
 import {
   newReviewValidationRun,
@@ -33,6 +34,7 @@ import type {
 } from "@orkestrator/protocol/multi-review";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { terminalVisibleText } from "./terminal-visible-text";
 
 type Status = {
   status: string;
@@ -116,6 +118,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
   expect(response?.ok() ?? false).toBe(true);
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
   expect(page.url()).not.toContain("code=");
+  await waitForGatewayRenderer(page);
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const invokeResponse = await page.request.post(
       new URL("/__orkestrator/invoke", status.browserUrl!).href,
@@ -127,15 +130,6 @@ async function authenticatedInvoke(page: Page, status: Status) {
     return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
-
-/** Terminal output as text, without the escape sequences a shell interleaves (`PS0`, prompts). */
-const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 // This host-specific notice can arrive after login, on top of any surface.
 // Dismiss it through its public Close control so local-worktree flows run even
@@ -371,7 +365,10 @@ test.describe("host path browsing", () => {
           ).toHaveValue(socketPath);
           await settings.getByRole("textbox", { name: "SSH agent socket", exact: true }).fill("");
           await settings.getByRole("button", { name: "Close settings" }).click();
-          if (pass === "initial") await page.reload({ waitUntil: "domcontentloaded" });
+          if (pass === "initial") {
+            await page.reload({ waitUntil: "domcontentloaded" });
+            await waitForGatewayRenderer(page);
+          }
         }
       } finally {
         await new Promise<void>((resolve, reject) =>
@@ -512,7 +509,7 @@ test("project Home retains background work and unread attention beneath the boar
         const snapshot = await invoke<{ output: string }>("get_terminal_output_snapshot", {
           sessionId: terminal.sessionId,
         });
-        return visibleText(snapshot.output)
+        return terminalVisibleText(snapshot.output)
           .split("\n")
           .some((line) => line === "home-background-finished");
       })
@@ -2871,6 +2868,7 @@ for (const width of [1280, 390]) {
     expect(fixture).toBeTruthy();
     await page.setViewportSize({ width, height: 900 });
     const openUpdates = async () => {
+      await waitForGatewayRenderer(page);
       const globalSettings = page.getByRole("button", { name: "Global settings", exact: true });
       if (width < 768) {
         await expect(

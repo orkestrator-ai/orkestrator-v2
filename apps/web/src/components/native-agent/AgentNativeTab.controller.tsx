@@ -93,6 +93,10 @@ import {
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
 import {
+  useJoinedMessageActions,
+  useMessageRewind,
+} from "@/components/native-agent/MessageRewindAction";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
@@ -195,6 +199,7 @@ import {
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useShallow } from "zustand/react/shallow";
+import { EnvironmentContainmentTag } from "./EnvironmentContainmentTag";
 import {
   nativeComposeDraft,
   nativeComposePersistence,
@@ -2681,6 +2686,7 @@ export function SharedNativeAgentController({
           ...(entry.parentId ? { parentId: entry.parentId } : {}),
           ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
           ...(entry.archived ? { archived: true } : {}),
+          ...(entry.archivable === false ? { archivable: false } : {}),
         }),
       ),
     [canArchiveResumable, listResumable],
@@ -2966,12 +2972,54 @@ export function SharedNativeAgentController({
     disabled: forkInFlight || phase === "running" || phase === "recovering",
     onFork: handleForkAction,
   });
+  const rewindEnabled =
+    Boolean(adapter.capabilities.actions?.rewindMessages) &&
+    hasEnvironmentRecord &&
+    Boolean(projection?.sessionId);
+  const composerHasDraft = useCallback(() => {
+    const current = composeDrafts.getState().drafts.get(sessionKey);
+    return Boolean(
+      current?.text.trim() ||
+      current?.attachments.length ||
+      current?.annotations?.length ||
+      current?.mentions.length,
+    );
+  }, [composeDrafts, sessionKey]);
+  const restoreRewoundDraft = useCallback(
+    (restored: { text: string; annotations: TranscriptAnnotation[] }) => {
+      updateDraft(sessionKey, {
+        text: restored.text,
+        mentions: [],
+        attachments: [],
+        annotations: restored.annotations,
+      });
+    },
+    [sessionKey, updateDraft],
+  );
+  const messageRewind = useMessageRewind({
+    platform,
+    agentLabel: label,
+    enabled: rewindEnabled,
+    messages: handoff.displayMessages,
+    responseInProgress: isTurnActive,
+    disabled: forkInFlight || phase === "running" || phase === "recovering",
+    performAction,
+    composerHasDraft,
+    restoreDraft: restoreRewoundDraft,
+  });
+  const { renderRewindAction } = messageRewind;
+  const joinMessageActions = useJoinedMessageActions();
+  const forkEnabled = Boolean(adapter.capabilities.fork);
   const renderMessageActions = useCallback(
     (message: NativeMessage) => {
-      const planned = forkPlan.get(message.id);
-      return planned ? renderForkAction(message.id, planned.kind) : null;
+      const planned = forkEnabled ? forkPlan.get(message.id) : undefined;
+      return joinMessageActions(
+        message.id,
+        planned ? renderForkAction(message.id, planned.kind) : null,
+        renderRewindAction(message.id),
+      );
     },
-    [forkPlan, renderForkAction],
+    [forkEnabled, forkPlan, joinMessageActions, renderForkAction, renderRewindAction],
   );
   const latestIsPlanReview =
     latestAssistantMessage?.planReview === true ||
@@ -4082,7 +4130,7 @@ export function SharedNativeAgentController({
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       onAnnotationCommentDone={focusComposerAfterAnnotationComment}
       messageActions={
-        adapter.capabilities.fork && hasEnvironmentRecord ? renderMessageActions : undefined
+        (forkEnabled || rewindEnabled) && hasEnvironmentRecord ? renderMessageActions : undefined
       }
       onResumeClick={
         adapter.capabilities.resume && hasEnvironmentRecord ? openResumeDialog : undefined
@@ -4090,6 +4138,7 @@ export function SharedNativeAgentController({
       resumeDialog={
         <>
           {resumeDialog}
+          {messageRewind.dialog}
           {goalsAvailable ? (
             <GoalPanel
               open={goalPanelOpen}
@@ -4340,6 +4389,7 @@ export function SharedNativeAgentController({
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"
+                    shortcut="Shift+Tab"
                     testId="native-mode-picker"
                     disabled={settingsLocked}
                     options={composer.modes.map((mode) =>
@@ -4353,6 +4403,7 @@ export function SharedNativeAgentController({
                 ) : !isReadOnlyCoordinator && composeExecutionProfiles.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"
+                    shortcut="Shift+Tab"
                     testId="native-execution-profile-picker"
                     disabled={settingsLocked}
                     options={composeExecutionProfiles.map((profile) =>
@@ -4609,6 +4660,7 @@ export function SharedNativeAgentController({
                   environmentId={data.environmentId}
                   logicalSessionKey={sessionKey}
                   turnActive={isTurnActive}
+                  containment={<EnvironmentContainmentTag environmentId={data.environmentId} />}
                 />
                 <div className="min-h-0 flex-1">{chatShell}</div>
                 {floatingNotices && agentPrompts.length > 0 ? (

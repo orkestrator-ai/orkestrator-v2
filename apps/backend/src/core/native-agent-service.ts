@@ -25,6 +25,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
+  NativeAgentSessionBranchList,
   NativeAgentToolDetails,
   Environment,
   PersistedNativeAgentSession,
@@ -73,6 +74,7 @@ import {
   stagePromptImages,
   AmbiguousPromptDispatchError,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
+  isTransientDispatchRefusal,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
   createHash,
@@ -169,7 +171,7 @@ import {
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
 import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
-import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
   PromptRejectedError,
@@ -1030,9 +1032,11 @@ export class NativeAgentService {
       ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
       : {};
     const research = this.options.openCodeCoordinatorResearch;
+    const listener = this.options.openCodeListenerRecheck;
     const optional = {
       ...signInGuidance,
       ...(research ? { openCodeCoordinatorResearch: research } : {}),
+      ...(listener ? { openCodeListenerRecheck: () => listener(environmentId) } : {}),
     };
     return typeof this.storage.getDataDir === "function"
       ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...optional }
@@ -1454,24 +1458,20 @@ export class NativeAgentService {
     const progressMs = Number.isFinite(launchReconcileIntervalMs)
       ? Math.max(20, launchReconcileIntervalMs as number)
       : 2_000;
-    if (this.options.keyedQueueScheduling ?? keyedSchedulingEnabled("native-queues")) {
-      this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
-        progressIntervalMs: progressMs,
-        // Safety discovery. A test that shortens the launch cadence keeps
-        // discovery at that cadence; production uses the 30 s interval.
-        discoveryIntervalMs:
-          this.options.queueDiscoveryIntervalMs ??
-          (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
-        ...(this.options.queueSchedulerClock
-          ? {
-              now: this.options.queueSchedulerClock.now,
-              timers: this.options.queueSchedulerClock.timers,
-            }
-          : {}),
-      });
-    } else {
-      this.launches.startTimer(progressMs, () => this.promptQueues.queueScan());
-    }
+    this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
+      progressIntervalMs: progressMs,
+      // Safety discovery. A test that shortens the launch cadence keeps
+      // discovery at that cadence; production uses the 30 s interval.
+      discoveryIntervalMs:
+        this.options.queueDiscoveryIntervalMs ??
+        (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
+      ...(this.options.queueSchedulerClock
+        ? {
+            now: this.options.queueSchedulerClock.now,
+            timers: this.options.queueSchedulerClock.timers,
+          }
+        : {}),
+    });
     await this.interactions.start();
   }
 
@@ -2126,17 +2126,12 @@ export class NativeAgentService {
       // Everything before the first dispatch attempt: session creation, the
       // manual-prompt claim. A normal send has no earlier record to preserve;
       // an explicit recovery retry does, and must leave it parked on failure.
-      if (!preserveExistingPending) {
-        await this.storage
-          .clearPendingNativeAgentDispatch(
-            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-            input.requestId,
-          )
-          .catch(() => false);
-      }
+      const cleared = !preserveExistingPending && (await this.clearRefusedDispatch(input));
+      const transient = cleared && isTransientDispatchRefusal(error);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
+        ...(transient ? { transient: true as const } : {}),
       };
     } finally {
       if (manualClaimSession) {
@@ -2191,10 +2186,14 @@ export class NativeAgentService {
         // The only thing refusing this prompt is an older dispatch nobody has
         // resolved. If the provider can prove that one landed, or that it never
         // will (retired), the block was stale and this prompt was never in
-        // conflict with anything.
+        // conflict with anything. The same holds when the record is already
+        // gone: a projection read settles parked dispatches in the background,
+        // and one that confirmed it between this refusal and the settle here
+        // leaves this settle nothing to clear.
         if (
           allowRecoveryRetry &&
-          (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
+          ((await this.settleAmbiguousDispatch(input, key, error.pendingRequestId)) ||
+            (await this.parkedDispatchReleased(key, error.pendingRequestId)))
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending, prepare);
         }
@@ -2240,15 +2239,36 @@ export class NativeAgentService {
       // A retry of an id the bridge has retired can never succeed, so the
       // parked record is resolved here too rather than left asking for one.
       const retired = error instanceof PromptRejectedError && error.requestIdRetired;
-      if (!preserveExistingPending || retired) {
-        await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
-      }
+      const cleared =
+        !preserveExistingPending || retired ? await this.clearRefusedDispatch(input) : false;
       if (retired) void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
         ...(retired ? { requestIdRetired: true as const } : {}),
+        // Nothing was sent and no record stays parked: a new id may succeed.
+        ...(!preserveExistingPending && cleared && isTransientDispatchRefusal(error)
+          ? { transient: true as const }
+          : {}),
       };
+    }
+  }
+
+  /** Reacquire the session fence before certifying cleanup; unreadable state is not retryable. */
+  private async clearRefusedDispatch(input: DispatchNativeAgentPromptInput): Promise<boolean> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    try {
+      return await this.promptQueues.withSessionWorkFence(input, async () => {
+        await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
+        const session = await this.storage.getNativeAgentSession(key);
+        return !session?.pendingDispatch && !session?.pendingSteer;
+      });
+    } catch {
+      return false;
     }
   }
 
@@ -2334,6 +2354,20 @@ export class NativeAgentService {
         : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Whether the parked dispatch `requestId` no longer blocks this session,
+   * because something else settled or discarded it after it refused a prompt.
+   * A failed read answers `false`: "I could not find out" keeps the block.
+   */
+  private async parkedDispatchReleased(key: string, requestId: string): Promise<boolean> {
+    try {
+      const session = await this.storage.getNativeAgentSession(key);
+      return session?.pendingDispatch?.requestId !== requestId;
+    } catch {
+      return false;
     }
   }
 
@@ -2602,6 +2636,10 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput & { action: NativeAgentSessionAction },
   ): Promise<NativeAgentSessionActionOutcome> {
     return this.sessionOperations.performProjectionAction(input);
+  }
+
+  listProjectionBranches(input: NativeAgentProjectionInput): Promise<NativeAgentSessionBranchList> {
+    return this.sessionOperations.listProjectionBranches(input);
   }
 
   performProjectionMcpAction(
@@ -4380,7 +4418,6 @@ export class NativeAgentService {
     await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
-    this.launches.stopTimer();
     this.promptQueues.stopScheduling();
     this.interactions.stop();
     await Promise.allSettled([

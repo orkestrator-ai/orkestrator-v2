@@ -59,7 +59,10 @@ fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
 cadence, and demotions by reason) and native session invalidations
 (`sessionInvalidations`: counts by content-free cause and by platform, from
-`native-session-invalidation-metrics.ts`), all aggregate and content-free. It is served by the
+`native-session-invalidation-metrics.ts`, plus `discoveryRenewals`: discovery
+announcements by platform and section with the value paths that changed,
+such as `value[].tools[order]`, structural names only), all aggregate and
+content-free. It is served by the
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 
@@ -142,6 +145,20 @@ mutations, deletions and explicit commands; a 30 s discovery pass
 adds what it found but never drops a key. Obligations are named per domain,
 not inferred from a `running` phase.
 
+A model submits a workflow result through a tool call inside its turn, so the
+acceptance and its `result-accepted` wake always land before that turn can
+end, and the turn's end raises no wake: workflow sessions are not native agent
+sessions, so the activity sweep never reports a `provider-transition` for
+them. A pass that reads the turn still running would otherwise leave the
+result for the next observation pass (3 s plus jitter). Multi Review therefore
+schedules its next pass after 250 ms (`RESULT_SETTLE_POLL_MS`) while a
+tool-mode result it observes (the active step's, or a running reviewer's) is
+accepted but not consumed, for one observation interval from the acceptance;
+past that window the ordinary cadence applies, so a model that keeps working
+after submitting cannot hold the short cadence (todo 7557, retired
+2026-11-10; `multi-review-result-settle.test.ts`). Graph runs read their turns
+the same way and are not changed yet ([7564](../todo/transcripts-and-observation/7564-graph-run-result-turn-end-tail.md)).
+
 **Native observation broker** (`native-agent-observation.ts`). The backend's
 activity sweep is the only observer of provider activity. Prompt-queue
 drains, agent mail, the coordinator and workflows read its bounded,
@@ -193,11 +210,16 @@ Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
 - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
-  list of `feature-planning`, `build-pipeline`, `multi-review`, `native-queues`, `backend-activity`, `graph-run`, or `all`. A named domain
-  runs its old whole-store driver; `multi-review` falls back to
-  `WorkflowDueScheduler`. `graph-run` has no previous driver: rolling it back
-  disables graph runs (launches are refused, nothing advances; stored runs stay
-  readable and can be cancelled).
+  list of `feature-planning`, `build-pipeline`, `graph-run`, or `all`. A named
+  domain runs its old whole-store driver. `graph-run` has no previous driver:
+  rolling it back disables graph runs (launches are refused, nothing
+  advances; stored runs stay readable and can be cancelled). `multi-review`,
+  `native-queues` and `backend-activity` are no longer revertible: their
+  rollback drivers (Multi Review's adaptive `WorkflowDueScheduler`, the 2 s
+  timer over every environment and queue, and the 2 s activity bundle with
+  its 60 s tab timer) were removed after the busy live profile and the long
+  soak (todo 0048 task 13), so naming them, or `all`, leaves them on their
+  keyed drivers.
 - `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`: every consumer reads providers
   itself again.
 - `ORKESTRATOR_RECURRING_METRICS=0`: the recorder is off.
@@ -212,7 +234,7 @@ the running attempt.
 | ID | Kind(s) | Owner | Cadence and policy |
 | --- | --- | --- | --- |
 | B01, B02 | `pr-detection`, `pr-check-rollup` | `pr-monitor.ts`, `pr-monitor-policy.ts`, `commands-pr-monitor.ts` | Completion-scheduled per environment: 20 s normal, 5 s create-pending (reverts after 10 min), 1 s merge-pending (reverts after 20 s). Errors double the interval up to 5 min. Restored entries are spread over one normal interval. Terminal (merged or closed) PRs repair their side effects from storage, then rediscover replacement or reopened PRs every 5 min plus up to 30 s jitter, with immediate wakes on explicit refresh and agent completion. Open PRs read the check rollup at most once per 60 s. Rate limits cool down for 2 min. `external-pr` pool. |
-| B03 | `diff-scan` | `diff-stats-service.ts`, `worktree-watcher.ts`, `container-worktree-signal.ts` | Watched local worktree: hints settle for 400 ms, plus a 120 s safety scan; an ignored `node_modules` sends none (see [git-scan-caches.md](git-scan-caches.md#what-the-worktree-watch-leaves-out)). Container with a confirmed worktree signal: a scan per ring, at most one per 2 s, plus a 60 s safety scan (see [container-lifecycle.md](container-lifecycle.md#container-worktree-signal-container-worktree-signal1)). Other containers and unwatched worktrees: 15 s poll. A periodic tick is skipped if any scan started within half an interval. Failures back off 5 s to 60 s; a failed watcher retries 30 s to 10 min and falls back to polling. |
+| B03 | `diff-scan` | `diff-stats-service.ts`, `worktree-watcher.ts`, `container-worktree-signal.ts` | Watched local worktree: hints settle for 400 ms, plus a 120 s safety scan; an ignored `node_modules` sends none (see [git-scan-caches.md](git-scan-caches.md#what-the-worktree-watch-leaves-out)). Container with a confirmed worktree signal: a scan per ring, at most one per 2 s, plus a 60 s safety scan (see [container-lifecycle.md](container-lifecycle.md#container-worktree-signal-container-worktree-signal1)). Other containers and unwatched worktrees: 15 s poll. A periodic tick is skipped if any scan started within half an interval. Failures back off 5 s to 60 s; a failed watcher retries 30 s to 10 min, five times per streak, and falls back to polling. A streak ends only once a re-attached watcher has held qualified coverage for 10 min. A watcher that meets an unreadable directory stays open but unqualified, so the target polls without retrying (see [git-scan-caches.md](git-scan-caches.md#a-directory-the-backend-may-not-read)). |
 | B03 | `change-capture` | `change-tracking/worktree-owner.ts`, `turn-boundaries.ts` | Not periodic. Turn start/end and restore captures run through the shared `git-docker-scan` pool at `interactive` priority, at most one per worktree, two remote at a time; provisional captures of a running turn follow watcher hints at most every 1 s locally / 5 s remotely. Boundary deadline 10 s, finalization 30 s. See [change-tracking.md](change-tracking.md). |
 | B06 | `change-evidence-pull` | `change-tracking/service.ts` | Rides the 2 s activity sweep: after a bridge connection is observed, its change-evidence spool is pulled (single flight per connection; a bridge without the route is rechecked after 5 min). |
 | B03 | `change-retention` | `change-tracking/retention.ts` | Hourly: reference expiry, quota transitions and the object-store sweep with an orphan grace window. |
@@ -228,13 +250,13 @@ the running attempt.
 | B12 | `activity-lease-expiry` | `core/index.ts`, `protocol/agent-activity.ts` | Every 15 s for a 30 s frontend activity lease. Critical. |
 | B13 | `tab-cleanup` | `core/index.ts` | 60 s plus startup; teardown and orphan reaping each guarded in flight; orphans get a one-hour grace. |
 | B14 | `build-supervisor-tick` | `build-pipeline-service-lifecycle.ts` | Keyed: one pass per pipeline with an obligation every 1.5 s, 30 s discovery. A pass looks at a session's transcript only at the 5 s persist boundary, when a turn ends or while a stall warning shows, through a conditional progress probe; the whole body is read only when the probe moved since the committed copy, and always once when a turn ends (`refreshMovedTranscript`). |
-| B16 | `multi-review-tick`, `multi-review-lease-renewal` | `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). Multi review's rollback (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=multi-review`) is `WorkflowDueScheduler`: the same per-workflow due times with a 15 s reconciliation scan. The legacy 1 s whole-store tick was removed on 2026-10-25. |
+| B16 | `multi-review-tick`, `multi-review-lease-renewal` | `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). The keyed driver is the only one: the legacy 1 s whole-store tick was removed on 2026-10-25, and the rollback `WorkflowDueScheduler` (the same per-workflow due times with a 15 s reconciliation scan) on 2026-11-10 (todo 0048 task 13). |
 | B17 | `feature-planning-tick` | `feature-planning.ts` | Keyed per-record 1 s passes, 30 s discovery. A pass reads its plan as one row (`getFeaturePlan`), not the whole feature-plan store. |
 | B18 | `tmux-poll` | `tmux-poll.ts` | One `docker exec` per read, change-only writes. On `claude-state-signal` images the hooks ring the backend, which reads on each ring plus a 30 s safety read (2 reads a minute idle); a change the safety read finds unannounced returns the container to 1 s. A container where terminal Claude never ran (no state file) also costs 2 reads a minute. Older images, and containers whose doorbell has not rung, keep the 1 s poll, which dominates their idle cost; recurring diagnostics count them (`signals`). See [container-lifecycle.md](container-lifecycle.md#claude-terminal-state-signal-claude-state-signal2). |
 | B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. |
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
-| B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
+| B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. Once a connection has sent `server.heartbeat` (every 10 s from `opencode serve` 1.19.5), 35 s with no frame (`OPENCODE_EVENT_STREAM_SILENCE_MS`, `OpenCodeStreamSilenceWatchdog`) aborts it onto the same loss path and logs `monitor.silent`; an OpenCode that never sends the heartbeat gets no deadline, since it is legitimately silent while idle. Heartbeats count as liveness, not drift. The 2.x provider reads a different stream and has no watchdog yet (to-do 7559). |
 | B23 | `bridge-observation-stream` | `http-bridge/observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | B27 | `scheduled-job-tick` | `scheduled-jobs/service.ts` | One timer for the earliest due fire, pending retry or stale heartbeat, capped at 30 s; woken by every schedule change in this process and by host resume. Fires only while the registry writer lease is held; claims are single-row transactions; at most four fires at once; a running fire heartbeats every 20 s. See [scheduled-jobs.md](scheduled-jobs.md). |
@@ -315,12 +337,12 @@ targets for a live profile; the deterministic harness does not measure them.
 | Mail presence | 2 s refresh, 4 s TTL (B10) | ≤ 4 s | Never inject into an active session |
 | Diff badge, watched local worktree | 400 ms settle plus scan, and at least 2 s from one scan's end to the next hinted one (`LOCAL_SCAN_MIN_GAP_MS`, B03) | ≤ 2 s after the save settles | A missed hint is recovered by the 120 s safety scan. Saves less than 2 s apart wait out the gap; back-to-back saves measured 1.6 to 1.7 s after settling in the packaged macOS app (todo 0048, task 7) |
 | Diff badge, container or unwatched | 15 s poll (B03) | ≤ 20 s | |
-| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action | Explicit refresh waits for a read started after the click |
+| Files panel list and tree, panel open | 5 s client poll; 3 s list reuse (B04, C02) | ≤ 6 s; ≤ 1 s after an explicit action, or one scan longer when a scan is already running | Explicit refresh waits for a read started after the click, so a Changes refresh that lands while a scan runs waits for that scan and then a fresh one. Accepted 2026-11-10 (todo 7201): a container Changes refresh measured p50 425 to 543 ms and p95 1.30 s and 2.23 s over two runs of 15 on macOS; All files stayed ≤ 1 s (max 881 ms) |
 | PR merge confirmation after merge-pending | 1 s (B01) | ≤ 3 s | |
 | PR created after create-pending | 5 s (B01) | ≤ 10 s | |
 | Open PR state change | 20 s (B01) | ≤ 30 s | Includes jitter |
 | Terminal PR replacement or reopen | 5 min plus jitter (B01) | ≤ 5 min plus immediate explicit and completion wakes | Accepted slowdown |
-| Workflow progress after a result | Keyed wake; 1 to 1.5 s passes (B14 to B17) | ≤ 3 s | |
+| Workflow progress after a result | Keyed wake; 1 to 1.5 s passes (B14 to B17); 250 ms passes while an accepted Multi Review result waits for its turn to end | ≤ 3 s | Before 2026-11-10 about one Multi Review in four waited one observation pass after its consolidated result (3.7 to 4.3 s, todo 7557). Graph runs may still (7564) |
 | Lease renewal, approval and auth expiry, watchdogs | 5 s renewal of a 15 s lease (B16); durable deadlines | Unchanged | Critical class |
 | Recovery after a deliberately missed hint | Safety scans and discovery passes | Unchanged or better | Required before reducing any polling |
 
@@ -330,7 +352,7 @@ With data saving on, the client accepts slower backstops for what it shows
 invalidations that read at once and the responsive backstop is 1 s. The Files
 panel accepts ≤ 2 s after an announced revision on a watched worktree and
 ≤ 11 s on an unwatched target (its 10 s backstop); an explicit action stays
-≤ 1 s. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
+≤ 1 s, or one scan longer behind a running scan. A reviewer tab follows checkpoints at once with a ≤ 30 s backstop.
 These budgets apply only to the client that turned the preference on.
 
 The container file-list reuse bound stays at 3 s for this reason: with a 5 s

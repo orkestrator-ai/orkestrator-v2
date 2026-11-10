@@ -56,6 +56,7 @@ import {
 import {
   ROLLOUT_COMMAND_EXECUTION_ITEM_TYPE,
   rolloutCommandExecutionParts,
+  ReplayCommandSettlement,
 } from "./code-mode-commands.js";
 import {
   isAuthoritativeAgentMessagePhase,
@@ -1435,6 +1436,7 @@ async function replayPersistedRollout(
   >();
   /** Call ids of the current turn's call records, cleared when the turn changes. */
   const turnCallIds = new Set<string>();
+  const commandSettlement = new ReplayCommandSettlement();
   // `asNonEmptyString` rather than `??`: a rollout whose `session_meta` carries
   // an empty `cwd` would otherwise resolve every patch path relatively.
   const transcriptCwd = asNonEmptyString(meta.cwd) ?? getWorkingDirectory();
@@ -1620,6 +1622,7 @@ async function replayPersistedRollout(
     const open = [...openCells.values()];
     const parts = rolloutCommandExecutionParts(item);
     const id = asNonEmptyString(item.id);
+    if (parts && id && commandSettlement.update(id, parts)) return;
     // A direct shell call shares its id with its own call record, already on screen.
     const direct = id !== undefined && turnCallIds.has(id);
     if (!parts || direct || open.length !== 1) {
@@ -1628,7 +1631,7 @@ async function replayPersistedRollout(
     }
     const cell = open[0]!;
     cell.sawCommandRecord = true;
-    cell.message.parts.push(...parts);
+    commandSettlement.append(id!, cell.message.parts, parts);
   };
 
   const visitCompletedItem = (item: unknown, timestamp: string): void => {
@@ -1762,6 +1765,7 @@ async function replayPersistedRollout(
     const recordTurnId = readTurnId(record.payload);
     if (recordTurnId && recordTurnId !== currentTurnId) {
       settleOpenCells();
+      commandSettlement.reset();
       currentTurnId = recordTurnId;
       turnCallIds.clear();
       typedPromptConsumed = false;
@@ -1793,9 +1797,12 @@ async function replayPersistedRollout(
       return;
     }
 
+    if (record.type === "event_msg" && record.payload?.type === "turn_aborted")
+      commandSettlement.settle();
     // A turn that failed keeps its error on `task_complete`; show it where the
     // live turn did (`messages/turn-failure.ts`).
     if (record.type === "event_msg" && record.payload?.type === "task_complete") {
+      commandSettlement.settle();
       const error = record.payload.error as { message?: unknown } | null | undefined;
       if (error && typeof error === "object" && typeof error.message === "string") {
         ensureAssistantMessage(timestamp).parts.push({

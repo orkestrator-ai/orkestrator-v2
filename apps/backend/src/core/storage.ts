@@ -12,6 +12,7 @@ export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 export type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 export type { KanbanStorage } from "./storage-kanban.js";
+export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -47,6 +48,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { KanbanStorage } from "./storage-kanban.js";
+import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -159,6 +161,8 @@ export class StorageService {
   private readonly context: StorageContext;
   private readonly repos: StorageRepositories;
   readonly kanban: KanbanStorage;
+  /** Kanban sync across machines (docs/architecture/tickets.md, "Sync across machines"). */
+  readonly ticketSync: TicketSyncStorage;
   readonly coordinators: CoordinatorsStorage;
   readonly publicOperations: PublicOperationsStorage;
   readonly nodes: NodesStorage;
@@ -181,6 +185,7 @@ export class StorageService {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
     this.repos = new StorageRepositories(this.context);
     this.kanban = this.repos.kanban;
+    this.ticketSync = this.repos.ticketSync;
     this.coordinators = this.repos.coordinators;
     this.publicOperations = this.repos.publicOperations;
     this.nodes = this.repos.nodes;
@@ -873,6 +878,14 @@ export class StorageService {
     activate?: "setup-handoff";
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureBuildPipelineTab(input);
+  }
+
+  ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+    completionRevision?: number;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.repos.sessions.ensureBuildPipelineNotesTab(input);
   }
 
   ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {

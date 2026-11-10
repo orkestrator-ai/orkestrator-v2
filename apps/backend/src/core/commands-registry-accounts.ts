@@ -4,10 +4,13 @@ import {
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isBackendId } from "@orkestrator/protocol/federation";
 import {
   cancelAgentAccountLoginCommand,
   cancelOpenCodeProviderLoginCommand,
   getAgentAccountLoginCommand,
+  applySharedUsageReadingsCommand,
+  collectSharedUsageReadingsCommand,
   getAgentAccountUsageCommand,
   getAgentSignInStatusCommand,
   getCoordinatorAccountSwitchGrantCommand,
@@ -19,6 +22,7 @@ import {
   listOpenCodeProviderAuthCommand,
   openAgentSignInTerminalCommand,
   readHostAgentSignInsCommand,
+  reauthenticateAgentAccountCommand,
   removeAgentAccountCommand,
   removeOpenCodeProviderLoginCommand,
   renameAgentAccountCommand,
@@ -35,6 +39,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/accounts";
 
 import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
 import type {
   CommandRegistrar,
@@ -51,6 +56,7 @@ import {
 import {
   agentAccountLoginProgress,
   cancelAgentAccountLogin,
+  listAgentAccountUsageIdentities,
   listAgentAccounts,
   readAgentAccountUsage,
   removeAgentAccount,
@@ -62,6 +68,10 @@ import {
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
+import {
+  applySharedUsageReadings,
+  collectSharedUsageReadings,
+} from "./agent-accounts-usage-sharing.js";
 import { accountSwitchGrantState } from "./nodes/index.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
@@ -76,6 +86,16 @@ import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode
 function asyncRegistrar(register: CommandRegistrar, options = ASYNC_HANDLER) {
   return <C extends AnyCommandDef>(def: C, handler: DefinedCommandHandler<C>): void =>
     register(def, handler, options);
+}
+
+/** The calling command node, which must be attached to this node (as for ticket sync). */
+function attachedController(args: { readonly controllerId?: unknown }, context: CommandContext) {
+  const controllerId = args.controllerId;
+  if (!isBackendId(controllerId)) throw new Error("Expected controllerId to be a node identity.");
+  if (!context.nodes?.listControllers().some((entry) => entry.controllerId === controllerId)) {
+    throw new Error("That command node is not attached to this node.");
+  }
+  return controllerId;
 }
 
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
@@ -134,6 +154,23 @@ export function registerAgentAccountCommands(
       context,
       asAccountPlatform(args.platform),
       args.email === null || args.email === undefined ? null : asString(args.email, "email"),
+    );
+  });
+  /**
+   * Shared usage readings, leaf side: called by an attached command node over
+   * its link only (`node-routing.ts` never routes them). Usage fields only;
+   * see `agent-accounts-usage-sharing.ts`.
+   */
+  define(collectSharedUsageReadingsCommand, async (args, context) => {
+    attachedController(args, context);
+    return collectSharedUsageReadings(context, await listAgentAccountUsageIdentities(context));
+  });
+  define(applySharedUsageReadingsCommand, async (args, context) => {
+    attachedController(args, context);
+    return applySharedUsageReadings(
+      context,
+      await listAgentAccountUsageIdentities(context),
+      args.readings,
     );
   });
   /** Grok's and Pi's login on this machine, from files and variable names only. */
@@ -267,6 +304,7 @@ export function registerAgentAccountCommands(
       asNonBlankString(args.accountId, "accountId"),
       {
         force: args.force === undefined ? false : asRequiredBoolean(args.force, "force"),
+        cacheOnly: args.cacheOnly === true,
         reader: dependencies.planUsageReader,
       },
     );
@@ -281,6 +319,12 @@ export function registerAgentAccountCommands(
         args.reauthenticate === undefined
           ? false
           : asRequiredBoolean(args.reauthenticate, "reauthenticate"),
+    });
+  });
+  definePlatformFirst(reauthenticateAgentAccountCommand, async (args, context) => {
+    return startAgentAccountLogin(context, asAccountPlatform(args.platform), {
+      reauthenticate: true,
+      accountId: asNonBlankString(args.accountId, "accountId"),
     });
   });
   define(getAgentAccountLoginCommand, async (_args, context) => {

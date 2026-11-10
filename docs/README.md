@@ -86,7 +86,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [github-cli.md](architecture/github-cli.md) | Which `gh` the backend runs (managed copy, then PATH), the status command, device-flow sign-in through the account login driver, the startup reminder and its opt-out, and the container GitHub credential source. |
 | [github-pull-requests.md](architecture/github-pull-requests.md) | In-app pull request viewer backend: commands, REST vs GraphQL split, Settings credential, mapping rules, ETag conditional-request cache, PR monitor refresh after merges. |
 | [setup-approval.md](architecture/setup-approval.md) | The trust gate for a local environment's `setupLocal` commands: default-branch and approved-hash trust, the held state, the approval panel, approving on every machine, who can approve. |
-| [agent-approvals.md](architecture/agent-approvals.md) | What an `ask` approval promises and where: the backend's signature on every bridge request that changes an agent's authority, the root-owned bridge launcher (`bridge-launch=1`), approvals on an unsandboxed host as a prompt rather than a boundary, provider rule files the agent's uid can write, and what the shared uid still allows. Follow-ups: [7250](todo/containers-and-environments/7250-bridge-replaced-by-an-agent-process.md), [7251](todo/containers-and-environments/7251-pi-project-extensions-in-the-bridge-process.md), [7252](todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md). |
+| [agent-approvals.md](architecture/agent-approvals.md) | What an `ask` approval promises and where: the backend's signature on every bridge request that changes an agent's authority, the root-owned bridge launcher (`bridge-launch=1`) and OpenCode’s start through it (`opencode-launch=1`, and for 2.x, the package caches and filtered project configuration `opencode2-launch=1`), approvals on an unsandboxed host as a prompt rather than a boundary, provider rule files the agent's uid can write, the listener check that refuses a bridge the agent started in place of the backend's, and what the shared uid still allows. |
 | [permission-rules.md](architecture/permission-rules.md) | Orkestrator-owned "always allow" rules: model and canonical patterns, the fail-closed matcher, where the backend applies them (activity sweep, projection reads) and when it never does, bridge eligibility, creation from the card only, Settings, transcript note, CLI. Remaining work: [0723-orkestrator-permission-rules.md](todo/agent-engines/0723-orkestrator-permission-rules.md). |
 | [self-improvement.md](architecture/self-improvement.md) | Experimental, off by default (Settings → Experimental). Settings → Self-improvement: the backend ranks this machine's diagnostics and, optionally, has Claude Code (Sonnet 5.5 notes, Opus 5.5 themes, on the active account) review Claude Code and Codex conversations; it files `[improvement]` and `[insight]` tickets with matching labels, follows them on the board, and confirms each fix or reopens its ticket from the app versions that carry it. What is sent, cost, signals, verdicts, commands and public actions, state, rules and limits. |
 | [scheduled-jobs.md](architecture/scheduled-jobs.md) | Backend-timed scheduled jobs: one-shot, cron and interval triggers with DST rules, missed-fire catch-up, exactly-once claims, owner authority (operator, MCP credential, agent, coordinator), surfaces and decisions. |
@@ -102,6 +102,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [command-nodes-handoff.md](development/command-nodes-handoff.md) | What was built for command nodes, where it lives, migration, deviations and what was not verified. |
 | [command-nodes-plan.md](development/command-nodes-plan.md) | Build plan for command nodes: contracts, milestones, requirement matrix with evidence and status, and the final verification procedure. |
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
+| [worktree-watcher-validation.md](development/worktree-watcher-validation.md) | Watcher review snapshot attribution, complete available failure inventory, isolated owner results and the canonical qualification receipt. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
 | [source-hint-emitter.md](development/source-hint-emitter.md) | The Babel plugin a project copies to emit web annotation source hints in development builds, and how to add it to Vite. The plugin text is run by a test. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
@@ -144,10 +145,15 @@ rationale, open questions, items that need verification, and the old docs it
 replaced. The individual items live only in these files.
 
 Files are grouped into ten folders by area. [`todo/0000-index.md`](todo/0000-index.md)
-points to the folders, and each folder's `0000-index.md` lists its files in a
-table ranked by criticality, most critical first, with a **Finished** column
-that says whether every item in the file is done. Criticality rates a file as
-a whole, never its individual items. Pick work from the top of a folder index.
+points to the folders and counts each folder's files by status, and each
+folder's `0000-index.md` lists its files in a table ranked by criticality,
+most critical first. Its columns are **Rank**, **File**, **Criticality**,
+**Status**, **Needs you**, **Covers** and **Why this rating**. Criticality
+rates a file as a whole, never its individual items; Status says who can act
+on it (see [Choosing a status](#choosing-a-status)). An agent picks work from
+the top of a folder index among the `backlog` rows; `blocked` rows wait on
+another to-do, a release or a recurrence, and `requires user input` rows wait
+on the user, whose part each row's **Needs you** cell names.
 
 Every file is named `NNNN-kebab-case-name.md`. The four-digit number is the
 file's permanent ID, unique across all folders: it is an identifier, not a
@@ -192,6 +198,58 @@ Rules of thumb:
 - Within a rating, rank files by how many users or runs their remaining work
   reaches, then by how much of it there is.
 
+### Choosing a status
+
+Every row's **Status** is exactly one of four values, judged on the file's
+still-open tasks (finished tasks do not count). Use the first that applies, in
+this order:
+
+1. **`done`**: every task in the file is done. A `done` row is normally
+   transient, because the same change retires the file (see
+   [Maintaining the folders](#maintaining-the-folders)). It stays only where
+   the file is deliberately kept, for example because flake cases or other
+   files link to its evidence, and its **Why this rating** cell says so.
+2. **`backlog`**: at least one open task an agent can start and complete on
+   its own now, in an isolated worktree on a headless Linux node (rootless
+   Docker available) or a macOS node, with loopback fake models, throwaway
+   profiles, the iOS simulator or two dev profiles on one host. A task whose
+   decision has a (recommended) option counts, because the recommendation
+   exists so that a later worker can act without asking, unless the file
+   reserves that decision to the user.
+3. **`blocked`**: no open task can start now, and at least one is waiting only
+   on something other than the user: another to-do (name its number), an
+   upstream release, a release or CI run, a flake or failure recurring, or a
+   time window. Once that clears, an agent could do it.
+4. **`requires user input`**: every remaining open task needs the user.
+   Typical reasons: a decision the file reserves to the user or maintainer
+   ("user's decision", "product call", "scope call", "needs approval",
+   "maintainer action"); a real or billed provider login, or paid model turns;
+   the user's real install, data directory, store or logs; hardware or
+   accounts the fleet lacks (a physical iOS device, a signed build, Windows,
+   arm64, a rootful Docker node, real DNS or certificates); two real machines
+   or a tailnet; or an outward action (GitHub settings or rulesets,
+   publishing, filing an upstream report, firewall or network changes on
+   nodes).
+
+A file with an agent task and a user-only task is therefore `backlog`, and a
+file whose only other open tasks need the user is `blocked` while it waits.
+A task that waits on another to-do whose remaining work itself needs the user
+is waiting on the user.
+
+**Needs you** is one short line:
+
+- for a `requires user input` row, exactly what the user must provide or
+  decide;
+- for a `blocked` row, `Waits on: <to-do number, release, CI run, recurrence
+  or date>`, followed by any user-only part;
+- for a `backlog` row that also has a user-only task, that part;
+- otherwise `—`.
+
+Update a file's Status and Needs you in the same change that alters its tasks
+(finishes, adds, narrows or unblocks one, or records evidence that changes who
+can act), just as its rating is, and keep the counts in
+[`todo/0000-index.md`](todo/0000-index.md) matching.
+
 ### Maintaining the folders
 
 - Once a file exists, never add new todos to it. New work always goes into a
@@ -202,24 +260,32 @@ Rules of thumb:
 - Update or remove an item in its file in the same change that finishes it.
   If the file's most serious remaining work changed, re-rate it and move its
   row in the folder index.
-- When the last item in a file is done, set its **Finished** column to Yes
-  in the folder index in the same change. Then move any durable behaviour into
-  `architecture/` or `development/`, delete the file and remove its row from
-  the folder index. Renumber the remaining ranks to `1..n` in row order. Its
-  todo number is not reused.
+- Keep the row's **Status** and **Needs you** current in every change that
+  alters the file's tasks ([choosing a status](#choosing-a-status)), and keep
+  the counts in [`todo/0000-index.md`](todo/0000-index.md) matching the folder
+  indexes.
+- When the last item in a file is done, its status is `done`. In the same
+  change, move any durable behaviour into `architecture/` or `development/`,
+  delete the file and remove its row from the folder index, unless the file is
+  deliberately kept (its row then stays `done` and says why). Renumber the
+  remaining ranks to `1..n` in row order and update the counts. Its todo
+  number is not reused.
 - To add work, create a new file with the next number and the same headings
-  in the folder that fits, and add a rated row (Finished: No) to that
-  folder's index. A new
-  folder also needs its own `0000-index.md` and a row in
-  [`todo/0000-index.md`](todo/0000-index.md).
+  in the folder that fits, and add a rated row with its Status and Needs you to
+  that folder's index, then update the counts. A new folder also needs its own
+  `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
 - After any row removal, insertion, or move, renumber that folder's ranks to
   `1..n` in row order. Ranks express priority; todo numbers remain permanent IDs.
 - Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans
   every Markdown file.
 - `tests/unit/todo-index.test.ts` fails when two files share a number or a
-  folder index is missing a rated row for a file, has invalid Criticality or
-  Finished values, or has ranks other than `1..n` in row order. It also requires
-  every area folder to be linked from the top-level index. Two numbers were
+  folder index is missing a rated row for a file, has a Criticality or Status
+  value outside the allowed set, an empty Needs you cell, a `requires user
+  input` row whose Needs you is `—`, a `blocked` row whose Needs you does not
+  start with `Waits on:`, a `Waits on:` note on a row that is not `blocked`,
+  or ranks other than `1..n` in row order. It also requires every area folder
+  to be linked from the top-level index, with status counts that match the
+  folder index and a total row that matches their sum. Two numbers were
   already shared when it was added and stay allowlisted: 0054 (three files) and
   0723 (two). Neither may gain another file.
 - Two open pull requests can each pick the same next number and each pass CI.

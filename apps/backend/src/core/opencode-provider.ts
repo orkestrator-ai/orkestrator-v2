@@ -1,13 +1,15 @@
+import { openCodeProviderClient } from "./opencode-provider-helpers.js";
 import {
   HUMAN_PROMPT_OBSERVATION_ROWS,
   humanPromptObservation,
 } from "@orkestrator/protocol/human-prompts";
 import { OpenCodeSessionPolicy } from "./opencode-session-policy.js";
-import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
+import { type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import {
+  consumeOpenCodeEventStream,
   createOpenCodeMonitorBackoff,
   OpenCodeObservationStream,
   readOpenCodeActivityBatch,
@@ -137,8 +139,9 @@ import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
 import { OpenCodeActionRetryCoordinator } from "./opencode-action-retry.js";
 import { reconcileOpenCodeStreamState } from "./opencode-stream-reconciliation.js";
 import {
-  openCodeRevertMarker,
+  observeOpenCodeRevertResult,
   openCodeRevertNotice,
+  readOpenCodeRevertMarker,
   withoutRevertedOpenCodeMessages,
   type OpenCodeRevertMarker,
 } from "./opencode-revert.js";
@@ -208,13 +211,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly waitForMonitorRetry: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private readonly requestTasks = new Set<Promise<void>>();
-  /**
-   * SSE event types this provider had no branch for.
-   *
-   * Shared across sessions because the subscription is: one stream serves the
-   * whole OpenCode server, so drift is a property of the connection rather than
-   * of any one session.
-   */
+  /** SSE event types with no branch here: drift of the one stream serving every session. */
   private readonly health = new RuntimeHealthRecorder();
   private readonly streamState = new OpenCodeStreamState();
   private readonly actionRetry: OpenCodeActionRetryCoordinator;
@@ -236,18 +233,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     private readonly connection: BridgeConnection,
     private readonly dependencies: OpenCodeProviderDependencies,
   ) {
-    const basic = Buffer.from(`opencode:${connection.authToken}`).toString("base64");
-    const createClient = dependencies.openCodeClientFactory ?? createOpenCodeSdkClient;
-    this.client =
-      dependencies.openCodeClient ??
-      createClient({
-        baseUrl: connection.baseUrl,
-        directory: connection.directory,
-        headers: {
-          Authorization: `Basic ${basic}`,
-          "X-Orkestrator-OpenCode-Token": connection.authToken,
-        },
-      });
+    this.client = openCodeProviderClient(connection, dependencies);
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
     this.researchTools = dependencies.coordinatorResearchToolIds ?? (() => []);
     this.sessionPolicy = new OpenCodeSessionPolicy(
@@ -452,21 +438,28 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
-        let receivedFrame = false;
         let startupError: unknown;
         const startup = this.reconcileStreamState().catch((error) => {
           startupError = error;
           if (this.activeStreamController === streamController) streamController.abort();
         });
-        for await (const raw of response.stream as AsyncIterable<unknown>) {
-          if (this.disposed) return;
-          if (!receivedFrame) {
-            receivedFrame = true;
-            this.monitorBackoff.connected();
-            this.observation.connected();
-          }
-          this.dispatchRequest(raw);
-        }
+        const ended = await consumeOpenCodeEventStream(
+          response.stream as AsyncIterable<unknown>,
+          {
+            disposed: () => this.disposed,
+            connected: () => {
+              this.monitorBackoff.connected();
+              this.observation.connected();
+            },
+            frame: (raw) => this.dispatchRequest(raw),
+            silent: (silenceMs) => {
+              log.warn("monitor.silent", { silenceMs });
+              streamController.abort();
+            },
+          },
+          { silenceMs: this.dependencies.monitorSilenceMs, clock: this.dependencies.monitorClock },
+        );
+        if (ended === "disposed") return;
         await startup;
         if (startupError) throw startupError;
         if (this.activeStreamController === streamController) {
@@ -945,46 +938,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  /**
-   * OpenCode's pending revert for a transcript read. `session.updated` and the
-   * revert actions keep it current; after a stream gap, or before either has
-   * been seen, it is read from the session. A failed read serves the marker
-   * last seen and leaves it unknown, so the next read asks again.
-   */
-  private async revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
-    if (this.streamState.revertMarkerKnown(sessionId)) {
-      return this.streamState.revertMarker(sessionId);
-    }
-    const version = this.streamState.revertVersion(sessionId);
-    try {
+  private revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
+    return readOpenCodeRevertMarker(this.streamState, sessionId, async () => {
       const response = await this.client.session.get(
         { sessionID: sessionId },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode session revert read");
-      const session = asRecord(response.data);
-      const marker = openCodeRevertMarker(session);
-      if (session?.id === sessionId && (session.revert === undefined || marker)) {
-        this.streamState.observeRevert(sessionId, marker, version);
-      }
-    } catch {
-      // The transcript stays readable; only the marker is stale.
-    }
-    return this.streamState.revertMarker(sessionId);
-  }
-
-  /** An action response overtaken by another observation needs an authoritative reread. */
-  private observeRevertResult(sessionId: string, session: unknown, version: number): void {
-    const info = asRecord(session);
-    const marker = openCodeRevertMarker(session);
-    if (
-      info?.id === sessionId &&
-      (info.revert === undefined || marker) &&
-      this.streamState.observeRevert(sessionId, marker, version)
-    )
-      return;
-    // Keep the last observed marker while a later read resolves ambiguous ordering.
-    this.streamState.invalidateRevert(sessionId);
+      return response.data;
+    });
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
@@ -1412,7 +1374,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data, version);
+        observeOpenCodeRevertResult(this.streamState, sessionId, response.data, version);
         return { outcome: "applied" };
       }
       if (action.kind === "redo") {
@@ -1421,7 +1383,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { sessionID: sessionId },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data, version);
+        observeOpenCodeRevertResult(this.streamState, sessionId, response.data, version);
         return { outcome: "applied" };
       }
       // No share/unshare: OpenCode 1.19.1 discontinued session sharing, so

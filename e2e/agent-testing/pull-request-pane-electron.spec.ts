@@ -15,6 +15,8 @@ import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
+import { electronSpecEnvironment } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * A pull request link opens in the right-hand PR pane of the real desktop
@@ -270,19 +272,20 @@ test("a pull request link opens the PR pane without moving native window focus",
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    // Reloads only a load that lost its modules to ERR_NETWORK_CHANGED (flake 2340).
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     await trackWebContentsFocus(electronApp);
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
@@ -308,7 +311,8 @@ test("a pull request link opens the PR pane without moving native window focus",
       description: `[Review PR](${SHOWN_PR})\n\n[Missing PR](${MISSING_PR})`,
     });
     await window.reload();
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     await electronApp.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]!.setSize(1440, 900),
     );

@@ -33,7 +33,10 @@ import { percentile, pickKindCounters, type LiveSample } from "./recurring-live-
  *    to `ready` (the workflow completion). Its validation plan runs one
  *    read-only command, which waits in the host-wide test scheduler
  *    (`host-test-scheduler.ts`) like any validation, so that step is its own
- *    row rather than a sample of "progress after a result";
+ *    row rather than a sample of "progress after a result". Every client
+ *    whose link is up also opens a review view (a second signed-in page) on
+ *    the review's own tab before the review starts, and each result is timed
+ *    to the moment that page shows the phase it leads to (todo 0048 task 2);
  * 7. the cut link restored, or the document shown again (the client resume).
  *
  * Every wait is timed in this process from the moment the cause is known:
@@ -59,13 +62,35 @@ export type BusyOptions = {
   busyClients: number[];
   /** Files each environment gets in a burst. */
   busyBurstFiles: number;
+  /**
+   * Files written into the turn environment while each round's held turn is
+   * at the model, and removed when the round ends; 0 writes none. Past the
+   * measurement file row cap (2,000) this puts capped lists on the turn and
+   * thread-segment owners, not only the environment scan (todo 4960).
+   */
+  busyTurnFiles: number;
 };
+
+/**
+ * Untracked files the environment scan counts lines for
+ * (`UNTRACKED_SCAN_MAX_FILES` in apps/backend/src/core/commands-validation.ts;
+ * the test pins the two together). Past it the rest are listed uncounted and
+ * the badge reads `~+2,000`, so a larger burst can only be waited for up to
+ * this many added lines. The busy environments hold no other untracked files.
+ */
+export const UNTRACKED_COUNTED_FILES = 2_000;
+
+/** Lines a burst of `files` one-line files adds to a change badge. */
+export function burstBadgeLines(files: number): number {
+  return Math.min(files, UNTRACKED_COUNTED_FILES);
+}
 
 export const BUSY_DEFAULTS: BusyOptions = {
   busyRounds: 0,
   busyEnvironments: 10,
   busyClients: [0, 1, 2],
   busyBurstFiles: 200,
+  busyTurnFiles: 0,
 };
 
 /**
@@ -110,7 +135,14 @@ export const BUSY_ROWS = {
   "workflow-progress": {
     budgetMs: 3_000,
     side: "backend",
-    label: "Backend phase observed after result submission (upper bound; no client measurement)",
+    label: "Backend phase observed after result submission (upper bound)",
+  },
+  // The same three results, timed to the client's review view showing the
+  // phase each one leads to (or a later one): what the budget row means.
+  "workflow-progress-visible": {
+    budgetMs: 3_000,
+    side: "client",
+    label: "Workflow progress visible after a result (the review's phase in its open tab)",
   },
   // The plan's next phase waits for its commands, which queue in the
   // host-wide test scheduler with every other worktree's validation and tests.
@@ -156,6 +188,18 @@ export interface BusyClient {
   /** Messages the open tab's agent-mail chip counts (0 when it shows none). */
   mailCount(): Promise<number>;
   setHidden(hidden: boolean): Promise<void>;
+  /**
+   * Opens this client's review view (its own signed-in page) on an
+   * environment, so a review launched there can be watched from its start.
+   */
+  prepareReview(environmentName: string): Promise<void>;
+  /** Starts recording a review's phases in the review view, then selects its tab. */
+  watchReview(workflowId: string): Promise<void>;
+  /**
+   * Each phase the review view has shown since `watchReview`, with when it
+   * first showed, on this process's clock (`BusyRuntime.now`).
+   */
+  reviewPhases(): Promise<ReviewSighting[]>;
   /** Cut (`false`) or restore (`true`) a linked client's connection. */
   setLinkUp(up: boolean): void;
   close(): Promise<void>;
@@ -167,6 +211,8 @@ export type BusyClientFactory = (input: {
   openEnvironment: string;
   signal?: AbortSignal;
 }) => Promise<BusyClient[]>;
+
+export type ReviewSighting = { phase: string; at: number };
 
 export type CliResult = { status: number | null; stdout: string };
 export type AsyncCli = (args: string[], signal?: AbortSignal) => Promise<CliResult>;
@@ -204,6 +250,8 @@ export type BusyResult = {
     /** A marker the model saw more often than once per prompt. */
     duplicates: number;
   };
+  /** Held turns that had `busyTurnFiles` files written while they ran. */
+  turnFileRounds: number;
   failures: BusyFailure[];
   /** `recurringWork` kinds and process totals, sampled at each round boundary. */
   windowSamples: LiveSample[];
@@ -215,6 +263,12 @@ export type BusyResult = {
   admission: Record<string, AdmissionPeak>;
   /** Each review's validation run: host-scheduler queue, command and whole-run times. */
   validationRuns: ValidationTiming[];
+  /**
+   * Client review views: views that watched a review, results they timed,
+   * and results that reached the backend before the view showed the review
+   * (not sampled, since the view could not have shown them yet).
+   */
+  reviewViews: { watched: number; sampled: number; unobserved: number };
   modelRequests: number;
   durationMs: number;
 };
@@ -315,6 +369,75 @@ const STEP_TIMEOUT = "10m";
 const PI_RUN_ENDED = new Set([0, 7]);
 /** Phases a Multi Review passes through, in order, and its terminal ones. */
 const REVIEW_TERMINAL = new Set(["ready", "failed", "cancelled"]);
+const REVIEW_ORDER = ["preparing", "reviewing", "consolidating", "ready"];
+
+export type ClientProgressSample =
+  | { kind: "sample"; ms: number }
+  /** The view showed nothing of the review until after the result: not sampled. */
+  | { kind: "unobserved" }
+  /** The view never showed the phase, or showed it before its own result. */
+  | { kind: "missing" };
+
+/**
+ * When a client's review view showed the progress a result caused: the first
+ * sighting of `target` or a later phase (a quick phase can be skipped
+ * between two renders, and showing a later one shows this progress too).
+ * A view that showed nothing before the result was not watching yet, so it
+ * cannot time it.
+ */
+export function clientProgressSample(
+  sightings: readonly ReviewSighting[],
+  submittedAt: number,
+  target: string,
+): ClientProgressSample {
+  const rank = REVIEW_ORDER.indexOf(target);
+  if (rank < 0) return { kind: "missing" };
+  if (!sightings[0] || sightings[0].at > submittedAt) return { kind: "unobserved" };
+  const shown = sightings.find((sighting) => REVIEW_ORDER.indexOf(sighting.phase) >= rank);
+  if (!shown || shown.at < submittedAt) return { kind: "missing" };
+  return { kind: "sample", ms: Math.round(shown.at - submittedAt) };
+}
+
+/**
+ * A pane layout's tree without the tabs of one Multi Review (its root,
+ * reviewer and Address Findings tabs), and how many it removed. Leaves whose
+ * active tab went select their first remaining tab. The renderer owns the
+ * tree's shape: leaves carry `tabs` and `activeTabId`, splits `children`.
+ */
+export function withoutReviewTabs(
+  root: unknown,
+  workflowId: string,
+): { root: unknown; removed: number } {
+  let removed = 0;
+  const isReviewTab = (tab: unknown) => {
+    if (!tab || typeof tab !== "object") return false;
+    const record = tab as { id?: unknown; multiReviewTabData?: { workflowId?: unknown } };
+    return (
+      record.multiReviewTabData?.workflowId === workflowId ||
+      record.id === `multi-review:${workflowId}` ||
+      (typeof record.id === "string" && record.id.startsWith(`multi-review:${workflowId}:`)) ||
+      record.id === `multi-review-fix:${workflowId}`
+    );
+  };
+  const walk = (node: unknown): unknown => {
+    if (!node || typeof node !== "object") return node;
+    const record = node as { tabs?: unknown; activeTabId?: unknown; children?: unknown };
+    if (Array.isArray(record.children)) return { ...record, children: record.children.map(walk) };
+    if (!Array.isArray(record.tabs)) return node;
+    const tabs = record.tabs.filter((tab) => !isReviewTab(tab));
+    removed += record.tabs.length - tabs.length;
+    const active = tabs.some((tab) => (tab as { id?: unknown }).id === record.activeTabId)
+      ? record.activeTabId
+      : ((tabs[0] as { id?: unknown } | undefined)?.id ?? null);
+    return { ...record, tabs, activeTabId: active };
+  };
+  return { root: walk(root), removed };
+}
+
+/** An error's first line: Playwright appends a call log that may name page content. */
+function firstLine(error: unknown): string {
+  return error instanceof Error ? (error.message.split("\n", 1)[0] ?? "") : String(error);
+}
 
 export function parseBusyClients(raw: string): number[] {
   const counts = raw.split(",").filter(Boolean).map(Number);
@@ -333,6 +456,26 @@ function cliJson(result: CliResult): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * Why a CLI call gave no usable answer, without its output: the exit status
+ * and the error code of its JSON envelope, or how many items it listed.
+ */
+export function cliFailure(result: CliResult): string {
+  let code = "no JSON";
+  try {
+    const envelope = JSON.parse(result.stdout) as {
+      error?: { code?: unknown };
+      result?: { items?: unknown };
+    };
+    if (typeof envelope.error?.code === "string") code = envelope.error.code;
+    else if (Array.isArray(envelope.result?.items)) code = `${envelope.result.items.length} listed`;
+    else code = "no error code";
+  } catch {
+    // Not JSON: keep "no JSON".
+  }
+  return `exit ${result.status ?? "signal"}, ${code}`;
 }
 
 /** The session and tab a `session start` reported, from its result or (Pi) its receipt. */
@@ -378,10 +521,12 @@ export async function measureBusy(
     samples,
     timeouts: {},
     obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+    turnFileRounds: 0,
     failures: [],
     windowSamples: [],
     admission: {},
     validationRuns: [],
+    reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
     modelRequests: 0,
     durationMs: 0,
   };
@@ -466,17 +611,50 @@ export async function measureBusy(
     return { ok: response?.ok === true, result: response?.result };
   };
 
+  const closeReviewTabs = async (environmentId: string, workflowId: string) => {
+    const layout = (await gateway.invoke("get_pane_layout", { environmentId })) as {
+      version?: unknown;
+      containerId?: unknown;
+      activePaneId?: unknown;
+      root?: unknown;
+    } | null;
+    if (!layout) return;
+    const next = withoutReviewTabs(layout.root, workflowId);
+    if (next.removed === 0) return;
+    // The merge takes exactly these four fields and refuses any other.
+    const base = {
+      version: layout.version,
+      containerId: layout.containerId,
+      activePaneId: layout.activePaneId,
+      root: layout.root,
+    };
+    await gateway.invoke("apply_pane_layout_intent", {
+      environmentId,
+      baseLayout: base,
+      desiredLayout: { ...base, root: next.root },
+    });
+  };
+
   const fakeModel = runtime.startFakeModel();
   let clients: BusyClient[] = [];
   try {
     runtime.writeFakePiModels(options.dataDir, fakeModel.baseUrl);
     // --- Environments ------------------------------------------------------
-    const listed = cliJson(await step(["environment", "list"])) as { items?: unknown[] } | null;
+    const listing = await step(["environment", "list"]);
+    // Every step goes through the worktree's CLI; an unbuilt one fails here,
+    // and reporting that as a missing environment hid the cause (todo 4960).
+    if (listing.status !== 0)
+      throw new Error(
+        `The CLI's environment list failed (exit ${listing.status}); build it with mise run build:cli`,
+      );
+    const listed = cliJson(listing) as { items?: unknown[] } | null;
     const fixture = (listed?.items ?? [])
       .map((raw) => raw as Record<string, unknown>)
       .find((entry) => entry.environmentType === "local" && entry.ready === true);
     if (!fixture || typeof fixture.id !== "string" || typeof fixture.projectId !== "string")
-      throw new Error("The busy phase needs the fixture's ready local environment");
+      throw new Error(
+        `The busy phase needs the fixture's ready local environment (${cliFailure(listing)})`,
+      );
     const projectId = fixture.projectId;
     const refreshed = await cli(
       ["agent", "options", "--environment", fixture.id, "--refresh", "--json"],
@@ -596,6 +774,7 @@ export async function measureBusy(
         const held = `t-${tag}`;
         const queued = `q-${tag}`;
         const approval = `a-${tag}`;
+        const turnFilesPath = path.join("busy-turn", tag);
         // A round that throws (a client that cannot open its view, a refused
         // command) is recorded and the next round still runs.
         try {
@@ -670,7 +849,8 @@ export async function measureBusy(
           await watchBadges(
             "burst-badge",
             burstAt,
-            (additions, base) => additions !== null && additions >= base + options.busyBurstFiles,
+            (additions, base) =>
+              additions !== null && additions >= base + burstBadgeLines(options.busyBurstFiles),
           );
           record("burst-backend", await backendBurst);
           const clearAt = runtime.now();
@@ -698,6 +878,12 @@ export async function measureBusy(
             BACKEND_WAIT_MS,
           );
           if (dispatched === null) fail("turn", "the held turn never reached the model");
+          else if (options.busyTurnFiles > 0) {
+            // Written inside the held turn, so the turn and its thread segment
+            // measure them; removed once the round ends (below).
+            runtime.writeBurst([turnEnvironment.worktree], turnFilesPath, options.busyTurnFiles);
+            result.turnFileRounds += 1;
+          }
           const heldAt = fakeModel.marker(held)?.firstAt ?? runtime.now();
           await allClients(
             "activity-working",
@@ -861,7 +1047,34 @@ export async function measureBusy(
           if (fakeModel.marker(held)) result.obligations.turns += 1;
 
           // 6. A Multi Review to completion, every slot on the fake model.
-          if (reviewId) await step(["review", "cancel", reviewId]);
+          if (reviewId) {
+            await step(["review", "cancel", reviewId]);
+            // Each review opens tabs in its environment, which holds at most
+            // nine; close the last one's as a user would, or every launch
+            // after the ninth is refused (todo 4960's soak).
+            try {
+              await closeReviewTabs(reviewEnvironment.id, reviewId);
+            } catch (error) {
+              fail("workflow-tabs", firstLine(error));
+            }
+          }
+          // Every client whose link is up watches it from a review view of
+          // its own (a hidden client's view is a separate, visible document).
+          const viewers = (
+            await Promise.all(
+              clients
+                .filter((client) => client !== outageClient)
+                .map(async (client) => {
+                  try {
+                    await client.prepareReview(reviewEnvironment.name);
+                    return client;
+                  } catch (error) {
+                    fail("workflow-visible", `${client.label}: ${firstLine(error)}`);
+                    return null;
+                  }
+                }),
+            )
+          ).filter((client): client is BusyClient => client !== null);
           const validationsBefore = runtime.validationRuns(reviewEnvironment.worktree);
           const launchAt = runtime.now();
           const workflowsBefore = fakeModel.workflow();
@@ -882,6 +1095,20 @@ export async function measureBusy(
             fail("workflow", "the review did not launch");
           else {
             reviewId = launched.workflowId;
+            const watchedId = reviewId;
+            // Not awaited: the backend is followed from the launch while the
+            // views select the review's tab.
+            const watching = Promise.all(
+              viewers.map(async (client) => {
+                try {
+                  await client.watchReview(watchedId);
+                  return client;
+                } catch (error) {
+                  fail("workflow-visible", `${client.label}: ${firstLine(error)}`);
+                  return null;
+                }
+              }),
+            );
             const transitions: Array<{ phase: string; at: number }> = [];
             let phase = typeof launched.phase === "string" ? launched.phase : "";
             const completed = await until(
@@ -908,13 +1135,16 @@ export async function measureBusy(
             // Correlate by tool and result identity, never the next timestamp.
             // Submission precedes acceptance: this is a conservative upper bound,
             // independent of when the model receives the tool's callback.
+            // Multi Review submits these three; `submit_review_preparation`
+            // belongs to build pipelines, so a review never sends it.
             const expected = {
               submit_validation_plan: "reviewing",
-              submit_review_preparation: "reviewing",
               submit_review_report: "consolidating",
               submit_consolidated_review: "ready",
             };
             const after = fakeModel.workflow();
+            /** Results the backend timed, which the review views time too. */
+            const progress: Array<{ target: string; at: number }> = [];
             for (const [tool, target] of Object.entries(expected)) {
               const earlier = workflowsBefore[tool]?.submissions.length ?? 0;
               const submissions = after[tool]?.submissions.slice(earlier) ?? [];
@@ -927,6 +1157,41 @@ export async function measureBusy(
                 tool === "submit_validation_plan" ? "workflow-validation" : "workflow-progress",
                 Math.round(transition.at - submissions[0]!.at),
               );
+              if (tool !== "submit_validation_plan")
+                progress.push({ target, at: submissions[0]!.at });
+            }
+            // What each review view showed: wait for it to reach the end the
+            // backend reached, then time every result against it.
+            const settledAt = transitions.at(-1)?.at ?? runtime.now();
+            for (const client of (await watching).filter(
+              (entry): entry is BusyClient => entry !== null,
+            )) {
+              result.reviewViews.watched += 1;
+              let sightings: ReviewSighting[] = [];
+              const visible = await until(
+                null,
+                settledAt,
+                async () => {
+                  sightings = await client.reviewPhases();
+                  return sightings.some((sighting) => sighting.phase === phase);
+                },
+                CLIENT_WAIT_MS,
+              );
+              if (visible === null)
+                fail(
+                  "workflow-visible",
+                  `${client.label}: review did not show terminal phase ${phase}`,
+                );
+              for (const entry of progress) {
+                const sample = clientProgressSample(sightings, entry.at, entry.target);
+                if (sample.kind === "sample") {
+                  record("workflow-progress-visible", sample.ms);
+                  result.reviewViews.sampled += 1;
+                } else if (sample.kind === "unobserved") result.reviewViews.unobserved += 1;
+                else
+                  result.timeouts["workflow-progress-visible"] =
+                    (result.timeouts["workflow-progress-visible"] ?? 0) + 1;
+              }
             }
           }
 
@@ -954,10 +1219,12 @@ export async function measureBusy(
           if ((fakeModel.marker(approval)?.requests ?? 0) > 2) result.obligations.duplicates += 1;
         } catch (error) {
           if (signal?.aborted) throw error;
-          fail("round", error instanceof Error ? error.message.split("\n", 1)[0] : String(error));
+          fail("round", firstLine(error));
           // Release model waiters; parked provider approvals require session.stop below.
           for (const id of [held, queued, approval]) fakeModel.release(id);
         }
+        if (options.busyTurnFiles > 0)
+          runtime.removeBurst([turnEnvironment.worktree], turnFilesPath);
         if (result.failures.length > failuresBefore) {
           for (const id of [held, queued, approval]) fakeModel.release(id);
           // A successful stop confirms provider work ended, including parked approvals.
@@ -1026,7 +1293,9 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
       result.obligations.approvals
     } approvals, ${result.obligations.mails} mails, ${result.obligations.workflows} reviews completed, ${
       result.obligations.duplicates
-    } duplicated dispatches. Failures: ${
+    } duplicated dispatches${
+      result.turnFileRounds > 0 ? `, ${result.turnFileRounds} held turns wrote files` : ""
+    }. Failures: ${
       result.failures
         .map(
           (entry) =>
@@ -1043,6 +1312,11 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
         )
         .join("; ") || "not read"
     }.`,
+    `Review views: ${result.reviewViews.watched} watched a review, ${
+      result.reviewViews.sampled
+    } results timed in a view, ${
+      result.reviewViews.unobserved
+    } reached the backend before the view showed the review (not sampled).`,
     `Validation runs (queue/commands/run ms): ${
       result.validationRuns
         .map((run) => `${run.queuedMs}/${run.commandMs}/${run.runMs}`)

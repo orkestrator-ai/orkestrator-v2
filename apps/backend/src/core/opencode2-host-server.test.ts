@@ -42,6 +42,9 @@ Bun.serve({
   port,
   fetch(request) {
     if (request.headers.get("authorization") !== expected) return new Response("no", { status: 401 });
+    // The credential reconcile at start: this server holds no logins.
+    if (request.method === "GET" && new URL(request.url).pathname === "/api/credential")
+      return Response.json({ data: [] });
     return Response.json({ version: "2.2.6", pid: process.pid, launched });
   },
 });
@@ -71,12 +74,23 @@ async function setup(
   // The server mirrors the user's global OpenCode configuration: point it at a fixture.
   const userConfigDir = path.join(root, "xdg", "opencode");
   await mkdir(userConfigDir, { recursive: true });
-  const saved = { xdg: process.env.XDG_CONFIG_HOME, config: process.env.OPENCODE_CONFIG };
+  const saved = {
+    xdg: process.env.XDG_CONFIG_HOME,
+    xdgData: process.env.XDG_DATA_HOME,
+    config: process.env.OPENCODE_CONFIG,
+  };
   process.env.XDG_CONFIG_HOME = path.join(root, "xdg");
+  // An agent-test start reconciles the 2.x logins from
+  // `$XDG_DATA_HOME/opencode/auth.json`: give it an empty store of its own,
+  // never the developer's (a host that sets XDG_DATA_HOME would otherwise
+  // hand the fake their real OpenCode logins).
+  process.env.XDG_DATA_HOME = path.join(root, "xdg-data");
   delete process.env.OPENCODE_CONFIG;
   cleanup.push(async () => {
     if (saved.xdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = saved.xdg;
+    if (saved.xdgData === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = saved.xdgData;
     if (saved.config === undefined) delete process.env.OPENCODE_CONFIG;
     else process.env.OPENCODE_CONFIG = saved.config;
   });

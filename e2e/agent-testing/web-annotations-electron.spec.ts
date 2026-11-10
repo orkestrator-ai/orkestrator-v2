@@ -100,6 +100,7 @@ import {
   writeNativeCaptures,
   type RecordedNativeCapture,
 } from "./web-annotations-native-captures";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -160,8 +161,7 @@ async function launchElectron(
       path.join(packageRoot, "dist", "electron", "main.js"),
     ],
     cwd: repositoryRoot,
-    env: {
-      ...(headless ? withoutDisplay(process.env) : process.env),
+    env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
       PATH: `${path.join(current.profile.dataDir, "probe-bin")}${path.delimiter}${process.env.PATH ?? ""}`,
       ORKESTRATOR_ANNOTATION_CODEX_PROBE: path.join(current.profile.dataDir, "codex-launches"),
       ELECTRON_DEV: "1",
@@ -169,7 +169,7 @@ async function launchElectron(
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
       // Never contend for the fixed control-MCP port an installed app may own.
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
-    },
+    }),
   });
   recordElectronDiagnostics(app);
   const startupConsole = collectStartupConsole(app.context());

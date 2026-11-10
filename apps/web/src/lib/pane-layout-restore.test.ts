@@ -179,7 +179,12 @@ describe("reconcilePersistedLayout", () => {
           {
             id: "a",
             type: "key-information",
-            keyInformationTabData: { pipelineId: "pipeline-1", view: "notes" },
+            keyInformationTabData: {
+              pipelineId: "pipeline-1",
+              view: "notes",
+              completionPublished: true,
+              completionRevision: 8,
+            },
           },
           {
             id: "b",
@@ -192,7 +197,13 @@ describe("reconcilePersistedLayout", () => {
     );
     const { tabs } = layout!.root as PaneLeaf;
     expect(tabs.map((tab) => tab.keyInformationTabData)).toEqual([
-      { environmentId: "env-1", pipelineId: "pipeline-1", view: "notes" },
+      {
+        environmentId: "env-1",
+        pipelineId: "pipeline-1",
+        view: "notes",
+        completionPublished: true,
+        completionRevision: 8,
+      },
       { environmentId: "env-1", pipelineId: "pipeline-1" },
     ]);
   });

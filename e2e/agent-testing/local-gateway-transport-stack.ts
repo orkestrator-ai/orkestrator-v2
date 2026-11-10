@@ -9,6 +9,7 @@ import { ownProcessGroup } from "../process-cleanup";
 import { withStartingProcess } from "./local-gateway-transport-lifecycle";
 import { recordProcessOutput } from "./electron-diagnostics";
 import { expect } from "./electron-fixtures";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * The disposable profile, fixture repository and Vite renderer both local
@@ -28,12 +29,6 @@ export const countsDir = path.join(
   "agent-testing",
   "local-transport-counts",
 );
-
-export const visibleText = (output: string): string =>
-  output
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 export async function waitForUrl(url: string): Promise<void> {
   await expect
@@ -112,14 +107,11 @@ export async function startTransportStack(
       projectPath,
       rendererUrl,
       vite,
-      electronEnv: {
-        ...(Object.fromEntries(
-          Object.entries(process.env).filter((entry) => entry[1] !== undefined),
-        ) as Record<string, string>),
+      electronEnv: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     };
   });
 }

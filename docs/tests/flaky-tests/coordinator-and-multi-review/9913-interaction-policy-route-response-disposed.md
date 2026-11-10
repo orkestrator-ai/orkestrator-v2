@@ -29,3 +29,37 @@ ORKESTRATOR_E2E_PORT=18452 mise run test:logged -- --name interaction-policy-own
 ```
 
 The complete unchanged owner passed with one worker at both viewports (126.7 seconds, exit 0). This separate single-owner command ran while the broad browser run continued on the host. No assertion, timeout or implementation changed. A response/context teardown race is a hypothesis; the available evidence does not establish the cause or an environmental exemption.
+
+
+## Completion Notes validation — 2026-11-10
+
+Observed on `open-notes-tab-0bdba344d18c-r1`, head `49bc718245`, base
+`c6de4733c5beb87a578f82a8548725305e1ff254`. The exact recorded command retry was
+`mise run test:logged -- --name browser -- mise run test:browser`, using nine
+workers. It finished in 1,599.4 s with 1,651 passed, 152 skipped and one failed;
+the chained public-site stage was not reached.
+
+The same mobile coordinator case failed in its unchanged route callback, this
+time at line 80's `request.fetch` with
+`apiRequestContext.fetch: Target page, context or browser has been closed`.
+This is a related response/context-lifetime symptom, rather than the earlier
+line 84 `route.fulfill` error; a shared cause is not established. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.T2WOF4/browser.log.gz`.
+
+The first complete-owner retry reused the still-running aggregate's fixture
+server, which shut down during that retry. It ended with seven passed and three
+failed; the last two failed navigations reported `ERR_CONNECTION_REFUSED` on
+port 1422. Its artifact is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MPQ6i2/interaction-policy-owner-r3.log.gz`.
+A fresh complete-owner run after the aggregate exited passed all ten cases with
+one worker in 31.2 s:
+
+```sh
+mise run test:logged -- --name interaction-policy-owner-r3 -- bunx playwright test --config e2e/playwright.config.ts e2e/InteractionPolicyChecks.spec.ts --workers=1 --output output/playwright/interaction-policy-owner-r3-fresh
+```
+
+`mise run flaky:recurrence -- 9913 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reported the existing case open and directed recording it. No interaction test,
+route handler, assertion or timeout changed. The fresh pass establishes
+intermittence, not a cause or an environmental exemption for the aggregate
+failure. The broad browser validation remains red.

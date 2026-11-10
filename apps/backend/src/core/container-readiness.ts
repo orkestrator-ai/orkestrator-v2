@@ -1,5 +1,9 @@
-import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import {
+  ContainerLifecycleError,
+  formatContainerLifecycleError,
+} from "@orkestrator/protocol/container-lifecycle";
 import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
+import { COPY_REFUSED_REMEDY } from "./docker-copy-refusal.js";
 import type { EnvironmentOperations } from "./environment-operations.js";
 import { runCommand } from "./shell.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
@@ -120,12 +124,22 @@ export function parseExitedBootRecord(content: string, startedAt: string): strin
   return Date.parse(updatedAt) >= Date.parse(runStartedSecond) ? code : null;
 }
 
+/**
+ * The failure code for an exited boot whose record Docker refused to copy
+ * out (a read-only bind on a `nosuid`/`nodev` filesystem under rootless
+ * Docker, `docker-copy-refusal.ts`): the boot failed, and why is unknown.
+ */
+export const BOOT_RECORD_REFUSED = "boot-record-copy-refused";
+
 /** Reads the final boot record out of a stopped container (`docker cp` needs no running process). */
 async function readExitedBootFailure(
   containerId: string,
   startedAt: string,
 ): Promise<string | null> {
   const copied = await copyOutBounded(containerId, BOOT_STATUS_PATH, MAX_BOOT_STATUS_BYTES, 10_000);
+  // The record exists but Docker will not copy it out: say so rather than
+  // `container-exited`, which reads as "the boot left no record".
+  if (copied.kind === "refused") return BOOT_RECORD_REFUSED;
   if (copied.kind !== "bytes") return null;
   const file = extractSingleTarFile(copied.tar, MAX_BOOT_STATUS_BYTES);
   return file.ok ? parseExitedBootRecord(file.content, startedAt) : null;
@@ -219,6 +233,10 @@ export async function observeContainerBoot(
 }
 
 export class ContainerInitializationError extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "not-ready" } as const;
+
   constructor(
     readonly reason: "failed" | "timed-out",
     readonly failureCode: string | null,
@@ -227,7 +245,9 @@ export class ContainerInitializationError extends Error {
       formatContainerLifecycleError(
         "not-ready",
         reason === "failed"
-          ? `Container initialization failed (${failureCode ?? "unknown"}). Check the container logs, then retry.`
+          ? failureCode === BOOT_RECORD_REFUSED
+            ? `Container initialization failed, and Docker refused to copy the container's boot record out (${BOOT_RECORD_REFUSED}), so the reason is unknown. Check the container logs. ${COPY_REFUSED_REMEDY}`
+            : `Container initialization failed (${failureCode ?? "unknown"}). Check the container logs, then retry.`
           : "Container initialization did not complete in time. Retry once the container is ready.",
       ),
     );
@@ -326,11 +346,9 @@ export async function ensureCurrentBootReady(
 const drainingContainers = new Set<string>();
 
 function drainingError(): Error {
-  return new Error(
-    formatContainerLifecycleError(
-      "operation-in-progress",
-      "The environment is stopping. New work is refused until it has stopped.",
-    ),
+  return new ContainerLifecycleError(
+    "operation-in-progress",
+    "The environment is stopping. New work is refused until it has stopped.",
   );
 }
 

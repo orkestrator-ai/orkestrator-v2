@@ -4,6 +4,7 @@ import { resetGitHubPullRequestCache } from "../src/core/github-pull-requests";
 import { createCommandFixtures } from "./command-fixtures";
 import {
   TOKEN,
+  apiPull,
   createFakeGitHub,
   json,
   routePullRequestDetail,
@@ -178,6 +179,37 @@ describe("GitHub pull request commands", () => {
     });
     expect(result).toMatchObject({ merged: true });
   });
+  for (const verified of [true, false]) {
+    test(`viewer merge checks stored repository and branch ownership (${verified})`, async () => {
+      const { context, fake, run } = setup();
+      const branch = "hotfix-deadbeefcafe";
+      // The stored environment must also own the branch namespace.
+      context.storage.loadEnvironments = mock(async () => [
+        createEnvironment({
+          id: "deadbeef-cafe-4000-8000-000000000000",
+          branch,
+          prUrl: verified
+            ? "https://github.com/acme/repo/pull/7"
+            : "https://github.com/other/repo/pull/7",
+        }),
+      ]);
+      fake.on(
+        "GET",
+        "/repos/acme/repo/pulls/7",
+        apiPull({ head: { ref: branch, repo: { full_name: "acme/repo" } } }),
+      );
+      fake.on("PUT", "/repos/acme/repo/pulls/7/merge", { merged: true });
+      fake.on(
+        "DELETE",
+        `/repos/acme/repo/git/refs/heads/${branch}`,
+        () => new Response(null, { status: 204 }),
+      );
+      expect(
+        await run("merge_github_pull_request", { ...ref, method: "merge", deleteBranch: true }),
+      ).toMatchObject({ merged: true, branchDeleted: verified });
+      expect(fake.requests.some((request) => request.method === "DELETE")).toBe(verified);
+    });
+  }
 });
 
 describe("refreshMonitoredPullRequest", () => {

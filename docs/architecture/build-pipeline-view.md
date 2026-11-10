@@ -58,8 +58,18 @@ All of them apply `buildPipelineInputWithDefaults`
 (`coordinator-launch-defaults.ts`), which is documented at the top of
 `build-pipeline-launch.ts`: an explicit step replaces the saved one, a step with
 no agent keeps the saved selection, and the review step is always the first
-reviewer. A launcher may still resolve the same defaults to display them
-(`@orkestrator/protocol/build-pipeline-defaults`). The ticket snapshot, source
+reviewer. A saved row pins only a model its action or saved reviewer names
+itself; a model inherited from the platform's own setting is left out, so the
+stage resolves it when it starts and gets the same unoffered-default swap a new
+session gets (a Codex default a ChatGPT login does not offer runs on the live
+list's first model, for that stage only). A launcher may still resolve the same
+defaults to display them (`@orkestrator/protocol/build-pipeline-defaults`);
+panels that resolve rows against the catalogue fill the inherited model back in
+before catalogue resolution (`buildPipelineLauncherDefaults`). The New
+Environment feature launcher submits these concrete choices even with
+Customize models off, so it relies on the renderer catalogue fallback, not
+the stage-time unoffered-default swap. The Build dialog also submits concrete
+choices. The ticket snapshot, source
 link and naming prompt come from the mappers in
 `@orkestrator/protocol/build-pipeline-tickets`.
 
@@ -772,16 +782,55 @@ A pipeline has one such tab, separate from its key information tab, which keeps
 showing the brief alone. Both keep only the pipeline id and read the record, so
 they follow every update and survive a reload.
 
-A run seen finishing also opens that tab and activates it
-(`apps/web/src/lib/build-pipeline-completion-notes.ts`), in the pane holding the
-pipeline tab, else the environment's active pane. The trigger is a completion
-the renderer observed: a pipeline the store held in an earlier phase arriving
-as `complete`. A run already complete when first loaded opens nothing, so a
-reload or a new window never reopens old notes. The intent is held outside
-React and waits for the environment's layout to be installed, so a run that
-finishes while another environment is on screen has its notes tab open and
-active on return. An open notes tab is focused rather than duplicated; a full
-layout opens nothing, leaving the Notes step selected.
+A finished run opens that tab and selects it. The backend does this when the
+pipeline completes (`ensureBuildPipelineNotesTab` in
+`apps/backend/src/core/storage-sessions.ts`, called from the recovery
+module's `complete`): it adds the notes tab to the environment's authoritative
+layout, in the pane holding the pipeline tab, else the active pane, and makes it
+that pane's tab and the active pane. So a run that finished while no client was
+watching it (the app closed, the window on another environment, or the run on
+another node whose pipelines this window had not loaded yet) still lands on
+its notes: a client hydrating the environment adopts the backend's selection.
+An Electron window keeps its own selection, so it follows the notes tab once,
+when it first sees `completionPublished` on the tab with a new
+`completionRevision`, including a manual Notes
+tab already open in that window
+(`applyCompletionNotesArrival` in
+`apps/web/src/lib/pane-layout-authoritative.ts`), the way it follows a newly
+published setup terminal. Manual Notes openings have no completion marker and
+leave other windows on their selected tab. A user who then picks another tab is
+not pulled back.
+The shared layout merge preserves the completion marker when the backend and
+renderer concurrently add the same Notes tab. Full-layout saves also retain it
+on an existing tab for the same environment and pipeline. Closing Notes removes
+the marker with the tab, so a later manual reopening stays unmarked.
+Successful completion is the only trigger, so a reload never reopens old notes.
+A failed run keeps its failure inspector selected and does not automatically
+open Notes; terminal ticket reconciliation still follows the durable failure save.
+
+The renderer also reacts to a completion it observed
+(`apps/web/src/lib/build-pipeline-completion-notes.ts`): a pipeline the store
+held in an earlier phase arriving as `complete` opens or focuses the same tab
+without waiting for the layout round trip. Both derive the tab id from
+`keyInformationTabId` (`@orkestrator/protocol/pane-layout`), so they merge into
+one tab. An open notes tab is focused rather than duplicated; a full layout
+opens nothing and shows the existing tab-limit notice, leaving the Notes step
+selected without evicting a tab. The observer acknowledges the handoff in a
+bounded, window-local node-scope slot before opening Notes. A later backend
+publication cannot override a newer selection, even if the user closed Notes
+in the interval. A layout-first publication likewise suppresses the later
+observer activation. The successful completion save records its own backend revision as
+`completionRevision` on the pipeline and publishes that same identity on Notes.
+Later terminal reconciliation leaves it unchanged; a restarted attempt gets a
+larger revision when it completes. Both event orders acknowledge that identity,
+including a `complete` to `complete` snapshot when a disconnected window missed
+the intermediate phases. Layout merges and full saves retain the greatest
+published completion revision on a retained tab. An unrelated pipeline update
+cannot clear an acknowledgement. Legacy publications without a revision retain
+the boolean fallback, cleared only by an observed transition out of completion
+or an environment change.
+Publishing the same or an older completion revision again is a backend no-op,
+including after the user has selected another tab.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the
@@ -904,3 +953,17 @@ Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
 Restarting Build creates an ordinary ticket-based session and retains the
 original as the first attempt. Pipeline records and ticket linkage provide the
 same sidebar, coordinator and PR ownership as any other pipeline.
+
+The created ticket has no delivery choice of its own, so it follows the default
+("Open a PR, don't merge"). Changing the ticket's **When verified** choice before
+Verify passes applies to this run, as for any ticket build. After adoption the
+run starts at package preparation: with one reviewer a Package Preparation
+Session plans validation, the backend runs it, a read-only Review Session reads
+the sealed package, and Verify decides delivery.
+
+`mise run test:agent:auto-pipeline` qualifies this whole path in a real browser
+against a disposable profile whose only agent is Pi on a loopback fake model
+([agent-testing.md](../development/agent-testing.md#auto-pipeline-flow-fake-model)):
+drafting, title and criterion edits, confirmation, the promotion commit, the
+adopted Build, commit-only delivery finishing while another environment is
+shown, and the finished graph after a reload.

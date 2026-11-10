@@ -2,7 +2,7 @@ import {
   environmentSetupCompleteEvent,
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
-import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { isRootlessKitHostLoopbackAddress } from "@orkestrator/protocol/container-host-reachability";
 import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./worktree-locations.js";
 import { withContainerAdmission } from "./container-admission.js";
 import {
-  formatContainerLifecycleError,
+  ContainerLifecycleError,
   isContainerLifecycleErrorCode,
   parseContainerLifecycle,
   setupCompletionIsCurrent,
@@ -297,18 +297,14 @@ export async function assertDockerContainerOwned(
   if (ownership.verdict === "owned" || ownership.verdict === "missing") return;
   if (ownership.verdict === "unknown") {
     // An unreachable daemon or unreadable answer is not evidence of ownership.
-    throw new Error(
-      formatContainerLifecycleError(
-        "daemon-unavailable",
-        "Docker could not confirm who owns this container. Retry once Docker is reachable.",
-      ),
+    throw new ContainerLifecycleError(
+      "daemon-unavailable",
+      "Docker could not confirm who owns this container. Retry once Docker is reachable.",
     );
   }
-  throw new Error(
-    formatContainerLifecycleError(
-      "not-owned",
-      "Refusing Docker operation on a container not owned by this development profile",
-    ),
+  throw new ContainerLifecycleError(
+    "not-owned",
+    "Refusing Docker operation on a container not owned by this development profile",
   );
 }
 
@@ -1247,9 +1243,7 @@ async function verifyRuntimeStorage(
   if (!imageId) return;
   const verified = await verifyStorageSet(context, imageId, environment.id, parsed.record.storage);
   if (!verified.ok) {
-    throw new Error(
-      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(verified)),
-    );
+    throw new ContainerLifecycleError("needs-attention", storageHelperFailureMessage(verified));
   }
 }
 
@@ -1323,19 +1317,15 @@ async function prepareRuntimeStorage(
     });
   }
   if (!imageId) {
-    throw new Error(
-      formatContainerLifecycleError(
-        "capability-unavailable",
-        "The environment image could not be identified, so its persistent storage cannot be checked.",
-      ),
+    throw new ContainerLifecycleError(
+      "capability-unavailable",
+      "The environment image could not be identified, so its persistent storage cannot be checked.",
     );
   }
   await ensureStorageVolumes(context, environment.id, storage);
   const initialized = await initializeStorageSet(context, imageId, environment.id, storage);
   if (!initialized.ok) {
-    throw new Error(
-      formatContainerLifecycleError("needs-attention", storageHelperFailureMessage(initialized)),
-    );
+    throw new ContainerLifecycleError("needs-attention", storageHelperFailureMessage(initialized));
   }
   return storage;
 }
@@ -1974,7 +1964,7 @@ export async function removeContainerConfirmingAbsence(
 }
 
 function containerLifecycleError(code: ContainerLifecycleErrorCode, message: string): Error {
-  return new Error(formatContainerLifecycleError(code, message));
+  return new ContainerLifecycleError(code, message);
 }
 
 export async function recreateEnvironmentOnce(
@@ -2384,6 +2374,12 @@ export async function removeLocalWorktree(
   });
 }
 
+/**
+ * Deletes a merged environment's branch on GitHub. Only the branch created for
+ * this environment is ever deleted: a pull request attached by hand whose head
+ * is a base branch or someone else's branch is left alone
+ * (`deleteRemoteBranchForPullRequestHead`).
+ */
 export async function deleteMergedEnvironmentRemoteBranch(
   environment: Environment,
   gitHubConfig: GitHubCliConfigSource,
@@ -2397,6 +2393,7 @@ export async function deleteMergedEnvironmentRemoteBranch(
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
       createLocalGhRunner(environment.worktreePath, gitHubConfig, gitHubCliSelection),
+      environment.id,
     );
     return;
   }
@@ -2405,6 +2402,7 @@ export async function deleteMergedEnvironmentRemoteBranch(
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
       createContainerGhRunner(environment.containerId),
+      environment.id,
     );
   }
 }
@@ -2510,7 +2508,7 @@ export async function ensureContainerAgentToolsHost(
   // An absent discovery result is not evidence that RootlessKit's working
   // alias is stale. Boot probes run in the background and later checks can
   // fail transiently; preserve this concrete alias until a target is known.
-  if (!hostAddress && parseIpTokens(existing).includes(ROOTLESSKIT_HOST_LOOPBACK_ADDRESS)) {
+  if (!hostAddress && parseIpTokens(existing).some(isRootlessKitHostLoopbackAddress)) {
     const topology = await detectDockerTopology();
     if (topology.rootless || topology.kind === "unavailable") return;
   }

@@ -285,6 +285,12 @@ ${name === "mkdir" ? 'exec /bin/mkdir "$@"' : "exit 0"}
     ]);
   });
 
+  test("rootless remediation names no driver's address: the reachable verdict shows the one in use", () => {
+    const text = buildRootlessHostRemediation(4567).steps.join("\n");
+    expect(text).toContain("RootlessKit's host loopback address");
+    expect(text).not.toMatch(/10\.0\.2\.\d/);
+  });
+
   for (const failure of ["mkdir", "write", "daemon-reload", "restart"] as const) {
     test(`rootless remediation stops and fails when ${failure} fails`, () => {
       const result = executeRemediation(buildRootlessHostRemediation(4567).commands[0]!, {
@@ -665,6 +671,27 @@ describe("ContainerHostReachabilityService.check", () => {
     expect(warnings()).toEqual([]);
   });
 
+  test("probe networks and containers carry the content-free creator label", async () => {
+    const labelled = service({ creator: "agent-test/temporary" });
+    await labelled.svc.check("boot");
+    const created = labelled.runner.calls.filter(
+      (call) => (call[1] === "network" && call[2] === "create") || call[1] === "run",
+    );
+    expect(created.length).toBeGreaterThan(1);
+    for (const call of created) {
+      expect(call).toContain("orkestrator-owner=owner");
+      expect(call).toContain("orkestrator-resource-role=host-reachability-probe");
+      expect(call).toContain("orkestrator-creator=agent-test/temporary");
+    }
+
+    // A backend that names no creator adds no label at all.
+    const unlabelled = service();
+    await unlabelled.svc.check("boot");
+    expect(
+      unlabelled.runner.calls.flat().some((part) => part.includes("orkestrator-creator")),
+    ).toBe(false);
+  });
+
   test("a block on per-environment networks only is still a block", async () => {
     const { svc } = service({
       runner: fakeRunner({
@@ -882,6 +909,11 @@ const ROOTLESS_GATEWAY_REFUSED =
 const ROOTLESS_LOOPBACK_DISABLED =
   "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (10.0.2.2): Network unreachable\nORK_PROBE_RC=1\n";
 const viaLoopback = (args: string[]) => args.includes("host.docker.internal:10.0.2.2");
+const viaGvisorLoopback = (args: string[]) => args.includes("host.docker.internal:10.0.2.1");
+// Captured on Docker 29.9.2 rootless (RootlessKit 3.3.0, gvisor-tap-vsock,
+// host loopback on): 10.0.2.2 is not RootlessKit's host there.
+const GVISOR_SLIRP_ADDRESS_UNREACHABLE =
+  "ORK_PROBE_TOOL=wget\nwget: can't connect to remote host (10.0.2.2): Host is unreachable\nORK_PROBE_RC=1\n";
 
 describe("rootless Docker", () => {
   const rootless = async () => ({ kind: "local-engine" as const, rootless: true });
@@ -906,6 +938,63 @@ describe("rootless Docker", () => {
     expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.2");
   });
 
+  test("gvisor-tap-vsock's host loopback (10.0.2.1) is found once slirp4netns's address fails", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) =>
+        viaGvisorLoopback(args)
+          ? BUSYBOX_HTTP_405
+          : viaLoopback(args)
+            ? GVISOR_SLIRP_ADDRESS_UNREACHABLE
+            : ROOTLESS_GATEWAY_REFUSED,
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result).toMatchObject({
+      status: "reachable",
+      dockerRootless: true,
+      hostAddress: "10.0.2.1",
+      remediation: null,
+    });
+    expect(result.summary).toContain("RootlessKit's host loopback (10.0.2.1)");
+    // host-gateway, 10.0.2.2 and 10.0.2.1, each on both networks.
+    expect(result.probes.map((probe) => probe.hostAddress ?? null)).toEqual([
+      null,
+      null,
+      "10.0.2.2",
+      "10.0.2.2",
+      "10.0.2.1",
+      "10.0.2.1",
+    ]);
+    expect(svc.containerHostAddress()).toBe("10.0.2.1");
+    expect(await svc.resolveContainerHostAddress()).toBe("10.0.2.1");
+  });
+
+  test("slirp4netns's address answering skips the gvisor-tap-vsock probe", async () => {
+    const runner = fakeRunner({
+      probeOutput: (args) => (viaLoopback(args) ? BUSYBOX_HTTP_405 : ROOTLESS_GATEWAY_REFUSED),
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    expect((await svc.check("boot")).hostAddress).toBe("10.0.2.2");
+    expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
+  });
+
+  test("an address that answers on only one network is not chosen", async () => {
+    let defaultBridge = 0;
+    const runner = fakeRunner({
+      probeOutput: (args) => {
+        if (!viaGvisorLoopback(args)) return ROOTLESS_GATEWAY_REFUSED;
+        // The first 10.0.2.1 probe (either network) answers, the other refuses.
+        defaultBridge += 1;
+        return defaultBridge === 1 ? BUSYBOX_HTTP_405 : ROOTLESS_LOOPBACK_DISABLED;
+      },
+    });
+    const { svc } = service({ runner, detectTopology: rootless });
+    const result = await svc.check("boot");
+    expect(result.status).toBe("blocked");
+    expect(result.hostAddress ?? null).toBeNull();
+    expect(result.remediation).toEqual(buildRootlessHostRemediation(38179));
+  });
+
   test("with host loopback disabled the fix is the daemon setting, not a firewall rule", async () => {
     const runner = fakeRunner({
       probeOutput: (args) =>
@@ -921,6 +1010,9 @@ describe("rootless Docker", () => {
       "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false",
     );
     expect(result.remediation?.commands.join("\n")).not.toContain("ufw");
+    // Both drivers' addresses were tried before the verdict.
+    expect(runner.calls.some(viaLoopback)).toBe(true);
+    expect(runner.calls.some(viaGvisorLoopback)).toBe(true);
     expect(svc.containerHostAddress()).toBeNull();
   });
 
@@ -931,6 +1023,7 @@ describe("rootless Docker", () => {
     expect(result).toMatchObject({ status: "reachable", dockerRootless: true });
     expect(result.hostAddress ?? null).toBeNull();
     expect(runner.calls.some(viaLoopback)).toBe(false);
+    expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
   });
 
   test("a rootful daemon never probes RootlessKit's address", async () => {
@@ -940,6 +1033,7 @@ describe("rootless Docker", () => {
     expect(result.status).toBe("blocked");
     expect(result.dockerRootless).toBe(false);
     expect(runner.calls.some(viaLoopback)).toBe(false);
+    expect(runner.calls.some(viaGvisorLoopback)).toBe(false);
   });
 
   test("container creation waits for the first check, bounded", async () => {

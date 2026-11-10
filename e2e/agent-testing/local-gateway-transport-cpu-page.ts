@@ -1,3 +1,5 @@
+import { TERMINAL_VISIBLE_TEXT_PAGE_SOURCE } from "./terminal-visible-text";
+
 /** Page code: count and keep the tail of one terminal session's frames. */
 export function listenCode(sessionId: string): string {
   return `(async () => {
@@ -31,15 +33,13 @@ export function listenCode(sessionId: string): string {
 
 /**
  * Page code: resolve once `marker` has arrived in this window, from its own
- * frames or, after a desync dropped some, the authoritative snapshot.
+ * frames or, after a desync dropped some, the authoritative snapshot. Its
+ * escape stripping is the shared helper's, as page source.
  */
 export function waitCode(sessionId: string, marker: string): string {
   return `new Promise((resolve, reject) => {
     const state = globalThis.__cpuTerminal;
-    const visible = (text) => text
-      .replace(/\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)/g, "")
-      .replace(/\\x1b\\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
-      .replace(/[\\x00-\\x08\\x0b-\\x1f\\x7f]/g, "");
+    const visible = ${TERMINAL_VISIBLE_TEXT_PAGE_SOURCE};
     let recovered = state.desynced;
     const check = async () => {
       if (visible(state.tail).includes(${JSON.stringify(marker)})) return resolve(state.count);

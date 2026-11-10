@@ -3,7 +3,9 @@ import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
+  KEYED_SCHEDULING_DOMAINS,
   KEYED_SCHEDULING_ROLLBACK_ENV,
+  REVERTIBLE_KEYED_SCHEDULING_DOMAINS,
   KeyedWorkflowSupervisor,
   keyedSchedulingEnabled,
   stableSpreadMs,
@@ -455,13 +457,30 @@ describe("KeyedWorkflowSupervisor", () => {
 
   test("the rollback switch disables one domain at a time", () => {
     expect(keyedSchedulingEnabled("build-pipeline", {})).toBe(true);
-    const env = { [KEYED_SCHEDULING_ROLLBACK_ENV]: "build-pipeline, feature-planning" };
+    const env = { [KEYED_SCHEDULING_ROLLBACK_ENV]: "build-pipeline, multi-review" };
     expect(keyedSchedulingEnabled("build-pipeline", env)).toBe(false);
-    expect(keyedSchedulingEnabled("feature-planning", env)).toBe(false);
-    expect(keyedSchedulingEnabled("multi-review", env)).toBe(true);
-    expect(keyedSchedulingEnabled("multi-review", { [KEYED_SCHEDULING_ROLLBACK_ENV]: "all" })).toBe(
-      false,
+    expect(keyedSchedulingEnabled("feature-planning", env)).toBe(true);
+    expect(
+      keyedSchedulingEnabled("feature-planning", { [KEYED_SCHEDULING_ROLLBACK_ENV]: "all" }),
+    ).toBe(false);
+  });
+
+  test("multi review, native queues and backend activity are no longer revertible", () => {
+    // Their rollback drivers were removed (todo 0048 task 13): the switch
+    // cannot name them, and every remaining domain still can.
+    for (const domain of ["multi-review", "native-queues", "backend-activity"] as const) {
+      expect(KEYED_SCHEDULING_DOMAINS).toContain(domain);
+    }
+    expect<string[]>([...REVERTIBLE_KEYED_SCHEDULING_DOMAINS].sort()).toEqual(
+      ["build-pipeline", "feature-planning", "graph-run"].sort(),
     );
+    const check = (env: Record<string, string>) => [
+      // @ts-expect-error -- the removed domains are not a switch argument.
+      keyedSchedulingEnabled("native-queues", env),
+      // @ts-expect-error -- the removed domains are not a switch argument.
+      keyedSchedulingEnabled("multi-review", env),
+    ];
+    expect(typeof check).toBe("function");
   });
 
   test("status is content-free", async () => {

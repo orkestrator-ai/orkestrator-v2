@@ -493,8 +493,8 @@ headless Electron exits with SIGTRAP. CPU contention reproduced it in 5 of 10
 runs. A released scope now gets no credential instead of an exception, and both
 hooks always call back (D22). With the fix the same load passed 10 of 10, and
 both flakes are resolved (D23). The audit of main's other webRequest listeners
-is
-[7060](../cross-cutting/7060-electron-webrequest-listeners-always-answer.md).
+(to-do 7060) is done: every listener now always answers
+([renderer-security.md](../../architecture/renderer-security.md#webrequest-listeners)).
 
 **Review validation repair (2026-11-06).** The review's `mise run
 test:agent:electron` lost both service-preview specs in `beforeAll`, before any

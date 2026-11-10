@@ -847,7 +847,8 @@ ticket outbox, conflicts, tombstones) is in
   `sync_node_tickets` syncs now.
 - **Disconnection.** Ticket changes wait durably on both sides (the board
   itself, the leaf's outbox) and apply in order, once each, on reconnect.
-  Launches and other changes to a disconnected node are refused, not queued
+  Launches and other changes to a disconnected node are refused, not queued;
+  the coordinator that tried is woken once when the node reconnects
   (see [coordinator.md](coordinator.md#tickets-on-other-machines)).
 - **Compatibility.** Gated on the `ticket-sync` capability. An older leaf is
   never sent tickets and the board says to update it; coordinator ticket
@@ -856,6 +857,20 @@ ticket outbox, conflicts, tombstones) is in
 - **Several command nodes.** Each syncs its own board with the leaf. A ticket
   made on the leaf goes to the command node that synced that project last.
   When a command node detaches, the leaf keeps its copies as its own tickets.
+
+## Usage readings across nodes
+
+The newest plan-usage reading of each agent login (provider, email and
+organisation) is shared the same way: the command node dials out, collects each
+connected node's newest readings (`collect_shared_usage_readings`), keeps the
+newest per login centrally and sends each node the readings of the logins it
+has (`apply_shared_usage_readings`). It runs on every connect and stream resync,
+when a node announces a reading it took (`agent-usage-readings-changed`), when
+the command node takes one, and every 60 s. Both commands run only over the
+link of an attached command node and are never routed. Only usage figures,
+reset times, the plan, the reading time and the machine that took it travel,
+never a credential. A node that predates the commands takes no part. The model
+is in [agent-accounts.md](agent-accounts.md#shared-readings).
 
 ## Projects on leaf nodes
 

@@ -77,6 +77,8 @@ export interface PublishInput {
   selector?: "live" | "final" | "pinned";
   observationEpoch?: number;
   ownerFence?: { assert: () => void; value: number } | null;
+  /** Checked synchronously in the publication transaction, after comparison. */
+  selectionEligible?: () => boolean;
 }
 
 export interface PublishOutcome {
@@ -181,6 +183,8 @@ export class ChangeMeasurementService {
     let backlog = false as boolean;
     const outcome = ledger.transaction((): PublishOutcome => {
       input.ownerFence?.assert();
+      if (input.selectionEligible && !input.selectionEligible())
+        return { measurementId: input.measurement.measurementId, revision: null, created: false };
       const existing = ledger.measurement(input.measurement.measurementId);
       let created = false;
       if (!existing) {
@@ -951,6 +955,7 @@ export class ChangeMeasurementService {
     resourceKey: string;
     observationEpoch?: number;
     ownerFence?: { assert: () => void; value: number } | null;
+    selectionEligible?: () => boolean;
   }): Promise<PublishOutcome> {
     const reasons = [...(input.reasons ?? [])];
     let draft = {
@@ -1069,6 +1074,7 @@ export class ChangeMeasurementService {
       resourceKey: input.resourceKey,
       observationEpoch: input.observationEpoch,
       ownerFence: input.ownerFence ?? null,
+      selectionEligible: input.selectionEligible,
     });
   }
 

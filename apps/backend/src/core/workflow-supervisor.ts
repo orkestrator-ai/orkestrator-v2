@@ -56,7 +56,12 @@ import {
  * discovery pass rebuild it.
  */
 
-/** Domains with a keyed driver, each individually revertible. */
+/**
+ * Domains with a keyed driver. `multi-review`, `native-queues` and
+ * `backend-activity` have no other driver: their rollback drivers were removed
+ * after the busy live profile and the long soak (todo 0048 task 13), so the
+ * switch below ignores them.
+ */
 export const KEYED_SCHEDULING_DOMAINS = [
   "feature-planning",
   "build-pipeline",
@@ -67,19 +72,29 @@ export const KEYED_SCHEDULING_DOMAINS = [
 ] as const;
 export type KeyedSchedulingDomain = (typeof KEYED_SCHEDULING_DOMAINS)[number];
 
+/** Domains the rollback switch can still revert. */
+export const REVERTIBLE_KEYED_SCHEDULING_DOMAINS = [
+  "feature-planning",
+  "build-pipeline",
+  "graph-run",
+] as const satisfies readonly KeyedSchedulingDomain[];
+export type RevertibleKeyedSchedulingDomain = (typeof REVERTIBLE_KEYED_SCHEDULING_DOMAINS)[number];
+
 /**
  * Rollback switch. A comma-separated list of domains (or `all`) that return to
  * their previous driver on the next backend start, e.g.
- * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=build-pipeline,multi-review`.
+ * `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=build-pipeline,feature-planning`.
  * A domain runs exactly one driver: the switch is read once at construction,
  * so the new driver is never started when the old one is selected. `graph-run`
  * has no previous driver: rolling it back disables graph runs (nothing is
- * launched or advanced; stored runs stay readable and cancellable).
+ * launched or advanced; stored runs stay readable and cancellable). Naming
+ * `multi-review`, `native-queues` or `backend-activity` (or `all`) no longer
+ * changes those three domains: they always run their keyed driver.
  */
 export const KEYED_SCHEDULING_ROLLBACK_ENV = "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK";
 
 export function keyedSchedulingEnabled(
-  domain: KeyedSchedulingDomain,
+  domain: RevertibleKeyedSchedulingDomain,
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   const raw = env[KEYED_SCHEDULING_ROLLBACK_ENV];

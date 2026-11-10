@@ -168,14 +168,19 @@ export function failedStepTarget(candidate: BuildPipeline): RestartTarget {
     : { kind: "session", phase: stagePhase };
 }
 
-/** Why a coordinator may not restart this pipeline at all, or `undefined`. */
+/**
+ * Why a coordinator may not restart this pipeline at all, or `undefined`.
+ * The cancelled refusal must not invite a new build: a coordinator told
+ * "start a new build if the work is still wanted" did exactly that after the
+ * user cancelled (to-do 7545 task 4).
+ */
 export function coordinatorRestartRefusal(
   candidate: BuildPipeline,
   stageId: string | undefined,
 ): Error | undefined {
   if (isCancelledBuildPipeline(candidate)) {
     return new Error(
-      "This build pipeline was cancelled, so it cannot be restarted. Start a new build if the work is still wanted.",
+      "This build pipeline was cancelled, so it cannot be restarted. If you did not cancel it yourself, the user did: that is their decision to stop this work, so do not start another build for this ticket unless the user asks you to.",
     );
   }
   if (candidate.phase === "complete") {

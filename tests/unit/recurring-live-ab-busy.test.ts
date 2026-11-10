@@ -3,18 +3,24 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { UNTRACKED_SCAN_MAX_FILES } from "../../apps/backend/src/core/commands-validation";
 import { __testing, parseOptions } from "../../scripts/recurring-live-ab";
 import {
   BUSY_ROWS,
   busyFailed,
   busyRuntime,
+  burstBadgeLines,
   busyRowSummary,
+  UNTRACKED_COUNTED_FILES,
+  withoutReviewTabs,
   busySummaryLines,
   measureBusy,
   parseBusyClients,
   type AsyncCli,
   type BusyClient,
   type BusyRuntime,
+  type ReviewSighting,
+  clientProgressSample,
 } from "../../scripts/recurring-live-ab-busy";
 import {
   FAKE_PI_MODEL_REF,
@@ -38,6 +44,16 @@ type Scenario = {
   reviewEnds?: string;
   /** The held turn reaches the model twice. */
   duplicateTurn?: boolean;
+  /** Review views start showing the review only once it is consolidating. */
+  lateView?: boolean;
+  /** Review views never show anything past `preparing`. */
+  stuckView?: boolean;
+  /** Tab selection succeeds but the review header never renders. */
+  emptyView?: boolean;
+  /** Opening a review view throws. */
+  failPrepare?: boolean;
+  /** Pane layout writes are ignored, so review tabs pile up. */
+  keepReviewTabs?: boolean;
 };
 
 /**
@@ -68,11 +84,37 @@ function busyHarness(scenario: Scenario = {}) {
   let commits = 0;
   let reads = 0;
   let reviewLaunches = 0;
+  /** The review environment's pane layout: one leaf. */
+  let reviewLayout: Record<string, unknown> & { revision: number; root: unknown } = {
+    version: 1,
+    environmentId: "env-busy-2",
+    containerId: null,
+    activePaneId: "default",
+    updatedAt: "2026-11-10T00:00:00.000Z",
+    revision: 1,
+    root: { kind: "leaf", id: "default", tabs: [{ id: "terminal-1" }], activeTabId: "terminal-1" },
+  };
+  const layoutWrites: unknown[] = [];
   let replies = 0;
+  /** What the review views show, shared by every view of the one review. */
+  let sightings: ReviewSighting[] = [];
+  let viewPhase: string | null = null;
+  const prepared: string[] = [];
+  const watched: string[] = [];
+  const show = (phase: string) => {
+    if (scenario.emptyView) return;
+    if (scenario.stuckView && phase !== "preparing") return;
+    if (scenario.lateView && (phase === "preparing" || phase === "reviewing")) return;
+    if (viewPhase === phase) return;
+    viewPhase = phase;
+    sightings.push({ phase, at: now });
+  };
   const linkCalls: boolean[] = [];
   const hiddenCalls: boolean[] = [];
   const closed: string[] = [];
   const calls: string[][] = [];
+  const turnFiles: Array<{ relative: string; count: number; heldAtModel: boolean }> = [];
+  const turnFilesRemoved: string[] = [];
   const note = (id: string) => {
     const existing = markers.get(id);
     if (existing) {
@@ -175,8 +217,16 @@ function busyHarness(scenario: Scenario = {}) {
       return json({ messageId: "m1" });
     }
     if (verb === "review launch") {
+      // The review environment holds at most nine tabs, as the backend refuses.
+      const tabs = (reviewLayout.root as { tabs: Array<{ id: string }> }).tabs;
+      if (tabs.length >= 9)
+        return { status: 1, stdout: JSON.stringify({ error: { code: "operation-failed" } }) };
+      tabs.push({ id: `multi-review:wf-${now}` });
       reviewReads = 0;
       reviewLaunches += 1;
+      sightings = [];
+      viewPhase = null;
+      if (!scenario.lateView) show("preparing");
       return json({ workflowId: `wf-${now}`, phase: "preparing" });
     }
     if (verb === "review cancel") return json({});
@@ -196,15 +246,20 @@ function busyHarness(scenario: Scenario = {}) {
         });
       if (!scenario.lateResults) entry.resultsAt.push(now);
     };
-    if (reviewReads === 1) {
-      submit("submit_validation_plan");
-      submit("submit_review_preparation");
-    }
+    // Multi Review's own results; `submit_review_preparation` is a build
+    // pipeline's and never comes from a review.
+    if (reviewReads === 1) submit("submit_validation_plan");
     if (reviewReads === 3) submit("submit_review_report");
     if (reviewReads === 5) submit("submit_consolidated_review");
     if (scenario.lateResults && reviewReads === 8) {
       for (const entry of Object.values(workflow)) entry.resultsAt.push(now + 50);
     }
+    // The views render each phase a poll after the backend reaches it.
+    const shown = phase;
+    queueMicrotask(() => {
+      now += 20;
+      show(shown);
+    });
     return phase;
   };
   const gateway = {
@@ -229,6 +284,27 @@ function busyHarness(scenario: Scenario = {}) {
       };
     },
     invoke: async (command: string, args: Record<string, unknown>) => {
+      if (command === "get_pane_layout") return structuredClone(reviewLayout);
+      if (command === "apply_pane_layout_intent") {
+        // The backend refuses any field but these four (a live run's HTTP 500).
+        for (const side of [args.baseLayout, args.desiredLayout])
+          expect(Object.keys(side as object).sort()).toEqual([
+            "activePaneId",
+            "containerId",
+            "root",
+            "version",
+          ]);
+        layoutWrites.push(args.desiredLayout);
+        if (!scenario.keepReviewTabs) {
+          const desired = args.desiredLayout as { root: unknown };
+          reviewLayout = {
+            ...reviewLayout,
+            revision: reviewLayout.revision + 1,
+            root: desired.root,
+          };
+        }
+        return structuredClone(reviewLayout);
+      }
       if (command === "create_environment") {
         environments.push({ id: "env-busy-ask", name: String(args.name), projectId: "p1" });
         return { id: "env-busy-ask" };
@@ -279,7 +355,9 @@ function busyHarness(scenario: Scenario = {}) {
       if (name === "busy-ask") return approval && !approval.answered ? "waiting" : "idle";
       return "idle";
     },
-    badges: async () => Object.fromEntries(environmentNames().map((name) => [name, burst || null])),
+    // The environment scan counts lines for at most 2,000 untracked files.
+    badges: async () =>
+      Object.fromEntries(environmentNames().map((name) => [name, Math.min(burst, 2_000) || null])),
     approvalVisible: async () => Boolean(approval && !approval.answered),
     replyCount: async () => replies,
     mailCount: async () => mails,
@@ -289,6 +367,14 @@ function busyHarness(scenario: Scenario = {}) {
     setLinkUp: (up) => {
       linkCalls.push(up);
     },
+    prepareReview: async (environmentName) => {
+      if (scenario.failPrepare) throw new Error("waitFor: Timeout 30000ms exceeded.\nCall log");
+      prepared.push(`${label}:${environmentName}`);
+    },
+    watchReview: async (workflowId) => {
+      watched.push(`${label}:${workflowId}`);
+    },
+    reviewPhases: async () => sightings.map((sighting) => ({ ...sighting })),
     close: async () => {
       closed.push(label);
     },
@@ -305,12 +391,24 @@ function busyHarness(scenario: Scenario = {}) {
       return Array.from({ length: count }, (_, index) => client(`c${index + 1}`, index === 1));
     },
     writeBurst: (worktrees, relative, count) => {
+      if (relative.startsWith("busy-turn/")) {
+        // Turn files go into the turn environment only, while its turn is held.
+        expect(worktrees).toEqual(["/worktrees/busy-1"]);
+        const tag = relative.slice("busy-turn/".length);
+        turnFiles.push({ relative, count, heldAtModel: markers.has(`t-${tag}`) });
+        return;
+      }
       expect(worktrees).toHaveLength(environments.length);
       expect(relative.startsWith("busy-burst/")).toBe(true);
       burst = count;
       changed += environments.length;
     },
-    removeBurst: () => {
+    removeBurst: (worktrees, relative) => {
+      if (relative.startsWith("busy-turn/")) {
+        expect(worktrees).toEqual(["/worktrees/busy-1"]);
+        turnFilesRemoved.push(relative);
+        return;
+      }
       burst = 0;
     },
     commitFixture: () => {
@@ -339,6 +437,13 @@ function busyHarness(scenario: Scenario = {}) {
     linkCalls,
     hiddenCalls,
     closed,
+    prepared,
+    watched,
+    turnFiles,
+    turnFilesRemoved,
+    layoutWrites,
+    reviewTabs: () =>
+      (reviewLayout.root as { tabs: Array<{ id: string }> }).tabs.map((tab) => tab.id),
     commits: () => commits,
   };
 }
@@ -354,6 +459,7 @@ const options = (overrides: Partial<Parameters<typeof measureBusy>[2]> = {}) => 
   busyEnvironments: 4,
   busyClients: [0, 1, 2],
   busyBurstFiles: 5,
+  busyTurnFiles: 0,
   dataDir: "/profile/data",
   ...overrides,
 });
@@ -369,6 +475,8 @@ describe("busy phase options", () => {
       "0,2,2",
       "--busy-burst-files",
       "100",
+      "--busy-turn-files",
+      "2500",
       "--fixture-environments",
       "local",
     ]);
@@ -377,8 +485,12 @@ describe("busy phase options", () => {
       busyEnvironments: 10,
       busyClients: [0, 2],
       busyBurstFiles: 100,
+      busyTurnFiles: 2500,
     });
     expect(parseOptions([]).busyRounds).toBe(0);
+    expect(parseOptions([]).busyTurnFiles).toBe(0);
+    expect(() => parseOptions(["--busy-turn-files", "1.5"])).toThrow();
+    expect(() => parseOptions(["--busy-turn-files", "-1"])).toThrow();
     expect(parseBusyClients("1")).toEqual([1]);
     expect(() => parseBusyClients("3")).toThrow();
     expect(() => parseBusyClients("")).toThrow();
@@ -401,7 +513,7 @@ describe("busy phase", () => {
       h.runtime,
     );
     expect(result.failures).toEqual([]);
-    expect(result.samples["workflow-progress"]).toHaveLength(3);
+    expect(result.samples["workflow-progress"]).toHaveLength(2);
   });
   test("an observation before its own submission cannot use a later unrelated phase", async () => {
     const h = busyHarness({ reversedSubmission: true });
@@ -412,7 +524,7 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
-    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(3);
     expect(result.samples["workflow-progress"]).toEqual([]);
   });
   test("missing submissions cannot silently qualify", async () => {
@@ -424,7 +536,7 @@ describe("busy phase", () => {
       undefined,
       h.runtime,
     );
-    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(4);
+    expect(result.failures.filter((item) => item.step === "workflow-sample")).toHaveLength(3);
     expect(busyFailed(result)).toBe(true);
   });
   test("an unconfirmed stop refuses session reuse", async () => {
@@ -451,6 +563,136 @@ describe("busy phase", () => {
     );
     expect(result.rounds.map((item) => item.failed)).toEqual([true, false]);
     expect(h.calls.filter((call) => call[0] === "session" && call[1] === "stop")).toHaveLength(2);
+  });
+  test("turn files are written while the held turn runs and removed each round", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0, 1], busyTurnFiles: 2_500 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.turnFileRounds).toBe(2);
+    expect(h.turnFiles).toEqual([
+      { relative: path.join("busy-turn", "r1"), count: 2_500, heldAtModel: true },
+      { relative: path.join("busy-turn", "r2"), count: 2_500, heldAtModel: true },
+    ]);
+    expect(h.turnFilesRemoved).toEqual([
+      path.join("busy-turn", "r1"),
+      path.join("busy-turn", "r2"),
+    ]);
+    expect(busySummaryLines("turn files", result).join("\n")).toContain("2 held turns wrote files");
+  });
+  test("a CLI that cannot list environments is named, not reported as a missing fixture", async () => {
+    const h = busyHarness();
+    const broken: AsyncCli = async (args, signal) =>
+      args[0] === "environment" && args[1] === "list"
+        ? { status: 1, stdout: "" }
+        : h.cli(args, signal);
+    await expect(
+      measureBusy(h.gateway, broken, options({ busyClients: [0] }), undefined, h.runtime),
+    ).rejects.toThrow(/environment list failed \(exit 1\).*build:cli/);
+  });
+  test("a burst past the untracked count limit waits only for the lines a badge can show", async () => {
+    expect(UNTRACKED_COUNTED_FILES).toBe(UNTRACKED_SCAN_MAX_FILES);
+    expect(burstBadgeLines(200)).toBe(200);
+    expect(burstBadgeLines(2_500)).toBe(2_000);
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1], busyBurstFiles: 2_500 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.timeouts).toEqual({});
+    expect(result.samples["burst-badge"]).toHaveLength(4);
+  });
+  test("each review's tabs are closed, so rounds past the ninth still launch reviews", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 12 }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.obligations.workflows).toBe(12);
+    // Only the last review's tab is left, beside the terminal.
+    expect(h.reviewTabs()).toHaveLength(2);
+    expect(h.reviewTabs().filter((id) => id.startsWith("multi-review:"))).toHaveLength(1);
+    expect(h.layoutWrites).toHaveLength(11);
+  });
+  test("without the tab close a long run's reviews stop launching (the soak's failure)", async () => {
+    const h = busyHarness({ keepReviewTabs: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0], busyRounds: 11 }),
+      undefined,
+      h.runtime,
+    );
+    // One terminal tab and eight reviews fill the nine.
+    expect(result.obligations.workflows).toBe(8);
+    expect(result.failures.map((entry) => [entry.round, entry.step])).toEqual([
+      [9, "workflow"],
+      [10, "workflow"],
+      [11, "workflow"],
+    ]);
+  });
+  test("a pane layout tree loses only one review's tabs", () => {
+    const root = {
+      kind: "split",
+      children: [
+        {
+          kind: "leaf",
+          tabs: [
+            {
+              id: "multi-review:wf-1",
+              type: "multi-review",
+              multiReviewTabData: { workflowId: "wf-1" },
+            },
+            { id: "terminal-1" },
+          ],
+          activeTabId: "multi-review:wf-1",
+        },
+        {
+          kind: "leaf",
+          tabs: [
+            { id: "multi-review:wf-1:reviewer:r1" },
+            { id: "multi-review-fix:wf-1" },
+            { id: "multi-review:wf-2" },
+          ],
+          activeTabId: "multi-review:wf-2",
+        },
+      ],
+    };
+    const next = withoutReviewTabs(root, "wf-1");
+    expect(next.removed).toBe(3);
+    expect(next.root).toEqual({
+      kind: "split",
+      children: [
+        { kind: "leaf", tabs: [{ id: "terminal-1" }], activeTabId: "terminal-1" },
+        { kind: "leaf", tabs: [{ id: "multi-review:wf-2" }], activeTabId: "multi-review:wf-2" },
+      ],
+    });
+    expect(withoutReviewTabs(root, "wf-9").removed).toBe(0);
+  });
+  test("without turn files no turn directory is touched", async () => {
+    const h = busyHarness();
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [0] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.turnFileRounds).toBe(0);
+    expect(h.turnFiles).toEqual([]);
+    expect(h.turnFilesRemoved).toEqual([]);
   });
   test("runs every step for 0, 1 and 2 clients and keeps every obligation", async () => {
     const h = busyHarness();
@@ -480,6 +722,14 @@ describe("busy phase", () => {
     expect(result.samples["workflow-progress"].length).toBeGreaterThan(0);
     // The plan's result is followed by its commands, not only a keyed wake: its own row.
     expect(result.samples["workflow-validation"]).toHaveLength(3);
+    // Every client whose link stays up watched the review from its own view:
+    // the hidden single client, and the first of two (the second is cut).
+    expect(h.prepared).toEqual(["c1:busy-2", "c1:busy-2"]);
+    expect(h.watched).toHaveLength(2);
+    expect(result.reviewViews).toEqual({ watched: 2, sampled: 4, unobserved: 0 });
+    expect(result.samples["workflow-progress-visible"]).toHaveLength(4);
+    for (const value of result.samples["workflow-progress-visible"])
+      expect(value).toBeGreaterThanOrEqual(0);
     // One new validation run per review, read from the review environment.
     expect(result.validationRuns).toEqual(
       Array.from({ length: 3 }, () => ({ queuedMs: 5, commandMs: 20, runMs: 900 })),
@@ -507,6 +757,8 @@ describe("busy phase", () => {
     expect(h.calls.every((call) => call.includes("--json"))).toBe(true);
     const lines = busySummaryLines("candidate repeat 1", result).join("\n");
     expect(lines).toContain("3 reviews completed");
+    expect(lines).toContain("Workflow progress visible after a result");
+    expect(lines).toContain("Review views: 2 watched a review, 4 results timed in a view");
     expect(lines).toContain("Pending approval visible");
     expect(lines).toContain("≤ 2000");
     expect(lines).toContain("≤ 2400");
@@ -515,6 +767,104 @@ describe("busy phase", () => {
     expect(pool.granted).toBeGreaterThan(0);
     expect(pool).toMatchObject({ rejected: 0, maxActive: 2, maxWaiting: 1, maxOldestWaitMs: 40 });
     expect(lines).toContain("Admission: workflow-provider");
+  });
+
+  test("a review view that opens late times only the results it could have shown", async () => {
+    const h = busyHarness({ lateView: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      h.runtime,
+    );
+    expect(result.failures).toEqual([]);
+    // The report reached the backend before the view showed the review.
+    expect(result.reviewViews).toEqual({ watched: 1, sampled: 1, unobserved: 1 });
+    expect(result.samples["workflow-progress-visible"]).toHaveLength(1);
+    expect(busyFailed(result)).toBe(false);
+  });
+
+  test("a review view that never shows the progress is a timeout, and one that cannot open fails the round", async () => {
+    const stuck = busyHarness({ stuckView: true });
+    const stuckResult = await measureBusy(
+      stuck.gateway,
+      stuck.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      stuck.runtime,
+    );
+    expect(stuckResult.samples["workflow-progress-visible"]).toEqual([]);
+    expect(stuckResult.timeouts["workflow-progress-visible"]).toBe(2);
+    expect(busyFailed(stuckResult)).toBe(true);
+
+    const refused = busyHarness({ failPrepare: true });
+    const refusedResult = await measureBusy(
+      refused.gateway,
+      refused.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      refused.runtime,
+    );
+    expect(refusedResult.failures).toEqual([
+      {
+        clients: 1,
+        round: 1,
+        step: "workflow-visible",
+        detail: "c1: waitFor: Timeout 30000ms exceeded.",
+      },
+    ]);
+    // The review itself still ran and was timed at the backend.
+    expect(refusedResult.obligations.workflows).toBe(1);
+    expect(refusedResult.reviewViews.watched).toBe(0);
+  });
+
+  test("a selected review view that never renders fails qualification", async () => {
+    const h = busyHarness({ emptyView: true });
+    const result = await measureBusy(
+      h.gateway,
+      h.cli,
+      options({ busyClients: [1] }),
+      undefined,
+      h.runtime,
+    );
+    expect(h.prepared).toHaveLength(1);
+    expect(h.watched).toHaveLength(1);
+    expect(result.reviewViews).toEqual({ watched: 1, sampled: 0, unobserved: 2 });
+    expect(result.samples["workflow-progress-visible"]).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        clients: 1,
+        round: 1,
+        step: "workflow-visible",
+        detail: "c1: review did not show terminal phase ready",
+      },
+    ]);
+    expect(result.obligations.workflows).toBe(1);
+    expect(busyFailed(result)).toBe(true);
+  });
+
+  test("client progress is the first sighting of the phase or a later one, after its result", () => {
+    const sightings = [
+      { phase: "preparing", at: 100 },
+      { phase: "consolidating", at: 900 },
+      { phase: "ready", at: 1_400 },
+    ];
+    // Reviewing was skipped between two renders; consolidating shows it.
+    expect(clientProgressSample(sightings, 400, "reviewing")).toEqual({
+      kind: "sample",
+      ms: 500,
+    });
+    expect(clientProgressSample(sightings, 1_000, "ready")).toEqual({ kind: "sample", ms: 400 });
+    // A view that showed nothing before the result was not watching yet.
+    expect(clientProgressSample(sightings, 50, "reviewing")).toEqual({ kind: "unobserved" });
+    expect(clientProgressSample([], 50, "reviewing")).toEqual({ kind: "unobserved" });
+    // Never shown, shown before its own result, or an unknown phase: missing.
+    expect(clientProgressSample(sightings.slice(0, 1), 400, "ready")).toEqual({
+      kind: "missing",
+    });
+    expect(clientProgressSample(sightings, 1_000, "consolidating")).toEqual({ kind: "missing" });
+    expect(clientProgressSample(sightings, 400, "fixing")).toEqual({ kind: "missing" });
   });
 
   test("records a lost approval, a failed review and a duplicated dispatch as failures", async () => {
@@ -563,10 +913,12 @@ describe("busy phase", () => {
       samples: { ...(samples as object), "approval-visible": [100, 2_500] } as never,
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+      turnFileRounds: 0,
       failures: [],
       windowSamples: [],
       admission: {},
       validationRuns: [],
+      reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
       modelRequests: 0,
       durationMs: 0,
     });
@@ -583,10 +935,12 @@ describe("busy phase", () => {
       samples: {} as never,
       timeouts: {},
       obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
+      turnFileRounds: 0,
       failures: [],
       windowSamples: [],
       admission: {},
       validationRuns: [],
+      reviewViews: { watched: 0, sampled: 0, unobserved: 0 },
       modelRequests: 0,
       durationMs: 0,
     };

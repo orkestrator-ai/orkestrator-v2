@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   analyzeStorageService,
   analyzeStorageWriters,
-  backendSourceFiles,
+  backendSources,
   calleePath,
   coreDir,
   identifiersOutside,
@@ -15,6 +14,7 @@ import {
   REPOSITORIES,
   scannedFiles,
   walk,
+  WHOLE_TREE_SCAN_TIMEOUT_MS,
 } from "./storage-writer-guards-test-support.js";
 
 describe("StorageService store writers", () => {
@@ -70,11 +70,17 @@ describe("StorageService store writers", () => {
       leases: ["backendProfileFile"],
       paths: 3,
     });
-    // Agent mail's four classes write through one shared store and lease.
+    // Agent mail's four classes write through one shared store and lease,
+    // including the environment delete's row diff.
     expect(stores.get("agentMailFile")).toMatchObject({
       kind: "whole",
       leases: ["agentMailFile"],
     });
+    expect(
+      analyzeStorageService().sites.find(
+        (site) => site.member === "AgentMailStore.saveRows" && site.store === "agentMailFile",
+      ),
+    ).toMatchObject({ kind: "whole" });
     expect(stores.get("linearAuthFile")).toMatchObject({
       kind: "whole",
       leases: ["linearAuthFile"],
@@ -152,6 +158,28 @@ describe("StorageService store writers", () => {
     expect(sources.some((source) => source.source.includes("return (async () => {"))).toBe(true);
     const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
     expect(result.violations.join("\n")).toContain("acknowledgeStartupAgentSession");
+  });
+
+  test("agent mail's row diff outside the mail lease is refused", () => {
+    const leased = `await this.store.enqueue(async () => {
+      // Planned on the shared read model and committed as the rows it changes:`;
+    const sources = readStorageSources().map((source) => ({
+      ...source,
+      source: source.source.replace(
+        leased,
+        `await (async () => {
+      // Planned on the shared read model and committed as the rows it changes:`,
+      ),
+    }));
+    expect(sources.some((source) => source.source.includes(leased))).toBe(false);
+    const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+    expect(
+      result.violations.some(
+        (violation) =>
+          violation.includes("updateStoreRows") &&
+          violation.includes("deleteAgentMailByEnvironment"),
+      ),
+    ).toBe(true);
   });
 
   describe("prompt queue writers", () => {
@@ -287,9 +315,12 @@ describe("StorageService store writers", () => {
       "publicOperations",
       "setupApprovals",
       "suborks",
+      "ticketSync",
       "watchedPullRequests",
     ]);
     expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");
+    // Sync across machines is its own collaborator sharing the board's lease.
+    expect(areas.get("ticketSync")).toContain("KanbanSyncRepository.applyTicketSyncOps");
     // Omitted from the area: only other repositories call it.
     expect(areas.get("publicOperations")).not.toContain(
       "PublicOperationsRepository.loadPublicOperationIndex",
@@ -312,42 +343,46 @@ describe("StorageService store writers", () => {
     );
   });
 
-  test("no backend class outside the scan calls the store write primitives", () => {
-    const { classes } = analyzeStorageService();
-    // StorageContext implements them.
-    const allowed = new Set([...classes, "StorageContext"]);
-    const primitive =
-      /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)$/;
-    const outside: string[] = [];
-    for (const full of backendSourceFiles()) {
-      const source = readFileSync(full, "utf8");
-      if (
-        !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)\s*[<(]/.test(
-          source,
-        )
-      ) {
-        continue;
-      }
-      const file = parse({ file: path.relative(repoRoot, full), source });
-      walk(file.program, (node, ancestors) => {
-        const callee = node.type === "CallExpression" ? calleePath(node) : null;
-        if (!callee || !primitive.test(callee)) return;
-        const owner = ancestors.findLast(
-          (ancestor) => ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression",
-        );
-        const name =
-          owner?.type === "ClassDeclaration" || owner?.type === "ClassExpression"
-            ? (owner.id?.name ?? null)
-            : null;
-        if (!name || !allowed.has(name)) {
-          outside.push(`${file.file}:${lineOf(file, node.start)} ${name ?? "(no class)"}`);
+  test(
+    "no backend class outside the scan calls the store write primitives",
+    () => {
+      const { classes } = analyzeStorageService();
+      // StorageContext implements them.
+      const allowed = new Set([...classes, "StorageContext"]);
+      const primitive =
+        /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)$/;
+      const outside: string[] = [];
+      for (const source of backendSources()) {
+        if (
+          !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)\s*[<(]/.test(
+            source.source,
+          )
+        ) {
+          continue;
         }
-      });
-    }
-    // A class that writes stores outside the scan is invisible to the guard
-    // above; reach it from StorageService through a typed field instead.
-    expect(outside).toEqual([]);
-  });
+        const file = parse(source);
+        walk(file.program, (node, ancestors) => {
+          const callee = node.type === "CallExpression" ? calleePath(node) : null;
+          if (!callee || !primitive.test(callee)) return;
+          const owner = ancestors.findLast(
+            (ancestor) =>
+              ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression",
+          );
+          const name =
+            owner?.type === "ClassDeclaration" || owner?.type === "ClassExpression"
+              ? (owner.id?.name ?? null)
+              : null;
+          if (!name || !allowed.has(name)) {
+            outside.push(`${file.file}:${lineOf(file, node.start)} ${name ?? "(no class)"}`);
+          }
+        });
+      }
+      // A class that writes stores outside the scan is invisible to the guard
+      // above; reach it from StorageService through a typed field instead.
+      expect(outside).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 
   test.each([
     ["StorageContext", "Storage\\u0043ontext"],
@@ -370,41 +405,49 @@ describe("StorageService store writers", () => {
     ).toEqual([`escaped.ts:1 ${name}`, `plain.ts:1 ${name}`]);
   });
 
-  test("only the scanned storage classes hold the StorageContext", () => {
-    // A class that takes a StorageContext writes stores. The scan follows
-    // every class StorageService reaches through a typed field; anything else
-    // naming the context would write where the scan does not look.
-    const allowed = new Set([
-      ...scannedFiles(),
-      ...["storage-context.ts", "storage-changes.ts", "storage-test-support.ts"].map((name) =>
-        path.relative(repoRoot, path.join(coreDir, name)),
-      ),
-    ]);
-    expect(
-      identifiersOutside(
-        allowed,
-        (name) => name === "StorageContext",
-        (source) => source.includes("StorageContext"),
-      ),
-    ).toEqual([]);
-  });
+  test(
+    "only the scanned storage classes hold the StorageContext",
+    () => {
+      // A class that takes a StorageContext writes stores. The scan follows
+      // every class StorageService reaches through a typed field; anything else
+      // naming the context would write where the scan does not look.
+      const allowed = new Set([
+        ...scannedFiles(),
+        ...["storage-context.ts", "storage-changes.ts", "storage-test-support.ts"].map((name) =>
+          path.relative(repoRoot, path.join(coreDir, name)),
+        ),
+      ]);
+      expect(
+        identifiersOutside(
+          allowed,
+          (name) => name === "StorageContext",
+          (source) => source.includes("StorageContext"),
+        ),
+      ).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 
-  test("code outside the storage files reaches the repositories only through StorageService", () => {
-    // Only StorageService's public methods and the members its area fields
-    // pick are entry points, so a caller holding a repository could run a
-    // write path the scan never checked. Callers name the area types instead.
-    const { classes } = analyzeStorageService();
-    const internal = new Set(classes.filter((name) => name !== "StorageService"));
-    const allowed = new Set([
-      ...scannedFiles(),
-      path.relative(repoRoot, path.join(coreDir, "storage-test-support.ts")),
-    ]);
-    expect(
-      identifiersOutside(
-        allowed,
-        (name) => internal.has(name),
-        (source) => [...internal].some((name) => source.includes(name)),
-      ),
-    ).toEqual([]);
-  });
+  test(
+    "code outside the storage files reaches the repositories only through StorageService",
+    () => {
+      // Only StorageService's public methods and the members its area fields
+      // pick are entry points, so a caller holding a repository could run a
+      // write path the scan never checked. Callers name the area types instead.
+      const { classes } = analyzeStorageService();
+      const internal = new Set(classes.filter((name) => name !== "StorageService"));
+      const allowed = new Set([
+        ...scannedFiles(),
+        path.relative(repoRoot, path.join(coreDir, "storage-test-support.ts")),
+      ]);
+      expect(
+        identifiersOutside(
+          allowed,
+          (name) => internal.has(name),
+          (source) => [...internal].some((name) => source.includes(name)),
+        ),
+      ).toEqual([]);
+    },
+    WHOLE_TREE_SCAN_TIMEOUT_MS,
+  );
 });

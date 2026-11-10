@@ -1,5 +1,6 @@
 import type { ReactNode, Ref } from "react";
 import { cn } from "@/lib/utils";
+import { CHAT_COLUMN_SHIFT_CLASS } from "./chat-column-shift";
 
 interface NativeComposeDockProps {
   centered: boolean;
@@ -44,7 +45,7 @@ export function NativeComposeDock({
   statusAccessory,
   notice,
   pinnedContent,
-  title = "Ready to build!",
+  title = "Ready to build",
   rootRef,
 }: NativeComposeDockProps) {
   const visibleTopAccessory = centered ? null : topAccessory;
@@ -56,13 +57,24 @@ export function NativeComposeDock({
         "absolute inset-x-0 z-20 px-2 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none sm:px-4",
         centered
           ? "top-1/2 max-h-full -translate-y-1/2 overflow-y-auto overscroll-contain py-2"
-          : "top-full -translate-y-full",
+          : /*
+             * Docked, the dock floats over a transcript that scrolls beneath
+             * it. A ground that fades in over its top 2rem and is solid below
+             * keeps that text out from behind the composer, the goal pill and
+             * the scroll-down control, without a hard edge across the column.
+             */
+            "top-full -translate-y-full before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:bottom-0 before:-z-10 before:bg-[linear-gradient(to_bottom,transparent,var(--color-background)_2rem)]",
       )}
     >
       <div
-        className={cn("flex flex-col items-center [&>*]:shrink-0", centered ? "gap-4" : "gap-0")}
+        className={cn(
+          "flex flex-col items-center [&>*]:shrink-0",
+          CHAT_COLUMN_SHIFT_CLASS,
+          centered ? "gap-4" : "gap-0",
+        )}
       >
         <div
+          aria-hidden={!centered}
           className={cn(
             "overflow-hidden text-center transition-[max-height,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
             centered ? "max-h-16 translate-y-0 opacity-100" : "max-h-0 -translate-y-2 opacity-0",

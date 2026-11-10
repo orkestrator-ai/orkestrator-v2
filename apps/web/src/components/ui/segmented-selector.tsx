@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
  * focus hairline stays inset and takes the text colour, clear of the blue fill.
  */
 export const SEGMENT_SELECTED_CLASS_NAME =
-  "bg-primary font-bold text-primary-foreground shadow-sm [--focus-hairline-color:currentColor]";
+  "bg-primary-fill font-bold text-primary-foreground shadow-sm [--focus-hairline-color:currentColor]";
 
 export interface SegmentedSelectorOption<T extends string> {
   value: T;

@@ -27,6 +27,10 @@ import {
   directTransportImport,
 } from "../source-guards/direct-transport-import";
 import { GUARD_IDS, type GuardId, type SourceGuard } from "../source-guards/guard";
+import {
+  RAW_WEBREQUEST_LISTENER_ROOTS,
+  rawWebRequestListener,
+} from "../source-guards/raw-webrequest-listener";
 import { releasedPortRebind } from "../source-guards/released-port-rebind";
 import {
   SOURCE_GUARDS,
@@ -429,6 +433,59 @@ describe("small-fake-pid", () => {
     ].join("\n");
     expect(lines(guard, source)).toEqual([]);
   });
+});
+
+describe("raw-webrequest-listener", () => {
+  const guard = rawWebRequestListener;
+  const file = "apps/desktop/electron/thing.ts";
+
+  test("flags a webRequest listener that is not wrapped to always answer", () => {
+    const source = [
+      "session.webRequest.onBeforeRequest((details, callback) => callback({}));",
+      "webRequest.onBeforeSendHeaders(filter, (details, callback) => callback({}));",
+      "this.session!.webRequest.onHeadersReceived(listener);",
+      "electronSession.webRequest.onBeforeRedirect(function (details) {});",
+      "(session.webRequest as WebRequest).onCompleted(observe);",
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("accepts answering, observing and null, and ignores other objects", () => {
+    const source = [
+      "session.webRequest.onBeforeRequest(answering('a', decide, () => ({ cancel: true })));",
+      "webRequest.onBeforeSendHeaders(filter, answering<D, R>('b', decide, failClosed));",
+      "session.webRequest.onBeforeRedirect(observing('c', observe, fail));",
+      "session.webRequest.onBeforeRedirect(null);",
+      "emitter.onBeforeRequest((details, callback) => callback({}));",
+      "const text = 'webRequest.onBeforeRequest((d, c) => c({}))';",
+    ].join("\n");
+    expect(lines(guard, source, file)).toEqual([]);
+  });
+
+  test("applies to Electron main's production sources only", () => {
+    const applies = (candidate: string) =>
+      guard.appliesTo({ path: candidate, source: "", isBunTest: false });
+    expect(guard.productionRoots).toEqual(RAW_WEBREQUEST_LISTENER_ROOTS);
+    expect(applies("apps/desktop/electron/preview-transport-manager.ts")).toBe(true);
+    expect(applies("apps/desktop/electron/socket-tos-guard.test.ts")).toBe(false);
+    expect(applies("apps/desktop/tests/artifact-host-manager.test.ts")).toBe(false);
+    expect(applies("apps/web/src/App.tsx")).toBe(false);
+  });
+
+  test("Electron main has no raw listener, and the scan reaches its listeners", () => {
+    const findings = scanRepository(ROOT, [rawWebRequestListener]);
+    expect(findings["raw-webrequest-listener"]).toEqual({});
+    const installs = listProductionSources(ROOT, RAW_WEBREQUEST_LISTENER_ROOTS).filter((relative) =>
+      /webRequest\.on[A-Z]/.test(readFileSync(path.join(ROOT, relative), "utf8")),
+    );
+    expect(installs).toEqual(
+      expect.arrayContaining([
+        "apps/desktop/electron/artifact-host-session.ts",
+        "apps/desktop/electron/preview-transport-manager.ts",
+        "apps/desktop/electron/renderer-file-policy.ts",
+      ]),
+    );
+  }, 30_000);
 });
 
 describe("window-orkestrator-direct", () => {

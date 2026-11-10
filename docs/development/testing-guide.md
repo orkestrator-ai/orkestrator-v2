@@ -770,12 +770,23 @@ host-reachability check: each backend is a new Docker owner stopped seconds
 after `ready`, so its Linux probe network would belong to an owner nothing
 reaps. A later on-demand check (a container scenario on a rootless daemon, a
 workflow preflight) still runs. A scenario that needs the boot check passes
-the variable through its own `env`. `renderer-log-boundary-electron.spec.ts`
-sets it because the probe's container can make Chromium abort the window's Vite
-module loads (flake 2340). `service-preview-electron.spec.ts` sets it
-for both of its backends too (agent-test backends keep it, in
-`AGENT_TEST_SAFE_ENV_NAMES`): on a host whose firewall drops Docker traffic the
-check's result dialog opened mid-test and took keyboard focus (flake 0620).
+the variable through its own `env`.
+
+The Electron specs under `e2e/agent-testing/` do the same through
+`electronSpecEnvironment` (`e2e/agent-testing/electron-spec-environment.ts`):
+every launch, Playwright's `electron.launch` or a bare spawn of the Electron
+binary, builds its `env` there (`packagedLaunchEnvironment` calls it), which
+sets the variable to `off` unless the spec passes its own value. The runner's
+own value is ignored. Agent-test backends keep the variable
+(`AGENT_TEST_SAFE_ENV_NAMES`). `tests/unit/electron-spec-environment.test.ts`
+fails on a launch that builds its `env` any other way, including one with no
+`env` at all. Besides the leaked network (todo 7470), the probe's container
+can make Chromium abort the window's Vite module loads (flake 2340), and on a
+host whose firewall drops Docker traffic the check's result dialog opened
+mid-test and took keyboard focus (flakes 0620, 4250). No Electron spec runs
+the boot probe now; the dialog itself is covered by
+`ContainerHostReachabilityNotice.test.tsx` and the browser specs that close it,
+and `dismissStartupDialogs` still closes it for a spec that turns the probe on.
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and
@@ -882,11 +893,11 @@ Generate the reference before making the change; no artifact is committed
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline and multi-review
-  supervisors over a temporary store, in rollback and keyed
-  modes, on one manual clock. Rollback is what
-  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick, or for
-  multi review its `WorkflowDueScheduler` (15 s reconciliation scan,
-  per-workflow due passes). Each domain reports `storageReads` (store content
+  supervisors over a temporary store in keyed mode, and feature planning and
+  build pipelines also in rollback mode, on one manual clock. Rollback is what
+  `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` selects: the whole-store tick. Multi
+  review has no rollback mode since its `WorkflowDueScheduler` was removed
+  (todo 0048 task 13). Each domain reports `storageReads` (store content
   decoded, cached or not, and uncached row queries) beside `storageStats`
   (reuse of already-decoded records) and `storageBytes` (what those reads
   fetched from SQLite; cache-served reads fetch nothing). The test holds every attempt to a
@@ -931,7 +942,10 @@ disappearance inside an observed interval invalidates that rate.
 
 Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
-`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`; native queues, backend activity
+and Multi Review stay keyed in both arms, since their rollback drivers were
+removed)
+and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
 freshness probes use it.
 
@@ -1014,24 +1028,38 @@ credential, login or provider: every turn goes to the fake model.
   N rounds of: `--busy-burst-files` (default 200) files written into every
   environment at once and removed; a turn in `busy-1` held at the model
   (`[hold:<id>]`) with a prompt queued behind it (`session prompt
-  --enqueue`); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  --enqueue`), with `--busy-turn-files` (default 0) files written into
+  `busy-1` while that turn is held and removed when the round ends, so the
+  turn and thread-segment owners get file lists past the 2,000-row
+  measurement cap (todo 4960); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
   which Pi parks as an approval, and agent mail to that tab; with two
   clients the second one's link cut (the outage link of
   `client-outage-support.ts`), with one its document hidden; the approval
   answered through the public action, the held turn released and the queued
   prompt sent; a Multi Review on `busy-2` with every slot on the fake model
   (it runs `git rev-parse HEAD` through Pi's `bash` for its validation plan,
-  then submits fixed finding-free results) followed to `ready`; and the cut
-  or hidden client restored.
+  then submits fixed finding-free results) followed to `ready`, watched by
+  every client whose link is up from a review view of its own (a second
+  signed-in context opened on `busy-2` before the launch, selecting the
+  review's tab and recording each phase its header shows), the previous
+  round's review cancelled and its tabs closed first (an environment holds at
+  most nine tabs, so without that every launch after the ninth round is
+  refused); and the cut or hidden client restored. A burst's badge is waited
+  for only up to the 2,000 untracked files the environment scan counts lines
+  for. The driver runs every step through this checkout's CLI, so run
+  `mise run build:cli` first.
 - Measures: each row of the latency budgets the round reaches, from the
   moment its cause is known (the fake model's arrival times, or the command's
   return) to what each connected client's page showed, plus backend rows
   (the approval in `session.interactions`, the queued prompt reaching the
   model, a Multi Review phase change after its corresponding result submission) and
-  the resumed client's convergence. Workflow timings are backend upper bounds
-  from submission (before acceptance); workflow client-visible latency remains
-  unmeasured. Every scripted result must have exactly one submission and its
-  expected consuming phase. Failed rounds stop their sessions before reuse;
+  the resumed client's convergence. Workflow progress is timed from each
+  result's submission (before acceptance) both to the backend's phase change
+  (an upper bound) and to the review view showing that phase or a later one;
+  a result that reached the backend before the view showed the review is
+  reported as not sampled. Every scripted result (the validation plan, the
+  reviewer report and the consolidated review; a review sends no preparation
+  result) must have exactly one submission and its expected consuming phase. Failed rounds stop their sessions before reuse;
   an uncertain stop aborts the phase. Obligations: each held turn and queued
   prompt reaches the model exactly once, the approval is answered and its
   turn finishes, and every review reaches `ready`. `recurringWork` and
@@ -1170,6 +1198,109 @@ unread-state and transcript requests share the transition windows, and
 their timing-dependent totals are not WEB-3's refetch cost. The two list
 hydrators are all that remain at the 1202 baseline commit; the original
 report's third list had already been removed there.
+
+#### A claude-tmux tab in a container, and per-item counts on a busy profile
+
+Two drivers took 1202 task 1's Linux counts on 2026-11-10; both read a
+running credential-free profile and record kinds, counts and durations only.
+
+`scripts/container-tmux-tab-live.ts` opens one claude-tmux tab on the
+profile's container fixture environment. Its model is
+`e2e/agent-testing/container-fake-claude-api.ts`, run by the container's own
+Bun on the container's loopback and named in the container's
+`~/.claude/settings.json` (`container-fake-claude-install.ts`), so the image's
+real `claude` takes turns with no login. It measures five windows (no tab; the
+idle tab before its first prompt, when no transcript exists; three queued
+turns; the idle tab with its transcript bound; the container stopped with
+`docker stop` behind the app's back) and, for each, both the backend's
+`recurringWork` counters and every `docker exec` Docker itself reports for
+the container (`docker events --filter event=exec_start`), labelled by
+program only. Use Docker's count to compare commits: the claude-tmux tab
+loop has no recurring kind on any commit so far (`tmux-poll` is the
+per-container Claude state poll), and an older backend leaves more loops
+uncounted. Afterwards it starts the container again, removes the fake model
+and stops the tab.
+
+`scripts/busy-item-counts-live.ts` runs on a profile the 0048 busy driver
+filled and kept (`recurring-live-ab.ts --busy-rounds 3 --busy-clients 0
+--keep-profiles`), restarted with the same `dev:test` flags. It reads two
+windows: everything running, then every `busy-*` environment stopped through
+the public `environment.stop` action (so the presence pass meets stopped
+environments that own mailboxes), and starts them again.
+
+```bash
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile ctab --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/container-tmux-tab-live.ts --profile ctab \
+  --out output/benchmarks/ctab.json
+mise run dev:stop --profile ctab && mise run dev:reset --profile ctab
+
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise exec -- bun scripts/recurring-live-ab.ts \
+  --arms candidate --busy-rounds 3 --busy-clients 0 --busy-environments 10 \
+  --fixture-environments local --agent-platforms pi --freshness-probes 0 \
+  --keep-profiles --profile-prefix busy --out output/benchmarks/busy.json
+mise run dev:test --profile <the kept profile> --fixture --fixture-environments local \
+  --no-agent-credentials --agent-platforms pi --headless
+mise exec -- bun scripts/busy-item-counts-live.ts --profile <the kept profile> \
+  --out output/benchmarks/items.json
+```
+
+The busy driver needs `packages/cli/dist` (`bun run --cwd packages/cli
+build`) in whichever checkout runs the profile; with `--checkout` its busy
+phase uses that checkout's CLI, because today's CLI refuses a backend that
+publishes no Linux process identity. A launcher older than `--headless`
+shows its window on the signed-in desktop. On Linux keep it off with a
+two-line `electron` wrapper that `exec`s the checkout's own Electron binary
+with the switches in `HEADLESS_ELECTRON_SWITCHES`
+(`apps/desktop/electron/runtime-profile.ts`) and no `DISPLAY` or
+`WAYLAND_DISPLAY`, named by `ELECTRON_OVERRIDE_DIST_PATH` for that launcher
+(`bun install.js` in its `electron` package first if `dist/` is missing).
+Run `dev:stop` and `dev:reset` for such a profile from its own checkout.
+
+`container-tmux-tab-live.ts` also records each container change signal's
+state and rings (`tmux-hook-signal` is the claude-tmux doorbell) either side
+of every window. To see the doorbell confirmed on a Linux host whose own
+Docker cannot reach the host, run the same profile on a disposable rootless
+daemon with host loopback: its containers reach the backend through
+`10.0.2.2`, and the app's on-demand reachability check names that address
+on the first container create even with the boot check off.
+
+```bash
+mise run docker:build:dev --profile ctab        # with the qualification shim, as above
+mise run docker:disposable -- start --name ctab --host-loopback \
+  --image orkestrator-v2:dev-<hash>             # the tag docker:build:dev printed
+eval "$(mise run docker:disposable -- env --name ctab)"
+# then the same dev:test, container-tmux-tab-live.ts, dev:stop and dev:reset
+# commands as above, in this shell, so the profile and the driver use that daemon
+mise run docker:disposable -- stop --name ctab
+```
+
+`scripts/human-prompt-reads-live.ts` measures BG-9: one native Claude
+session started through the profile's CLI (`--checkout` for an older
+commit's), the profile's isolated Claude directory pointed at the loopback
+fake Anthropic model, no browser, then 60 s idle and 180 s with a turn held
+at the model. The human-prompt monitor's bridge reads are the unattributed
+`provider-request` counter; the artifact also has each kind's provider
+requests a minute.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile bg9 --fixture \
+  --fixture-environments local --no-agent-credentials --agent-platforms claude --headless
+mise exec -- bun scripts/human-prompt-reads-live.ts --profile bg9 \
+  --out output/benchmarks/bg9.json
+```
+
+A launch with a cold toolchain page cache needs no root on Linux: with the
+profile stopped, `find <dataDir>/toolchains -type f -exec dd if={} iflag=nocache count=0 status=none \;`
+evicts the toolchain's pages, and `fincore -b` on the same files confirms
+nothing is resident. Delete `<dataDir>/toolchains/.verified-stamps.json` as
+well for a full check. Time the `dev:test` start to its `Live` line (the
+launcher runs the toolchain step before Electron) and read Electron's
+`[toolchain] prepare.ready durationMs` from the profile's `logs/electron.log`,
+which is rewritten on every start.
 
 #### Image and layer sizes
 

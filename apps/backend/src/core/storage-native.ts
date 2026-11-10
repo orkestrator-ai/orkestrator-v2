@@ -1076,6 +1076,41 @@ export class NativeAgentSessionsRepository {
     await this.nativeAgentDisplayTailStore().deleteByEnvironment(environmentId);
   }
 
+  /**
+   * The keys of an environment's readable sessions, sorted. Read from the
+   * store's indexed owner column, so the cost is this environment's rows, not
+   * the store's (todo 6120 task 6): parsing every session here held the event
+   * loop for 150 ms per delete on a 2,000-session store. Rows with no owner
+   * (an older build wrote them, or the open-time backfill could not read
+   * them) are parsed and checked here, so a row the index misses is still
+   * found. A store held whole, or buffered by an atomic scope, is read whole.
+   */
+  private async nativeAgentSessionKeysForEnvironment(environmentId: string): Promise<string[]> {
+    const indexed = this.context.listStoreRowKeysByOwner(
+      this.files.nativeAgentSessionsFile(),
+      environmentId,
+    );
+    if (!indexed) {
+      return Object.entries((await this.loadNativeAgentSessions()).sessions)
+        .filter(([, session]) => session.environmentId === environmentId)
+        .map(([key]) => key)
+        .sort();
+    }
+    const keys = new Set(indexed.owned);
+    for (const { key, value } of indexed.unowned) {
+      let session: unknown;
+      try {
+        session = JSON.parse(value);
+      } catch {
+        continue;
+      }
+      if (isPersistedNativeAgentSession(session, key) && session.environmentId === environmentId) {
+        keys.add(key);
+      }
+    }
+    return [...keys].sort();
+  }
+
   async deleteNativeAgentSessionsByEnvironment(environmentId: string): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
     // The environment's tombstone is already set, and inserts check it in
@@ -1088,10 +1123,7 @@ export class NativeAgentSessionsRepository {
     // user takes to clear one, so it must always complete; unreadable records
     // are carried across untouched, since nothing here can prove which
     // environment they belong to.
-    const keys = Object.entries((await this.loadNativeAgentSessions()).sessions)
-      .filter(([, session]) => session.environmentId === environmentId)
-      .map(([key]) => key)
-      .sort();
+    const keys = await this.nativeAgentSessionKeysForEnvironment(environmentId);
     let removed = false;
     for (const key of keys) {
       removed =

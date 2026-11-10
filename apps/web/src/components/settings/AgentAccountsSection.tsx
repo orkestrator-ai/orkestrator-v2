@@ -7,27 +7,32 @@
  * for a switch. A switch takes effect as each agent next starts work while
  * idle, so nothing running is interrupted. Entries of one login are shown once
  * (`groupAgentAccountLogins`).
+ *
+ * A signed-out Claude account is signed in again in place, without becoming
+ * the active account, and each signed-in account's usage can be read afresh
+ * on demand (a forced probe, which still waits out a provider rate limit).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Loader2, Plus, RefreshCw } from "lucide-react";
+import { AlertCircle, Check, Loader2, LogIn, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
-import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
 import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { AutoSwitchKeptNote } from "@/components/settings/AutoSwitchKeptNote";
 import { CoordinatorAccountSwitchGrant } from "@/components/settings/CoordinatorAccountSwitchGrant";
 import { useAccountMachine } from "@/components/settings/account-machine";
-import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
+import { UsageReadingAge, UsageReadingBars } from "@/components/settings/UsageReading";
 import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
+import { useAgentUsageReadingsChanged } from "@/hooks/useAgentUsageReadingsChanged";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   cancelAgentAccountLogin,
   getAgentAccountLogin,
   getAgentAccountUsage,
   listAgentAccounts,
+  reauthenticateAgentAccount,
   removeAgentAccount,
   renameAgentAccount,
   setActiveAgentAccount,
@@ -74,12 +79,13 @@ function sortAccounts(accounts: AgentAccountSummary[]): AgentAccountSummary[] {
 }
 
 /**
- * Of one login's readings, the one to show: a fresh one before a stale one, and
- * the newest of either. Its entries share one allowance, so the freshest wins.
+ * Of one login's readings, the one to show: the newest reading, by when it was
+ * taken. Its entries share one allowance, so the freshest wins. A last known
+ * reading keeps its original time, so a newer fresh one always beats it; a
+ * failed read with no reading at all comes last.
  */
 export function freshestUsage(snapshots: readonly PlanUsageSnapshot[]): PlanUsageSnapshot | null {
-  const rank = (snapshot: PlanUsageSnapshot) =>
-    snapshot.status !== "ok" ? 2 : snapshot.stale ? 1 : 0;
+  const rank = (snapshot: PlanUsageSnapshot) => (snapshot.status !== "ok" ? 1 : 0);
   return (
     [...snapshots].sort(
       (left, right) =>
@@ -92,11 +98,20 @@ function AccountUsage({
   platform,
   accountIds,
   reloadToken,
+  email,
+  refreshToken,
+  onRefreshed,
 }: {
   platform: AgentAccountPlatform;
   /** Every entry of one login. */
   accountIds: readonly string[];
   reloadToken: string;
+  /** Match usage events to this login; reconnects refresh every visible login. */
+  email?: string;
+  /** Raised by the row's refresh button: the next read bypasses the cache. */
+  refreshToken: number;
+  /** Called once a read for `refreshToken` has settled, whatever its outcome. */
+  onRefreshed: (refreshToken: number) => void;
 }) {
   const idsKey = accountIds.join(",");
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
@@ -104,21 +119,47 @@ function AccountUsage({
   // A credential can change while the general settings pane is visible. A
   // newly mounted account row must also bypass the pre-change cache then.
   const seenReloadTokenRef = useRef("0:0");
+  const seenRefreshTokenRef = useRef(0);
+  const onRefreshedRef = useRef(onRefreshed);
+  useEffect(() => {
+    onRefreshedRef.current = onRefreshed;
+  }, [onRefreshed]);
   const { machine } = useAccountMachine();
+  const [readToken, setReadToken] = useState(0);
+  const seenReadToken = useRef(0);
+  useAgentUsageReadingsChanged(
+    platform,
+    (emails) => {
+      if (!emails || (email && emails.includes(email.trim().toLowerCase()))) {
+        setReadToken((token) => token + 1);
+      }
+    },
+    machine,
+  );
 
   useEffect(() => {
     let current = true;
-    const forced = reloadToken !== seenReloadTokenRef.current;
+    const forced =
+      reloadToken !== seenReloadTokenRef.current || refreshToken !== seenRefreshTokenRef.current;
+    const cacheOnly = !forced && readToken !== seenReadToken.current;
+    seenReadToken.current = readToken;
     seenReloadTokenRef.current = reloadToken;
+    seenRefreshTokenRef.current = refreshToken;
     const load = async () => {
       const results = await Promise.allSettled(
         idsKey
           .split(",")
           .map((accountId) =>
-            getAgentAccountUsage(platform, accountId, { force: forced }, machine),
+            getAgentAccountUsage(
+              platform,
+              accountId,
+              { force: forced, ...(cacheOnly ? { cacheOnly: true } : {}) },
+              machine,
+            ),
           ),
       );
       if (!current) return;
+      onRefreshedRef.current(refreshToken);
       const next = freshestUsage(
         results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])),
       );
@@ -134,7 +175,7 @@ function AccountUsage({
     return () => {
       current = false;
     };
-  }, [platform, idsKey, reloadToken, machine]);
+  }, [platform, idsKey, reloadToken, readToken, refreshToken, machine]);
 
   if (error) return <p className="text-xs text-destructive">{error}</p>;
   if (!snapshot) {
@@ -146,15 +187,21 @@ function AccountUsage({
     );
   }
   if (snapshot.status !== "ok") {
-    return <p className="text-xs text-muted-foreground">{snapshot.message}</p>;
+    // No reading at all: a last known one would have been served, marked stale.
+    return (
+      <div className="space-y-0.5">
+        {snapshot.message ? (
+          <p className="text-xs text-muted-foreground">{snapshot.message}</p>
+        ) : null}
+        <UsageReadingAge snapshot={null} />
+      </div>
+    );
   }
-  return snapshot.windows.length > 0 ? (
-    <div>
-      <AccountQuotaList account={snapshot.windows} />
-      {snapshot.stale ? <StalePlanUsageNote snapshot={snapshot} /> : null}
-    </div>
-  ) : (
-    <p className="text-xs text-muted-foreground">No metered plan limits reported.</p>
+  return (
+    <UsageReadingBars
+      snapshot={snapshot}
+      empty={<p className="text-xs text-muted-foreground">No metered plan limits reported.</p>}
+    />
   );
 }
 
@@ -281,11 +328,31 @@ function PrivateEntriesNotice({
   );
 }
 
+/** Signing a signed-out account in again from its row. */
+interface AccountSignIn {
+  /** False while another sign-in is running on this machine. */
+  available: boolean;
+  /** The running sign-in, when it is renewing this account. */
+  progress: AgentAccountLoginProgress | null;
+  onStart: () => void;
+  onCancel: () => void;
+  onError: (message: string) => void;
+}
+
+/**
+ * Only Claude renews an account in place. A Codex login keeps refreshing
+ * itself, and one that has lapsed is removed and added again.
+ */
+function canSignInAgain(platform: AgentAccountPlatform): boolean {
+  return platform === "claude";
+}
+
 function AccountRow({
   login,
   busy,
   usageReloadToken,
   autoSwitchIncluded,
+  signIn,
   onUse,
   onRename,
   onRemove,
@@ -296,6 +363,7 @@ function AccountRow({
   usageReloadToken: string;
   /** Absent from a machine that predates automatic switching. */
   autoSwitchIncluded?: boolean;
+  signIn: AccountSignIn;
   onAutoSwitchIncluded: (included: boolean) => void;
   onUse: () => void;
   onRename: (label: string) => Promise<void>;
@@ -305,15 +373,26 @@ function AccountRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.label);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [usageRefresh, setUsageRefresh] = useState({ requested: 0, settled: 0 });
+  const refreshingUsage = usageRefresh.requested > usageRefresh.settled;
+  const onUsageRefreshed = useCallback(
+    (token: number) =>
+      setUsageRefresh((current) =>
+        token > current.settled ? { ...current, settled: token } : current,
+      ),
+    [],
+  );
   const identity = describeIdentity(account);
+  const signingIn = signIn.progress !== null;
+  const offerSignIn = !account.signedIn && canSignInAgain(account.platform);
 
   return (
     <li
       aria-label={account.label}
       className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-48">
           {editing ? (
             <form
               className="flex items-center gap-2"
@@ -350,6 +429,14 @@ function AccountRow({
                   Signed out
                 </span>
               ) : null}
+              {!account.signedIn && !canSignInAgain(account.platform) ? (
+                <InfoHint label={`About signing ${account.label} in`}>
+                  <p>
+                    A signed-out Codex account cannot be signed in again in place. Remove it and add
+                    it again with Add account.
+                  </p>
+                </InfoHint>
+              ) : null}
             </p>
           )}
           {identity ? <p className="mt-0.5 text-xs text-muted-foreground">{identity}</p> : null}
@@ -384,7 +471,36 @@ function AccountRow({
           ) : null}
         </div>
         {!editing ? (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1">
+            {offerSignIn && !signingIn ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={signIn.onStart}
+                disabled={busy || !signIn.available}
+                title={signIn.available ? undefined : "Finish or cancel the other sign-in first"}
+              >
+                <LogIn className="mr-1.5 h-3.5 w-3.5" />
+                Sign in
+              </Button>
+            ) : null}
+            {account.signedIn ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-muted-foreground"
+                aria-label={`Refresh usage for ${account.label}`}
+                title="Check usage limits now"
+                disabled={refreshingUsage}
+                onClick={() =>
+                  setUsageRefresh((current) => ({ ...current, requested: current.requested + 1 }))
+                }
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", refreshingUsage && "animate-spin")} />
+              </Button>
+            ) : null}
             {!login.isActive ? (
               <Button type="button" size="sm" variant="outline" onClick={onUse} disabled={busy}>
                 Use
@@ -423,11 +539,21 @@ function AccountRow({
           </div>
         ) : null}
       </div>
+      {signIn.progress ? (
+        <AgentAccountLoginPanel
+          progress={signIn.progress}
+          onCancel={signIn.onCancel}
+          onError={signIn.onError}
+        />
+      ) : null}
       {account.signedIn ? (
         <AccountUsage
           platform={account.platform}
           accountIds={login.entryIds}
           reloadToken={usageReloadToken}
+          email={account.identity.email}
+          refreshToken={usageRefresh.requested}
+          onRefreshed={onUsageRefreshed}
         />
       ) : null}
     </li>
@@ -494,10 +620,14 @@ export function AgentAccountsSection({
     [reload, onAccountsChanged],
   );
 
-  // Signing the active account in again is driven from the agent's own tab; it
-  // only blocks adding an account here, it is not shown as one being added.
+  // Signing an account in again is shown on that account's row (whether this
+  // pane or the agent's own tab started it), never as one being added.
   const loginHere = login.platform === platform && login.mode !== "reauthenticate";
   const loginPending = login.state === "pending" && loginHere;
+  const renewingAccountId =
+    login.state === "pending" && login.platform === platform && login.mode === "reauthenticate"
+      ? login.accountId
+      : undefined;
   const loginStatus = useCoordinatedRead<AgentAccountLoginProgress>({
     key: { resource: "agent-account-login", target: machine ?? "backend" },
     // A sign-in outlives this pane: reopening settings resumes the one running.
@@ -542,6 +672,19 @@ export function AgentAccountsSection({
     }
   };
 
+  const signInAgain = async (accountId: string) => {
+    setError(null);
+    try {
+      // Dismiss a finished sign-in first so its result does not linger.
+      if (login.state !== "idle" && login.state !== "pending")
+        await cancelAgentAccountLogin(login.operationId, machine);
+      applyLogin(await reauthenticateAgentAccount(platform, accountId, machine));
+      await refreshLogin();
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  };
+
   const cancelLogin = async () => {
     applyLogin(
       await cancelAgentAccountLogin(login.operationId, machine).catch(() => ({
@@ -554,7 +697,11 @@ export function AgentAccountsSection({
   const logins = groupAgentAccountLogins(
     sortAccounts(snapshot?.accounts.filter((account) => account.platform === platform) ?? []),
   );
-  const otherLoginPending = login.state === "pending" && !loginHere;
+  const renewingRowShown =
+    renewingAccountId !== undefined &&
+    logins.some((entry) => entry.entryIds.includes(renewingAccountId));
+  // A renewal shown on its row explains itself; any other sign-in is named here.
+  const otherLoginPending = login.state === "pending" && !loginHere && !renewingRowShown;
   const autoSwitch = snapshot?.autoSwitch?.[platform];
 
   return (
@@ -584,7 +731,7 @@ export function AgentAccountsSection({
             variant="outline"
             size="sm"
             onClick={() => void addAccount()}
-            disabled={loginPending || otherLoginPending}
+            disabled={login.state === "pending"}
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             Add account
@@ -647,17 +794,27 @@ export function AgentAccountsSection({
 
       {snapshot ? (
         <ul className="mt-4 space-y-2">
-          {logins.map((login) => {
-            const { account } = login;
+          {logins.map((entry) => {
+            const { account } = entry;
             return (
               <AccountRow
                 key={account.id}
-                login={login}
+                login={entry}
                 busy={busy}
                 usageReloadToken={`${reloadToken}:${usageReloadToken}`}
                 {...(autoSwitch
                   ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
                   : {})}
+                signIn={{
+                  available: login.state !== "pending",
+                  progress:
+                    renewingAccountId !== undefined && entry.entryIds.includes(renewingAccountId)
+                      ? login
+                      : null,
+                  onStart: () => void signInAgain(account.id),
+                  onCancel: () => void cancelLogin(),
+                  onError: setError,
+                }}
                 onAutoSwitchIncluded={(included) =>
                   void run(() =>
                     setAgentAccountAutoSwitchIncluded(

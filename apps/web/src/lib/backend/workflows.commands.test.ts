@@ -8,6 +8,7 @@ import {
   getNativeAgentDiscoveryUpdate,
   getNativeAgentLiveUpdate,
   getNativeAgentProjectionUpdate,
+  listNativeAgentBranches,
   refreshNativeAgentCommands,
   setNativeAgentResumableSessionArchived,
 } from "./workflows";
@@ -39,6 +40,14 @@ describe("native command wrappers", () => {
       ...input,
       archived: false,
     });
+  });
+
+  test("listNativeAgentBranches reads the branch list command", async () => {
+    const list = { activeEntryId: "e-2", branches: [], truncated: false };
+    invokeMock.mockImplementation(async () => list);
+    const input = { environmentId: "env-1", agent: "pi" as const, logicalSessionKey: "k" };
+    await expect(listNativeAgentBranches(input)).resolves.toEqual(list);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_native_agent_branches", input);
   });
 
   test("refreshNativeAgentCommands calls the refresh command and returns its outcome", async () => {

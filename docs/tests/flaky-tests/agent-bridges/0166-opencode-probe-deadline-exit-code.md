@@ -1,7 +1,7 @@
 # OpenCode compatibility probe deadline sees no exit code under aggregate load
 
 - **ID:** 0166
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-26
 - **Test:** `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
 - **File:** `scripts/opencode-live-compatibility-probe.test.ts`
@@ -140,3 +140,21 @@ stays open.
   would appear as a leak. Scoping the listing to roots this test created would
   rule that out.
 
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved.
+- **Root cause:** the 2026-10-25 reopening was not this case's deadline
+  race, which the controlled deadline timer fixed on 2026-10-15
+  (`server.exitCode` was 0 in that run). It was the shared temporary-root
+  snapshot of [0242](0242-opencode-probe-shared-temp-root.md): `tempRoots()`
+  saw another process's `ork-opencode-compat-*` directory in the host's
+  shared temporary directory.
+- **Fix:** `522a4f03c` (#1425) gives every test process a private `TMPDIR`
+  through `tests/isolate-tmpdir.ts`, so no other process can add or remove a
+  root between the snapshots. No change in this sweep.
+- **Reproduced:** yes — see 0242's resolution. Churning foreign roots in an
+  emulated shared `TMPDIR` failed this test's line 399 comparison in two of
+  five runs; with the private directory five of five passed.
+- **Stress:** as in 0242: five owner runs under three churners, 31 of 31
+  each.

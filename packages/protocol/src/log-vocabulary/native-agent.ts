@@ -95,6 +95,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "coordinator-servers.unavailable": "OpenCode coordinator research servers are unavailable.",
       "monitor.reconnecting":
         "The request monitor lost its stream and is reconnecting. Error class only.",
+      "monitor.silent":
+        "The request monitor's stream stopped heartbeating, so it is replaced. `silenceMs` only.",
       "worker-limit.reached":
         "The bounded request workers are full, so the stream restarts and a snapshot reconciles.",
       "request.failed":
@@ -135,6 +137,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "The start script of a container environment's 2.x server was run. Container port only.",
       "container-server.ready":
         "A container environment's 2.x server this backend started answered `/api/info` as 2.x. Environment id only.",
+      "container-server.cleanup-failed":
+        "Cleanup after OpenCode startup failed; step names only, while the original startup error is preserved.",
       "container-server.warm-incomplete":
         "The first workspace request to a container's new 2.x server failed, so its plugins load on the next one. Error class only.",
       "resume-list.unavailable":

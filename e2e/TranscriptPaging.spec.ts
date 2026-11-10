@@ -2,6 +2,26 @@ import { expect, test, type Locator } from "@playwright/test";
 import { expectPlaceHeld, holdPosition } from "./transcript-hold";
 import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
+// Finish the fixture's React lifetime before Playwright closes its context.
+// This stops view-owned polling, observers and scroll restoration while the
+// page can still run their cleanup; all behavior assertions run beforehand.
+test.afterEach(async ({ page }) => {
+  if (page.isClosed()) return;
+  const disposed = await page.evaluate(() => {
+    const dispose = (window as unknown as { disposePagingTranscript?: () => void })
+      .disposePagingTranscript;
+    if (!dispose) return false;
+    dispose();
+    return true;
+  });
+  if (!disposed) return;
+  await expect(page.locator("[data-paging-transcript]")).toHaveAttribute(
+    "data-paging-transcript",
+    "disposed",
+  );
+  await expect(page.locator("[data-transcript-scroller]")).toHaveCount(0);
+});
+
 async function toolPosition(list: Locator, id: string) {
   return list.evaluate((el, partId) => {
     const tool = el.querySelector<HTMLElement>(`[data-transcript-part-id="${partId}"]`);
@@ -45,6 +65,22 @@ for (const view of ["native", "reviewer"]) {
               timeout: 1_000,
             });
           }).toPass();
+          // Opening animates the group's height for 500ms; the dock can still
+          // be finishing its initial collapse too. Establish the open view
+          // before capturing the paging baseline. The cases below separately
+          // exercise folding while a held-place restoration is in progress.
+          await page.evaluate(async () => {
+            await Promise.all(
+              Array.from(
+                document.querySelectorAll('.tool-group-fold-content, [data-testid="compose-dock"]'),
+              )
+                .flatMap((element) => element.getAnimations({ subtree: true }))
+                .filter(
+                  (animation) => animation.effect?.getComputedTiming().iterations !== Infinity,
+                )
+                .map((animation) => animation.finished),
+            );
+          });
         }
         await list.hover();
         await expect
@@ -526,4 +562,74 @@ test("native: the automatic opening page keeps following subsequent live rows", 
   await expect(list.getByText("Live message 11", { exact: true })).toBeInViewport();
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(before);
+});
+
+test("coarse-pointer targets preserve dock and transcript row heights", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "touch layout");
+  await page.goto("/transcript-paging");
+  const dock = page.getByTestId("compose-dock");
+  const actions = page.locator("[data-message-actions]").last();
+  await expect(actions).toBeVisible();
+  await expect(dock).toBeVisible();
+  await dock.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished),
+    );
+  });
+  const before = await actions.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    row: element.closest("[data-chat-message-key]")!.getBoundingClientRect().height,
+    dock: document.querySelector('[data-testid="compose-dock"]')!.getBoundingClientRect().height,
+  }));
+  for (const button of await page.locator("[data-native-compose-toolbar] button").all()) {
+    const box = await button.boundingBox();
+    expect(box!.height).toBeGreaterThanOrEqual(40);
+    expect(box!.width).toBeGreaterThanOrEqual(40);
+  }
+  const action = actions.locator("button").first();
+  const hitArea = await action.evaluate((element) => {
+    const style = getComputedStyle(element, "::after");
+    const box = element.getBoundingClientRect();
+    return {
+      height: parseFloat(style.minHeight),
+      width: box.width,
+      receivesExpandedHit:
+        document.elementFromPoint(box.x + box.width / 2, box.bottom + 8)?.closest("button") ===
+        element,
+      coversPreviousContent:
+        document
+          .elementFromPoint(
+            box.x + box.width / 2,
+            element
+              .closest("[data-message-actions]")!
+              .parentElement!.previousElementSibling!.getBoundingClientRect().bottom - 1,
+          )
+          ?.closest("button") === element,
+    };
+  });
+  expect(hitArea.height).toBeGreaterThanOrEqual(40);
+  expect(hitArea.width).toBeGreaterThanOrEqual(40);
+  expect(hitArea.receivesExpandedHit).toBe(true);
+  expect(hitArea.coversPreviousContent).toBe(false);
+  // Compare against the mouse-size geometry without changing content or font.
+  await page.addStyleTag({
+    content: `
+    [data-native-compose-toolbar] { padding-top: 12px !important; }
+    [data-native-compose-toolbar] button { min-height: 0 !important; min-width: 0 !important; }
+    [data-message-actions] button { min-width: 0 !important; }
+  `,
+  });
+  const after = await actions.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    row: element.closest("[data-chat-message-key]")!.getBoundingClientRect().height,
+    dock: document.querySelector('[data-testid="compose-dock"]')!.getBoundingClientRect().height,
+  }));
+  expect(before.height).toBe(after.height);
+  expect(before.row).toBe(after.row);
+  expect(before.dock).toBe(after.dock);
 });

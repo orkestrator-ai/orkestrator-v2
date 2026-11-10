@@ -111,6 +111,16 @@ export const KNOWN_OPENCODE_EVENTS: Record<OpenCodeEvent["type"], boolean> = {
   "server.instance.disposed": true,
 };
 
+/**
+ * The idle keepalive `opencode serve` writes on `/event`. It is not in the
+ * SDK's `Event` union, so it cannot sit in the table above. Observed live
+ * against 1.19.5 (2026-11-10): one `server.heartbeat` data frame every 10 s
+ * after `server.connected`. The request monitor consumes it as liveness only
+ * (`OpenCodeStreamSilenceWatchdog`); it is never dispatched or counted as an
+ * unknown event.
+ */
+export const OPENCODE_HEARTBEAT_EVENT = "server.heartbeat";
+
 export function isKnownOpenCodeEvent(type: string): boolean {
   return type in KNOWN_OPENCODE_EVENTS;
 }

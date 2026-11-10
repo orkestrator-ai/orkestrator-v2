@@ -7,10 +7,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
+  coordinatorDelegationInstruction,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import type { CommandContext } from "./commands-context.js";
+import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { localReportInstruction } from "./commands-registry-coordinator.js";
@@ -230,7 +232,7 @@ export function registerCoordinatorForkWorker(
     const launch = parseForkWorkerLaunch(input);
     const remote =
       nodeId && (await context.nodes?.status())?.nodeId !== nodeId
-        ? await coordinatorNodeTarget(context, caller.projectId, nodeId)
+        ? await coordinatorNodeTarget(context, caller, nodeId)
         : undefined;
     const source = remote
       ? await remote.environment(sourceEnvironmentId)
@@ -250,6 +252,11 @@ export function registerCoordinatorForkWorker(
       async () => {
         const key = requestKey(caller, requestId);
         const controlRequestId = `coordinator-fork:${key}`;
+        // In the instruction text, so a node that predates the origin note
+        // still writes it into the frame it builds.
+        const turnOrigin = launch.prompt
+          ? await coordinatorCallerTurnOrigin(context, caller, args.scope)
+          : undefined;
         let environment: JsonRecord;
         let agent: unknown;
         if (remote) {
@@ -266,7 +273,10 @@ export function registerCoordinatorForkWorker(
                   ? {
                       delegation: {
                         ...caller,
-                        instruction: remoteReportInstruction(remote.nodeName),
+                        instruction: coordinatorDelegationInstruction(
+                          remoteReportInstruction(remote.nodeName),
+                          turnOrigin,
+                        ),
                       },
                     }
                   : {}),
@@ -289,7 +299,15 @@ export function registerCoordinatorForkWorker(
             controlRequestId,
             launch,
             ...(launch.prompt
-              ? { delegation: { ...caller, instruction: localReportInstruction() } }
+              ? {
+                  delegation: {
+                    ...caller,
+                    instruction: coordinatorDelegationInstruction(
+                      localReportInstruction(),
+                      turnOrigin,
+                    ),
+                  },
+                }
               : {}),
           });
           environment = forked.environment as unknown as JsonRecord;

@@ -7,6 +7,7 @@
  * failing. Asking app-server before the turn starts turns that into an
  * immediate, explainable refusal.
  */
+import { boundedWait, type BoundedWaitResult } from "@orkestrator/protocol/node/bounded-wait";
 
 export type McpToolAvailability =
   | { state: "available" }
@@ -84,27 +85,17 @@ export async function waitForMcpToolAvailability(
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeoutMs ?? MCP_TOOL_AVAILABILITY_TIMEOUT_MS);
   const pollMs = options.pollMs ?? MCP_TOOL_AVAILABILITY_POLL_MS;
-  const expired = Symbol("availability-deadline");
   for (;;) {
     const remainingMs = deadline - now();
     if (remainingMs <= 0) return { state: "unverified" };
-    let response: unknown;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let response: BoundedWaitResult<unknown>;
     try {
-      response = await Promise.race([
-        list(remainingMs),
-        new Promise((resolve) => {
-          timer = setTimeout(() => resolve(expired), remainingMs);
-          timer.unref?.();
-        }),
-      ]);
+      response = await boundedWait(list(remainingMs), remainingMs);
     } catch {
       return { state: "unverified" };
-    } finally {
-      clearTimeout(timer);
     }
-    if (response === expired || now() >= deadline) return { state: "unverified" };
-    const availability = classifyMcpToolAvailability(response, serverName, toolName);
+    if (!response.settled || now() >= deadline) return { state: "unverified" };
+    const availability = classifyMcpToolAvailability(response.value, serverName, toolName);
     if (availability) return availability;
     // Settles on its own, so nothing to clear; a poll pause must not keep the
     // process alive either.

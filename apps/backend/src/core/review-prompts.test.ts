@@ -429,6 +429,10 @@ describe("prompt contract edge cases", () => {
     // The reviewer reaches the evidence itself now, under instructions rather
     // than a tool restriction.
     expect(prompt).toContain("Run that command yourself to read the diff");
+    // A read-only turn without the command sandbox cannot run Git at all
+    // (to-do 0190): it is sent to the sealed diff file instead.
+    expect(prompt).toContain("When this session refuses Git commands");
+    expect(prompt).toContain("`diffArtifact.path`");
     expect(prompt).toContain("Do not rerun the full test suite");
     expect(prompt).toContain("Do not modify, create, or delete files");
   });
@@ -449,6 +453,7 @@ describe("prompt contract edge cases", () => {
     expect(prompt).toContain("This package carries its own evidence");
     expect(prompt).not.toContain("Run that command yourself to read the diff");
     expect(prompt).not.toContain("diffCommand");
+    expect(prompt).not.toContain("diffArtifact");
     // The evidence itself still has to survive alongside the rules.
     expect(prompt).toContain(JSON.stringify(reviewPackage.completeDiff));
   });

@@ -20,9 +20,11 @@ import {
   packageRoot,
   repositoryRoot,
   startTransportStack,
-  visibleText,
   webRoot,
 } from "./local-gateway-transport-stack";
+import { electronSpecEnvironment } from "./electron-spec-environment";
+import { terminalVisibleText } from "./terminal-visible-text";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
@@ -348,15 +350,18 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, electronMain],
       cwd: repositoryRoot,
-      env: stack.electronEnv,
+      env: electronSpecEnvironment(stack.electronEnv),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
+    // Every window here loads its modules from Vite: a load that lost them to
+    // ERR_NETWORK_CHANGED is reloaded, and only that (flake 2340).
+    const startup = watchElectronStartup(electronApp);
     dismissStartupDialogs(electronApp);
     await instrumentMain(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
 
     const composed = await window.evaluate(() => ({
       host: "orkestratorDesktopHost" in window,
@@ -417,7 +422,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
 
     await instrumentPage(window);
     await window.reload();
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
     const openEnvironment = async (name: string, page: Page = window) => {
       const expand = page.getByRole("button", { name: `Expand project ${project.name}` });
       const entry = page.getByText(name, { exact: true }).first();
@@ -499,7 +504,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       .toBeGreaterThan(0);
     const sessionId = (await writtenSessions())[0]!;
     const output = async () =>
-      visibleText(
+      terminalVisibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     await expect.poll(output, { timeout: 30_000 }).toContain("READY-42");
@@ -531,7 +536,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     // authoritative snapshot.
     const reached = async (marker: string) => {
       const seen = await frames();
-      if (visibleText(seen.tail).includes(marker)) return true;
+      if (terminalVisibleText(seen.tail).includes(marker)) return true;
       return seen.desynced > 0 && (await output()).includes(marker);
     };
 
@@ -581,7 +586,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await clickNewWindow(electronApp);
     const extra = await secondOpened;
     extra.setDefaultTimeout(20_000);
-    await expect(extra).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await startup.waitForTitle(extra, profile.electronTitle, { timeoutMs: 60_000 });
     expect(await extra.evaluate(() => "orkestratorDesktopHost" in window)).toBe(mode === "gateway");
     await openEnvironment(target.name, extra);
     await expect(extra.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
@@ -819,7 +824,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       });
       await clickNewWindow(electronApp);
       const second = await opened;
-      await expect(second).toHaveTitle(/electron-transport-relay/, { timeout: 60_000 });
+      await startup.waitForTitle(second, /electron-transport-relay/, { timeoutMs: 60_000 });
       expect(await second.evaluate(() => "orkestratorDesktopHost" in window)).toBe(true);
       expect(await window.evaluate(() => "orkestratorDesktopHost" in window)).toBe(false);
       expect(
@@ -874,7 +879,10 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         executablePath: electronExecutable,
         args: [...ELECTRON_TEST_SWITCHES, bootstrap],
         cwd: repositoryRoot,
-        env: { ...process.env, ELECTRON_DEV: "0", ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath },
+        env: electronSpecEnvironment(process.env, {
+          ELECTRON_DEV: "0",
+          ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        }),
       });
       recordElectronDiagnostics(app);
       dismissStartupDialogs(app);

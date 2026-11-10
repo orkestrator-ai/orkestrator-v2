@@ -662,7 +662,7 @@ export function EnvironmentRow({
                   )}
                   {facts.unreadMail > 0 && (
                     <span
-                      className="min-w-4 rounded-full bg-cyan-400/90 px-1 text-center font-mono text-[9px] leading-4 text-zinc-950"
+                      className="min-w-4 rounded-full bg-primary-fill px-1 text-center font-mono text-[10px] leading-4 text-primary-foreground"
                       aria-label={`${facts.unreadMail} unread agent messages`}
                     >
                       {facts.unreadMail > 99 ? "99+" : facts.unreadMail}

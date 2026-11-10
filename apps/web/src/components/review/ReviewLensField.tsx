@@ -11,6 +11,7 @@ import {
   type ReviewLensPreset,
 } from "@orkestrator/protocol/review-lens";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfigStore } from "@/stores/configStore";
 import { cn } from "@/lib/utils";
@@ -79,8 +80,10 @@ export function ReviewLensField({
         <label htmlFor={id} className="shrink-0 text-xs font-medium text-zinc-400">
           Focus
         </label>
-        <select
+        <NativeSelect
           id={id}
+          size="sm"
+          wrapperClassName="flex-1"
           aria-label={`${reviewerLabel} focus`}
           value={selected}
           onChange={(event) => {
@@ -97,7 +100,6 @@ export function ReviewLensField({
               if (preset) onChange({ label: preset.label, instruction: preset.instruction });
             }
           }}
-          className="h-8 min-w-0 flex-1 rounded-md border border-zinc-700/80 bg-zinc-900 px-2 text-xs text-zinc-200"
         >
           <option value={NONE}>No focus</option>
           {presets.map((preset) => (
@@ -106,7 +108,7 @@ export function ReviewLensField({
             </option>
           ))}
           <option value={CUSTOM}>Custom…</option>
-        </select>
+        </NativeSelect>
       </div>
       {value && !custom && (
         <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-zinc-500">
@@ -122,7 +124,7 @@ export function ReviewLensField({
             placeholder="Label, e.g. Migrations"
             aria-invalid={Boolean(error && reviewLensLabelError(value.label)) || undefined}
             aria-describedby={errorId}
-            className="h-8 border-zinc-700/80 bg-zinc-900 text-xs"
+            className="h-8 text-xs"
           />
           <Textarea
             aria-label={`${reviewerLabel} focus instruction`}
@@ -134,7 +136,7 @@ export function ReviewLensField({
               Boolean(error && reviewLensInstructionError(value.instruction)) || undefined
             }
             aria-describedby={errorId}
-            className="max-h-40 border-zinc-700/80 bg-zinc-900 text-xs"
+            className="max-h-40 text-xs"
           />
           <p
             id={errorId}

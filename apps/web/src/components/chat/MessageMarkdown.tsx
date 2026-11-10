@@ -153,13 +153,13 @@ function MarkdownListItem({ className, children, ...props }: HTMLAttributes<HTML
           aria-hidden="true"
           data-task-list-icon="true"
           data-state="unchecked"
-          className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60"
+          className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
         />
       )}
       <div
         className={cn(
           "min-w-0 flex-1 [&>p]:my-0 [&_ol]:mt-1 [&_ul]:mt-1",
-          checked ? "text-muted-foreground/60 line-through" : "text-foreground",
+          checked ? "text-muted-foreground line-through" : "text-foreground",
         )}
       >
         {content}

@@ -71,6 +71,8 @@ import {
   type GraphPushEvidence,
 } from "./graph-agent-remote-attribution.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
+import { classifyFetchFailure } from "./container-git-fetch.js";
+import { retryWithBackoff, type RetryPolicy } from "./abortable-timing.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";
 import {
@@ -106,6 +108,8 @@ export interface GraphAgentGuardDependencies {
    */
   peers?: GraphGuardPeerSource;
   now?: () => Date;
+  /** The backoff between `ls-remote` attempts; tests shorten it. */
+  lsRemoteBackoff?: Pick<RetryPolicy, "baseDelayMs" | "maxDelayMs">;
 }
 
 /** A guard stopped the activation, before dispatch or when its result was consumed. */
@@ -134,7 +138,17 @@ type GuardNode = Pick<GraphPlanAgentNode, "id" | "label" | "workspaceAccess" | "
 const MAX_REMOTES = GRAPH_RUN_BOUNDS.maxBaselineUpstreamRefs;
 const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 const SAFE_BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
-const LS_REMOTE_ATTEMPTS = 3;
+/**
+ * `ls-remote` attempts: three, backed off with jitter so a remote that is
+ * briefly unreachable gets a moment to recover, rather than three immediate
+ * tries that all meet the same outage.
+ */
+const LS_REMOTE_RETRY: RetryPolicy = {
+  maxAttempts: 3,
+  baseDelayMs: 250,
+  maxDelayMs: 1_000,
+  retryable: lsRemoteRetryable,
+};
 /** Refs a listing may hold before the guard refuses to judge it. */
 const MAX_LISTED_REFS = 100_000;
 /** Pushed refs attributed one by one; any beyond are blamed on the activation. */
@@ -370,15 +384,10 @@ export class GraphAgentGuards {
   private async listRemote(environment: Environment, args: string[]): Promise<string> {
     const lsRemote = this.dependencies.lsRemote;
     if (!lsRemote) throw new Error("the backend cannot reach this environment's remotes");
-    let last: unknown;
-    for (let attempt = 0; attempt < LS_REMOTE_ATTEMPTS; attempt++) {
-      try {
-        return await lsRemote(environment, args);
-      } catch (error) {
-        last = error;
-      }
-    }
-    throw last;
+    return retryWithBackoff(() => lsRemote(environment, args), {
+      ...LS_REMOTE_RETRY,
+      ...this.dependencies.lsRemoteBackoff,
+    });
   }
 
   // ------------------------------------------------------------ at submit time
@@ -843,4 +852,17 @@ export function graphEnforcementGuardResult(
     problem ??
       `${AGENT_PLATFORM_LABELS[platform]} holds this step at ${decision.enforcement}${floor}${reason}`,
   );
+}
+
+/**
+ * Whether a failed `ls-remote` may succeed on another attempt. Refused
+ * credentials or permissions and a missing repository will not, so they fail
+ * at once; a network error or a timeout may. GitHub answers a private
+ * repository it will not show these credentials with "Repository not found".
+ */
+export function lsRemoteRetryable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/repository not found/i.test(message)) return false;
+  const failure = classifyFetchFailure(1, message);
+  return failure !== "auth" && failure !== "no-remote";
 }

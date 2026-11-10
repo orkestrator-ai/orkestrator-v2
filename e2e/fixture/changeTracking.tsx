@@ -63,12 +63,24 @@ export function ChangeTrackingFixture() {
   const [active, setActive] = useState(true);
   const imagePath = new URLSearchParams(window.location.search).get("image");
   const { projections } = useToolChangePresentation(scope, "edit");
+  const headerOnly = new URLSearchParams(window.location.search).has("header-only");
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
+    <main className="@container flex h-screen flex-col bg-background text-foreground">
       <button onClick={() => setActive((value) => !value)}>
         {active ? "Switch away" : "Return"}
       </button>
-      <ThreadChangesHeader environmentId="env-1" logicalSessionKey="tab" turnActive={false} />
+      <ThreadChangesHeader
+        environmentId="env-1"
+        logicalSessionKey="tab"
+        turnActive={false}
+        containment={
+          headerOnly ? (
+            <span className="truncate font-mono text-[11px]" data-testid="fixture-containment">
+              worktree
+            </span>
+          ) : undefined
+        }
+      />
       <div data-testid="fixture-tool-changes">
         {projections.map((item) =>
           item.projection ? (
@@ -76,24 +88,26 @@ export function ChangeTrackingFixture() {
           ) : null,
         )}
       </div>
-      <div
-        className="relative min-h-0 flex-1"
-        style={{ visibility: active ? "visible" : "hidden" }}
-      >
-        {imagePath ? (
-          <FileViewerTab
-            tabId="live-image"
-            environmentId="env-1"
-            filePath={imagePath}
-            worktreePath="/fixture"
-            isLocalEnvironment
-            isActive={active}
-            changeDiff={{ ...target, path: imagePath, title: imagePath }}
-          />
-        ) : (
-          <DiffViewerTab target={target} isActive={active} />
-        )}
-      </div>
+      {!headerOnly ? (
+        <div
+          className="relative min-h-0 flex-1"
+          style={{ visibility: active ? "visible" : "hidden" }}
+        >
+          {imagePath ? (
+            <FileViewerTab
+              tabId="live-image"
+              environmentId="env-1"
+              filePath={imagePath}
+              worktreePath="/fixture"
+              isLocalEnvironment
+              isActive={active}
+              changeDiff={{ ...target, path: imagePath, title: imagePath }}
+            />
+          ) : (
+            <DiffViewerTab target={target} isActive={active} />
+          )}
+        </div>
+      ) : null}
     </main>
   );
 }

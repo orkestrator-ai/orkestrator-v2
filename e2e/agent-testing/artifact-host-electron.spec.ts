@@ -23,6 +23,8 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { electronSpecEnvironment } from "./electron-spec-environment";
+import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The desktop live interactive-artifact host through the real app: the
@@ -248,20 +250,22 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: {
-        ...process.env,
+      env: electronSpecEnvironment(process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      },
+      }),
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
+    const startup = watchElectronStartup(app);
     dismissStartupDialogs(app);
     const window = await app.firstWindow();
     // index.html's title stays until Vite serves and runs renderer-entry; under
-    // host load that startup takes longer than expect's 5 s default.
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // host load that startup takes longer than expect's 5 s default. A start
+    // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
+    await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    startup.dispose();
     await expect(window.getByRole("button", { name: "Global settings" })).toBeVisible({
       timeout: 60_000,
     });

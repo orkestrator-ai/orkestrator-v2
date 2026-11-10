@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import {
   capacityVerdict,
+  runCopyStep,
   replacementCopyFailure,
   quiesceRuntime,
   parseCopyOutput,
@@ -122,6 +123,10 @@ exit 125
       [
         "Error response from daemon: Could not find the file /home/node/.pi in container source",
         { absent: true },
+      ],
+      [
+        "Error response from daemon: remount-ro /d/rootfs/overlayfs/1/git, flags: 0x1021: operation not permitted",
+        { absent: false, producerFailed: true, daemonUnavailable: false, refused: true },
       ],
     ] as const) {
       await withDockerScript(
@@ -786,6 +791,17 @@ ${probe}
       );
     }, 15_000);
   }
+  test("a refused copy is the topology error and needs no probe", async () => {
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\nexit 99\n',
+      async (log) => {
+        const error = await replacementCopyFailure("source-copy-refused");
+        expect(String(error)).toContain("ContainerLifecycleError:unsupported-topology");
+        expect(String(error)).toContain("kept unchanged");
+        expect(await log.read()).toBe("");
+      },
+    );
+  });
   test("an explicit daemon failure needs no second probe", async () => {
     await withDockerScript("#!/bin/sh\nexit 99\n", async (log) => {
       expect(String(await replacementCopyFailure("daemon-unavailable"))).toContain(
@@ -843,6 +859,43 @@ exit 0
       expect(await stopping).toEqual({ forced: false });
       expect(requested).toHaveBeenCalledTimes(1);
       expect(stopped).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+test("copy step maps a refused producer to source-copy-refused before outage probing", async () => {
+  const { context, owner } = await fixture();
+  const candidate = planStorageSet("env-lifecycle", owner, 1, "candidate");
+  const step = replacementCopyPlan("legacy-layer")[0]!;
+  await withDockerScript(
+    `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = cp ]; then
+  echo 'Error response from daemon: remount-ro /rootfs/git, flags: 0x1021: operation not permitted' >&2
+  exit 1
+fi
+cat >/dev/null
+exit 1
+`,
+    async (log) => {
+      const result = await runCopyStep(
+        context,
+        "sha256:fixture",
+        step,
+        {
+          containerId: "source-container",
+          storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        },
+        candidate,
+      );
+      expect(result).toEqual({ ok: false, reason: "source-copy-refused" });
+      if (result.ok) throw new Error("Expected copy failure");
+      expect(String(await replacementCopyFailure(result.reason))).toContain(
+        "ContainerLifecycleError:unsupported-topology",
+      );
+      const calls = await log.read();
+      expect(calls).toContain("cp source-container:");
+      expect(calls).not.toContain("version --format");
     },
   );
 });

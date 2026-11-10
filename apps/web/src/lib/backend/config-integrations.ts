@@ -447,12 +447,13 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   /** Read one platform's plan/quota windows from the backend. */
   async function getPlanUsage(
     platform: AgentPlatform,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; cacheOnly?: boolean } = {},
     machine?: AccountMachine,
   ): Promise<PlanUsageSnapshot> {
     return accountsOn_(machine).get_plan_usage({
       platform,
       ...(options.force ? { force: true } : {}),
+      ...(options.cacheOnly ? { cacheOnly: true } : {}),
     });
   }
 
@@ -532,9 +533,21 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return systemApiOn(client, machine).get_database_stats({});
   }
 
-  /** Builds the bundle on the backend and answers with the manifest of exactly that bundle. */
-  async function planDiagnosticsBundle(machine?: AccountMachine): Promise<DiagnosticsBundlePlan> {
-    return systemApiOn(client, machine).plan_diagnostics_bundle({});
+  /**
+   * Builds the bundle on the backend and answers with the manifest of exactly that
+   * bundle. `containerLogs` names the container environments whose server logs the
+   * user chose to add; none by default.
+   */
+  async function planDiagnosticsBundle(
+    machine?: AccountMachine,
+    options: { containerLogs?: readonly string[] } = {},
+  ): Promise<DiagnosticsBundlePlan> {
+    const containerLogs = options.containerLogs ?? [];
+    const api = systemApiOn(client, machine);
+    // Its own command, so a backend without it says so instead of leaving them out.
+    return containerLogs.length > 0
+      ? api.plan_diagnostics_bundle_with_container_logs({ containerLogs: [...containerLogs] })
+      : api.plan_diagnostics_bundle({});
   }
 
   async function readDiagnosticsBundle(

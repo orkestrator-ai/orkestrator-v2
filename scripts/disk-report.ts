@@ -18,6 +18,7 @@ import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-
 import { PRIVATE_TMPDIR_PREFIX, privateTmpdirRoot } from "../tests/private-tmpdir";
 import {
   listProbeNetworks,
+  probeNetworkCreators,
   removeStaleProbeNetworks,
   staleProbeNetworks,
 } from "./probe-network-sweep";
@@ -295,7 +296,9 @@ export function probeNetworkRow(dockerRun: Run = run, now = Date.now()): ReportR
   return {
     location: "Docker host-reachability probe networks (address pools)",
     bytes: null,
-    orphaned: `${stale.length} of ${networks.length} unattached and older than a day`,
+    orphaned:
+      `${stale.length} of ${networks.length} unattached and older than a day` +
+      (stale.length ? ` (by creator: ${probeNetworkCreators(stale)})` : ""),
     owner: "each backend's own check (reaps only its own owner's)",
     cleanup: "mise run disk:report -- --fix probe-networks",
   };

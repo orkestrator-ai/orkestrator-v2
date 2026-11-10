@@ -99,11 +99,12 @@ export function CoordinatorActionsFixture() {
 
 /** Exercises the production shell and viewport measurement rather than prebuilt cards. */
 export function CoordinatorActionsTranscriptFixture() {
+  const shiftLayout = new URLSearchParams(window.location.search).has("shift-layout");
   const navigation = useVirtuosoScrollState();
   const nodeId = useScopesWithCommandFallback().scope.nodeId;
   const [anchor, setAnchor] = useState("");
   const [done, setDone] = useState(false);
-  const [rowCount, setRowCount] = useState(50);
+  const [rowCount, setRowCount] = useState(shiftLayout ? 12 : 50);
   const messages = useMemo<NativeMessage[]>(
     () =>
       Array.from({ length: rowCount }, (_, index) => ({
@@ -166,6 +167,7 @@ export function CoordinatorActionsTranscriptFixture() {
         <button onClick={() => navigation.scrollToIndex(49)}>Read end</button>
         <button onClick={() => setDone(true)}>Answer question</button>
         <button onClick={() => setRowCount((count) => count + 1)}>Append question</button>
+        {shiftLayout && <button onClick={() => setRowCount(0)}>Clear transcript</button>}
         {[
           { id: "peer-mail-fixture", label: "mail" },
           { id: "row-2", label: "user" },
@@ -198,6 +200,16 @@ export function CoordinatorActionsTranscriptFixture() {
           finalElapsedSeconds={null}
           centerCompose={false}
           composer={<textarea aria-label="Prompt" />}
+          transcriptHeader={
+            shiftLayout ? (
+              <div data-testid="shift-header" className="mx-auto max-w-[56rem]">
+                Earlier messages
+              </div>
+            ) : undefined
+          }
+          transcriptCards={
+            shiftLayout ? <div data-testid="shift-footer">Waiting for review</div> : undefined
+          }
           isAtBottom={navigation.isAtBottom}
           scrollToBottom={navigation.scrollToBottom}
           scrollProps={navigation.scrollProps}

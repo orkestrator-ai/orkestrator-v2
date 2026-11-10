@@ -23,6 +23,11 @@ import {
   type AgentAccountsSnapshot,
   type AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
+import {
+  normalizeUsageIdentity,
+  usageIdentityKey,
+  type UsageIdentity,
+} from "@orkestrator/protocol/agent-account-shared-usage";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -65,6 +70,7 @@ import {
   type SpawnLike,
 } from "./agent-accounts-login.js";
 import type { AgentAccountLogin } from "./agent-accounts-runtime.js";
+import { shareAndMergeUsage } from "./agent-accounts-usage-sharing.js";
 import { readAgentAccountPlanUsage, type PlanUsageRead } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
@@ -138,6 +144,64 @@ async function readLoginState(
     return claudeAccountLoginState(await readClaudeCredentialsFor(context, home), claudeJson);
   }
   return codexAccountLoginState(await readCodexAuthFor(context, home));
+}
+
+function usageIdentityOf(
+  platform: AgentAccountPlatform,
+  state: AgentAccountLoginState,
+): UsageIdentity | undefined {
+  return normalizeUsageIdentity(platform, state.identity.email, state.organizationId);
+}
+
+/**
+ * The login identity a usage reading of one of this machine's accounts belongs
+ * to across machines, or `undefined` when it cannot be matched (no email).
+ */
+async function agentAccountUsageIdentity(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  stored: StoredAgentAccount | undefined,
+): Promise<UsageIdentity | undefined> {
+  const home = stored ? homeFor(context, platform, stored.id) : undefined;
+  return usageIdentityOf(platform, await readLoginState(context, platform, home));
+}
+
+/**
+ * Every signed-in login on this machine that can be matched on another, once
+ * each: what `collect_shared_usage_readings` reports and what
+ * `apply_shared_usage_readings` keeps readings for.
+ */
+export async function listAgentAccountUsageIdentities(
+  context: CommandContext,
+): Promise<UsageIdentity[]> {
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
+  const rows = AGENT_ACCOUNT_PLATFORMS.flatMap((platform) => [
+    { platform, stored: undefined as StoredAgentAccount | undefined },
+    ...store.accounts
+      .filter((account) => account.platform === platform)
+      .map((stored) => ({ platform, stored })),
+  ]);
+  const states = await Promise.all(
+    rows.map(async ({ platform, stored }) => ({
+      platform,
+      state: await readLoginState(
+        context,
+        platform,
+        stored ? homeFor(context, platform, stored.id) : undefined,
+      ),
+    })),
+  );
+  const seen = new Set<string>();
+  const identities: UsageIdentity[] = [];
+  for (const { platform, state } of states) {
+    const identity = state.signedIn ? usageIdentityOf(platform, state) : undefined;
+    if (!identity) continue;
+    const key = usageIdentityKey(identity);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    identities.push(identity);
+  }
+  return identities;
 }
 
 export async function listAgentAccounts(context: CommandContext): Promise<AgentAccountsSnapshot> {
@@ -754,6 +818,7 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
     if (entry.cancelled) throw new Error("The sign-in was cancelled");
     if (entry.mode === "reauthenticate") {
       await finishReauthentication(context, entry);
+      const store = await context.storage.agentAccounts.loadAgentAccounts();
       entry.state = "succeeded";
       entry.completedAt = new Date().toISOString();
       // A first-run user who was never signed in has no model list yet; fetch it
@@ -763,9 +828,11 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );
-        // Whichever client signed in, prompts refused for want of this login
-        // go out now. Tracked and bounded by the service; never fails a sign-in.
-        context.nativeAgents?.signInResends.resendAll();
+        // Held prompts use the active login. Renewing an inactive slot must
+        // not consume them while the active login may still be signed out.
+        if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
+          context.nativeAgents?.signInResends.resendAll();
+        }
       }
       announceAccountsChanged(context, platform);
       return;
@@ -810,19 +877,44 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
 /**
  * Start a sign-in.
  *
- * By default it adds an account. With `reauthenticate` it signs the platform's
- * active account in again — the host login or an added account — so an agent
- * whose login has lapsed can be repaired without leaving the app.
+ * By default it adds an account. With `reauthenticate` it signs an existing
+ * account in again — the host login or an added account — so an agent whose
+ * login has lapsed can be repaired without leaving the app. That is the
+ * platform's active account unless `accountId` names another one (the settings
+ * pane's "Sign in" on a signed-out account), which stays inactive.
  */
 export async function startAgentAccountLogin(
   context: CommandContext,
   platform: AgentAccountPlatform,
-  options: { spawnImpl?: SpawnLike; executable?: string; reauthenticate?: boolean } = {},
+  options: {
+    spawnImpl?: SpawnLike;
+    executable?: string;
+    reauthenticate?: boolean;
+    /** With `reauthenticate`, the account to sign in again instead of the active one. */
+    accountId?: string;
+  } = {},
 ): Promise<AgentAccountLoginProgress> {
   const mode = options.reauthenticate ? "reauthenticate" : "add";
+  if (options.accountId !== undefined && mode !== "reauthenticate") {
+    throw new Error("Only a sign-in again can name an account.");
+  }
   const activeLogin = context.runtime.accounts.activeLogin();
   if (activeLogin?.state === "pending") {
-    if (activeLogin.platform === platform && activeLogin.mode === mode) {
+    const targetId =
+      mode === "reauthenticate"
+        ? (options.accountId ??
+          (await context.storage.agentAccounts.loadAgentAccounts()).active[platform] ??
+          DEFAULT_AGENT_ACCOUNT_ID)
+        : undefined;
+    // The slot may have changed or settled while resolving an implicit target.
+    if (context.runtime.accounts.activeLogin() !== activeLogin || activeLogin.state !== "pending") {
+      return startAgentAccountLogin(context, platform, options);
+    }
+    if (
+      activeLogin.platform === platform &&
+      activeLogin.mode === mode &&
+      (mode === "add" || activeLogin.accountId === targetId)
+    ) {
       return loginProgress(context);
     }
     throw new Error("Finish or cancel the other sign-in first.");
@@ -834,14 +926,23 @@ export async function startAgentAccountLogin(
     operationId: randomUUID(),
     platform,
     mode,
-    accountId: mode === "add" ? randomUUID() : DEFAULT_AGENT_ACCOUNT_ID,
+    accountId: mode === "add" ? randomUUID() : (options.accountId ?? DEFAULT_AGENT_ACCOUNT_ID),
     state: "pending",
   };
   context.runtime.accounts.claimLogin(entry);
   try {
     const store = await context.storage.agentAccounts.loadAgentAccounts();
     if (mode === "reauthenticate") {
-      entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      if (options.accountId === undefined) {
+        entry.accountId = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
+      } else if (
+        options.accountId === DEFAULT_AGENT_ACCOUNT_ID ||
+        store.accounts.some((a) => a.platform === platform && a.id === options.accountId)
+      ) {
+        entry.accountId = options.accountId;
+      } else {
+        throw new Error("Unknown agent account");
+      }
       // An agent-test profile only reads the host login its harness granted;
       // it must not write one.
       if (entry.accountId === DEFAULT_AGENT_ACCOUNT_ID && context.runtimeFlavor === "agent-test") {
@@ -974,14 +1075,19 @@ export async function readAgentAccountUsage(
   context: CommandContext,
   platform: AgentAccountPlatform,
   accountId: string,
-  options: { force?: boolean; reader: PlanUsageRead; now?: () => number },
+  options: { force?: boolean; cacheOnly?: boolean; reader: PlanUsageRead; now?: () => number },
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
   const accounts = context.runtime.accounts;
-  const { store, generation } = await accounts.withMutation(async () => ({
-    store: await context.storage.agentAccounts.loadAgentAccounts(),
-    generation: usageGeneration(context, platform),
-  }));
+  const { store, generation, identity } = await accounts.withMutation(async () => {
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
+    const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
+    return {
+      store,
+      generation: usageGeneration(context, platform),
+      identity: await agentAccountUsageIdentity(context, platform, stored).catch(() => undefined),
+    };
+  });
   const now = options.now ?? Date.now;
   const root = accountsRoot(context);
   const publish = (snapshot: PlanUsageSnapshot, retryAfterMs?: number, cache = false) =>
@@ -1006,14 +1112,31 @@ export async function readAgentAccountUsage(
           snapshot: result,
         });
       }
-      return result;
+      // Identity and generation were captured together. Keep the generation
+      // fence through shared publication, including every asynchronous write.
+      return shareAndMergeUsage(context, identity, result, now());
     });
+  const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
+  if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
+  if (options.cacheOnly) {
+    const active = (store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId;
+    const cached = active
+      ? (accounts.planUsage.cache.peek(platform) ?? accounts.planUsage.cache.lastOk(platform))
+      : accounts.cachedUsage(usageKey(context, platform, accountId))?.snapshot;
+    return publish(
+      cached ?? {
+        platform,
+        status: "unavailable",
+        windows: [],
+        fetchedAt: new Date(now()).toISOString(),
+        message: "Usage has not been read yet.",
+      },
+    );
+  }
   if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
     const snapshot = await options.reader(context, platform, { force: options.force === true });
     return publish(snapshot);
   }
-  const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
-  if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
   const key = usageKey(context, platform, accountId);
   const cached = accounts.cachedUsage(key);
@@ -1055,6 +1178,21 @@ export async function readAgentAccountUsage(
     ));
   }
   return publish(snapshot, retryAfterMs, true);
+}
+
+/** Active plan cards share exactly the same identity and publication fence as account rows. */
+export async function readActiveAgentAccountUsage(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  options: { force?: boolean; cacheOnly?: boolean; reader: PlanUsageRead },
+): Promise<PlanUsageSnapshot> {
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
+  return readAgentAccountUsage(
+    context,
+    platform,
+    store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID,
+    options,
+  );
 }
 
 /**

@@ -1,7 +1,9 @@
+import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
 import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
+import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -52,6 +54,7 @@ import {
   NodeCoordinatorRemote,
   NodePortal,
   NodeService,
+  NodeUsageSync,
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
@@ -83,7 +86,12 @@ import {
   readAgentAccountUsage,
   recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
+  listAgentAccountUsageIdentities,
 } from "./agent-accounts.js";
+import {
+  centralUsageReadings,
+  recordCentralUsageReadings,
+} from "./agent-accounts-usage-sharing.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
 import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
@@ -106,11 +114,7 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import {
-  keyedSchedulingEnabled,
-  type KeyedWorkflowOwner,
-  type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { MachineLoadSampler } from "./machine-load.js";
@@ -190,6 +194,7 @@ import {
 } from "./transcript-artifacts/index.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
+import { probeCreator } from "./container-host-reachability-creator.js";
 import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
@@ -222,6 +227,7 @@ import {
   containerRunsOpenCode2,
   openCode2EnvironmentServer,
 } from "./opencode2-container-server.js";
+import { openCodeEnvironmentListenerRecheck } from "./opencode-environment-listener.js";
 import { openCodeWorkflowRoutingDependencies } from "./native-agent-opencode-protocol.js";
 import { openCode2WorkerMailbox } from "./opencode2/turn-connections.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
@@ -352,6 +358,9 @@ export class OrkestratorBackend {
   readonly nodes: NodeService;
   readonly nodePortal: NodePortal;
   readonly nodeCoordination: NodeCoordination;
+  /** Shared usage readings with the nodes this one controls (command node). */
+  readonly usageSync: NodeUsageSync;
+  private usageSyncTimer: ReturnType<typeof setInterval> | null = null;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
   /** How another node reaches this one, for handing it to a new command node. */
@@ -388,6 +397,8 @@ export class OrkestratorBackend {
   private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
+  /** Agent-test profiles only (to-do 0050 task 3); see `agent-test-dispatch-hold.ts`. */
+  private uninstallDispatchHold?: () => void;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
@@ -397,11 +408,8 @@ export class OrkestratorBackend {
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
-  private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
-  private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
-  /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
+  /** Step 08 named due jobs: the activity bundle and maintenance. */
   private activityJobs: BackendActivityJobs | null = null;
-  private readonly keyedActivityJobs: boolean;
   private readonly activityJobClock:
     | { now: () => number; timers: import("./recurring-scheduler.js").RecurringTimerFactory }
     | undefined;
@@ -536,12 +544,6 @@ export class OrkestratorBackend {
      */
     dockerFollowers?: Pick<BackendRuntimeOptions, "containerOom" | "containerLogs">;
     environmentLifecycleDrainTimeoutMs?: number;
-    /**
-     * Step 08 named due jobs for the activity bundle and maintenance. `false`
-     * selects the previous 2 s bundle and 60 s timer (never both); defaults
-     * to `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` not naming `backend-activity`.
-     */
-    keyedActivityJobs?: boolean;
     /** Test seam: the activity jobs' monotonic clock and timers. */
     activityJobClock?: {
       now: () => number;
@@ -560,8 +562,6 @@ export class OrkestratorBackend {
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
     const emit = createBackendEmit((event, payload) => options.emit(event, payload));
-    this.keyedActivityJobs =
-      options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
     this.compatibilityPathSink = compatibilityPathUsageDatabaseSink(options.dataDir);
@@ -604,6 +604,7 @@ export class OrkestratorBackend {
         : new ContainerHostReachabilityService({
             servicePort: () => this.agentTools.servicePort?.() ?? null,
             ownerNamespace: dockerOwnerNamespace(options.dataDir),
+            creator: probeCreator(options.runtimeFlavor ?? "production", options.dataDir),
             fallbackImage: () => options.dockerImage ?? DOCKER_IMAGE,
             // Read lazily: the gateway that receives events is created after init.
             emit,
@@ -660,6 +661,13 @@ export class OrkestratorBackend {
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;
+    // Agent-test profiles only: lets a live spec stop the backend inside the
+    // prompt dispatch window. Undefined (nothing installed) everywhere else.
+    const dispatchHold = agentTestDispatchHold({
+      dataDir: options.dataDir,
+      runtimeFlavor: options.runtimeFlavor,
+    });
+    if (dispatchHold) this.uninstallDispatchHold = installAgentTestDispatchHold(dispatchHold);
     this.runtime =
       options.runtime ??
       new BackendRuntime({
@@ -922,6 +930,23 @@ export class OrkestratorBackend {
       emit,
     });
     context.nodeCoordination = this.nodeCoordination;
+    this.usageSync = new NodeUsageSync({
+      selfId: () => this.nodes.selfIdentity(),
+      isCommandNode: () => this.nodes.mode() === "command",
+      link: (nodeId) => (isBackendId(nodeId) ? this.nodes.link(nodeId) : null),
+      connectedNodeIds: async () =>
+        (await this.nodes.listNodes()).nodes
+          .filter((node) => node.connection.state === "connected")
+          .map((node) => node.nodeId),
+      ownIdentities: () => listAgentAccountUsageIdentities(context),
+      central: () => centralUsageReadings(context),
+      storeCentral: (readings, ownIdentities) =>
+        recordCentralUsageReadings(context, readings, ownIdentities),
+    });
+    context.usageSync = this.usageSync;
+    this.nodePortal.readModel.onNodeEvent((event, payload) =>
+      this.usageSync.handleNodeEvent(event, payload),
+    );
     // Coordinator work on the nodes this one controls is read through the
     // node link, and their relayed changes settle it promptly.
     this.coordinators.setRemoteAccess(
@@ -938,6 +963,8 @@ export class OrkestratorBackend {
         this.nodeCoordination.queueNotice(controllerId as BackendId, item),
     });
     this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
+    // Coordinators refused this node while it was down hear that it is back.
+    connectCoordinatorNodeWakes(this.nodeCoordination, this.coordinators);
     bridgeRemoteAutoSwitchNotices({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       nodeName: async (nodeId) =>
@@ -1080,6 +1107,7 @@ export class OrkestratorBackend {
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
         openCodeCoordinatorResearch: this.runtime.localServers.openCodeAgentTools.research,
+        openCodeListenerRecheck: openCodeEnvironmentListenerRecheck(storage),
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -2562,8 +2590,6 @@ export class OrkestratorBackend {
           orphanReconcileInFlight = null;
         });
     };
-    let mailRetentionTick = 0;
-    let coordinatorWorkflowTick = 0;
     let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
     const reconcileCoordinatorWorkflows = () =>
       runCoordinatorMaintenance(
@@ -2605,7 +2631,7 @@ export class OrkestratorBackend {
           });
         },
       );
-    if (this.keyedActivityJobs && !this.activityJobs) {
+    if (!this.activityJobs) {
       // Step 08: every part of the former 2 s bundle and the 60 s maintenance
       // is its own named due job (see backend-activity-jobs.ts).
       const jobLog = (name: string) => ({
@@ -2758,88 +2784,6 @@ export class OrkestratorBackend {
           : {},
       );
       this.activityJobs.start();
-    } else if (!this.keyedActivityJobs) {
-      const sweepFailed = (name: string, error: unknown): void => {
-        activityLog.throttled("warn", "job.failed", {
-          scope: `${this.logScope}:${name}`,
-          error,
-          fields: () => ({ error: formatLogError(error, { stack: false }) }),
-        });
-      };
-      this.nativeActivitySweep ??= setInterval(() => {
-        void this.nativeAgents
-          .reconcileAgentActivity()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:native-agent-activity`))
-          .catch((error) => {
-            sweepFailed("native-agent-activity", error);
-          });
-        if (reconcileClaudeState) {
-          void observeSweepStep("claude-state-reconcile", () =>
-            reconcileClaudeState({}, this.context),
-          )
-            .then(() =>
-              activityLog.recovered("job.failed", `${this.logScope}:claude-terminal-activity`),
-            )
-            .catch((error: unknown) => {
-              sweepFailed("claude-terminal-activity", error);
-            });
-        }
-        void this.promptQueues
-          .drainAll()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:tmux-prompt-queues`))
-          .catch((error) => {
-            sweepFailed("tmux-prompt-queues", error);
-          });
-        void this.agentMail
-          .refreshPresence()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-presence`))
-          .catch((error) => {
-            sweepFailed("agent-mail-presence", error);
-          });
-        void this.agentMail
-          .drainInjects()
-          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-drain`))
-          .catch((error) => {
-            sweepFailed("agent-mail-drain", error);
-          });
-        coordinatorWorkflowTick += 1;
-        if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
-        mailRetentionTick += 1;
-        if (mailRetentionTick % 30 === 0) {
-          void observeSweepStep("mail-retention", () =>
-            this.context.storage
-              .loadConfig()
-              .then((config) =>
-                this.context.storage.pruneAgentMail(
-                  config.global.agentMessaging?.retentionDays ?? 14,
-                ),
-              ),
-          )
-            .then(() => activityLog.recovered("job.failed", `${this.logScope}:mail-retention`))
-            .catch((error) => {
-              sweepFailed("mail-retention", error);
-            });
-        }
-        if (reconcilePendingEnvironmentRenames) {
-          void observeSweepStep("pending-rename-reconcile", () =>
-            reconcilePendingEnvironmentRenames({}, this.context),
-          )
-            .then(() => activityLog.recovered("job.failed", `${this.logScope}:pending-renames`))
-            .catch((error: unknown) => {
-              sweepFailed("pending-renames", error);
-            });
-        }
-      }, 2_000);
-      this.nativeActivitySweep.unref?.();
-      // Interrupted tab cleanup is durable and orphan reaping has a one-hour
-      // grace period. A one-minute, coalesced sweep is responsive enough without
-      // repeatedly parsing layouts or overlapping destructive work.
-      this.tabResourceSweep ??= setInterval(() => {
-        void reconcileRetiredReviews();
-        reconcileTabTeardownsOnce();
-        reconcileOrphanedTabResourcesOnce();
-      }, 60_000);
-      this.tabResourceSweep.unref?.();
     }
     // This credential persists across restarts, so an already configured MCP
     // client can reconnect the instant the listener binds. Publish it only
@@ -2885,6 +2829,15 @@ export class OrkestratorBackend {
       });
     });
     this.nodeCoordination.start();
+    // Shared usage readings: once now, then a minute apart as a last resort for
+    // anything an event did not trigger (a node with nothing new costs a collect).
+    // `init()` can be re-entered by a supervisor retrying a partial startup;
+    // a second interval would double the collects and leak the first handle.
+    if (!this.usageSyncTimer) {
+      void this.usageSync.syncAll();
+      this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
+      this.usageSyncTimer.unref?.();
+    }
     this.coordinators.startStatusWakes();
     this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();
@@ -3146,6 +3099,7 @@ export class OrkestratorBackend {
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    stopStepNow("agent-test-dispatch-hold", () => this.uninstallDispatchHold?.());
     // Each synchronous stop is guarded: one that throws is logged and the rest
     // still run, since an exception here would skip the drain and every close.
     stopStepNow("log-policy", () => {
@@ -3164,6 +3118,11 @@ export class OrkestratorBackend {
     stopStepNow("pr-auto-merge", () => this.prAutoMerge.dispose());
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
     stopStepNow("node-coordination", () => this.nodeCoordination.dispose());
+    stopStepNow("usage-sync", () => {
+      if (this.usageSyncTimer) clearInterval(this.usageSyncTimer);
+      this.usageSyncTimer = null;
+      this.usageSync.dispose();
+    });
     stopStepNow("node-portal", () => this.nodePortal.stop());
     const nodesStopped = beginShutdownStep(() => this.nodes.stop()).catch(() => undefined);
     stopStepNow("activity-lease-sweep", () => {
@@ -3197,14 +3156,6 @@ export class OrkestratorBackend {
     });
     stopStepNow("container-oom", () => this.runtime.containerOom.stop());
     stopStepNow("container-logs", () => this.runtime.containerLogs.shutdown());
-    stopStepNow("native-activity-sweep", () => {
-      if (this.nativeActivitySweep) clearInterval(this.nativeActivitySweep);
-      this.nativeActivitySweep = null;
-    });
-    stopStepNow("tab-resource-sweep", () => {
-      if (this.tabResourceSweep) clearInterval(this.tabResourceSweep);
-      this.tabResourceSweep = null;
-    });
     stopStepNow("activity-jobs", () => {
       const jobs = this.activityJobs;
       this.activityJobs = null;

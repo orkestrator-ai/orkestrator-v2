@@ -537,7 +537,12 @@ repository exchange ordinary node mail
   On the leaf each new message from the command node's coordinator starts a
   fresh budget, as a new request to a worker does, so the leaf answers every
   question the command node actually sends; the hourly limit still applies
-  there.
+  there. Replacing the command node's main does not release a held answer:
+  the next main takes it over still held
+  ([agent-messaging.md](agent-messaging.md#budgets)). The exchange, the bound
+  and the replacement are qualified between two `dev:test` profiles with a
+  loopback model by `mise run test:agent:coordinator:node-mail-fake`
+  ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same
@@ -658,6 +663,18 @@ message saying they are not queued: run hours later, a launch would start
 from a stale base commit, and an outcome lost to a disconnect could not be
 resolved without risking running it twice. Retry when the node reconnects
 (`list_nodes`), or use another machine.
+
+**Reconnect wake.** A refusal records only who tried: the coordinator, and
+the node (`note_coordinator_node_unavailable` from the control MCP's node
+gate, or `coordinatorNodeTarget` in the backend). When that node connects
+again (the same transition that collects its mail and syncs its tickets,
+`NodeCoordination.onNodeConnected`), each coordinator that tried it gets one
+system message in its main conversation, "Machine … reconnected", saying
+nothing was started or queued and to take a fresh base from
+`get_launch_options` before retrying (`coordinator-node-reconnect-wakes.ts`).
+The record is in memory and bounded (64 nodes, 32 coordinators each); an
+attempt older than 24 hours is dropped unannounced, and a restart forgets
+them, since the coordinator already holds the refusal it was given.
 
 ## One main coordinator, and side agents
 
@@ -1012,9 +1029,17 @@ checkout pointing into the data directory was read; the coordinator's server
 therefore loads `orkestrator-coordinator-read-boundary.js`
 (`opencode-read-boundary-plugin.ts`) from the host configuration directory,
 which resolves `read`, `grep`, `glob` and `list` paths and refuses the call in
-`tool.execute.before`. It is inert in every other server, and absent when the
-user sets their own `OPENCODE_CONFIG_DIR`
-([7402](../todo/coordinator-and-multi-review/7402-opencode-coordinator-user-config-dir.md)).
+`tool.execute.before`. It is inert in every other server. When the user sets
+their own `OPENCODE_CONFIG_DIR`, OpenCode honours only that one directory, so
+the launcher keeps it and adds the plugins as `file://` entries of
+`OPENCODE_CONFIG_CONTENT`'s `plugin` list, which 1.19.5 appends to every other
+source's plugins (`installHostOpenCodePlugins`); a coordinator's server is
+refused when the user's own `OPENCODE_CONFIG_CONTENT` cannot be extended
+(unparseable, not an object, or a `plugin` value that is not a list of
+strings); any other server then starts without the plugins, as before. The
+credential plugin rides along, since it too is self-contained. Qualified on the
+pinned binary beside a user directory, with a control showing that directory
+alone reads through the link.
 Both layers are qualified on the pinned binary with a loopback model
 (`opencode-coordinator-read-boundary-live.test.ts`).
 
@@ -1062,8 +1087,19 @@ OS sandbox).
 
 Cursor applies the sandbox
 and a tool ban but exposes no approval callback, and is refused outright if its
-sandbox cannot be enabled. Its reading tools still reach the data directory
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)).
+sandbox cannot be enabled. `@cursor/sdk` has no per-call hook that sees a
+built-in tool's path, so a coordinator's agent runs `read`, `grep` (which also
+serves `glob`) and `ls` on the bridge's own executors
+(`local.resourceProviderOptions`; `bridges/cursor-bridge/src/read-boundary.ts`
+and `read-tools.ts`). They refuse a path inside the data directory, directly or
+through a link, and check every file a search or listing rooted above it would
+return, since searches follow links; the checkout and the coordinator's
+attachment directory stay readable. The read executor also serves an MCP call's
+`$file:` arguments. The executor shapes are unpublished SDK internals, so this
+is proven only against fakes and the SDK's own message descriptors until a live
+Cursor turn qualifies it
+([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)
+task 2).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
@@ -1268,6 +1304,15 @@ bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
 
+In a container environment the probe runs inside the container, where it
+answers `missing-programs`: the image ships neither program. That was checked
+with `docker exec` in a real environment container on 2026-11-10 (to-do 0145
+task 4), and the container's own bridge refused a provider-sandbox prompt
+with 422. Installing the two packages would not help: under Docker's default
+seccomp profile bubblewrap cannot create its user namespace (the CLI's own
+availability check fails too), and without seccomp it cannot mount `/proc`
+over Docker's masked one. The container is the sandbox there.
+
 Three consumers use it:
 
 - the backend's coordinator table, which reports Claude as
@@ -1316,14 +1361,41 @@ The boundary is shown, not silent:
   step (`stepRuntimes.consolidate.commandSandboxOff`). The reviewer's and the
   consolidation step's inspector show it as a warning note. A restarted
   reviewer or step starts without it.
+- **The reason names where it is.** In a container (`/.dockerenv` or
+  `/run/.containerenv`) the probe says the sandbox cannot run "in this
+  container" and that bubblewrap and socat are not in the container's image;
+  only a host is told to install the packages, since nobody installs into an
+  environment's image.
+
+Without the sandbox the hook refuses every Git command, because a
+repository's Git configuration can run helpers (an external diff, a
+textconv, `core.fsmonitor`). A packaged reviewer is told to run the
+package's `diffCommand`, which is Git, so in a container it could not see
+the change at all. The backend therefore seals the reviewed diff as a file
+beside the package when it builds it (`review-diff-artifact.ts`): it runs
+the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
+<base>...<head>` the package names, writes it read-only and Git-excluded as
+`review-diff-<sha256>.patch` in the round's artifact directory, records
+`diffArtifact: { path, bytes, sha256 }` in the package, and checks its bytes
+and digest with the package before each reviewer is dispatched. The
+reviewer instructions say to read that file when the session refuses Git. A
+diff over 16 MiB, or one Git or the write could not produce, is left out
+and the package's limitations say so; the review itself never fails for
+it. The runner decodes the output as UTF-8. If it contains a replacement
+character (including a literal U+FFFD), the backend leaves the artifact out
+and records a fidelity limitation instead of sealing potentially altered bytes.
 
 Proved by the bridge's session-manager and route tests with an injected probe
 answer, and by the `read-only-*` cases of
 `conformance-coordinator-sandbox-live.test.ts`, which hide `bwrap` and
 `socat` from `PATH` and run the pinned CLI against a scripted endpoint; the
-case that pins the CLI's own refusal of a required sandbox runs only on Linux.
-Not yet run: a real Multi Review in a container environment and on stock
-Ubuntu
+case that pins the CLI's own refusal of a required sandbox runs only on Linux
+(all 19 cases passed on Linux on 2026-11-10). A real Multi Review in a
+container environment, with two Claude reviewers and a Claude consolidation
+on the image's real `claude` against a scripted Messages API, is
+`container-multi-review-read-only.spec.ts` (passed 2026-11-10; see
+[container qualification](../development/container-qualification.md)). Not
+yet run: stock Ubuntu with AppArmor's `bwrap-userns-restrict`, and Windows
 ([0190](../todo/agent-engines/0190-claude-read-only-turns-without-working-sandbox.md)).
 
 Orkestrator never changes AppArmor policy and does not ship a profile. To get
@@ -1604,6 +1676,13 @@ that has begun is finished first, because the turn's admission
 a side agent, a paused coordinator and a steered message (one taken into a
 running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
+
+Both paths are qualified against a slow remote on a real profile by
+`mise run test:agent:coordinator-slow-remote` (to-do 4720, retired 2026-11-10; see
+[agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
+In that run a worker's mail to a coordinator whose turn is running waits on
+the coordinator's presence (`agent-mail delivery.waiting reason=working`)
+before it reaches this step, and reaches it once the turn has ended.
 
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout
@@ -2023,12 +2102,50 @@ The mark is coarse by design, the same line as the account-switch grant: it also
 marks a delegation that merely happened during such a turn, and a later user turn
 clears it even if the content carried over. An agent's reasoning cannot be traced
 to specific input, so tracking provenance per message would only look more
-precise. Three limits: a message the user approved
-(`send_approved_project_home_message`) is not marked, since they read it; a
-scheduled `send_message` reads whichever turn came last; and a leaf without
-`node-mail-turn-origin` frames mail as it always did. Prompts sent with
-`send_prompt_to_tab` and `launch_job` are not mail and carry no such note
-([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)).
+precise. Two limits: a message the user approved
+(`send_approved_project_home_message`) is not marked, since they read it; and a
+leaf without `node-mail-turn-origin` frames mail as it always did.
+
+`coordinatorCallTurnOrigin` (`@orkestrator/protocol/coordinator`) is the one
+rule every path reads: only a turn the user started is unmarked, and an unknown
+origin counts as mail.
+
+### Delegated prompts from a turn the user did not start
+
+The same mark reaches prompts, which are not mail
+([6080](../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md)
+task 5):
+
+- A launch's delegation frame (`launch_environment`, `launch_job`,
+  `fork_worker`, and a launch or fork on another node) ends with
+  `COORDINATOR_MAIL_ORIGIN_NOTE` as its last line, after the instruction
+  (`createCoordinatorDelegatedPrompt` with `turnOrigin: "mail"`). A frame from
+  the user's turn is unchanged, byte for byte.
+- `send_prompt_to_tab` from such a turn wraps the prompt in a frame holding
+  only the note (`createCoordinatorMailOriginPrompt`). The worker already has
+  its launch's frame, so the metadata and instruction are not repeated. A
+  prompt from the user's turn is sent as written. This later prompt has no
+  stored presentation, so the worker's transcript shows the frame as text.
+- A remote fork sends the note inside the instruction text
+  (`coordinatorDelegationInstruction`), which the node copies into the frame it
+  builds. A node from before the note writes the same frame without knowing
+  about it. The frame grammar is unchanged (opening line at offset zero, closing
+  line, blank line), so an older backend or renderer parses a marked frame and
+  accepts its stored presentation.
+- The Control MCP tools read the origin through `get_project_coordinator`
+  (`coordinatorScopeTurnOrigin`). The registry commands read it from the
+  coordinator store (`coordinatorCallerTurnOrigin`). A read that fails marks the
+  prompt rather than sending it as the user's.
+
+A scheduled fire is framed from the turn that set the schedule, not from
+whichever turn the conversation ran last. A coordinator schedule's owner
+records `turnOrigin` (`user` or `mail`) when it is created. An `update_schedule`
+or `resume_schedule` from a turn the user did not start sets it to `mail`, and
+nothing clears it. The executor puts it on the fire's `CoordinatorControlScope`,
+which only the backend's scheduler sets, and `send_message`,
+`send_prompt_to_tab` and the launches read it in place of the newest turn. A
+schedule created before the field has no `turnOrigin` and reads the newest turn,
+as it did before.
 
 ### Delegation round trip
 
@@ -2538,7 +2655,13 @@ lock).
   step's selection from then on, as the UI's does.
 - **Refusals.** A cancelled or completed pipeline, a failure in environment
   setup (before any step), a failure with no step, an unknown step and a
-  pipeline of another project are refused before anything changes. A
+  pipeline of another project are refused before anything changes. The
+  cancelled refusal (and `resume_build_pipeline`'s) says the cancel is the
+  user's decision unless the coordinator made it, and not to start another
+  build for the ticket unasked; it used to say "start a new build if the work
+  is still wanted", which a Codex coordinator followed after the user
+  cancelled (to-do 7545 task 4). `get_build_pipeline` shows `cancelledAt`
+  on a cancelled build, whose phase reads `failed`. A
   refused request leaves no receipt, so the same `requestId` can be sent
   again once the cause is fixed.
 - **Once per request.** The command node keeps a coordinator receipt
@@ -2687,11 +2810,12 @@ stable key; a key is sent once, recorded on the association
 | Multi Review | interactive fix turn finished (`fix-done`, with the reason when auto-PR started no PR) or failed (`fix-failed`) | `settled` |
 | Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL) or already `pr-closed`, `pr-merged` or `pr-unknown`, or the launch failed (`pr-failed`) | `settled` |
 | Multi Review | a reviewer, consolidation or Address Findings session `stalled` | `settled` |
-| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
+| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` (stopped on purpose; a cancel the coordinator did not make is the user's decision, so it does not launch it again unasked) | always |
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
 | Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
 | Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
 | Build pipeline | `completed` (task, last verification, acceptance criteria, delivery), `failed` (error, acceptance criteria) | always |
+| Build pipeline | `cancelled` (task; the error only when stopping every agent could not be confirmed), keyed per cancel. Never reported as `failed`: it says the build was stopped on purpose, that a cancel the coordinator did not make itself is the user's decision, and not to restart, resume or rebuild it or start another build for the ticket unless the user asks. It offers only `get_build_pipeline` (to-do 7545 task 4) | always |
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |

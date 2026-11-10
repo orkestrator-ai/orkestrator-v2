@@ -1,3 +1,5 @@
+import { hasErrorCode } from "./contract/ipc-error.js";
+
 /**
  * The pane layout compare-and-swap contract, shared by the backend that raises
  * a conflict and the renderer that has to recognise one.
@@ -43,10 +45,30 @@ export function paneLayoutRevisionConflictMessage(
 /**
  * Recognises a conflict on the renderer side.
  *
- * Uses `includes` rather than `startsWith` because the transport is allowed to
- * prepend its own framing, and matches on the marker alone so the revision
- * numbers stay free to change.
+ * The backend throws it with the registered code `pane-layout-revision-conflict`
+ * (`contract/ipc-error.ts`), which decides when present, from any transport.
+ * Without a code (an older backend) the marker is matched with `includes`
+ * rather than `startsWith`, because the transport is allowed to prepend its
+ * own framing, and on the marker alone so the revision numbers stay free to
+ * change.
  */
 export function isPaneLayoutRevisionConflict(error: unknown): boolean {
-  return error instanceof Error && error.message.includes(PANE_LAYOUT_REVISION_CONFLICT_MARKER);
+  return (
+    error instanceof Error &&
+    hasErrorCode(error, "pane-layout-revision-conflict", PANE_LAYOUT_REVISION_CONFLICT_MARKER)
+  );
+}
+
+/**
+ * The id of a build pipeline's key information tab (`view` absent) or its
+ * notes tab (`view: "notes"`). Every client and the backend derive it the same
+ * way, so a tab two of them open for the same pipeline and view merges into
+ * one tab instead of two.
+ */
+export function keyInformationTabId(
+  environmentId: string,
+  pipelineId: string,
+  view?: "notes",
+): string {
+  return `key-information:${JSON.stringify([environmentId, pipelineId, view ?? "information"])}`;
 }

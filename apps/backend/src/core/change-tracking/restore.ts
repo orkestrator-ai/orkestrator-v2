@@ -19,7 +19,7 @@ import type {
   ChangesPrepareRestoreResult,
   RestorePreviewFile,
 } from "@orkestrator/protocol/change-resources";
-import { runCommandBuffer } from "../shell.js";
+import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import {
   decodePath,
   displayPath,
@@ -71,117 +71,64 @@ export function safeRelativePath(pathId: string): string | null {
   return Buffer.from(decodePath(pathId)).toString();
 }
 
+/** One conditional write sent to the helper, with the bytes it writes. */
+export interface ConditionalWriteItem {
+  action: RestoreAction;
+  /** Bytes to write; null deletes the destination. */
+  bytes: Uint8Array | null;
+  /**
+   * Writes sharing a group run in order, and once one of them is not applied
+   * the helper fails the rest of the group without touching them (both ends
+   * of a rename are one unit).
+   */
+  group?: string;
+}
+
+/**
+ * How many groups (a file, or both ends of a rename) one helper process
+ * writes. Each write is still checked on its own immediately before it
+ * happens; batching only removes the per-file process start, which cost 11
+ * to 14 ms per file on a quiet host and 30 to 40 ms under load (todo 7555).
+ * It also bounds how far an owner replacement can run on: the owner fence is
+ * asserted before each batch.
+ */
+export const RESTORE_WRITE_BATCH_GROUPS = 500;
+
+/**
+ * Decoded content one helper invocation may carry. The helper reads its whole
+ * stdin, so this bounds its memory (base64 adds a third). A single file is at
+ * most 16 MiB, so every group fits a batch of its own.
+ */
+export const RESTORE_WRITE_BATCH_BYTES = 32 * 1024 * 1024;
+
 /** Same root-pinned helper on the host and beside the container filesystem. */
+export async function hostConditionalWrites(
+  root: string,
+  items: readonly ConditionalWriteItem[],
+): Promise<ConditionalWriteOutcome[]> {
+  return executeConditionalWrites(process.execPath, ["-e", CONTAINER_RESTORE_HELPER], root, items);
+}
+
+export async function containerConditionalWrites(
+  containerId: string,
+  root: string,
+  items: readonly ConditionalWriteItem[],
+): Promise<ConditionalWriteOutcome[]> {
+  return executeConditionalWrites(
+    "docker",
+    ["exec", "-i", containerId, "node", "-e", CONTAINER_RESTORE_HELPER],
+    root,
+    items,
+  );
+}
+
+/** One write through the batched helper. */
 export async function hostConditionalWrite(
   root: string,
   action: RestoreAction,
   bytes: Uint8Array | null,
 ): Promise<ConditionalWriteOutcome> {
-  return executeConditionalWrite(
-    process.execPath,
-    ["-e", CONTAINER_RESTORE_HELPER],
-    root,
-    action,
-    bytes,
-  );
-}
-
-export const CONTAINER_RESTORE_HELPER = String.raw`
-const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const out = result => process.stdout.write(JSON.stringify({ result }));
-let temp;
-try {
-  const input = JSON.parse(fs.readFileSync(0, "utf8"));
-  const root = fs.realpathSync(input.root), expectedRoot = fs.lstatSync(root);
-  const valid = rel => rel && !rel.includes("\0") && !rel.includes("\\") && !/^[A-Za-z]:/.test(rel) && rel.split("/").every(p => p && p !== "." && p !== ".." && p.toLowerCase() !== ".git");
-  const pin = (encoded, create) => {
-    const rel = Buffer.from(encoded, "base64").toString();
-    if (!valid(rel)) throw new Error("path");
-    process.chdir(root);
-    const opened = fs.statSync(".");
-    if (opened.dev !== expectedRoot.dev || opened.ino !== expectedRoot.ino) throw new Error("root");
-    const parts = rel.split("/"), name = parts.pop();
-    for (const p of parts) {
-      if (create) { try { fs.mkdirSync(p); } catch (e) { if (e.code !== "EEXIST") throw e; } }
-      const info = fs.lstatSync(p);
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("ancestor");
-      process.chdir(p);
-      const pinned = fs.statSync(".");
-      if (info.dev !== pinned.dev || info.ino !== pinned.ino) throw new Error("ancestor");
-    }
-    return name;
-  };
-  const matches = (file, oid, mode) => {
-    let s;
-    try { s = fs.lstatSync(file); } catch (e) { if (e.code === "ENOENT") return oid === null && mode == null; throw e; }
-    if (!s.isFile() || s.isSymbolicLink() || s.size > 16 * 1024 * 1024) return false;
-    if (mode !== undefined && mode !== ((s.mode & 0o111) ? "100755" : "100644")) return false;
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try {
-      const info = fs.fstatSync(fd);
-      if (!info.isFile() || info.dev !== s.dev || info.ino !== s.ino) return false;
-      const b = Buffer.alloc(s.size + 1); let size = 0;
-      while (size < b.length) { const n = fs.readSync(fd, b, size, b.length - size, null); if (!n) break; size += n; }
-      const after = fs.fstatSync(fd);
-      if (size !== s.size || after.mtimeMs !== s.mtimeMs || after.ctimeMs !== s.ctimeMs) return false;
-      return crypto.createHash("sha1").update("blob " + size + "\0").update(b.subarray(0, size)).digest("hex") === oid;
-    } finally { fs.closeSync(fd); }
-  };
-  if (input.guard) {
-    const guarded = pin(input.guard.path, false);
-    if (!matches(guarded, input.guard.expectedOid, input.guard.expectedMode)) { out("precondition-failed"); process.exit(0); }
-  }
-  const file = pin(input.path, true);
-  if (!matches(file, input.expected, input.expectedMode)) { out("precondition-failed"); process.exit(0); }
-  if (input.content === null) { fs.unlinkSync(file); out("applied"); }
-  else {
-    temp = "." + file + ".orkestrator-restore-" + crypto.randomUUID();
-    fs.writeFileSync(temp, Buffer.from(input.content, "base64"), { mode: input.mode === "100755" ? 0o755 : 0o644, flag: "wx" });
-    if (!matches(file, input.expected, input.expectedMode)) { out("precondition-failed"); }
-    else {
-      if (input.expected === null) fs.linkSync(temp, file);
-      else fs.renameSync(temp, file);
-      out("applied");
-    }
-  }
-} catch { out("failed"); }
-finally { if (temp) try { fs.rmSync(temp, { force: true }); } catch {} }
-`;
-
-async function executeConditionalWrite(
-  command: string,
-  args: string[],
-  root: string,
-  action: RestoreAction,
-  bytes: Uint8Array | null,
-): Promise<ConditionalWriteOutcome> {
-  try {
-    const result = await runCommandBuffer(command, args, {
-      stdin: JSON.stringify({
-        root,
-        path: Buffer.from(decodePath(action.pathId)).toString("base64"),
-        expected: action.expectedOid,
-        expectedMode: action.expectedMode,
-        content: bytes ? Buffer.from(bytes).toString("base64") : null,
-        mode: action.mode,
-        ...(action.guard
-          ? {
-              guard: {
-                ...action.guard,
-                path: Buffer.from(decodePath(action.guard.pathId)).toString("base64"),
-              },
-            }
-          : {}),
-      }),
-      timeoutMs: 60_000,
-    });
-    const parsed = JSON.parse(result.stdout.toString("utf8")) as {
-      result?: ConditionalWriteOutcome;
-    };
-    return parsed.result ?? "failed";
-  } catch {
-    return "failed";
-  }
+  return (await hostConditionalWrites(root, [{ action, bytes }]))[0] ?? "failed";
 }
 
 export async function containerConditionalWrite(
@@ -190,13 +137,167 @@ export async function containerConditionalWrite(
   action: RestoreAction,
   bytes: Uint8Array | null,
 ): Promise<ConditionalWriteOutcome> {
-  return executeConditionalWrite(
-    "docker",
-    ["exec", "-i", containerId, "node", "-e", CONTAINER_RESTORE_HELPER],
-    root,
-    action,
-    bytes,
-  );
+  return (await containerConditionalWrites(containerId, root, [{ action, bytes }]))[0] ?? "failed";
+}
+
+/**
+ * Reads `{ root, actions: [...] }` from stdin and answers one line
+ * `{"i":<index>,"result":...}` per action, in order, written synchronously
+ * as each action finishes. A helper that dies part-way has therefore already
+ * reported every action it completed; the caller treats any action without a
+ * line as failed. Every action repeats the full check: the root and each
+ * ancestor directory are pinned, and the destination's content and mode are
+ * compared immediately before the temporary sibling is renamed over it.
+ */
+export const CONTAINER_RESTORE_HELPER = String.raw`
+const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const out = (i, result) => {
+  const line = Buffer.from(JSON.stringify({ i, result }) + "\n");
+  for (let off = 0; off < line.length;) {
+    try { off += fs.writeSync(1, line, off); } catch (e) { if (e.code !== "EAGAIN") throw e; }
+  }
+};
+let input, root, expectedRoot;
+try {
+  input = JSON.parse(fs.readFileSync(0, "utf8"));
+  root = fs.realpathSync(input.root); expectedRoot = fs.lstatSync(root);
+} catch { process.exit(0); }
+const valid = rel => rel && !rel.includes("\0") && !rel.includes("\\") && !/^[A-Za-z]:/.test(rel) && rel.split("/").every(p => p && p !== "." && p !== ".." && p.toLowerCase() !== ".git");
+const pin = (encoded, create) => {
+  const rel = Buffer.from(encoded, "base64").toString();
+  if (!valid(rel)) throw new Error("path");
+  process.chdir(root);
+  const opened = fs.statSync(".");
+  if (opened.dev !== expectedRoot.dev || opened.ino !== expectedRoot.ino) throw new Error("root");
+  const parts = rel.split("/"), name = parts.pop();
+  for (const p of parts) {
+    if (create) { try { fs.mkdirSync(p); } catch (e) { if (e.code !== "EEXIST") throw e; } }
+    const info = fs.lstatSync(p);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("ancestor");
+    process.chdir(p);
+    const pinned = fs.statSync(".");
+    if (info.dev !== pinned.dev || info.ino !== pinned.ino) throw new Error("ancestor");
+  }
+  return name;
+};
+const matches = (file, oid, mode) => {
+  let s;
+  try { s = fs.lstatSync(file); } catch (e) { if (e.code === "ENOENT") return oid === null && mode == null; throw e; }
+  if (!s.isFile() || s.isSymbolicLink() || s.size > 16 * 1024 * 1024) return false;
+  if (mode !== undefined && mode !== ((s.mode & 0o111) ? "100755" : "100644")) return false;
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.dev !== s.dev || info.ino !== s.ino) return false;
+    const b = Buffer.alloc(s.size + 1); let size = 0;
+    while (size < b.length) { const n = fs.readSync(fd, b, size, b.length - size, null); if (!n) break; size += n; }
+    const after = fs.fstatSync(fd);
+    if (size !== s.size || after.mtimeMs !== s.mtimeMs || after.ctimeMs !== s.ctimeMs) return false;
+    return crypto.createHash("sha1").update("blob " + size + "\0").update(b.subarray(0, size)).digest("hex") === oid;
+  } finally { fs.closeSync(fd); }
+};
+const one = action => {
+  let temp;
+  try {
+    if (action.guard) {
+      const guarded = pin(action.guard.path, false);
+      if (!matches(guarded, action.guard.expectedOid, action.guard.expectedMode)) return "precondition-failed";
+    }
+    const file = pin(action.path, true);
+    if (!matches(file, action.expected, action.expectedMode)) return "precondition-failed";
+    if (action.content === null) { fs.unlinkSync(file); return "applied"; }
+    temp = "." + file + ".orkestrator-restore-" + crypto.randomUUID();
+    fs.writeFileSync(temp, Buffer.from(action.content, "base64"), { mode: action.mode === "100755" ? 0o755 : 0o644, flag: "wx" });
+    if (!matches(file, action.expected, action.expectedMode)) return "precondition-failed";
+    if (action.expected === null) fs.linkSync(temp, file);
+    else fs.renameSync(temp, file);
+    return "applied";
+  } catch { return "failed"; }
+  finally { if (temp) try { fs.rmSync(temp, { force: true }); } catch {} }
+};
+const blocked = new Set();
+for (let i = 0; i < input.actions.length; i++) {
+  const action = input.actions[i];
+  const group = action.group;
+  let result;
+  if (group != null && blocked.has(group)) result = "failed";
+  else {
+    result = one(action);
+    if (result !== "applied" && group != null) blocked.add(group);
+  }
+  out(i, result);
+}
+`;
+
+function helperAction(item: ConditionalWriteItem) {
+  const { action, bytes } = item;
+  return {
+    path: Buffer.from(decodePath(action.pathId)).toString("base64"),
+    expected: action.expectedOid,
+    expectedMode: action.expectedMode,
+    content: bytes ? Buffer.from(bytes).toString("base64") : null,
+    mode: action.mode,
+    ...(item.group !== undefined ? { group: item.group } : {}),
+    ...(action.guard
+      ? {
+          guard: {
+            ...action.guard,
+            path: Buffer.from(decodePath(action.guard.pathId)).toString("base64"),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Result lines the helper wrote, by action index; anything unanswered failed. */
+export function parseConditionalWriteResults(
+  stdout: Buffer | string,
+  count: number,
+): ConditionalWriteOutcome[] {
+  const results = Array.from<ConditionalWriteOutcome>({ length: count }).fill("failed");
+  for (const line of stdout.toString("utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line) as { i?: unknown; result?: unknown };
+      if (
+        typeof parsed.i === "number" &&
+        Number.isInteger(parsed.i) &&
+        parsed.i >= 0 &&
+        parsed.i < count &&
+        (parsed.result === "applied" ||
+          parsed.result === "precondition-failed" ||
+          parsed.result === "failed")
+      )
+        results[parsed.i] = parsed.result;
+    } catch {
+      // A torn last line (the helper died mid-write) answers nothing.
+    }
+  }
+  return results;
+}
+
+async function executeConditionalWrites(
+  command: string,
+  args: string[],
+  root: string,
+  items: readonly ConditionalWriteItem[],
+): Promise<ConditionalWriteOutcome[]> {
+  if (items.length === 0) return [];
+  let stdout: Buffer;
+  try {
+    const result = await runCommandBuffer(command, args, {
+      stdin: JSON.stringify({ root, actions: items.map(helperAction) }),
+      // The old per-file helper had 60 s each; a batch keeps that floor and
+      // grows with its size, far beyond what its in-process writes need.
+      timeoutMs: 60_000 + items.length * 100,
+    });
+    stdout = result.stdout;
+  } catch (error) {
+    // A helper that was killed or exited badly may still have reported (and
+    // so completed) some of its writes; those lines stay authoritative.
+    stdout = error instanceof CommandFailedError ? error.stdoutBytes : Buffer.alloc(0);
+  }
+  return parseConditionalWriteResults(stdout, items.length);
 }
 
 /**
@@ -220,6 +321,29 @@ export function restorePreflightDeadlineMs(
   );
 }
 
+/**
+ * How long the apply's recovery checkpoint and result captures may take. The
+ * checkpoint captures the whole worktree just after a bulk turn, which is cold
+ * for every file the turn wrote when the turn's own end capture was the only
+ * earlier publish; a fixed 10 s refused bulk restores on a busy host before
+ * writing anything (todo 7310). The user is already waiting on an explicit
+ * action, and the checkpoint is what makes the apply recoverable, so it gets
+ * at least the turn finalization deadline, more for a large plan as the
+ * preview does, up to the same ceiling.
+ */
+export function restoreCaptureDeadlineMs(
+  paths: number,
+  policy: Pick<
+    ChangeTrackingPolicy,
+    | "finalizationDeadlineMs"
+    | "restorePreflightDeadlineMs"
+    | "restorePreflightPerPathMs"
+    | "restorePreflightMaxDeadlineMs"
+  >,
+): number {
+  return Math.max(policy.finalizationDeadlineMs, restorePreflightDeadlineMs(paths, policy));
+}
+
 function matchesAction(action: RestoreAction, record: ReadRecord | undefined): boolean {
   if (!record) return false;
   if (record.kind === "missing") return action.expectedOid === null && action.expectedMode == null;
@@ -241,6 +365,9 @@ export class ChangeRestoreService {
       tokenTtlMs: () => number;
       /** Destination preflight deadline for a plan of this many paths. */
       preflightDeadlineMs: (paths: number) => number;
+      /** Checkpoint and result capture deadline for an apply of this many paths. */
+      captureDeadlineMs: (paths: number) => number;
+      beforeCheckpoint?: (worktreeId: string) => void;
       onApplied?: (worktreeId: string, environmentId: string | null) => void;
     },
   ) {}
@@ -452,7 +579,7 @@ export class ChangeRestoreService {
     actionToken: string;
     idempotencyKey: string;
   }): Promise<ChangesApplyRestoreResult> {
-    const { ledger, store } = this.deps;
+    const { ledger } = this.deps;
     const previous = ledger.restoreOperationByKey(input.idempotencyKey);
     if (previous?.outcome_json)
       return JSON.parse(previous.outcome_json) as ChangesApplyRestoreResult;
@@ -503,10 +630,12 @@ export class ChangeRestoreService {
     const completed: string[] = [];
     const failed: string[] = [];
     let outcome: ChangesApplyRestoreResult;
+    const captureDeadlineMs = this.deps.captureDeadlineMs(payload.actions.length);
     try {
+      this.deps.beforeCheckpoint?.(payload.worktreeId);
       const checkpoint = await owner.capture({
         purpose: "restore-checkpoint",
-        deadlineMs: 10_000,
+        deadlineMs: captureDeadlineMs,
         boundaryKey: `restore-checkpoint:${operationId}`,
       });
       if (checkpoint.kind !== "published") throw new Error("checkpoint-unavailable");
@@ -533,56 +662,22 @@ export class ChangeRestoreService {
             expectedOid: group[1]!.expectedOid,
             expectedMode: group[1]!.expectedMode,
           };
-        // Check both rename endpoints at apply time before either mutation.
-        const current = await owner.executor
-          .describe(
-            group.map((a) => a.pathId),
-            {
-              maxCandidates: group.length,
-              maxFileBytes: 16 * 1024 * 1024,
-              maxCaptureBytes: 256 * 1024 * 1024,
-              readers: 1,
-              stableReadAttempts: 2,
-            },
-            new AbortController().signal,
-          )
-          .catch(() => []);
-        if (
-          group.some(
-            (action) =>
-              !matchesAction(
-                action,
-                current.find((record) => record.pathId === action.pathId),
-              ),
-          )
-        ) {
-          failed.push(...group.map((a) => a.pathId));
-          continue;
-        }
-        let blocked = false;
-        for (const action of group) {
-          try {
-            owner.assertCurrent();
-            const bytes = action.targetBlob ? await store.get(action.targetBlob) : null;
-            const result =
-              blocked || (action.targetBlob && !bytes)
-                ? "failed"
-                : await this.write(owner, action, bytes);
-            if (result === "applied") completed.push(action.pathId);
-            else {
-              failed.push(action.pathId);
-              blocked = true;
-            }
-          } catch {
-            failed.push(action.pathId);
-            blocked = true;
-          }
+      }
+      const ordered = [...groups.values()];
+      for (let index = 0; index < ordered.length; index += RESTORE_WRITE_BATCH_GROUPS) {
+        const outcomes = await this.applyBatch(
+          owner,
+          ordered.slice(index, index + RESTORE_WRITE_BATCH_GROUPS),
+        );
+        for (const [action, result] of outcomes) {
+          if (result === "applied") completed.push(action.pathId);
+          else failed.push(action.pathId);
         }
       }
       owner.invalidate(completed);
       await owner.capture({
         purpose: "restore-result",
-        deadlineMs: 10_000,
+        deadlineMs: captureDeadlineMs,
         boundaryKey: `restore-result:${operationId}`,
       });
       outcome = {
@@ -627,14 +722,93 @@ export class ChangeRestoreService {
     return outcome;
   }
 
-  private write(
+  /**
+   * Writes one batch of groups and answers every action's outcome in plan
+   * order. Both ends of each group are described before any write in the
+   * batch, a group whose destination moved since the preview is skipped
+   * whole, and the helper re-checks each file immediately before writing it.
+   */
+  private async applyBatch(
     owner: WorktreeChangeOwner,
-    action: RestoreAction,
-    bytes: Uint8Array | null,
-  ): Promise<ConditionalWriteOutcome> {
+    groups: readonly RestoreAction[][],
+  ): Promise<Array<[RestoreAction, ConditionalWriteOutcome]>> {
+    const { store } = this.deps;
+    const outcomes = new Map<RestoreAction, ConditionalWriteOutcome>();
+    const paths = groups.flatMap((group) => group.map((action) => action.pathId));
+    // Check every endpoint at apply time before any mutation in this batch.
+    const described = new Map<string, ReadRecord>();
+    // Host describe returns full bodies. Retain only metadata and release each
+    // body before reading the next path; container describe is metadata-only.
+    const batchSize = owner.executor.kind === "host-worker" ? 1 : paths.length;
+    for (let index = 0; index < paths.length; index += batchSize) {
+      const current = await owner.executor
+        .describe(
+          paths.slice(index, index + batchSize),
+          {
+            maxCandidates: paths.length,
+            maxFileBytes: 16 * 1024 * 1024,
+            maxCaptureBytes: 256 * 1024 * 1024,
+            readers: 1,
+            stableReadAttempts: 2,
+          },
+          new AbortController().signal,
+        )
+        .catch(() => [] as ReadRecord[]);
+      for (const record of current) {
+        if (record.kind === "file" || record.kind === "symlink") record.bytes = undefined;
+        described.set(record.pathId, record);
+      }
+    }
+    let pending: ConditionalWriteItem[] = [];
+    let pendingBytes = 0;
+    const flush = async () => {
+      const items = pending;
+      pending = [];
+      pendingBytes = 0;
+      if (items.length === 0) return;
+      let results: ConditionalWriteOutcome[];
+      try {
+        owner.assertCurrent();
+        results = await this.writeBatch(owner, items);
+      } catch {
+        results = items.map(() => "failed");
+      }
+      items.forEach((item, position) => outcomes.set(item.action, results[position] ?? "failed"));
+    };
+    for (const [groupIndex, group] of groups.entries()) {
+      if (group.some((action) => !matchesAction(action, described.get(action.pathId)))) {
+        for (const action of group) outcomes.set(action, "failed");
+        continue;
+      }
+      // A write whose blob is gone fails, and so does the rest of its group.
+      const items: ConditionalWriteItem[] = [];
+      let bytes = 0;
+      for (const action of group) {
+        let content: Uint8Array | null = null;
+        if (action.targetBlob) {
+          content = await store.get(action.targetBlob).catch(() => null);
+          if (!content) break;
+        }
+        items.push({ action, bytes: content, group: String(groupIndex) });
+        bytes += content?.byteLength ?? 0;
+      }
+      for (const action of group.slice(items.length)) outcomes.set(action, "failed");
+      if (items.length === 0) continue;
+      if (pending.length > 0 && pendingBytes + bytes > RESTORE_WRITE_BATCH_BYTES) await flush();
+      pending.push(...items);
+      pendingBytes += bytes;
+    }
+    await flush();
+    return groups.flat().map((action) => [action, outcomes.get(action) ?? "failed"]);
+  }
+
+  private writeBatch(
+    owner: WorktreeChangeOwner,
+    items: readonly ConditionalWriteItem[],
+  ): Promise<ConditionalWriteOutcome[]> {
     const identity = owner.identity;
     return identity.runtimeKind === "container"
-      ? containerConditionalWrite(identity.runtimeId, identity.canonicalRoot, action, bytes)
-      : hostConditionalWrite(identity.canonicalRoot, action, bytes);
+      ? containerConditionalWrites(identity.runtimeId, identity.canonicalRoot, items)
+      : hostConditionalWrites(identity.canonicalRoot, items);
   }
 }

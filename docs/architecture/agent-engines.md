@@ -205,6 +205,53 @@ archived in Cursor's own UI. Both vendors refuse to continue an archived
 conversation, so choosing one restores it first; a refused restore does not
 resume.
 
+OpenCode offers it for 2.x conversations only. Its platform table reports
+`actions.archive`, and the backend's OpenCode router sends an `opencode2:` id to
+the session's 2.x server, which sets `archived` with `PATCH /api/session/:id`
+and lists archived rows on request (`opencode2/sessions.ts`). The same picker
+also lists 1.x conversations, which the 1.x wire cannot archive: the 1.x
+provider marks each of its rows `archivable: false`, the dialog offers no
+remove on those rows, and the router refuses a 1.x id. As on Codex and Cursor,
+a 2.x conversation the server still holds for a tab or a run is refused
+("This conversation is open in a tab"); restoring is always allowed.
+
+### Rewinding a conversation and Pi branches
+
+Codex, Pi and Cursor report `actions.rewindMessages`. The native tab offers
+**Rewind to before this prompt** on each persisted prompt, beside fork
+(`components/native-agent/MessageRewindAction.tsx`, plan in
+`native-agent-rewind.ts`). It sits on prompts only because every bridge
+resolves a prompt id to "cut before this prompt": Codex reverts the turn that
+holds it and every later turn (`thread/revert`; a row with no `turnId` is not
+offered, the bridge would refuse it), Pi moves its leaf to the prompt's parent
+(`navigateTree`), and Cursor reverts to the run's `startCheckpointRef`. A
+response action would mean something different on each. A dialog names how many
+turns go and whether they can come back, then the tab sends the
+`rewind-messages` session action. The prompt's text returns to the composer
+unless the composer already holds a draft, which is never overwritten. Files
+are not reverted on any platform. The action is disabled while a turn runs, and
+every bridge refuses a rewind mid-turn as well.
+
+Pi keeps the removed turns as another branch of the same session file
+(`actions.branches`). The rendered rows show only the active branch, so no row
+holds an entry id of the branch left behind. `GET /session/:id/branches` on the
+Pi bridge (`session-branches.ts`) lists the tree's leaves that are not on the
+active branch and hold conversation it does not share: the leaf's entry id,
+the first prompt it does not share (or its newest prompt when it diverges after
+a response), its entry count and time, newest first, at most 50
+(`NATIVE_AGENT_BRANCH_LIST_LIMITS`). Leaves that differ only by bookkeeping
+entries are left out. The backend command `list_native_agent_branches` reads
+it, and the session panel's **Branches** picker (`SessionBranchPicker.tsx`)
+reads it when opened, never on a poll, and sends `switch-branch` with the
+entry id. The branch being left is listed in its turn, so a switch is always
+reversible. Live rows keep their bridge ids; giving them Pi entry ids would
+change a row's id mid-turn (`bridges/AGENTS.md`, "Transcript rows").
+
+The public CLI reaches both: `session rewind SESSION --message ID`,
+`session branches SESSION` and `session branch SESSION ENTRY_ID`
+([public-cli.md](public-cli.md)). A Coordinator conversation refuses rewind and
+a branch switch, as it refuses fork and resume.
+
 ## Session titles
 
 The backend owns every native session's title (`native-agent-session-titles.ts`).
@@ -391,6 +438,20 @@ which is a deliberate choice: an Orkestrator agent tab is an interactive session
 in an isolated environment. `plan` mode is the read-only alternative, and the
 SDK's `canUseTool` callback is what routes a tool request back through the
 bridge's approval flow when one is raised.
+
+A session's CLI stays warm between turns (`session-manager-runtime.ts`), so a
+follow-up, a model or mode change and a parked approval all go to the same
+process; a launch-only change (bypass mode, plugins, policy and the rest of
+`claudeLaunchProfile`) replaces an idle CLI instead. Each CLI the bridge
+launches takes the next number from a bridge-wide counter, which
+`/session/:id/runtime-health` serves as `summary.runtimeGeneration` beside
+`attached`/`detached` and Agent Info shows as "process N". The number is how a
+test or a user tells "the same CLI" from "a new one" without reading a PID; it
+restarts at 1 with the bridge. The backend caches that read for 30 seconds
+(`INTERACTIVE_RUNTIME_METADATA_TTL_MS`) and refreshes it in the background, so
+the projection can show the previous number for up to that long after a
+relaunch. `claude-warm-runtime-live.spec.ts` drives one CLI through the app
+against a loopback model and asserts the number holds (todo 0005 task 8).
 
 Background shell commands are bounded. Since Claude Code 2.1.285 an Agent SDK
 session stops a `run_in_background` command at its `timeout` (30 minutes by
@@ -648,6 +709,17 @@ time, from spawn until healthy or exited, and a local start whose server exits
 reporting a locked database is retried twice (0.5 s, then 2 s) before the
 dispatch that asked for it is refused with that reason. Container servers have
 their own database and are not serialised.
+
+The locked database names itself only on the server's stderr, and a child's
+`exit` can fire before its last stderr chunk is read. `waitForLocalServerStartup`
+(`commands-servers.ts`) therefore decides an OpenCode exit on `close`, once
+stdio has ended, or `OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS` (1 s) after `exit`
+when a surviving grandchild holds the pipe open, whichever comes first. A
+health result that lands after `exit` does not decide the start: an exited
+server is a failed start. Other server kinds do not read stderr and still
+decide on `exit`. Deciding on `exit` reported a lost database as a plain
+"exited before becoming healthy" and skipped the retry (flake
+[0723](../tests/flaky-tests/backend-services-and-tooling/0723-opencode-host-shutdown-retry-race.md)).
 
 That shared database is the user's, and their own OpenCode 2 may have written
 it. OpenCode 1.x refuses to start on a database whose tables include no
@@ -917,7 +989,25 @@ sandbox (a `provider` sandbox, or a coordinator qualified on it) when
 bubblewrap on that host cannot nest the user namespace the CLI's seccomp helper needs, as under
 Ubuntu's AppArmor `bwrap-userns-restrict` profile. The prompt fails with the
 probe's reason instead of every Bash call failing; see
-[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux).
+[Claude's sandbox on Linux](coordinator.md#claudes-sandbox-on-linux). Inside a
+container environment the probe answers `missing-programs` (the image ships
+neither `bwrap` nor `socat`, and Docker's default seccomp profile and masked
+`/proc` would refuse bubblewrap anyway), so a container session overridden to
+`provider` is refused the same way; the container is its sandbox.
+
+Where Claude's provider sandbox runs, it holds the same two options on macOS
+(Seatbelt) and Linux (bubblewrap): under auto-approval a command cannot write
+outside its writable paths or escape with `dangerouslyDisableSandbox`
+(`allowUnsandboxedCommands: false`), and a restricted network refuses an
+unlisted host at the sandbox proxy without a card (`strictAllowlist`). One
+difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
+and on Linux each command gets its own network namespace whose only way out
+is the proxy, which `NO_PROXY` skips for loopback. So with full network a
+sandboxed command on Linux cannot reach a service on the machine's loopback
+directly (a dev server, a local database); on macOS it can. Agent Info does
+not say so yet ([7563](../todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md)).
+`mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
+either system (to-do 0001 task 9).
 
 Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
 `packages/protocol/src/native-agent-policy-effects.ts`): what confines the
@@ -1697,11 +1787,14 @@ workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 (`bridgePromptBody`). The review fan-out's reviewers, every Multi Review step
 (preparation, consolidation and Fix, and their reminder and restart turns) and
 Build Pipeline consolidation declare the pair, with the key set to the turn's
-request id, which is also the result key. Feature Planning
-(`feature-planning.ts`) and Build
-Pipeline stage sends and follow-ups (`build-pipeline-service-supervisor.ts`)
-still omit `workflowResultKey`; declaring their attempts remains outstanding.
-Those paths do not receive this exemption under deny/ask or read-only gating.
+request id, which is also the result key. Build Pipeline stage sends
+(`build-pipeline-service-supervisor.ts`) and their durable re-sends
+(`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
+single Pi reviewer's read-only Review in a pipeline could never submit its
+report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
+Planning (`feature-planning.ts`) still omits `workflowResultKey`; declaring its
+attempts remains outstanding, and it does not receive this exemption under
+deny/ask or read-only gating.
 The warm-up attach does not declare the pair; the bridges read it from the
 prompt only. The bridge keeps them for that turn only (`state.workflowResultTurn`,
 memory only, replaced by every prompt; a malformed pair is refused with 400

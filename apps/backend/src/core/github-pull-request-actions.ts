@@ -2,6 +2,7 @@
  * Pull request mutations for the in-app viewer: merge, state, conversation
  * comments, reviews, review threads, viewed files, reviewers and labels.
  */
+import { hasEnvironmentBranchOwnership } from "@orkestrator/protocol/environment-branch";
 import type {
   GitHubPullRequestComment,
   GitHubPullRequestDetail,
@@ -210,7 +211,9 @@ export async function mergeGitHubPullRequest(
     deleteBranch: boolean;
     expectedHeadSha?: string;
   },
-  options: GitHubPullRequestRequestOptions = {},
+  options: GitHubPullRequestRequestOptions & {
+    environments?: readonly { id: string; branch: string | null; prUrl?: string | null }[];
+  } = {},
 ): Promise<GitHubPullRequestMergeResult> {
   assertPullRequestRef(ref);
   if (!MERGE_METHODS.has(input.method))
@@ -244,8 +247,14 @@ export async function mergeGitHubPullRequest(
   if (!merged || !pull) return result;
   if (isCrossRepositoryPull(pull)) return { ...result, branchDeleted: false };
   const head = isRecord(pull.head) ? pull.head : {};
+  const headRef = stringValue(head.ref);
+  // Only a branch Orkestrator created for an environment may be deleted. A
+  // release pull request from `dev`, or any branch the user made, merges and
+  // keeps its branch, whatever the request asked for.
+  if (!hasEnvironmentBranchOwnership(ref, headRef, options.environments ?? []))
+    return { ...result, branchDeleted: false };
   try {
-    return { ...result, branchDeleted: await deleteHeadBranch(client, ref, stringValue(head.ref)) };
+    return { ...result, branchDeleted: await deleteHeadBranch(client, ref, headRef) };
   } catch {
     return {
       ...result,

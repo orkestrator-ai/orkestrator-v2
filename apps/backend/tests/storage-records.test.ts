@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
+import { errorCode, ipcErrorMessage } from "@orkestrator/protocol/contract/ipc-error";
+import {
+  isPaneLayoutRevisionConflict,
+  paneLayoutRevisionConflictMessage,
+} from "@orkestrator/protocol/pane-layout";
+import { paneLayoutRevisionConflict } from "../src/core/pane-layout-conflict.js";
 import {
   createEnvironment,
   createProject,
@@ -537,7 +542,7 @@ describe("Electron StorageService", () => {
     const rejected = competingWrites.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
-    expect(rejected?.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 2)));
+    expect(rejected?.reason).toEqual(paneLayoutRevisionConflict(1, 2));
     expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(2);
 
     const third = await storage.savePaneLayout(
@@ -740,7 +745,7 @@ describe("Electron StorageService", () => {
     if (saved.status === "fulfilled") {
       expect(saved.value.revision).toBe(2);
     } else {
-      expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
+      expect(saved.reason).toEqual(paneLayoutRevisionConflict(1, 0));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
     const onDisk = readStoredValue<Record<string, unknown>>(dataDir, "pane-layouts.json")!;
@@ -800,7 +805,7 @@ describe("Electron StorageService", () => {
     if (saved.status === "fulfilled") {
       expect(saved.value.revision).toBe(2);
     } else {
-      expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
+      expect(saved.reason).toEqual(paneLayoutRevisionConflict(1, 0));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
     expect(readStoredValue(dataDir, "pane-layouts.json")).toEqual({});
@@ -912,9 +917,13 @@ describe("Electron StorageService", () => {
     const layout = { version: 1, containerId: null, activePaneId: "default", root };
 
     await storage.savePaneLayout(environment.id, layout, 0);
-    await expect(storage.savePaneLayout(environment.id, layout, 0)).rejects.toThrow(
-      paneLayoutRevisionConflictMessage(0, 1),
-    );
+    const conflict = await storage
+      .savePaneLayout(environment.id, layout, 0)
+      .catch((error: unknown) => error);
+    expect((conflict as Error).message).toBe(paneLayoutRevisionConflictMessage(0, 1));
+    // The registered code crosses Electron IPC in the message form; readers decide on it.
+    expect(errorCode(conflict)).toBe("pane-layout-revision-conflict");
+    expect(isPaneLayoutRevisionConflict(new Error(ipcErrorMessage(conflict) ?? ""))).toBe(true);
     await expect(storage.savePaneLayout(environment.id, layout, 7)).rejects.toThrow(
       paneLayoutRevisionConflictMessage(7, 1),
     );

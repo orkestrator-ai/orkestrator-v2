@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
+import { BridgeRestartCounter } from "./bridge-restarts.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 
 const KEY = "codex:env-1";
@@ -25,6 +26,27 @@ describe("reportBridgeStart", () => {
     expect(started).toHaveLength(1);
     expect(started[0]?.level).toBe("info");
     expect(started[0]?.fields).toEqual({ key: KEY, pid: 100 });
+  });
+});
+
+describe("bridge restart counts", () => {
+  test("a start counts, and so does an exit nothing asked for, but not a requested one", async () => {
+    const counter = new BridgeRestartCounter();
+    const servers = new LocalServerRuntime({
+      terminateProcessTree: async () => true,
+      bridgeRestarts: counter,
+    });
+    const crashed = fakeChild(110);
+    servers.reportBridgeStart(KEY, crashed);
+    servers.reportBridgeExit(KEY, crashed, 1, null);
+    const stopped = fakeChild(111);
+    servers.reportBridgeStart(KEY, stopped);
+    servers.adoptProcess(KEY, stopped);
+    await servers.terminate(KEY, stopped, "stop requested");
+    servers.reportBridgeExit(KEY, stopped, null, "SIGTERM");
+    expect(counter.snapshot()).toEqual({
+      codex: { localStarts: 2, localUnrequestedExits: 1, containerLaunches: 0 },
+    });
   });
 });
 

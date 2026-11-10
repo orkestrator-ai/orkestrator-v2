@@ -285,10 +285,12 @@ export function registerPullRequestCommands(
       resolvedContainerId,
     );
     if (!environment) {
+      // No stored environment owns this container, so no branch is its own:
+      // the merge keeps the head branch whatever `deleteBranch` says.
       const result = await mergePullRequestInContainer(
         resolvedContainerId,
         parseMergeMethod(method),
-        asBoolean(deleteBranch, true),
+        null,
       );
       // Stored environments invalidate inside `runStoredEnvironmentMerge`.
       if (result.outcome !== "pending") {

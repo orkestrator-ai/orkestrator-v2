@@ -1,3 +1,4 @@
+import { AGENT_USAGE_READINGS_CHANGED_EVENT } from "@orkestrator/protocol/agent-account-shared-usage";
 import { nodeSummaryChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import type { BackendEmit } from "../backend-emit.js";
 import {
@@ -24,6 +25,7 @@ import {
   type SummaryFreshness,
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 
 import { boundSummaryIcons } from "./project-summary-icons.js";
@@ -86,10 +88,18 @@ export interface ReadModelPersistence {
   save(value: unknown): Promise<void>;
 }
 
-/** Event prefixes the read model needs from each node. */
+/**
+ * Event prefixes the read model needs from each node, and those its other
+ * consumers (`onNodeEvent`) act on: the mail outbox's `node-outbox-ready`
+ * (under `node-`) and ticket sync's `ticket-sync-outbox-ready`. The node's
+ * gateway sends nothing outside these, so an announcement left off this list
+ * is only noticed by the 60 s reconcile (found live, to-do 3800 task 1).
+ */
 export const NODE_SUMMARY_EVENT_PREFIXES = [
+  AGENT_USAGE_READINGS_CHANGED_EVENT,
   RESOURCE_CHANGED_EVENT,
   BACKEND_PROFILE_CHANGED_EVENT,
+  TICKET_SYNC_OUTBOX_READY_EVENT,
   "node-",
 ] as const;
 
@@ -161,6 +171,11 @@ function summaryFingerprint(state: NodeState): string {
   ]);
 }
 
+/** What ticket sync pairs by: each project's id and repository identity. */
+function projectListKey(projects: readonly NodeProjectSummary[]): string {
+  return JSON.stringify(projects.map((project) => [project.ref.projectId, project.repositoryHint]));
+}
+
 export class NodeReadModel {
   private readonly states = new Map<BackendId, NodeState>();
   private readonly views = new Map<BackendId, NodeView>();
@@ -175,6 +190,7 @@ export class NodeReadModel {
   private readonly listeners = new Set<
     (event: string, payload: unknown, nodeId: BackendId) => void
   >();
+  private readonly projectListeners = new Set<(nodeId: BackendId) => void>();
   private readonly self: {
     id: BackendId | null;
     summary: SelfNodeSummary | null;
@@ -252,6 +268,17 @@ export class NodeReadModel {
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.changeTimer = null;
     this.changeTimerDueAt = null;
+  }
+
+  /**
+   * A node's project list (ids and repository identities) changed on a read:
+   * its first read after it connected, or a copy added or removed there.
+   * Ticket sync pairs boards by this list, so it syncs then rather than at its
+   * next reconcile. Listeners must not throw.
+   */
+  onProjectsChanged(listener: (nodeId: BackendId) => void): () => void {
+    this.projectListeners.add(listener);
+    return () => this.projectListeners.delete(listener);
   }
 
   /** Other consumers (coordinator mail, outbox collection) of the same streams. */
@@ -639,12 +666,22 @@ export class NodeReadModel {
         environmentsByProject.set(project.ref.projectId, result.environments);
       }
       const before = summaryFingerprint(state);
+      const projectsBefore = projectListKey(state.projects);
       state.projects = projects;
       state.environmentsByProject = environmentsByProject;
       state.loadedAt = (this.options.now ?? Date.now)();
       state.truncated = truncated;
       state.lastError = failed ? "Some environments could not be loaded." : null;
       state.freshness = failed ? "degraded" : "current";
+      if (projectListKey(projects) !== projectsBefore) {
+        for (const listener of this.projectListeners) {
+          try {
+            listener(state.nodeId);
+          } catch {
+            // A consumer's failure never stops the read model.
+          }
+        }
+      }
       // A periodic re-read that found nothing new tells no client.
       if (summaryFingerprint(state) === before) return;
       this.noteChanged(state.nodeId);

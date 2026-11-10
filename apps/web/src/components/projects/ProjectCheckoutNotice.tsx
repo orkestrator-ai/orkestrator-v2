@@ -1,0 +1,87 @@
+import { useState } from "react";
+import { FolderX, GitBranch, Loader2, RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { loadProjectsFromBackend } from "@/hooks/useProjects";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { useAppDialogStore } from "@/stores/appDialogStore";
+import type { ProjectCheckoutState } from "./useProjectCheckout";
+
+/**
+ * The coordinator's panel while it cannot read the project's checkout. A
+ * project this node does not have is told apart from one with no local path:
+ * only the second can be fixed in Repository settings, which would otherwise
+ * open for a project the node cannot find and close at once.
+ */
+export function ProjectCheckoutNotice({
+  projectId,
+  state,
+}: {
+  projectId: string;
+  state: Exclude<ProjectCheckoutState, "ready">;
+}) {
+  const scope = useNodeScope();
+  const [reloading, setReloading] = useState(false);
+
+  if (state === "loading") {
+    return (
+      <div
+        id="project-panel-coordinator"
+        role="tabpanel"
+        className="grid h-full place-items-center"
+      >
+        <div role="status">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="sr-only">Loading project</span>
+        </div>
+      </div>
+    );
+  }
+
+  const missing = state === "missing";
+  const Icon = missing ? FolderX : GitBranch;
+  return (
+    <div
+      id="project-panel-coordinator"
+      role="tabpanel"
+      className="grid h-full place-items-center p-8"
+    >
+      <div className="max-w-lg rounded-xl border border-border bg-card p-6 text-center">
+        <Icon className="mx-auto mb-3 size-8 text-muted-foreground" aria-hidden="true" />
+        <h2 className="text-lg font-semibold">
+          {missing ? "Project not found on this machine" : "Connect a local checkout"}
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {missing
+            ? "This machine's project list has no project with this id. Open the project again from the sidebar, or reload this machine's projects."
+            : "Coordinator reads the project’s real local checkout. Set a valid local path in Repository settings to continue."}
+        </p>
+        {missing ? (
+          <Button
+            className="mt-4"
+            variant="outline"
+            disabled={reloading}
+            onClick={() => {
+              setReloading(true);
+              void loadProjectsFromBackend(scope).finally(() => setReloading(false));
+            }}
+          >
+            <RotateCcw className="size-4" />
+            {reloading ? "Reloading…" : "Reload projects"}
+          </Button>
+        ) : (
+          <Button
+            className="mt-4"
+            variant="outline"
+            onClick={() =>
+              useAppDialogStore
+                .getState()
+                .open({ kind: "repository-settings", nodeId: scope.nodeId, projectId })
+            }
+          >
+            Repository settings
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}

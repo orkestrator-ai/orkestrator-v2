@@ -1,5 +1,6 @@
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { useRemoteMachineView } from "@/components/federation/useMachineViews";
 import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
@@ -275,6 +276,13 @@ export function CreateEnvironmentDialog({
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const federation = useFederation();
+  // The machine the environment is created on: this node scope's, which is
+  // another machine when the dialog opens in that machine's workspace.
+  const dialogScope = useNodeScope();
+  const remoteMachine = useRemoteMachineView(
+    dialogScope.role === "command" ? null : dialogScope.nodeId,
+  );
+  const targetMachine = dialogScope.role === "command" ? federation.boundMachine : remoteMachine;
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
@@ -1595,7 +1603,7 @@ export function CreateEnvironmentDialog({
                   {projectName}
                 </span>
               )}
-              {federation.enabled && federation.boundMachine ? (
+              {federation.enabled && targetMachine ? (
                 // With several machines in view, the dialog names the machine
                 // the environment is created on.
                 <span
@@ -1603,10 +1611,10 @@ export function CreateEnvironmentDialog({
                   data-testid="create-environment-machine"
                 >
                   <MachineDot
-                    colorToken={federation.boundMachine.colorToken}
-                    machineName={federation.boundMachine.name}
+                    colorToken={targetMachine.colorToken}
+                    machineName={targetMachine.name}
                   />
-                  on {federation.boundMachine.name}
+                  on {targetMachine.name}
                 </span>
               ) : null}
             </DialogTitle>

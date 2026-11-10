@@ -7,7 +7,7 @@ Analysed 2026-11-05 against `main` at `251f772d6`. Found running `renderer-log-b
 ### Tasks
 
 1. **Stop the throw when a window closes during a request**: a request still in flight after its window's scope is released should not raise an uncaught exception. Status: done (2026-11-06, `03cbf0191`).
-2. **See what happens with a display**: whether a user gets the error dialog, and whether the app then exits cleanly. Status: open. The throw that led here is gone, so this now concerns any other uncaught exception: whether the sheet with no parent window crashes Electron (SIGTRAP), with and without a display.
+2. **See what happens with a display**: whether a user gets the error dialog, and whether the app then exits cleanly. Status: blocked (waits on 7568: 6303 task 2, a host with a disposable display). The throw that led here is gone, so this now concerns any other uncaught exception: whether the sheet with no parent window crashes Electron (SIGTRAP), with and without a display.
 
 ### 1. Stop the throw when a window closes during a request
 
@@ -52,7 +52,7 @@ Two things are not established:
 - **How to check?**
   - **Run the earlier spec once under Xvfb, before fixing task 1 (recommended).**
     - Pros: shows the real outcome, repeatably, and gives the fix a failing case.
-    - Cons: needs a host with Xvfb; whether beelink gets one is the user's decision.
+    - Cons: needs a host with Xvfb; providing one is in the manual-test checklist (7568: 6303 task 2).
   - **Close a real window by hand during startup.**
     - Pros: needs no harness.
     - Cons: the timing is hard to hit, so a clean close would prove little.
@@ -93,3 +93,4 @@ disposable display was available.
   [to-do 0042](../previews-and-annotations/0042-service-preview-rollout.md) (task 11, D22),
   every webRequest listener answering (to-do 7060, done 2026-11-10:
   [renderer-security.md](../../architecture/renderer-security.md#webrequest-listeners))
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: providing a host with a disposable display) moved there on 2026-11-10.

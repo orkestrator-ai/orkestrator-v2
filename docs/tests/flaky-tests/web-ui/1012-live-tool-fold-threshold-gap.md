@@ -144,3 +144,64 @@ mise run test:logged -- --name isolate-fold -- bunx playwright test --config e2e
 
 This confirms intermittence; the cause remains unconfirmed. Status stays open.
 No assertion, timeout or skip changed.
+
+## Mixed-version CI repair review — 2026-11-10
+
+At `df39c7db3` (base `53340356c`), review preparation's `mise run test:browser`
+reported 1,665 passed, 152 skipped and one failed. The desktop no-preference
+case had a maximum gap of 8 px at line 122, then 9 px at line 147 on retry,
+against the 2 px limit. The branch changes no renderer code, and neither the
+spec nor the tool-group implementation changed.
+
+The complete unchanged owner, rerun alone with one worker while a full
+`mise run test:full` loaded the host, failed again: gaps of 46 px and 17 px
+(desktop and mobile), plus two `scrollend` timeouts. Rerun alone on a quiet
+host at `645183531`, it passed (exit 0, 102.6 s):
+
+```sh
+NODE_ENV= mise run test:logged -- --name toolgroupfold-alone-quiet -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+This points again to sensitivity to host load. The cause remains unconfirmed,
+and the status stays open. No assertion, timeout or skip changed.
+
+## Releases page review repairs — 2026-11-10
+
+Observed 2026-11-10 on `releases-page-b2c7d73cdbc4-r1`, base commit
+`53340356c51e6bdb6f86cb6d806575218bbbc6bd`
+(`mise run flaky:recurrence -- 1012 --base 53340356c5`: open, record the
+recurrence). The branch changes only `apps/web-public` and docs; the review
+package's failure triage marked this test `undetermined` with reasons
+`known-flaky` and `not-import-traceable`.
+
+Review preparation's `mise run test:browser` (exit 1, 1,219.1 s; 1,664
+passed, 152 skipped) failed this case on mobile and desktop with gaps above
+2 px. Two complete one-worker owner reruns then also failed it:
+
+```sh
+mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+- First rerun, overlapping a `mise run test` run: 31 passed, 7 failed
+  (5.9 min). This case failed on mobile (10 px) and desktop (95 px); five
+  line-153 `preserves their place` cases timed out or missed their offset.
+- Second rerun, after `mise run test` finished: 35 passed, 3 failed
+  (3.6 min). This case failed with 5 px on mobile and 9 px on desktop; the
+  mobile line-153 `growing below ... with reduce motion` case timed out.
+
+The host load average was about 41 on 16 cores (unrelated agent work) during
+both reruns, so the one-worker owner did not get the idle host the earlier
+passing reruns had. The cause remains unconfirmed. Status stays open. No
+assertion, timeout or skip changed.
+
+## Action-search review repair — 2026-11-10
+
+Preparation for the coordinator action-search branch (`action-search-modal-1162dc5c0a2a-r1`, base `53340356c`, validated at `300105a39`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 5 failed, 5 flaky, 152 skipped, 1656 passed. The branch changes only the coordinator Actions panel, which renders for coordinator tabs; neither spec opens one. Evidence: `validation-11.stdout.txt` under `.orkestrator/review-artifacts/review-validation-985e2298-c3a5-42bd-bd66-83c90557e178/`. Both mobile-chromium and desktop-chromium failed `expect(received).toBeLessThanOrEqual(2)` (desktop received 8, then 51 on retry).
+
+The complete unchanged ToolGroupFold and TranscriptPaging owners then passed together with one worker (exit 0, 296.8 s):
+
+```sh
+mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

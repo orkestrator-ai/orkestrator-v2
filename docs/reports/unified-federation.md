@@ -877,7 +877,7 @@ grant or the relay; 692 of them are used by the web client. Once commands are
 schema-defined (§11) each declares `access: "workspace" | "admin" | "internal"`
 and grants become an **allow-list derived from the manifest**, failing closed.
 Live evidence for the current list is still open
-(`docs/todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md`) and
+(to-do 5740, retired 2026-11-10) and
 must be gathered before realms are removed.
 
 *Built (2026-11-07, [7012](../../plans/unified/7012-allow-listed-grants.md);

@@ -622,6 +622,16 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   `__Host-orkestrator_gateway_auth` name too, but does not issue it yet: older
   iOS builds look the cookie up by its plain name (todo
   [2960](../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md)).
+- `e2e/preview/gateway-browser-security.spec.ts` (part of
+  `mise run test:preview:browser`, served by
+  `apps/backend/src/gateway-browser-harness.ts`) checks the parts of these rules
+  that depend on the browser: cookie scope across ports, `SameSite=Strict` on
+  typed and cross-site navigations, the legacy route's sandbox header on a
+  top-level load, and credentials from `Origin: null` (security report cases
+  H1, M1 and M2). It runs in Playwright's Chromium, Firefox and WebKit.
+  Playwright's WebKit is not shipping Safari, whose own cookie policy sits on
+  top of the engine; no harness here drives Safari (`safaridriver` needs
+  **Allow Remote Automation** turned on), so Safari is checked by hand.
 - Sessions live only in the backend's memory (`gateway-sessions.ts`). A session
   expires after 12 hours without explicit keyboard or pointer activity (the
   client renews through `POST /__orkestrator/session` at most once a minute;

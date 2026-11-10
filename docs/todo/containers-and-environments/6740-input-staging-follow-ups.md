@@ -11,7 +11,6 @@ What E25 (DK-14, report part `0490`) left after the host staging copy learned to
 1. **Reflinks on macOS**: clone staged files on APFS. Status: open.
 2. **A cold first start from a reflinked revision**: decide whether the slower first start matters. Status: open.
 3. **The in-container first start of a many-file home**: find what the 5–6 s for 5,202 files is spent on. Status: open.
-4. **Input sizes of real homes**: measure what a real host stages. Status: open.
 
 ### 1. Reflinks on macOS
 
@@ -58,7 +57,7 @@ What E25 (DK-14, report part `0490`) left after the host staging copy learned to
 
 **Context.** This is `docker/entrypoint.sh` importing the inputs into `$HOME` (`import_agent_input`), not the host staging that report task 3 ("bounded parallel copy") was about. The stamps already skip it on a restart.
 
-**Investigation.** Not profiled. The likely costs are per-file processes in the shell import (hashing and copying each entry). The fixture's file count is chosen, not typical; see task 4.
+**Investigation.** Not profiled. The likely costs are per-file processes in the shell import (hashing and copying each entry). The fixture's file count is chosen, not typical; measuring real homes' input sizes needs the user's data directory and moved to [7568](../manual-test/7568-manual-test-checklist.md) (6740 task 4).
 
 **Decisions.**
 
@@ -70,26 +69,9 @@ What E25 (DK-14, report part `0490`) left after the host staging copy learned to
     - Pros: likely the biggest win for many small files.
     - Cons: a change to the root-boundary-sensitive entrypoint without a measurement saying where the time goes.
 
-### 4. Input sizes of real homes
-
-**Problem.** No real home's input sizes have been measured, so every number above uses fixture homes.
-
-**Context.** E25 was told not to touch `~/.claude`, `~/.codex`, `~/.pi` or `~/.grok`. This host's data directory held no staged revisions to read counts from: `portable-inputs/` was empty on 2026-11-05.
-
-**Investigation.** None beyond the above.
-
-**Decisions.**
-
-- **How to measure?**
-  - **Read the counts from the manifests of real revisions (`manifest.json`, counts only, no names) on a host with container environments (recommended).**
-    - Pros: content-free, and exactly what was staged.
-    - Cons: needs a host that has staged recently, with the user's permission to read its data directory.
-  - **Walk real homes with the staging allowlist.**
-    - Pros: works anywhere.
-    - Cons: reads the user's agent homes.
-
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+- to-do 1202 efficiency follow-ups, task 15 (retired 2026-11-10).
 - [4580 input stamp follow-ups](4580-input-stamp-follow-ups.md).
-- [6741 Git mirror access](6741-git-mirror-access.md).
+- To-do 6741 Git mirror access (retired 2026-11-10; see [Project Git mirror](../../architecture/container-lifecycle.md#project-git-mirror)).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, reading manifest counts from a real data directory) moved there on 2026-11-10.

@@ -3,8 +3,8 @@
 A Kanban ticket has a **kind**, **typed optional sections** stored as JSON, and
 two plain-text **mirrors** that every older reader keeps using. Acceptance
 criteria are items that a Build pipeline's Verify step marks passed, failed or
-not checked, with evidence. The design record (options, pros and cons) is
-[0742-structured-tickets.md](../todo/coordinator-and-multi-review/0742-structured-tickets.md).
+not checked, with evidence. The design options were weighed in to-do 0742
+(retired 2026-11-10).
 
 Code: `packages/protocol/src/ticket-sections.ts` (schema, markdown, mirrors,
 migration), `apps/backend/src/core/storage-kanban.ts` (reads and writes),

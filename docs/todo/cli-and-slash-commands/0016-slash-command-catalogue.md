@@ -12,7 +12,7 @@ upstream-blocked item and two small verification or hygiene points.
 
 ### Tasks
 
-1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311, and rechecked 2026-11-10 at the 0.3.319 pin: `SlashCommand` is still `{ name, description, argumentHint, aliases?, builtin? }`).
+1. **Claude terminal marker** (code item 11): read a terminal marker from `SlashCommand` once the Agent SDK has one, and delete the remembered list. Status: blocked (on the Agent SDK; still absent at 0.3.311, and rechecked 2026-11-10 at the 0.3.319 pin: `SlashCommand` is still `{ name, description, argumentHint, aliases?, builtin? }`). Filing the upstream feature request moved to the manual-test checklist.
 2. **Codex cold-settle wait in a slow container** (Needs verification): confirm two 1 s re-reads are enough where plugin loading is slower. Status: open.
 3. **Real v2.21.0 pairings** (Needs verification): mixed-version run against real old builds. Status: open, owned by 0015 item 1.
 4. **Stale OpenCode pin comment**: `opencode-commands.ts` named 1.19.0 as the pin while the pin had moved on. Status: done (2026-10-31).
@@ -34,13 +34,8 @@ upstream-blocked item and two small verification or hygiene points.
   - **Keep item 11 open here.**
     - Pros: visible in the folder index.
     - Cons: the file never finishes on its own work; the index rating already calls it blocked upstream.
-- **Is it worth asking upstream for the marker?**
-  - **Yes, file a feature request for a `terminal` flag on `SlashCommand` (recommended).**
-    - Pros: the only path that closes the first-tab gap without guessing.
-    - Cons: no control over timing.
-  - **No; accept the remembered list permanently.**
-    - Pros: no external dependency.
-    - Cons: the first-tab gap on each new CLI version stays.
+- Asking upstream for a `terminal` flag on `SlashCommand` is an outward
+  action and is on the manual-test checklist (7568: 0016 task 1).
 
 ### 2. Codex cold-settle wait in a slow container
 
@@ -594,6 +589,7 @@ Assumptions:
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md#provider-support)
   for the per-provider support, unavailable-command and literal-suppression
   tables, and the catalogue lifecycle.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the upstream feature request of task 1) moved there on 2026-11-10.
 
 ## Replaces
 

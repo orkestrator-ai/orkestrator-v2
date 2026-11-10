@@ -6,8 +6,7 @@ Analysed 2026-11-04 against `main` at `67db62362`.
 
 ### Tasks
 
-1. **Flip stored and transmitted values and fields to the new names**: backend writes the new vocabulary, with a one-way storage migration. Status: open (depends on 2).
-2. **Confirm every machine runs a stage-one build**: the user confirms it, in place of waiting for the support window. Status: open.
+1. **Flip stored and transmitted values and fields to the new names**: backend writes the new vocabulary, with a one-way storage migration. Status: blocked (waits on 7568: 4740 task 2).
 3. **Rename the public names**: coordinator tools and their fields, CLI wire fields, `submit_fix_result`, graph template names. Status: open (depends on 1).
 4. **Give package preparation its own phase**: stop storing the preparation session as phase `fix`. Status: open (depends on 1).
 5. **Retire the compatibility paths**: the former names and readers, once nothing needs them. Status: open (depends on 1 and 3).
@@ -43,24 +42,6 @@ Analysed 2026-11-04 against `main` at `67db62362`.
   - **Wait for the support window (the first Stable with stage one, plus 60 days).**
     - Pros: follows the policy with no exception.
     - Cons: the old names remain for longer. The user chose not to wait.
-
-### 2. Confirm every machine runs a stage-one build
-
-**Problem.** Task 1 breaks any client or machine older than stage one.
-
-**Context.** The user chose on 2026-11-04 to flip as soon as their own machines are updated rather than after the support window. That waives the window for anyone else on an older published release.
-
-**Investigation.** `list_nodes` and `BackendVersionReminder` report versions per machine. Containers keep their bridge until they restart, but bridges do not read these values.
-
-**Decisions.**
-
-- **What counts as updated?**
-  - **The user confirms each machine and client (recommended).**
-    - Pros: this is the user's decision to make, and they know the fleet.
-    - Cons: manual.
-  - **A capability the backend advertises and a command node checks.**
-    - Pros: automatic.
-    - Cons: more code for a one-time flip, and it cannot see older desktop clients.
 
 ### 3. Rename the public names
 
@@ -135,3 +116,4 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 
 - [`docs/architecture/version-compatibility.md`](../../architecture/version-compatibility.md)
 - [`docs/architecture/build-pipeline-view.md`](../../architecture/build-pipeline-view.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10.

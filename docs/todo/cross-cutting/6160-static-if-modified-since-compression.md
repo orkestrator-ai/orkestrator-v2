@@ -32,4 +32,4 @@ Analysed 2026-11-05 against `main` at `0194a0675`.
 ## Related
 
 - Closing check of E24 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), where this was left.
-- [1202 task 11](1202-efficiency-review-follow-ups.md).
+- to-do 1202 task 11 (retired 2026-11-10).

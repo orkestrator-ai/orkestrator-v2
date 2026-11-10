@@ -165,7 +165,7 @@ The same hogs on macOS, counting stalled children (the worktree's real test with
 | Files, no exit watchdog | 175 | 0 | 9 stalled children, all zombies with no exit event |
 | **Files and watchdog**, final `4543e8b33` | 175 | **0** | **0** unsettled after 2.5 s; 8 lost exits settled at the watchdog's first check, 1 s |
 
-Re-measured on 2026-11-06 with a probe that cannot mistake a delay for a loss (an unreaped zombie for 5 s, read through `waitid(WNOWAIT)`): 150 runs, 0 lost exits, and 3 exits delivered 22 to 30 ms after the child became a zombie. The watchdog's single `ps` look counted 10 in 150 runs, so the watchdog settlements above may be early reads of exits Bun was about to report. See [to-do 4260, task 2](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md#outcome-2026-11-06).
+Re-measured on 2026-11-06 with a probe that cannot mistake a delay for a loss (an unreaped zombie for 5 s, read through `waitid(WNOWAIT)`): 150 runs, 0 lost exits, and 3 exits delivered 22 to 30 ms after the child became a zombie. The watchdog's single `ps` look counted 10 in 150 runs, so the watchdog settlements above may be early reads of exits Bun was about to report. See to-do 4260, task 2, "Outcome (2026-11-06)" (retired 2026-11-10; its record is `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`).
 
 Not reproduced, about 700,000 children in total, on Linux and macOS with
 `node:child_process` and the same spawn options: plain spawn loops, same-tick
@@ -197,8 +197,9 @@ behaviour: a same-worktree retarget still queues behind the old scan's admission
 lease, and a reader already parked on the old promise still waits for it. Each now
 waits only for work that is really running, not for a child that has already exited.
 
-What this does not cover is in
-[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the
+What this does not cover was tracked in todo 4260 (retired 2026-11-10; its record
+is `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`, and its macOS reaper is in
+[backend runtime](../../../architecture/backend-runtime.md#one-shot-commands)): the
 defect is still in Bun, other `node:child_process` captures in the backend can still
 hit it, and a child whose exit Bun lost stays a zombie.
 
@@ -215,7 +216,8 @@ occurred. Those results describe that earlier mitigation, not the final merged
 code. File capture supersedes it here. Its investigation was CI shard report
 0020 (`git show 413bd6219:docs/reports/ci-shard-validation/0020-git-output-lost-after-exit.md`);
 the remaining runtime-trigger work is in
-[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md) and
+todo 4260 (retired 2026-11-10; its upstream report is in the
+[manual-test checklist](../../../todo/manual-test/7568-manual-test-checklist.md)) and
 [todo 6900](../../../todo/cross-cutting/6900-reproduce-lost-child-event-on-pipe-capture.md).
 
 ## CI confirmation (2026-11-07)

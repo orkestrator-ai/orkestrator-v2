@@ -22,7 +22,7 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 1. **Bound the waits inside the container**: one exec waits for the state itself, up to a bounded window, instead of one exec per 250 ms. Status: done 2026-10-30 (`container-readiness.ts`, `egress-gateway.ts`; deterministic tests, and probe timings in the real image).
 2. **Re-qualify the readiness faults**: the C09 fault cases and the gateway-cannot-apply case pass with the new wait. Status: done on Linux amd64, 2026-10-30. All nine live readiness cases passed in one run, plus four C09 stale-record and active-exec interruption checks. Explicit unused subnets bypassed the exhausted default pools without removing other runs' resources; fixture repairs and host prerequisites are recorded in the qualification evidence below.
-3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: open. Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
+3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: blocked (waits on 7568: 0241 task 1, the probe-network sweep on omarchy-hp, and on the next Container live qualification CI run on both architectures). Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
 
 ### 1. Bound the waits inside the container
 
@@ -118,8 +118,9 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 ### Qualification
 
-The 29 older leaked probe networks remain untouched
-([0241](0241-leaked-reach-probe-networks.md) task 1). They still block
+The 29 older leaked probe networks remain untouched (to-do 0241, retired
+2026-11-10; clearing them is a
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) item). They still block
 automatic allocation, but explicit unused subnets allowed the live fault
 qualification to complete. CI's "Container live qualification" workflow
 also runs those suites on both architectures when the PR touches its paths.
@@ -216,7 +217,7 @@ figure is in Current state.
 ## Related
 
 - [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md) (the attribution)
-- [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md) (what blocked the live runs)
+- To-do 0241 (retired 2026-11-10): the leaked probe networks that blocked the live runs; the sweep is described in [disk usage](../../development/disk-usage.md#what-you-clean-yourself)
 - [Container lifecycle: readiness](../../architecture/container-lifecycle.md)
 - [Benchmark harness and regression targets](../../development/container-qualification.md#benchmarks)
 

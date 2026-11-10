@@ -46,6 +46,7 @@ export default defineScenario({
     ctx.note("sync after a ticket on the command node", {
       leafSyncs: syncs,
       state: first?.state,
+      message: first?.message,
     });
 
     if (!syncs) {

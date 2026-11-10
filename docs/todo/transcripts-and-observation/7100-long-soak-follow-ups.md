@@ -35,7 +35,7 @@ Analysed 2026-11-06 against `main` at `281de1a17`, from the long soak of
 
 **Problem.** The 2026-11-06 soak exercised local environments only. Container start, stop, delete and their signal and fetch records were not soaked for an hour.
 
-**Context.** On beelink, 29 of the daemon's 34 networks were unattached `ork-<owner>-reach-probe-net` networks created between 2026-10-31 and 2026-11-02 by other backends, so `dev:test` failed with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. Removing them is the user's call ([0241](../containers-and-environments/0241-leaked-reach-probe-networks.md) task 5: `mise run disk:report -- --fix probe-networks`). This work may remove only what it created, and network pruning is banned.
+**Context.** On beelink, 29 of the daemon's 34 networks were unattached `ork-<owner>-reach-probe-net` networks created between 2026-10-31 and 2026-11-02 by other backends, so `dev:test` failed with `ContainerLifecycleError:resource-exhausted: Docker has no free address range for another environment network`. Removing them is the user's call (to-do 0241, retired 2026-11-10; the sweep is `mise run disk:report -- --fix probe-networks`, see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)). This work may remove only what it created, and network pruning is banned.
 
 **Investigation.** The driver already takes `--soak-environments local,container --fixture-environments local,container`; nothing else is missing. The 10-cycle container soak of 2026-10-25 left no leaked footprint.
 
@@ -110,4 +110,4 @@ after the session records go). Live: see 0048's
 ## Related
 
 - [0048-recurring-work-qualification.md](0048-recurring-work-qualification.md), task 10.
-- [0241-leaked-reach-probe-networks.md](../containers-and-environments/0241-leaked-reach-probe-networks.md), task 5.
+- To-do 0241 (retired 2026-11-10): the probe-network sweep, described in [disk usage](../../development/disk-usage.md#what-you-clean-yourself).

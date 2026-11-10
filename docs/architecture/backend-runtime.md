@@ -204,6 +204,27 @@ with output missing. Under Bun the child comes from `Bun.spawn`; where `Bun` doe
 not exist (Electron's main process runs the SSH adapter) it comes from
 `node:child_process`.
 
+On macOS under Bun a child's exit can be lost too, leaving it a zombie that
+nothing reaps. `watchForLostExit` reads the exit status with `ps -o
+stat=,xstat=` once a command has run 1 s and settles the capture from it; on
+Linux, where no lost exit has been seen, a lost exit fails at the deadline
+instead. When a capture settles while the runtime still reports no exit for
+its child, `runCommand` and the database copy's supervisor call
+`reapAfterLostExit` (`packages/protocol/src/node/lost-exit-reaper.ts`). It acts
+only on macOS under Bun: after a 2 s grace and then at doubling gaps up to
+30 s (twelve checks), it calls `waitpid(pid, WNOHANG)` through `bun:ffi` only
+while the PID is one the capture started (never this process or PID 1), the
+runtime still reports no exit (`exitCode` and `signalCode` both null), and
+`ps` shows it as a zombie whose parent is this process. The checks and the
+call run in one synchronous step, so Bun cannot reap the child in between; a
+late `ECHILD` from Bun afterwards is ignored. At most 256 children are
+watched, timers are unref'd, and `child.reaped`, `child.reap-abandoned` and
+`child.reap-unavailable` record the outcome ([logging](logging.md)).
+
+The defect is Bun's (1.4.4) and is not reported upstream yet. Never raise a
+test deadline, skip or retry to hide it, and never settle a command as
+successful when its output may be missing.
+
 Use `spawnCommand` or `spawnParentBoundCommand` only for a child read while it
 runs: a log follower, a server, a stream. A caller that hands over one payload
 and waits for one answer is not a follower, and `runCommand`'s `stdin` covers it.

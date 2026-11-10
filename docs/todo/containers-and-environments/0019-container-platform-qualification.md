@@ -10,8 +10,6 @@ Analysed 2026-11-06 against `main` at `c1724ab74` (tasks 2, 6 and 7; tasks 1 and
 
 1. **Record the Linux Engine CI results**: the follow-up to the answered CI question ("record them in this file then, including the C22 host-level reachability verdict"). Status: partly done (CI has run on both architectures; nothing is recorded here, and `container-qualification.md` still says "Not covered: Linux Engine").
 2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: done 2026-11-10 (`docker:disposable`'s rootless daemon under a systemd user manager delegated only `memory pids`: Docker reported CPU unsupported, the containers had no CPU controller, and the read-back, admission and refusal all matched; no code change, see [Results, 2026-11-10](#results-2026-11-10-task-2-rootless-without-cpu-delegation)).
-3. **Grok C13 resume and C21 rotation**: qualify Grok resume after a rebuild, and Grok login rotation. Status: blocked (on a current host Grok login; the rotation half also on 0061 item 7's live run).
-4. **Claude C21 half with a disposable account**: a real re-authentication through `markContainersForClaudeLoginRefresh`, and a refresh-token rotation through the keeper. Status: blocked (needs a disposable Claude account).
 5. **Daemon-wide restart during launch and rebuild copy**: a Docker restart or Desktop quit at both points. Status: open (needs a dedicated host or VM).
 6. **Container log followers on a live backend after the per-backend move**: a Docker log view streams, its follower exits after the idle grace and with the backend. Moved from to-do 0733 (deleted 2026-11-06). Status: done (2026-11-06 on beelink, native Docker Engine 29.9.2; found and fixed two follower leaks, see [Results, 2026-11-06](#results-2026-11-06-tasks-6-and-7-on-native-docker)).
 7. **Fixture restart keeps the container's origin bind on native Docker**: a `dev:test` restart with `--fixture-environments local,container` keeps the same container, and `git fetch origin` still works inside it. Moved from to-do 2180 (deleted 2026-11-06). Status: done (2026-11-06 on beelink, native Docker Engine 29.9.2; three restarts kept the same container and a live origin bind).
@@ -52,7 +50,7 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
 
 **Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (0022 decision 4).
 
-**Investigation.** 2026-11-06: not run then; it waited for [4730](4730-disposable-docker-daemon-for-live-suites.md)'s repo-owned disposable rootless daemon (merged since) rather than hand-building a third private daemon on a shared host. Run on 2026-11-10: see the result below. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
+**Investigation.** 2026-11-06: not run then; it waited for the repo-owned [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon) (to-do 4730, retired 2026-11-10; merged since) rather than hand-building a third private daemon on a shared host. Run on 2026-11-10: see the result below. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
 
 **Decisions.**
 
@@ -104,42 +102,6 @@ budget admitted, `cpu.max` `50000 100000`, read-back `cpus: 0.5`, and the busy
 loop held to 1.51 s in 3 s. Docker's report matched what the cgroup enforced
 on both daemons. Recipe and details:
 [container qualification](../../development/container-qualification.md#rootless-budget-read-back-without-cpu-delegation-2026-11-10).
-
-### 3. Grok C13 resume and C21 rotation
-
-**Problem.** Grok is the only provider whose session resume after a rebuild is unverified. `RESUME_QUALIFIED_PROVIDERS` (`apps/backend/src/core/container-replacement.ts:991-997`) lists `claude`, `codex`, `opencode`, `cursor` and `pi`, so the product shows Grok's resume as unverified.
-
-**Context.** It needs a current host Grok login. The rotation half needs 0061 item 7's profile-scoped Grok staging, whose live spec is itself blocked on the same login.
-
-**Investigation.** The host still has no `~/.grok/auth.json`, only a lock file from 2026-10-26. The C13 driver is `scripts/qualify-session-resume.sh`. The user's memory also records a Grok ACP "Invalid params" failure at `session/new` on 1.0.41, which succeeded in a direct probe on 1.0.44. A resume run may surface that first.
-
-**Decisions.**
-
-- **How to sequence it?**
-  - **One session: the user signs in to Grok on the host, then runs 0061's `grok-container-login.spec.ts`, then C13 for Grok, then the C21 rotation (recommended).**
-    - Pros: one login serves three gates; follows the dependency order the files state.
-    - Cons: depends on the user's interactive login and a working Grok CLI version.
-  - **Leave Grok as "pending qualification" for good.**
-    - Pros: honest in the product today, and no work.
-    - Cons: Grok users keep seeing unverified resume, and parity stays incomplete.
-
-### 4. Claude C21 half with a disposable account
-
-**Problem.** A real container re-authentication and an Anthropic refresh-token rotation through the keeper have never run end to end. Only the durable `loginGeneration` half ran.
-
-**Context.** Neither can use the host's own login: a rotation would spend the user's real refresh token. The live test is `apps/backend/tests/claude-container-login-live.test.ts` (`ORKESTRATOR_LIVE_CLAUDE_LOGIN=1`).
-
-**Investigation.** `markContainersForClaudeLoginRefresh` is at `apps/backend/src/core/agent-accounts-containers.ts:1460`. [0018](0018-container-network-and-credential-isolation.md)'s analysis notes that Claude Code moved to 2.1.309 (`docker/Dockerfile:193`) without the keeper's refresh trigger being rechecked.
-
-**Decisions.**
-
-- **Is a disposable account worth obtaining?**
-  - **Yes, and run it with 0018's Claude keeper host-refresh run, on a fresh profile with only that account (recommended).**
-    - Pros: covers two credential-isolation gates; this is the default provider.
-    - Cons: needs a second Claude subscription or a test account; its usage cost.
-  - **Keep it blocked and rely on the generation and unit evidence.**
-    - Pros: no account management.
-    - Cons: a Claude Code change to its token refresh would go unnoticed until users hit it.
 
 ### 5. Daemon-wide restart during launch and rebuild copy
 
@@ -243,9 +205,11 @@ the to-do 0109, since retired: its
 is the evidence, and what it left is in
 [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) and
 [7549](7549-rootless-docker-cp-refusals.md). What is still missing needs
-hardware, accounts or a host this pass did not have: a rootless host without
-`cpu` delegation, a live Grok login, a daemon-wide restart, and Linux Engine
-evidence from the new scheduled CI job.
+hardware, accounts or a host this pass did not have: a daemon-wide restart
+and Linux Engine evidence from the new scheduled CI job. The Grok resume and
+rotation run and the disposable-account Claude half of C21 need real
+provider logins and moved to the manual-test checklist (7568) on
+2026-11-10.
 
 ## Current state
 
@@ -299,8 +263,9 @@ evidence from the new scheduled CI job.
 The commands that reproduce the evidence, the C01–C30 scenario matrix, the
 platform dimensions and the benchmark targets are in
 [container-qualification.md](../../development/container-qualification.md).
-Gaps this pass found but did not fix are in
-[0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md).
+Gaps this pass found but did not fix went into to-do 0061 (retired
+2026-11-10); their behaviour is in
+[container lifecycle](../../architecture/container-lifecycle.md).
 
 ## Results, 2026-11-10 (task 2: rootless without `cpu` delegation)
 
@@ -1091,15 +1056,10 @@ Desktop. What remains of those items:
   - A host that delegates `memory pids` without `cpu`: done 2026-11-10 (task
     2); Docker reports CPU unsupported there and the read-back stays
     truthful.
-- C13 and the C21 live half for Grok. Both need a current host Grok login
-  (the host's expired on 2026-10-20 and was still expired on 2026-10-23), and
-  the rotation half needs a profile that can be pointed at a disposable Grok
-  copy (0061, item 7).
-- The Claude half of C21 that a disposable Claude account would unlock: a real
-  re-authentication through `markContainersForClaudeLoginRefresh` (only its
-  durable `loginGeneration` half ran), and an Anthropic refresh-token
-  rotation through the keeper (`claude-container-login-live.test.ts`,
-  `ORKESTRATOR_LIVE_CLAUDE_LOGIN=1`). Neither can use the host's own login.
+- C13 and the C21 live half for Grok, and the Claude half of C21 that a
+  disposable Claude account would unlock: moved to the manual-test
+  checklist (7568) on 2026-11-10 (they need a current host Grok login and a
+  disposable Claude account).
 - A daemon-wide Docker restart or Desktop quit during launch and during a
   rebuild copy. The shared daemon here could not be restarted. The proxy
   reproduces what the CLI sees, not daemon-side effects (containers stopped by
@@ -1263,7 +1223,7 @@ considered, the choice, why, and its pros and cons.
     host; load was 18 at the start and every target was met. Con: still not an
     idle-host reference.
 25. **New work goes to a new file.** Gaps found but not fixed went into
-    [0061](0061-container-qualification-follow-ups.md), since an existing todo
+    0061 (retired 2026-11-10), since an existing todo
     file never takes new items. Two flake recurrences were added to their
     existing cases (0506, 0518).
 
@@ -1409,16 +1369,18 @@ were removed.
 
 ## Related
 
-- [0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md):
-  gaps the 2026-10-23 pass found and did not fix.
+- To-do 0061 (retired 2026-11-10): gaps the 2026-10-23 pass found and did
+  not fix, now fixed; their behaviour is in
+  [container lifecycle](../../architecture/container-lifecycle.md).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   shared prerequisites and batching. The Docker Desktop rows of
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) and
   [0014-cli-qualification.md](../cli-and-slash-commands/0014-cli-qualification.md) belong in the same platform
   run.
-- [0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md): the environment settings
-  dialog blocked by the projects drawer, found during the container settings
-  real-stack run.
+- To-do 0035 (retired 2026-11-10; see
+  [narrow-layout.md](../../architecture/narrow-layout.md#settings-from-the-projects-drawer)):
+  the environment settings dialog blocked by the projects drawer, found during
+  the container settings real-stack run.
 - [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
   and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
   (what the rootless runs left, after the retired to-do 0109),
@@ -1432,6 +1394,7 @@ were removed.
 - [Container lifecycle](../../architecture/container-lifecycle.md),
   [agent testing](../../development/agent-testing.md),
   [testing guide](../../development/testing-guide.md).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 3 and 4) moved there on 2026-11-10.
 
 ## Replaces
 

@@ -12,7 +12,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Test temp-dir leaks (Code 1)**: fix the listed leaks at source. Status: done (2026-10-26, `7809191f`); the newly found leaks moved to 0247.
 2. **Surface permanently failing cleanup (Code 2)**: a `disk:report` row for ledger entries that stopped retrying. Status: done.
-3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: blocked (needs a macOS host).
+3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: open (run it on a macOS node with a throwaway `dev:test` profile).
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
 5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: done (2026-11-01): one more cycle per backend version that never attempted it (decision 10).
 6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): defer external stray deletion until durable ownership proof exists (decision 14).

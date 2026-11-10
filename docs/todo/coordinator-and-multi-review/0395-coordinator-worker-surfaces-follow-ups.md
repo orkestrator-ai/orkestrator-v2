@@ -35,9 +35,9 @@ association kind.
 ### Tasks
 
 1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: done.
-2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open (scope call for the user).
+2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`: build whichever option the scope call picks (a patch sent to a leaf controller command, or a clear refusal across nodes). Status: blocked (waits on 7568: 0395 task 2 scope call).
 3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: done.
-4. **Live `surfaces` scenario**: a scenario in `mise run test:agent:coordinator` that calls each tool once on a real stack. Status: open (needs a live provider).
+4. **Live `surfaces` scenario**: add a scenario to `mise run test:agent:coordinator` that calls each tool once on a real stack. The billed run of it moved to the manual-test checklist (7568). Status: open.
 5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (task 3, which it depended on, is done).
 
 ### 1. Worker surfaces on other nodes
@@ -132,8 +132,10 @@ for.
     - Pros: no new code; a pushed branch already reaches a remote worker.
     - Cons: the user loses the feature exactly where workers usually run.
 
-**Open for the user.** This is a scope call between the first and third
-options, so it was left open on 2026-10-30.
+**Waiting on the scope call.** The choice between the first and third
+options is the user's; it moved to the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) on
+2026-11-10. What each option would take:
 
 - *A new leaf command that applies a patch sent over the node link.* The user
   keeps the feature for remote workers, and the approval dialog and read-only
@@ -305,14 +307,15 @@ works on the new kind unless it is filtered out.
 
 1. **Root changes on other nodes.** `request_root_changes` across nodes needs
    the patch to travel from this node's checkout to a leaf worker, or a clear
-   refusal. Waiting on the user's scope call; see task 2.
+   refusal. Waiting on the scope call on the manual-test checklist; see task 2.
 2. **Status wakes for feature plans.** Done (task 3).
 
 ### Qualification
 
 3. **Live coordinator suite scenario.** A `surfaces` scenario in
    `mise run test:agent:coordinator` that calls each tool once and checks the
-   resulting tabs and the root-changes approval on a real stack. See task 4.
+   resulting tabs and the root-changes approval on a real stack. See task 4;
+   its billed Claude run is on the manual-test checklist.
    The remote variants from task 1 have component evidence only
    (`coordinator-surfaces-remote.test.ts`, simulated node link); a
    two-node live check is still owed.
@@ -464,6 +467,7 @@ Task 5 depends on task 3.
 - [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
   for the live suite.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the scope call of task 2, the billed Claude run of task 4) moved there on 2026-11-10.
 
 ## Replaces
 

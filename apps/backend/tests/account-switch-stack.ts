@@ -10,7 +10,7 @@
  * carried from one bridge process and account to the next.
  *
  * It says nothing about the provider's real words or real timing. Those stay in
- * docs/todo/agent-engines/1250-automatic-account-switching-live-checks.md.
+ * docs/todo/manual-test/7568-manual-test-checklist.md (from retired to-do 1250).
  *
  * Run as its own process (`account-switch-resend-live.test.ts`), because it points
  * HOME at a throwaway directory and replaces the global `fetch`.

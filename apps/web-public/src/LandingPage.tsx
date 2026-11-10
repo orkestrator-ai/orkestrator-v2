@@ -25,10 +25,10 @@ import {
 } from "lucide-react";
 import orkLogo from "../../../logos/ork-logo2.png";
 import { CONNECT_PATH } from "./routes";
+import { SiteFooter, SiteHeader } from "./SiteChrome";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-const GITHUB_URL = "https://github.com/orkestrator-ai/orkestrator-v2";
 const INSTALL_COMMAND =
   "curl -fsSL https://orkestrator.dev/install.sh | bash -s -- --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev";
 
@@ -150,15 +150,6 @@ function LoginButton({ label, className }: { label: string; className?: string }
     <a className={`landing-button landing-button--primary ${className ?? ""}`} href={CONNECT_PATH}>
       <LogIn aria-hidden="true" />
       {label}
-    </a>
-  );
-}
-
-function Brand() {
-  return (
-    <a className="landing-brand" href="/" aria-label="Orkestrator home">
-      <img src={orkLogo} alt="" width={36} height={36} />
-      <span>Orkestrator</span>
     </a>
   );
 }
@@ -341,26 +332,7 @@ function InstallCommand() {
 export function LandingPage() {
   return (
     <div className="landing">
-      <header className="landing-nav">
-        <div className="landing-nav__inner">
-          <Brand />
-          <nav aria-label="Sections">
-            <a href="#security">Security</a>
-            <a href="#graphs">Pipelines</a>
-            <a href="#multi-review">Multi Review</a>
-            <a href={GITHUB_URL} rel="noreferrer">
-              GitHub
-            </a>
-          </nav>
-          <a
-            className="landing-button landing-button--quiet landing-nav__login"
-            href={CONNECT_PATH}
-          >
-            <LogIn aria-hidden="true" />
-            Log in
-          </a>
-        </div>
-      </header>
+      <SiteHeader current="landing" />
 
       <main>
         <section className="landing-hero" aria-labelledby="landing-title">
@@ -504,18 +476,7 @@ export function LandingPage() {
         </section>
       </main>
 
-      <footer className="landing-footer">
-        <Brand />
-        <nav aria-label="Footer">
-          <a href={GITHUB_URL} rel="noreferrer">
-            GitHub
-          </a>
-          <a href={`${GITHUB_URL}/releases`} rel="noreferrer">
-            Releases
-          </a>
-          <a href={CONNECT_PATH}>Connect</a>
-        </nav>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

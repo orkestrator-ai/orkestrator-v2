@@ -7,8 +7,7 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0820`, `0810`
 ### Tasks
 
 1. **macOS: `dbstat` and `process.memoryUsage`**: confirm both on a real Mac. Status: open.
-2. **A long-running real install**: the health rows, the top tables and the cost of a sample, over days. Status: open.
-3. **A packaged app**: the bundle's download and the clean exit marker in packaged paths. Status: open.
+3. **A packaged app**: the clean exit marker and the essential log's file writer in a locally packaged build. Status: open (the bundle's export through the native save dialog of a release candidate is in 7568: 6141 task 3).
 4. **Export across machines**: Settings and `--node` against a leaf node. Status: open.
 
 ### 1. macOS: `dbstat` and `process.memoryUsage`
@@ -29,24 +28,6 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0820`, `0810`
     - Pros: nothing to do.
     - Cons: the report's own note says this library varies.
 
-### 2. A long-running real install
-
-**Problem.** Row size and write cost were only reasoned about, and a real database's top tables have not been seen.
-
-**Context.** The store is bounded at 2,016 rows, and a sample is one small transaction every five minutes. `health-summary` also counts towards the hourly copy's size. Part `0750` left the same kind of gap for the essential log: its "tens of KB a day" is an estimate, and only the worst case (4 MiB in total, about 36 KB a day from any one event) is bounded.
-
-**Investigation.** An isolated `dev:test` profile showed the rows, a `previous-run` line for both a clean stop and a killed backend, and `/metrics` carrying the database figures. It ran for minutes, on a fixture. This build was told not to read real logs or databases, so no real install was sampled.
-
-**Decisions.**
-
-- **What decides that it is fine?**
-  - **Sampling one real install after a week: the row's bytes, the store's share of the file and the commit's time (recommended).**
-    - Pros: replaces the report's "trivial" and "tens of KB" with numbers; also shows whether `store_rows` swamps the top tables (6144).
-    - Cons: needs the user's installation and a week.
-  - **Rely on the bound.**
-    - Pros: the worst case is already known to be small.
-    - Cons: says nothing about what the figures look like in use.
-
 ### 3. A packaged app
 
 **Problem.** The download path and the marker have run under `dev:test` only, and so has the essential log's file writer in its packaged paths (part `0750`).
@@ -61,6 +42,7 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0820`, `0810`
   - **Export once from a packaged build, and read `previous-run` after a normal quit (recommended).**
     - Pros: covers the real save dialog and packaged paths.
     - Cons: needs a release candidate.
+    - Agent part: the `previous-run` marker and the essential log's packaged paths in a locally packaged build, through the packaged-app spec ([agent-testing.md](../../development/agent-testing.md#packaged-app-electron-spec)); the export through a release candidate's native save dialog is in the manual-test checklist (7568: 6141 task 3).
   - **Add a native save dialog now.**
     - Pros: the report mentions they exist.
     - Cons: a new IPC surface for a case nothing shows is broken, and a remote machine's bytes still have to reach the renderer first.
@@ -87,3 +69,4 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 parts `0820`, `0810`
 
 - [Application logging](../../architecture/logging.md#health-summary-and-the-clean-exit-marker)
 - [The diagnostics bundle](../../architecture/logging.md#the-diagnostics-bundle)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the user part of task 3: exporting the bundle through a release candidate's native save dialog) moved there on 2026-11-10.

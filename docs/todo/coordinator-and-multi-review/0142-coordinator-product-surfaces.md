@@ -9,16 +9,18 @@ are now built; the current state, decisions and remaining qualification below
 supersede the proposed choices in this snapshot. The task statuses were
 brought up to date on 2026-11-10 (against `main` at `04639b12b`): every task is
 done in code, and only the live runs under Needs verification remain.
+On 2026-11-10 the real-provider and desktop-app runs moved to the manual-test
+checklist (7568); the fake-model browser checks of tasks 1 and 3 stay here.
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Uncommitted root changes in a worker**: let the user hand a chosen patch of the root checkout's uncommitted changes to a new worker. Status: done (2026-10-27, `request_root_changes`); live run only remains.
-2. **Terminal or tmux launch**: a coordinator tool that opens a terminal, tmux or terminal-agent tab in a worker. Status: done (2026-10-27, `launch_terminal`); live run only remains.
-3. **Browser launch and navigation**: a coordinator tool that opens or drives a worker's preview. Status: done (2026-10-27, `open_worker_browser`); live run only remains.
-4. **Pane editing**: a coordinator tool that opens, closes or moves a worker's tabs. Status: done (2026-10-27, `edit_worker_tab`); live run only remains.
-5. **Multi Review and planning launches**: custom-fix model switches, reviewer subtabs, looped review and feature-plan launch. Status: done (2026-10-27, `custom_fix_multi_review`, `open_multi_review` with `reviewerId`, `launch_feature_plan`; the looped review tool was later removed with that feature); live run only remains.
+1. **Uncommitted root changes in a worker**: let the user hand a chosen patch of the root checkout's uncommitted changes to a new worker. Status: open. Built 2026-10-27 (`request_root_changes`); left: the root-changes dialog end to end on a `dev:test` profile in the browser client (see Needs verification). The real-provider run moved to 7568.
+2. **Terminal or tmux launch**: a coordinator tool that opens a terminal, tmux or terminal-agent tab in a worker. Status: done (2026-10-27, `launch_terminal`); the real-provider run moved to 7568.
+3. **Browser launch and navigation**: a coordinator tool that opens or drives a worker's preview. Status: open. Built 2026-10-27 (`open_worker_browser`); left: the container worker's `agent-link` resolution in the browser client (see Needs verification). The real-provider run and the desktop-app check moved to 7568.
+4. **Pane editing**: a coordinator tool that opens, closes or moves a worker's tabs. Status: done (2026-10-27, `edit_worker_tab`); the real-provider run moved to 7568.
+5. **Multi Review and planning launches**: custom-fix model switches, reviewer subtabs, looped review and feature-plan launch. Status: done (2026-10-27, `custom_fix_multi_review`, `open_multi_review` with `reviewerId`, `launch_feature_plan`; the looped review tool was later removed with that feature); the real-provider run moved to 7568.
 6. **Prioritise or retire the file**: the open question of which surface comes first, given no user request. Status: done (settled by building all five; Open questions is "None").
 
 ### 1. Uncommitted root changes in a worker
@@ -360,18 +362,15 @@ per-task sections as the record of the choices.
 ## Needs verification
 
 Unit and component tests cover every item; none of this has run on a real
-stack with a real provider yet.
+stack yet. The real Claude and Codex coordinator run and the desktop-app check
+are in 7568 (0142 tasks 1 to 5). Left here, on a disposable `dev:test`
+profile with a loopback fake model (no login) and the browser client:
 
-- A real coordinator (Claude and Codex at least) calling each new tool in a
-  disposable `dev:test` profile, with the worker inactive and then
-  reopened: the terminal, browser and reviewer tabs appear
-  in the worker, and a closed tab's conversation is still in history.
-- The root-changes dialog end to end in the app: approve applies to a local
+- The root-changes dialog end to end (task 1): approve applies to a local
   worker and to a container worker (`docker exec … git apply`), reject
   applies nothing, and both wake the coordinator once.
 - `open_worker_browser` on a container worker resolves the `agent-link`
-  intent to the container's service in the desktop app and in the browser
-  client.
+  intent to the container's service in the browser client (task 3).
 
 ## Related
 
@@ -379,6 +378,7 @@ stack with a real provider yet.
   authority.
 - [0395-coordinator-worker-surfaces-follow-ups.md](0395-coordinator-worker-surfaces-follow-ups.md)
   for the follow-ups.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real Claude and Codex run of tasks 1 to 5, the desktop-app half of task 3) moved there on 2026-11-10.
 
 ## Replaces
 

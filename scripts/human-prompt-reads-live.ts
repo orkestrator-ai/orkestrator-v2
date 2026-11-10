@@ -14,7 +14,7 @@ import {
 } from "./tmux-mail-inject-live";
 
 /**
- * BG-9 live (to-do 1202 task 1, docs/todo/cross-cutting/1202-efficiency-review-follow-ups.md):
+ * BG-9 live (to-do 1202 task 1, retired 2026-11-10; method in docs/development/testing-guide.md):
  * what the human-prompt monitor costs a working native Claude session whose
  * transcript is not changing.
  *

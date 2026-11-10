@@ -28,16 +28,18 @@ This file holds that qualification and the gaps the build left.
 
 ### Tasks
 
-1. **Live `gap-tools` scenario**: each new tool called once by a live main coordinator on a real stack. Status: open (needs a live provider).
-2. **Live PR follow against GitHub**: one PR followed through opened, conflicts, resolve, checks failed, ready and merged. Status: open (needs a GitHub test repository).
-3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open (needs a live provider); the browser spec is done (2026-11-03).
-4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link. Status: open (needs two nodes).
+1. **`gap-tools` scenario**: build the recommended one-worker `gap-tools` scenario in `mise run test:agent:coordinator` (each new tool called once, `get_worker_changes` with `diffScope` included) and run it on a loopback fake model, as the `routing` scenario's fake-model run does. Running it with a real provider moved to 7568. Status: open.
+3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: done for the browser spec (2026-11-03); the live half (a real worker answered once per question-capable provider) moved to 7568.
+4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link, on two `dev:test` profiles on one host (a command node and a leaf, as `mise run test:agent:coordinator:node-mail-fake` sets them up). Status: open.
 5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: done (2026-11-01).
 6. **PR follow gaps**: PR-tab failure and remote Merge and Cleanup wakes are done; reopened PRs remain outside a finished follow. Status: decided, keep the terminal-follow policy (2026-11-01); reopen only when a coordinator needs it.
-7. **"Checks failed" counts checks that are not required**: Status: done (2026-11-01); live GitHub evidence is part of task 2.
+7. **"Checks failed" counts checks that are not required**: Status: done (2026-11-01); live GitHub evidence is part of 7568 (1021 task 2).
 8. **Separate committed and uncommitted diffs in `get_worker_changes`**: Status: done (2026-11-01); live coordinator use is part of task 1.
 
 ### 1. Live `gap-tools` scenario
+
+**Split 2026-11-10.** Building the scenario and a fake-model run stay here;
+the run with a real provider is in 7568 (1021 task 1).
 
 **Problem.** The new tools are offered to every main coordinator by default
 and have never been called by a real agent, so a tool description the model
@@ -71,32 +73,6 @@ path was exercised by patching that answer.
     - Pros: failures are independent.
     - Cons: many minutes of worker boots per run, for checks that do not
       interact.
-
-### 2. Live PR follow against GitHub
-
-**Problem.** The PR wakes are driven by the PR monitor's readings, which the
-tests fake. Only GitHub decides when `mergeStateStatus` turns `DIRTY`, a check
-rollup fails, or a merge lands.
-
-**Context.** `coordinator-pr-status.ts` reduces an environment's PR health to
-one status; `coordinator-status-wakes.ts` sends it under the `pull-request`
-association. A Resolve tab's report waits for the
-`refresh-pr-after-agent-completion` recheck, for at most 60 s.
-
-**Investigation.** Not run. The timing of the completion-action recheck and of
-the merge-and-cleanup path against a real `gh` are unverified.
-
-**Decisions.**
-
-- **Where to run it?**
-  - **A disposable repository under the test account, driven by the live suite (recommended).**
-    - Pros: real GitHub state changes; nothing touches this repository.
-    - Cons: needs a token and a repository set aside for it, which is an
-      outward-facing setup the user has to approve.
-  - **Replay recorded `gh` answers.**
-    - Pros: deterministic and offline.
-    - Cons: proves only what was recorded, which is what the unit tests
-      already do.
 
 ### 3. Answer relay in the app
 
@@ -132,9 +108,10 @@ and Decline sat below the fold. The dialog now uses the same column layout as
 `AgentsMdApprovalDialog` (header and footer `shrink-0`, the question list
 `min-h-0 flex-1` and still capped at 60vh), so only the questions scroll.
 
-**Still open (live half).** No real worker has been answered through the
-dialog, and the per-provider question shapes are unchecked. This needs Claude,
-Codex and OpenCode signed in on a `dev:test` profile.
+**Live half: moved to 7568 (2026-11-10).** No real worker has been answered
+through the dialog, and the per-provider question shapes are unchecked; that
+needs Claude, Codex and OpenCode signed in, so it is on the manual-test
+checklist.
 
 **Decisions.**
 
@@ -373,15 +350,15 @@ were not checked by name. All of these were fixed on the same branch.
 
 ### Qualification
 
-1. Task 1 (live scenario), task 2 (GitHub), task 3 (a real worker answered
-   through the dialog, once per question-capable provider), task 4 (two
-   nodes).
+1. Task 1 (the `gap-tools` scenario on a fake model) and task 4 (two
+   `dev:test` profiles on one host). The real-provider run of task 1, the
+   GitHub PR follow (task 2) and the live half of task 3 are in 7568.
 
 ### Code
 
 None. Task 6 is decided as no change. Tasks 7 and 8 also need live
 qualification: the required-checks query against a real repository with branch
-protection (task 2) and a coordinator using `diffScope` (task 1).
+protection (task 2, in 7568) and a coordinator using `diffScope` (task 1).
 
 ## Assumptions and decisions
 
@@ -458,4 +435,5 @@ GitHub and two-node qualification remain tasks 1–4.
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
 - [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
 - [0395-coordinator-worker-surfaces-follow-ups.md](0395-coordinator-worker-surfaces-follow-ups.md)
-- [0740-coordinator-deliver-now-live-qualification.md](0740-coordinator-deliver-now-live-qualification.md)
+- to-do 0740 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#course-corrections-with-delivernow))
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-provider run of task 1, task 2, the live half of task 3) moved there on 2026-11-10.

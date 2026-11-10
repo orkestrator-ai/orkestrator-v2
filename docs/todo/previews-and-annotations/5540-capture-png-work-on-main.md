@@ -15,7 +15,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`. Carried over from efficiency 
 
 **Context.** Report `0691` rated captures Low because they are occasional and bounded. A capture runs after a user action, once per capture. The cost is not base64 and not IPC, so neither the byte wire nor a custom scheme changes it.
 
-**Investigation.** Measured in real Electron 45 on macOS arm64; the table is in [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 12. The report's "up to 12 encodes" did not appear: an incompressible 2000x2000 bitmap settled in two real encodes. `boundedScreenshotPng` is in `apps/desktop/electron/browser-preview-capture-image.ts`, and the crop is in `readPendingWire` in `browser-preview-capture.ts`. The renderer reads a capture through `useAnnotationCapture.ts`; how many reads a region capture gets per save was not counted.
+**Investigation.** Measured in real Electron 45 on macOS arm64; the table is in to-do 1202 task 12 (retired 2026-11-10). The report's "up to 12 encodes" did not appear: an incompressible 2000x2000 bitmap settled in two real encodes. `boundedScreenshotPng` is in `apps/desktop/electron/browser-preview-capture-image.ts`, and the crop is in `readPendingWire` in `browser-preview-capture.ts`. The renderer reads a capture through `useAnnotationCapture.ts`; how many reads a region capture gets per save was not counted.
 
 **Decisions.**
 
@@ -58,6 +58,6 @@ Captures hold page content. One spool serves every window of the process and has
 
 ## Related
 
-- [1202 efficiency follow-ups](../cross-cutting/1202-efficiency-review-follow-ups.md), task 12
+- to-do 1202 efficiency follow-ups, task 12 (retired 2026-11-10)
 - Efficiency report, G (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 - [Web page annotations](../../architecture/web-page-annotations.md#pending-spool-and-acknowledged-transfer)

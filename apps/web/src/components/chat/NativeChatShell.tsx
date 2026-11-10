@@ -675,6 +675,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               })),
               visibleEnd ?? messages.length - 1,
             )}
+            searchCards={actionCards}
             onNavigate={coordinatorNavigate}
           />
         )}

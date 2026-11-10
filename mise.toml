@@ -321,7 +321,7 @@ depends = ["build:cli:test"]
 run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker:isolated"]
-description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
+description = "Build the image, then smoke and qualify it while the Docker fixture profiles start, run the fixture shards side by side, and reset the disposable profiles"
 depends = ["playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode,cursor,pi"
 

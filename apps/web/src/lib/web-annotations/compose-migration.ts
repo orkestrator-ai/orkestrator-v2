@@ -19,6 +19,7 @@ import {
   isTranscriptAnnotation,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { webAnnotationCommand } from "./client";
 
 export function hasUnmigratedBrowserNotes(
@@ -77,12 +78,16 @@ export interface ComposeReconciliation {
 export async function reconcileComposeDraftValue(
   environmentId: string,
   value: { annotations?: unknown[] } & Record<string, unknown>,
+  /** The node that owns the environment; this view's backend when omitted. */
+  scope?: NodeScope,
 ): Promise<ComposeReconciliation | null> {
   try {
-    const result = await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.reconcileDraft, {
-      environmentId,
-      value,
-    });
+    const result = await webAnnotationCommand(
+      WEB_ANNOTATION_COMMANDS.reconcileDraft,
+      { environmentId, value },
+      undefined,
+      scope,
+    );
     if (!result || !Array.isArray(result.references)) return null;
     const reconciled = result.value as { annotations?: unknown } | null;
     return {

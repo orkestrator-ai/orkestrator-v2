@@ -121,7 +121,8 @@ Docker:
   (`mise run test:agent:docker`);
 - `terminal-input-resume-electron.spec.ts` and
   `local-gateway-transport-electron.spec.ts` with a disposable display (see
-  agent-testing.md, Electron specs and their display).
+  agent-testing.md, Electron specs and their display); the host for that waits
+  on 7568: 6303 task 2.
 
 Close this file when they pass.
 

@@ -6,7 +6,7 @@ Analysed 2026-11-05 against `main` at `1a66d95c3`. From efficiency report part `
 
 ### Tasks
 
-1. **Help → Open Developer Tools in a packaged app**: packaged Linux seen; packaged macOS, real Windows Electron and an on-screen native menu bar not yet observed. Status: open.
+1. **Help → Open Developer Tools in a packaged app**: packaged Linux seen; packaged macOS and real Windows Electron not yet recorded from `native-application-menu.yml`. Status: open (looking at a drawn menu bar on a real Mac and Linux desktop is in 7568: 6301 task 1).
 2. **A desktop window's own error ring reaching the essential log**: one real renderer failure, end to end. Status: done.
 3. **A raised setting reverting on the timer in a running app**: the one-minute check, not only the start check. Status: done.
 
@@ -28,6 +28,7 @@ Seen 2026-11-06: from #1873 on, `ubuntu-latest` failed every run on `renderer-lo
   - **Read the workflow's results on the pull request, then look once at a real menu bar on a Mac and on Linux (recommended).**
     - Pros: the workflow gives repeatable macOS and Windows evidence; one look covers what no test draws.
     - Cons: needs a person with a Mac for the last step.
+    - Agent part: read and record the workflow's macOS, Windows and Linux results here; the look at a drawn menu bar is in the manual-test checklist (7568: 6301 task 1).
   - **Accept the workflow's results alone.**
     - Pros: nothing manual.
     - Cons: says nothing about how an otherwise empty macOS Help menu is drawn.
@@ -73,6 +74,7 @@ Seen 2026-11-06: from #1873 on, `ubuntu-latest` failed every run on `renderer-lo
 - [Renderer failures in the essential log](../../architecture/logging.md#renderer-failures-in-the-essential-log)
 - [6303](6303-window-close-during-request-throws.md)
 - [6300](6300-renderer-error-ring-for-realms-and-web-clients.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: looking once at the drawn Help menu on a real Mac and a Linux desktop) moved there on 2026-11-10.
 
 ## Assumptions and decisions
 

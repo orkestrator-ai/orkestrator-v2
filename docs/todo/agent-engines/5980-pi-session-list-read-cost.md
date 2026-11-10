@@ -8,7 +8,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 
 ### Tasks
 
-1. **Bound the cost of listing a large Pi history**: a list reads every session file in full, holds gigabytes while it does, and a history that exceeds the ceiling can never be listed. Status: open.
+1. **Bound the cost of listing a large Pi history**: a list reads every session file in full, holds gigabytes while it does, and a history that exceeds the ceiling can never be listed. The agent part is building the route chosen below: adopting Pi's bounded listing once it ships, or the bridge-side reader. Status: blocked (waits on 7568: 5980 task 1).
 
 ### 1. Bound the cost of listing a large Pi history
 
@@ -23,7 +23,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 - **What should change?**
   - **Ask Pi for a bounded listing: a limit, and no `allMessagesText` when the caller does not want it (recommended).**
     - Pros: fixes memory and time at the source; the bridge keeps Pi's own reading of a session file.
-    - Cons: depends on an upstream release; ordering by last message may still need each file's tail. Raising it upstream is an outward action, so it needs the user's approval.
+    - Cons: depends on an upstream release; ordering by last message may still need each file's tail. Raising it upstream is an outward action, so it needs the user's approval; that approval (or the choice of another route) and the upstream request are in the manual-test checklist (7568, 5980 task 1).
   - **Have the bridge read session files itself, newest by modification time first.**
     - Pros: no upstream dependency; can stop at 200.
     - Cons: a second parser of Pi's private format, which `version-drift.test.ts` cannot guard, and modification time is not the order Pi lists.
@@ -40,4 +40,5 @@ Review correction (2026-11-05): describe the crossing estimates by measured thro
 ## Related
 
 - `5480-pi-resume-list-timeout-leftovers.md` (deleted 2026-11-06): the measurement and the reason shown in the dialog.
-- [1202 task 6](../cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths): the cache and the ceiling.
+- to-do 1202 task 6 (retired 2026-11-10): the cache and the ceiling.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the choice of route and the upstream request in task 1) moved there on 2026-11-10.

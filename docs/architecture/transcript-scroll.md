@@ -223,9 +223,11 @@ follower, came back 466 px (desktop) higher than they left
 ([flake 6380](../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md),
 [5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)
 task 2). When the scroller is, or wraps, the container, that range would be 0,
-which fits the reset to the top [0860](../todo/coordinator-and-multi-review/0860-multi-review-inspector-webkit-divergences.md)
-found. So the controller keeps the offset it last observed while the scroller
-had a box; once a resize delivery has measured it at zero height, the first
+which fits the reset to the top that to-do 0860 (retired 2026-11-10) found
+in the Multi Review inspector tail (see
+[`build-pipeline-view.md`](build-pipeline-view.md#shared-flow-graph)). So the
+controller keeps the offset it last observed while the scroller had a box;
+once a resize delivery has measured it at zero height, the first
 `scroll` or resize delivery after the show writes that offset back, upward
 only, since the clamp only lowers it and following growth raises it (Chromium
 keeps it, so nothing is written there). That `scroll` is the browser's, not the

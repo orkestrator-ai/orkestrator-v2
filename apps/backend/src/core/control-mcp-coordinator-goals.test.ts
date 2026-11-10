@@ -2,7 +2,7 @@
  * A coordinator's worker goal tools over the real Control MCP endpoint, the real
  * command registry, coordinator store and native-agent service, with a scripted
  * provider. Nothing spends tokens, and no real coordinator runs: a live run is
- * `plans/goals/403`'s open box.
+ * the `goal` scenario in `apps/desktop/scripts/dev/coordinator-live-goal.ts`.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import path from "node:path";

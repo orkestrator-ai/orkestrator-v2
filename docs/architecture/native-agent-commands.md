@@ -197,6 +197,18 @@ The backend merges runtime actions into the provider list
   remains accepted without running compaction again; this advisory flag is not
   persisted and is absent on replay (see the
   [compatibility register](version-compatibility.md#register)).
+  On Pi, Stop also ends a manual compaction: while it compacts the bridge
+  reports `running` with `activity: "compacting"` (shown like Claude's
+  compacting state), and with no prompt claim `/cancel`, `/abort` and
+  `/hard-abort` call Pi's `abortCompaction()`. The compact route then answers
+  409 `{ error, cancelled: true }`, so the composer says the compaction was
+  stopped, keeps the draft, and the conversation is not compacted. Every Pi
+  model also carries a session-scoped `autoCompaction` toggle ("Auto-compact",
+  default Pi's own `compaction.enabled`). The bridge applies it by overriding
+  the session's settings manager in memory and keeps it in its `state.json`,
+  never in Pi's `settings.json`; the backend keeps it across a model switch.
+  `bridges/pi-bridge/src/compaction-controls.test.ts` proves both on the real
+  Pi SDK with the faux model.
 - `/goal` is **reserved** on platforms with `actions.goal`: the backend's goal
   loop replaces a provider's own `/goal`, so two loops can never stack on one
   session. It has no `busy` policy: it neither queues nor interrupts a turn, it
@@ -212,8 +224,8 @@ The backend merges runtime actions into the provider list
 
 Deduplication is by identity, never by lower-cased display name.
 
-No other shortcuts are planned beyond `/goal`, which has its own plan
-(`plans/goals.md`; decided 2026-10-24 in
+No other shortcuts are planned beyond `/goal`, which has its own design
+([goals.md](goals.md); decided 2026-10-24 in
 [0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)),
 and `/subork`, which has its own contract ([suborks.md](suborks.md)).
 Clearing or starting a session, model and permission changes already have

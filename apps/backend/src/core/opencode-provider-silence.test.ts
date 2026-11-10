@@ -11,7 +11,7 @@ import {
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 
 /**
- * To-do 7200 task 1: an OpenCode event stream that stays open but stops
+ * #2052: an OpenCode event stream that stays open but stops
  * heartbeating is replaced, while a server that never heartbeats is left
  * alone. Heartbeats are liveness only, never dispatched or counted as drift.
  */

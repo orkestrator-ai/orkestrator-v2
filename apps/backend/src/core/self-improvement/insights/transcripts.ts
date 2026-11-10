@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createEventLoopSlicer } from "../../event-loop-slice.js";
 
 /** A history file larger than this is read from its end only. */
 export const MAX_TRANSCRIPT_BYTES = 24 * 1024 * 1024;
@@ -117,7 +118,14 @@ export function projectOf(cwd: string): string {
   return base || "unknown";
 }
 
-function listJsonl(root: string, depth: number, out: string[], seen: Set<string>): void {
+async function listJsonl(
+  root: string,
+  depth: number,
+  out: TranscriptFile[],
+  seen: Set<string>,
+  provider: Provider,
+  slice: () => Promise<void>,
+): Promise<void> {
   if (out.length >= MAX_FILES || depth < 0) return;
   let names: string[];
   try {
@@ -126,6 +134,8 @@ function listJsonl(root: string, depth: number, out: string[], seen: Set<string>
     return;
   }
   for (const name of names) {
+    // A history directory holds thousands of files: let other work run between them.
+    await slice();
     const full = path.join(root, name);
     let stat: ReturnType<typeof statSync>;
     try {
@@ -133,7 +143,7 @@ function listJsonl(root: string, depth: number, out: string[], seen: Set<string>
     } catch {
       continue;
     }
-    if (stat.isDirectory()) listJsonl(full, depth - 1, out, seen);
+    if (stat.isDirectory()) await listJsonl(full, depth - 1, out, seen, provider, slice);
     else if (name.endsWith(".jsonl") && stat.isFile()) {
       let real = full;
       try {
@@ -143,7 +153,7 @@ function listJsonl(root: string, depth: number, out: string[], seen: Set<string>
       }
       if (seen.has(real)) continue;
       seen.add(real);
-      out.push(real);
+      out.push({ provider, file: real, mtimeMs: stat.mtimeMs, size: stat.size });
       if (out.length >= MAX_FILES) return;
     }
   }
@@ -156,26 +166,26 @@ export interface TranscriptFile {
   size: number;
 }
 
-/** Every history file, deduplicated by real path, with its modification time. */
-export function listTranscriptFiles(sources: TranscriptSources): TranscriptFile[] {
+/**
+ * Every history file, deduplicated by real path, with its modification time.
+ * A machine can hold thousands (8,983 files on one host, listed in 2 s), so the
+ * walk yields to the event loop between files instead of holding it throughout.
+ */
+export async function listTranscriptFiles(
+  sources: TranscriptSources,
+  slice: () => Promise<void> = createEventLoopSlicer(),
+): Promise<TranscriptFile[]> {
   const seen = new Set<string>();
   const result: TranscriptFile[] = [];
-  const add = (provider: Provider, roots: string[], depth: number) => {
-    const files: string[] = [];
-    for (const root of roots) listJsonl(root, depth, files, seen);
-    for (const file of files) {
-      try {
-        const stat = statSync(file);
-        result.push({ provider, file, mtimeMs: stat.mtimeMs, size: stat.size });
-      } catch {
-        // Gone since it was listed.
-      }
-    }
+  const add = async (provider: Provider, roots: string[], depth: number) => {
+    const files: TranscriptFile[] = [];
+    for (const root of roots) await listJsonl(root, depth, files, seen, provider, slice);
+    result.push(...files);
   };
   // Claude keeps `<project>/<session>.jsonl` (sub-agents one level deeper, skipped as sidechains).
-  add("claude", sources.claudeProjectDirs, 2);
+  await add("claude", sources.claudeProjectDirs, 2);
   // Codex keeps `YYYY/MM/DD/rollout-*.jsonl`.
-  add("codex", sources.codexSessionDirs, 4);
+  await add("codex", sources.codexSessionDirs, 4);
   return result;
 }
 

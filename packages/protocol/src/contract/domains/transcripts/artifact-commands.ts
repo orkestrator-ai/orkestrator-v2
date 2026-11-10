@@ -63,12 +63,6 @@ const Representation = Schema.Literals([
 /** The conversation every read names; the handler answers `not_found` for anything it does not own. */
 const conversation = { environmentId: checked, logicalSessionKey: checked };
 
-export const ArtifactErrorSchema = modelRecord<ArtifactError>()({
-  code: Schema.Literals(ARTIFACT_ERROR_CODES),
-  message: Schema.String,
-  retryClass: Schema.Literals(["never", "after-edit", "after-refresh", "transient"]),
-});
-
 export const TranscriptArtifactRefSchema = modelRecord<TranscriptArtifactRef>()({
   schemaVersion: Schema.Literal(1),
   artifactId: Schema.String,

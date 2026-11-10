@@ -639,7 +639,7 @@ export class ChangeTrackingService {
    * terminal (acceptance H13). The settlement appends a superseding
    * `later-recovery` measurement; the interrupted one stays retrievable. A
    * turn whose end capture timed out while writers were unresolved is offered
-   * for a background end recovery instead (todo 7310).
+   * for a background end recovery instead (#2047).
    */
   private async settleInterruptedTurns(operationIds: Iterable<string>): Promise<void> {
     const turnIds = new Set<string>();

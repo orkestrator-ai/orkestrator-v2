@@ -899,7 +899,7 @@ describe("readContainerBridgeToken for OpenCode", () => {
 });
 
 /**
- * To-do 7250: the token goes only to the socket the bridge the backend
+ * #2030: the token goes only to the socket the bridge the backend
  * launched opened, never to whatever listens on its port now.
  */
 describe("the listener on a bridge's port", () => {

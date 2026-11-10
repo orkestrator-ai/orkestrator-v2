@@ -71,7 +71,7 @@ export interface RuntimeProbe {
    * Ask the environment's Codex app-server to reload MCP configuration, only if
    * one is already running. Never starts a bridge or an app-server:
    * `not-running` means the next process start reads the saved file anyway, and
-   * `unsupported` means the bridge predates the reload route.
+   * `unsupported` means the provider has no on-request reload.
    */
   reloadCodex(environmentId: string): Promise<ReloadOutcome>;
   /**
@@ -418,7 +418,7 @@ const RELOAD_TEXT = {
     applying: "Reloading Codex's MCP configuration.",
     timeout: "Codex stayed busy for 30 minutes; retry apply when its sessions are idle.",
     unsupported:
-      "This Codex bridge predates on-request reload; stop and start the environment to load the change.",
+      "This Codex bridge cannot reload on request; stop and start the environment to load the change.",
     refused: "Codex did not accept the reload request; retry apply.",
   },
   opencode: {

@@ -116,10 +116,6 @@ export function normalizeAllowedDomainsInput(value: string | string[]): string[]
 export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
   const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
   return {
-    containerResources: {
-      cpuCores: global.containerResources.cpuCores,
-      memoryGb: global.containerResources.memoryGb,
-    },
     envFilePatterns: normalizeEnvPatternsInput(global.envFilePatterns),
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
@@ -222,8 +218,6 @@ function getSavedReviewInstruction(value: unknown): string {
  */
 export function globalFormSignature(global: GlobalConfig): string {
   return JSON.stringify([
-    global.containerResources.cpuCores,
-    global.containerResources.memoryGb,
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.containerGitHubCredential ?? "none",
@@ -278,8 +272,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const { machine } = useAccountMachine();
   const global = config.global;
 
-  const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
-  const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [cursorApiKey, setCursorApiKey] = useState("");
@@ -449,8 +441,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     if (syncedGlobalSignatureRef.current === signature) return;
     syncedGlobalSignatureRef.current = signature;
     syncedGlobalRef.current = global;
-    setCpuCores(global.containerResources.cpuCores);
-    setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     // Credential inputs are deliberately not reset here. They are write-only and
     // cleared explicitly once their save succeeds, so preserving whatever is
@@ -657,7 +647,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // cannot store a partial secret.
   const localCoreFields = useMemo<CoreFieldsSnapshot>(
     () => ({
-      containerResources: { cpuCores, memoryGb },
       envFilePatterns: normalizeEnvPatternsInput(envPatterns),
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
@@ -703,8 +692,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       multiReviewEngine,
     }),
     [
-      cpuCores,
-      memoryGb,
       envPatterns,
       allowedDomains,
       useHostGitHubCredentials,
@@ -1083,10 +1070,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
   const sectionSettings = {
     global,
-    cpuCores,
-    setCpuCores,
-    memoryGb,
-    setMemoryGb,
     envPatterns,
     setEnvPatterns,
     anthropicApiKey,

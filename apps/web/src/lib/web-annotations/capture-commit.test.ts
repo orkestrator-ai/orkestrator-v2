@@ -16,6 +16,9 @@ import {
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
 import { appCommandStore } from "@/test/app-command-store";
+import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { WindowScope } from "@/lib/node-scope/window-scope";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 let backend: FakeWebAnnotationBackend;
 
@@ -238,4 +241,235 @@ describe("shadow-root targets follow the backend's advertisement", () => {
       expect(args.capture.target.anchor.scope).toEqual(expected);
     });
   }
+});
+
+describe("capture commit on another machine's environment", () => {
+  let windowScope: WindowScope;
+  let local: FakeWebAnnotationBackend;
+
+  beforeEach(() => {
+    // This window's own backend does not know the environment.
+    local = new FakeWebAnnotationBackend("env-local").install();
+    windowScope = new WindowScope();
+  });
+  afterEach(() => {
+    windowScope.dispose();
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  test("stages, creates and reads the receipt on the environment's own node", async () => {
+    const remote = new FakeWebAnnotationBackend("env-remote");
+    const client = new FakeNodeClient({ nodeId: "bk_remote-node" as BackendId });
+    for (const command of [
+      "web_annotation_operation_receipt",
+      "web_annotation_asset_stage",
+      "web_annotation_create",
+    ]) {
+      client.respond(command, (args: Readonly<Record<string, unknown>>) =>
+        remote.handle(command, { ...args }),
+      );
+    }
+    const scope = windowScope.open({ role: "leaf", client });
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, {
+      captureId: "cap-remote",
+      environmentId: "env-remote",
+    });
+
+    const committed = await commitPendingCapture({
+      api: fake.api,
+      environmentId: "env-remote",
+      captureId: "cap-remote",
+      record,
+      input: { body: "These should be in pills" },
+      scope,
+    });
+
+    expect(committed.annotationId).toBeTruthy();
+    expect(client.calls("web_annotation_operation_receipt")).toHaveLength(1);
+    expect(client.calls("web_annotation_asset_stage")).toHaveLength(1);
+    expect(client.calls("web_annotation_create")[0]!.args).toMatchObject({
+      environmentId: "env-remote",
+      body: "These should be in pills",
+    });
+    expect(local.calls).toEqual([]);
+  });
+});
+
+describe("capture commit branches on another machine's environment", () => {
+  const ROUTED_COMMANDS = [
+    "web_annotation_operation_receipt",
+    "web_annotation_asset_stage",
+    "web_annotation_create",
+    "web_annotation_get",
+    "web_annotation_capture_replace",
+    "web_annotation_result_capture",
+  ];
+  const hint: WebAnnotationSourceHint = {
+    producer: "data-orkestrator-source",
+    path: "src/Save.tsx",
+    line: 12,
+    verified: false,
+  };
+  const shadowScope = {
+    kind: "shadow" as const,
+    hosts: [{ tagName: "app-shell", cssPath: "html > body > app-shell" }],
+  };
+  const ENV = "env-shared";
+
+  let windowScope: WindowScope;
+  let local: FakeWebAnnotationBackend;
+  let remote: FakeWebAnnotationBackend;
+  let client: FakeNodeClient;
+  let scope: ReturnType<WindowScope["open"]>;
+
+  beforeEach(() => {
+    // Both nodes know an environment with the same id, so only the scope
+    // decides which one is used.
+    local = new FakeWebAnnotationBackend(ENV).install();
+    remote = new FakeWebAnnotationBackend(ENV);
+    client = new FakeNodeClient({ nodeId: "bk_remote-node" as BackendId });
+    for (const command of ROUTED_COMMANDS) {
+      client.respond(command, (args: Readonly<Record<string, unknown>>) =>
+        remote.handle(command, { ...args }),
+      );
+    }
+    windowScope = new WindowScope();
+    scope = windowScope.open({ role: "leaf", client });
+  });
+  afterEach(() => {
+    windowScope.dispose();
+    appCommandStore(webAnnotationStore).getState().reset();
+    forgetCaptureIntent("cap-remote-result");
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  function advertise(
+    target: "local" | "remote",
+    operations: { sourceHints: boolean; shadowTargets: boolean },
+  ) {
+    const store =
+      target === "local" ? appCommandStore(webAnnotationStore) : scope.store(webAnnotationStore);
+    store.getState().update(ENV, () => ({
+      capabilities: fixtureCapabilities(operations),
+      capabilityStatus: "available",
+    }));
+  }
+
+  function hintedShadowRecord(captureId: string, annotationId: string | null = null) {
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, {
+      captureId,
+      environmentId: ENV,
+      annotationId,
+      image: null,
+    });
+    const target = record.capture.target;
+    if (target.kind !== "element") throw new Error("expected an element fixture");
+    record.capture = {
+      ...record.capture,
+      target: { ...target, anchor: { ...target.anchor, scope: shadowScope } },
+      evidence: { ...record.capture.evidence!, sourceHints: [hint] },
+    };
+    return { fake, record };
+  }
+
+  type SentCapture = {
+    capture: {
+      evidence: { sourceHints?: unknown };
+      target: { anchor: { scope: unknown } };
+    };
+  };
+
+  for (const [label, localFlags, remoteFlags, expectedHints, expectedScope] of [
+    [
+      "follows the owning node's advertisement when only it advertises",
+      { sourceHints: false, shadowTargets: false },
+      { sourceHints: true, shadowTargets: true },
+      [hint],
+      shadowScope,
+    ],
+    [
+      "ignores this window's advertisement when the owning node does not advertise",
+      { sourceHints: true, shadowTargets: true },
+      { sourceHints: false, shadowTargets: false },
+      undefined,
+      { kind: "unsupported", reason: "shadow-root" },
+    ],
+  ] as const) {
+    test(label, async () => {
+      advertise("local", localFlags);
+      advertise("remote", remoteFlags);
+      const { fake, record } = hintedShadowRecord(`cap-flags-${String(remoteFlags.sourceHints)}`);
+      await commitPendingCapture({
+        api: fake.api,
+        environmentId: ENV,
+        captureId: record.descriptor.captureId,
+        record,
+        input: { body: "Inside a component." },
+        scope,
+      });
+      const args = client.calls("web_annotation_create")[0]!.args as unknown as SentCapture;
+      expect(args.capture.evidence.sourceHints).toEqual(expectedHints);
+      expect(args.capture.target.anchor.scope).toEqual(expectedScope);
+      expect(local.calls).toEqual([]);
+    });
+  }
+
+  test("a replace reads the current revision and replaces on the owning node", async () => {
+    const annotation = remote.seed({ id: "annotation-remote", contentRevision: 3 });
+    // This window's backend holds a different revision for the same id.
+    local.seed({ id: "annotation-remote", contentRevision: 9 });
+    local.calls.length = 0;
+    const { fake, record } = hintedShadowRecord("cap-remote-replace", annotation.id);
+
+    const committed = await commitPendingCapture({
+      api: fake.api,
+      environmentId: ENV,
+      captureId: "cap-remote-replace",
+      record,
+      input: { body: "Reselected" },
+      scope,
+    });
+
+    expect(committed.annotationId).toBe(annotation.id);
+    expect(client.calls("web_annotation_get")).toHaveLength(1);
+    expect(client.calls("web_annotation_capture_replace")[0]!.args).toMatchObject({
+      environmentId: ENV,
+      annotationId: annotation.id,
+      expectedContentRevision: 3,
+      body: "Reselected",
+    });
+    expect(client.calls("web_annotation_create")).toHaveLength(0);
+    expect(local.calls).toEqual([]);
+  });
+
+  test("a result capture is recorded on the owning node", async () => {
+    const { fake, record } = hintedShadowRecord("cap-remote-result");
+    record.descriptor.purpose = "result";
+    rememberCaptureIntent("cap-remote-result", {
+      kind: "result",
+      requestId: "request-remote",
+      annotationId: "annotation-remote",
+      createdAt: Date.now(),
+    });
+
+    const committed = await commitPendingCapture({
+      api: fake.api,
+      environmentId: ENV,
+      captureId: "cap-remote-result",
+      record,
+      input: { body: "" },
+      scope,
+    });
+
+    expect(committed.annotationId).toBe("annotation-remote");
+    expect(committed.backendCaptureId).toBeTruthy();
+    expect(client.calls("web_annotation_result_capture")[0]!.args).toMatchObject({
+      environmentId: ENV,
+      requestId: "request-remote",
+      annotationId: "annotation-remote",
+    });
+    expect(local.calls).toEqual([]);
+  });
 });

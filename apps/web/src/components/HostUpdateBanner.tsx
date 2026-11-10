@@ -4,6 +4,7 @@ import {
   CANCELLABLE_HOST_UPDATE_JOB_STATES,
   isActiveHostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
+import { useFederation } from "@/components/federation/FederationProvider";
 import { describeHostUpdateJob } from "@/components/settings/HostUpdatesPanel";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
@@ -33,6 +34,22 @@ function writeReloaded(jobId: string): void {
 }
 
 /**
+ * How the toast names the machine being updated: the connected backend's, the
+ * command node. Named whenever the client knows it, because the selected
+ * environment may run on another machine and "the host" then reads as that
+ * one. With other machines in view it also says it is the command node.
+ */
+export function hostUpdateMachineLabel(federation: {
+  supported: boolean;
+  enabled: boolean;
+  boundMachine: { name: string } | null;
+}): { name: string | undefined; title: string } {
+  const name = federation.supported ? federation.boundMachine?.name : undefined;
+  if (!name) return { name: undefined, title: "the host" };
+  return { name, title: federation.enabled ? `${name} (command node)` : name };
+}
+
+/**
  * Shows an update of the connected backend's host while it runs, on every
  * client, wherever the user is in the app. The toast follows the job across
  * the backend restart (the snapshot is re-read on reconnect).
@@ -43,6 +60,8 @@ function writeReloaded(jobId: string): void {
  */
 export function HostUpdateBanner() {
   const { snapshot } = useHostMaintenance();
+  const federation = useFederation();
+  const { name: machineName, title: machineTitle } = hostUpdateMachineLabel(federation);
   const shownFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -50,10 +69,11 @@ export function HostUpdateBanner() {
     if (!snapshot || !job) return;
     if (isActiveHostUpdateJob(job)) {
       shownFor.current = job.id;
+      const restarter = machineName ?? "The host";
       const description =
         job.state === "awaiting-restart" && job.restartAt
-          ? `${describeHostUpdateJob(job, null).replace(/ The host is restarting…$/, "")} The host restarts at ${new Date(job.restartAt).toLocaleTimeString()}.`
-          : describeHostUpdateJob(job, null);
+          ? `${describeHostUpdateJob(job, null, machineName).replace(` ${restarter} is restarting…`, "")} ${restarter} restarts at ${new Date(job.restartAt).toLocaleTimeString()}.`
+          : describeHostUpdateJob(job, null, machineName);
       const options = {
         id: HOST_UPDATE_TOAST_ID,
         description,
@@ -72,9 +92,9 @@ export function HostUpdateBanner() {
           : { label: "Details", onClick: requestCurrentMachineUpdates },
       };
       if (job.state === "awaiting-restart" || job.state === "waiting-for-idle") {
-        toast.warning("Orkestrator is updating on the host", options);
+        toast.warning(`Orkestrator is updating on ${machineTitle}`, options);
       } else {
-        toast.loading("Orkestrator is updating on the host", options);
+        toast.loading(`Orkestrator is updating on ${machineTitle}`, options);
       }
       return;
     }
@@ -92,28 +112,28 @@ export function HostUpdateBanner() {
     }
     if (shownFor.current !== job.id) return;
     shownFor.current = null;
-    const text = describeHostUpdateJob(job, null);
+    const text = describeHostUpdateJob(job, null, machineName);
     if (job.state === "succeeded") {
-      toast.success("Orkestrator updated on the host", {
+      toast.success(`Orkestrator updated on ${machineTitle}`, {
         id: HOST_UPDATE_TOAST_ID,
         description: text,
         duration: 8_000,
       });
     } else if (job.state === "failed") {
-      toast.error("The host update failed", {
+      toast.error(`The update on ${machineTitle} failed`, {
         id: HOST_UPDATE_TOAST_ID,
         description: text,
         duration: 15_000,
         action: { label: "Details", onClick: requestCurrentMachineUpdates },
       });
     } else {
-      toast.info("Host update stopped", {
+      toast.info(`The update on ${machineTitle} stopped`, {
         id: HOST_UPDATE_TOAST_ID,
         description: text,
         duration: 8_000,
       });
     }
-  }, [snapshot]);
+  }, [machineName, machineTitle, snapshot]);
 
   return null;
 }

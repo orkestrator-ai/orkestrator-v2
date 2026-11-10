@@ -7,12 +7,13 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
     events: {
       stalled: {
         description:
-          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `commandsInFlight` and `commands` the commands running, and `blockingCommand` one whose synchronous part overlapped it.",
+          "A timer fired late, so every request in that window waited. In the backend the line also names what ran: `storageMs` and the `storage*` fields describe the slow SQLite calls in the window (`operation.slow` in `storage`), `commandsInFlight` and `commands` the commands running, `blockingCommand` one whose synchronous part overlapped it, and `jobsInWindow` and `jobs` the recurring jobs that ran around it. `cpuMs` is the CPU time the process used in the window: near `lagMs` its own thread was busy, far below it the thread waited.",
         essential: true,
         minLevel: "error",
         fields: {
           lagMs: "number",
           intervalMs: "number",
+          cpuMs: "number",
           storageMs: "number",
           storageDatabase: "label",
           storageOp: "label",
@@ -21,6 +22,7 @@ export const RUNTIME_LOG_AREAS = defineLogAreas({
           storageBusy: "boolean",
           commandsInFlight: "number",
           blockingCommandMs: "number",
+          jobsInWindow: "number",
         },
       },
     },

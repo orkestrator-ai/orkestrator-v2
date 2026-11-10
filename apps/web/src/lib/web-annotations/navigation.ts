@@ -10,7 +10,7 @@ import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { createUuid } from "@/lib/uuid";
 import { environmentStore } from "@/stores/environmentStore";
-import { getAllLeaves, paneLayoutStore } from "@/stores/paneLayoutStore";
+import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 import { describeWebAnnotationError, webAnnotationCommand } from "./client";
 
@@ -104,16 +104,6 @@ export function openConversationTab(
   scope: NodeScope = appCommandScope(),
 ): boolean {
   return activate(scope, environmentId, tabId);
-}
-
-export function isConversationTabOpen(
-  environmentId: string,
-  tabId: string,
-  scope: NodeScope = appCommandScope(),
-): boolean {
-  const layout = scope.store(paneLayoutStore).getState().environments.get(environmentId);
-  if (!layout) return false;
-  return getAllLeaves(layout.root).some((leaf) => leaf.tabs.some((tab) => tab.id === tabId));
 }
 
 /**

@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-06 against `main` at `ee2cc8423`. Found by
-[1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 1's idle
+to-do 1202 (retired 2026-11-10) task 1's idle
 before-and-after on macOS: on an idle profile with one container
 environment, `main`'s `tab-cleanup` job ran 5 `docker exec`, 1 `tmux` and 1
 other process a minute, and read 50–93 KB a minute of command output; on
@@ -83,7 +83,7 @@ were not counted. Whether `main` needs all five is still the open question.
 
 ## Related
 
-- [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 1 (the measurement) and task 8 (BG-1, BG-2, BG-8).
+- to-do 1202 task 1 (retired 2026-11-10) (the measurement) and task 8 (BG-1, BG-2, BG-8).
 
 ## Replaces
 

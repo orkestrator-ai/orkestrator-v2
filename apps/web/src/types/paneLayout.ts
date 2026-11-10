@@ -102,12 +102,6 @@ export interface ClaudeTmuxData {
 
 /** Canonical provider-neutral data for every native agent tab. */
 export type NativeAgentData = ProtocolNativeAgentTabData;
-/** @deprecated Test/controller compatibility only; pane records use NativeAgentData. */
-export type ClaudeNativeData = NativeAgentData;
-/** @deprecated Test/controller compatibility only; pane records use NativeAgentData. */
-export type CodexNativeData = NativeAgentData;
-/** @deprecated Test/controller compatibility only; pane records use NativeAgentData. */
-export type OpenCodeNativeData = NativeAgentData;
 
 // Data for build pipeline tabs
 export interface BuildTabData {

@@ -371,11 +371,6 @@ export function isSupersededPipelineSession(
   return session?.supersededBy !== undefined;
 }
 
-/** The sessions of the live run, in the order they started. */
-export function livePipelineSessions(pipeline: Pick<BuildPipeline, "sessions">): PipelineSession[] {
-  return pipeline.sessions.filter((session) => !isSupersededPipelineSession(session));
-}
-
 /** The steps a launcher can configure independently. */
 export type BuildStepKey = "build" | "review" | "address" | "verify" | "pr" | "resolve-conflicts";
 

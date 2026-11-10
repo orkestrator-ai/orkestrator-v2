@@ -50,7 +50,19 @@ import {
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
 
+/**
+ * Told to every session that changes code for a ticket: build, rework and
+ * address. Tickets often forbid edits to `AGENTS.md`, README files, tests or
+ * comments, and workers that then deleted or renamed a file left those files
+ * pointing at it, or describing a status rule it had replaced, and reported
+ * the ticket incomplete. A reference or description the change itself made
+ * stale is part of the change (root `AGENTS.md`, "Keep references current").
+ */
+export const REFERENCE_UPDATE_RULE =
+  "If your change deletes, moves, renames or retires a file, update every link and reference to it in the same change, including in AGENTS.md, CLAUDE.md, README files, docs, code comments and tests. Likewise update any description or rule there that your change makes untrue, such as a status scheme or layout example it replaces. This holds even where the ticket forbids editing those files: such a ban never covers a reference or description your own change made stale. Change only that reference or description there, name the edit in your final message, and never report the work incomplete because of the ban.";
+
 const ADDRESS_FINDINGS_TAIL =
+  `${REFERENCE_UPDATE_RULE} ` +
   "Run targeted validation for what you change: the tests that cover the files you edit, plus the static checks repository instructions require for them. Preparation already ran validation once for this round: do not redundantly rerun passing full-suite, typecheck, lint, or build commands. After repairing a failed or incomplete recorded command, rerun that exact command, even when it is the full test suite, typecheck, lint, or build. Stage only related safe files and commit every relevant fix before finishing.";
 
 /**
@@ -248,6 +260,7 @@ export function buildTaskPrompt(task: TaskSnapshot, notes: string, validation: s
     ticketContext(task),
     notes ? `**Project Notes**:\n${notes}` : "",
     "Build this feature completely. Do not ask questions; make your best judgment for ambiguous requirements.",
+    REFERENCE_UPDATE_RULE,
     validation,
   ]
     .filter(Boolean)
@@ -895,6 +908,7 @@ export function reworkTaskPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
+    REFERENCE_UPDATE_RULE,
     `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. Treat a failure as pre-existing or environmental only on evidence the verification feedback or the last review package's failure triage records (a verdict of \`unrelated\` and its reasons) or a demonstrated environmental cause; do not change unrelated code or tests to hide them. Do not run checks against origin/${targetBranch}, check it out, or create another worktree to reproduce a failure there: that evidence is already recorded, and gathering more only slows the pipeline. A timeout or a check that produced no output may be excused only when the triage classifies it \`unrelated\` or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with its triage evidence or demonstrated environmental cause.`,
     validation,
   ]

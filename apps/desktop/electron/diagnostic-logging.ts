@@ -12,6 +12,7 @@ export function reportMainThreadStall(
     intervalMs,
     folded,
     level,
+    cpuMs,
   }: Parameters<NonNullable<EventLoopStallMonitorOptions["report"]>>[0],
   describeStall: (lagMs: number) => string,
 ): void {
@@ -19,6 +20,7 @@ export function reportMainThreadStall(
     lagMs,
     endedAt,
     intervalMs,
+    cpuMs,
     openDialog: describeStall(lagMs).replace(/^; /, "") || undefined,
     folded: folded.replace(/^; /, "") || undefined,
   });

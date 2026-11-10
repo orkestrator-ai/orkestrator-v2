@@ -104,15 +104,16 @@ async function collect(
 }
 
 describe("/event/subscribe", () => {
-  test("requires the bridge token and accepts it only on the EventSource query path", async () => {
+  test("requires the bridge token in a header, never on the query string", async () => {
     const token = "sse-test-token";
     __testing.setBridgeAuthForTesting(token);
     try {
       expect((await app.request("/event/subscribe")).status).toBe(401);
-      expect((await app.request("/session/list?token=sse-test-token")).status).toBe(401);
+      expect((await app.request(`/event/subscribe?token=${token}`)).status).toBe(401);
 
       const controller = new AbortController();
-      const response = await app.request(`/event/subscribe?token=${encodeURIComponent(token)}`, {
+      const response = await app.request("/event/subscribe", {
+        headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
       expect(response.status).toBe(200);
@@ -789,7 +790,7 @@ describe("/session/:id/approvals", () => {
       { decision: "yes" },
       { decision: "accept" },
       { decision: 1 },
-      // Retired by todo 0160: each saved a Codex rule Orkestrator cannot revoke.
+      // Retired by #1325: each saved a Codex rule Orkestrator cannot revoke.
       { decision: "approve-with-execpolicy-amendment" },
       { decision: "approve-with-network-amendment", amendmentIndex: 0 },
     ]) {

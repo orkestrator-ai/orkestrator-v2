@@ -55,10 +55,8 @@ describe("Cursor stall diagnostics", () => {
 
   test("the stream and SDK snapshots are off by default", () => {
     const previousShared = process.env.ORKESTRATOR_BRIDGE_DEBUG;
-    const previousCursor = process.env.CURSOR_BRIDGE_DEBUG;
     try {
       delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
-      delete process.env.CURSOR_BRIDGE_DEBUG;
       const lines: string[] = [];
       const previousInfo = console.info;
       console.info = (line: unknown) => lines.push(String(line));
@@ -77,8 +75,6 @@ describe("Cursor stall diagnostics", () => {
     } finally {
       if (previousShared === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousShared;
-      if (previousCursor === undefined) delete process.env.CURSOR_BRIDGE_DEBUG;
-      else process.env.CURSOR_BRIDGE_DEBUG = previousCursor;
     }
   });
 

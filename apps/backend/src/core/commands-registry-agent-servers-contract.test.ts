@@ -23,7 +23,7 @@ test("registers every agent-servers command with its definition", () => {
       defined: true,
     });
   }
-  expect(registry.helloDomains()["agent-servers"]).toEqual({ min: 1, max: 1 });
+  expect(registry.helloDomains()["agent-servers"]).toEqual({ min: 1, max: 2 });
 });
 
 test("a workspace grant runs exactly the agent-servers commands defined as workspace", () => {

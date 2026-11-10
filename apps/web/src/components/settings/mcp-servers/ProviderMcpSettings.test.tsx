@@ -267,16 +267,6 @@ describe("ProviderMcpSettings", () => {
     expectDomAbsent(screen.queryByText("No servers."), "empty-source text");
   });
 
-  test("an older backend is reported as unsupported", async () => {
-    install({
-      list_mcp_management_targets: () => {
-        throw new Error("Unknown backend command: list_mcp_management_targets");
-      },
-    });
-    renderInAppCommandScope(<ProviderMcpSettings />);
-    expect(await screen.findByText(/does not support managing MCP servers/)).toBeTruthy();
-  });
-
   test("add reviews an impact preview, then saves with an expected revision", async () => {
     const mutations: unknown[] = [];
     install({

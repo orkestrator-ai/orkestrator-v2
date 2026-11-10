@@ -19,7 +19,7 @@ test("registers every system command with its definition", () => {
       defined: true,
     });
   }
-  expect(registry.helloDomains().system).toEqual({ min: 1, max: 1 });
+  expect(registry.helloDomains().system).toEqual({ min: 1, max: 2 });
 });
 
 const snapshot = {

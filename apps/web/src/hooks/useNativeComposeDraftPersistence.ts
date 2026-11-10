@@ -243,7 +243,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       if (!hasUnmigratedBrowserNotes(draft.annotations as TranscriptAnnotation[] | undefined)) {
         return Promise.resolve();
       }
-      reconciling = reconcileComposeDraftValue(environmentId, { ...draft })
+      reconciling = reconcileComposeDraftValue(environmentId, { ...draft }, scope)
         .then((result) => {
           if (result) applyReferences(result.references);
         })

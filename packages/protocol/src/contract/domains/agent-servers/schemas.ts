@@ -384,12 +384,6 @@ export const AgentPluginCatalogSchema = openRecord({
 
 // --- Credentials and the GitHub CLI ---------------------------------------
 
-/** `get_credential_status`: whether a Claude login exists here. */
-export const CredentialStatusSchema = openRecord({
-  available: optionalBoolean,
-  expiresAt: Schema.NullOr(Schema.String),
-});
-
 /** `GitHubCliStatus` (github-cli-setup.ts). */
 export const GitHubCliStatusSchema = openRecord({
   installed: Schema.Boolean,

@@ -27,12 +27,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    back to `prepared` and send it again under the same id. Status: done
    (2026-10-27; code item 2).
 4. **OpenCode same-id deduplication** (Needs verification): does OpenCode
-   deduplicate a `promptAsync` that reuses a message id? Status: open, live run
-   only (no code depends on it: OpenCode never answers `absent`).
-5. **Live restart-resend check per bridge** (Qualification). Status: open,
-   live runs only: Claude, Codex and Pi passed on 2026-10-27; Cursor
-   (its first send failed) and Grok (expired host login) remain, batched
-   with 0031.
+   deduplicate a `promptAsync` that reuses a message id? Status: open (read
+   the pinned server source; no code depends on it: OpenCode never answers
+   `absent`).
 
 ### 1. Make Build Pipeline's same-id redispatch at-most-once
 
@@ -226,33 +223,6 @@ messages (`OPEN_CODE_MESSAGE_HISTORY_LIMIT`, `opencode-message-id.ts:9`).
     - Pros: observes the real behaviour, not a reading of code.
     - Cons: needs OpenCode credentials and spends a turn; it is a live
       provider run.
-
-### 5. Live restart-resend check per bridge
-
-**Problem.** The deterministic tests use fakes; nobody has watched a real
-bridge refuse or deduplicate a resend after its own restart.
-
-**Context.** Batched with
-[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-
-**Investigation.** The nearest existing proof is the real-bridge
-`tests/multi-review-claude-bridge-restart.test.ts`, which restarts the real
-Claude bridge process without a live model. No equivalent exists for the other
-bridges.
-
-**Decisions.**
-
-- **Live run, or real-bridge tests?**
-  - **Real-bridge restart tests per bridge (no model needed), with the live run
-    kept only for providers whose dedupe lives in the vendor (OpenCode)
-    (recommended).**
-    - Pros: deterministic, runs in CI, no credentials; the dedupe under test is
-      the bridge's journal, not the model.
-    - Cons: one harness per bridge to write.
-  - **One live run per provider through 0031.**
-    - Pros: covers the whole stack.
-    - Cons: needs every credential; cannot force the race on purpose, so a pass
-      proves little.
 
 Split out of todo 0112 (retired on 2026-10-29; see
 [review preparation, "Dispatch recovery"](../../architecture/review-preparation.md#dispatch-recovery)),
@@ -543,10 +513,6 @@ they record why each choice was made.
 
 ## Needs verification
 
-- Complete Cursor and Grok live qualification once Cursor can complete its
-  first prompt and a current Grok login can be seeded. Claude, Codex and Pi
-  passed signed-in bridge restart checks above; deterministic fake-CLI checks
-  remain separate evidence.
 - Whether OpenCode deduplicates a `promptAsync` that reuses a message id.
   OpenCode still never answers `absent`, so nothing here depends on it.
 
@@ -566,6 +532,7 @@ they record why each choice was made.
   a Claude bridge killed mid-write delayed the re-send of an `absent` request
   until its preference lock aged out. A dead owner's lock is now taken over at
   once, and a lock held by a live owner answers a retryable 503.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 5, the Cursor and Grok restart-resend runs) moved there on 2026-11-10.
 
 ## Replaces
 

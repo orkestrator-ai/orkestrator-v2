@@ -1,7 +1,7 @@
 /**
- * A bridge older than the MCP configuration report cannot prove an apply.
- * The runtime says so, with what to do, instead of waiting silently; a
- * restarted bridge can still prove it afterwards.
+ * A bridge that does not report its MCP configuration (only an unpublished
+ * build) cannot prove an apply. The runtime says so, with what to do, instead
+ * of waiting silently; a restarted bridge can still prove it afterwards.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -11,7 +11,7 @@ import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpOperationSnapshot } from "@orkestrator/protocol/mcp-management";
 
-import { EVIDENCE_RECHECK_MS, appliedReason, olderBridgeOutcome } from "./evidence.js";
+import { EVIDENCE_RECHECK_MS, UNREPORTED_BRIDGE_OUTCOME, appliedReason } from "./evidence.js";
 import {
   createFixture,
   mutation,
@@ -93,20 +93,19 @@ async function runtimeOf(operation: McpOperationSnapshot) {
     .runtimes[0]!;
 }
 
-describe("bridges older than the MCP configuration report", () => {
-  test.each(["cursor", "pi"] as const)(
-    "%s: an older bridge needs a restart, and a restarted bridge proves it",
+describe("bridges that do not report their MCP configuration", () => {
+  test.each(["claude", "cursor", "pi"] as const)(
+    "%s: the runtime needs a restart, and a restarted bridge proves it",
     async (provider) => {
       session(provider);
       const operation = await saveAndApply(provider);
       expect(operation.apply.runtimes[0]!.state).toBe("pending-next-turn");
       answer(provider, { state: "unsupported" });
       await fixture.service.tick();
-      const older = await runtimeOf(operation);
-      expect(older).toMatchObject(olderBridgeOutcome(provider));
-      expect(older.state).toBe("restart-required");
-      expect(older.reason).toContain("older than this backend");
-      expect(older.reason).toContain("Stop and start the environment");
+      const unreported = await runtimeOf(operation);
+      expect(unreported).toMatchObject(UNREPORTED_BRIDGE_OUTCOME);
+      expect(unreported.state).toBe("restart-required");
+      expect(unreported.reason).toContain("Stop and start the environment");
 
       // Still polled: the environment restarts with a current bridge.
       fixture.now.value += EVIDENCE_RECHECK_MS;
@@ -119,28 +118,7 @@ describe("bridges older than the MCP configuration report", () => {
     },
   );
 
-  test("Claude: the change still loads, and the bridge's first report confirms it", async () => {
-    session("claude");
-    const operation = await saveAndApply("claude");
-    answer("claude", { state: "unsupported" });
-    await fixture.service.tick();
-    const older = await runtimeOf(operation);
-    expect(older.state).toBe("pending-next-turn");
-    expect(older.reason).toBe(olderBridgeOutcome("claude").reason);
-    expect(older.reason).toContain("confirmed once the bridge reports");
-    expect(older.reason).not.toContain("until the environment restarts");
-
-    // A bridge from #838 on reports its first query's files: no restart.
-    fixture.now.value += EVIDENCE_RECHECK_MS;
-    prove("claude");
-    await fixture.service.tick();
-    expect(await runtimeOf(operation)).toMatchObject({
-      state: "applied",
-      reason: appliedReason("claude"),
-    });
-  });
-
-  test("Grok: a restart onto an older bridge says so rather than staying generic", async () => {
+  test("Grok: a restart onto a bridge that does not report says so", async () => {
     fixture.environment.grokBridgePid = 11;
     session("grok");
     const operation = await saveAndApply("grok");
@@ -148,7 +126,7 @@ describe("bridges older than the MCP configuration report", () => {
     fixture.environment.grokBridgePid = 12;
     answer("grok", { state: "unsupported" });
     await fixture.service.tick();
-    expect(await runtimeOf(operation)).toMatchObject(olderBridgeOutcome("grok"));
+    expect(await runtimeOf(operation)).toMatchObject(UNREPORTED_BRIDGE_OUTCOME);
   });
 
   test("the outcome is published once, not on every poll", async () => {
@@ -164,7 +142,7 @@ describe("bridges older than the MCP configuration report", () => {
     expect((await runtimeOf(operation)).state).toBe("restart-required");
   });
 
-  test("a current bridge with nothing loaded yet is not mistaken for an older one", async () => {
+  test("a current bridge with nothing loaded yet is not mistaken for one that does not report", async () => {
     session("pi");
     const operation = await saveAndApply("pi");
     answer("pi", { state: "none" });

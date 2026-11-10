@@ -23,7 +23,6 @@ import {
 /** The 63 commands `contract-domain-map.ts` listed under `environments` (2026-11-07). */
 const ENVIRONMENTS_COMMAND_NAMES = [
   "acknowledge_startup_agent_session",
-  "add_environment_domains",
   "apply_environment_allowed_domains",
   "approve_environment_setup",
   "approve_project_setup_commands",
@@ -72,8 +71,6 @@ const ENVIRONMENTS_COMMAND_NAMES = [
   "revoke_provider_credentials",
   "run_environment_setup",
   "set_container_resource_limits",
-  "set_environment_initial_prompt",
-  "set_environment_pending_agent_launch",
   "set_environment_pr",
   "start_environment",
   "start_environment_background",
@@ -124,7 +121,7 @@ function fakeNode(domains: NegotiatedDomains | null, answers: Record<string, unk
 }
 
 describe("environments commands", () => {
-  it("defines every environments command once, at version 1", () => {
+  it("defines every environments command once, since version 1", () => {
     expect(ENVIRONMENTS_COMMANDS.map((command) => command.name as string).sort()).toEqual(
       ENVIRONMENTS_COMMAND_NAMES,
     );
@@ -264,9 +261,9 @@ describe("environments commands", () => {
 });
 
 describe("environments client", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(environmentsClient);
-    expect(environmentsClient.versions).toEqual([1, 0]);
+    expect(environmentsClient.versions).toEqual([2, 1, 0]);
   });
 
   it("sends the envelope with the carried critical keys to a node with the domain", async () => {

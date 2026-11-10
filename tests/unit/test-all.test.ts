@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  acquireFullSuiteLease,
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
   BACKEND_WORKERS_ENV,
   buildConcurrentGroups,
@@ -40,7 +39,6 @@ import {
   TEST_GROUP_KEYS,
   TEST_GROUP_TIMEOUT_MS_ENV,
   TEST_GROUPS_ENV,
-  TEST_LEASE_DIRECTORY_ENV,
   TEST_MAX_OUTPUT_BYTES_ENV,
   TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
   TEST_RERUN_FAILED_ENV,
@@ -664,12 +662,11 @@ describe("scripts/test-all.ts", () => {
     expect(shared.env?.[BACKEND_WORKERS_ENV]).toBe(String(planWorkers(4, "all").backend));
   });
 
-  test("removes ambient bridge diagnostics flags from every aggregate group", async () => {
+  test("removes the ambient bridge diagnostics flag from every aggregate group", async () => {
     const { dependencies, invocations } = createDependencies({
       environment: {
         TEST_ALL_MARKER: "preserved",
         ORKESTRATOR_BRIDGE_DEBUG: "1",
-        CURSOR_BRIDGE_DEBUG: "1",
       },
     });
 
@@ -677,7 +674,6 @@ describe("scripts/test-all.ts", () => {
     for (const invocation of invocations) {
       expect(invocation.env.TEST_ALL_MARKER).toBe("preserved");
       expect(invocation.env.ORKESTRATOR_BRIDGE_DEBUG).toBeUndefined();
-      expect(invocation.env.CURSOR_BRIDGE_DEBUG).toBeUndefined();
     }
     expect(dependencies.env.ORKESTRATOR_BRIDGE_DEBUG).toBe("1");
   });
@@ -1382,70 +1378,6 @@ describe("scripts/test-all.ts", () => {
       if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
     } finally {
       await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  test("treats an unreadable but fresh lease as contention, not as a leftover", async () => {
-    // A live acquirer is briefly between its `mkdir` and its metadata write.
-    // Claiming the lease in that window would defeat the whole mechanism.
-    const parent = await mkdtemp(path.join(os.tmpdir(), "ork-lease-fresh-"));
-    const lock = path.join(parent, "suite.lock");
-    try {
-      await mkdir(lock);
-      expect(() =>
-        acquireFullSuiteLease(path.resolve(import.meta.dir, "../.."), {
-          [TEST_LEASE_DIRECTORY_ENV]: lock,
-        }),
-      ).toThrow(/acquiring the host lease/);
-    } finally {
-      await rm(parent, { recursive: true, force: true });
-    }
-  });
-
-  test("reclaims a lease that no longer resolves instead of throwing its ENOENT", async () => {
-    // A dangling lease is what a released-underneath-us lease looks like from
-    // inside the EEXIST branch: `mkdir` still fails, and both the metadata read
-    // and the age check come back ENOENT.
-    const parent = await mkdtemp(path.join(os.tmpdir(), "ork-lease-dangling-"));
-    const lock = path.join(parent, "suite.lock");
-    try {
-      await symlink(path.join(parent, "gone"), lock);
-      const lease = acquireFullSuiteLease(path.resolve(import.meta.dir, "../.."), {
-        [TEST_LEASE_DIRECTORY_ENV]: lock,
-      });
-      expect(lease?.directory).toBe(lock);
-      lease?.release();
-      expect(await stat(lock).catch(() => null)).toBeNull();
-    } finally {
-      await rm(parent, { recursive: true, force: true });
-    }
-  });
-
-  test("serializes full suites across linked worktrees and cleans stale leases", async () => {
-    const leaseDirectory = await mkdtemp(path.join(os.tmpdir(), "ork-suite-lease-parent-"));
-    const lock = path.join(leaseDirectory, "suite.lock");
-    try {
-      const repositoryRoot = path.resolve(import.meta.dir, "../..");
-      const first = acquireFullSuiteLease(repositoryRoot, { [TEST_LEASE_DIRECTORY_ENV]: lock });
-      expect(first?.directory).toBe(lock);
-      expect(() =>
-        acquireFullSuiteLease(repositoryRoot, { [TEST_LEASE_DIRECTORY_ENV]: lock }),
-      ).toThrow(/already running/);
-      first?.release();
-
-      await mkdir(lock);
-      await writeFile(
-        path.join(lock, "owner.json"),
-        JSON.stringify({ version: 1, pid: 2_147_483_647, root: "/stale" }),
-      );
-      const replacement = acquireFullSuiteLease(repositoryRoot, {
-        [TEST_LEASE_DIRECTORY_ENV]: lock,
-      });
-      expect(replacement?.directory).toBe(lock);
-      replacement?.release();
-      expect(await stat(lock).catch(() => null)).toBeNull();
-    } finally {
-      await rm(leaseDirectory, { recursive: true, force: true });
     }
   });
 

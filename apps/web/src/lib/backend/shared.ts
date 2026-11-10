@@ -11,16 +11,11 @@ export function parseTerminalSessionCreateResult(value: unknown): TerminalSessio
     typeof (value as { sessionId?: unknown }).sessionId !== "string" ||
     (value as { sessionId: string }).sessionId.length === 0 ||
     typeof (value as { created?: unknown }).created !== "boolean" ||
-    ((value as { bootstrapped?: unknown }).bootstrapped !== undefined &&
-      typeof (value as { bootstrapped?: unknown }).bootstrapped !== "boolean")
+    typeof (value as { bootstrapped?: unknown }).bootstrapped !== "boolean"
   ) {
     throw new Error("Backend returned an invalid terminal session result");
   }
-  return {
-    ...(value as Omit<TerminalSessionCreateResult, "bootstrapped">),
-    // Compatibility with the previous backend for one release.
-    bootstrapped: (value as { bootstrapped?: boolean }).bootstrapped ?? false,
-  };
+  return value as TerminalSessionCreateResult;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

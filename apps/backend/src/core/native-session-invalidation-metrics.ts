@@ -32,7 +32,7 @@ export interface NativeSessionInvalidationMetricsOptions {
  * Counts every native session invalidation the backend emits, by cause and by
  * the platform it was scoped to (todo 0049 task 4): which code path keeps
  * waking an idle view. Discovery announcements are also counted by section
- * and changed value path (todo 7530), which names the field that keeps
+ * and changed value path (#2062), which names the field that keeps
  * moving.
  *
  * Both labels are fixed vocabularies. The agent is kept only when it is a
@@ -49,7 +49,7 @@ export class NativeSessionInvalidationMetrics {
     NativeSessionInvalidationScope,
     Map<NativeSessionInvalidationCause, number>
   >();
-  /** Todo 7530: which section a discovery announcement was about. */
+  /** #2062: which section a discovery announcement was about. */
   private readonly discoveryRenewals = new Map<
     NativeSessionInvalidationScope,
     Map<NativeAgentDiscoverySection, DiscoveryRenewalCounter>

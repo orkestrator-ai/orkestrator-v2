@@ -87,7 +87,8 @@ export class CaptureContents extends EventEmitter {
   /** Simulate a native image whose pixels cannot be read back for masking. */
   bitmapUnavailable = false;
   onCapture: () => void = () => undefined;
-  pinsResponse: (queries: Json[]) => unknown = () => "[]";
+  pinsResponse: (queries: Json[]) => unknown = () =>
+    JSON.stringify({ revision: 0, results: [], diagnostics: null });
   pinsConfig: Json | null = null;
   /** Answer to the pins snapshot script (live re-resolution). */
   pinsSnapshot: unknown = null;

@@ -24,9 +24,9 @@ describe("HTTP bridge MCP configuration reload", () => {
     await expect(provider.reloadMcpConfiguration!()).resolves.toBe("not-running");
   });
 
-  test("a bridge that predates the route is reported as unsupported", async () => {
+  test("a 404 rejects like any other failure: every bridge serves the route", async () => {
     const { provider } = httpProvider(() => new Response(null, { status: 404 }), codexConnection);
-    await expect(provider.reloadMcpConfiguration!()).resolves.toBe("unsupported");
+    await expect(provider.reloadMcpConfiguration!()).rejects.toThrow();
   });
 
   test("a bridge failure rejects so the apply is reported as failed", async () => {

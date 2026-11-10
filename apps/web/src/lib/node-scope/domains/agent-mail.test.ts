@@ -58,14 +58,6 @@ describe("agent-mail domain client", () => {
     ] as never);
   });
 
-  test("version 1 refuses a message without its id", async () => {
-    const { id: _id, ...anonymous } = message;
-    const { client } = fakeClient(anonymous, { "agent-mail": { min: 1, max: 1 } });
-    await expect(
-      createAgentMailApi(client).ackAgentMail("env-1", "tab-1", "m-1"),
-    ).rejects.toThrow();
-  });
-
   test("a pre-contract node, or a client without negotiation, gets today's call", async () => {
     for (const domains of [null, undefined]) {
       const { client, invokeRaw } = fakeClient({ older: "shape" }, domains);

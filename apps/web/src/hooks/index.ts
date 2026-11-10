@@ -4,12 +4,6 @@ export { useTerminal } from "./useTerminal";
 export { usePullRequest } from "./usePullRequest";
 export { useFilesPanel, FileBatchActionError, findWorkspaceMoveConflicts } from "./useFilesPanel";
 export { useClipboardImagePaste } from "./useClipboardImagePaste";
-export { useTerminalClipboard } from "./useTerminalClipboard";
-export type {
-  UseTerminalClipboardOptions,
-  UseTerminalClipboardReturn,
-} from "./useTerminalClipboard";
-export { useScrollLock, clearPersistedScrollState } from "./useScrollLock";
 export { useVirtuosoScrollState, clearPersistedVirtuosoState } from "./useVirtuosoScrollState";
 export { useNativeComposeBarPaste } from "./useNativeComposeBarPaste";
 export type { PastedImageAttachment } from "./useNativeComposeBarPaste";

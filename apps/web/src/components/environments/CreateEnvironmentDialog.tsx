@@ -1729,8 +1729,14 @@ export function CreateEnvironmentDialog({
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {environmentType === "local"
-                      ? "Git worktree on your machine"
-                      : "Isolated Docker environment"}
+                      ? // "Your machine" would read as the one the window runs
+                        // on; the worktree is made on the target machine.
+                        federation.enabled && targetMachine
+                        ? `Git worktree on ${targetMachine.name}`
+                        : "Git worktree on the host"
+                      : federation.enabled && targetMachine
+                        ? `Isolated Docker environment on ${targetMachine.name}`
+                        : "Isolated Docker environment"}
                   </p>
                   {!dockerAvailable && (
                     <p id="containerized-unavailable" className="text-xs text-amber-400">

@@ -55,9 +55,6 @@ export function createCoordinatorApi(client: BackendClient) {
   ): Promise<CoordinatorSnapshot> =>
     domain().retry_coordinator_conversation({ projectId, conversationId });
 
-  const getProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot | null> =>
-    domain().get_project_coordinator({ projectId });
-
   /**
    * Conditional coordinator read. With `known` (the stamp of the body this
    * client holds) the backend answers `unchanged` without a body while that body
@@ -190,7 +187,6 @@ export function createCoordinatorApi(client: BackendClient) {
   return {
     ensureProjectCoordinator,
     retryCoordinatorConversation,
-    getProjectCoordinator,
     getProjectCoordinatorView,
     listCoordinatorActivity,
     listCoordinatorLaunchOverrides,
@@ -217,7 +213,6 @@ export type CoordinatorApi = ReturnType<typeof createCoordinatorApi>;
 export const {
   ensureProjectCoordinator,
   retryCoordinatorConversation,
-  getProjectCoordinator,
   getProjectCoordinatorView,
   listCoordinatorActivity,
   listCoordinatorLaunchOverrides,

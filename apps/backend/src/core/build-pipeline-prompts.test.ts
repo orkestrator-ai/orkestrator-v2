@@ -25,6 +25,7 @@ import {
   ADDRESS_FINDINGS_OUTPUT_CONTRACT,
   buildPipelineReviewPackageContext,
   buildPrompt,
+  REFERENCE_UPDATE_RULE,
   reworkPrompt,
   MAX_ADDRESS_FINDINGS_REPORT_CHARACTERS,
   MAX_INLINE_VALIDATION_DIAGNOSTIC_CHARACTERS,
@@ -132,6 +133,36 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Do not use the final-response channel for progress");
     expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
     expect(prompt).toContain("provider-enforced preparation metadata");
+  });
+
+  // Tickets that barred edits to AGENTS.md, READMEs, tests or comments left
+  // them pointing at files the change deleted, and the work was reported
+  // incomplete. Every session that changes code for a ticket is told that a
+  // reference its own change made stale is always in scope.
+  test("every code-changing prompt says references to moved or deleted files are always updated", () => {
+    expect(REFERENCE_UPDATE_RULE).toContain("update every link and reference to it");
+    // A description the change makes untrue (an outdated status rule) is
+    // stale the same way a path is.
+    expect(REFERENCE_UPDATE_RULE).toContain(
+      "description or rule there that your change makes untrue",
+    );
+    expect(REFERENCE_UPDATE_RULE).toContain(
+      "a reference or description your own change made stale",
+    );
+    expect(REFERENCE_UPDATE_RULE).toContain("even where the ticket forbids editing those files");
+    expect(REFERENCE_UPDATE_RULE).toContain("never report the work incomplete because of the ban");
+
+    const build = buildPrompt(pipeline(), "");
+    expect(build).toContain(REFERENCE_UPDATE_RULE);
+    // Before the validation instruction that ends the turn.
+    expect(build.indexOf(REFERENCE_UPDATE_RULE)).toBeLessThan(
+      build.indexOf("Prepare the immutable review package"),
+    );
+    expect(reworkPrompt(pipeline(), "", "Criterion 2 failed.")).toContain(REFERENCE_UPDATE_RULE);
+    const address = addressFindingsReportPrompt({
+      issues: [{ title: "Stale link", evidence: "AGENTS.md names a deleted file." }],
+    } as unknown as StructuredReviewReport);
+    expect(address).toContain(REFERENCE_UPDATE_RULE);
   });
 
   test("buildPrompt omits empty optional context", () => {

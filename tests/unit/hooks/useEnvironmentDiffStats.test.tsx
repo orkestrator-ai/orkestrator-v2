@@ -16,9 +16,21 @@ const mockGetEnvironmentDiffStats = mock<() => Promise<{ entries: EnvironmentDif
   () => Promise.resolve({ entries: [] }),
 );
 
+/**
+ * Every backend in the support window stamps its diff-stat snapshots and
+ * events. Like the real service, a snapshot carries the revision current when
+ * it was requested, and each announced event advances it.
+ */
+const GENERATION = "a".repeat(32);
+let revision = 0;
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  getEnvironmentDiffStats: mockGetEnvironmentDiffStats,
+  getEnvironmentDiffStats: async () => {
+    const stamp = revision;
+    const snapshot = await mockGetEnvironmentDiffStats();
+    return { ...snapshot, generation: GENERATION, revision: stamp };
+  },
 }));
 
 /**
@@ -53,7 +65,11 @@ const { useEnvironmentDiffStats } =
   await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
 
 function emitEvent(event: string, payload: unknown) {
-  for (const handler of listeners.get(event) ?? []) handler(payload);
+  const stamped =
+    event === DIFF_STATS_CHANGED_EVENT && typeof payload === "object" && payload !== null
+      ? { ...payload, generation: GENERATION, revision: ++revision }
+      : payload;
+  for (const handler of listeners.get(event) ?? []) handler(stamped);
 }
 
 function listenerCount(event: string): number {
@@ -103,6 +119,7 @@ async function flush() {
 describe("useEnvironmentDiffStats", () => {
   beforeEach(() => {
     listeners.clear();
+    revision = 0;
     mockListen.mockClear();
     mockListen.mockImplementation(defaultListen);
     mockGetEnvironmentDiffStats.mockClear();

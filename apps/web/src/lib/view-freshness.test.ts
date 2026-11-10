@@ -11,17 +11,15 @@ describe("hydrationFreshnessNotice", () => {
     }
   });
 
-  test("describes stale, degraded and unsupported mirrors", () => {
+  test("describes stale and degraded mirrors", () => {
     expect(hydrationFreshnessNotice("stale", "change counts")?.kind).toBe("stale");
     expect(hydrationFreshnessNotice("degraded", "change counts")?.kind).toBe("degraded");
-    expect(hydrationFreshnessNotice("unsupported", "change counts")?.kind).toBe("unsupported");
     expect(hydrationFreshnessNotice("stale", "change counts")?.detail).toContain(
       "last state received",
     );
   });
 
-  test("a polled view only reports delayed announcements, never the polling fallback", () => {
-    expect(hydrationFreshnessNotice("unsupported", "the file lists", { polled: true })).toBeNull();
+  test("a polled view only reports delayed announcements", () => {
     const notice = hydrationFreshnessNotice("degraded", "the file lists", { polled: true });
     expect(notice?.kind).toBe("degraded");
     expect(notice?.detail).toContain("periodic re-read");

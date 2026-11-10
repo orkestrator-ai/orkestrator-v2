@@ -18,7 +18,6 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
-import type { AcpMessage } from "@/lib/acp-client";
 import {
   extractMarkedAttachmentReferences,
   stripInitialPromptAttachmentReferences,
@@ -860,11 +859,6 @@ export function coalesceAdjacentToolMessages(
   }
   assignCoalescedRowIds(merged, members, aliases);
   return merged;
-}
-
-/** Normalize ACP messages for Cursor and Grok below the shared tab boundary. */
-export function normalizeAcpNativeMessage(message: AcpMessage): NativeMessage {
-  return normalizeNativeMessage(message);
 }
 
 /** Same identity-cache rationale as `normalizeNativeMessage`, for Claude. */
@@ -1794,11 +1788,6 @@ export function splitAssistantTranscriptBlocks(message: NativeMessage): NativeMe
   return rows;
 }
 
-/** @deprecated Use {@link splitAssistantTranscriptBlocks}. */
-export function splitClaudeAssistantTextBlocks(message: NativeMessage): NativeMessage[] {
-  return splitAssistantTranscriptBlocks(message);
-}
-
 function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeMessage[] {
   if (message.role !== "assistant") return [message];
 
@@ -1882,9 +1871,4 @@ export function getNativeMessageBoundarySourceId(message: NativeMessage): string
     lastPartSourceMessageId(message.parts) ??
     getNativeSourceMessageId(message.id)
   );
-}
-
-/** @deprecated Use {@link getNativeSourceMessageId}. */
-export function getClaudeSourceMessageId(messageId: string): string {
-  return getNativeSourceMessageId(messageId);
 }

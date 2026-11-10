@@ -30,7 +30,7 @@ const MAX_CODEX_RULE_FILES = 32;
 const MAX_ENVIRONMENTS = 32;
 const CONTAINER_READ_TIMEOUT_MS = 5_000;
 
-// Measured on Codex 0.166.0 (`live-policy-amendment.test.ts`, todo 0160): a
+// Measured on Codex 0.166.0 (`live-policy-amendment.test.ts`, #1518): a
 // thread reads the rules once, when it starts.
 const CODEX_GUIDANCE =
   "Saved by Codex itself (for example by an older Orkestrator's “Approve with command policy” " +

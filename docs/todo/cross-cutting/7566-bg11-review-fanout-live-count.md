@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-10 against `main` at `4dc220f7b`. Moved out of
-[1202](1202-efficiency-review-follow-ups.md) task 1, whose other agent-doable
+to-do 1202 task 1 (retired 2026-11-10), whose other agent-doable
 baselines were measured on 2026-11-10; this is the one that needs new
 tooling rather than a run of an existing driver.
 
@@ -59,7 +59,7 @@ with the build pipeline's own result tools added.
 
 ## Related
 
-- [1202](1202-efficiency-review-follow-ups.md) task 1 (the baselines) and
+- to-do 1202 task 1 (retired 2026-11-10) (the baselines) and
   task 10 (BG-11).
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md)
   (the busy driver and its fake model).

@@ -185,7 +185,7 @@ function address(session: PersistedNativeAgentSession): GoalSessionAddress {
 }
 
 /**
- * Owns the goal loop (`plans/goals.md`): after each turn of a session with a
+ * Owns the goal loop (`docs/architecture/goals.md`): after each turn of a session with a
  * running goal it reads how the turn ended and sends the next one, runs the
  * check or the verifier, or stops.
  *

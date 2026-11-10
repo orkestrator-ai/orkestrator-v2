@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-10 against `main` at `c98b20e6f`. Found by
-[1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 1's Linux
+to-do 1202 (retired 2026-11-10) task 1's Linux
 run with a claude-tmux tab open in a container, which counted the
 container's `docker exec` sessions from Docker's own event stream beside the
 backend's `recurringWork` counters.
@@ -132,7 +132,7 @@ session projection makes.
 
 ## Related
 
-- [1202](../cross-cutting/1202-efficiency-review-follow-ups.md) task 1 (the
+- to-do 1202 task 1 (retired 2026-11-10) (the
   measurements) and task 8 (BG-1, BG-2, BG-7).
 - [0048](0048-recurring-work-qualification.md) (the busy driver and the
   recurring-work instruments).

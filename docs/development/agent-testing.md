@@ -49,14 +49,24 @@ of the already-running-profile command `mise run test:agent:docker`:
 mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolated
 ```
 
-It builds the worktree-specific development image, runs the final-image smoke,
-runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
+It builds the worktree-specific development image, then runs three things side
+by side, since each only reads that image: the final-image smoke, the backend
+live image qualifications in `IMAGE_QUALIFICATION_TESTS`
 (`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
 `claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
 starts interactive Claude on it with no network and fake credentials; it fails
-rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok, OpenCode, Cursor and Pi,
-and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
-resets the profile afterwards. The worktree's shared development image is kept
+rather than skips when the image is missing), and the startup of one
+credential-free local/container fixture profile (Codex, Grok, OpenCode, Cursor
+and Pi) per entry of `DOCKER_FIXTURE_SHARDS`. The profiles start one after
+another, because each startup compiles Electron and the bridges into the same
+checkout. The first failure stops the others. Each profile then runs its shard of the same `Docker fixture` selection
+as `test:agent:docker`, one spec at a time, while the other shards run in their
+own profiles; the shards are balanced by measured run time, and
+`isolated-browser.test.ts` fails when a spec with a `Docker fixture` test is in
+no shard or in two. A fixed `--agent-tools-port` can be bound by only one
+backend, so that run keeps every spec in one profile. Results are written per
+profile under `output/agent-testing/<profile>/browser/`. Every started profile
+is stopped and reset afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
 records that it covers `test:agent:docker`; do not schedule the latter separately
 without a running profile. No provider turns are enabled. Linux Electron runs
@@ -1852,11 +1862,7 @@ isolated `~/.claude.json`, and its fixture server lives under
 `output/agent-testing/<profile>/`. A profile's provider homes are always its
 own, including a Codex or OpenCode source it authorizes (that adds only a
 restricted copy of the host's `auth.json`), so a user-scope save never reaches
-the operator's own `config.toml` or `opencode.json`. Set
-`ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
-Claude bridge built before the `mcpConfigReporting` marker to add the
-older-bridge step. That step swaps the build in only while it starts the
-environment's bridge, then restores the current one.
+the operator's own `config.toml` or `opencode.json`.
 `ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model.
 `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and UI
 check but drops the ones that need the model to answer: Claude's bridge
@@ -2669,7 +2675,7 @@ the `steer-unsupported` hold note before its gate opens, and it is injected
 `coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
 runs the orchestration over a scripted command transport.
 
-The `goal` case (`plans/goals/403`) proves a coordinator can give a worker a goal
+The `goal` case proves a coordinator can give a worker a goal
 and react to its end. It runs only where the platform's `actions.goal` capability
 is on, so other platforms record a skip, gives the coordinator two prompts and
 waits at most six step budgets:

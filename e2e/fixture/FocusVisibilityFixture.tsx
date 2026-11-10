@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { WorkflowSnapshotGraph } from "../../apps/web/src/components/chat/rich/WorkflowSnapshotCardGraph";
 import { OptionCards } from "../../apps/web/src/components/settings/agent/InheritedValue";
-import { AgentRadioGroup } from "../../apps/web/src/components/agents/AgentRadioGroup";
 import { Button } from "../../apps/web/src/components/ui/button";
 
 export function FocusVisibilityFixture() {
@@ -28,7 +27,22 @@ export function FocusVisibilityFixture() {
         onChange={() => {}}
         options={[{ value: "selected", label: "Selected option" }]}
       />
-      <AgentRadioGroup label="Agent" value="claude" onChange={() => {}} />
+      <div role="radiogroup" aria-label="Agent" className="relative w-48">
+        {/* The peer-radio card pattern (BuildLaunchDialog): the label draws the hairline. */}
+        <input
+          id="focus-agent-claude"
+          type="radio"
+          name="focus-agent"
+          defaultChecked
+          className="peer sr-only"
+        />
+        <label
+          htmlFor="focus-agent-claude"
+          className="flex cursor-pointer flex-col rounded-lg border px-3 py-2.5 focus-hairline-peer"
+        >
+          Claude
+        </label>
+      </div>
       <Button aria-invalid="true" variant="outline">
         Invalid control
       </Button>

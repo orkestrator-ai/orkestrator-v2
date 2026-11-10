@@ -172,7 +172,7 @@ from the repository root with those arguments.
 
 `get_docker_image_status` reports `missing`, `compatible`, `legacy`,
 `incompatible` or `unavailable` with the missing capabilities and fixed
-remediation text. `check_base_image` remains a presence-only adapter.
+remediation text.
 
 ## Daemon topology
 
@@ -193,9 +193,9 @@ Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
 4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
 Rootless daemons are supported with gated features and were qualified on a
 Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
-2026-11-09 with an image built from `main`; the gaps those runs left are
-[7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)
-(host loopback on the gvisor-tap-vsock driver) and
+2026-11-09 with an image built from `main`; the gaps those runs left were
+7548 (host loopback on the gvisor-tap-vsock driver, fixed and retired on
+2026-11-10; [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)) and
 [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
 (`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
 refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
@@ -701,8 +701,8 @@ operation's candidate set or a pending deletion.
 from that set, re-classifying each at removal time: one that became referenced
 is a `conflict`, one outside the preview is `not-in-preview`, a volume still
 mounted is `skipped` (`in-use`), never forced. Every resource gets its own
-outcome. The earlier one-shot `docker_system_prune` / `cleanup_orphaned_containers`
-commands are refused (`invalid-request`): nothing is removed without a review.
+outcome. Nothing is removed without a review: the earlier one-shot prune and
+orphan-cleanup commands were removed on 2026-11-10.
 A container from before owner labels is classified `legacy-unadopted` — it
 could be any installation's on this daemon — and is offered for reattachment,
 never removal.
@@ -730,6 +730,16 @@ Staged per provider (`portableInputSpec`):
 | Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
 | Shared skills (`staged-inputs=4`) | `/agents-skills` | `~/.agents/skills`, one unit per top-level entry with the credential guard, copied to `~/.agents/skills`. Staged once, as the `shared-skills` summary entry, when Codex, Cursor, Grok, OpenCode or Pi is staged (`SHARED_SKILL_READERS`; Claude does not read it). It holds no login, so it has no revoke action |
 | Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
+
+The entrypoint rebuilds `~/.claude.json` on every boot, from the staged host
+file through `CLAUDE_JSON_ALLOWED_KEYS` or from a minimal fallback, so any
+answer Claude Code wrote there in the container is gone at the next start.
+Every path therefore sets `bypassPermissionsModeAccepted`,
+`hasCompletedOnboarding` and `hasSeenAutoDefaultNudge` itself; without the
+last, terminal Claude asks "Make auto mode your default permission mode?" in
+every Claude CLI tab after each start (`tests/unit/container-claude-settings.test.ts`
+pins it). The key is Claude Code's internal state, so a release that renames it
+brings the offer back.
 
 User-authored extension directories (Claude's `commands`, `skills`,
 `agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
@@ -996,7 +1006,7 @@ full copy's, apart from the removal below.
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
 relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
 applies. Timings are in
-[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 
@@ -1432,9 +1442,9 @@ trade only the user can make. Publishing the service back through a
 container's forwarded port would need a multiplexing relay in every
 container for one path, and the host's LAN address was tried live and
 refused. `10.0.2.2` is the slirp4netns and VPNKit address; on the
-gvisor-tap-vsock driver host loopback is `10.0.2.1` and the check still
-reports `blocked`
-([7548](../todo/containers-and-environments/7548-rootless-gvisor-tap-vsock-host-loopback.md)),
+gvisor-tap-vsock driver host loopback is `10.0.2.1`, which the check probes
+and reports `reachable` (to-do 7548, retired 2026-11-10;
+[evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)),
 and other drivers stay `blocked` with the same remediation.
 
 ### Port selection and the loopback address (`agent-tools-listen.ts`)
@@ -1766,9 +1776,8 @@ diagnostics export is the likely first consumer.
 one `docker logs -f` per container among subscribers; a read renews the lease,
 a cursor older than the ring or from another source returns an explicit `gap`,
 and a replaced runtime is a new source id. Closing releases only the observer.
-The legacy `stream_container_logs` is an adapter onto the same service whose
-lease lapses, so an old client that never closes cannot leave an immortal
-follower. Backend shutdown stops every follower.
+A lease that is not renewed lapses, so a client that never closes cannot leave
+an immortal follower. Backend shutdown stops every follower.
 
 ## Claude terminal state signal (`claude-state-signal=3`)
 
@@ -1940,7 +1949,7 @@ need it once cloned.
   remote, it dropped the history the mirror held (31,276 objects missing on
   `git/git`) and fetched it back from the remote on demand. A blobless clone also
   pays for history reads one lazy fetch at a time; see
-  [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
+  the measurements (to-do 1202, retired 2026-11-10).
 - **`--reference-if-able`, checked again afterwards.** A mirror removed between
   the check and the clone does not fail the clone: Git clones from the remote
   alone, with the full history. The script then checks the mirror again and, if

@@ -110,7 +110,7 @@ describe("synthetic-full-turn fixture", () => {
     expect(command?.toolOutput).toContain("src");
     // The authoritative item never arrived in this truncated run, but the turn
     // completed: nothing will settle the command, so it reads as left running
-    // rather than "running..." on an idle thread (to-do 7522).
+    // rather than "running..." on an idle thread (#2064).
     expect(summary.turns[0]?.phase).toBe("completed");
     expect(command?.toolState).toBeUndefined();
     expect(command?.toolLeftRunning).toBe(true);

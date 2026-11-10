@@ -924,7 +924,7 @@ export function describePermissionRule(rule: Pick<NativeAgentPermissionRule, "ki
 /**
  * A file in which a provider keeps its own "always allow" rules: Codex's
  * `rules/*.rules` (Starlark `prefix_rule(...)` and `network_rule(...)`,
- * including any saved by the Codex amendment options removed in todo 0160) and
+ * including any saved by the Codex amendment options removed in #1325) and
  * Claude's `permissions.allow` in its settings files. Orkestrator only shows
  * these; it never edits them: neither provider offers an API to change them
  * through, and Codex's docs mark its rules format experimental.

@@ -96,10 +96,6 @@ export function createTerminalsApi(client: BackendClient) {
       : null;
   }
 
-  async function attachTerminal(containerId: string, cols: number, rows: number): Promise<string> {
-    return domain().attach_terminal({ containerId, cols, rows });
-  }
-
   async function createTerminalSession(
     containerId: string,
     cols: number,
@@ -150,10 +146,6 @@ export function createTerminalsApi(client: BackendClient) {
 
   async function getTerminalSession(sessionId: string): Promise<TerminalSessionStatus> {
     return domain().get_terminal_session({ sessionId });
-  }
-
-  async function getTerminalOutputBuffer(sessionId: string): Promise<string> {
-    return domain().get_terminal_output_buffer({ sessionId });
   }
 
   async function getTerminalStateSnapshot(
@@ -265,13 +257,11 @@ export function createTerminalsApi(client: BackendClient) {
 
   return {
     getClaudeTerminalState,
-    attachTerminal,
     createTerminalSession,
     startTerminalSession,
     launchTerminalJob,
     bootstrapTerminalSession,
     getTerminalSession,
-    getTerminalOutputBuffer,
     getTerminalStateSnapshot,
     getTerminalHistoryPage,
     acknowledgeTerminalSnapshot,
@@ -291,13 +281,11 @@ export type TerminalsApi = ReturnType<typeof createTerminalsApi>;
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
   getClaudeTerminalState,
-  attachTerminal,
   createTerminalSession,
   startTerminalSession,
   launchTerminalJob,
   bootstrapTerminalSession,
   getTerminalSession,
-  getTerminalOutputBuffer,
   getTerminalStateSnapshot,
   getTerminalHistoryPage,
   acknowledgeTerminalSnapshot,

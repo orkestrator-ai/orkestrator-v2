@@ -1,7 +1,7 @@
 /**
  * A goal: a durable objective on one native agent session, with the backend
  * driving turns until a check or a verifier proves it, the agent needs a
- * person, or a limit stops it. `plans/goals.md` holds the design.
+ * person, or a limit stops it. `docs/architecture/goals.md` describes it.
  *
  * Every status rule lives in {@link nextGoalState}, so the driver, the command
  * and the UI cannot each grow their own.
@@ -77,7 +77,7 @@ export const NATIVE_AGENT_GOAL_LIMITS = Object.freeze({
  */
 export const AGENT_GOAL_TOOL_NAMES = Object.freeze(["report_goal"] as const);
 
-/** Where the loop has passed the live suite (`plans/goals/109`, Phase 3). */
+/** Where the loop has passed the live suite (`docs/architecture/goals.md`, Qualification). */
 export const GOAL_QUALIFIED_PLATFORMS = Object.freeze([
   "claude",
   "codex",

@@ -10,39 +10,24 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Live container sessions (review gap 9)**: save an environment-private server during a running turn in a container and confirm the turn finishes and the next turn loads it, for Claude, Codex, Cursor and Pi (plus terminal work not being interrupted). Status: open.
+1. **Live container sessions, terminal half (review gap 9)**: save an environment-private server while a container terminal runs a long command and confirm the terminal is not interrupted. The provider-session half (a running Claude, Codex, Cursor and Pi turn finishes and the next turn loads the server) needs provider logins and moved to 7568 on 2026-11-10. Status: open.
 2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: done (2026-11-01); three bugs fixed, see its Outcome.
-3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered; in the same run, host-target rows show the backend's paths and an apply operation recovers after the connection drops (moved from 0039 task 9 on 2026-11-06). Status: open (needs two machines).
 4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: done (2026-10-31).
 
-### 1. Live container sessions (review gap 9)
+### 1. Live container sessions, terminal half (review gap 9)
 
-**Problem.** Nothing has shown that a container-private save leaves a running provider turn alone and reaches the next turn with real sessions. The design guarantees it by construction (one file write, no restart scheduled, materialisation only after a boot), but the guarantee is unproven for users of container environments, who are the only users of the overlay.
+**Problem.** Nothing has shown that a container-private save leaves existing terminal work in the container alone. The design guarantees it by construction (one file write, no restart scheduled, materialisation only after a boot), but the guarantee is unproven for users of container environments, who are the only users of the overlay.
 
-**Context.** This is review gap 9, the one gap the Multi Review left open. The file says container runs batch with [0019](../containers-and-environments/0019-container-platform-qualification.md), and [0121](0121-claude-plugin-mcp-servers.md) asks to batch its container plugin run with this one. Decision 14 says sessions adopt a resolution the way they adopt any external change (Claude next message, Cursor and Pi next turn, Codex, OpenCode and Grok next process start).
+**Context.** This is the terminal half of review gap 9, the one gap the Multi Review left open. The provider-session half (a running turn finishes and the next turn loads the server, for Claude, Codex, Cursor and Pi, batched with [0121](0121-claude-plugin-mcp-servers.md)'s container plugin run) needs provider logins and moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md) on 2026-11-10. The terminal half needs no provider and no login.
 
-**Investigation.** The overlay code is unchanged since it merged as `01d052e0` (#1183): `materialiseEnvironment` is at `apps/backend/src/core/mcp-management/service.ts:1119` and `overlay-service.ts:343`, called from `apps/backend/src/core/commands-environment.ts:1429` after the container boots. The harness is real and wired: `e2e/agent-testing/mcp-apply-live.spec.ts` reads `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER` and `ORKESTRATOR_AGENT_TEST_LIVE_MCP` (`:143-144`), is listed in `e2e/agent-testing/playwright.browser.config.ts:40`, and in container mode keeps tab A busy with a shell `sleep` while the edit is saved and applied, then requires the busy turn to finish (header `:16-18`, step label `:1064`). It also restarts the bridge on the first scope and probes a second tab. It does not check terminal sessions, so the "existing terminal work is not interrupted" half of the item has no automated step. It covers all six platforms by default (`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS`), wider than the four this item names. No recorded container-mode run exists in this file or in 0039.
+**Investigation.** The overlay code is unchanged since it merged as `01d052e0` (#1183): `materialiseEnvironment` is at `apps/backend/src/core/mcp-management/service.ts:1119` and `overlay-service.ts:343`, called from `apps/backend/src/core/commands-environment.ts:1429` after the container boots. `e2e/agent-testing/mcp-apply-live.spec.ts` in container mode keeps a provider turn busy, but does not check terminal sessions, so the "existing terminal work is not interrupted" half has no automated step.
 
 **Decisions.**
 
-- **How to run it?**
-  - **One run of `mcp-apply-live.spec.ts` in container mode on a fresh `mise run docker:build:dev` image, in an isolated `dev:test` profile with `--fixture-environments local,container`, combined with 0121's container plugin run (recommended).**
-    - Pros: the harness already asserts the busy-turn and next-turn behaviour from server logs, not model replies; one image and one credentialed profile also close 0121.
-    - Cons: needs credentials for every platform under test and a long Docker run; a skipped (signed-out) platform leaves its row open.
-  - **A manual run: one provider at a time, save from the editor while a turn is running.**
-    - Pros: can include a terminal tab and watch it directly.
-    - Cons: not repeatable; evidence is a human reading, not the server's log.
-- **Which platforms must pass for the item to close?**
-  - **The four named (Claude, Codex, Cursor, Pi); record Grok and OpenCode results if the run produces them but do not block on them (recommended).**
-    - Pros: matches the item's scope; Grok and OpenCode have their own qualification in 0039.
-    - Cons: leaves container-private behaviour of two platforms only incidentally proven.
-  - **All six.**
-    - Pros: one complete matrix.
-    - Cons: blocks on Grok and OpenCode sign-in and their own open issues in 0039.
 - **How to cover the terminal half?**
-  - **Add a manual step to the same run: keep a container terminal running a long command while saving, and check it continues (recommended).**
-    - Pros: cheap, and the claim is narrow (nothing is injected or restarted).
-    - Cons: manual evidence only.
+  - **A credential-free run: in a disposable `dev:test` profile with `--fixture --fixture-environments local,container --no-agent-credentials`, keep a container terminal running a long command, save an environment-private server from the editor, and check the command continues and its output keeps arriving (recommended).**
+    - Pros: cheap, needs no login, and the claim is narrow (nothing is injected or restarted).
+    - Cons: one-off evidence.
   - **Extend the spec to drive a terminal.**
     - Pros: repeatable.
     - Cons: a code change to a large live spec for a property that holds by construction.
@@ -99,29 +84,6 @@ Bugs found and fixed, each with a test:
 2. A refresh of a file nothing was staged for reported `stagedCopy: "unavailable"`, so the user was told to "refresh again after the next rebuild". The entrypoint copies only staged files that exist, so the next boot keeps the refreshed file, and a rebuild stages the backend user's current file anyway. `createStagedDefaultsWriter` now reports `not-needed` when the staged file is absent from an existing input revision (decision 19). Tests: `commands-registry-mcp.test.ts`, "staged defaults writer".
 3. While the target's default file was blocked (diverged), the add dialog kept it as the selection: "Save to" was blank, the form could be filled and reviewed, and only the backend's refusal explained why. It now shows "Choose where to save", says why the default file is not offered, and keeps "Review change" disabled until a writable file is chosen (decision 20). Test: `McpEnvironmentOverlay.test.tsx`, "a diverged default file is not preselected…".
 
-### 3. Remote-browser check
-
-**Problem.** A remote browser, the backend and a container are three different hosts. The editor's location hint and the container sign-in reason exist to stop a remote user assuming `localhost` means their machine, but they have not been seen from a second machine.
-
-**Context.** The file batches remote runs with [0031](../cross-cutting/0031-live-provider-and-platform-qualification.md). Decision 12 says remote backends are not detected on the backend side; the editor shows where the connection is made from instead.
-
-**Moved here from 0039 task 9 (2026-11-06).** 0039 also asked a remote browser to show "correct backend paths and operation recovery". This check covered container rows only, so that part is added as a second check of the same run: on a host (backend-user or project) target, the source paths shown are the backend host's, not the browser machine's, and a save-and-apply whose browser connection drops mid-operation shows the operation's real outcome after reconnecting (`get_mcp_operation`, the settings card). Nothing is new in the UI for it; 0039 closed its task and points here.
-
-**Investigation.** The text is rendered unconditionally from the environment, not from any remote detection (`McpServerForm.tsx:460`), so what a remote browser sees is the same component output as a local one. 0031's "Two machines or a remote backend" row (`docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:470`) lists this file since 2026-10-31 (task 4), so the batch picks this item up. Its Docker row (`:468`) already listed 0040.
-
-**Decisions.**
-
-- **Keep it as a two-machine run, or retire it?**
-  - **Keep it, and add this file to 0031's two-machine row so the batch includes it (recommended; the row was updated under task 4).**
-    - Pros: the one real check that a remote user sees the hint and no callback; costs nothing extra if 0039's remote run happens anyway.
-    - Cons: depends on a second machine being set up.
-  - **Retire it as proven by construction.**
-    - Pros: removes a gate that needs special hardware.
-    - Cons: the "no callback is offered" claim depends on the sign-in path, which could change; a single run is the evidence.
-  - **Simulate with a second browser on the same host using the LAN address.**
-    - Pros: no second machine.
-    - Cons: the browser's `localhost` is still the backend host, which is exactly what the check must rule out.
-
 ### 4. Stale notes in this file
 
 Done 2026-10-31 on `main` at `931e5541`, taking the recommended option; see decision 17.
@@ -130,7 +92,7 @@ Done 2026-10-31 on `main` at `931e5541`, taking the recommended option; see deci
 
 **Context.** The README allows correcting existing items.
 
-**Investigation.** The Evidence "Observation, not investigated here" points at todo 0058; that file said "Fixed and qualified on 2026-10-26; every item is done" and was retired on 2026-10-29 (see [`container-lifecycle.md`](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild), "Preserving rebuild"). The remote-run batching gap is described under task 3.
+**Investigation.** The Evidence "Observation, not investigated here" points at todo 0058; that file said "Fixed and qualified on 2026-10-26; every item is done" and was retired on 2026-10-29 (see [`container-lifecycle.md`](../../architecture/container-lifecycle.md#preserving-rebuild-migrate--rebuild), "Preserving rebuild"). The remote-run batching gap was described under task 3 (moved to the manual-test checklist on 2026-11-10).
 
 **Decisions.**
 
@@ -148,8 +110,9 @@ offer environment-private configuration, and Cursor's user servers never
 reached containers. This file covered durable container-private
 configuration, deliberate delivery of host defaults, and the location,
 network and authentication semantics outside the backend host. The code is
-done; what is left is live qualification with real provider sessions and a
-remote browser.
+done; what is left is the terminal half of review gap 9 (task 1). The live
+provider-session run and the remote-browser check moved to the manual-test
+checklist on 2026-11-10.
 
 ## Current state
 
@@ -259,20 +222,15 @@ remote runs with
   covered.
 - A remote browser and a restricted network show the right execution and
   callback scope. **Restricted network: done** (service tests). **Remote
-  browser: open.** It needs a browser on a second machine against a remote
-  backend: check that the URL location hint and the container sign-in reason
-  show, and that no callback is offered.
+  browser:** moved to the manual-test checklist on 2026-11-10 (it needs a
+  second machine).
 - Existing terminal work and background native sessions are not interrupted.
-  **Open for a live run.** By construction the save path writes one file and
-  schedules no restart, and materialisation runs only after a boot, before
-  launch. What is still missing is a run with real provider sessions in a
-  container: save an environment-private server during a running turn, then
-  check the turn continues and the next turn loads it (Claude, Codex reload,
-  Cursor and Pi reattach). The harness exists:
-  `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1`
-  runs `e2e/agent-testing/mcp-apply-live.spec.ts` against container
-  environment-private sources. It needs provider credentials and has not been
-  run for this change.
+  By construction the save path writes one file and schedules no restart, and
+  materialisation runs only after a boot, before launch. **Terminal work:
+  open** (task 1, credential-free). **Native sessions:** the run with real
+  provider sessions in a container moved to the manual-test checklist on
+  2026-11-10, because `mcp-apply-live.spec.ts`'s container mode needs provider
+  logins (its fake-model mode runs local environments only).
 - ~~**Real-browser pass of the overlay UI.**~~ Done on 2026-11-01 on a
   `dev:test` profile with a container fixture: every overlay state and action,
   the refresh dialog (including a stale token) and the corrupt-record reset,
@@ -599,6 +557,7 @@ None left; both earlier questions are answered in decisions 9 and 10.
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
   ("Provider state", the provider-state inventory).
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Containers").
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the provider-session half of task 1, task 3) moved there on 2026-11-10.
 
 ## Replaces
 

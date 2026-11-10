@@ -620,26 +620,6 @@ export function isProviderEvidenceFrame(value: unknown): value is ProviderEviden
   return providerEvidenceFrameIssues(value).length === 0;
 }
 
-export function isProviderEvidenceAck(value: unknown): value is ProviderEvidenceAck {
-  if (!isPlainRecord(value)) return false;
-  if (value.kind === "accepted") {
-    return (
-      isId(value.frameId) &&
-      isId(value.receiptId) &&
-      Array.isArray(value.retainedBodyIds) &&
-      value.retainedBodyIds.every(isId)
-    );
-  }
-  if (value.kind === "gap-recorded") {
-    return (
-      isId(value.gapId) &&
-      typeof value.reason === "string" &&
-      gapCoverageIssues(value.coverage, "coverage").length === 0
-    );
-  }
-  return false;
-}
-
 // ---------------------------------------------------------------------------
 // Capture-executor observation reports
 // ---------------------------------------------------------------------------

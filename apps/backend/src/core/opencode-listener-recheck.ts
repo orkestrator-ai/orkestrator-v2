@@ -1,6 +1,6 @@
 /**
  * The socket check again, after a failed or unexpected answer
- * (to-do 7550, task 4; docs/architecture/agent-approvals.md).
+ * (#2091; docs/architecture/agent-approvals.md).
  *
  * The backend checks the listener on a container's OpenCode port when it
  * reads the password (`readContainerBridgeToken`), then keeps sending it for

@@ -326,6 +326,7 @@ export function useAnnotationCapture({
           record,
           input,
           localRedaction: redactionsRef.current.get(captureId),
+          scope: annotationScope,
         });
         finishCommitted(captureId, committed.annotationId, committed.ackPending, automatic);
         void refreshPending();
@@ -346,7 +347,7 @@ export function useAnnotationCapture({
         savingRef.current.delete(captureId);
       }
     },
-    [environmentId, finishCommitted, loadCapture, refreshPending, setSaveState],
+    [annotationScope, environmentId, finishCommitted, loadCapture, refreshPending, setSaveState],
   );
 
   /**
@@ -381,7 +382,12 @@ export function useAnnotationCapture({
           if (!checkReceipts && !descriptor.acknowledged) continue;
           try {
             const kind = captureCommitKind({ descriptor }, captureIntent(captureId));
-            const receipt = await existingCaptureReceipt(environmentId, captureId, kind);
+            const receipt = await existingCaptureReceipt(
+              environmentId,
+              captureId,
+              kind,
+              annotationScope,
+            );
             if (!receipt) continue;
             const ack = {
               captureId,
@@ -400,7 +406,7 @@ export function useAnnotationCapture({
         resumingRef.current = false;
       }
     },
-    [environmentId, finishCommitted, refreshExpired, refreshPending, runSave],
+    [annotationScope, environmentId, finishCommitted, refreshExpired, refreshPending, runSave],
   );
   const resumeRef = useRef(resume);
   useLayoutEffect(() => {

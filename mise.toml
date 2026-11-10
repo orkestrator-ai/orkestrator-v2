@@ -321,7 +321,7 @@ depends = ["build:cli:test"]
 run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker:isolated"]
-description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
+description = "Build the image, then smoke and qualify it while the Docker fixture profiles start, run the fixture shards side by side, and reset the disposable profiles"
 depends = ["playwright:install"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode,cursor,pi"
 
@@ -615,6 +615,11 @@ run = "bun scripts/set-version.ts"
 description = "Build this platform's desktop release and upload it to the draft GitHub release"
 raw_args = true
 run = "bun scripts/release-desktop.ts build"
+
+[tasks."release:linux"]
+description = "Run the Linux release build on the Linux builder over SSH (check | build [--no-publish] | attach)"
+raw_args = true
+run = "bun scripts/release-linux-remote.ts"
 
 [tasks."release:publish"]
 description = "Publish the draft GitHub release once macOS and Linux are both uploaded"

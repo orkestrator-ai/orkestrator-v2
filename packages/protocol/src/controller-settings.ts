@@ -46,12 +46,6 @@ export type InheritedGlobalSettings = Partial<Record<InheritedGlobalSettingKey, 
 /** Bound on one command node's serialized settings. */
 export const MAX_INHERITED_SETTINGS_BYTES = 256 * 1024;
 
-const INHERITED_KEYS: ReadonlySet<string> = new Set(INHERITED_GLOBAL_SETTING_KEYS);
-
-export function isInheritedGlobalSettingKey(key: string): key is InheritedGlobalSettingKey {
-  return INHERITED_KEYS.has(key);
-}
-
 /** The inherited keys present in a global config. */
 export function pickInheritedGlobalSettings(global: object): InheritedGlobalSettings {
   const source = global as Record<string, unknown>;

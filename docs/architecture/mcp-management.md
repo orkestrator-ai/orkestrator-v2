@@ -419,7 +419,8 @@ guidance instead.
 **Codex reload** is one environment-level call, `POST /global/mcp/reload` on the
 Codex bridge, which reloads only if an app-server child is already running
 (`requestIfReady`) and never spawns one: `reloaded` or `not-running` →
-`pending-next-turn`; a 404 from an older bridge → `restart-required`. Just
+`pending-next-turn`; any failed request, a 404 included (every Codex bridge
+from v2.21.0 serves the route), reports the reload as refused. Just
 before the first reload the backend re-reads the source; if the change is no
 longer in it (see [External edits](#external-edits)) the queued runtimes are
 `cancelled` and nothing is reloaded.
@@ -521,21 +522,18 @@ failed runtimes off the page stay actionable. `omittedStates` carries no
 `cancelReason`, so the page always lists a superseded runtime when the
 operation has one.
 
-**Bridges older than the MCP configuration report.** Current Claude, Cursor,
-Pi and ACP bridges put `mcpConfigReporting: 1` in every
-`/session/:id/runtime-health` body, including an unknown session's. A body
-with neither that marker nor an `mcpConfig` of any shape, or a 404/405 from
-the route, comes from an older bridge (`unsupported`); any other failed read
-says nothing about the version. An older bridge cannot prove an apply, so the
-runtime says so instead of waiting silently: Cursor and Pi (bridges that old
-do not reload between turns) and Grok become `restart-required` with
-"older than this backend … Stop and start the environment"; Claude stays
-`pending-next-turn` (its older bridges still re-read files every query) with
-a reason that the change is confirmed once the bridge reports that query, or
-by a restart if it never does: bridges from #838 on report what a query
-loaded once one has run, so they confirm it with no restart. Polling
+**Bridges that do not report.** Claude, Cursor, Pi and ACP bridges put
+`mcpConfigReporting: 1` in every `/session/:id/runtime-health` body,
+including an unknown session's, and have since v2.21.0, the support floor. A
+body without that marker, or a 404/405 from the route, is `unsupported`; any
+other failed read says nothing about the bridge. Such a bridge (only an
+unpublished build) cannot prove an apply, so the runtime says so instead of
+waiting silently: it becomes `restart-required` with "does not report which
+MCP configuration it loaded … Stop and start the environment". Polling
 continues inside the evidence window, so a restarted, current bridge still
-proves it.
+proves it. Until 2026-11-10 an older bridge's `mcpConfig` without the marker
+also counted as a report, and Claude stayed `pending-next-turn`
+([version compatibility](version-compatibility.md#retired)).
 
 **Pi and Cursor bridges** fingerprint the MCP files each live generation was
 built from. At the next turn start (never mid-turn; running, compacting or

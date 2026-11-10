@@ -207,7 +207,7 @@ describe("activity sweep over the batch route", () => {
     });
   });
 
-  test("an older bridge is read individually and not re-probed every sweep", async () => {
+  test("a bridge without the batch route is read individually on every sweep", async () => {
     await withSweep(async ({ storage, service, connectTo }) => {
       const ids = await adoptSessions(storage, 3);
       const states = new Map<string, Answer>(ids.map((id) => [id, { activity: "idle" }]));
@@ -222,7 +222,7 @@ describe("activity sweep over the batch route", () => {
         expect(observed(service).size).toBe(3);
 
         await service.reconcileAgentActivity();
-        expect(requests.filter((request) => request.method === "POST")).toHaveLength(1);
+        expect(requests.filter((request) => request.method === "POST")).toHaveLength(2);
         expect(requests.filter((request) => request.method === "GET")).toHaveLength(6);
         expect(
           requests.every((request) =>

@@ -13,10 +13,8 @@ import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-pre
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
 import { createLogger, type LogFields } from "@orkestrator/protocol/logger";
 import {
-  checkBaseImageCommand,
   checkContainerHostReachabilityCommand,
   checkDockerCommand,
-  cleanupOrphanedContainersCommand,
   closeContainerLogsCommand,
   dockerCleanupExecuteCommand,
   dockerCleanupPreviewCommand,
@@ -24,9 +22,6 @@ import {
   dockerRemoveContainerCommand,
   dockerStartContainerCommand,
   dockerStopContainerCommand,
-  dockerSystemPruneCommand,
-  dockerVersionCommand,
-  getContainerHostPortCommand,
   getContainerHostReachabilityCommand,
   getContainerLogsCommand,
   getContainerUsageCommand,
@@ -35,13 +30,11 @@ import {
   getDockerSystemStatsCommand,
   getDockerTopologyCommand,
   getOrkestratorContainersCommand,
-  listDockerContainersCommand,
   openContainerLogsCommand,
   propagateGithubTokenToContainersCommand,
   provisionEnvironmentCommand,
   readContainerLogsCommand,
   reattachContainerCommand,
-  streamContainerLogsCommand,
 } from "@orkestrator/protocol/contract/domains/docker";
 
 const log = createLogger("docker");
@@ -104,7 +97,6 @@ import {
   dockerOwnerMatches,
   toClientEnvironment,
   getDockerStatus,
-  getHostPort,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
   enqueueEnvironmentLifecycleOperation,
@@ -203,13 +195,6 @@ export function registerDockerCommands(
     context.runtime.dockerAvailability.record(availability);
     return availability;
   });
-  register(dockerVersionCommand, async () =>
-    (
-      await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], {
-        timeoutMs: 10_000,
-      })
-    ).stdout.trim(),
-  );
   register(getDockerImageStatusCommand, (_args, context) => getImageStatus(context));
   // Can agents in containers reach the agent tools server? The startup check
   // result, or a fresh check on request ("Check again").
@@ -226,16 +211,6 @@ export function registerDockerCommands(
   );
   register(getDockerTopologyCommand, ({ refresh }) =>
     detectDockerTopology({ refresh: refresh === true }),
-  );
-  // Legacy boolean adapter: presence only. It never implies compatibility;
-  // capability gates use `get_docker_image_status`.
-  register(checkBaseImageCommand, (_args, context) =>
-    runCommand("docker", ["image", "inspect", context.dockerImage ?? DOCKER_IMAGE], {
-      timeoutMs: 10_000,
-    }).then(
-      () => true,
-      () => false,
-    ),
   );
   register(provisionEnvironmentCommand, async (args, context) => {
     const id = asString(args.environmentId, "environmentId");
@@ -337,36 +312,6 @@ export function registerDockerCommands(
     const id = asString(containerId, "containerId");
     return getDockerStatus(id);
   });
-  register(listDockerContainersCommand, async (_args, context) => {
-    const { storage } = context;
-    const dockerOwner = dockerOwnerNamespace(storage.getDataDir());
-    // Ownership is filtered here rather than by a second `--filter label=` so an
-    // unlabelled pre-upgrade container is still reachable. See dockerOwnerMatches.
-    const { stdout } = await runCommand(
-      "docker",
-      [
-        "ps",
-        "-a",
-        "--no-trunc",
-        "--filter",
-        `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
-        "--format",
-        "{{.ID}}\t{{.Names}}\t{{.Labels}}",
-      ],
-      { timeoutMs: 10_000 },
-    );
-    return stdout
-      .split("\n")
-      .filter(Boolean)
-      .flatMap((line) => {
-        const [id = "", name = "", labels = ""] = line.split("\t");
-        if (!dockerOwnerMatches(labels, dockerOwner, context.strictDockerOwner)) return [];
-        return [[id, name] as [string, string]];
-      });
-  });
-  register(getContainerHostPortCommand, ({ containerId, containerPort }) =>
-    getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")),
-  );
   // Initialization views in every client poll this once a second; equivalent
   // tails join and share a short-lived snapshot (container-log-snapshots.ts).
   const readContainerLogs = createSharedContainerLogReader({
@@ -398,25 +343,6 @@ export function registerDockerCommands(
     // Releases the observer only; the container and its processes continue.
     context.runtime.containerLogs.close(asString(subscriptionId, "subscriptionId"));
   });
-  // Legacy adapter: an older client that never closes gets a lease that
-  // lapses, so its follower stops instead of living forever.
-  register(streamContainerLogsCommand, ({ containerId }, context) => {
-    const { subscriptionId, sourceId } = context.runtime.containerLogs.open(
-      asString(containerId, "containerId"),
-    );
-    return { subscriptionId, sourceId };
-  });
-  // Removing Docker resources is a reviewed operation: the user sees exactly
-  // what docker_cleanup_preview found eligible and why the rest is kept, and
-  // docker_cleanup_execute removes only that selection. These two earlier
-  // one-shot commands removed without a review and are refused.
-  const reviewedCleanupRequired = async () => {
-    throw new ContainerLifecycleError(
-      "invalid-request",
-      "Docker cleanup is reviewed first. Open Docker → Review cleanup to see what can be removed.",
-    );
-  };
-  register(dockerSystemPruneCommand, reviewedCleanupRequired);
   register(getDockerSystemStatsCommand, async (_args, context) => {
     // Capacity is the daemon's (on Docker Desktop, its VM), usage is the sum
     // over this installation's containers, and anything Docker would not say
@@ -605,7 +531,6 @@ export function registerDockerCommands(
       context,
     );
   });
-  register(cleanupOrphanedContainersCommand, reviewedCleanupRequired);
   register(reattachContainerCommand, async ({ projectId, containerId, name }, context) => {
     const { storage } = context;
     const id = asString(containerId, "containerId");

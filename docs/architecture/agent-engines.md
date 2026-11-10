@@ -91,7 +91,8 @@ The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route
 means the bridge predates it, which only an unpublished source build can do.
 The close stays pending with a "restart the environment" error on every
-platform and never falls back to `DELETE /session/:id`: Claude's calls the SDK's
+platform and never falls back to `DELETE /session/:id`, which no current bridge
+serves and which an older Claude bridge answered by calling the SDK's
 `deleteSession`.
 
 Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
@@ -180,8 +181,9 @@ until the user resumes it.
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
 | Native agent reconcile on an authoritative `missing` | Drop a mapping whose provider session is gone | Mapping only |
 
-Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
-operation and nothing in the backend or renderer calls it.
+No bridge serves `DELETE /session/:id` any more (removed 2026-11-10). Claude's
+deleted the rollout through the SDK's `deleteSession`; nothing in the backend
+or renderer had called it since the close route.
 
 ### Removing a conversation from the resume list
 
@@ -300,6 +302,21 @@ title, so a failed push never loses it, and the push is retried at most every
 five minutes. Cursor and Grok have no setter, so their backend title is always
 authoritative. No bridge generates a title, and the Codex bridge no longer
 reports a title it read back from the first prompt.
+
+The first-message fallback (`firstMessageSessionTitle`,
+`session-title-text.ts`) uses only the user's own words: it strips the
+coordinator preamble, provider system instructions and every
+transcript-annotation envelope (`stripTranscriptAnnotations` from
+`@orkestrator/protocol/transcript-annotations`, the parser's strict
+`cleanPrompt`, so a malformed or hand-typed tag never hides the user's text)
+before cutting to 80 characters. A first message that is only annotations
+titles nothing, and the next user message is used. A live-window row whose
+head a bridge's transcript bound cut off (the snapshot reports
+`omittedParts`) is not a title source until hydration reads it whole
+(`firstUserMessageOf`), because the bound keeps the envelope's tail and drops
+the request. The Codex bridge's resume-list label (`session-title-index.ts`)
+and the Claude tmux resume list (`titleFromTranscriptHead`, `tmux-hooks.ts`)
+strip the envelope the same way.
 
 ## Sub-agent models
 
@@ -1428,7 +1445,7 @@ contents. Vendor wire formats stay inside the adapter — `session-config.ts`
 converts them to the shared `NativeAgentComposerState` that HTTP clients see.
 
 Tab close (`POST /session/:id/close`, `acp-session-close.ts`) runs one
-operation per session id; a second close or DELETE joins it. It fences the
+operation per session id; a second close joins it. It fences the
 session first (`closing`: prompt, attach, config, resume, create-by-key and
 approval/interaction answers get 409 `Session is closing`; reads, cancel and
 close still work), denies every parked permission, question and plan approval
@@ -1773,8 +1790,28 @@ the read-only turns of a packaged review:
 | Grok (ACP) | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 | Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 
-None of these has been run against a real reviewer on its provider yet; see
-[0029-multi-review-flow-graph.md](../todo/coordinator-and-multi-review/0029-multi-review-flow-graph.md).
+None of these has been run against a real reviewer on its provider yet; the
+live runs (from to-do 0029, retired 2026-11-10) are on the manual-test
+checklist (to-do 7568).
+
+**Codex handshake budget.** Before a Codex workflow-result turn starts, the
+bridge asks app-server whether the thread's `orkestrator` server offers the
+submit tool (`bridges/codex-bridge/src/engine/mcp-tool-availability.ts`). Codex
+marks a thread-scoped MCP server that has not finished `initialize` and
+`tools/list` within its `startup_timeout_sec` as failed for the life of the
+thread, so every Orkestrator server the bridge adds (`orkestrator`,
+`orkestrator-artifacts`, `orkestrator-design`) gets
+`ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC` (15 s), and the availability check waits
+5 s longer than that (`MCP_TOOL_AVAILABILITY_TIMEOUT_MS`, 20 s) so a slow
+handshake settles as connected or failed inside the wait. A definite failure
+refuses the prompt with HTTP 424 ("could not list its tools"); an answer that
+does not come in time is `unverified` and the turn is sent. The old 3 s budget
+refused most Codex preparation and consolidation turns when about ten Multi
+Reviews ran at once on a host with a load average above 100.
+`bridges/codex-bridge/src/app-server/mcp-startup.live.test.ts`
+(`RUN_LIVE_CODEX_APP_SERVER=1`, no model turn or login) checks the real Codex
+against delayed handshakes, and
+`apps/backend/scripts/agent-mcp-handshake-bench.ts` measures the backend side.
 
 ### Attempt tools in read-only turns (Grok, Pi)
 

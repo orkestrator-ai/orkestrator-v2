@@ -160,7 +160,7 @@ export interface OpenCodeEventStreamHandlers {
 
 /**
  * Reads one `/event` connection until it ends. Open but silent is a loss too
- * (task 1 of to-do 7200), so a watchdog asks the owner to replace a stream
+ * (#2052), so a watchdog asks the owner to replace a stream
  * that stopped heartbeating; it is stopped whenever the connection ends.
  */
 export async function consumeOpenCodeEventStream(

@@ -14,7 +14,7 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 /**
  * Fleet ticket sync over two running `dev:test` profiles, the second attached
- * to the first as a leaf (to-do 3800 task 1). Opt-in and not part of the
+ * to the first as a leaf (#2059). Opt-in and not part of the
  * smoke suite: it needs two fresh profiles and stops and restarts the leaf.
  * See `fleet-ticket-sync-live.spec.ts` for the commands.
  */

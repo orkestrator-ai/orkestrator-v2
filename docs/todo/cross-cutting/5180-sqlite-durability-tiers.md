@@ -2,15 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-10 against `main` at `04639b12b` (task 3 done on macOS; first analysed 2026-11-05 at `69a3b4ca5`). Carried from part `0920` of the E5 efficiency batch (R18's tiers, D5), whose batch file was deleted when E5 landed. Its outcome is in the closing check of E5 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); the original text stays in git history at `69a3b4ca5`. The maintainer's deferral in [1202](1202-efficiency-review-follow-ups.md) task 2 (ST-12, "decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task") is kept: nothing here has been measured on a real session, which the deferral needs.
+Analysed 2026-11-10 against `main` at `04639b12b` (task 3 done on macOS; first analysed 2026-11-05 at `69a3b4ca5`). Carried from part `0920` of the E5 efficiency batch (R18's tiers, D5), whose batch file was deleted when E5 landed. Its outcome is in the closing check of E5 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`); the original text stays in git history at `69a3b4ca5`. The maintainer's deferral in to-do 1202 task 2 (retired 2026-11-10) (ST-12, "decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task") is kept: nothing here has been measured on a real session, which the deferral needs.
 
 ### Tasks
 
-1. **Measure fsync and zero-write cost**: commits and fsyncs a minute in a busy real session, now that the ledger has its own file. Status: open (needs live evidence: a real provider turn).
-2. **Decide the tiers**: with the maintainer's sign-off. Status: open (depends on 1).
+1. **Count commits per connection**: add the commit counter, split by file and readable from `/metrics`, that a busy real session will be measured with. Status: open (the measurement itself needs a real provider turn and is in 7568: 5180 task 1).
 3. **Check macOS `fsync` and `fullfsync` under Bun's linked SQLite**: the report's "Needs verification". Status: done (2026-11-10, macOS 27.2, Bun 1.4.4, system SQLite 3.54.0; `checkpoint_fullfsync` now set explicitly).
 
-### 1. Measure fsync and zero-write cost
+### 1. Count commits per connection
 
 **Problem.** The report estimates 600 to 1,000 fsynced commits a minute in a busy session, dominated by change tracking. That was reasoned, not counted.
 
@@ -24,33 +23,10 @@ Analysed 2026-11-10 against `main` at `04639b12b` (task 3 done on macOS; first a
   - **A commit counter per connection, read from `/metrics`, during a busy real session on an isolated profile (recommended).**
     - Pros: counts what the deferral asks about, split by file; no content in the numbers.
     - Cons: needs a real provider turn; a counter is new code on the hot write path, though a cheap one.
+    - Agent part: build the counter and prove it on a `dev:test` profile; the busy real session is in the manual-test checklist (7568: 5180 task 1).
   - **`strace -c -e fsync,fdatasync` on the backend during the same session.**
     - Pros: counts real syscalls, including WAL syncs at checkpoints; no code change.
     - Cons: Linux only, and it attaches to a process that shares the host with production.
-
-### 2. Decide the tiers
-
-**Problem.** `synchronous = FULL` and `secure_delete = ON` apply to all data, while the privacy and durability cases differ per store.
-
-**Context.** Ledger rows hold counts, object ids and encoded paths, while evidence bodies and file contents are files outside the database (`ledger-schema.ts`), so `secure_delete` on the ledger protects less than on mail or prompts. `docs/architecture/storage.md`, "Durability and deletion", documents the settings and the scrub guarantee.
-
-**Investigation.** With its own file, the ledger would set its settings in `openChangeLedgerDatabase` after opening. `StorageDatabaseOptions` has no setting for them yet.
-
-**Decisions.**
-
-- **What to change, if the measure justifies anything?**
-  - **Ledger file to `synchronous = NORMAL`; leave everything else (recommended).**
-    - Pros: largest saving on the rows the report blames; loses only the last few transactions on power loss, with no corruption; `secure_delete` and the documented scrub stay whole.
-    - Cons: one file's commits differ; a turn's last measurement could vanish on power loss.
-  - **Also `secure_delete = FAST` on the ledger and display tails.**
-    - Pros: fewer zero-writes on the highest churn.
-    - Cons: deleted content can stay in free pages until reused, which weakens the scrub guarantee for display tails, which hold transcript text.
-  - **`synchronous = FULL` plus `fullfsync = ON` on macOS for app stores.**
-    - Pros: orders every commit's WAL sync with a write barrier.
-    - Cons: does not make commits survive power loss: task 3 found Apple's SQLite maps it to `F_BARRIERFSYNC`, not `F_FULLFSYNC`, on APFS and HFS+. Costs about 0.5 ms more per commit (0.19 to 0.72 ms median on the internal SSD, task 3), against the point of this work.
-  - **Leave all as it is.**
-    - Pros: the current decision; simple to state.
-    - Cons: a real cost stays if the measure finds one.
 
 ### 3. Check macOS `fsync` and `fullfsync` under Bun's linked SQLite
 
@@ -96,12 +72,12 @@ Analysed 2026-11-10 against `main` at `04639b12b` (task 3 done on macOS; first a
 
 ## Current state
 
-- The ledger file already runs `synchronous = NORMAL` (#1996, `d9b46f30e`, 2026-11-09), task 2's first option. Tasks 1 and 2 stay open: the maintainer's deferral asked for a measurement first, and whether #1996 settles task 2 is the maintainer's call.
+- The ledger file already runs `synchronous = NORMAL` (#1996, `d9b46f30e`, 2026-11-09), the first option of the tiering decision now in the manual-test checklist (7568: 5180 task 2). The maintainer's deferral asked for a measurement first.
 - macOS numbers for task 2 are in task 3: a commit costs about 0.19 ms (FULL), 0.05 ms (NORMAL) and 0.72 ms (FULL with `fullfsync`) on mini's internal SSD.
 
 ## Constraints and rationale
 
-- Re-rate this file when task 1 has numbers; it is Low because the maintainer deferred it pending that measurement.
+- Re-rate this file when the busy-session measurement has numbers; it is Low because the maintainer deferred it pending that measurement.
 - A durability change needs the maintainer's sign-off.
 
 ## Assumptions and decisions
@@ -116,7 +92,8 @@ Chose to set `PRAGMA checkpoint_fullfsync = ON` in `StorageDatabase`'s construct
 
 ## Related
 
-- [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md) tasks 1 and 2 (ST-12)
-- [5181](5181-sqlite-cache-sizes.md), [5182](5182-database-upkeep-live-evidence.md)
+- to-do 1202 efficiency follow-ups tasks 1 and 2 (retired 2026-11-10) (ST-12)
+- [5181](5181-sqlite-cache-sizes.md); to-do 5182 (retired 2026-11-10), whose macOS scrub result is in [Backend storage: Durability and deletion](../../architecture/storage.md#durability-and-deletion)
 - [Backend storage: Durability and deletion](../../architecture/storage.md#durability-and-deletion)
 - Logging and database report, R18 and D5 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: the busy real session; task 2, the tiering decision with the maintainer's sign-off) moved there on 2026-11-10.

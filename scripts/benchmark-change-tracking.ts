@@ -31,7 +31,7 @@
  * event-loop stall, how many manifests each pass parsed or found cached, and
  * how long a capture's write waited while a sweep ran.
  *
- * One fixture for undoing a bulk turn (todo 7310): `restore-apply` runs one
+ * One fixture for undoing a bulk turn (#2047): `restore-apply` runs one
  * turn that writes `--restore-files` new files through the whole service,
  * finalizes it (retrying a timed-out end capture as the backend would), then
  * times the restore preview and `apply` end to end. It reports the turn's end

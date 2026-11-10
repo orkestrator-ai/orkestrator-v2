@@ -3305,8 +3305,8 @@ export class NativeAgentTranscriptProjection {
           // block that the first pass is documented to keep visible.
           messages: persisted.messages,
           historyEpoch: persisted.historyEpoch,
-          // v1 tails and any write that omitted remainder metadata cannot
-          // prove the start of history. Claim complete only when persisted.
+          // A write that omitted remainder metadata cannot prove the start
+          // of history. Claim complete only when persisted.
           historyComplete,
           ...(messageWindow ? { messageWindow } : {}),
           ...(persisted.title ? { title: persisted.title } : {}),
@@ -3871,7 +3871,7 @@ export class NativeAgentTranscriptProjection {
       this.progressiveDiscoveryCache.delete(oldest);
     }
     // Diagnostic only, and computed only for an announcement: which part of
-    // the value moved (todo 7530). Content-free paths, never values.
+    // the value moved (#2062). Content-free paths, never values.
     const changedPaths = !announce
       ? []
       : !previous
@@ -3882,7 +3882,7 @@ export class NativeAgentTranscriptProjection {
     return { changed, announce, changedPaths };
   }
 
-  /** Count an announced discovery change by section and changed path (todo 7530). */
+  /** Count an announced discovery change by section and changed path (#2062). */
   private recordDiscoveryAnnouncement(
     input: NativeAgentDiscoveryUpdateInput,
     section: NativeAgentDiscoverySection,

@@ -36,7 +36,6 @@ import {
 
 /** The machine's settings writes a workspace grant never runs (plan items 7005, 7012). */
 const CONFIG_ADMIN = new Set([
-  "save_config",
   "update_global_config",
   "patch_global_config",
   "update_notification_sound_settings",
@@ -85,11 +84,11 @@ const CONFIG = {
 };
 
 describe("projects and config definitions", () => {
-  it("defines both domains at version 1 with every command once", () => {
-    expect(projectsDomain).toMatchObject({ name: "projects", version: 1, min: 1 });
-    expect(configDomain).toMatchObject({ name: "config", version: 1, min: 1 });
-    expect(PROJECTS_COMMANDS).toHaveLength(27);
-    expect(CONFIG_COMMANDS).toHaveLength(31);
+  it("defines both domains at version 2 (min 1) with every command once", () => {
+    expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
+    expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
+    expect(PROJECTS_COMMANDS).toHaveLength(26);
+    expect(CONFIG_COMMANDS).toHaveLength(29);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
       [configDomain, CONFIG_COMMANDS],
@@ -179,11 +178,11 @@ describe("projects and config definitions", () => {
     );
   });
 
-  it("lists both clients in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists both clients in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
     expect(DOMAIN_CLIENTS).toContain(projectsClient);
     expect(DOMAIN_CLIENTS).toContain(configClient);
-    expect(projectsClient.versions).toEqual([1, 0]);
-    expect(configClient.versions).toEqual([1, 0]);
+    expect(projectsClient.versions).toEqual([2, 1, 0]);
+    expect(configClient.versions).toEqual([2, 1, 0]);
   });
 });
 
@@ -215,15 +214,15 @@ function fakeNode(
   return { sent, invoked, usage, options };
 }
 
-const CURRENT = { projects: { min: 1, max: 1 }, config: { min: 1, max: 1 } };
+const CURRENT = { projects: { min: 1, max: 2 }, config: { min: 1, max: 2 } };
 
 describe("projects client", () => {
-  it("version 1: typed calls carry the envelope and the critical keys sent, results decode", async () => {
+  it("version 2: typed calls carry the envelope and the critical keys sent, results decode", async () => {
     const node = fakeNode(CURRENT, (command) =>
       command === "add_project" ? { ...PROJECT, extra: "dropped" } : [PROJECT],
     );
     const client = createDomainClient(projectsClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const api = client.api();
     await expect(
       api.add_project({ gitUrl: PROJECT.gitUrl, localPath: "/work/alpha", cloneOnly: true }),
@@ -231,15 +230,15 @@ describe("projects client", () => {
     expect(node.sent[0]).toEqual({
       command: "add_project",
       args: { gitUrl: PROJECT.gitUrl, localPath: "/work/alpha", cloneOnly: true },
-      envelope: { domain: "projects", version: 1, critical: ["cloneOnly"] },
+      envelope: { domain: "projects", version: 2, critical: ["cloneOnly"] },
     });
     await expect(api.get_projects({})).resolves.toEqual([PROJECT]);
-    expect(node.sent[1]!.envelope).toEqual({ domain: "projects", version: 1 });
+    expect(node.sent[1]!.envelope).toEqual({ domain: "projects", version: 2 });
     expect(node.invoked).toEqual([]);
     expect(node.usage).toEqual([]);
   });
 
-  it("version 1: a result that does not match its schema is refused", async () => {
+  it("version 2: a result that does not match its schema is refused", async () => {
     const node = fakeNode(CURRENT, () => ({ ...PROJECT, order: "first" }));
     const api = createDomainClient(projectsClient, node.options).api();
     await expect(api.get_project({ projectId: "p1" })).rejects.toThrow(
@@ -260,14 +259,14 @@ describe("projects client", () => {
 });
 
 describe("config client", () => {
-  it("version 1: settings keep every key, and the capability command is folded in", async () => {
+  it("version 2: settings keep every key, and the capability command is folded in", async () => {
     const node = fakeNode(CURRENT, () => CONFIG);
     const api = createDomainClient(configClient, node.options).api();
     await expect(api.get_config({})).resolves.toEqual(CONFIG);
     await expect(
       api.patch_global_config({ patch: { autoSteer: true }, unset: ["x"] }),
     ).resolves.toEqual(CONFIG);
-    expect(node.sent[1]!.envelope).toEqual({ domain: "config", version: 1, critical: ["unset"] });
+    expect(node.sent[1]!.envelope).toEqual({ domain: "config", version: 2, critical: ["unset"] });
     await expect(api.clientStateCapabilities()).resolves.toEqual(CONFIG_CLIENT_STATE_CAPABILITIES);
     expect(node.sent.map((sent) => sent.command)).toEqual(["get_config", "patch_global_config"]);
     expect(node.invoked).toEqual([]);

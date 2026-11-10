@@ -430,20 +430,3 @@ export function recordDirectoryName(id: string): string {
 export function requestTextRecordId(requestId: string): string {
   return `request-text:${requestId}`;
 }
-
-export function sameRequestText(
-  a: RequestTextValue,
-  b: { instruction: string; response: WebAnnotationResponseExcerpt | null },
-): boolean {
-  if (a.instruction !== b.instruction) return false;
-  const left = a.response;
-  const right = b.response;
-  if (left === null || right === null) return left === right;
-  return (
-    left.text === right.text &&
-    left.capturedAt === right.capturedAt &&
-    left.messageId === right.messageId &&
-    left.truncated === right.truncated &&
-    left.provenance === right.provenance
-  );
-}

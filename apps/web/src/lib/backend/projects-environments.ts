@@ -34,14 +34,12 @@ import type {
   StartEnvironmentResult,
 } from "@/types";
 import {
-  isResourceRevisionManifest,
   isScopedResourceRevisionManifest,
   isScopedResourceSnapshotBatch,
   SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES,
   type ResourceChange,
   type ScopedResourceSnapshotBatch,
   type ScopedResourceRevisionManifest,
-  type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 import { environmentsClient } from "@orkestrator/protocol/contract/domains/environments";
@@ -93,20 +91,6 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
     machine === undefined
       ? environments()
       : domainApi(machineBackendClient(client, machine), environmentsClient);
-
-  async function getResourceRevisionManifest(
-    knownGeneration?: string,
-    knownRevisions: Partial<ResourceRevisionMap> = {},
-  ): Promise<ResourceRevisionManifest> {
-    const response = await systemApi(client).get_resource_revision_manifest({
-      ...(knownGeneration === undefined ? {} : { knownGeneration }),
-      knownRevisions,
-    });
-    if (!isResourceRevisionManifest(response)) {
-      throw new Error("Invalid resource revision manifest response");
-    }
-    return response;
-  }
 
   async function getScopedResourceRevisionManifest(
     knownGeneration?: string,
@@ -523,7 +507,6 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
   }
 
   return {
-    getResourceRevisionManifest,
     getScopedResourceRevisionManifest,
     getScopedResourceSnapshots,
     getProjects,
@@ -575,7 +558,6 @@ export type ProjectsEnvironmentsApi = ReturnType<typeof createProjectsEnvironmen
 
 /** The window's command-scope binding (the counted shim, plan item 3002). */
 export const {
-  getResourceRevisionManifest,
   getScopedResourceRevisionManifest,
   getScopedResourceSnapshots,
   getProjects,

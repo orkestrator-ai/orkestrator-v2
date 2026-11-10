@@ -14,7 +14,7 @@ import type {
  * observed.
  */
 export interface FreshnessNotice {
-  kind: "stale" | "degraded" | "unsupported" | "remote-stale" | "remote-unknown";
+  kind: "stale" | "degraded" | "remote-stale" | "remote-unknown";
   /** Short label for an inline badge. */
   label: string;
   /** One or two sentences for a tooltip or strip. */
@@ -26,8 +26,7 @@ export interface FreshnessNotice {
  *
  * `polled`: the view also re-reads on a short timer (the Files panel's 5 s
  * poll), so the mirror only speeds updates up. Its failure then delays
- * changes by at most one poll rather than freezing them, and a backend
- * without the snapshot command is the designed polling path, not a problem.
+ * changes by at most one poll rather than freezing them.
  */
 export function hydrationFreshnessNotice(
   status: HydrationStatus,
@@ -54,12 +53,6 @@ export function hydrationFreshnessNotice(
         kind: "degraded",
         label: "Out of date",
         detail: `Refreshing ${subject} keeps failing, so this shows the last state received. It recovers on reconnect or the next check.`,
-      };
-    case "unsupported":
-      return {
-        kind: "unsupported",
-        label: "Live updates only",
-        detail: `This backend cannot send a ${subject} snapshot, so this follows live updates only and may miss changes made while disconnected.`,
       };
     default:
       return null;

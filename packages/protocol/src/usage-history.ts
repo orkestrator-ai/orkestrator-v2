@@ -1,4 +1,4 @@
-import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import {
   combineNativeAgentCostSources,
   type NativeAgentCostSource,
@@ -54,9 +54,6 @@ export interface UsageTotals {
 
 /** The model name used when a provider priced a turn without naming a model. */
 export const UNKNOWN_USAGE_MODEL_ID = "unknown";
-
-/** Ranges the usage panes offer, in days ending today (today included). */
-export const USAGE_HISTORY_RANGE_DAYS: readonly number[] = Object.freeze([1, 7, 30, 90]);
 
 /** Days of history the backend keeps before pruning a bucket. */
 export const USAGE_HISTORY_RETENTION_DAYS = 400;
@@ -175,10 +172,6 @@ export function addUsageTotals(target: UsageTotals, addition: UsageTotals): Usag
   return target;
 }
 
-export function isUsageTotalsEmpty(totals: UsageTotals): boolean {
-  return totals.totalTokens === 0 && totals.costUsd === 0 && totals.turns === 0;
-}
-
 /** A finite, non-negative count; anything else counts as zero. */
 export function usageCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
@@ -235,14 +228,4 @@ export function normalizeUsageHistoryQuery(value: unknown): UsageHistoryQuery {
     ...(platform ? { platform } : {}),
     ...(environmentId ? { environmentId } : {}),
   };
-}
-
-/** Orders platform summaries the way the rest of the app lists platforms. */
-export function sortUsagePlatformSummaries(
-  summaries: readonly UsagePlatformSummary[],
-): UsagePlatformSummary[] {
-  return [...summaries].sort(
-    (left, right) =>
-      AGENT_PLATFORMS.indexOf(left.platform) - AGENT_PLATFORMS.indexOf(right.platform),
-  );
 }

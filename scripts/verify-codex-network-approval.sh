@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the managed-network half of live-policy-amendment.test.ts (todo 0160).
+# Runs the managed-network half of live-policy-amendment.test.ts (#1518).
 #
 # Codex only asks about a host when `/etc/codex/requirements.toml` enables its
 # network proxy, a file no test may write on a real machine. So this runs in a

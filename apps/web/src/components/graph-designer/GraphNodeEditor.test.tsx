@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { graphTemplateExample } from "@orkestrator/protocol/graphs/examples";
-import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/graphs/isolation-template";
+import { graphCompetingImplementationsTemplate } from "@orkestrator/protocol/testing/graph-isolation-template";
 import type { GraphAgentNode, GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import { GraphNodeEditor } from "./GraphNodeEditor";
 import { renderWithGraphEditor } from "./graph-editor.test-support";

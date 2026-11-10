@@ -3,7 +3,7 @@
  *
  * Previews were never gated by version, only by whether the backend has the
  * preview commands at all (`get_preview_capabilities` answering
- * `unknown-command`, `isUnknownPreviewCommandError`), and they keep their own
+ * `unknown-command`), and they keep their own
  * response-level versioning: `protocolVersion`, per-surface availability and
  * the backend epoch in `get_preview_capabilities`, the registry revision in
  * every snapshot. So both adapters offer the same calls:
@@ -14,8 +14,7 @@
  * - **Version 0**, for a pre-contract node, is today's call: the command by
  *   name without an envelope, its answer not decoded, so an older backend's
  *   shapes are taken as they always were and the callers' own checks
- *   (`isUnknownPreviewCommandError`, the store's capability validation) keep
- *   working.
+ *   (the store's capability validation) keep working.
  *
  * `get_preview_capabilities` stays registered and is still read on every
  * version: it reports runtime state (the access kill switch, which surfaces

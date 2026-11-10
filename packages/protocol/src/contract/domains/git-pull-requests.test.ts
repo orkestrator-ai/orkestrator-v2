@@ -41,21 +41,22 @@ const ADMIN = new Set(["changes_get_diagnostics"]);
 const INTERNAL = new Set(["pr_monitor_agent_turn_completed", "pr_monitor_probe_environment"]);
 
 const DOMAINS = [
-  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 23 },
+  { domain: gitDomain, commands: GIT_COMMANDS as readonly AnyCommandDef[], count: 23, version: 1 },
   {
     domain: pullRequestsDomain,
     commands: PULL_REQUESTS_COMMANDS as readonly AnyCommandDef[],
-    count: 42,
+    count: 40,
+    version: 2,
   },
 ];
 
 describe("git and pull-requests definitions", () => {
-  for (const { domain, commands, count } of DOMAINS) {
-    it(`defines ${domain.name}'s ${count} commands once each, at version 1`, () => {
+  for (const { domain, commands, count, version } of DOMAINS) {
+    it(`defines ${domain.name}'s ${count} commands once each, since version 1`, () => {
       const names = commands.map((def) => def.name);
       expect(names).toHaveLength(count);
       expect(new Set(names).size).toBe(count);
-      expect(domain).toMatchObject({ version: 1, min: 1 });
+      expect(domain).toMatchObject({ version, min: 1 });
       for (const def of commands) {
         expect(def.domain).toBe(domain);
         expect(def.since).toBe(1);
@@ -86,11 +87,11 @@ describe("git and pull-requests definitions", () => {
     });
   }
 
-  it("lists both clients in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists both clients in DOMAIN_CLIENTS with their adapters", () => {
     expect(DOMAIN_CLIENTS).toContain(gitClient);
     expect(DOMAIN_CLIENTS).toContain(pullRequestsClient);
     expect(gitClient.versions).toEqual([1, 0]);
-    expect(pullRequestsClient.versions).toEqual([1, 0]);
+    expect(pullRequestsClient.versions).toEqual([2, 1, 0]);
   });
 
   it("drops unknown keys of a formerly strict command, refuses an unknown critical one", () => {

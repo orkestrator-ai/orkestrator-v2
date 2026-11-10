@@ -1,5 +1,5 @@
 /**
- * A goal's verifier session (`plans/goals/401-verifier-session.md`): at an
+ * A goal's verifier session (`docs/architecture/goals.md`, Verifier and other surfaces): at an
  * agent's `done` report, a fresh read-only session on any provider reads the
  * workspace, runs commands and returns one `verification-verdict@1`.
  *

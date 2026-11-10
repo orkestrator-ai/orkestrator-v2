@@ -6,8 +6,7 @@ Analysed 2026-11-03 against `main` at `a1218b081`.
 
 ### Tasks
 
-1. **Switch the issued cookie name over HTTPS**: issue `__Host-orkestrator_gateway_auth` instead of `orkestrator_gateway_auth` when the browser reached the gateway over HTTPS. Status: open (depends on 2).
-2. **Wait for an iOS release that accepts the name**: the iOS app's native sign-in must accept the `__Host-` name in every supported build before the backend issues it. Status: open.
+1. **Switch the issued cookie name over HTTPS**: issue `__Host-orkestrator_gateway_auth` instead of `orkestrator_gateway_auth` when the browser reached the gateway over HTTPS. Status: blocked (waits on 7568: 2960 task 2).
 
 ### 1. Switch the issued cookie name over HTTPS
 
@@ -48,45 +47,6 @@ the attacker already holds. HTTPS detection is `requestIsHttps` (TLS socket,
     - Cons: a setting that silently breaks iOS sign-in when turned on; one
       more configuration surface.
 
-### 2. Wait for an iOS release that accepts the name
-
-**Problem.** An iOS build older than the H1 change rejects a login response
-that carries only the `__Host-` cookie ("did not create a secure web
-session").
-
-**Context.** The H1 change made `loginCookie` accept either name, preferring
-`__Host-`, with an XCTest case. It was written on Linux and not compiled or
-run there.
-
-**Investigation.** Tried on 2026-11-04 on a Mac with Xcode 27.2, without a
-result. `mise run test:ios` printed nothing while `xcodebuild -runFirstLaunch`
-ran; it was stopped after 15 minutes. Complete Xcode's first launch by hand first,
-because it installs system components. The commit with the change
-(`4f9cf3b32`) is in the tags `v2.35.5-beta`, `v2.36.0` and `v2.36.1`. Whether
-an iOS build has shipped from them, and how long the iOS support window is,
-were not established.
-
-Compiled and run on 2026-11-05 on a Mac with Xcode 26.6, in the iOS app review
-(security report part `0270`): `loginCookie` accepts either name, and a new
-test shows a real `WKHTTPCookieStore` keeps `HttpOnly`, `Secure` and
-`SameSite=Strict` on both. All 66 tests in `OrkestratorMobileTests` passed on
-the iOS 17.5, 18.2 and 26.2 simulators. That run used `swiftc` and a throwaway
-host app, because `xcodebuild` found no destination without the iOS 26.5
-simulator platform, so `mise run test:ios` itself is still to run
-([5601](5601-ios-runtime-security-checks.md) task 1). What is left of this task
-is recording the first release that contains the change.
-
-**Decisions.**
-
-- **How to verify?**
-  - **Run `OrkestratorMobileTests` on macOS, then record the first release
-    that contains it in the version-compatibility register (recommended).**
-    - Pros: the switch in task 1 can then cite a concrete minimum build.
-    - Cons: needs a Mac with Xcode.
-  - **Rely on code review.**
-    - Pros: no hardware.
-    - Cons: the Swift change has never been compiled.
-
 ## Assumptions and decisions
 
 ### Task 2: how to verify (2026-11-05)
@@ -103,4 +63,5 @@ is recording the first release that contains the change.
 
 - `docs/reports/2-26-10-27-security.md` (H1)
 - `docs/architecture/remote-gateway.md` (Security notes)
-- [5601-ios-runtime-security-checks.md](5601-ios-runtime-security-checks.md)
+- To-do 5601 (retired 2026-11-10): the iOS guarantees it checked are in [renderer security, iOS app](../../architecture/renderer-security.md#ios-app), and its device and signed-release checks are in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, recording the first iOS release that accepts the `__Host-` name and the iOS support window) moved there on 2026-11-10.

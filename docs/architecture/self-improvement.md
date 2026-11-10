@@ -124,7 +124,9 @@ error text.
    24 MiB, read from its end, resumes correctly as it grows. The first run
    looks back 14 days. A run reads at most 30 parts; the rest wait for the
    next run. Conversations whose working directory is inside the data
-   directory are never read.
+   directory are never read. Finding the new parts reads every quiet history
+   file of the last 14 days (thousands on a busy machine), so the scan yields
+   to the backend's event loop every 20 ms rather than holding it for seconds.
 2. **What is sent.**
    - Sent: your messages, the agents' replies (shortened), which tools ran
      (names and counts), tool errors and interruptions. Lines are marked as
@@ -264,8 +266,9 @@ fix, the run waits for the next release before judging it.
 - **Windows differ by source.** The essential log reaches back as far as its
   4 MiB holds, the health rows seven days, database counters only this
   backend's run.
-- **Container bridges are missing** from the bundle
-  ([6143](../todo/cross-cutting/6143-diagnostics-bundle-container-logs.md)).
+- **Container bridges are missing** from the bundle a run reads. Only the
+  Export dialog adds container server logs, per environment, when the user
+  opts in ([logging.md](logging.md)).
 - **A model only sees what was said.** UI friction you never mention to an
   agent does not reach it. Themes are judgements: delete a wrong one's
   ticket.

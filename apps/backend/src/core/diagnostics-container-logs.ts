@@ -18,7 +18,7 @@ import type { Environment } from "./models.js";
 /**
  * Container server logs for a diagnostics bundle, read only for the
  * environments the user chose in the Export dialog
- * (docs/todo/cross-cutting/6143-diagnostics-bundle-container-logs.md).
+ * (docs/architecture/logging.md).
  *
  * Each read is a `docker exec` per server, so the cost is the user's choice:
  * nothing here runs for a bundle that chose none. Each file is bounded at the

@@ -45,8 +45,6 @@ export const SERVER_BOOLEAN_FLAGS: readonly string[] = Object.freeze([
   "--strict-docker-owner",
   "--strict-gateway-port",
   "--tailscale-serve",
-  // Pre-rename spelling kept for existing service units.
-  "--unsafe-allow-non-tailscale-bind",
 ]);
 
 export function isServerFlag(token: string): boolean {

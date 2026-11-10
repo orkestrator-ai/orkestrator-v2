@@ -704,7 +704,7 @@ read, so a question that was just answered does not report 6.
 
 `session goal` gives one agent tab a durable objective; the backend sends turns
 until a check proves it, the agent needs a person, or a limit stops it. The
-rules are the composer's `/goal` (`plans/goals.md`), and `docs/architecture/goals.md`
+rules are the composer's `/goal`, and [goals.md](goals.md)
 describes the loop. An agent in a session has only `report_goal`, so it can report
 on a goal and never set one. A Control MCP credential granted `sessions.control`
 reaches these actions like any other session control, and the voice profile

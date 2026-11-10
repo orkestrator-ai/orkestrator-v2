@@ -20,7 +20,6 @@ import {
   isClosedTransportError,
   performSessionMcpAction,
   readClaudeCommandCatalogue,
-  readSessionCommands,
   readSessionMcpServers,
   recordCommandsChanged,
   refreshClaudeCommandCatalogue,
@@ -60,7 +59,9 @@ describe("catalog reads against a closed transport", () => {
     const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
 
     // First read populates the cache from the live control.
-    const initial = await readSessionCommands(session.id);
+    const initial = await readClaudeCommandCatalogue(session.id).then(
+      (catalogue) => catalogue.commands,
+    );
     expect(initial.map((command) => command.name)).toEqual(["/deploy"]);
     expect(session.commandInventory?.map((command) => command.name)).toEqual(["/deploy"]);
 
@@ -72,7 +73,9 @@ describe("catalog reads against a closed transport", () => {
       throw closedTransport();
     });
     session.queryControl!.supportedCommands = dying;
-    await expect(readSessionCommands(session.id)).resolves.toEqual(initial);
+    await expect(
+      readClaudeCommandCatalogue(session.id).then((catalogue) => catalogue.commands),
+    ).resolves.toEqual(initial);
     expect(dying).toHaveBeenCalled();
 
     await finish();
@@ -85,13 +88,15 @@ describe("catalog reads against a closed transport", () => {
     queryControlOverrides.supportedCommands = supportedCommands;
 
     const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
-    await readSessionCommands(session.id);
+    await readClaudeCommandCatalogue(session.id).then((catalogue) => catalogue.commands);
     const callsBeforeDrain = supportedCommands.mock.calls.length;
 
     // What `drainClaudeRuntime()` records once the CLI's stdin is closed.
     session.queryControlDraining = session.queryControl;
 
-    await expect(readSessionCommands(session.id)).resolves.toEqual(session.commandInventory ?? []);
+    await expect(
+      readClaudeCommandCatalogue(session.id).then((catalogue) => catalogue.commands),
+    ).resolves.toEqual(session.commandInventory ?? []);
     // The point of the marker: no request was even attempted.
     expect(supportedCommands.mock.calls.length).toBe(callsBeforeDrain);
 

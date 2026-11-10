@@ -38,10 +38,6 @@ export interface ArtifactPrintProfile {
   maxBytes: number;
 }
 
-export function isArtifactPrintPaper(value: unknown): value is ArtifactPrintPaper {
-  return value === "a4" || value === "letter";
-}
-
 export function artifactPrintProfile(
   paper: ArtifactPrintPaper,
   preview: ArtifactPreviewProfile,

@@ -1,5 +1,5 @@
 /**
- * Background recovery of turn ends whose capture timed out (todo 7310 task 1).
+ * Background recovery of turn ends whose capture timed out (#2047).
  * A finalization deadline of 0 makes every end capture time out at once; the
  * retry has its own deadline.
  */

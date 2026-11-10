@@ -579,9 +579,9 @@ describe("the real state file at its default ceiling", () => {
 
     // Closing through the router removes the session even though the file is
     // refusing growth: a close never needs a larger write first.
-    const response = await harness.call(`/session/${oversized.id}`, { method: "DELETE" });
+    const response = await harness.call(`/session/${oversized.id}/close`, { method: "POST" });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ deleted: true });
+    expect(await response.json()).toEqual({ closed: true, retained: true });
     expect(sessions.has(oversized.id)).toBe(false);
 
     keeper.composer = { ...keeper.composer, selectedModelId: "after-recovery" };

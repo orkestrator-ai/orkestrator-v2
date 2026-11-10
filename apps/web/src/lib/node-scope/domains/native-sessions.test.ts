@@ -44,8 +44,8 @@ describe("native-sessions over a lib/backend client", () => {
       answer as never,
     );
     expect(client.invokeRaw).toHaveBeenLastCalledWith("get_native_agent_session", identity);
-    await nativeSessions(client).cleanup_orphaned_buffers({});
-    expect(client.invokeRaw).toHaveBeenLastCalledWith("cleanup_orphaned_buffers");
+    await nativeSessions(client).reconcile_agent_interactions({});
+    expect(client.invokeRaw).toHaveBeenLastCalledWith("reconcile_agent_interactions");
     await nativeSessions(client).syncCapabilities();
     expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_native_agent_sync_capabilities"]);
   });

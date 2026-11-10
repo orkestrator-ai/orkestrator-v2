@@ -63,10 +63,6 @@ export function actionDefaultEntry(
 
 export type ActionDefaults = Partial<Record<ActionDefaultKey, AgentActionDefault>>;
 
-export function isActionDefaultKey(value: unknown): value is ActionDefaultKey {
-  return ACTION_DEFAULT_KEYS.includes(value as ActionDefaultKey);
-}
-
 /**
  * The id the model-catalogue builder synthesises for OpenCode when no live or
  * cached models exist for a project. No OpenCode server knows it, so pinning it

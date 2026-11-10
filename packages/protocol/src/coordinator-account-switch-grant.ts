@@ -18,9 +18,6 @@ import { AGENT_ACCOUNT_PLATFORMS, type AgentAccountPlatform } from "./agent-acco
 export const GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND = "get_coordinator_account_switch_grant";
 export const SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND = "set_coordinator_account_switch_grant";
 
-/** Command: run and record a switch a self-timer's permission allows. */
-export const RUN_TIMER_AGENT_ACCOUNT_SWITCH_COMMAND = "run_timer_agent_account_switch";
-
 /** Emitted with a `CoordinatorAccountSwitchRecord` when a switch ran without asking. */
 export const COORDINATOR_ACCOUNT_SWITCHED_EVENT = "coordinator-account-switched";
 

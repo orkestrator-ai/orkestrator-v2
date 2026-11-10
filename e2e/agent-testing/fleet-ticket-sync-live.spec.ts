@@ -1,5 +1,5 @@
 /**
- * Fleet ticket sync over two real backends (to-do 3800 task 1): two running
+ * Fleet ticket sync over two real backends (#2059): two running
  * `dev:test` profiles on this machine, the second attached to the first as a
  * leaf, over the real gateway, event stream and node link, with a real
  * disconnect (the leaf profile stopped and started again).

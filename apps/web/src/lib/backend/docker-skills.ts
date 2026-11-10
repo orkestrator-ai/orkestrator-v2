@@ -13,7 +13,6 @@ import type {
 } from "@orkestrator/protocol/container-resources";
 import type {
   Environment,
-  EnvironmentStatus,
   DomainTestResult,
   PreferredEditor,
   ClaudeModelCatalogSnapshot,
@@ -168,46 +167,7 @@ export interface OpenCodeModelCatalogSnapshot {
 /** Every container server with a `get_<provider>_server_log` command. */
 export type ContainerServerLogProvider = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 
-const finiteNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
-
-/**
- * Project a model onto exactly the fields the cache command accepts.
- *
- * The catalogue is assembled from whatever a provider reports, so this drops
- * `NaN`/`Infinity` costs that `typeof x === "number"` lets through upstream and
- * makes the wire contract explicit: a field added to `OpenCodeModel` later
- * cannot start failing the command's strict key check.
- */
-function toCachedOpenCodeModel(model: CachedOpenCodeModel): CachedOpenCodeModel {
-  const variants = Array.isArray(model.variants)
-    ? model.variants.filter((variant) => typeof variant === "string" && variant.trim().length > 0)
-    : undefined;
-  const inputCost = finiteNumber(model.inputCost);
-  const outputCost = finiteNumber(model.outputCost);
-  const contextWindow = finiteNumber(model.contextWindow);
-  return {
-    id: model.id,
-    name: model.name,
-    provider: model.provider,
-    ...(variants?.length ? { variants } : {}),
-    ...(inputCost === undefined ? {} : { inputCost }),
-    ...(outputCost === undefined ? {} : { outputCost }),
-    ...(contextWindow === undefined ? {} : { contextWindow }),
-    ...(typeof model.supportsImageInput === "boolean"
-      ? { supportsImageInput: model.supportsImageInput }
-      : {}),
-  };
-}
-
-// --- Claude Bridge Server Commands ---
-
 // --- Credential Commands ---
-
-export interface CredentialStatus {
-  available: boolean;
-  expiresAt: number | null;
-}
 
 export interface GitHubCredentialStatus {
   source: "none" | "host-cli" | "pat";
@@ -358,19 +318,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     return docker().checkHostReachability();
   }
 
-  async function dockerVersion(): Promise<string> {
-    return docker().dockerVersion();
-  }
-
-  /** The environment's container id; `null` when the create left none. */
-  async function provisionEnvironment(environmentId: string): Promise<string | null> {
-    return docker().provisionEnvironment({ environmentId });
-  }
-
-  async function dockerStartContainer(containerId: string): Promise<void> {
-    return docker().startContainer({ containerId });
-  }
-
   async function dockerStopContainer(containerId: string, machine?: AccountMachine): Promise<void> {
     return dockerOn(machine).stopContainer({ containerId });
   }
@@ -380,18 +327,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     machine?: AccountMachine,
   ): Promise<void> {
     return dockerOn(machine).removeContainer({ containerId });
-  }
-
-  async function dockerContainerStatus(containerId: string): Promise<EnvironmentStatus> {
-    return docker().containerStatus({ containerId });
-  }
-
-  async function listDockerContainers(): Promise<[string, string][]> {
-    return docker().listContainers();
-  }
-
-  async function checkBaseImage(): Promise<boolean> {
-    return docker().checkBaseImage();
   }
 
   /** Get Docker system statistics (memory, CPU, disk usage) */
@@ -448,17 +383,6 @@ export function createDockerSkillsApi(client: BackendClient) {
    * Legacy: opens a leased log subscription. Log lines are not pushed as events;
    * read them with `readContainerLogs`.
    */
-  async function streamContainerLogs(containerId: string): Promise<void> {
-    await docker().streamContainerLogs({ containerId });
-  }
-
-  /** Get the host port mapped to a specific container port */
-  async function getContainerHostPort(
-    containerId: string,
-    containerPort: number,
-  ): Promise<number | null> {
-    return docker().containerHostPort({ containerId, containerPort });
-  }
 
   /** Apply the selected GitHub credential source to all running containers. */
   async function propagateGithubCredentialsToContainers(
@@ -466,6 +390,12 @@ export function createDockerSkillsApi(client: BackendClient) {
   ): Promise<PropagateTokenResult> {
     return dockerOn(machine).propagateGithubToken();
   }
+
+  /**
+   * A container server's bounded, redacted log tail (for debugging). With
+   * `previous`, the log of the run before the last relaunch instead, which is
+   * where a crash's evidence is; empty when there has been no relaunch.
+   */
 
   /**
    * A container server's bounded, redacted log tail (for debugging). With
@@ -482,11 +412,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     // A provider this build has no definition for is asked by name, as before.
     const read = agentServers()[command] as ((input: typeof args) => Promise<string>) | undefined;
     return read ? read(args) : client.invokeRaw<string>(command, args);
-  }
-
-  /** Get the OpenCode server log from a container (for debugging) */
-  async function getOpenCodeServerLog(containerId: string): Promise<string> {
-    return getContainerServerLog("opencode", containerId);
   }
 
   /** Get OpenCode model preferences from ~/.local/state/opencode/model.json */
@@ -508,24 +433,6 @@ export function createDockerSkillsApi(client: BackendClient) {
    * Store a newly-discovered catalogue. The backend hashes normalized model data
    * and only rewrites the cache when the catalogue version has actually changed.
    */
-  async function cacheOpenCodeModelCatalog(
-    projectId: string,
-    models: CachedOpenCodeModel[],
-  ): Promise<OpenCodeModelCatalogSnapshot> {
-    return asWebModel<OpenCodeModelCatalogSnapshot>(
-      agentServers().cache_opencode_model_catalog({
-        projectId,
-        // A non-array is a caller bug; forwarding it lets the command reject it
-        // with a named error instead of throwing a TypeError in the renderer.
-        models: (Array.isArray(models) ? models : []).map(toCachedOpenCodeModel),
-      }),
-    );
-  }
-
-  /** Get the Claude bridge server log from a container (for debugging) */
-  async function getClaudeServerLog(containerId: string): Promise<string> {
-    return getContainerServerLog("claude", containerId);
-  }
 
   /** Read or refresh the backend-owned Claude model catalog for an environment. */
   async function getClaudeModelCatalog(
@@ -535,19 +442,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     return asWebModel<ClaudeModelCatalogSnapshot>(
       agentServers().get_claude_model_catalog({ environmentId, forceRefresh }),
     );
-  }
-
-  /** Get the Codex bridge server log from a container (for debugging) */
-  async function getCodexServerLog(containerId: string): Promise<string> {
-    return getContainerServerLog("codex", containerId);
-  }
-
-  async function hasClaudeCredentials(): Promise<boolean> {
-    return agentServers().has_claude_credentials({});
-  }
-
-  async function getCredentialStatus(): Promise<CredentialStatus> {
-    return asWebModel<CredentialStatus>(agentServers().get_credential_status({}));
   }
 
   /** Report whether the credential source selected for container Git operations is usable. */
@@ -648,11 +542,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     );
   }
 
-  /** Check if any AI CLI (Claude or OpenCode) is available for name generation */
-  async function checkAnyAiCli(): Promise<boolean> {
-    return agentServers().check_any_ai_cli({});
-  }
-
   /** Get the name of the available AI CLI ("claude", "opencode", or null if none) */
   async function getAvailableAiCli(): Promise<string | null> {
     return agentServers().get_available_ai_cli({});
@@ -675,21 +564,6 @@ export function createDockerSkillsApi(client: BackendClient) {
     machine?: AccountMachine,
   ): Promise<DomainTestResult[]> {
     return asWebModel<DomainTestResult[]>(nativeOn(machine).test_domain_resolution({ domains }));
-  }
-
-  async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {
-    return asWebModel<DomainTestResult[]>(native().validate_domains({ domains }));
-  }
-
-  async function addEnvironmentDomains(environmentId: string, domains: string[]): Promise<string> {
-    return environments().addEnvironmentDomains({ environmentId, domains });
-  }
-
-  async function removeEnvironmentDomains(
-    environmentId: string,
-    domains: string[],
-  ): Promise<string> {
-    return environments().removeEnvironmentDomains({ environmentId, domains });
   }
 
   async function updateEnvironmentAllowedDomains(
@@ -772,34 +646,20 @@ export function createDockerSkillsApi(client: BackendClient) {
     checkDocker,
     getContainerHostReachability,
     checkContainerHostReachability,
-    dockerVersion,
-    provisionEnvironment,
-    dockerStartContainer,
     dockerStopContainer,
     dockerRemoveContainer,
-    dockerContainerStatus,
-    listDockerContainers,
-    checkBaseImage,
     getDockerSystemStats,
     getOrkestratorContainers,
     reattachContainer,
     getContainerLogs,
+    getContainerServerLog,
     openContainerLogs,
     readContainerLogs,
     closeContainerLogs,
-    streamContainerLogs,
-    getContainerHostPort,
     propagateGithubCredentialsToContainers,
-    getContainerServerLog,
-    getOpenCodeServerLog,
     getOpencodeModelPreferences,
     getCachedOpenCodeModelCatalog,
-    cacheOpenCodeModelCatalog,
-    getClaudeServerLog,
     getClaudeModelCatalog,
-    getCodexServerLog,
-    hasClaudeCredentials,
-    getCredentialStatus,
     getContainerGitHubCredentialStatus,
     checkClaudeCli,
     checkClaudeConfig,
@@ -813,15 +673,11 @@ export function createDockerSkillsApi(client: BackendClient) {
     startGitHubCliLogin,
     getGitHubCliLogin,
     cancelGitHubCliLogin,
-    checkAnyAiCli,
     getAvailableAiCli,
     greet,
     validateGitUrl,
     getGitRemoteUrl,
     testDomainResolution,
-    validateDomains,
-    addEnvironmentDomains,
-    removeEnvironmentDomains,
     updateEnvironmentAllowedDomains,
     openInEditor,
     openLocalInEditor,
@@ -842,34 +698,20 @@ export const {
   checkDocker,
   getContainerHostReachability,
   checkContainerHostReachability,
-  dockerVersion,
-  provisionEnvironment,
-  dockerStartContainer,
   dockerStopContainer,
   dockerRemoveContainer,
-  dockerContainerStatus,
-  listDockerContainers,
-  checkBaseImage,
   getDockerSystemStats,
   getOrkestratorContainers,
   reattachContainer,
   getContainerLogs,
+  getContainerServerLog,
   openContainerLogs,
   readContainerLogs,
   closeContainerLogs,
-  streamContainerLogs,
-  getContainerHostPort,
   propagateGithubCredentialsToContainers,
-  getContainerServerLog,
-  getOpenCodeServerLog,
   getOpencodeModelPreferences,
   getCachedOpenCodeModelCatalog,
-  cacheOpenCodeModelCatalog,
-  getClaudeServerLog,
   getClaudeModelCatalog,
-  getCodexServerLog,
-  hasClaudeCredentials,
-  getCredentialStatus,
   getContainerGitHubCredentialStatus,
   checkClaudeCli,
   checkClaudeConfig,
@@ -883,15 +725,11 @@ export const {
   startGitHubCliLogin,
   getGitHubCliLogin,
   cancelGitHubCliLogin,
-  checkAnyAiCli,
   getAvailableAiCli,
   greet,
   validateGitUrl,
   getGitRemoteUrl,
   testDomainResolution,
-  validateDomains,
-  addEnvironmentDomains,
-  removeEnvironmentDomains,
   updateEnvironmentAllowedDomains,
   openInEditor,
   openLocalInEditor,

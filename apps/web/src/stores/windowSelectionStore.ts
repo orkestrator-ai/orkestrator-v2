@@ -22,7 +22,6 @@ import {
   projectRef,
 } from "@orkestrator/protocol/federation";
 import { COMMAND_STORAGE_NODE, desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
-import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
@@ -30,11 +29,6 @@ import { windowScopeOf, type NodeSelection, type WindowScope } from "@/lib/node-
 import { useMachineViewStore } from "./machineViewStore";
 
 export type { NodeSelection } from "@/lib/node-scope/window-scope";
-
-/** The app window's selection, for plain code with no window scope of its own. */
-export function windowSelection(windowScope: WindowScope = getWindowScope()): NodeSelection | null {
-  return windowScope.selection.get();
-}
 
 /** The open scope of `selection`'s node in `windowScope`, or `null` (nothing selected, or a node not open yet). */
 export function selectionScope(

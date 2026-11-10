@@ -14,7 +14,7 @@ Analysed 2026-11-06 against `main` at `585cf97d8`.
 
 **Problem.** The transport has only run on the dev renderer, over `http://`.
 
-**Context.** [1202](1202-efficiency-review-follow-ups.md) task 12 shipped it behind `global.localWindowGatewayTransport`, off by default. `local-gateway-transport-electron.spec.ts` drives a real window, but through Vite.
+**Context.** To-do 1202 task 12 (retired 2026-11-10) shipped it behind `global.localWindowGatewayTransport`, off by default. `local-gateway-transport-electron.spec.ts` drives a real window, but through Vite.
 
 **Investigation.** A `<meta>` Content Security Policy only reaches a production build (`renderer-security.md`). From code: `connect-src` allows `http:`, and main rewrites `Origin` on the two routes, so a `file://` page should behave the same. Neither has been seen working.
 
@@ -125,7 +125,7 @@ passed.
 
 ## Related
 
-- [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 12.
+- to-do 1202 efficiency follow-ups, task 12 (retired 2026-11-10).
 - [Measuring Electron main's CPU](../../development/agent-testing.md#measuring-electron-mains-cpu), the method behind the figures in task 2.
 - Closing check of E26 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`), the outcome of efficiency report parts `0400` and `0860`.
 - [Remote gateway](../../architecture/remote-gateway.md).

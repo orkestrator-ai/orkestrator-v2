@@ -505,7 +505,7 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
     errors: [],
   };
 
-  const selection = selectSegments({
+  const selection = await selectSegments({
     sources: options.sources,
     cursor,
     now: options.now,

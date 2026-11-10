@@ -6,10 +6,7 @@ import { create } from "zustand";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { artifactErrorInfo } from "@/lib/chat/artifact-requests";
 import type { ArtifactLiveSessionResponse } from "@orkestrator/protocol/transcript-artifact-commands";
-import {
-  FRAME_CHANNEL_POLICY,
-  FRONTEND_RENDER_POLICY,
-} from "@orkestrator/protocol/rich-content-policy";
+import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import { clampArtifactFrameHeight } from "@orkestrator/protocol/artifact-frame-channel";
 import { backendApiForScope } from "@/lib/backend/client";
 import {
@@ -460,11 +457,6 @@ export const useArtifactLiveHostStore = create<ArtifactLiveHostState>((set, get)
     },
   };
 });
-
-export const LIVE_FRAME_HEIGHT_BOUNDS = {
-  min: FRAME_CHANNEL_POLICY.minInlineHeight,
-  max: FRAME_CHANNEL_POLICY.maxInlineHeight,
-};
 
 export const LIVE_HOST_INVALIDATION_REASONS = {
   environmentDeleted: "The conversation's environment was deleted.",

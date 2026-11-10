@@ -23,7 +23,7 @@ import {
 } from "./node-ticket-sync-test-support.js";
 
 /**
- * To-do 3800 tasks 2 to 6: sharing a leaf's older tickets, images on synced
+ * #2027: sharing a leaf's older tickets, images on synced
  * tickets, the conflict list and the "synced from" mark, a second copy of a
  * repository on one leaf, and column order. Two real stores over the
  * in-process link of `node-ticket-sync-test-support.ts`.

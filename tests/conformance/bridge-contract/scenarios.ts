@@ -73,6 +73,12 @@ export interface BridgeContractHandle {
   saturateBoundedState?(sessionId: string): Promise<void>;
   /** Pick the bounded-structure occupancy records out of a runtime-health body. */
   boundedOccupancy?(runtimeHealth: unknown): BoundedOccupancy[];
+  /**
+   * How many times the engine's durable history deletion (Claude SDK
+   * `deleteSession`, Codex `thread/delete`, …) has been called. Optional:
+   * where present, a scenario that must not delete history checks it.
+   */
+  historyDeletions?(): number;
   stop(): Promise<void>;
 }
 
@@ -293,6 +299,26 @@ export const CONTRACT_SCENARIOS = [
       }
       expect(await close(bridge, id)).toEqual({ status: 200, body: CLOSED });
       expect(await close(bridge, id)).toEqual({ status: 200, body: MISSING });
+    },
+  },
+  {
+    id: "delete-refused-history-retained",
+    title:
+      "an authenticated DELETE /session/:id is refused and the session and its history are kept",
+    requires: [],
+    async run(bridge) {
+      const id = await bridge.createSession();
+      const deletionsBefore = bridge.historyDeletions?.() ?? 0;
+      // Closing is POST /close. No bridge serves DELETE any more (an older
+      // Claude bridge's deleted the rollout), so the route is refused as
+      // absent or not allowed, never answered as success.
+      const response = await bridge.request("DELETE", `/session/${encode(id)}`);
+      expect([404, 405]).toContain(response.status);
+      expect(await activity(bridge, id)).not.toBe("missing");
+      expect(bridge.historyDeletions?.() ?? 0).toBe(deletionsBefore);
+      // Still registered: the real close finds it and retains it.
+      expect(await close(bridge, id)).toEqual({ status: 200, body: CLOSED });
+      expect(bridge.historyDeletions?.() ?? 0).toBe(deletionsBefore);
     },
   },
   {

@@ -7,8 +7,8 @@ Analysed 2026-11-05 against `main` at `5467f6ccb`. These are what was left when 
 ### Tasks
 
 1. **Live evidence for the streamed file reads** (report part 0580, task 1): show in a real browser that file viewer images and detached-transcript media load from the content origin, and fall back when they cannot. Status: open.
-2. **How often large files are read this way** (report part 0580, Needs verification): measure it. Status: open.
-3. **The base64 readers that remain** (report part 0580, task 1, "move large-file readers"): decide whether transcript images should move to stream URLs too. Status: open (depends on 2).
+2. **How often large files are read this way** (report part 0580, Needs verification): make the measurement possible, by finding whether the gateway's metrics give per-command response bytes for the three base64 readers or adding a content-free size histogram for them. Status: open (reading it on a working profile over a few days is in 7568: 5800 task 2).
+3. **The base64 readers that remain** (report part 0580, task 1, "move large-file readers"): decide whether transcript images should move to stream URLs too. Status: blocked (waits on 7568: 5800 task 2).
 
 ### 1. Live evidence for the streamed file reads
 
@@ -42,6 +42,7 @@ Analysed 2026-11-05 against `main` at `5467f6ccb`. These are what was left when 
   - **Read the gateway's per-command invoke counts and response bytes on a working profile for a few days, if the metrics expose them; otherwise add a content-free size histogram for these three commands (recommended).**
     - Pros: real usage; tells task 3 whether moving more readers is worth it.
     - Cons: a histogram is new metrics surface.
+    - Agent part: the metrics check or the histogram, proved on a `dev:test` profile; the few days on a working profile are in the manual-test checklist (7568: 5800 task 2).
   - **Leave it.**
     - Pros: no work; the large readers named in the report have moved.
     - Cons: task 3 stays a guess.
@@ -52,7 +53,7 @@ Analysed 2026-11-05 against `main` at `5467f6ccb`. These are what was left when 
 
 **Context.** The resolver returns `data:` URLs that its callers cache (`image-preview-cache.ts`), size and decode (`imageDimensionsFromDataUrl`, `FilePreview`'s download), so moving it to capability URLs changes more than a fetch. Pinned images (`transcript_media_pin`) and PDF previews (read in process by the backend, never crossing the channel) are not affected. Server-side reads by `commands-pdf.ts` and `web-annotation-migration.ts` call the commands in process.
 
-**Investigation.** Not started; waits on task 2's numbers.
+**Investigation.** Not started; waits on task 2's numbers from a working profile (7568: 5800 task 2).
 
 **Decisions.**
 
@@ -66,6 +67,7 @@ Analysed 2026-11-05 against `main` at `5467f6ccb`. These are what was left when 
 
 ## Related
 
-- [1202 efficiency follow-ups](1202-efficiency-review-follow-ups.md), task 7
+- to-do 1202 efficiency follow-ups, task 7 (retired 2026-11-10)
 - Efficiency report, E (`git show 413bd6219:docs/reports/2026-10-27-efficiency.md`)
 - [version-compatibility.md](../../architecture/version-compatibility.md#register): the environment-less stream fallback row
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 2: reading the base64 reader sizes on a working profile over a few days) moved there on 2026-11-10.

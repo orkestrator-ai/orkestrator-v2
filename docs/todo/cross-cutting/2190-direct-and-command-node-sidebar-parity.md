@@ -12,7 +12,7 @@ decisions.
 
 1. **Merged PR icon on another machine's rows**: the command node's rows for another machine never showed the merged icon. Status: done (2026-11-01).
 2. **One environment row component**: replace the duplicated `RemoteEnvironmentItem` JSX with the row `EnvironmentItem` renders, fed by one row model. Status: done (2026-11-01): `EnvironmentRow` plus `environmentRowModel`, with `localEnvironmentRowFacts` and `nodeEnvironmentRowFacts` as the two adapters; one delete dialog and one row frame.
-3. **Summary fields the row needs**: carry agent-mail counts, failed-mail state and the leaf's Docker availability in `NodeEnvironmentSummary`, and confirm the activity it carries is the runtime one. Status: done in part: `agentMailUnread`, `agentMailFailed` and `buildActive` added and re-read on agent-mail changes (2026-11-01); `dockerAvailable` relayed (2026-11-02). Open: live confirmation that the summary's activity keeps up with the machine's runtime activity.
+3. **Summary fields the row needs**: carry agent-mail counts, failed-mail state and the leaf's Docker availability in `NodeEnvironmentSummary`, and confirm the activity it carries is the runtime one. Status: done in part: `agentMailUnread`, `agentMailFailed` and `buildActive` added and re-read on agent-mail changes (2026-11-01); `dockerAvailable` relayed (2026-11-02). Open: live confirmation, with two paired `dev:test` profiles (a command node and a leaf, as in the agent-testing guide's two-profile scenarios), that the summary's activity keeps up with the machine's runtime activity. The checks on the user's real machines (RKMBP through the command node, and stopping Docker on a real leaf) moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 4. **One project header component**: replace `RemoteProjectGroup`'s copy of `SortableProjectGroup`. Status: done (2026-11-01): `ProjectGroupHeader`, with the hover card, mail badges and project-home activity on both.
 5. **One activity list and one priority order**: the bound machine's activity rows change order and lose their controls bar the moment another machine is visible. Status: done (2026-11-01): `compareActivity` and `ActivityEnvironmentList` serve both.
 6. **A parity guard for future changes**: a rule agents read before editing either path, and a test that renders both paths from one fixture. Status: done (2026-11-01): the rule in `docs/architecture/federation.md` and `environment-row-model.parity.test.ts`.
@@ -192,9 +192,10 @@ the merged tree. The rule for future changes is in
 
 ## Outstanding work
 
-- Task 3: confirm on two real machines that a remote row's activity keeps up
-  with the owner's own row (the owner reads runtime activity events; the
-  summary carries the persisted activity).
+- Task 3: confirm with two paired `dev:test` profiles on one host (a command
+  node and a leaf) that a remote row's activity keeps up with the owner's own
+  row (the owner reads runtime activity events; the summary carries the
+  persisted activity).
 
 ## Constraints and rationale
 
@@ -202,16 +203,10 @@ Summaries stay bounded and content-free: counts and states, never prompts, mail 
 
 ## Needs verification
 
-- No `dev:test` fixture runs two paired machines, so none of this has been seen
-  through a real command node by an agent. Check on RKMBP through the command
-  node: the merged icon, agent-mail badges, project home indicator, activity
-  bar and the shared delete confirmation.
 - Whether the leaf's persisted activity lags its runtime activity (task 3).
-- Task 3: on two real machines, stop Docker on the leaf and confirm the command
-  node's rows for it disable Fork container, Start/Stop and Restart within
-  about 90 seconds (the leaf's 30-second cache plus the command node's
-  60-second reconcile), and re-enable after Docker returns. Unit tests cover
-  each step; the whole path has not been seen live.
+- The live checks on the user's machines (RKMBP through the command node, and
+  Docker stopped on a real leaf) are in
+  [7568](../manual-test/7568-manual-test-checklist.md).
 
 ## Assumptions and decisions
 
@@ -360,3 +355,7 @@ projects' places for when it returns (`isMachineShown`), because a merged
 project list has no machine heading to carry the offline state, while "By
 machine" and "By activity" show it dimmed under or beside one.
 
+
+## Related
+
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-machine checks of task 3 and Needs verification: RKMBP through the command node, Docker stopped on a real leaf) moved there on 2026-11-10.

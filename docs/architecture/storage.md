@@ -509,7 +509,10 @@ primitives above serialize their writes.
   connection closes (one last try). So deleted content leaves the WAL within
   a minute of the last older reader finishing. Each deferral and failure is
   logged as `[storage] scrub.checkpoint-failed`, throttled, with a
-  `throttle.recovered` line once it succeeds.
+  `throttle.recovered` line once it succeeds. macOS's system SQLite calls the
+  busy handler in a truncating checkpoint as Linux's does (checked on macOS
+  27.2, SQLite 3.54.0); `bun test src/core/storage-database-upkeep.test.ts` in
+  `apps/backend` repeats the check on another release.
 - `foreign_keys` is off: no table declares a foreign key, so the PRAGMA would
   promise checks nothing enforces. A migration that declares keys turns it on
   in `StorageDatabase`'s constructor.
@@ -783,7 +786,9 @@ main database before the ledger, so the move has always run before the ledger
 is first written. On a generated ledger of 2 million file rows (666 MB) the
 move took about 8 s with secure deletion disabled (a historical measurement;
 the corrected migration keeps it enabled and has not been remeasured); the hourly
-copy afterwards was 48 KB in 19 ms. The pages the ledger freed are returned to
+copy afterwards was 48 KB in 19 ms. The move logs `[storage] ledger.moved` at
+info with `rows` and `durationMs`, so a real installation's one-time cost can be
+read from its first start after the upgrade. The pages the ledger freed are returned to
 the filesystem after start-up by the snapshot check's upkeep
 (`runDatabaseUpkeep`, every five minutes after the copies). It runs
 `PRAGMA optimize` on the backend's own connection, whose queries that reads,

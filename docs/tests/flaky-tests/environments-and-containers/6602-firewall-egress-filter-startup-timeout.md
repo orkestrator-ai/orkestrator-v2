@@ -2,7 +2,7 @@
 
 - **ID:** 6602
 - **Status:** resolved
-- **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it ([todo 7142](../../../todo/cross-cutting/7142-red-lint-job-merged-unguarded.md))
+- **Previously:** 9834, renumbered on 2026-11-06 because three cases shared it (to-do 7142, retired 2026-11-10; see [number claims](../../../number-claims/README.md))
 - **Date observed:** 2026-11-06
 - **Test:** `init-firewall.sh with name checks > redirects TCP to allowed tuples and every DNS query to the daemon, and lets only marked traffic leave`
 - **Owner:** `tests/unit/firewall-egress-filter.test.ts`

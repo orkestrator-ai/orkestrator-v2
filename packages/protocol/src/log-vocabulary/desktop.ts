@@ -30,10 +30,11 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
         "A packaged app was launched with ELECTRON_DEV=1 and ignored it; it loads its bundled renderer.",
       "instance.already-running": "Another instance holds this data directory; this one will quit.",
       "main-thread.stalled": {
-        description: "A timer fired late, so windows, IPC and the stdout reader waited.",
+        description:
+          "A timer fired late, so windows, IPC and the stdout reader waited. `cpuMs` is the CPU time the process used in the window: near `lagMs` the main thread was busy, far below it the thread waited.",
         essential: true,
         minLevel: "error",
-        fields: { lagMs: "number", intervalMs: "number" },
+        fields: { lagMs: "number", intervalMs: "number", cpuMs: "number" },
       },
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",

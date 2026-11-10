@@ -155,7 +155,6 @@ export function isDefaultSessionTitle(
  */
 export async function reconcilePersistedSessions(): Promise<void> {
   const sdk = await claudeSdk();
-  if (typeof sdk.listSessions !== "function") return;
   const cwd = currentWorkingDirectory();
   // Recorded before the read, so a deletion that lands while it is in flight is
   // detectable against the snapshot it returns.
@@ -268,7 +267,6 @@ export async function materializePersistedSessionState(
   const racedDuringImport = sessions.get(sessionId);
   if (racedDuringImport) return racedDuringImport;
 
-  if (typeof sdk.getSessionInfo !== "function") return undefined;
   const [info, preferences] = await Promise.all([
     sdk.getSessionInfo(sdkId, {
       dir: currentWorkingDirectory(),
@@ -365,7 +363,6 @@ export async function readPersistedSessionMessages(session: SessionState): Promi
 > {
   if (!session.sdkSessionId) return undefined;
   const sdk = await claudeSdk();
-  if (typeof sdk.getSessionMessages !== "function") return undefined;
   const [persisted, commandChanges, preferences] = await Promise.all([
     // No `limit`/`offset`: the SDK parses the whole JSONL and rebuilds the
     // message chain before it slices (offset counts from the start), and the
@@ -735,12 +732,6 @@ export async function forkPersistedSession(
     throw sessionOperationError("conflict", "Cannot fork a running session");
   }
   const sdk = await claudeSdk();
-  if (typeof sdk.forkSession !== "function") {
-    throw sessionOperationError(
-      "conflict",
-      "Installed Claude Agent SDK does not support session forking",
-    );
-  }
   const boundaryId = options.upToMessageId
     ? await resolvePersistedMessageId(source, options.upToMessageId)
     : undefined;
@@ -801,7 +792,6 @@ export async function resolvePersistedMessageId(
   if (local && !allowedTypes.has(local.role as "user" | "assistant")) return undefined;
 
   const sdk = await claudeSdk();
-  if (typeof sdk.getSessionMessages !== "function") return candidate;
   const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
     dir: currentWorkingDirectory(),
     includeSystemMessages: false,

@@ -11,7 +11,7 @@ freshly built image
 
 ### Tasks
 
-1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: open. The classification is done (2026-11-10); only the upstream report to Moby is left, an outward-facing action that needs the user's approval.
+1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10); the delivery change waits for a host that fails.
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries).
 
@@ -80,7 +80,8 @@ GitHub seed logs `refusal=read-only-bind-remount`. The opt-in live test
 at a real container and passed on both stores.
 
 The upstream report was not filed: it is an outward-facing action, which
-this repository's rules leave to the user. A draft, from the evidence above:
+this repository's rules leave to the user (moved to
+[7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10). A draft, from the evidence above:
 "Rootless dockerd 29.9.2 (runc 1.5.2, RootlessKit 3.3.0): `docker cp` into or
 out of a container with a read-only bind whose source filesystem is mounted
 `nosuid` or `nodev` fails with `remount-ro <rootfs>/<target>, flags: 0x1021:
@@ -274,8 +275,6 @@ with its fault injection raised past the retries.
 
 ## Outstanding work
 
-- Task 1: file the upstream report to Moby (draft in task 1), once the user
-  approves.
 - Task 2: reproduce `device or resource busy` on a host that fails, on both
   image stores, then build the delivery fix and its live case.
 
@@ -326,7 +325,8 @@ copied into an overlay2 instance.
 - The retired to-do 0109 (task 3 classified the start refusal; task 4 added
   the single retry; task 5 found these): its evidence is the
   [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
-- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md)
+- To-do 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon))
   (the launcher used, which has no storage-driver option).
 - [Container lifecycle](../../architecture/container-lifecycle.md)
   ("Portable inputs").
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 1: approving and filing the upstream Moby report) moved there on 2026-11-10.

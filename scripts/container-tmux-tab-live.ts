@@ -13,7 +13,7 @@ import { gatewayFor, gatewayMetrics } from "./tmux-mail-inject-live";
 /**
  * Recurring work with a claude-tmux tab open in a container, on a loopback
  * fake model: the live counts for BG-1, BG-2 and BG-8 that to-do 1202 task 1
- * asked for (docs/todo/cross-cutting/1202-efficiency-review-follow-ups.md).
+ * asked for (retired 2026-11-10; method in docs/development/testing-guide.md).
  *
  * It drives a running, credential-free `dev:test` profile started with
  * `--fixture --fixture-environments local,container --no-agent-credentials`.

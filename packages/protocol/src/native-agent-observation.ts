@@ -174,7 +174,7 @@ export interface NativeSessionInvalidationSnapshot {
   droppedLabels: number;
   /**
    * Which discovery section each `discovery-renewal` and `discovery-deadline`
-   * announcement was about, and which parts of its value changed (todo 7530).
+   * announcement was about, and which parts of its value changed (#2062).
    * Absent from an older backend.
    */
   discoveryRenewals?: Partial<

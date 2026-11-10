@@ -75,7 +75,6 @@ test("a cancelled ACP process stays idle and detects a later pending request sta
       CWD: directory,
       ACP_STATE_DIR: directory,
       ORKESTRATOR_BRIDGE_DEBUG: "0",
-      ACP_BRIDGE_DEBUG: "0",
       ACP_PROVIDER_CONFIG: JSON.stringify({
         id: "cursor",
         name: "Cancellation fixture",

@@ -12,7 +12,11 @@ import {
 const ADDRESS_KEY = "orkestrator.public.backend-address";
 const SESSION_TOKENS_KEY = "orkestrator.public.gateway-tokens";
 const CONNECTIONS_KEY = "orkestrator.public.connections";
-const LEGACY_SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
+/**
+ * A persistent token the first public client (#82, replaced the same day by
+ * #87) could leave in localStorage. Scrubbed on load: a credential must not
+ * outlive the browser session.
+ */
 const LEGACY_REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
 export const DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS = 10_000;
 const BACKEND_PROBE_TIMEOUT_MS = 3_000;
@@ -158,12 +162,6 @@ export function insecureBackendWarning(
 export function loadSavedConnection(): SavedConnection {
   const address = localStorage.getItem(ADDRESS_KEY) ?? "";
   const tokens = loadSessionTokens();
-  const legacySessionToken = sessionStorage.getItem(LEGACY_SESSION_TOKEN_KEY) ?? "";
-  if (address && legacySessionToken && !tokens[connectionId(address)]) {
-    tokens[connectionId(address)] = legacySessionToken;
-    saveSessionTokens(tokens);
-  }
-  sessionStorage.removeItem(LEGACY_SESSION_TOKEN_KEY);
   localStorage.removeItem(LEGACY_REMEMBERED_TOKEN_KEY);
   return {
     address,

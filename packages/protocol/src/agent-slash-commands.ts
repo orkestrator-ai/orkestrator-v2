@@ -183,7 +183,7 @@ export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
     busy: "idle",
     collision: "defer",
   },
-  // The backend's loop, one behaviour on every provider (`plans/goals.md`).
+  // The backend's loop, one behaviour on every provider (`docs/architecture/goals.md`).
   // Reserved, so a provider's own goal loop can never stack on top of it.
   "/goal": {
     kind: "goal",
@@ -206,15 +206,6 @@ export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
     collision: "reserve",
   },
 };
-
-export function sessionActionDefinitionForId(
-  id: string,
-): (SessionActionCommandDefinition & { name: string }) | undefined {
-  for (const [name, definition] of Object.entries(SESSION_ACTION_SLASH_COMMANDS)) {
-    if (definition.id === id) return { ...definition, name };
-  }
-  return undefined;
-}
 
 export interface ResolvedSessionActionCommand {
   kind: SessionActionCommandKind;

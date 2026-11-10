@@ -1,7 +1,6 @@
 import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { terminals } from "@/lib/node-scope/domains/terminals";
-import { agentServersApi } from "@/lib/node-scope/domains/agent-servers";
 import { hydrationRequests } from "@/lib/hydration-request-limiter";
 import {
   LIST_ENVIRONMENT_HYDRATION_COMMAND,
@@ -24,11 +23,6 @@ import type {
   PersistedFileDraft,
   PersistedPromptQueue,
 } from "@/types";
-import {
-  isAwaitBridgeReadyResult,
-  type AgentBridgeKind,
-  type AwaitBridgeReadyResult,
-} from "@orkestrator/protocol/bridge-readiness";
 import type {
   NativeAgentAuthStatus,
   NativeAgentControlUpdate,
@@ -228,14 +222,6 @@ export function createWorkflowsApi(client: BackendClient) {
     controls?: NativeAgentControlUpdate;
   }): Promise<PersistedNativeAgentSession> {
     return asWebModel<PersistedNativeAgentSession>(native().adopt_native_agent_session(input));
-  }
-
-  async function getNativeAgentSession(input: {
-    environmentId: string;
-    agent: NativeAgentClientPlatform;
-    logicalSessionKey: string;
-  }): Promise<PersistedNativeAgentSession | null> {
-    return asWebModel<PersistedNativeAgentSession | null>(native().get_native_agent_session(input));
   }
 
   async function getNativeAgentProjection<TMessage = unknown>(input: {
@@ -666,28 +652,6 @@ export function createWorkflowsApi(client: BackendClient) {
     return asWebModel(native().hold_native_agent_interaction(input));
   }
 
-  async function dispatchNativeAgentPrompt(input: {
-    environmentId: string;
-    agent: NativeAgentClientPlatform;
-    logicalSessionKey: string;
-    origin?: AgentInteractionOrigin;
-    interactionPolicy?: AgentInteractionPolicy;
-    title?: string;
-    model?: string;
-    reasoningEffort?: string;
-    phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
-    prompt: string;
-    requestId: string;
-    images?: Array<{ filename: string; data: string }>;
-    schema?: Record<string, unknown>;
-    mode?: "plan" | "build";
-    fastMode?: boolean;
-    /** Absent is legacy behaviour: the backend treats the text as typed. */
-    command?: NativeAgentCommandIntent;
-  }): Promise<PersistedNativeAgentSession> {
-    return asWebModel<PersistedNativeAgentSession>(native().dispatch_native_agent_prompt(input));
-  }
-
   async function dispatchNativeAgentIntent(input: {
     environmentId: string;
     agent: NativeAgentClientPlatform;
@@ -851,18 +815,6 @@ export function createWorkflowsApi(client: BackendClient) {
     return asWebModel<PersistedComposeDraft<T> | null>(native().get_compose_draft({ draftKey }));
   }
 
-  async function listComposeDrafts<T = unknown>(
-    ownerType: "environment" | "project",
-    ownerId: string,
-  ): Promise<Array<PersistedComposeDraft<T>>> {
-    return asWebModel<Array<PersistedComposeDraft<T>>>(
-      native().list_compose_drafts({
-        ownerType,
-        ownerId,
-      }),
-    );
-  }
-
   async function saveComposeDraft<T>(
     draftKey: string,
     ownerType: "environment" | "project",
@@ -919,23 +871,6 @@ export function createWorkflowsApi(client: BackendClient) {
     });
   }
 
-  /** Join the backend-owned startup wait for one environment/provider pair. */
-  async function awaitBridgeReady(
-    environmentId: string,
-    agent: AgentBridgeKind,
-    timeoutMs = 60_000,
-  ): Promise<AwaitBridgeReadyResult> {
-    const result: unknown = await agentServersApi(client).await_bridge_ready({
-      environmentId,
-      agent,
-      timeoutMs,
-    });
-    if (!isAwaitBridgeReadyResult(result)) {
-      throw new Error("Backend returned an invalid bridge readiness result");
-    }
-    return result;
-  }
-
   /** Create a local terminal session for a local environment */
   async function createLocalTerminalSession(
     environmentId: string,
@@ -985,7 +920,6 @@ export function createWorkflowsApi(client: BackendClient) {
     launchNativeAgentJob,
     ensureNativeAgentSession,
     adoptNativeAgentSession,
-    getNativeAgentSession,
     getNativeAgentProjection,
     getNativeAgentSyncCapabilities,
     getNativeAgentTranscriptUpdate,
@@ -1019,7 +953,6 @@ export function createWorkflowsApi(client: BackendClient) {
     signOutNativeAgent,
     resolveNativeAgentInteraction,
     holdNativeAgentInteraction,
-    dispatchNativeAgentPrompt,
     dispatchNativeAgentIntent,
     retryNativeAgentDispatch,
     discardNativeAgentDispatch,
@@ -1031,13 +964,11 @@ export function createWorkflowsApi(client: BackendClient) {
     movePromptQueueMessage,
     retryPromptQueueDispatch,
     getComposeDraft,
-    listComposeDrafts,
     saveComposeDraft,
     deleteComposeDraft,
     getFileDraft,
     saveFileDraft,
     deleteFileDraft,
-    awaitBridgeReady,
     createLocalTerminalSession,
     startLocalTerminalSession,
     writeLocalTerminal,
@@ -1053,7 +984,6 @@ export const {
   launchNativeAgentJob,
   ensureNativeAgentSession,
   adoptNativeAgentSession,
-  getNativeAgentSession,
   getNativeAgentProjection,
   getNativeAgentSyncCapabilities,
   getNativeAgentTranscriptUpdate,
@@ -1087,7 +1017,6 @@ export const {
   signOutNativeAgent,
   resolveNativeAgentInteraction,
   holdNativeAgentInteraction,
-  dispatchNativeAgentPrompt,
   dispatchNativeAgentIntent,
   retryNativeAgentDispatch,
   discardNativeAgentDispatch,
@@ -1099,13 +1028,11 @@ export const {
   movePromptQueueMessage,
   retryPromptQueueDispatch,
   getComposeDraft,
-  listComposeDrafts,
   saveComposeDraft,
   deleteComposeDraft,
   getFileDraft,
   saveFileDraft,
   deleteFileDraft,
-  awaitBridgeReady,
   createLocalTerminalSession,
   startLocalTerminalSession,
   writeLocalTerminal,

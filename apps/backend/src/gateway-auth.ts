@@ -148,11 +148,10 @@ export class GatewayAuth {
    * The workspace allow-list a client grant and the relay share: only
    * commands this backend defines with `access: "workspace"`, failing closed.
    */
-  private admitsWorkspaceCommand(command: string, path: "grant" | "relay"): boolean {
+  private admitsWorkspaceCommand(command: string): boolean {
     const backend = this.ctx.backend;
-    return admitsWorkspaceCommand(command, path, {
+    return admitsWorkspaceCommand(command, {
       accessOf: backend.commandAccess?.bind(backend),
-      isRegistered: backend.hasCommand?.bind(backend),
     });
   }
 
@@ -451,7 +450,7 @@ export class GatewayAuth {
       if (
         !resolve ||
         !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks), (command) =>
-          this.admitsWorkspaceCommand(command, "relay"),
+          this.admitsWorkspaceCommand(command),
         ))
       ) {
         jsonResponse(response, 404, { error: "Not found" });
@@ -527,7 +526,7 @@ export class GatewayAuth {
         response,
         requestMetrics,
         viaGrant
-          ? { refuseCommand: (command: string) => !this.admitsWorkspaceCommand(command, "grant") }
+          ? { refuseCommand: (command: string) => !this.admitsWorkspaceCommand(command) }
           : controllerId
             ? { controllerId }
             : undefined,

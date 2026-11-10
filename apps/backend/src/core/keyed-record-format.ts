@@ -89,34 +89,6 @@ export function recordFileStem(namespace: string, key: string): string {
   return createHash("sha256").update(namespace).update("\0").update(key).digest("hex");
 }
 
-export function isRecordFileStem(value: string): boolean {
-  return /^[0-9a-f]{64}$/.test(value);
-}
-
-export function assertValidRecordKey(key: string): void {
-  if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_LENGTH) {
-    throw new Error("Keyed record key is invalid");
-  }
-}
-
-export function normalizeOwner(owner: Record<string, string> | undefined): Record<string, string> {
-  const entries = Object.entries(owner ?? {});
-  if (entries.length > MAX_OWNER_ATTRIBUTES) throw new Error("Keyed record owner is too large");
-  const normalized: Record<string, string> = {};
-  for (const [name, value] of entries.sort(([left], [right]) => left.localeCompare(right))) {
-    if (
-      name.length === 0 ||
-      name.length > MAX_OWNER_NAME_LENGTH ||
-      typeof value !== "string" ||
-      value.length > MAX_OWNER_VALUE_LENGTH
-    ) {
-      throw new Error("Keyed record owner attribute is invalid");
-    }
-    normalized[name] = value;
-  }
-  return normalized;
-}
-
 export function encodeRecordFile(header: KeyedRecordHeader, payload: Buffer): Buffer {
   const encodedHeader = Buffer.from(`${JSON.stringify(header)}\n`, "utf8");
   return Buffer.concat([encodedHeader, payload]);
@@ -382,17 +354,6 @@ export async function readBoundedFile(
   }
 }
 
-/** Cheap change detector for decoded-value caches: one lstat, no read. */
-export async function statFingerprint(filePath: string): Promise<string | null> {
-  try {
-    const stat = await fs.lstat(filePath, { bigint: true });
-    if (!stat.isFile()) return null;
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Creates the namespace directory privately and refuses to operate through a
  * symlinked or non-directory namespace. The data directory itself is owned by
@@ -454,8 +415,4 @@ export async function syncDirectory(directory: string): Promise<void> {
   } finally {
     await handle?.close().catch(() => undefined);
   }
-}
-
-export function tempFileName(stem: string, unique: string): string {
-  return `.${stem}.${unique}${KEYED_RECORD_TEMP_EXTENSION}`;
 }

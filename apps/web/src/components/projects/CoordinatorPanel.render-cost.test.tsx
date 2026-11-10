@@ -129,7 +129,6 @@ const ensure = mock(async () => snapshot);
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   ensureProjectCoordinator: ensure,
-  getProjectCoordinator: ensure,
   getProjectCoordinatorView: mock(async () => ({
     status: "snapshot",
     generation: "view-gen",

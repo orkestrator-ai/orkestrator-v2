@@ -33,16 +33,14 @@ the loopback model only, reached through a custom OpenCode provider (see
 
 ### Tasks
 
-1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Status: blocked (upstream Claude Code; canary in place, report not filed: filing with Anthropic is outward-facing and left to a maintainer, so the 2026-11-06 work did not do it).
+1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (the standalone repro can be written now; the canary flip waits on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix).
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
-4. **Grok live probes and the untrusted-project check**: run the live apply spec for Grok and confirm that an untrusted session skips project MCP servers. Status: blocked (no current Grok login on the host; `grok mcp doctor` now shows the gate credential-free, a live session is still unrun; the 2026-11-06 fake-model work covered only Claude, Codex and Pi and used no login, so Grok stays open).
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
-6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor open: it needs a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
+6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor's cells moved to the manual-test checklist (7568) on 2026-11-10: they need a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into [0040](0040-mcp-environment-delivery.md) task 3).
-10. **Release decision on the all-on default**: keep or narrow the rollout once the matrix is filled. Status: blocked (a release decision for a maintainer; the 2026-11-06 and 2026-11-10 runs are fake-model evidence of the runtime side only, and the Grok and Cursor cells remain).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun).
 13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's).
@@ -72,6 +70,13 @@ the loopback model only, reached through a custom OpenCode provider (see
 **Not done (2026-11-06).** Still the recommended option, still for a
 maintainer: filing the report is an outward-facing action this work was not
 allowed to take. The canary is unchanged.
+
+**Split (2026-11-10).** Filing the report moved to the manual-test
+checklist (7568). What stays here is the agent part: a standalone repro the
+report can carry (the drafted one points at the internal
+`session-manager-prompt-mcp-sync.live-probe.ts`, scenario `replace`), and,
+once an upstream release stops the old process, changing the canary to
+`alive: ["alpha"]` and closing code item 8.
 
 ### 2. Re-derive Grok rules at 1.0.70
 
@@ -128,35 +133,6 @@ allowed to take. The canary is unchanged.
   - Confirmed unchanged: worktree entry, then main checkout's; no ancestor grants; `$CODEX_HOME/managed_config.toml` is not a source.
 - Not covered by either guard: `/etc/codex` and `/etc/grok` files (root needed) and live sessions (`mcp list`/`inspect`/`doctor` use the same loaders as a session, but the session path itself is task 4's and task 6's).
 - Running the OpenCode guard at the new OpenCode pin 1.19.5 found it failing on this host ("opencode serve did not come up", also at 1.19.4): a request that reaches `opencode serve` while its first instance boots can hang, and the readiness poll had no request timeout. Each call is now bounded (15 s) and the readiness deadline is 60 s; it passes on 1.19.5 (2 passed, 3.8 s), so the user-file cache and in-place reload task 11 relies on still hold.
-
-### 4. Grok live probes and the untrusted-project check
-
-**Problem.** Grok is the only provider whose apply strategy (`restart-required` then `applied`) has never run live, and whether an untrusted Grok session really skips project MCP servers is unknown because `grok inspect` lists them either way.
-
-**Context.** The host's Grok login expired on 2026-10-16/19. Refreshing from a copy would rotate the host's login, so the earlier runs skipped Grok. 0015 holds the related trust evidence for instructions, commands and skills.
-
-**Investigation.** Nothing has changed the blocker. Profile isolation since `d4171748` (#1116) means a profile authorising the Grok credential gets a snapshot of the host login, so once the host is signed in again the run needs no hand-seeding. Since 2026-10-31 there is credential-free evidence for the gate: at 1.0.70 `grok mcp doctor` refuses to start an untrusted folder's project servers (task 2), and `verify:grok:mcp-live` holds that. `doctor` is not a session, so the live check still decides it.
-
-**Decisions.**
-
-- **How to obtain a usable Grok login?**
-  - **The operator signs in to Grok on the host, then runs the spec in a fresh profile with `--credential-source grok` (recommended).**
-    - Pros: uses the supported snapshot path; no token handling by the agent.
-    - Cons: depends on a person; the login may expire again before the run.
-  - **Use a separate test Grok account seeded only into the profile.**
-    - Pros: decoupled from the operator's login.
-    - Cons: needs an account to exist and its credentials handled carefully.
-- **Should the untrusted-project check be a live session or retired?**
-  - **Run it in the same session: a project `.grok/config.toml` server, project resources off and no trust grant, and check the session's live inventory (recommended).**
-    - Pros: the only real evidence; cheap once logged in.
-    - Cons: shares the login blocker.
-  - **Retire it, keeping the catalogue's trust gate as documented.**
-    - Pros: no login needed.
-    - Cons: if Grok loads untrusted project servers, the editor understates what runs, a security-relevant mismatch.
-
-**Not done (2026-11-06).** The fake-model work ran only Claude, Codex and
-Pi and used no login; the host's Grok login is still expired, so the live
-session check stays open as above.
 
 ### 5. Pi user-scope failure and rerun
 
@@ -335,7 +311,8 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
   offered after the rename (the fake found no `<server>_probe` tool and the
   server logged no call), so the inventory rule for a substituted name was
   not needed.
-- Cursor remains open (needs a Cursor login). These are fake-model
+- Cursor's cells (they need a Cursor login) moved to the manual-test
+  checklist (7568) on 2026-11-10. These are fake-model
   observations, not evidence of how a real model behaves.
 
 ### 7. Inactive environment, full mode and process-wide variant
@@ -385,6 +362,10 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
   credential verifier (2026-11-04) it cannot authenticate with today's
   backend. The step stays optional in the spec; the backend's pre-marker
   path is now unreachable from any supported bridge (see the decision).
+  Both were removed on 2026-11-10: the spec step, and the backend's
+  unmarked-`mcpConfig` reading and provider-specific older-bridge outcome
+  (a body without the marker now gets one generic `restart-required`;
+  [version compatibility](../../architecture/version-compatibility.md#retired)).
 - **Codex process-wide variant (new spec).**
   `e2e/agent-testing/mcp-apply-inactive-codex.spec.ts`: environment A with
   two Codex threads on one bridge, the browser on environment B. 1 passed,
@@ -452,34 +433,6 @@ host target, was added to 0040's task 3 as a second check of the same
 two-machine run, so it is not dropped. The stale "every container target
 (read-only by design)" line under the completion matrix and the
 "Containers and remote" qualification bullet now point there.
-
-### 10. Release decision on the all-on default
-
-**Problem.** MCP editing and apply ship enabled for every provider (`DEFAULT_MCP_MANAGEMENT_ROLLOUT` with `enabled: true` and all platforms for write and apply, `packages/protocol/src/mcp-management.ts:1683-1687`) while Grok has never run live and Pi is unqualified.
-
-**Context.** The rollout gate and kill switch are `global.mcpManagement` (`apps/backend/src/core/mcp-management/rollout.ts`); it only narrows behaviour and never touches saved files.
-
-**Investigation.** The default is unchanged since the file was written. The gate supports per-provider write and apply lists, so narrowing is a one-line default change.
-
-**Decisions.**
-
-- **What to do until the matrix is filled?**
-  - **Keep all-on for Claude, Codex, OpenCode and Cursor; decide Grok and Pi apply after tasks 4 and 5, narrowing them to write-only if they still fail (recommended).**
-    - Pros: the four providers have live evidence; limits exposure to the two unproven ones without removing editing.
-    - Cons: Grok and Pi stay all-on until someone runs them; a later narrowing changes behaviour users already have.
-  - **Narrow Grok and Pi apply now.**
-    - Pros: no unproven apply outcome shown to users.
-    - Cons: Pi's strategy was seen working live (`pending-next-turn` then `applied`), and Grok's is restart-based and conservative, so this may remove working features.
-  - **Keep all-on for everyone and close the item.**
-    - Pros: no change.
-    - Cons: ignores the file's own release gate.
-
-**Not done (2026-11-06).** A release decision belongs to a maintainer. New
-input for it: Claude, Codex and Pi now pass every probe cell on a fake model
-(task 6), which shows each runtime offers, applies and drops servers as its
-outcome says; it says nothing about real-model behaviour. OpenCode joined
-them on 2026-11-10, also on the loopback model (task 6). Grok (task 4) and
-Cursor's model-facing cells are still unrun.
 
 ### 11. OpenCode user-file apply and sign-in follow-ups
 
@@ -749,9 +702,8 @@ collects the live evidence the shipped behaviour has never had.
 - Apply-path guards (see "Runtime application" in
   [`mcp-management.md`](../../architecture/mcp-management.md)): every outcome
   names the runtime generation (bridge pid plus provider session) it was
-  observed against; a bridge older than the `mcpConfigReporting` marker is
-  reported as such (`restart-required`, or an unconfirmable Claude
-  `pending-next-turn`); an edit made to the source after the save is merged
+  observed against; a bridge without the `mcpConfigReporting` marker is
+  reported as one that does not report (`restart-required`); an edit made to the source after the save is merged
   (flagged) or supersedes the change (waiting runtimes `cancelled`, re-apply
   refused) by `external-edits.ts`; one apply tracks 256 runtimes, lists 64 and
   counts the rest by state in `omittedStates`.
@@ -921,7 +873,8 @@ collects the live evidence the shipped behaviour has never had.
    connected and offered. `session-manager-prompt-mcp-sync.live.test.ts` now
    asserts that, so it fails when the CLI starts stopping the old process;
    then expect one `alpha` and close this item. Not yet reported to
-   Anthropic: filing is outward-facing and was left to a maintainer. Draft:
+   Anthropic: filing moved to the manual-test checklist (7568) on
+   2026-11-10; a standalone repro for it is task 1's agent part. Draft:
    "Claude Code 2.1.309, Agent SDK `Query.setMcpServers`: replacing a stdio
    server's configuration under the same name connects a new process but
    never stops the old one; the old process keeps its environment until the
@@ -950,9 +903,9 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   the guard passes at 1.19.5 (2026-10-31). Grok: done for 1.0.70 on
   2026-10-31 (task 2). Codex: guarded since 2026-10-31 (task 3). Pi's two
   parity tests and Claude's live probe passed at the 2026-10-25 pins.
-- **Grok and Pi live probes.** Run `mcp-apply-live.spec.ts` for Grok (user
-  and project scopes, saved `enabled`, SSE) once the host has a current Grok
-  login (it expired on 2026-10-19, so Grok is still unrun). Pi ran on
+- **Grok and Pi live probes.** The Grok run (user and project scopes, saved
+  `enabled`, SSE, with a current Grok login) moved to the manual-test
+  checklist (7568) on 2026-11-10. Pi ran on
   2026-10-22 (see [the Pi record](#live-apply-record-pi-2026-10-22)): the
   project scope passed every probe; the user scope failed four, with the
   runtime `applied` while the model answered "unavailable" without a tool
@@ -974,8 +927,9 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   2026-11-10 on the same fake through a custom provider and passed both
   scopes: project scope `applied` by the in-place reload, user scope
   `restart-required`, and the renamed server's old name refused
-  ([OpenCode record](#opencode-on-the-loopback-model-2026-11-10)). Cursor
-  and Grok are still to run. Hand-seeding logins is no longer needed (see the
+  ([OpenCode record](#opencode-on-the-loopback-model-2026-11-10)). The
+  Cursor and Grok runs need logins and moved to the manual-test checklist
+  (7568) on 2026-11-10. Hand-seeding logins is no longer needed (see the
   isolation note in the 2026-10-18 method). The [completion matrix](#completion-matrix)
   retains the original observations and names the cells still unverified;
   provider errors, silence and substituted tools do not prove removal.
@@ -1011,8 +965,6 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   targets are writable now and 0040 owns their qualification, and the remote
   browser check of host-target paths and operation recovery is part of
   0040's task 3.
-- **Release decision.** Keep or narrow the all-on rollout default once the
-  matrix is filled.
 
 ## OpenCode 1.19.4 configuration loader (2026-10-25)
 
@@ -1623,18 +1575,6 @@ directory and were deleted with it.
 
 ## Needs verification
 
-- Whether an untrusted Grok session really skips project MCP servers. At
-  1.0.52 and still at 1.0.70, `grok inspect --json` and `grok mcp list` list
-  a project `.grok/config.toml` server whether or not `projectTrusted` is
-  true, so they cannot show it. Partly answered 2026-10-31: at 1.0.70
-  `grok mcp doctor` does not start an untrusted folder's project-bound
-  servers (the project file, `.mcp.json`, `.cursor/mcp.json`, Claude's
-  `projects[<repo>]`), and the fixture server's own log shows no process
-  (task 2). The catalogue keeps treating trust as the gate, as
-  [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md)
-  describes it. A live session check (task 4) still needs a Grok login (the
-  host's expired on 2026-10-19).
-
 - ~~How OpenCode OAuth completes after `mcp.auth.start`.~~ Traced 2026-10-25:
   it does not (see the OpenCode 1.19.4 record). ~~Whether
   `mcp.auth.authenticate` could be driven from the panel.~~ Dropped
@@ -2120,6 +2060,7 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).

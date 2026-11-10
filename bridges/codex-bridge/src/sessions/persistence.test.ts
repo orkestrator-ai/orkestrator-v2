@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { BRIDGE_SESSION_REGISTRY_VERSION, BridgeSessionStore, hashCwd } from "./persistence.js";
+import { BridgeSessionStore, hashCwd } from "./persistence.js";
 import { MAX_STRUCTURED_OUTPUT_TURNS } from "@orkestrator/protocol/structured-output";
 
 const temporaryDirectories: string[] = [];
@@ -290,176 +290,6 @@ describe("BridgeSessionStore", () => {
     expect((await store.load()).map((entry) => entry.bridgeSessionId).sort()).toEqual(ids.sort());
   });
 
-  test("migrates the aggregate v2 registry without overwriting a newer record", async () => {
-    const { codexHome, store } = await makeStore();
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await mkdir(dirname(legacyPath), { recursive: true });
-    const legacy = store.toRecord({
-      bridgeSessionId: "shared",
-      threadId: "thread-legacy",
-      cwd: "/workspace",
-      config: { mode: "plan" },
-    });
-    const newer = {
-      ...legacy,
-      threadId: "thread-newer",
-      config: { mode: "build" as const },
-    };
-    await store.upsert(newer);
-    await writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: [legacy],
-      }),
-      "utf8",
-    );
-
-    expect(await store.load()).toEqual([newer]);
-    expect(await Bun.file(legacyPath).exists()).toBe(false);
-  });
-
-  test("tightens permissions while migrating an aggregate registry", async () => {
-    const { codexHome, store } = await makeStore();
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await mkdir(dirname(legacyPath), { recursive: true, mode: 0o755 });
-    await writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: [
-          store.toRecord({
-            bridgeSessionId: "legacy-private",
-            threadId: "thread-legacy-private",
-            cwd: "/workspace",
-            config: { mode: "plan" },
-          }),
-        ],
-      }),
-      { encoding: "utf8", mode: 0o644 },
-    );
-
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["legacy-private"]);
-    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777).toBe(0o700);
-    expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
-    expect((await stat(recordPathFor(codexHome, "legacy-private"))).mode & 0o777).toBe(0o600);
-  });
-
-  test("same-id upsert/remove contention cannot revive a legacy record", async () => {
-    const { codexHome, store } = await makeStore();
-    const otherStore = new BridgeSessionStore({ codexHome, cwd: "/workspace" });
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await mkdir(dirname(legacyPath), { recursive: true });
-    const ids = Array.from({ length: 20 }, (_, index) => `shared-${index}`);
-    const legacyRecords = ids.map((id) =>
-      store.toRecord({
-        bridgeSessionId: id,
-        threadId: `legacy-${id}`,
-        cwd: "/workspace",
-        config: { mode: "plan" },
-      }),
-    );
-    await writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: legacyRecords,
-      }),
-      "utf8",
-    );
-
-    await Promise.all(
-      ids.flatMap((id) => {
-        const newer = store.toRecord({
-          bridgeSessionId: id,
-          threadId: `newer-${id}`,
-          cwd: "/workspace",
-          config: { mode: "build" },
-        });
-        return [store.upsert(newer), otherStore.remove(id)];
-      }),
-    );
-
-    const loaded = await store.load();
-    expect(loaded.every((record) => record.threadId.startsWith("newer-"))).toBe(true);
-    expect(loaded.some((record) => record.threadId.startsWith("legacy-"))).toBe(false);
-  });
-
-  test("rejects malformed, expired, foreign-cwd, and old-version records", async () => {
-    const now = Date.parse("2026-07-25T12:00:00.000Z");
-    const { codexHome, store } = await makeStore({
-      now: () => now,
-      retentionMs: 1_000,
-    });
-    const path = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await mkdir(dirname(path), { recursive: true });
-    const valid = {
-      bridgeSessionId: "valid",
-      threadId: "thread-valid",
-      cwdHash: hashCwd("/workspace"),
-      config: { mode: "build" },
-      lastAccessed: new Date(now).toISOString(),
-    };
-    const registry = {
-      version: BRIDGE_SESSION_REGISTRY_VERSION,
-      sessions: [
-        valid,
-        { ...valid, bridgeSessionId: "", threadId: "" },
-        { ...valid, bridgeSessionId: "bad-config", config: { mode: "unsafe" } },
-        { ...valid, bridgeSessionId: "bad-title", titleSource: "model" },
-        {
-          ...valid,
-          bridgeSessionId: "foreign",
-          cwdHash: hashCwd("/elsewhere"),
-        },
-        {
-          ...valid,
-          bridgeSessionId: "expired",
-          lastAccessed: new Date(now - 1_001).toISOString(),
-        },
-      ],
-    };
-    await writeFile(path, JSON.stringify(registry), "utf8");
-
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["valid"]);
-
-    await rm(join(codexHome, "orkestrator-bridge", `bridge-sessions-${hashCwd("/workspace")}`), {
-      recursive: true,
-      force: true,
-    });
-    await writeFile(path, JSON.stringify({ ...registry, version: registry.version + 1 }), "utf8");
-    expect(await store.load()).toEqual([]);
-
-    await writeFile(path, "{not json", "utf8");
-    expect(await store.load()).toEqual([]);
-
-    await writeFile(
-      path,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: { valid },
-      }),
-      "utf8",
-    );
-    expect(await store.load()).toEqual([]);
-  });
-
   test("skips corrupt, foreign-cwd and expired per-session record files", async () => {
     const now = Date.parse("2026-07-25T12:00:00.000Z");
     const { codexHome, store } = await makeStore({
@@ -609,80 +439,17 @@ describe("BridgeSessionStore", () => {
     expect((await readdir(recordsDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  test("a failing legacy migration warns instead of failing load", async () => {
-    const { codexHome, store } = await makeStore();
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await mkdir(dirname(legacyPath), { recursive: true });
-    await writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: [
-          store.toRecord({
-            bridgeSessionId: "legacy",
-            threadId: "thread-legacy",
-            cwd: "/workspace",
-            config: { mode: "plan" },
-          }),
-        ],
-      }),
-      "utf8",
-    );
-
-    // Stands in for the non-EEXIST `link` failure migrateLegacy deliberately
-    // rethrows. It must not escape: load() runs before the engine starts and
-    // nothing retries it, so a throw here leaves app-server unstarted forever.
-    Object.defineProperty(store, "migrateLegacy", {
-      value: () =>
-        Promise.reject(
-          Object.assign(new Error("EPERM: operation not permitted, link"), {
-            code: "EPERM",
-          }),
-        ),
-    });
-
-    const { result, warnings } = await captureWarnings(() => store.load());
-    expect(warnings).toBe(1);
-    // The in-memory legacy entries are still served for this run even though they
-    // could not be republished as per-session records.
-    expect(result.map((entry) => entry.bridgeSessionId)).toEqual(["legacy"]);
-  });
-
-  test("a read-only records directory is tightened before migration", async () => {
+  test("a read-only records directory is tightened before records are read", async () => {
     if (process.getuid?.() === 0) return; // root ignores the mode bits
     const { codexHome, store } = await makeStore();
     const recordsDir = recordsDirFor(codexHome);
-    await mkdir(recordsDir, { recursive: true });
-    const legacyPath = join(
-      codexHome,
-      "orkestrator-bridge",
-      `bridge-sessions-${hashCwd("/workspace")}.json`,
-    );
-    await writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: BRIDGE_SESSION_REGISTRY_VERSION,
-        sessions: [
-          store.toRecord({
-            bridgeSessionId: "legacy",
-            threadId: "thread-legacy",
-            cwd: "/workspace",
-            config: { mode: "plan" },
-          }),
-        ],
-      }),
-      "utf8",
-    );
+    await writeRecordFile(codexHome, "kept", validRecordFields("kept", Date.now()));
     await chmod(recordsDir, 0o555);
 
     try {
       const { result, warnings } = await captureWarnings(() => store.load());
       expect(warnings).toBe(0);
-      expect(result.map((entry) => entry.bridgeSessionId)).toEqual(["legacy"]);
+      expect(result.map((entry) => entry.bridgeSessionId)).toEqual(["kept"]);
       expect((await stat(recordsDir)).mode & 0o777).toBe(0o700);
     } finally {
       await chmod(recordsDir, 0o755);
@@ -735,7 +502,7 @@ describe("BridgeSessionStore", () => {
     await writeFile(temporary, "{}", { encoding: "utf8", mode: 0o644 });
 
     expect(await store.load()).toEqual([]);
-    // A live tombstone still shields against legacy resurrection, and a temp file
+    // A live tombstone still shields against resurrection, and a temp file
     // this young may belong to a writer that is mid-rename in another process.
     expect((await readdir(recordsDir)).sort()).toEqual(
       [

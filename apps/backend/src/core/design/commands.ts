@@ -28,7 +28,6 @@ import {
   designCancelCommand,
   designCapabilitiesCommand,
   designCaptureCommand,
-  designChangesCommand,
   designCheckpointCommand,
   designExecuteCommand,
   designExportPreviewCommand,
@@ -50,13 +49,11 @@ import {
   designPrepareCommand,
   designPurgeCommand,
   designReadinessCommand,
-  designSaveCommand,
   designSessionLinkCommand,
   designSessionLinkStatesCommand,
   designSessionResumeCommand,
   designSessionUnlinkCommand,
   designSnapshotCommand,
-  designStatusCommand,
   designSyncCommand,
   designValidateCommand,
 } from "@orkestrator/protocol/contract/domains/design";
@@ -294,14 +291,6 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
         resolveDestination: () => resolveDesignDestination(context.storage, environmentId),
       })) as ResultOf<typeof designActionCommand>;
     }),
-    entry(designStatusCommand, async (_args, context) => {
-      if (!context.design) return { ready: false as const, error: "Design service unavailable" };
-      return context.design.renderer.status();
-    }),
-    entry(designChangesCommand, async (args, context) => {
-      if (!context.design) throw new Error("Design service unavailable");
-      return context.design.changes(args.canvasId, args.environmentId, args.generation, args.after);
-    }),
     entry(designImportCommand, async (args, context) => {
       const { design, environmentId } = await authorized(args, context);
       return design.create(environmentId, "Imported design", args.document, "user");
@@ -316,44 +305,6 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
         throw new DesignError("invalid-input", "Choose an .orkdes design file.");
       const document = await readDesignHostFile(filePath);
       return design.create(environmentId, "Imported design", document, "user");
-    }),
-    entry(designSaveCommand, async (args, context) => {
-      const { design, environmentId } = await authorized(args, context);
-      const canvasId = args.canvasId;
-      const destination = await resolveDesignDestination(context.storage, environmentId);
-      const filePath = args.filePath;
-      // Legacy save never overwrites: a collision is reported, not resolved.
-      const receipt = await exportSave(
-        design,
-        environmentId,
-        canvasId,
-        { destination },
-        { relativePath: filePath, revision: args.expectedRevision, expected: { state: "absent" } },
-      ).catch(async (error) => {
-        const failure = toDesignFailure(error);
-        if (failure.code !== "export-collision") throw error;
-        const preview = await exportPreview(
-          design,
-          environmentId,
-          canvasId,
-          { destination },
-          filePath,
-        );
-        if (!preview.target.needsReplaceConfirmation && preview.target.fingerprint)
-          return exportSave(
-            design,
-            environmentId,
-            canvasId,
-            { destination },
-            {
-              relativePath: filePath,
-              revision: args.expectedRevision,
-              expected: { state: "present", digest: preview.target.fingerprint },
-            },
-          );
-        throw error;
-      });
-      return { filePath: receipt.relativePath, revision: receipt.revision };
     }),
 
     // Protocol v2 surface: typed envelopes, capability negotiated.

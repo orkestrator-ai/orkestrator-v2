@@ -870,6 +870,76 @@ describe("service browser tabs", () => {
     );
   });
 
+  test("hides the view at once while the next service's attach is still pending", async () => {
+    const api = fixturePreviewService({
+      definition: { serviceId: API_SERVICE_ID, applicationPort: 8000, label: "api", entry: false },
+    });
+    const { browserPreview } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService(), api],
+    });
+    seedTab(serviceUri("/start"));
+    const view = renderTab();
+    await waitFor(() =>
+      expect(browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+
+    // The next service's tunnel never comes up.
+    browserPreview.attach.mockImplementation(() => new Promise<BrowserPreviewState>(() => {}));
+    browserPreview.setVisible.mockClear();
+    act(() =>
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .updateTabBrowserUrl(
+          "browser-1",
+          serviceUri("/", API_SERVICE_ID),
+          FIXTURE_ENVIRONMENT_ID,
+          [],
+          -1,
+        ),
+    );
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0].service?.serviceId).toBe(API_SERVICE_ID),
+    );
+    // The previous service's page does not stay on screen for the new one.
+    expect(browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+
+    // Deactivating while that attach is pending hides now, not when it settles.
+    browserPreview.setVisible.mockClear();
+    view.rerender(<TabHarness isActive={false} />);
+    expect(browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+  });
+
+  test("a service snapshot refresh never hides the view", async () => {
+    const { browserPreview } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() =>
+      expect(browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
+    browserPreview.setVisible.mockClear();
+    browserPreview.attach.mockClear();
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      await act(async () => {
+        await appCommandStore(previewServiceStore)
+          .getState()
+          .refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      });
+    }
+    await Bun.sleep(5);
+    expect(browserPreview.setVisible).not.toHaveBeenCalledWith("browser-1", false);
+    expect(browserPreview.attach).not.toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false }),
+    );
+  });
+
   test("compatibility mode follows the service's current host port", async () => {
     const service = fixturePreviewService();
     service.endpoint.hostPort = 49999;
@@ -1236,19 +1306,6 @@ describe("service browser tabs", () => {
         ref: { serviceId: app.definition.serviceId },
       }),
     );
-  });
-
-  test("older backends keep the original link behaviour", async () => {
-    installBackend({ capabilities: null, services: [] });
-    seedTab(
-      formatPreviewIntentUri({
-        environmentId: FIXTURE_ENVIRONMENT_ID,
-        source: "container-terminal",
-        url: "http://localhost:3000/",
-      }),
-    );
-    renderTab();
-    await waitFor(() => expect(tabUrl()).toBe("http://localhost:3000/"));
   });
 
   test("a tab saved against another backend asks for a new service", async () => {

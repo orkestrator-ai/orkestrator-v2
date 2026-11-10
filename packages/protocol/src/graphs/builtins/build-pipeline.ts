@@ -8,7 +8,7 @@
  * own. The flow keeps running there (`engine: "build-pipeline"`). Where the
  * graph model cannot say what the engine does, the template says the nearest
  * thing and the difference is recorded beside it and in
- * plans/graphs/108-builtin-templates.md. The backend's
+ * docs/architecture/graphs.md (built-in templates). The backend's
  * `graph-builtin-templates.test.ts` pins this file to the engine.
  * Browser-safe.
  */

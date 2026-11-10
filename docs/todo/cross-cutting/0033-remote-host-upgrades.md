@@ -10,40 +10,14 @@ Previously analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Remote desktop update between two signed releases**: macOS and AppImage, with agents running; Postpone, unanswered countdown, cancel, toolchain retry, iOS reconnect. Status: open (not started; needs a macOS VM or spare account and a Linux desktop VM).
-2. **Standalone service on launchd and systemd**: install from npm, self-update, broken-release rollback, `engines.bun` refusal, linger. Status: partly done (a systemd install from npm reached ready on 2026-10-26; the rest, and all of launchd, not run).
+2. **Standalone service on systemd**: install from npm, self-update, broken-release rollback, `engines.bun` refusal, linger, in a disposable Linux VM or systemd container. Status: open (a systemd install from npm reached ready on 2026-10-26; the rest not run). The launchd half moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
 3. **Image and `gh` updates**: `host.image.update` against GHCR and `host.gh.update` `latest` and `pinned` on both platforms. Status: open (the GHCR index was inspected; neither task run).
 
-Items 4 and 5 (per-environment Rebuild… and container terminals in the restart impact) are done and need no analysis beyond task 1 exercising their UI on a real release.
+Items 4 and 5 (per-environment Rebuild… and container terminals in the restart impact) are done and need no analysis beyond the signed-release desktop update (task 1, moved to [7568](../manual-test/7568-manual-test-checklist.md)) exercising their UI on a real release.
 
-### 1. Remote desktop update between two signed releases
+### 2. Standalone service on systemd
 
-**Problem.** Remote host maintenance ships, but no remote-initiated desktop update has been observed between real signed releases, so the countdown, cancel and relaunch paths are unproven for users who rely on them.
-
-**Context.** D2 (60 s countdown with Postpone; unanswered restarts) and D3 (operator token with `confirm: true`) define the behaviour. The living reference is `docs/architecture/host-updates.md`. Runs must not happen on a machine someone works on, after the [0244](0244-second-backend-on-one-host.md) incident.
-
-**Investigation.** Published releases now run to `v2.33.0-beta` (2026-10-26), each with `alpha-mac.yml`, `beta-mac.yml`, `beta-linux.yml`, the arm64 DMG and zip, and the x86_64 AppImage (`gh release view v2.33.0-beta`). The file's example pair (2.30.0-beta to 2.31.0-beta) predates two relevant fixes: `0a2ea7e3` (#1301), first in `v2.32.0-beta`, made Restart relaunch an AppImage from `$APPIMAGE` rather than the vanished mount (`apps/desktop/electron/relaunch.ts`; the 2026-10-26 SIGTRAP) and replaced the blocking `dialog.showErrorBox` with `restart-prompt.ts`; `77b76c3c` (#1302, items 4 and 5) is also first in `v2.32.0-beta`. The CLI side exists: `--when-idle` maps to `drain` in `packages/cli/src/client/commands/host.ts:321`.
-
-**Decisions.**
-
-- **Which release pair?**
-  - **Install `v2.32.0-beta` and update to `v2.33.0-beta`, or the next consecutive pair after that (recommended).**
-    - Pros: the starting release already has the AppImage relaunch fix and items 4 and 5, so the run tests the code users now have.
-    - Cons: the pair is only one release apart in content; a later pair may be needed once Stable ships.
-  - **Use 2.30.0-beta to 2.31.0-beta, as the file suggests.**
-    - Pros: matches the documented procedure.
-    - Cons: the old release's relaunch path is the one that crashed on 2026-10-26; a failure there would say nothing about current code.
-- **Where to run the macOS half?**
-  - **A spare user account on a maintainer Mac (recommended).**
-    - Pros: real Developer ID signature checks by Squirrel.Mac; no nested virtualisation.
-    - Cons: shares the host with the maintainer's own install; a second account has its own data directory, but a second backend on the same host can still take the Control MCP port (0244), so quit the main app first.
-  - **A macOS VM.**
-    - Pros: fully disposable.
-    - Cons: Apple Silicon VMs are limited in number and slow to provision; code-signing behaviour in VMs can differ.
-
-### 2. Standalone service on launchd and systemd
-
-**Problem.** The supervised standalone backend's self-update and rollback have never completed on real releases, and the launchd branch has not run at all.
+**Problem.** The supervised standalone backend's self-update and rollback have never completed on real releases. (The launchd branch, which needs a spare Mac user account, is in [7568](../manual-test/7568-manual-test-checklist.md).)
 
 **Context.** `scripts/qualify-standalone-service.ts` drives all four checks and writes a JSON report; it refuses a host with another Orkestrator unless `--allow-shared-host`, installs with `--skip-start`, and boots with a private HOME and `ORKESTRATOR_CONTROL_MCP_DISABLED=1`.
 
@@ -76,8 +50,8 @@ Items 4 and 5 (per-environment Rebuild… and container terminals in the restart
 
 **Decisions.**
 
-- **Run it in the same VMs as tasks 1 and 2, or separately?**
-  - **In the Linux VM of task 2, after the service run, and in the macOS account of task 1 for the zip layout (recommended).**
+- **Run it in the same VM as task 2, or separately?**
+  - **In the Linux VM or container of task 2, after the service run, and in a headless backend with a private data directory on a macOS node for the zip layout (recommended).**
     - Pros: one VM provisioning; each platform's archive layout covered once.
     - Cons: needs at least 15 GB free in the Linux VM on top of the service run.
   - **A separate minimal VM per platform.**
@@ -132,26 +106,10 @@ Run all of these in a disposable VM, container or user account, never on a
 machine someone works on. Each needs real published releases; none can be
 simulated here.
 
-1. A remote-initiated desktop update between two signed releases, on macOS
-   and on AppImage, with agents running. Cover each of these:
-   - Postpone
-   - an unanswered countdown
-   - cancel during the countdown and during `waiting-for-idle`
-   - the relaunch with a toolchain failure retried without a dialog
-   - the iOS shell reconnecting and the backend-served page reloading
-
-   Not started. How to collect it: in a macOS VM (or a spare Mac user
-   account) and a Linux VM with a desktop session, install the older of two
-   consecutive signed releases (for example 2.30.0-beta, then update to
-   2.31.0-beta), start one native agent turn in a fixture environment, then
-   from a second machine run `orkestrator host update apply --yes --wait`
-   (and `--when-idle` for the idle case). Exercise each bullet in turn.
-   Record the job states from `orkestrator host status --json` and the
-   desktop dialog. For the toolchain retry, make one pinned tool's download
-   fail (block its host in the VM firewall) during the relaunch. For iOS, keep
-   the iOS shell connected to that backend through the update.
-2. The standalone service on macOS launchd and on Linux systemd (with
-   linger):
+1. Moved to [7568](../manual-test/7568-manual-test-checklist.md) on
+   2026-11-10: the remote-initiated desktop update between two signed
+   releases.
+2. The standalone service on Linux systemd (with linger):
    - `service install` from npm
    - a self-update between two published releases
    - a deliberately broken release rolling back
@@ -165,13 +123,14 @@ simulated here.
    (cancel during the countdown, a `--when-idle` self-update from
    2.30.0-beta to 2.31.0-beta, a broken `2.31.0-beta.990` served by a private
    registry rolling back, and 2.29.0-beta under Bun 1.4.3 refusing
-   2.30.0-beta). In a Linux VM with systemd and a user session:
+   2.30.0-beta). In a disposable Linux VM or systemd container with a user
+   session:
    `loginctl enable-linger $USER`, install mise and this checkout, then run
    `mise run build:cli` and
    `bun scripts/qualify-standalone-service.ts --engines-bun <path to Bun 1.4.3> --report report.json`.
    Log out and back in once to confirm the unit keeps running with linger.
-   Repeat on macOS in a VM or spare user account (the launchd path of the
-   script has not been run anywhere yet). Attach each `report.json`.
+   Attach `report.json`. The launchd run on macOS moved to
+   [7568](../manual-test/7568-manual-test-checklist.md).
 3. `host.image.update` against the GHCR release image, and `host.gh.update`
    `latest` on both platforms (checksums, the zip and tar layouts, the
    `--version` probe).
@@ -260,7 +219,8 @@ AppImage install. It is the probable cause of an outage there.
 
 Every unit, process, temporary directory and Docker resource the test
 created was removed; no live data was touched. The bug and the full evidence
-are in [0244-second-backend-on-one-host.md](0244-second-backend-on-one-host.md).
+are in to-do 0244 (retired 2026-11-10); the port rule it led to is in
+[control-mcp.md](../../architecture/control-mcp.md).
 The qualification script now refuses to run beside another Orkestrator, and
 gives its units a private HOME and no Control MCP. No further live runs were
 made on that host.
@@ -320,7 +280,9 @@ made on that host.
 
 ## Related
 
-- [0244-second-backend-on-one-host.md](0244-second-backend-on-one-host.md):
-  the Control MCP port and backend exit found by this qualification.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, the launchd half of task 2) moved there on 2026-11-10.
+- [control-mcp.md](../../architecture/control-mcp.md): the Control MCP port
+  rule that came from the port takeover and backend exit this qualification
+  found (to-do 0244, retired 2026-11-10).
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md):
   the batching index for live platform runs.

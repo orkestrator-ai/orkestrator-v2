@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Tasks 1 to 3 are unchanged. Task 4 still applies, but its realm part is obsolete: plan items 6002 and 6003 deleted workspace realms and their portal (`orkestrator:portal-event`), so main's relayed stream now serves windows only, and another node's workspace is a node scope in the window's own renderer.
+Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. Tasks 1 and 2 are unchanged. Task 3 (a production profile of the frame costs) needs a real multi-client workload on the user's install and moved to 7568 on 2026-11-10. Task 4 still applies, but its realm part is obsolete: plan items 6002 and 6003 deleted workspace realms and their portal (`orkestrator:portal-event`), so main's relayed stream now serves windows only, and another node's workspace is a node scope in the window's own renderer.
 
 Previously analysed 2026-11-05 against `main` at `1e6d56391`.
 
@@ -10,8 +10,6 @@ Previously analysed 2026-11-05 against `main` at `1e6d56391`.
 
 1. **Two-node browser check**: per-node relayed events between two real backends, in a real browser, with a busy leaf and an inactive tab. Status: open.
 2. **Older peers on real releases**: an older renderer on an upgraded command node, and a current renderer on an older command node. Status: open.
-3. **Production profile of the frame costs**: whether the shared frame buffer matters on a real fan-out. Status: open.
-4. **The desktop's relay between two real machines**: a desktop window, with a leaf on another machine. Status: open (the realm's-portal half is obsolete: 6002 and 6003 deleted realms).
 
 ### 1. Two-node browser check
 
@@ -49,43 +47,8 @@ Previously analysed 2026-11-05 against `main` at `1e6d56391`.
     - Pros: no setup.
     - Cons: it shows that the path is used, not that it works.
 
-### 3. Production profile of the frame costs
-
-**Problem.** Part `0280` (GW-5) was rated as something that should wait for a profile, and no production profile was taken.
-
-**Context.** A frame is encoded once and every client is written the same `Buffer` (`encodeGatewayFrame`, `apps/backend/src/gateway-event-replay.ts`). On 2026-11-04 frame measures per emit went from 13 to 0 with 4 subscribers, and the time inside `emit` fell from 433–565 µs to 258–426 µs per 64 KiB event, moving with host load ([1202 task 11](1202-efficiency-review-follow-ups.md)).
-
-**Investigation.** The synthetic numbers come from `apps/backend/scripts/gateway-frame-costs.ts`. A production profile needs a real workload with several clients, which this batch did not have.
-
-**Decisions.**
-
-- **Is a profile still needed?**
-  - **Take one only if gateway fan-out shows up in another investigation (recommended).**
-    - Pros: the fix is built, has no downside to undo, and a profile could only confirm it.
-    - Cons: the real saving stays unmeasured.
-  - **Profile a real multi-client session now.**
-    - Pros: a real figure.
-    - Cons: effort with no decision depending on the answer.
-
-### 4. The desktop's relay between two real machines
-
-**Problem.** The desktop's main process now takes relayed events on one filtered stream, for what its windows listen to. That has run against a real gateway and in a real Electron window with a leaf on loopback, not across a real link to another machine, so a route that drops, a tailnet peer that vanishes and a leaf on another release are not proven end to end.
-
-**Context.** A renderer on the IPC path reports its per-node listens to main (`createRelayedListenReporter`, `apps/desktop/electron/preload-api.ts`). Main keeps their union per connection (`DesktopWindowContexts.syncRelayedEvents`) and runs the stream (`BackendHttpClient.setRelayedEvents`, `apps/desktop/electron/backend-process.ts`). It serves a local window with `localWindowGatewayTransport` off. It also served a realm's portal (`orkestrator:portal-event`) until 6003 deleted realms; a leaf's workspace is now a node scope in the window's own renderer ([node scopes](../../architecture/federation.md#node-scopes-one-scope-per-node-in-the-windows-tree)), and on the desktop its own events come over main's node scope rather than this relayed stream. See [command nodes](../../architecture/command-nodes.md).
-
-**Investigation.** Not run: it needs two real machines, and the batch that built this could not contact other real nodes. Already covered by automated tests: scoping, filter changes from the cursor, a closed window, a reload, replay and `resync` after a reconnect, and an older backend's old-name frames (`apps/backend/tests/gateway-desktop-relayed-stream.test.ts`, with a scripted older backend), plus windows and a reload in real Electron against a loopback leaf (`e2e/agent-testing/relayed-events-electron.spec.ts`; its realm's-portal case went with 6003). No provider turn is needed for any of this.
-
-**Decisions.**
-
-- **How to qualify?**
-  - **A desktop on one machine with a leaf attached on another, with the transport setting off (recommended).** Watch the leaf's badges in the window, open a second window that also watches the leaf, and change a fixture environment on the leaf. Check on `/__orkestrator/metrics` that only the watched node's frames are written, close one window and check the filter keeps what the other listens to (and narrows once neither does), then break the route for longer than the relayed window and check that the badges re-read when it returns. Repeat once with the leaf on the last release before E18.
-    - Pros: exercises the real route handling and the path the support window promises.
-    - Cons: needs two machines and a built older release.
-  - **Rely on the automated tests and watch `relayed-node-event.legacy-desktop-stream`.**
-    - Pros: no setup.
-    - Cons: a real route's failure modes stay unproven, and the counter says only that older desktops still connect.
-
 ## Related
 
-- [1202 task 11](1202-efficiency-review-follow-ups.md)
+- to-do 1202 task 11 (retired 2026-11-10)
 - [Command nodes](../../architecture/command-nodes.md)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do moved there on 2026-11-10: task 3 (a production profile of the frame costs, taken only if gateway fan-out shows up in another investigation) and task 4 (the desktop's relay between two real machines).

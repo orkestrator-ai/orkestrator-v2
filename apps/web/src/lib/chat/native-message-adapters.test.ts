@@ -11,7 +11,7 @@ import {
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
   findPreviousNativeMessage,
-  getClaudeSourceMessageId,
+  getNativeSourceMessageId,
   groupNativeAgentActivity,
   groupNativeToolActivity,
   isTaskTool,
@@ -24,7 +24,7 @@ import {
   normalizeNativeMessages,
   parseNativeAttachmentsFromContent,
   rowlessBackgroundTaskMessages,
-  splitClaudeAssistantTextBlocks,
+  splitAssistantTranscriptBlocks,
 } from "./native-message-adapters";
 
 describe("Claude activity in the shared native transcript", () => {
@@ -1717,7 +1717,7 @@ describe("native message adapters", () => {
     });
 
     expect(normalized.modelId).toBe("claude-opus-5");
-    expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId)).toEqual([
+    expect(splitAssistantTranscriptBlocks(normalized).map((row) => row.modelId)).toEqual([
       "claude-opus-5",
       "claude-opus-5",
       "claude-opus-5",
@@ -3345,7 +3345,7 @@ describe("native message adapters", () => {
       ],
     };
 
-    const displayMessages = splitClaudeAssistantTextBlocks(message);
+    const displayMessages = splitAssistantTranscriptBlocks(message);
 
     expect(displayMessages).toEqual([message]);
     expect(displayMessages[0]).toBe(message);
@@ -3530,20 +3530,20 @@ describe("native message adapters", () => {
   });
 });
 
-describe("getClaudeSourceMessageId", () => {
+describe("getNativeSourceMessageId", () => {
   test("passes an unsplit id through unchanged", () => {
-    expect(getClaudeSourceMessageId("msg-1")).toBe("msg-1");
-    expect(getClaudeSourceMessageId("")).toBe("");
+    expect(getNativeSourceMessageId("msg-1")).toBe("msg-1");
+    expect(getNativeSourceMessageId("")).toBe("");
   });
 
   test("resolves a split display row back to its persisted message", () => {
-    expect(getClaudeSourceMessageId("msg-1:text-block:7")).toBe("msg-1");
+    expect(getNativeSourceMessageId("msg-1:text-block:7")).toBe("msg-1");
   });
 
   test("resolves every row a real split produces", () => {
     // The bridge only ever sees the persisted id, so each display row this
     // splitter emits has to map back onto exactly one message on disk.
-    const rows = splitClaudeAssistantTextBlocks({
+    const rows = splitAssistantTranscriptBlocks({
       id: "assistant-1",
       role: "assistant",
       content: "",
@@ -3568,13 +3568,13 @@ describe("getClaudeSourceMessageId", () => {
     });
 
     expect(rows.length).toBeGreaterThan(1);
-    expect(rows.map((row) => getClaudeSourceMessageId(row.id))).toEqual(
+    expect(rows.map((row) => getNativeSourceMessageId(row.id))).toEqual(
       rows.map(() => "assistant-1"),
     );
   });
 
   test("truncates at the first marker so a nested split cannot leak through", () => {
-    expect(getClaudeSourceMessageId("msg-1:text-block:2:text-block:5")).toBe("msg-1");
+    expect(getNativeSourceMessageId("msg-1:text-block:2:text-block:5")).toBe("msg-1");
   });
 });
 

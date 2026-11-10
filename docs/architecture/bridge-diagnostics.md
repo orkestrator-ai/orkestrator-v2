@@ -15,11 +15,9 @@ controls and how the setting reaches a bridge.
 
 The backend also passes `ORKESTRATOR_BRIDGE_DEBUG=1` or `0` to every new local and
 Docker bridge, as its startup default for the per-minute stream until the setting
-arrives. Standalone bridges accept the same variable. An unset common variable
-allows `CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`, `CURSOR_BRIDGE_DEBUG`,
-`PI_BRIDGE_DEBUG`, or `ACP_BRIDGE_DEBUG` as a compatibility fallback. Only `1`
-enables the stream; an explicit common `0` overrides every legacy flag. The flag
-never silences lifecycle or stall snapshots: `bridge.diagnostics=warn` does that.
+arrives. Standalone bridges accept the same variable. The per-bridge spellings
+(`CLAUDE_BRIDGE_DEBUG` and the like) are no longer read. Only `1` enables the
+stream. The flag never silences lifecycle or stall snapshots: `bridge.diagnostics=warn` does that.
 
 ## When a snapshot is written
 

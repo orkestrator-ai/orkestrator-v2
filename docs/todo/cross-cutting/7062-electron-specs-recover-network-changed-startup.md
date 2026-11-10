@@ -12,8 +12,9 @@ were made deterministic after repeated runs needed two reloads.
 ### Tasks
 
 1. **Use the startup recovery in the other Electron specs**: every spec that
-   waits for a development window's first title. Status: open (code done
-   2026-11-10; a live run of the specs that need a display remains).
+   waits for a development window's first title. Status: blocked (waits on
+   7568: 6303 task 2, a host with a disposable display; code done 2026-11-10,
+   a live run of the specs that need a display remains).
 2. **Measure it under forced network churn**: show a real reload recovering a
    startup. Status: done (2026-11-10, Chromium and a real headless Electron
    window in a private network namespace; after the review repair every run
@@ -227,7 +228,8 @@ in headless Electron, each with exactly one reload.
 - Run `mise run test:agent:electron` on a host with a disposable display and
   check the migrated specs pass; read any `[startup-recovery]` lines in the
   run's `results.json`. Not done here: this ticket allowed headless runs only
-  and no Xvfb.
+  and no Xvfb. Providing such a host is in the manual-test checklist
+  (7568: 6303 task 2).
 - Startup recovery does not cover a later lazy load (the Kanban view in
   `web-annotations-electron.spec.ts`, 2026-11-06). That is a separate failure
   mode; record a new to-do if it recurs.

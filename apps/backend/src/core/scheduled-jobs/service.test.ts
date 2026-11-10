@@ -404,7 +404,7 @@ describe("two backends sharing a data directory", () => {
 });
 
 describe("experimental scheduling switch", () => {
-  test.each(["save_config", "update_global_config"])(
+  test.each(["update_global_config"])(
     "%s wakes a started scheduler across on → off → on and preserves missed-fire rules",
     async (command) => {
       const clock = { now: T0 };
@@ -429,10 +429,7 @@ describe("experimental scheduling switch", () => {
       const save = async (enabled: boolean) => {
         const current = await storage.loadConfig();
         const global = { ...current.global, experimentalScheduling: enabled };
-        await createCommandRegistry().get(command)!(
-          command === "save_config" ? { config: { ...current, global } } : { global },
-          context,
-        );
+        await createCommandRegistry().get(command)!({ global }, context);
         await service.idle();
       };
       const first = (await service.create(OPERATOR, { at: "+1m", action: MAIL })).job;

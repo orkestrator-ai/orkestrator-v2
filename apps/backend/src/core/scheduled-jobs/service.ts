@@ -4,7 +4,6 @@ import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
 import { hostTimeZone } from "@orkestrator/protocol/schedule-time";
 import {
-  describeScheduleTrigger,
   nextScheduleSlot,
   normalizeScheduleTrigger,
   normalizeTimeZone,
@@ -850,11 +849,4 @@ export function defaultOwnerLabel(owner: ScheduleOwner): string {
     case "coordinator":
       return owner.role === "main" ? "Coordinator" : "Coordinator side agent";
   }
-}
-
-/** One line for tool results and logs. */
-export function describeSchedule(job: ScheduledJob | ScheduledJobSummary): string {
-  return `${job.name} (${job.id}): ${describeScheduleTrigger(job.trigger, job.timeZone)}, ${job.state}${
-    job.nextFireAt ? `, next ${job.nextFireAt}` : ""
-  }`;
 }

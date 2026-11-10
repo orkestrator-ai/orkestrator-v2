@@ -51,4 +51,11 @@ const legacyApi = (_call: CommandCall, context: DomainAdapterContext): ProjectsA
     context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined),
   );
 
-export const projectsClient = domainClient(projectsDomain, { 1: currentApi, 0: legacyApi });
+export const projectsClient = domainClient(projectsDomain, {
+  2: currentApi,
+  // Version 2 only removed commands nothing called (2026-11-10), so version 1
+  // peers take the same API. Adapter 1 goes when the support floor passes the
+  // first Stable release with version 2.
+  1: currentApi,
+  0: legacyApi,
+});

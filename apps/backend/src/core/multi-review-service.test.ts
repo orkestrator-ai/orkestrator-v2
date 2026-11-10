@@ -2681,10 +2681,10 @@ test("MultiReviewService reads interactive Address Findings activity per session
       await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
       await Promise.all(workflowIds.map((id) => service.advanceNow(id)));
 
-      // The absent route is learned once per connection, not once per read.
-      expect(requests.filter((path) => path === "/sessions/activity").length).toBeLessThanOrEqual(
-        1,
-      );
+      // Nothing remembers an absent batch route: each sweep tries it once
+      // (three concurrent reads coalesce into one request), then falls back to
+      // the single route for every session.
+      expect(requests.filter((path) => path === "/sessions/activity")).toHaveLength(2);
       expect(requests.filter(singleActivityRead)).toHaveLength(6);
       for (const id of workflowIds) {
         expect((await snapshot(id))?.fixSession).toMatchObject({ status: "running" });

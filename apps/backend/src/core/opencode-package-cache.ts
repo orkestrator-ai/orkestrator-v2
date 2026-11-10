@@ -1,6 +1,6 @@
 /**
  * The package cache of a launched OpenCode server
- * (to-do 7550, task 2; docs/architecture/agent-approvals.md).
+ * (#2091; docs/architecture/agent-approvals.md).
  *
  * OpenCode installs two kinds of npm package at run time and imports them into
  * the server: the AI SDK package of a provider it does not bundle (the

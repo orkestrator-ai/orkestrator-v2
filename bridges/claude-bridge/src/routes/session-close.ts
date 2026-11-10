@@ -5,9 +5,8 @@ import { closeSessionRetainingHistory } from "../services/session-manager-close.
  * `POST /session/:id/close` — ordinary tab close.
  *
  * Stops the session's owned work, denies anything parked and retires the
- * bridge's live mapping, but never deletes the Claude conversation. That is the
- * whole difference from `DELETE /session/:id`, which removes the SDK rollout and
- * stays available only to callers that deliberately ask for permanent deletion.
+ * bridge's live mapping, but never deletes the Claude conversation. The bridge
+ * serves no route that removes an SDK rollout.
  *
  * Contract shared by every bridge:
  * - 200 `{ closed: true, retained: true }` once the work is stopped.

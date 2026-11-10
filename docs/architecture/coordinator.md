@@ -1097,9 +1097,8 @@ return, since searches follow links; the checkout and the coordinator's
 attachment directory stay readable. The read executor also serves an MCP call's
 `$file:` arguments. The executor shapes are unpublished SDK internals, so this
 is proven only against fakes and the SDK's own message descriptors until a live
-Cursor turn qualifies it
-([7400](../todo/coordinator-and-multi-review/7400-cursor-coordinator-data-dir-reads.md)
-task 2).
+Cursor turn qualifies it (to-do 7400, retired 2026-11-10; the billed turn is
+on the manual-test checklist, to-do 7568).
 
 Grok deny-policy children load a private agent profile that removes `write`,
 `search_replace`, `run_terminal_cmd`, built-in subagents and 1.0.67's `monitor`
@@ -1788,8 +1787,9 @@ dropped. A node that predates the command, or fails a read, shows nothing new; a
 failed read keeps the last reading until the node is reported unavailable, when
 its prompts drop out. A remote worker's prompt still does not produce a notice to
 the coordinator: `noteWorkerHumanPrompt` is local. Two real nodes have not
-exercised this:
-[4942](../todo/coordinator-and-multi-review/4942-c7-live-checks.md).
+exercised this; the check is on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(to-do 4942, retired 2026-11-10).
 
 ### Mail tiles and the report cue
 
@@ -1810,8 +1810,12 @@ delivered: `CoordinatorService` raises `coordinator-wake-attention`, which
 once, not replayed to a client that was away, and quiet while that coordinator's
 page is on screen in a visible window. A worker's "agent stopped" cue and its wake
 within 500 ms are one sound. A backend that predates the event never sends it, and
-an older client ignores it. A desktop notification is a wider feature:
-[4941](../todo/coordinator-and-multi-review/4941-coordinator-report-desktop-notification.md).
+an older client ignores it. A report raises no desktop notification: that
+is a wider feature (new permission handling, nothing on the web client, and a
+choice of what may show on a lock screen), and the event names no worker. Whether
+to build one is the user's call, on the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+(to-do 4941, retired 2026-11-10).
 
 ## User `!` commands
 
@@ -2579,8 +2583,8 @@ Decisions:
   leaf's placement and reason otherwise. A lost answer is the ordinary
   outcome-unknown error with no `deliverNow` claim; retrying the same
   `requestId` replays on the leaf.
-  Live qualification is in
-  [0740](../todo/coordinator-and-multi-review/0740-coordinator-deliver-now-live-qualification.md).
+  Live qualification was to-do 0740 (retired 2026-11-10); its billed runs
+  are on the manual-test checklist (to-do 7568).
 
 `list_agents` (discovery) returns every agent tab in the project and what each
 is doing — see [`agent-registry.md`](agent-registry.md).
@@ -3598,8 +3602,7 @@ answer.
 
 ### Worker goals
 
-A coordinator can give a worker tab a goal, and is woken once when it stops
-(`plans/goals/403`). The tools sit on the same service as `/goal` and
+A coordinator can give a worker tab a goal, and is woken once when it stops. The tools sit on the same service as `/goal` and
 `session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
 Coordinator tools cannot configure shell checks; a person configures checks
 through the composer or public API. A coordinator goal ends as an unverified claim.
@@ -3652,8 +3655,7 @@ the coordinator would be woken between iterations. A person's `/goal` on a remot
 worker the coordinator delegated to has that problem today.
 
 A live run is the `goal` scenario of `mise run test:agent:coordinator`, described in
-[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite). Whether
-it has passed is recorded in `plans/goals/403`.
+[`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite).
 
 ## Saved graphs
 
@@ -3796,8 +3798,14 @@ the new objects. Nothing merges.
 **The section.** `mergeOrkestratorSection` copies everything outside the
 section byte for byte (CRLF kept, a byte-order mark kept, invalid UTF-8
 refused). A missing section is created at the end of the file, opening with a
-note that it holds coordinator-approved operating decisions every agent must
-follow; a missing file is created with just the section. Entries are compared
+note (`ORKESTRATOR_SECTION_NOTE`) that it holds coordinator-approved operating
+decisions every agent must follow, changed only through a proposal except to
+update a reference or description the agent's own change makes stale; a
+missing file is created with just the section. When a proposal changes an
+existing section whose preamble line is exactly an earlier wording of that
+note (`PREVIOUS_ORKESTRATOR_SECTION_NOTES`), the line becomes the current note
+in the same pull request, so the diff the user approves shows it; any other
+preamble is the user's text and is kept. Entries are compared
 ignoring case, spacing and a final full stop, stay de-duplicated (existing
 duplicates collapse to the first when the section changes), keep their order,
 and new ones go after the last entry. ATX and Setext level-one and level-two
@@ -4093,3 +4101,25 @@ Only bare native tool names and explicit Orkestrator server prefixes create mark
 Workflow-to-PR replay reconciles the structured PR URL or, for
 older notices, the PR URL carried by status notice bodies; older URL-free notices fall back to a node-qualified environment identity.
 Publication-started and publication-failed notices do not create PR cards.
+
+### Searching actions
+
+A magnifying-glass button labelled "Search actions" opens a palette styled and
+driven like the ⌘K project search (`CoordinatorActionSearch.tsx`). It sits in
+the panel's header row, beside the fold control, whenever the panel is open
+(docked, or the narrow overlay once expanded); a folded docked panel shows it
+beside the icon instead, since nothing there expands on hover.
+
+The palette searches every action the shell derives (`actionCards`: recovered
+history plus the loaded transcript), not the ten cards the panel shows. Each
+whitespace-separated term must start a word of the title, the kind ("topic",
+"question", "pr", "pull request") or the state ("open", "merged", "done",
+"awaiting answer"…), case-insensitively; results are newest first, and an empty
+query lists everything. Arrow keys move the selection, Enter or a click
+chooses, and Escape closes with focus back on the button that opened it. While
+it is open the narrow overlay stays expanded behind it; choosing folds the
+overlay and focuses its icon.
+
+Choosing calls the same navigation as a card: a scroll target for the action's
+anchor message, which pages earlier history until a not-yet-loaded anchor is
+rendered. There is no keyboard shortcut for the palette.

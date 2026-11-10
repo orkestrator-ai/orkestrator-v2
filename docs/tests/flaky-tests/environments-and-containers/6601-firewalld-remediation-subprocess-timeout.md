@@ -46,7 +46,7 @@ processes that finish in milliseconds alone. A SIGTERM at 5,004.98 ms is
 Raw host load is a poor fit for so little work (compare the firewall
 fixtures, 0192/0632/9837, which fork more than a hundred processes). The
 macOS lost-exit defect in
-[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md)
+todo 4260 (retired 2026-11-10; its record is `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`)
 fits better: an exited child stays a zombie that Bun never reports, and
 `spawnSync` has no watchdog. The same applies to 1532. Not reproduced on
 Linux; status left open. On a recurrence, record the child's `ps` state. If

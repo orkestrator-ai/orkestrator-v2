@@ -161,7 +161,7 @@ describe("create acknowledgement", () => {
     try {
       const retry = create({ clientSessionKey: "tab-1" });
       await hold.held;
-      const closing = harness.call(`/session/${state.id}`, { method: "DELETE" });
+      const closing = harness.call(`/session/${state.id}/close`, { method: "POST" });
       await waitFor(() => state.closed === true);
       hold.release();
       expect((await retry).status).toBe(409);

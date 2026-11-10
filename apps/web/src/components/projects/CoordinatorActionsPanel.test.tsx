@@ -22,7 +22,9 @@ let clocks: ReturnType<typeof installControlledTimeout>[] = [];
 afterEach(() => {
   cleanup();
   localStorage.removeItem(COORDINATOR_ACTIONS_DOCKED_KEY);
-  for (const clock of clocks) clock.restore();
+  // Newest first: each clock restores the setTimeout it wrapped, so restoring
+  // in install order would put an earlier clock's stub back.
+  for (const clock of clocks.toReversed()) clock.restore();
   clocks = [];
 });
 function clock(delay: number) {

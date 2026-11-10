@@ -184,7 +184,7 @@ Durations are not reference figures.
   after that. Without the added contention, on the committed fix: 10 of 10
   alone, and 2 of 2 in owner order after every earlier case except the legacy
   URL tab case, which fails every headless run
-  ([7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)).
+  ([to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel)).
   Before the fix and without contention it had passed 10 of 10.
 - Also closes the throw in
   [to-do 6303](../../../todo/cross-cutting/6303-window-close-during-request-throws.md)
@@ -201,5 +201,5 @@ connect" after Chromium aborted its Vite modules with
 The launcher now reloads a window only for that startup failure (`9ef37bfd1`,
 to-do 0042 D24). Afterwards, headless and without a private network namespace,
 this test passed 10 of 10 (`--repeat-each=10`) and the owner without the
-[7061](../../../todo/previews-and-annotations/7061-legacy-url-tab-back-fails-headless.md)
+[to-do 7061, retired 2026-11-10](../../../architecture/browser-previews.md#desktop-tunnel)
 case 21 of 21.

@@ -626,11 +626,3 @@ export function validateWorkflowResult(
   const slot: WorkflowResultSlotView = { schema, context };
   return validateRegisteredWorkflowResult(kind, value, slot);
 }
-
-/** The reusable final-content check of a built-in kind (graph types bind it, report §5.3). */
-export function workflowResultFinalContent(
-  kind: WorkflowResultKind,
-  value: Record<string, unknown>,
-): WorkflowResultValidationIssue[] {
-  return workflowResultKindDefinition(kind).finalContent?.(value, {}) ?? [];
-}

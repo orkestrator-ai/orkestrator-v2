@@ -27,7 +27,7 @@ seconds, even on the loaded macOS host where the aggregate saw load averages of
 30 or more; the firewall fixtures (0192, 0632, 9837) fork more than a hundred
 processes and needed 5–10× their idle time. The better-supported candidate is the Bun 1.4.4
 lost-child-event defect in
-[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
+todo 4260 (retired 2026-11-10; its record is `git show 53340356c:docs/todo/cross-cutting/4260-bun-loses-child-process-events.md`).
 On macOS that defect leaves an exited child as a zombie that Bun never
 reports. `spawnSync` would then block until Bun's test deadline kills it,
 giving the recorded `status: null` at 5,035 ms. `runCommand` works around the

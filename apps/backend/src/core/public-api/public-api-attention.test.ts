@@ -280,7 +280,7 @@ describe("attention.list", () => {
   // Fixture budgets for three-byte names and 36-character interaction IDs,
   // not universal page bounds: JSON-escaped names and longer provider IDs can
   // exceed them. Revisit unconditional polling if this fixture grows or live
-  // measurements warrant it (docs/todo/cli-and-slash-commands/5560).
+  // measurements warrant it (docs/architecture/control-mcp-voice.md).
   test("pages with three-byte names and 36-character IDs stay within fixture budgets", async () => {
     const { harness, service, stub } = await setup();
     const started = await harness.call<{ tabId: string }>(

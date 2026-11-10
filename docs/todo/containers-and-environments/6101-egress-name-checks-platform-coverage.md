@@ -9,7 +9,7 @@ against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: partly done (x64 passed on beelink 2026-11-06, host daemon and a disposable rootful daemon, and two test defects fixed; arm64 has only CI's hosted-runner run and stays open).
 2. **Run the live suite on rootless Docker**: a real rootless host. Status: done (2026-11-10, beelink, disposable rootless daemons from 4730: slirp4netns 6/6 and gvisor-tap-vsock 5/5; pasta is task 4).
 3. **Exercise the path where Docker names its upstreams by address**: controlled addressed upstreams, forged UDP replies and TCP failover. Status: done (Docker Desktop, 2026-11-05; on rootful Linux x64 2026-11-06, where the host daemon itself names its upstream by address).
-4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: open (pasta is not installed on beelink, and installing it is a host change).
+4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: blocked (waits on 7568: 6101 task 4).
 
 ### 1. Run the live suite on rootful Linux Engine
 
@@ -44,7 +44,7 @@ against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 
 **Problem.** Rootless Docker puts the container network inside RootlessKit's namespace (slirp4netns or pasta). Whether `SO_MARK`, the `nat` DNAT to the namespace's own address and `SO_ORIGINAL_DST` behave the same there is unproven.
 
-**Context.** The [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) (from the retired to-do 0109) and [4730](4730-disposable-docker-daemon-for-live-suites.md) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
+**Context.** The [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09) (from the retired to-do 0109) and the [disposable daemon launcher](../../development/container-qualification.md#disposable-docker-daemon) (to-do 4730, retired 2026-11-10) describe the rootless hosts and daemons the other live suites used. The gateway already works rootless for address enforcement.
 
 **Investigation.** Not run before 2026-11-10. No rootless daemon was available on the build host. Not run on 2026-11-06 either: that run on beelink was scoped to its rootful Engine, and no rootless daemon was started.
 
@@ -88,7 +88,7 @@ against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 
 **Problem.** Task 2's problem names slirp4netns and pasta. The 2026-11-10 run covered slirp4netns and gvisor-tap-vsock; pasta's user-mode stack has not run the name checks.
 
-**Context.** `mise run docker:disposable -- start --net pasta` supports it and uses RootlessKit's `implicit` port driver with it. It needs the `pasta` binary (the `passt` package) on the host.
+**Context.** `mise run docker:disposable -- start --net pasta` supports it and uses RootlessKit's `implicit` port driver with it. It needs the `pasta` binary (the `passt` package) on the host. Installing that package is a host change for the user ([7568](../manual-test/7568-manual-test-checklist.md)); this task is the run once a host has it.
 
 **Investigation.** On 2026-11-10 beelink had no `pasta` or `passt` on PATH. Installing a package needs `sudo` and changes the host, which this run was not allowed to do. The name checks run inside the gateway's namespace, a Docker bridge network whatever RootlessKit uses to reach the outside, so no difference is expected; that is an expectation, not an observation. The two drivers that ran passed the same cases.
 
@@ -186,7 +186,8 @@ accept CI's), and rootless with pasta (task 4).
 - [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
 - [0018](0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
 - [7000](7000-name-checks-hold-newline-less-first-writes.md): a newline-less first write is held, found by task 1
-- [4730](4730-disposable-docker-daemon-for-live-suites.md): the disposable daemon task 1 had to build by hand, and task 2 used
+- 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
 - [7390](7390-rootless-restart-remaining-settings.md): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`
-- [0241](0241-leaked-reach-probe-networks.md): the leaked networks that fill the host's pools
+- To-do 0241 (retired 2026-11-10): the leaked networks that fill the host's pools; see [disk usage](../../development/disk-usage.md#what-you-clean-yourself)
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the user part of task 4: installing `passt` on a Linux host) moved there on 2026-11-10.

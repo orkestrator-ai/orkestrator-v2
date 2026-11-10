@@ -22,7 +22,7 @@ classifies each failing test from evidence that already exists
 it edits and fixes the recorded failures that relate to the ticket or the
 branch; for one it believes unrelated it cites the triage, and it never runs a
 check against the target branch. It ends by submitting a typed fix result
-([below](#the-address--verify-handoff)). Verify is a quick acceptance review of
+([below](#the-address-findings--verify-handoff)). Verify is a quick acceptance review of
 the diff, read alongside the recorded package and that result. It runs no
 suite, typecheck, lint or build, never builds or tests the target branch, and
 creates no worktrees. It judges each failing test rather than each command: a
@@ -530,7 +530,8 @@ What differs on the graph engine:
   the bespoke engine never shows.
 
 Parity evidence for each Phase 3 checklist item, with the test names, is
-recorded in `plans/graphs/301-multi-review-on-graph-runtime.md`.
+recorded in the retired graphs plan item 301
+(`git show 2b876486b:plans/graphs/301-multi-review-on-graph-runtime.md`).
 
 ## Performance boundary and verification
 

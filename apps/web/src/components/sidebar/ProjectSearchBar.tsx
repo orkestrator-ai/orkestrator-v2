@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { FolderGit2, ListFilter, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -80,17 +81,6 @@ export function searchShortcutLabel(): string {
   if (typeof navigator === "undefined") return "Ctrl K";
   const platform = navigator.platform || navigator.userAgent;
   return /Mac|iPhone|iPad|iPod/i.test(platform) ? "⌘K" : "Ctrl K";
-}
-
-function ShortcutHint({ keys, label }: { keys: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <kbd className="rounded-md border border-border/70 bg-zinc-900 px-1.5 py-0.5 font-sans text-[10px] font-medium text-zinc-300">
-        {keys}
-      </kbd>
-      <span>{label}</span>
-    </span>
-  );
 }
 
 const AVAILABILITY_LABELS: Record<Exclude<ProjectSearchAvailability, "live">, string> = {

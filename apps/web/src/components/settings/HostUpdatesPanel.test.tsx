@@ -17,7 +17,7 @@ import {
 } from "../../../../../tests/mocks/sonner";
 import { connectedHostClient } from "@/test/host-maintenance-client";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { HostUpdatesPanel, describeRestartImpact } from "./HostUpdatesPanel";
+import { HostUpdatesPanel, describeHostUpdateJob, describeRestartImpact } from "./HostUpdatesPanel";
 import { useHostMaintenance } from "./useHostMaintenance";
 
 function UpdatesSettings() {
@@ -302,3 +302,52 @@ test.each([false, true])(
     );
   },
 );
+
+test("describeHostUpdateJob names the machine when given one, else says the host", () => {
+  const job = (overrides: Partial<HostUpdateJob>) =>
+    hostUpdateJobFixture({ targetVersion: "2.37.4-beta", ...overrides });
+  const deadline = "2026-10-16T13:00:00.000Z";
+  const until = new Date(deadline).toLocaleTimeString();
+  const cases: Array<[HostUpdateJob, number | null, string, string]> = [
+    [
+      job({ state: "waiting-for-idle" }),
+      null,
+      "2.37.4-beta is ready. Waiting until nothing is running on mini.",
+      "2.37.4-beta is ready. Waiting until nothing is running on the host.",
+    ],
+    [
+      job({ state: "waiting-for-idle", idleDeadline: deadline }),
+      null,
+      `2.37.4-beta is ready. Waiting until nothing is running on mini (at most until ${until}).`,
+      `2.37.4-beta is ready. Waiting until nothing is running on the host (at most until ${until}).`,
+    ],
+    [
+      job({ state: "awaiting-restart" }),
+      30,
+      "2.37.4-beta is ready. mini restarts in 30 s unless someone there postpones it.",
+      "2.37.4-beta is ready. The host restarts in 30 s unless someone there postpones it.",
+    ],
+    [
+      job({ state: "awaiting-restart" }),
+      null,
+      "2.37.4-beta is ready. mini is restarting…",
+      "2.37.4-beta is ready. The host is restarting…",
+    ],
+    [
+      job({ state: "restarting" }),
+      null,
+      "Restarting mini to install 2.37.4-beta. This page reconnects when it is back.",
+      "Restarting the host to install 2.37.4-beta. This page reconnects when it is back.",
+    ],
+    [
+      job({ state: "postponed" }),
+      null,
+      "Postponed on mini. 2.37.4-beta installs the next time Orkestrator quits there.",
+      "Postponed on the host. 2.37.4-beta installs the next time Orkestrator quits there.",
+    ],
+  ];
+  for (const [updateJob, secondsLeft, named, unnamed] of cases) {
+    expect(describeHostUpdateJob(updateJob, secondsLeft, "mini")).toBe(named);
+    expect(describeHostUpdateJob(updateJob, secondsLeft)).toBe(unnamed);
+  }
+});

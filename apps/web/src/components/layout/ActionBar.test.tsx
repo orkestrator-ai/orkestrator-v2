@@ -6,7 +6,6 @@ import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realTooltip from "@/components/ui/tooltip";
-import * as realSettings from "@/components/settings";
 import * as realStores from "@/stores";
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import type { MultiReviewState } from "@/stores/multiReviewStore";
@@ -59,7 +58,6 @@ const commandNodeId = () => getWindowScope().commandScope().nodeId;
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
 const realTooltipSnapshot = { ...realTooltip };
-const realSettingsSnapshot = { ...realSettings };
 const realStoresSnapshot = { ...realStores };
 const realFilesPanelChromeSnapshot = { ...realFilesPanelChrome };
 const realUIChromeSnapshot = { ...realUIChrome };
@@ -555,53 +553,6 @@ mock.module("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-mock.module("@/components/settings", () => ({
-  RepositorySettings: ({
-    onOpenChange,
-    onUpdateProject,
-    open,
-    project,
-  }: {
-    onOpenChange: (open: boolean) => void;
-    onUpdateProject: (project: Project) => Promise<void>;
-    open: boolean;
-    project: Project;
-  }) =>
-    open ? (
-      <div>
-        <span>Repository settings for {project.name}</span>
-        <button
-          onClick={() => void onUpdateProject({ ...project, name: "updated-repo" })}
-          type="button"
-        >
-          Update mock repository
-        </button>
-        <button onClick={() => onOpenChange(false)} type="button">
-          Close mock repository settings
-        </button>
-      </div>
-    ) : null,
-  SettingsPage: ({
-    open,
-    onOpenChange,
-    defaultSection,
-    sectionRequest,
-  }: {
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    defaultSection?: string;
-    sectionRequest?: number;
-  }) =>
-    open ? (
-      <div>
-        Global settings dialog
-        {defaultSection ? <span>Default settings section: {defaultSection}</span> : null}
-        <span>Settings section request: {sectionRequest}</span>
-        <button onClick={() => onOpenChange(false)}>Close global settings</button>
-      </div>
-    ) : null,
-}));
-
 let useRealSelection = false;
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
@@ -903,7 +854,6 @@ afterAll(() => {
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
-  mock.module("@/components/settings", () => realSettingsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/stores/filesPanelChromeStore", () => realFilesPanelChromeSnapshot);
   mock.module("@/stores/uiChromeStore", () => realUIChromeSnapshot);

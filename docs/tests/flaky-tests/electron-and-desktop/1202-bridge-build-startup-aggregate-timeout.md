@@ -1,7 +1,7 @@
 # Bridge build startup times out in aggregate validation
 
 - **ID:** 1202
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-27 during first-prompt transcript-confirmation validation.
 - **Test:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`
 - **File:** `apps/desktop/scripts/dev/bridge-builds.test.ts`
@@ -353,3 +353,47 @@ ports and respawn Vite before the profile's ports are published; (3) in the
 test only, stub `waitForUrl` and keep the stand-in off the network, which
 gives up coverage of real renderer readiness. (1) alone turns the hang into a
 fast, explained failure; (2) is what removes the flake.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** a real race in the `dev:test` launcher
+  (`startDevelopment`, `apps/desktop/scripts/dev/lifecycle.ts`). It added its
+  listener for Electron's `exit` only after readiness, the `ready` status
+  write and fixture seeding had finished. The test's Electron stand-in exits
+  as soon as it reads `ready` from the status file, so when the launcher's
+  continuation after that write was delayed, the exit was emitted before the
+  listener existed and the launcher waited forever with Vite still running.
+  That is the recorded signature: the 15-second timeout, "Bun killed one
+  dangling process" (the Vite stand-in, which only the launcher's shutdown
+  stops), and late `ENOENT`/`EEXIST` status writes after the test removed
+  the profile. A real launcher whose Electron quits during fixture seeding
+  hung the same way. Stage tracing of the unchanged path caught it directly:
+  `electron exit event` was logged before `status ready written`, and
+  nothing followed until the test's cleanup killed Vite; 6 of 57
+  fresh-process runs at host load about 34 timed out this way.
+  The 2026-11-06 investigation's mechanism is a second, separate gap: the
+  renderer port is reserved by binding and closing it long before Vite binds
+  it, and a Vite that then loses the port exits while `waitForUrl` polls
+  the dead URL for 45 s.
+- **Fix:** `lifecycle.ts` attaches each child's exit promise right after
+  spawning it (`childExit`) and races those promises at the end, so an early
+  exit is never missed. It also waits for the renderer URL only while Vite is
+  alive (`waitForUrlWhileRunning`; `waitForUrl` takes an abort signal); when
+  Vite exits first, the launcher reserves a new renderer port, rewrites the
+  profile and the status `rendererUrl`, and starts Vite again, up to three
+  attempts, then fails at once with Vite's output instead of after 45 s.
+  `apps/desktop/scripts/dev/bridge-builds.test.ts` runs the successful-start
+  case twice, the second time with the first reserved renderer port held by
+  another listener, and checks that Vite, the status and the stored profile
+  moved to a new port.
+- **Reproduced:** yes, both mechanisms. A temporary `await Bun.sleep(300)`
+  after the `ready` status write in the unchanged launcher made the original
+  case time out at 15,006.23 ms with `killed 1 dangling process`; with the fix
+  and the same delay both cases passed. Holding the first renderer port in
+  the unchanged code timed the case out at 15,006.99 ms; with the fix it
+  retried on a new port and finished in about 1.2 s.
+- **Stress:** `mise run test:logged -- --name stress-1202-loop -- bash -c 'cd apps/desktop && for i in $(seq 40); do bun test ./scripts/dev/bridge-builds.test.ts ./scripts/dev/lifecycle.test.ts --preload ../../tests/setup-node.ts || exit 1; done'`
+  passed 40 of 40 fresh processes (exit 0, 420.5 s), and
+  `mise run test:logged -- --name stress-1202 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts ./scripts/dev/lifecycle.test.ts --preload ../../tests/setup-node.ts --parallel=2 --rerun-each=10`
+  passed (exit 0, 105.2 s) with the port retry; the stage tracing that found
+  the exit race ran after that, and the loop above covers the final code.

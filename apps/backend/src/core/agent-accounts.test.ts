@@ -123,13 +123,21 @@ function fakeClaudeLogin(identity?: string, email = "claude@example.com"): Spawn
   };
 }
 
+/**
+ * Waits for the sign-in to leave `pending`. Settling runs the fake CLI's timers
+ * and the account store's file writes, which took over a second on a loaded
+ * host, past the old count of 200 five-millisecond sleeps (flake 9850). This
+ * waits on the state itself; the test's timeout is the real bound, and the
+ * deadline only stops a loop that outlives a timed-out test.
+ */
 async function settledLogin() {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
     const progress = agentAccountLoginProgress(context);
     if (progress.state !== "pending") return progress;
+    if (Date.now() > deadline) throw new Error("login did not settle");
     await Bun.sleep(5);
   }
-  throw new Error("login did not settle");
 }
 
 async function addCodexAccount(email: string, accountId: string) {
@@ -279,7 +287,9 @@ describe("agent accounts", () => {
   test("cancellation during login startup still reaches the spawned process", async () => {
     let child: ChildProcess | undefined;
     let kills = 0;
+    const spawned = deferred<void>();
     const spawnImpl: SpawnLike = () => {
+      spawned.resolve();
       child = new EventEmitter() as ChildProcess;
       Object.assign(child, {
         stdout: new PassThrough(),
@@ -295,7 +305,15 @@ describe("agent accounts", () => {
       return child;
     };
     const starting = startAgentAccountLogin(context, "claude", { spawnImpl, executable: "claude" });
-    for (let n = 0; n < 100 && !child; n += 1) await Bun.sleep(1);
+    // Wait for the spawn itself, or for a start that ended without one; a
+    // count of 1 ms sleeps ran out before the spawn under load (flake 0770).
+    await Promise.race([
+      spawned.promise,
+      starting.then(
+        () => undefined,
+        () => undefined,
+      ),
+    ]);
     expect(child).toBeDefined();
     cancelAgentAccountLogin(context);
     child!.stdout!.emit(
@@ -772,14 +790,15 @@ describe("agent accounts", () => {
       expect(cancelAgentAccountLogin(context, operationId).state).toBe("idle");
       Object.assign(child, { exitCode: 0 });
       child.emit("exit", 0, null);
-      for (
-        let n = 0;
-        n < 100 &&
+      // Removal follows the exit through file I/O; wait on the directory, not a
+      // count of sleeps.
+      const removalDeadline = Date.now() + 10_000;
+      while (
+        Date.now() < removalDeadline &&
         (await fs.stat(temporary).then(
           () => true,
           () => false,
-        ));
-        n++
+        ))
       )
         await Bun.sleep(5);
       expect(await savedLogin(home)).toEqual(before);

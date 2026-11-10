@@ -4,12 +4,12 @@ Checked against `main` at `06297124` (2026-10-23).
 
 ## Task analysis
 
-Analysed 2026-11-06 against `main` at `c1724ab74` (tasks 2, 6 and 7; tasks 1 and 3–5 were last analysed 2026-10-27 at `863b5782`).
+Analysed 2026-11-06 against `main` at `c1724ab74` (tasks 2, 6 and 7; tasks 1 and 3–5 were last analysed 2026-10-27 at `863b5782`); task 2 run 2026-11-10 against `main` at `04639b12b`.
 
 ### Tasks
 
 1. **Record the Linux Engine CI results**: the follow-up to the answered CI question ("record them in this file then, including the C22 host-level reachability verdict"). Status: partly done (CI has run on both architectures; nothing is recorded here, and `container-qualification.md` still says "Not covered: Linux Engine").
-2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: open (depends on [4730](4730-disposable-docker-daemon-for-live-suites.md), which is building a disposable rootless daemon).
+2. **Rootless host without `cpu` delegation**: check that the budget read-back stays truthful when only `memory pids` are delegated. Status: done 2026-11-10 (`docker:disposable`'s rootless daemon under a systemd user manager delegated only `memory pids`: Docker reported CPU unsupported, the containers had no CPU controller, and the read-back, admission and refusal all matched; no code change, see [Results, 2026-11-10](#results-2026-11-10-task-2-rootless-without-cpu-delegation)).
 3. **Grok C13 resume and C21 rotation**: qualify Grok resume after a rebuild, and Grok login rotation. Status: blocked (on a current host Grok login; the rotation half also on 0061 item 7's live run).
 4. **Claude C21 half with a disposable account**: a real re-authentication through `markContainersForClaudeLoginRefresh`, and a refresh-token rotation through the keeper. Status: blocked (needs a disposable Claude account).
 5. **Daemon-wide restart during launch and rebuild copy**: a Docker restart or Desktop quit at both points. Status: open (needs a dedicated host or VM).
@@ -52,7 +52,7 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
 
 **Context.** omarchy-hp's rootless daemon delegates `cpu memory pids`, so it cannot show this case. Unit tests already cover a rootless daemon with only memory delegated (`commands-registry-resource-limits.test.ts`, 0061 item 11). The built-in default drops and reports an unenforceable axis (0022 decision 4).
 
-**Investigation.** 2026-11-06: not run. To-do [4730](4730-disposable-docker-daemon-for-live-suites.md) is building a repo-owned disposable rootless daemon in another build; this task waits for it rather than hand-building a third private daemon on a shared host. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
+**Investigation.** 2026-11-06: not run then; it waited for [4730](4730-disposable-docker-daemon-for-live-suites.md)'s repo-owned disposable rootless daemon (merged since) rather than hand-building a third private daemon on a shared host. Run on 2026-11-10: see the result below. Explicit budgets are refused on such a daemon by `refuseUnenforceableLimits` (`apps/backend/src/core/container-resources.ts:539-550`), which checks each `capacity.support` axis. Settings warns on save through `unenforceableOnThisDaemon` (0061 item 11). What remains unproved live is whether Docker's own reported capacity on a host like this matches what the cgroup actually enforces.
 
 **Decisions.**
 
@@ -66,6 +66,44 @@ So the next weekly run on `main` should fail only that C14 case. The benchmark n
   - **Accept the unit tests and retire the item.**
     - Pros: refusal and reporting are pure functions of `docker info`, which the tests feed.
     - Cons: assumes Docker reports delegation correctly; this item exists to check that assumption.
+
+**Result (2026-11-10).** Done on beelink, no code change. The launcher's
+rootless daemon inherits the delegation of the user manager that runs it, and
+beelink's `user@1000.service` delegates `cpu memory pids`, so it was run on a
+throwaway systemd "host" instead: a privileged Debian 13 container whose
+`user@.service` drop-in resets and narrows `Delegate=` to `memory pids`, where
+`user.slice`, `user-1000.slice` and `user@1000.service` all exposed only
+`memory pids`. Inside it, uid 1000 ran
+`bun scripts/disposable-docker-daemon.ts start --name s0019md` (Docker's static
+29.9.2 binaries, the launcher's pinned RootlessKit and slirp4netns). The new
+`apps/backend/scripts/rootless-budget-readback-evidence.ts` then ran there:
+
+- `docker info`: cgroup v2, systemd driver, `rootless`; `CpuCfsQuota`,
+  `CpuCfsPeriod` and `CPUShares` false with their warnings, `MemoryLimit` and
+  `PidsLimit` true. Production capacity: `cpuQuota: false`,
+  `memoryLimit: true`, `pidsLimit: true`.
+- Built-in default: 8192 MiB and 4096 PIDs, no CPU cap, nothing
+  `unenforced` (the default never sets CPU).
+- Admission: a 64 MiB, 32-PID budget passed; the same with 0.5 CPU was
+  refused (`unsupported-topology`, naming CPU and the rootless remedy).
+- A container created with the production arguments: no Docker warning;
+  `cgroup.controllers` `memory pids`, no `cpu.max`, `memory.max` 67108864,
+  `memory.swap.max` 0, `pids.max` 32. Read-back and the environment policy:
+  applied `{ cpus: null, memoryMiB: 64, pids: 32 }`, `unsupported: []`.
+- Enforcement: holding 100 MiB was OOM-killed (`oom_kill` 2); forks stopped
+  at the limit (`pids.peak` 32, `pids.events` `max 1`); a busy loop got 2.97 s
+  of CPU in 3 s, as nothing claimed a CPU limit.
+- Asked directly for `--cpus 0.5`, Docker refused the container: `NanoCPUs
+  can not be set, as your kernel does not support CPU CFS scheduler or the
+  cgroup is not mounted`. So no runtime on such a daemon can carry an
+  unenforced CPU limit for the read-back to misreport.
+
+Control, the same script on a `docker:disposable` rootless daemon run
+directly on beelink (`cpu memory pids` delegated): `cpuQuota: true`, the CPU
+budget admitted, `cpu.max` `50000 100000`, read-back `cpus: 0.5`, and the busy
+loop held to 1.51 s in 3 s. Docker's report matched what the cgroup enforced
+on both daemons. Recipe and details:
+[container qualification](../../development/container-qualification.md#rootless-budget-read-back-without-cpu-delegation-2026-11-10).
 
 ### 3. Grok C13 resume and C21 rotation
 
@@ -259,6 +297,28 @@ platform dimensions and the benchmark targets are in
 [container-qualification.md](../../development/container-qualification.md).
 Gaps this pass found but did not fix are in
 [0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md).
+
+## Results, 2026-11-10 (task 2: rootless without `cpu` delegation)
+
+Host beelink (Omarchy, kernel 7.1.8, x86_64; host Engine 29.9.2), `main` at
+`04639b12b`. The run is summarised under [task 2](#2-rootless-host-without-cpu-delegation);
+the image recipe, commands and both daemons' figures are in the
+[container qualification record](../../development/container-qualification.md#rootless-budget-read-back-without-cpu-delegation-2026-11-10).
+
+- **Topology.** A throwaway privileged systemd container (`--cgroupns=private`)
+  on the host daemon, `user@.service` delegating `memory pids` only, with
+  `docker:disposable`'s rootless daemon started inside by its uid-1000 user.
+- **Result.** Docker reported `CpuCfsQuota: false`, `MemoryLimit` and
+  `PidsLimit` true; containers got only the `memory` and `pids` controllers;
+  memory and PID limits were enforced; a CPU budget was refused by
+  `refuseUnenforceableLimits` and, asked directly, by Docker; the read-back
+  showed exactly what was applied. A control daemon with `cpu` delegated
+  enforced 0.5 CPU and reported it. No code change.
+- **Created and removed.** The systemd image (three builds of one tag), its
+  container, the inner daemon `s0019md` and the control daemon `s0019rl`, the
+  downloaded `docker-29.9.2.tgz` and the launcher's tools cache. Left: the
+  BuildKit cache of those builds on the host daemon, which only a prune could
+  remove; the rules forbid one.
 
 ## Results, 2026-11-06 (tasks 6 and 7 on native Docker)
 
@@ -1022,8 +1082,9 @@ Desktop. What remains of those items:
     read-only file binds from `nosuid`/`nodev` sources (two C09 fixtures)
     and ephemeral port collisions (one C15 run). These are new work in
     [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md).
-  - What remains here: a host that delegates `memory pids` without `cpu`, to
-    check that the budget read-back stays truthful there.
+  - A host that delegates `memory pids` without `cpu`: done 2026-11-10 (task
+    2); Docker reports CPU unsupported there and the read-back stays
+    truthful.
 - C13 and the C21 live half for Grok. Both need a current host Grok login
   (the host's expired on 2026-10-20 and was still expired on 2026-10-23), and
   the rotation half needs a profile that can be pointed at a disposable Grok
@@ -1242,12 +1303,58 @@ by design and the to-do asks whether a restart reuses that container. Reuse
 after a SIGKILLed backend was checked as well, since the fixture code cannot
 tell the two cases apart.
 
-### 2026-11-06, task 2: wait for 4730
+### 2026-11-06, task 2: wait for 4730 (superseded 2026-11-10)
 
-Task 2 stays open and depends on 4730's disposable rootless daemon, which
-another build is creating. Hand-building a third private daemon on beelink
+Task 2 stayed open for 4730's disposable rootless daemon, which another
+build was creating; it has since merged and task 2 ran on it on 2026-11-10. Hand-building a third private daemon on beelink
 would repeat work 4730 replaces, and 4730's launcher is what later runs will
 use.
+
+### 2026-11-10, task 2: a systemd container as the host, not omarchy-hp
+
+Task 2 needs a user manager that delegates `memory pids` without `cpu`.
+beelink's `user@1000.service` delegates `cpu memory pids`, and so does the
+launcher's rootless daemon there, because its systemd cgroup driver creates
+each container's scope in the user's own manager. Options:
+
+- **A drop-in on the daemon's own user service (the recommended option
+  above).** Pros: no new machine. Cons: container scopes are created in the
+  manager's `user.slice`, outside that service, so the drop-in would not
+  narrow what they get. Not used.
+- **Narrow the host's `user@.service`.** Pros: the real topology. Cons: needs
+  root and a restart of the user manager, which ends every session of this
+  user on a shared host, the production Orkestrator backend included. Not
+  used.
+- **A privileged systemd container as the host, with the drop-in on its own
+  `user@.service`, running the same launcher (chosen).** Pros: a real systemd
+  user manager on the same kernel, delegating through cgroup v2 exactly as a
+  host would; the daemon is `docker:disposable`'s rootless daemon unchanged;
+  everything is disposable. Cons: one more layer (a private cgroup
+  namespace inside a container), and it is still one kernel.
+
+`Delegate=` lists merge, so the drop-in has to reset the list (`Delegate=`)
+before `Delegate=memory pids`; without the reset Debian's own `cpu` stayed
+delegated. The daemon's data root has to be on a tmpfs, because overlayfs
+refuses an upper directory on the container's own overlay root.
+
+### 2026-11-10, task 2: commit the evidence script
+
+The comparison of Docker's report with the cgroup files and the kernel's
+behaviour is `apps/backend/scripts/rootless-budget-readback-evidence.ts`,
+committed so the run can be repeated (the 2026-11-04 loopback fixture that
+lived only in a git-ignored folder is the reason, 4730 task 2). It calls the
+production capacity, default, refusal, argument and read-back functions and
+removes its labelled containers by id. A hand-run `docker run` sequence was
+the alternative; it would not have exercised the backend's own read-back.
+
+### 2026-11-10, task 2: no code change
+
+Docker's report matched what the cgroup enforced, the read-back reported
+what was applied, and an unenforceable CPU limit cannot reach a container on
+such a daemon, so nothing in `container-resources.ts` changes. Not covered: a
+host whose `user-<uid>.slice` exposes a controller its `user@<uid>.service`
+does not. Here both had `memory pids`, so the run cannot tell which of the
+two Docker reads.
 
 ### 2026-11-06: no new to-dos
 

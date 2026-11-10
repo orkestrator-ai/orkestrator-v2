@@ -99,7 +99,7 @@ import {
   type BuildIntent,
   type FeatureBuildModelState,
 } from "@/lib/feature-build-launch";
-import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
+import { buildPipelineLauncherDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import type { CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
@@ -551,7 +551,7 @@ export function CreateEnvironmentDialog({
    * decision the user has already made a few controls above.
    */
   const defaultFeatureModels = useMemo(() => {
-    const configured = buildPipelineConfiguredDefaults(config, projectId ?? "");
+    const configured = buildPipelineLauncherDefaults(config, projectId ?? "");
     const review = configured.reviewers[0] ?? {
       agent: agentType,
       model,

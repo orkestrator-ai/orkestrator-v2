@@ -234,7 +234,7 @@ JavaScript, and the gateway sizes the joined body, which copies it again.
 `commands-registry-native-splice.test.ts` pins which commands are marked;
 re-measure before marking another. The same probe found the marked commands'
 snapshot responses slower than `JSON.stringify` for rows of a few KiB; that is
-[to-do 7551](../todo/transcripts-and-observation/7551-transcript-splice-slower-on-large-rows.md).
+[to-do 7553](../todo/transcripts-and-observation/7553-transcript-splice-slower-on-large-rows.md).
 
 ### Incomplete previews and exact recovery
 

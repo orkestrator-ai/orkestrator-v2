@@ -1086,20 +1086,27 @@ describe("session lifecycle", () => {
     await h.runtime.start();
 
     // Escalation keeps failing, so the thread must stay guarded and keep trying
-    // rather than sit in `recovering` with no timer left to move it.
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(restartAttempts).toBeGreaterThan(1);
-    expect(h.runtime.getStatus("session-norestart")).toMatchObject({
-      status: "running",
-      phase: "recovering",
-    });
-    expect(
-      h.events.some(
-        (event) => event.type === "session.error" && event.data?.error === "circuit breaker open",
-      ),
-    ).toBe(true);
-
-    supervisor.restartNow = realRestart;
+    // rather than sit in `recovering` with no timer left to move it. Wait for the
+    // re-armed backstop's second attempt itself: a fixed 80 ms window measured
+    // timer delivery on a loaded host (flake 0214).
+    try {
+      await waitUntil(
+        () => restartAttempts > 1,
+        "the backstop was not re-armed after a failed escalation restart",
+        5_000,
+      );
+      expect(h.runtime.getStatus("session-norestart")).toMatchObject({
+        status: "running",
+        phase: "recovering",
+      });
+      expect(
+        h.events.some(
+          (event) => event.type === "session.error" && event.data?.error === "circuit breaker open",
+        ),
+      ).toBe(true);
+    } finally {
+      supervisor.restartNow = realRestart;
+    }
   });
 
   test("status reports recovering, not idle, while startup recovery is still running", async () => {
@@ -3792,7 +3799,10 @@ describe("crash recovery", () => {
     const engine = h.engine as unknown as { emit: (event: EngineEvent) => void };
     engine.emit({ kind: "engine.generation", generation: 2, previous: 1, engineGeneration: 2 });
     engine.emit({ kind: "engine.generation", generation: 3, previous: 2, engineGeneration: 3 });
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Both passes are chained on the runtime's recovery promise, which drain
+    // settles. A fixed 80 ms window could end before the second pass on a
+    // loaded host (flake 0463).
+    await h.drain();
 
     expect(order).toEqual(["start:1", "end:1", "start:2", "end:2"]);
   });

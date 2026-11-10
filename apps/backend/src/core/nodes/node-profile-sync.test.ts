@@ -11,7 +11,13 @@ import {
   type NodeSummariesResult,
 } from "@orkestrator/protocol/node-summaries";
 
-import { TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
+import {
+  stopTestNodeNetworks,
+  TestNodeNetwork,
+  type TestNode,
+} from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 import { NodePortal } from "./node-portal.js";
 
 const updatedProfile: BackendProfile = {

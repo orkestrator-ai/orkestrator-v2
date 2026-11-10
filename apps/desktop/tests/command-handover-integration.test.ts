@@ -1,10 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 import {
+  stopTestNodeNetworks,
   TestNodeNetwork,
   settle,
   type TestNode,
@@ -24,6 +25,8 @@ import {
   browserPreviewServicePartition,
   connectionPartitionKey,
 } from "../electron/desktop-window-lifecycle";
+
+afterEach(stopTestNodeNetworks);
 
 const id = (node: TestNode) => node.storage.instanceId as BackendId;
 const routes = (node: TestNode) => [

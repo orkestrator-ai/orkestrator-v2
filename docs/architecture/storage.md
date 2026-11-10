@@ -474,6 +474,24 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+- "Survives a crash" means an application or operating-system crash. Whether a
+  commit also survives sudden power loss depends on the platform's sync call.
+  On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0
+  on macOS 27.2), and a FULL commit there calls plain `fsync`, which does not
+  flush the drive's write cache, so a power cut can lose the last commits
+  (WAL checksums stop recovery at the first torn frame, so it does not
+  corrupt the file). Apple's build also maps `PRAGMA fullfsync = ON` to
+  `F_BARRIERFSYNC` (ordering, no cache flush) on APFS and HFS+, not to
+  `F_FULLFSYNC`, so that PRAGMA cannot buy full power-loss durability there;
+  it costs about four to six times a plain commit. Evidence and numbers:
+  [to-do 5180](../todo/cross-cutting/5180-sqlite-durability-tiers.md) task 3,
+  `scripts/benchmark-sqlite-sync.ts`.
+- Every connection sets `checkpoint_fullfsync = ON`, so a checkpoint, which
+  copies WAL frames into the database file and then resets the WAL, syncs
+  with a write barrier on macOS. Apple's SQLite already defaults to that
+  (`DEFAULT_CKPTFULLFSYNC`); setting it keeps the ordering if the library or
+  its build changes. It changes nothing on Linux, which has no such call.
+  `fullfsync` (each commit) stays off.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
   their backups) returns up to 16 MiB of freed pages to the filesystem

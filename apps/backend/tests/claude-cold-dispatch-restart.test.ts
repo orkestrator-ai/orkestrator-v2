@@ -82,10 +82,12 @@ test("a restarted Claude bridge answers a cold dispatch from disk without regist
           .map((file) => readFile(path.join(preferences, file), "utf8")),
       );
       // Killed only once the turn's own preference writes (the claim, then
-      // the in-flight mark) have landed and released their lock: a lock left
-      // by a kill mid-write can block the next process's writes until it is
-      // stale (docs/architecture/agent-engines.md, "Claude Code"), which would
-      // fail the resend below for the wrong reason.
+      // the in-flight mark) have landed and released their lock. A later
+      // write (the title, the model) can still be taking a lock when the kill
+      // lands. The bridge publishes every lock with its owner already in it,
+      // so the restarted bridge takes a dead owner's lock over at once; an
+      // ownerless one blocked the resend below for 30 s and answered 503
+      // (flakes 1305, 1308).
       const locked = files.some((file) => file.endsWith(".lock"));
       if (
         !locked &&

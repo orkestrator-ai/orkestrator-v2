@@ -1,7 +1,7 @@
 # `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 
 - **ID:** 0017
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -39,3 +39,27 @@
   `session-manager-catalog.ts` and their peers); `json-file-cache.ts` and its
   test were untouched, matching the aggregate-only timing shape of the original
   observation.
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved, as a duplicate of
+  [0146](0146-json-file-cache-concurrent-cold-readers.md), the same test and
+  assertion recorded a week later and resolved on 2026-09-18.
+- **Root cause:** a real cache race (from 0146's resolution). Each cold
+  reader joined the in-flight parse only after its own `stat`. When the first
+  reader's parse finished and dropped the shared promise before a slower
+  reader's `stat` returned, that reader parsed the unchanged file again,
+  which is the count of 2 recorded here.
+- **Fix:** `42933c4b1` (`fix: stabilize clipboard, fork fallback, and
+  json-file-cache races`, #786). `readJsonSliceCachedWithDigest` in
+  `bridges/claude-bridge/src/services/json-file-cache.ts` joins a per-file
+  read cohort before its first await, and the parsed promise stays shared
+  until every overlapping reader leaves. No change in this sweep.
+- **Reproduced:** no — not re-run against the pre-fix code, because that
+  version lacks the `setJsonFileCacheBeforeStatForTesting` seam the
+  deterministic test uses. That test, `keeps a completed parse for concurrent
+  readers whose metadata is delayed`, came with the fix: it holds the later
+  readers' `stat` until the first parse has completed. No recurrence since
+  2026-09-11.
+- **Stress:** `mise run test:logged -- --name claude-json-cache-0017 -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/json-file-cache.test.ts --parallel=1 --rerun-each=100`
+  passed (exit 0).

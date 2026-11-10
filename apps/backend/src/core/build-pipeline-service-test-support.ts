@@ -115,6 +115,8 @@ export class FakeProvider implements BuildPipelineProvider {
   readonly aborted: string[] = [];
   readonly runningPhases = new Set<PipelineSessionPhase>();
   statusValue: ProviderStatus = "idle";
+  /** The login's model connectivity answer; unset keeps every configured model. */
+  resolveDefaultModel?: BuildPipelineProvider["resolveDefaultModel"];
   private counter = 0;
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {

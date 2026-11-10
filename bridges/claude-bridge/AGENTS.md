@@ -84,7 +84,11 @@ writers on one `.jsonl`. When touching the prompt path:
   bridge's pid-only lock keeps the 30 s rule unless it names this process's
   own pid. `ps` (hosts without `/proc`) runs only on the slow path. A claim
   write that waits out a live owner answers 503 (`unavailable`: nothing was
-  journaled or sent), never 500.
+  journaled or sent), never 500. A lock or recovery marker is published with
+  its owner already in it (`createOwnedFile`: written to a staging file, then
+  hard-linked into place). Never create one empty and write the owner after:
+  a bridge killed in between leaves an ownerless lock that blocks every
+  claim for the 30 s stale window (flakes 1305, 1308).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
   effective Chrome access, plugins and managed credentials cannot change on a live CLI. Adaptive thinking

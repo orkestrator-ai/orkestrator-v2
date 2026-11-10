@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +8,9 @@ import type { CommandContext } from "../commands-context.js";
 import { createEnvironment, createProject, StorageService } from "../storage.js";
 import * as shell from "../shell.js";
 import { NodeReadModel } from "./node-read-model.js";
-import { TestNodeNetwork, settle } from "./node-network-test-support.js";
+import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 import { evaluatePrMergeReadiness } from "@orkestrator/protocol/pr-merge-readiness";
 
 // No workspace subscription or PR lifecycle command: only the real summary

@@ -1,5 +1,7 @@
-import { expect, spyOn, test } from "bun:test";
-import { TestNodeNetwork } from "./node-network-test-support.js";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { stopTestNodeNetworks, TestNodeNetwork } from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 
 test("stop closes every portal, stream and service when a service rejects", async () => {
   const network = new TestNodeNetwork();

@@ -244,6 +244,47 @@ test("config-only changes invalidate the cached self default branch", async () =
   }
 });
 
+test("a node's project list read is announced when it is first read and when it changes", async () => {
+  // Ticket sync pairs boards by this list, and syncs on the announcement
+  // rather than waiting for its reconcile (to-do 3800 task 1).
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let projects = [{ id: "p1", name: "One", gitUrl: "https://github.com/acme/one.git" }];
+  leaf.commands.set("get_projects", () => projects);
+  leaf.commands.set("get_environments", () => []);
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 60_000,
+  });
+  const announced: string[] = [];
+  model.onProjectsChanged((nodeId) => announced.push(nodeId));
+  try {
+    await model.start();
+    await settle(40);
+    expect(announced).toHaveLength(1);
+    const nodeId = announced[0]!;
+    // A re-read that finds the same list says nothing.
+    leaf.emit("resource-changed", { resource: "project", id: "p1", revision: 1 });
+    await settle(40);
+    expect(announced).toEqual([nodeId]);
+    // A second copy appears there.
+    projects = [...projects, { id: "p2", name: "Two", gitUrl: "https://github.com/acme/two.git" }];
+    leaf.emit("resource-changed", { resource: "project", id: "p2", revision: 2 });
+    await settle(40);
+    expect(announced).toEqual([nodeId, nodeId]);
+  } finally {
+    model.stop();
+  }
+});
+
 test("config-only leaf events rehydrate the remote project's default branch", async () => {
   const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
   const network = new TestNodeNetwork();

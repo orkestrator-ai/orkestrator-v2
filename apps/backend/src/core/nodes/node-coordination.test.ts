@@ -1119,3 +1119,47 @@ test("production take-back pass retries from the 60-second recovery timer", asyn
     instance.dispose();
   }
 });
+
+test("a leaf's project list read starts a ticket sync on a command node", async () => {
+  // Live over two dev:test profiles the first sync after attaching waited up
+  // to the 60 s reconcile for the leaf's projects (to-do 3800 task 1).
+  const world = await MailWorld.create();
+  worlds.push(world);
+  let projectsChanged: (nodeId: string) => void = () => {};
+  let mode = "command";
+  const instance = new NodeCoordination({
+    storage: world.storage,
+    nodes: {
+      selfIdentity: async () => "bk_cmd",
+      subscribe: () => () => {},
+      listNodes: async () => ({ nodes: [] }),
+      mode: () => mode,
+    } as never,
+    portal: {
+      readModel: {
+        onNodeEvent: () => () => {},
+        onProjectsChanged: (listener: (nodeId: string) => void) => {
+          projectsChanged = listener;
+          return () => {};
+        },
+      },
+    } as never,
+    invoke: async () => undefined as never,
+    emit: () => {},
+  });
+  const synced: string[] = [];
+  instance.ticketSync.sync = async (nodeId: string) => {
+    synced.push(nodeId);
+    return { nodeId, state: "in-sync", applied: 0, conflicts: 0, sent: 0 };
+  };
+  try {
+    projectsChanged("bk_leaf");
+    expect(synced).toEqual(["bk_leaf"]);
+    // A leaf has no leaves of its own to sync.
+    mode = "leaf";
+    projectsChanged("bk_other");
+    expect(synced).toEqual(["bk_leaf"]);
+  } finally {
+    instance.dispose();
+  }
+});

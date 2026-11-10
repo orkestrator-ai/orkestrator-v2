@@ -171,6 +171,11 @@ function summaryFingerprint(state: NodeState): string {
   ]);
 }
 
+/** What ticket sync pairs by: each project's id and repository identity. */
+function projectListKey(projects: readonly NodeProjectSummary[]): string {
+  return JSON.stringify(projects.map((project) => [project.ref.projectId, project.repositoryHint]));
+}
+
 export class NodeReadModel {
   private readonly states = new Map<BackendId, NodeState>();
   private readonly views = new Map<BackendId, NodeView>();
@@ -185,6 +190,7 @@ export class NodeReadModel {
   private readonly listeners = new Set<
     (event: string, payload: unknown, nodeId: BackendId) => void
   >();
+  private readonly projectListeners = new Set<(nodeId: BackendId) => void>();
   private readonly self: {
     id: BackendId | null;
     summary: SelfNodeSummary | null;
@@ -262,6 +268,17 @@ export class NodeReadModel {
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.changeTimer = null;
     this.changeTimerDueAt = null;
+  }
+
+  /**
+   * A node's project list (ids and repository identities) changed on a read:
+   * its first read after it connected, or a copy added or removed there.
+   * Ticket sync pairs boards by this list, so it syncs then rather than at its
+   * next reconcile. Listeners must not throw.
+   */
+  onProjectsChanged(listener: (nodeId: BackendId) => void): () => void {
+    this.projectListeners.add(listener);
+    return () => this.projectListeners.delete(listener);
   }
 
   /** Other consumers (coordinator mail, outbox collection) of the same streams. */
@@ -649,12 +666,22 @@ export class NodeReadModel {
         environmentsByProject.set(project.ref.projectId, result.environments);
       }
       const before = summaryFingerprint(state);
+      const projectsBefore = projectListKey(state.projects);
       state.projects = projects;
       state.environmentsByProject = environmentsByProject;
       state.loadedAt = (this.options.now ?? Date.now)();
       state.truncated = truncated;
       state.lastError = failed ? "Some environments could not be loaded." : null;
       state.freshness = failed ? "degraded" : "current";
+      if (projectListKey(projects) !== projectsBefore) {
+        for (const listener of this.projectListeners) {
+          try {
+            listener(state.nodeId);
+          } catch {
+            // A consumer's failure never stops the read model.
+          }
+        }
+      }
       // A periodic re-read that found nothing new tells no client.
       if (summaryFingerprint(state) === before) return;
       this.noteChanged(state.nodeId);

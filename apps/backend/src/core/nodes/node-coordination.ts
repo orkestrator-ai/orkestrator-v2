@@ -207,6 +207,7 @@ export class NodeCoordination {
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
   private unsubscribeKanban: (() => void) | undefined;
+  private unsubscribeProjects: (() => void) | undefined;
   private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
   private coordinatorNotices: NodeCoordinatorNotices | null = null;
   private takingBack: Promise<void> | null = null;
@@ -330,6 +331,7 @@ export class NodeCoordination {
     clearInterval(this.ticketSyncTimer);
     this.unsubscribeNodes?.();
     this.unsubscribeKanban?.();
+    this.unsubscribeProjects?.();
     this.collector.dispose();
     this.ticketSync.dispose();
     this.ticketImages.dispose();
@@ -455,6 +457,11 @@ export class NodeCoordination {
     portal.readModel.onNodeEvent((event, payload, nodeId) => {
       this.collector.handleNodeEvent(event, payload, nodeId);
       this.ticketSync.handleNodeEvent(event, payload, nodeId);
+    });
+    // A leaf's project list read (its first after attaching, or a new copy
+    // there) is what pairs boards: sync then, not at the next reconcile.
+    this.unsubscribeProjects = portal.readModel.onProjectsChanged?.((nodeId) => {
+      if (nodes.mode?.() === "command") void this.ticketSync.sync(nodeId);
     });
     // A board change here goes to the leaves with the project (command node);
     // a change queued for a command node is announced to it (leaf). Test

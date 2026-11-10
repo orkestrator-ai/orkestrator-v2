@@ -115,3 +115,51 @@ Repair, without changing any assertion:
 Owners after the change:
 `mise run test:logged -- --name storage-writer-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards.test.ts ./src/core/storage-writer-guards-raw.test.ts ./src/core/storage-writer-guards-analysis.test.ts --parallel=2 --only-failures`
 passed (1.4 s). The raw-writer scan (case 1309) is not changed here.
+
+## Completion Notes next preparation, 2026-11-10
+
+Observed at `ebd2cfd7fc00face0995e438ea85fc25b40d1bf4`, branch base
+`c6de4733c5beb87a578f82a8548725305e1ff254`. The store-writer scan did not recur.
+`mise run flaky:recurrence -- 6150 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports this case open. This observation does not establish a shared cause for
+the failures below or resolve the earlier rows.
+
+Original command: `mise run test:logged -- --name review-default-tests -- mise run test`.
+The backend runner used two parallel workers. Its retained complete inner log
+reports 17,680 pass, 151 skip, nine fail and three errors across 1,211 files;
+the outer review-package copy truncates that log. Desktop also failed its
+startup test. The package's failure triage marks the six credential, readiness
+and listener failures plus the evidence-output failure related through imports;
+the three remaining failures are undetermined because test-file names were
+missing from parsed records. These classifications alone do not establish cause.
+
+| Test | Owner under `apps/` | Original observation | Whole owner rerun |
+| --- | --- | --- | --- |
+| `Electron backend command registry > GitHub credential helper > removes a token-bearing rewrite an older image or backend left behind` | backend/tests/commands-container-exec.test.ts | 5,011.93 ms timeout; child status null | passed, 3.3 s |
+| `Electron backend command registry > GitHub credential helper > keeps working after setup clears credential.helper, on either order` | backend/tests/commands-container-exec.test.ts | 5,005.28 ms timeout; child status null | same owner |
+| `Electron backend command registry > GitHub credential helper > takes a token out of an origin left by an earlier clone` | backend/tests/commands-container-exec.test.ts | 5,005.96 ms timeout; child status null | same owner |
+| `bounded in-container boot wait > a pending shell probe is clipped to the remaining overall deadline` | backend/tests/container-readiness.test.ts | 2,102.05 ms against a 1,500 ms assertion | passed, 3.8 s |
+| `bounded in-container boot wait > renews an expired shell wait window and accepts readiness in the next exec` | backend/tests/container-readiness.test.ts | container-exited error, 2,179.83 ms | same owner |
+| `LoopbackListenerOwnership on this host > attributes a real :: listener and refuses another environment` | backend/src/core/preview-listener-ownership.test.ts | unattributed instead of this-environment, 1,161.74 ms | passed, 1.2 s |
+| `real backend runner seals hashed evidence and refuses a moved head or replaced log` | backend/src/core/review-validation-service.test.ts | empty output instead of evidence, 2,547.90 ms | passed, 2.3 s |
+| `goalWorkspaceFingerprint > changes with a new file, an edit and a commit, and not otherwise` | backend/src/core/native-agent-goal-check.test.ts | 5,000.98 ms timeout | passed, 0.9 s |
+| `no backend file imports zod` | backend/src/core/no-zod.test.ts | 12,686.14 ms against a 5,000 ms deadline | passed, 0.3 s |
+| `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness` | desktop/scripts/dev/bridge-builds.test.ts | 15,025.60 ms timeout | passed, 0.8 s |
+
+Each unchanged whole owner was rerun separately with
+`mise run test:logged -- --name <name> -- bun test --cwd apps/<package> ./<owner> --parallel=1 --only-failures`.
+Names in table order (deduplicated by owner): `credential-owner`,
+`readiness-owner`, `listener-owner`, `evidence-owner`, `fingerprint-owner`,
+`no-zod-owner`, `recorded-desktop-owner`. All exited 0. Passing logs were deleted
+by the logged runner; individual test counts were not retained. A preceding
+six-file backend run (`recorded-backend-owners`, two workers) also passed in 6.3 s.
+
+The exact original aggregate command then passed in 318.7 s (exit 0).
+No failing owner, deadline or assertion was changed. This clears that recorded
+command, but does not prove a product or harness repair for these intermittent
+failures. Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-b17b55a3-a0c1-4c51-88c4-efbb8c66471b/validation-04.stderr.txt`
+and the complete inner log at
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iar2kT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+Related earlier observations: readiness case 0230, listener case 1410 and desktop
+startup case 1202. An isolated pass is not an environmental exemption.

@@ -27,12 +27,14 @@ section. Tickets carry only what differs for this piece of work; the tool
 descriptions say so.
 
 A constraint that limits which files the work may edit never covers updating
-references to files the work deletes, moves or renames. The sections guidance
+references to files the work deletes, moves or renames, or descriptions (a
+status scheme, a layout example) the work makes untrue. The sections guidance
 in the ticket tools tells ticket writers to say so, and every build, rework
-and address prompt tells the worker to repair such references anyway
-(`REFERENCE_UPDATE_RULE` in `build-pipeline-prompts.ts`; root `AGENTS.md`,
-"Keep references current"). Edit bans had left `AGENTS.md` naming deleted
-to-dos, with the work reported incomplete.
+and address prompt tells the worker to repair such references and
+descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline-prompts.ts`;
+root `AGENTS.md`, "Keep references current"). Edit bans had left `AGENTS.md`
+naming deleted to-dos and an outdated status rule, with the work reported
+incomplete.
 
 ## Sections
 

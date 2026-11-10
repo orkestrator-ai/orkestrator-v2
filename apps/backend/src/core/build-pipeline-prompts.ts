@@ -54,12 +54,12 @@ import {
  * Told to every session that changes code for a ticket: build, rework and
  * address. Tickets often forbid edits to `AGENTS.md`, README files, tests or
  * comments, and workers that then deleted or renamed a file left those files
- * pointing at it and reported the ticket incomplete. A reference the change
- * itself made stale is part of the change (root `AGENTS.md`, "Keep references
- * current").
+ * pointing at it, or describing a status rule it had replaced, and reported
+ * the ticket incomplete. A reference or description the change itself made
+ * stale is part of the change (root `AGENTS.md`, "Keep references current").
  */
 export const REFERENCE_UPDATE_RULE =
-  "If your change deletes, moves, renames or retires a file, update every link and reference to it in the same change, including in AGENTS.md, CLAUDE.md, README files, docs, code comments and tests. This holds even where the ticket forbids editing those files: such a ban never covers a reference your own change made stale. Change only that reference there, name the edit in your final message, and never report the work incomplete because of the ban.";
+  "If your change deletes, moves, renames or retires a file, update every link and reference to it in the same change, including in AGENTS.md, CLAUDE.md, README files, docs, code comments and tests. Likewise update any description or rule there that your change makes untrue, such as a status scheme or layout example it replaces. This holds even where the ticket forbids editing those files: such a ban never covers a reference or description your own change made stale. Change only that reference or description there, name the edit in your final message, and never report the work incomplete because of the ban.";
 
 const ADDRESS_FINDINGS_TAIL =
   `${REFERENCE_UPDATE_RULE} ` +

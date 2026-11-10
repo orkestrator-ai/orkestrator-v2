@@ -141,6 +141,14 @@ describe("build pipeline prompts", () => {
   // reference its own change made stale is always in scope.
   test("every code-changing prompt says references to moved or deleted files are always updated", () => {
     expect(REFERENCE_UPDATE_RULE).toContain("update every link and reference to it");
+    // A description the change makes untrue (an outdated status rule) is
+    // stale the same way a path is.
+    expect(REFERENCE_UPDATE_RULE).toContain(
+      "description or rule there that your change makes untrue",
+    );
+    expect(REFERENCE_UPDATE_RULE).toContain(
+      "a reference or description your own change made stale",
+    );
     expect(REFERENCE_UPDATE_RULE).toContain("even where the ticket forbids editing those files");
     expect(REFERENCE_UPDATE_RULE).toContain("never report the work incomplete because of the ban");
 

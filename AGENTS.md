@@ -1983,7 +1983,7 @@ not exist.
 
 ## Orkestrator
 
-Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update a reference to a file their change deletes, moves or renames.
+Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request, except to update what their own change makes stale: a reference to a file it deletes, moves, renames or retires, or a description it makes untrue.
 
 - Never merge pull requests; the user merges.
 - Workers finish by committing, rebasing on the project's configured base branch (not a hard-coded main) and pushing their branch without opening a PR, leave git status clean, then report to the coordinator; a pipeline environment's own PR step opens the PR, and for a prompt environment the coordinator runs Multi Review and sees it through to the PR.

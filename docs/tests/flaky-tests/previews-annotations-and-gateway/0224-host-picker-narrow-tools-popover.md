@@ -700,3 +700,41 @@ confirmed that this case is already open.
   arrival, completion while inactive, preserved user selection and reload.
   These observations do not establish a cause for the blank gateway page or
   classify it as unrelated to the branch. No picker code or assertion was changed.
+
+## Notes handoff address stage, 2026-11-10
+
+Observed on branch base `c6de4733c5beb87a578f82a8548725305e1ff254`, after
+`1df0ad5b6` (handoff fix) and `395368c5a` (aggregate evidence).
+`mise run flaky:recurrence -- 0224 --base c6de4733c5beb87a578f82a8548725305e1ff254`
+reports this case open.
+
+The complete gateway owner was run with one worker:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=notes-handoff-r4 ORKESTRATOR_AGENT_TEST_RUN_ID=notes-handoff-r4 mise run test:logged -- --name notes-browser-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts browser-gateway.spec.ts
+```
+
+The initial profile inherited Codex credentials. That run passed the narrow
+picker but failed the signed-out recovery precondition (`signed-in` rather than
+`signed-out` or `needs-auth`), with 14 passed, 11 skipped and one failed in
+277.9 s. Its expanded trace also exceeded the sanitizer's 67,108,864-byte bound.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Kvcc2I/notes-browser-smoke.log.gz`.
+
+After stopping/resetting the profile, it was recreated with
+`dev:test --profile notes-handoff-r4 --fixture --no-agent-credentials --agent-platforms codex`.
+The exact owner command then completed in 510.7 s with 14 passed, 11 skipped,
+one failed and a teardown error. The narrow picker again could not find either
+`Open projects and environments` or `Close projects and environments` at line
+259 within 5,000 ms. The screenshot shows the open, empty project drawer.
+`ArtifactBoundError` again reports an expanded `trace/1-trace.trace` above the
+same sanitizer limit. Bounded evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.AbNiyE/notes-browser-smoke.log.gz`.
+
+The authoritative local-environment gateway smoke passed in both runs. Separate
+fixture-only Notes QA passed on the real renderer at desktop and 390 px,
+including completion while inactive, delayed publication preserving a later
+selection, reload and the full-layout notice. No picker, drawer or sanitizer
+code was changed. The complete gateway owner has not passed in this stage;
+this remains undetermined validation evidence, not an environmental exemption
+or a newly established flake cause. The profile was stopped and reset, retaining
+toolchains.

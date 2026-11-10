@@ -1,5 +1,5 @@
 import { expect, test, spyOn } from "bun:test";
-import { containerCredentialMode } from "./container-credential-mode.js";
+import { containerCredentialMode, containerOpenCodeMode } from "./container-credential-mode.js";
 import type { CommandContext } from "./commands-context.js";
 const context = {} as CommandContext;
 test.each([
@@ -123,4 +123,33 @@ test("unrecorded runtime uses Docker inspect stdout and refuses inspect errors",
   } finally {
     inspect.mockRestore();
   }
+});
+
+test.each([
+  ["supported", "supported", "opencode-launcher"],
+  ["unsupported", "supported", "launcher"],
+  ["unsupported", "unsupported", "verifier"],
+] as const)(
+  "OpenCode with opencode-launch %s and bridge-launch %s starts as %s",
+  async (openCodeLaunch, bridgeLaunch, mode) => {
+    const asked: string[] = [];
+    expect(
+      await containerOpenCodeMode(context, "container", async (_id, _context, capability) => {
+        asked.push(capability);
+        if (capability === "opencode-launch") return openCodeLaunch;
+        if (capability === "bridge-launch") return bridgeLaunch;
+        return "supported";
+      }),
+    ).toBe(mode);
+    // OpenCode's launch extends the bridges' launcher; nothing else asks for it.
+    expect(asked.includes("opencode-launch")).toBe(bridgeLaunch === "supported");
+  },
+);
+
+test("OpenCode refuses a downgrade when its launcher support cannot be read", async () => {
+  await expect(
+    containerOpenCodeMode(context, "container", async (_id, _context, capability) =>
+      capability === "opencode-launch" ? "unknown" : "supported",
+    ),
+  ).rejects.toThrow("Cannot determine bridge credential support");
 });

@@ -518,7 +518,7 @@ Every checkpoint and result capture published, warm, in under a second, and
 no restored file was left behind in the worktree. The restore-result capture
 took 0.1 to 0.16 s. The gateway held the 305 s apply request open and
 answered it; whether the restore dialog or the desktop IPC path waits as long
-is [todo 7550](../todo/cross-cutting/7550-restore-apply-throughput.md) task 2.
+is [todo 7552](../todo/cross-cutting/7552-restore-apply-throughput.md) task 2.
 At a load of 1 to 10 the apply still cost 11 to 14 ms per file, so most of
 the busy-host 30 to 40 ms is the per-file helper process, not only load.
 
@@ -533,7 +533,7 @@ final one, which restores. The restore dialog is gated by the projection's
 owns the gap.
 
 Apply throughput at bulk sizes is
-[todo 7550](../todo/cross-cutting/7550-restore-apply-throughput.md).
+[todo 7552](../todo/cross-cutting/7552-restore-apply-throughput.md).
 
 ## Retention and backup
 

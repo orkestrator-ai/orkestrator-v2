@@ -9,7 +9,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. T
 ### Tasks
 
 1. **Soak the row cap on a busy live profile**: confirm the database stays near the new bound under real work. Status: open.
-2. **Check a restore of tens of thousands of files**: does the preflight finish inside its deadline. Status: done (2026-11-06). It did not: on a busy host 10,000 files reached the 10 s deadline, so the deadline now scales with the plan. Its follow-ups (7310, done and retired 2026-11-10 after quiet- and busy-host live-profile applies of 10,000 and 20,000 files) are in [Change tracking: restore](../../architecture/change-tracking.md#restore) and [7550](7550-restore-apply-throughput.md).
+2. **Check a restore of tens of thousands of files**: does the preflight finish inside its deadline. Status: done (2026-11-06). It did not: on a busy host 10,000 files reached the 10 s deadline, so the deadline now scales with the plan. Its follow-ups (7310, done and retired 2026-11-10 after quiet- and busy-host live-profile applies of 10,000 and 20,000 files) are in [Change tracking: restore](../../architecture/change-tracking.md#restore) and [7552](7552-restore-apply-throughput.md).
 
 ### 1. Soak the row cap on a busy live profile
 
@@ -100,7 +100,7 @@ Chosen: the old 10 s stays as a floor, the budget is 5 ms per planned path, and 
 
 ## Related
 
-- [7550](7550-restore-apply-throughput.md): restore apply throughput at bulk sizes. Its predecessor 7310 (retired 2026-11-10) made turns whose end capture timed out restorable and gave the restore checkpoint a longer deadline.
+- [7552](7552-restore-apply-throughput.md): restore apply throughput at bulk sizes. Its predecessor 7310 (retired 2026-11-10) made turns whose end capture timed out restorable and gave the restore checkpoint a longer deadline.
 
 - [4961](4961-measurement-directory-rows.md) and [4962](4962-provisional-capture-spacing.md) wait on this soak.
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md)
@@ -110,7 +110,7 @@ Chosen: the old 10 s stays as a floor, the budget is 5 ms per planned path, and 
 
 ### Task 2: qualification completed under 7310
 
-7310 kept the quiet-host and isolated live-profile evidence open rather than treating busy-host service benchmarks as completion. It was recorded on 2026-11-10 by this file's method (results in [Change tracking: restore](../../architecture/change-tracking.md#restore)), and 7310 was retired. 7550 remains the throughput follow-up.
+7310 kept the quiet-host and isolated live-profile evidence open rather than treating busy-host service benchmarks as completion. It was recorded on 2026-11-10 by this file's method (results in [Change tracking: restore](../../architecture/change-tracking.md#restore)), and 7310 was retired. 7552 remains the throughput follow-up.
 
 ### Task 1: Preserve document identity
 

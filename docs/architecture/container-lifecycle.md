@@ -2076,6 +2076,8 @@ read it (`container-bridge-credential.ts`). The rules for bridges are in
 | --- | --- | --- |
 | `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
 | `/run/orkestrator-bridge/<kind>-authority`, beside it (`bridge-launch=1`) | The private half of the bridge's authority key | The backend, in the same root exec |
+| `/run/orkestrator-bridge/opencode-listener` (`opencode-launch=1`) | The inode of the socket the OpenCode server the backend launched listens on | The backend, in the root exec that reads OpenCode's password |
+| `/run/orkestrator-opencode` (`opencode-launch=1`) | OpenCode's configuration and empty home: the user's host configuration and Orkestrator's plugins, rebuilt as root before every start | The OpenCode server, read-only |
 | The bridge's environment | `<TOKEN_ENV>_SHA256` and, with `bridge-launch=1`, `<TOKEN_ENV>_AUTHORITY_KEY`, both removed from `process.env` at start | Anything, harmlessly |
 | The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
 
@@ -2131,8 +2133,11 @@ kill the bridge, or replace it between two of the backend's checks of the
 socket on its port ([a replaced bridge is refused](agent-approvals.md#a-replaced-bridge-is-refused)),
 and on an older image catch the token on the bridge's port or plant code for the
 next start. OpenCode has no bridge and takes the plain password, in
-`opencode-token` in the same directory
-([7252](../todo/containers-and-environments/7252-opencode-server-loads-agent-writable-code.md));
+`opencode-token` in the same directory; on an `opencode-launch=1` image the
+launcher starts it from root's binary and configuration and the backend sends
+the password only to the listening socket it recorded in `opencode-listener`
+([agent-approvals.md](agent-approvals.md#opencode-under-the-launcher-opencode-launch1),
+follow-ups in [7550](../todo/containers-and-environments/7550-opencode-launch-follow-ups.md));
 a plugin inside the server keeps it from the agent (`buildOpenCodeCredentialPluginSource` in
 `agent-credential-files.ts`). In a container, a server the plugin could not harden
 refuses tools; on a host it only logs, because a host's OpenCode can be any build.

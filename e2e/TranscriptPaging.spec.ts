@@ -2,6 +2,26 @@ import { expect, test, type Locator } from "@playwright/test";
 import { expectPlaceHeld, holdPosition } from "./transcript-hold";
 import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
+// Finish the fixture's React lifetime before Playwright closes its context.
+// This stops view-owned polling, observers and scroll restoration while the
+// page can still run their cleanup; all behavior assertions run beforehand.
+test.afterEach(async ({ page }) => {
+  if (page.isClosed()) return;
+  const disposed = await page.evaluate(() => {
+    const dispose = (window as unknown as { disposePagingTranscript?: () => void })
+      .disposePagingTranscript;
+    if (!dispose) return false;
+    dispose();
+    return true;
+  });
+  if (!disposed) return;
+  await expect(page.locator("[data-paging-transcript]")).toHaveAttribute(
+    "data-paging-transcript",
+    "disposed",
+  );
+  await expect(page.locator("[data-transcript-scroller]")).toHaveCount(0);
+});
+
 async function toolPosition(list: Locator, id: string) {
   return list.evaluate((el, partId) => {
     const tool = el.querySelector<HTMLElement>(`[data-transcript-part-id="${partId}"]`);

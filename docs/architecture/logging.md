@@ -309,7 +309,7 @@ migration commit on a loaded Mac wrote during this work's tests):
 [storage] operation.slow database=main op=transaction table=stores store=environments mode=immediate durationMs=9811 beginMs=9811 sqlMs=0 busy=true
 [storage] operation.slow database=ledger op=transaction table=change_ledger_meta mode=exclusive durationMs=374 beginMs=0 sqlMs=1 commitMs=372 busy=false
 [backend] command.slow command=get_projects durationMs=9902 syncMs=0 outcome=ok
-[event-loop] stalled lagMs=9800 endedAt=2026-11-06T09:14:03.120Z intervalMs=500 storageMs=9811 storageDatabase=main storageOp=transaction storageTable=stores storageStore=environments storageLongestMs=9811 storageBusy=true commandsInFlight=3 commands=get_projects,get_environments,create_client_grant
+[event-loop] stalled lagMs=9800 endedAt=2026-11-06T09:14:03.120Z intervalMs=500 cpuMs=240 storageMs=9811 storageDatabase=main storageOp=transaction storageTable=stores storageStore=environments storageLongestMs=9811 storageBusy=true commandsInFlight=3 commands=get_projects,get_environments,create_client_grant jobsInWindow=2 jobs=diff-scan,file-tree-read
 [storage] upkeep.finished durationMs=1840 optimizeMs=12 releasable=5120 released=4096 left=1024 releaseMs=1828 stop=budget
 ```
 
@@ -349,7 +349,7 @@ event loop. One line per command per minute; the rest are folded in. Per-command
 counts and summed durations of gateway invokes were already in
 `/__orkestrator/metrics`.
 
-**The stall line.** The backend registers two stall context sources
+**The stall line.** The backend registers three stall context sources
 (`addEventLoopStallContext`, in `main.ts`). A source is asked only for a stall
 that is reported, with the window from the last on-time tick to the late one.
 The storage source adds the slow SQLite operations overlapping the window:
@@ -357,8 +357,28 @@ The storage source adds the slow SQLite operations overlapping the window:
 `storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. The command
 source adds `commandsInFlight`, the names of up to three of the most recently
 started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
-command's synchronous part of 250 ms or more overlapped the window. A stall with
-no storage fields was not SQLite holding the loop for 250 ms at a time.
+command's synchronous part of 250 ms or more overlapped the window. The
+recurring-work source (`recurringWorkMetrics.stallContext`) adds `jobsInWindow`,
+the attempts of recurring jobs (diff scans, file-tree reads, sweeps; the kinds in
+`@orkestrator/protocol/recurring-work`) that were running during the window or
+settled inside it, and `jobs`, up to three of their kinds, newest first. Each
+attempt counts once; one started while the tracked table was full counts while
+it is in flight and, once settled, only for windows it overlapped, but its kind
+is not named. An
+attempt's span includes its awaits, so a named job ran around the stall rather
+than necessarily causing it; a kind that keeps coming back is the lead. A stall
+with no storage fields was not SQLite holding the loop for 250 ms at a time.
+
+The backend and the desktop also pass the monitor a CPU reader
+(`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry
+`cpuMs`: the CPU time the whole process used in the window. Close to `lagMs`
+means its own thread was busy (JavaScript or a synchronous call that computes);
+far below it means the thread waited (a synchronous call blocked on disk or a
+lock, or the host did not schedule the process). Self-improvement's conversation
+scan was a busy one: it read every recent Claude and Codex history file in one
+synchronous loop, about 7 s on a Mac with nine thousand of them, and now yields
+between files (`event-loop-slice.ts`;
+`apps/backend/scripts/self-improvement-scan-stall.ts` measures it).
 
 **`upkeep.finished`.** `stop` is `done` (no free pages left), `budget` (1 GiB
 per pass), `busy` (another connection held the database), `no-progress`,
@@ -491,8 +511,8 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
 | `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
 | `storage` | `operation.slow` | `database`, `op`, `table`, `mode`, `durationMs`, `beginMs`, `sqlMs`, `commitMs`, `busy`, `folded`, `foldedMaxMs` | A synchronous SQLite call held the event loop for 250 ms or more; see [what ran during a stall](#what-ran-during-a-stall). |
-| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
-| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `event-loop` | `stalled` | `lagMs`, `intervalMs`, `cpuMs`, `storageMs`, `storageDatabase`, `storageOp`, `storageTable`, `storageLongestMs`, `storageBusy`, `commandsInFlight`, `blockingCommandMs`, `jobsInWindow` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. The `storage*` and command fields are the backend's [stall context](#what-ran-during-a-stall). |
+| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs`, `cpuMs` | The same, for the main process. |
 | `backend` | `previous-run` | `outcome`, `ranForMs`, `lastSeenAgoMs` | This start read how the previous run ended, from the [health summary](#health-summary-and-the-clean-exit-marker). |
 | `logging` | `essential.started` | `owner` | This process began writing the file. |
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |

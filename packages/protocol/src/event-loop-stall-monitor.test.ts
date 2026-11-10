@@ -10,7 +10,7 @@ import { configureLogger } from "./logger.js";
 import { captureLogs } from "./testing/log-capture.js";
 
 /** A virtual clock and a single pending timer the test fires by hand. */
-function harness(options: { useDefaultLogger?: boolean } = {}) {
+function harness(options: { useDefaultLogger?: boolean; cpuUsage?: () => number } = {}) {
   let monotonic = 0;
   let wall = Date.parse("2026-10-28T02:22:55.000Z");
   let pending: { callback: () => void; dueAt: number } | null = null;
@@ -21,6 +21,7 @@ function harness(options: { useDefaultLogger?: boolean } = {}) {
     logIntervalMs: 30_000,
     alwaysLogMs: 10_000,
     ...(options.useDefaultLogger ? {} : { report: (stall) => logs.push(stall) }),
+    ...(options.cpuUsage ? { cpuUsage: options.cpuUsage } : {}),
     now: () => monotonic,
     wallClock: () => wall,
     setTimer: (callback, ms) => {
@@ -140,6 +141,46 @@ describe("event loop stall monitor", () => {
     monitor = run.monitor;
     run.tick(2_500);
     expect(run.logs[0]?.context).toBeUndefined();
+  });
+
+  test("a stall line says how much CPU the process used during it", () => {
+    // Microseconds of CPU time, advanced by hand between ticks.
+    let cpuMicros = 5_000_000;
+    const capture = captureLogs();
+    try {
+      const run = harness({ useDefaultLogger: true, cpuUsage: () => cpuMicros });
+      monitor = run.monitor;
+      cpuMicros += 40_000;
+      run.tick(0);
+      // A busy stall: the thread ran for most of it.
+      cpuMicros += 2_812_400;
+      run.tick(2_500);
+      // A waiting stall: the thread barely ran.
+      cpuMicros += 30_000;
+      run.tick(35_000);
+      expect(capture.records().map((record) => record.fields)).toEqual([
+        expect.objectContaining({ lagMs: 2_500, cpuMs: 2_812 }),
+        expect.objectContaining({ lagMs: 35_000, cpuMs: 30 }),
+      ]);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test("a CPU reader that throws or answers nonsense leaves cpuMs out", () => {
+    let calls = 0;
+    const run = harness({
+      cpuUsage: () => {
+        calls += 1;
+        if (calls === 2) throw new Error("unavailable");
+        return Number.NaN;
+      },
+    });
+    monitor = run.monitor;
+    run.tick(2_500);
+    run.tick(40_000);
+    expect(run.logs.map((stall) => stall.cpuMs)).toEqual([undefined, undefined]);
+    expect(run.monitor.snapshot().stalls).toBe(2);
   });
 
   test("a stall of 10 seconds or more is written at any configured level, and a shorter one is not", () => {

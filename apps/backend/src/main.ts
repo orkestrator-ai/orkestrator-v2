@@ -42,6 +42,7 @@ import {
   startEventLoopStallMonitor,
 } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { commandTimings } from "./core/command-timing.js";
+import { recurringWorkMetrics } from "./core/recurring-work-metrics.js";
 import { slowStorageOperations } from "./core/storage-slow-operations.js";
 import {
   DESKTOP_SUPERVISED_ENV,
@@ -66,10 +67,19 @@ const boundedConsole = installBoundedConsole();
 configureLoggerFromEnvironment(process.env, {
   relayToSupervisor: process.env[DESKTOP_SUPERVISED_ENV] === "1",
 });
-startEventLoopStallMonitor();
-// A stall line names the slow SQLite calls and the commands that ran during it.
+// A stall line says how much CPU this process used during it: near the stall's
+// length means its own thread was busy, far below means it waited.
+startEventLoopStallMonitor({
+  cpuUsage: () => {
+    const usage = process.cpuUsage();
+    return usage.user + usage.system;
+  },
+});
+// A stall line names the slow SQLite calls, the commands and the recurring jobs
+// that ran during it.
 addEventLoopStallContext((window) => slowStorageOperations.stallContext(window));
 addEventLoopStallContext((window) => commandTimings.stallContext(window));
+addEventLoopStallContext((window) => recurringWorkMetrics.stallContext(window));
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.

@@ -167,7 +167,11 @@ describe("orkestrator-worktree-signal", () => {
         try {
           // runCommand owns a process group, so a timeout cannot signal the
           // Bun worker or leave the fake watcher running after this fixture.
+          // Rings are detached curls, and those started inside the watcher's
+          // pipeline outlive the script (its final `wait` only covers `lost`),
+          // so wait for the whole group before the rings are read.
           await runCommand(bash!, [SCRIPT, mode], {
+            waitForDescendants: true,
             stdin,
             env: {
               PATH: dir,

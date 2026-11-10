@@ -452,7 +452,10 @@ and one optional preflight case.
     one the live list positively lacks is refused before sending (item 6).
   - Build and Multi Review stages share the rule (`build-pipeline-service-
     agents.ts`, which was OpenCode-only), because a Codex stage on the
-    unoffered default failed the same way.
+    unoffered default failed the same way. A Build row filled from saved
+    defaults is not a pin: it names only a model its action chose, so an
+    inherited platform model reaches the stage as a default and is swapped
+    there ([7546](../coordinator-and-multi-review/7546-build-review-row-pins-unoffered-codex-model.md)).
   - Existing sessions: the platform policy's `runsSessionHeldModel` makes the
     projection add the held model as a row marked "session model"
     rather than show the first catalogue row. Nothing is persisted on a read.

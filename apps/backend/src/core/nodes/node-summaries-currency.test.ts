@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { settle, TestNodeNetwork, type TestNode } from "./node-network-test-support.js";
+import {
+  stopTestNodeNetworks,
+  settle,
+  TestNodeNetwork,
+  type TestNode,
+} from "./node-network-test-support.js";
+
+afterEach(stopTestNodeNetworks);
 import { NodeReadModel } from "./node-read-model.js";
 
 /**

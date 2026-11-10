@@ -4580,6 +4580,10 @@ describe("NativeAgentService shared observations", () => {
     const paths: string[] = [];
     let activity: ProviderActivityState = "working";
     const server = Bun.serve({
+      // The address the service dials. A dual-stack wildcard bind (`*:P`) can
+      // share P with another process's `127.0.0.1:P` listener on macOS, which
+      // then answers the service instead of this fixture (case 0672).
+      hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);

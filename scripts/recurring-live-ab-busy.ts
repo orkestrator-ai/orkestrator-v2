@@ -398,7 +398,6 @@ export function clientProgressSample(
   return { kind: "sample", ms: Math.round(shown.at - submittedAt) };
 }
 
-/** An error's first line: Playwright appends a call log that may name page content. */
 /**
  * A pane layout's tree without the tabs of one Multi Review (its root,
  * reviewer and Address Findings tabs), and how many it removed. Leaves whose
@@ -435,6 +434,7 @@ export function withoutReviewTabs(
   return { root: walk(root), removed };
 }
 
+/** An error's first line: Playwright appends a call log that may name page content. */
 function firstLine(error: unknown): string {
   return error instanceof Error ? (error.message.split("\n", 1)[0] ?? "") : String(error);
 }

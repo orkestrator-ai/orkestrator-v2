@@ -139,8 +139,9 @@ import { readOpenCodeTurnTerminalError } from "./opencode-turn-outcome.js";
 import { OpenCodeActionRetryCoordinator } from "./opencode-action-retry.js";
 import { reconcileOpenCodeStreamState } from "./opencode-stream-reconciliation.js";
 import {
-  openCodeRevertMarker,
+  observeOpenCodeRevertResult,
   openCodeRevertNotice,
+  readOpenCodeRevertMarker,
   withoutRevertedOpenCodeMessages,
   type OpenCodeRevertMarker,
 } from "./opencode-revert.js";
@@ -961,46 +962,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  /**
-   * OpenCode's pending revert for a transcript read. `session.updated` and the
-   * revert actions keep it current; after a stream gap, or before either has
-   * been seen, it is read from the session. A failed read serves the marker
-   * last seen and leaves it unknown, so the next read asks again.
-   */
-  private async revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
-    if (this.streamState.revertMarkerKnown(sessionId)) {
-      return this.streamState.revertMarker(sessionId);
-    }
-    const version = this.streamState.revertVersion(sessionId);
-    try {
+  private revertMarker(sessionId: string): Promise<OpenCodeRevertMarker | undefined> {
+    return readOpenCodeRevertMarker(this.streamState, sessionId, async () => {
       const response = await this.client.session.get(
         { sessionID: sessionId },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode session revert read");
-      const session = asRecord(response.data);
-      const marker = openCodeRevertMarker(session);
-      if (session?.id === sessionId && (session.revert === undefined || marker)) {
-        this.streamState.observeRevert(sessionId, marker, version);
-      }
-    } catch {
-      // The transcript stays readable; only the marker is stale.
-    }
-    return this.streamState.revertMarker(sessionId);
-  }
-
-  /** An action response overtaken by another observation needs an authoritative reread. */
-  private observeRevertResult(sessionId: string, session: unknown, version: number): void {
-    const info = asRecord(session);
-    const marker = openCodeRevertMarker(session);
-    if (
-      info?.id === sessionId &&
-      (info.revert === undefined || marker) &&
-      this.streamState.observeRevert(sessionId, marker, version)
-    )
-      return;
-    // Keep the last observed marker while a later read resolves ambiguous ordering.
-    this.streamState.invalidateRevert(sessionId);
+      return response.data;
+    });
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
@@ -1428,7 +1398,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data, version);
+        observeOpenCodeRevertResult(this.streamState, sessionId, response.data, version);
         return { outcome: "applied" };
       }
       if (action.kind === "redo") {
@@ -1437,7 +1407,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { sessionID: sessionId },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.observeRevertResult(sessionId, response.data, version);
+        observeOpenCodeRevertResult(this.streamState, sessionId, response.data, version);
         return { outcome: "applied" };
       }
       // No share/unshare: OpenCode 1.19.1 discontinued session sharing, so

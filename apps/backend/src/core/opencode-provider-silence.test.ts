@@ -7,6 +7,7 @@ import {
   OpenCodeStreamSilenceWatchdog,
 } from "./opencode-observation-stream.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
+import { installControlledTimeout } from "../../../../tests/helpers/controlled-timeout.js";
 
 /**
  * To-do 7200 task 1: an OpenCode event stream that stays open but stops
@@ -138,43 +139,63 @@ describe("OpenCodeStreamSilenceWatchdog", () => {
     expect(OPENCODE_EVENT_STREAM_SILENCE_MS).toBe(35_000);
   });
 
-  test("stays unarmed until a heartbeat arrives", async () => {
+  test("stays unarmed until a heartbeat arrives", () => {
     let clock = 0;
-    const { instance, fired } = watchdog(20, () => clock);
-    instance.frame(false);
-    clock = 1_000;
-    await sleep(40);
-    expect(instance.isArmed).toBe(false);
-    expect(fired).toEqual([]);
+    const deadline = installControlledTimeout(20, { label: "silence deadline" });
+    try {
+      const { instance, fired } = watchdog(20, () => clock);
+      instance.frame(false);
+      clock = 1_000;
+      // No deadline was scheduled, so nothing can ever fire.
+      expect(deadline.pendingCount()).toBe(0);
+      expect(instance.isArmed).toBe(false);
+      expect(fired).toEqual([]);
+    } finally {
+      deadline.restore();
+    }
   });
 
-  test("re-checks elapsed silence instead of firing on the first timer", async () => {
+  test("re-checks elapsed silence instead of firing on the first timer", () => {
     let clock = 0;
-    const { instance, fired } = watchdog(30, () => clock);
-    instance.frame(true);
-    // A frame 20 ms in moves the deadline; the first timer must re-arm.
-    await sleep(10);
-    clock = 20;
-    instance.frame(false);
-    clock = 30;
-    await sleep(30);
-    expect(fired).toEqual([]);
-    clock = 60;
-    await waitUntil(() => fired.length === 1);
-    expect(fired).toEqual([30]);
-    expect(instance.isArmed).toBe(false);
+    const first = installControlledTimeout(30, { label: "first deadline" });
+    const recheck = installControlledTimeout(20, { label: "re-armed deadline" });
+    try {
+      const { instance, fired } = watchdog(30, () => clock);
+      instance.frame(true);
+      // A frame 20 ms in moves the deadline; the first timer must re-arm.
+      clock = 20;
+      instance.frame(false);
+      clock = 30;
+      expect(first.advance()).toBe(1);
+      expect(fired).toEqual([]);
+      expect(recheck.pendingCount()).toBe(1);
+      clock = 60;
+      expect(recheck.advance()).toBe(1);
+      expect(fired).toEqual([30]);
+      expect(instance.isArmed).toBe(false);
+    } finally {
+      recheck.restore();
+      first.restore();
+    }
   });
 
-  test("stop cancels a pending deadline", async () => {
+  test("stop cancels a pending deadline", () => {
     let clock = 0;
-    const { instance, fired } = watchdog(10, () => clock);
-    instance.frame(true);
-    instance.stop();
-    clock = 1_000;
-    await sleep(30);
-    expect(fired).toEqual([]);
-    instance.frame(true);
-    expect(instance.isArmed).toBe(false);
+    const deadline = installControlledTimeout(10, { label: "silence deadline" });
+    try {
+      const { instance, fired } = watchdog(10, () => clock);
+      instance.frame(true);
+      expect(deadline.pendingCount()).toBe(1);
+      instance.stop();
+      clock = 1_000;
+      expect(deadline.pendingCount()).toBe(0);
+      expect(fired).toEqual([]);
+      instance.frame(true);
+      expect(instance.isArmed).toBe(false);
+      expect(deadline.pendingCount()).toBe(0);
+    } finally {
+      deadline.restore();
+    }
   });
 
   test("recognises only the heartbeat frame", () => {

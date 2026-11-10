@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1018,
-    "defined": 1018,
+    "commands": 1020,
+    "defined": 1020,
     "untyped": 0,
     "events": 45
   },

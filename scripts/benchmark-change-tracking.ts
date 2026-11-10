@@ -36,8 +36,9 @@
  * finalizes it (retrying a timed-out end capture as the backend would), then
  * times the restore preview and `apply` end to end. It reports the turn's end
  * capture, the apply's checkpoint and result captures with their deadlines
- * and outcomes, and how many files were restored. Each restored file is one
- * conditional-write helper process, so this is the slow one.
+ * and outcomes, and how many files were restored. The writes go through one
+ * conditional-write helper process per batch of 500 files (todo 7555; before
+ * that, one per file, about 12 ms each on a quiet host).
  *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).

@@ -537,7 +537,12 @@ repository exchange ordinary node mail
   On the leaf each new message from the command node's coordinator starts a
   fresh budget, as a new request to a worker does, so the leaf answers every
   question the command node actually sends; the hourly limit still applies
-  there.
+  there. Replacing the command node's main does not release a held answer:
+  the next main takes it over still held
+  ([agent-messaging.md](agent-messaging.md#budgets)). The exchange, the bound
+  and the replacement are qualified between two `dev:test` profiles with a
+  loopback model by `mise run test:agent:coordinator:node-mail-fake`
+  ([agent-testing.md](../development/agent-testing.md#coordinator-node-mail-between-two-profiles-fake-model)).
 - **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
   nothing; the call is refused with "update that machine", and
   `list_mailboxes` with its `nodeId` reports it unreachable for the same
@@ -1280,6 +1285,15 @@ bubblewrap cannot create a user namespace, or whose nested namespace is
 refused, is not sandboxed. The reason names the cause, and names
 `bwrap-userns-restrict` when AppArmor is enabled and that profile is installed.
 
+In a container environment the probe runs inside the container, where it
+answers `missing-programs`: the image ships neither program. That was checked
+with `docker exec` in a real environment container on 2026-11-10 (to-do 0145
+task 4), and the container's own bridge refused a provider-sandbox prompt
+with 422. Installing the two packages would not help: under Docker's default
+seccomp profile bubblewrap cannot create its user namespace (the CLI's own
+availability check fails too), and without seccomp it cannot mount `/proc`
+over Docker's masked one. The container is the sandbox there.
+
 Three consumers use it:
 
 - the backend's coordinator table, which reports Claude as
@@ -1618,7 +1632,7 @@ running turn) are all left alone, and a failure is logged
 (`checkout.mail-follow`) and never holds the mail.
 
 Both paths are qualified against a slow remote on a real profile by
-`mise run test:agent:coordinator-slow-remote` (to-do 4720; see
+`mise run test:agent:coordinator-slow-remote` (to-do 4720, retired 2026-11-10; see
 [agent-testing.md](../development/agent-testing.md#coordinator-checkout-sync-with-a-slow-remote-fake-model)).
 In that run a worker's mail to a coordinator whose turn is running waits on
 the coordinator's presence (`agent-mail delivery.waiting reason=working`)

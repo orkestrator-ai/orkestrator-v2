@@ -1,5 +1,5 @@
 /**
- * Points a `dev:test` profile's own Claude, Codex or Pi at the MCP
+ * Points a `dev:test` profile's own Claude, Codex, Pi or OpenCode at the MCP
  * qualification fake model (`mcp-fake-model.ts`, todo 0039), for the MCP
  * specs' fake-model mode (`ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL=1`). Every
  * file it writes is under the profile's data directory and is restored by the
@@ -11,13 +11,25 @@ import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { startModel, type FakeModelHandle } from "./idle-observation-fake-models";
+import {
+  mergeOpenCodeFakeProvider,
+  openCodeModelRef,
+  profileOpenCodeConfigFile,
+} from "./opencode-fake-provider";
 
-export type FakeModelPlatform = "claude" | "codex" | "pi";
+export type FakeModelPlatform = "claude" | "codex" | "pi" | "opencode";
 
 export const FAKE_PI_PROVIDER = "mcpq-fake";
 export const FAKE_PI_MODEL = "mcpq-1";
 /** `provider/modelId`, the form Pi sessions and dispatches take. */
 export const FAKE_PI_MODEL_REF = `${FAKE_PI_PROVIDER}/${FAKE_PI_MODEL}`;
+/** OpenCode's custom provider for the same fake (todo 0039 task 6). */
+export const FAKE_OPENCODE_PROVIDER = "mcpq-fake";
+export const FAKE_OPENCODE_MODEL = "mcpq-1";
+export const FAKE_OPENCODE_MODEL_REF = openCodeModelRef({
+  provider: FAKE_OPENCODE_PROVIDER,
+  model: FAKE_OPENCODE_MODEL,
+});
 
 const FAKE_MODEL = path.join(import.meta.dirname, "mcp-fake-model.ts");
 
@@ -29,7 +41,9 @@ export interface McpFakeModelHandle extends FakeModelHandle {
 }
 
 export function isFakeModelPlatform(platform: string): platform is FakeModelPlatform {
-  return platform === "claude" || platform === "codex" || platform === "pi";
+  return (
+    platform === "claude" || platform === "codex" || platform === "pi" || platform === "opencode"
+  );
 }
 
 export function insideProfile(dataDir: string, file: string): string {
@@ -105,6 +119,25 @@ function configure(platform: FakeModelPlatform, dataDir: string, origin: string)
     });
     return [file];
   }
+  if (platform === "opencode") {
+    // The global file, which the MCP editor's OpenCode user scope also edits:
+    // the merge keeps its servers, and the editor keeps the provider.
+    const file = insideProfile(dataDir, profileOpenCodeConfigFile(dataDir));
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const earlier = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+    writeFileSync(
+      file,
+      mergeOpenCodeFakeProvider(earlier, {
+        provider: FAKE_OPENCODE_PROVIDER,
+        providerName: "MCP qualification fake",
+        baseUrl: `${origin}/v1`,
+        model: FAKE_OPENCODE_MODEL,
+        modelName: "MCPQ 1",
+      }),
+      { mode: 0o600 },
+    );
+    return [file];
+  }
   // Agent-test backends run with HOME=<dataDir>/agent-credentials/home, and a
   // local Pi bridge uses Pi's default `~/.pi/agent` under it.
   const file = insideProfile(
@@ -147,7 +180,9 @@ export async function startMcpFakeModel(
       ? path.join(credentials, "claude", "settings.json")
       : platform === "codex"
         ? path.join(credentials, "codex", "config.toml")
-        : path.join(credentials, "home", ".pi", "agent", "models.json");
+        : platform === "opencode"
+          ? profileOpenCodeConfigFile(dataDir)
+          : path.join(credentials, "home", ".pi", "agent", "models.json");
   const restore = snapshotFixtureFiles([insideProfile(dataDir, planned)]);
   const model = await startModel(FAKE_MODEL, options);
   let files: string[];
@@ -165,6 +200,7 @@ export async function startMcpFakeModel(
     origin: model.origin,
     files: files.map((file) => path.relative(dataDir, file)),
     ...(platform === "pi" ? { model: FAKE_PI_MODEL_REF } : {}),
+    ...(platform === "opencode" ? { model: FAKE_OPENCODE_MODEL_REF } : {}),
     stop: async () => {
       try {
         restore();

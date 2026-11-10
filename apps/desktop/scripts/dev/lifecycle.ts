@@ -267,15 +267,99 @@ function childStartTime(child: ChildProcess): number {
   return processStartTime(pid) ?? Date.now();
 }
 
-function killOwnedChild(child: ChildProcess | null, signal: NodeJS.Signals): void {
-  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
+/**
+ * Whether stopping a runtime process signals its whole process group.
+ *
+ * Electron's group holds Chromium's zygotes, GPU process and utility
+ * processes, and the backend. A SIGTERM to all of them kills the GPU process
+ * and its zygote while the browser is still running: the browser relaunches
+ * the GPU process, the launch fails because the zygote is gone, and with
+ * `--disable-gpu` there is no GPU mode left to fall back to, so it dies on
+ * `LOG(FATAL) "GPU process isn't usable. Goodbye."` with SIGTRAP and a core
+ * dump (to-dos 7552 and 7554). So SIGTERM goes to Electron's top process
+ * alone, which lets Chromium tear down its own children, and only SIGKILL,
+ * which never dumps core, sweeps the group. Vite's group is plain processes.
+ */
+export function signalsProcessGroup(name: RuntimeProcessName, signal: NodeJS.Signals): boolean {
+  if (name === "vite") return true;
+  if (name === "electron") return signal === "SIGKILL";
+  return false;
+}
+
+/** Signals one owned child, or its process group, ignoring a child that has already gone. */
+export type OwnedChildSignal = (
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  processGroup: boolean,
+) => void;
+
+const signalOwnedChild: OwnedChildSignal = (child, signal, processGroup) => {
+  if (processGroup) {
     try {
-      child.kill(signal);
-    } catch {}
+      process.kill(-child.pid!, signal);
+      return;
+    } catch {
+      // Fall through to the exact PID when the child is not a group leader.
+    }
   }
+  try {
+    child.kill(signal);
+  } catch {}
+};
+
+function childRunning(child: ChildProcess | null): child is ChildProcess {
+  return Boolean(child?.pid) && child!.exitCode === null && child!.signalCode === null;
+}
+
+function killOwnedChild(
+  child: ChildProcess | null,
+  name: "vite" | "electron",
+  signal: NodeJS.Signals,
+  send: OwnedChildSignal,
+): void {
+  if (!childRunning(child)) return;
+  send(child, signal, signalsProcessGroup(name, signal));
+}
+
+/**
+ * How long the launcher lets Electron quit on its own before it kills
+ * Electron's group. Electron's quit stops the backend first, which normally
+ * takes well under a second; `dev:stop` gives the whole launcher 5 s before it
+ * escalates, so this stays under that.
+ */
+export const ELECTRON_STOP_GRACE_MS = 3_000;
+
+/** Resolves once `child` has exited, or after `timeoutMs`. */
+function childExitWithin(child: ChildProcess | null, timeoutMs: number): Promise<void> {
+  if (!childRunning(child)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, timeoutMs);
+    function done() {
+      clearTimeout(timer);
+      child!.off("exit", done);
+      resolve();
+    }
+    child.once("exit", done);
+  });
+}
+
+/**
+ * The launcher's stop: SIGTERM to Electron's top process and Vite's group,
+ * a grace period for both to exit, then SIGKILL to whatever is left. See
+ * `signalsProcessGroup` for why Electron's group never gets the SIGTERM.
+ */
+export async function stopLauncherChildren(
+  children: { electron: ChildProcess | null; vite: ChildProcess | null },
+  options: { graceMs?: number; send?: OwnedChildSignal } = {},
+): Promise<void> {
+  const { electron, vite } = children;
+  const send = options.send ?? signalOwnedChild;
+  const graceMs = options.graceMs ?? ELECTRON_STOP_GRACE_MS;
+  killOwnedChild(electron, "electron", "SIGTERM", send);
+  killOwnedChild(vite, "vite", "SIGTERM", send);
+  await Promise.all([childExitWithin(electron, graceMs), childExitWithin(vite, graceMs)]);
+  killOwnedChild(electron, "electron", "SIGKILL", send);
+  killOwnedChild(vite, "vite", "SIGKILL", send);
 }
 
 type RuntimeProcessControl = {
@@ -324,7 +408,7 @@ function signalTrackedRuntimeProcess(
   const startedAt = status.processStartTimes[name];
   if (!pid || !control.matches(pid, startedAt)) return;
   try {
-    control.signal(pid, signal, name === "vite" || name === "electron");
+    control.signal(pid, signal, signalsProcessGroup(name, signal));
   } catch {
     // A process can exit between the identity check and signal delivery.
   }
@@ -498,6 +582,46 @@ export function electronLaunch(
     return { switches: [], env: { ...result, [AGENT_TEST_HIDDEN_WINDOWS_ENV]: "1" } };
   }
   return { switches: [], env: result };
+}
+
+/**
+ * `1` lets an agent-test profile's Electron, and everything it starts, write
+ * core dumps on Linux. Off by default: see `electronCommand`.
+ */
+export const AGENT_TEST_CORE_DUMPS_ENV = "ORKESTRATOR_AGENT_TEST_CORE_DUMPS";
+
+/** Sets a core file size limit of 0, then becomes the command after it. */
+const NO_CORE_DUMPS_SCRIPT = 'ulimit -c 0 && exec "$0" "$@"';
+
+/**
+ * The command that starts Electron. On Linux an agent-test profile's Electron
+ * runs with a core file size limit of 0, inherited by everything it starts.
+ * When the host's `kernel.core_pattern` is a relative name such as `core`, a
+ * crash writes its dump (about 1 GB for Electron) into the crashing process's
+ * working directory, which for a profile is the checkout: untracked, one
+ * `git add -A` from a commit, and a gigabyte of disk per crash. The limit is
+ * per process and changes nothing on the host. With systemd-coredump the
+ * journal still records the crash, and Chromium's own `FATAL` line still
+ * reaches `electron.log`. `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1` keeps the
+ * dumps for a diagnosis. macOS writes cores to `/cores` only when asked, and
+ * `mise run dev` is a person's own profile, so neither changes.
+ */
+export function electronCommand(
+  executable: string,
+  args: readonly string[],
+  options: {
+    flavor: "development" | "agent-test";
+    platform: NodeJS.Platform;
+    env: NodeJS.ProcessEnv;
+  },
+): { command: string; args: string[] } {
+  const keepCoreDumps =
+    options.flavor !== "agent-test" ||
+    options.platform !== "linux" ||
+    options.env[AGENT_TEST_CORE_DUMPS_ENV] === "1";
+  if (keepCoreDumps) return { command: executable, args: [...args] };
+  // `exec` keeps the PID, so the launcher still tracks and signals Electron.
+  return { command: "/bin/sh", args: ["-c", NO_CORE_DUMPS_SCRIPT, executable, ...args] };
 }
 
 /** Platforms where an agent-test profile can keep Electron off the desktop. */
@@ -852,11 +976,7 @@ export async function startDevelopment(
       status: "stopping",
       ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
     });
-    killOwnedChild(electron, "SIGTERM");
-    killOwnedChild(vite, "SIGTERM");
-    await Bun.sleep(500);
-    killOwnedChild(electron, "SIGKILL");
-    killOwnedChild(vite, "SIGKILL");
+    await stopLauncherChildren({ electron, vite });
     await writeStatus({ status: finalStatus });
   };
   process.once("SIGINT", () => void shutdown("stopped").then(() => process.exit(130)));
@@ -925,25 +1045,26 @@ export async function startDevelopment(
     if (notice) console.log(notice);
     const launch = electronLaunch(headless, platform, process.env);
     const electronEnv = launch.env;
-    electron = (dependencies.spawn ?? spawn)(
+    const electronSpawn = electronCommand(
       electronExecutable,
       [...launch.switches, "apps/desktop/dist/electron/main.js"],
-      {
-        cwd: repositoryRoot,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...electronEnv,
-          ELECTRON_DEV: "1",
-          VITE_DEV_SERVER_URL: rendererUrl,
-          ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-          // Development profiles routinely coexist with the installed app and
-          // with one another. Let the OS reserve an isolated control-MCP port;
-          // the backend publishes that URL in its descriptor and readiness frame.
-          ORKESTRATOR_CONTROL_MCP_PORT: electronEnv.ORKESTRATOR_CONTROL_MCP_PORT ?? "0",
-        },
-      },
+      { flavor, platform, env: process.env },
     );
+    electron = (dependencies.spawn ?? spawn)(electronSpawn.command, electronSpawn.args, {
+      cwd: repositoryRoot,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...electronEnv,
+        ELECTRON_DEV: "1",
+        VITE_DEV_SERVER_URL: rendererUrl,
+        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        // Development profiles routinely coexist with the installed app and
+        // with one another. Let the OS reserve an isolated control-MCP port;
+        // the backend publishes that URL in its descriptor and readiness frame.
+        ORKESTRATOR_CONTROL_MCP_PORT: electronEnv.ORKESTRATOR_CONTROL_MCP_PORT ?? "0",
+      },
+    });
     // Listen for the exit now: Electron can exit while readiness, status
     // writes or fixture seeding are still pending, and a listener added
     // after that would wait forever with Vite still running.

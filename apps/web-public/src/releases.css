@@ -1,0 +1,215 @@
+/*
+ * Releases page. It sits inside .landing, so it shares the landing page's
+ * colour tokens, navigation, buttons and footer.
+ */
+
+.releases {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 96px 24px 0;
+}
+
+.releases h1 {
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 680;
+  letter-spacing: -0.04em;
+  line-height: 1.04;
+  text-wrap: balance;
+}
+
+.release-list {
+  display: grid;
+  gap: 24px;
+  margin: 64px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.release-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  padding: 32px;
+  box-shadow: inset 0 1px 0 #222c3d;
+}
+
+.release-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.release-card__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.landing .release-card h2 {
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.release-card time {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.release-channel {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.release-channel--stable {
+  border-color: rgb(102 201 146 / 0.4);
+  background: rgb(102 201 146 / 0.08);
+  color: var(--green);
+}
+
+.release-channel--beta {
+  border-color: rgb(91 141 239 / 0.4);
+  background: rgb(91 141 239 / 0.08);
+  color: var(--blue-bright);
+}
+
+.release-channel--unstable {
+  border-color: rgb(214 167 93 / 0.4);
+  background: rgb(214 167 93 / 0.08);
+  color: var(--amber);
+}
+
+.release-card__intro {
+  margin-top: 8px !important;
+  color: var(--ink-3);
+  font-size: 14px;
+}
+
+.release-groups {
+  display: grid;
+  gap: 24px;
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+
+.release-group h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.release-group h3 svg {
+  width: 15px;
+  height: 15px;
+}
+
+.release-group--new h3 {
+  color: var(--blue-bright);
+}
+
+.release-group--improved h3 {
+  color: var(--green);
+}
+
+.release-group--fixed h3 {
+  color: var(--amber);
+}
+
+.release-group ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.release-group li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--ink-2);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.release-group li::before {
+  content: "";
+  position: absolute;
+  top: 0.68em;
+  left: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.release-card__notes,
+.releases__more a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--blue-bright) !important;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.release-card__notes {
+  margin-top: 24px;
+}
+
+.release-card__notes svg,
+.releases__more svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 150ms;
+}
+
+.release-card__notes:hover svg,
+.releases__more a:hover svg {
+  transform: translate(2px, -2px);
+}
+
+.releases__more {
+  margin-top: 40px !important;
+  color: var(--ink-3);
+  font-size: 14px;
+  text-align: center;
+}
+
+.landing-nav nav a[aria-current="page"] {
+  color: var(--ink);
+}
+
+@media (max-width: 600px) {
+  .releases {
+    padding: 56px 16px 0;
+  }
+  .release-list {
+    margin-top: 40px;
+  }
+  .release-card {
+    padding: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .release-card__notes svg,
+  .releases__more svg {
+    transition: none;
+  }
+}

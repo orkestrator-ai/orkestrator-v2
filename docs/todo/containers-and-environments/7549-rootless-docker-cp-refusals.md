@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-09 against `main` at `c6de4733c`. Found by
-[0109](0109-rootless-linux-runtime-gaps.md) task 5, the rootless re-run on a
+the retired to-do 0109's task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
 
@@ -215,10 +215,9 @@ neighbourhood.
 
 ## Related
 
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md)
-  (task 3 classified the start refusal; task 5 found these).
-- [0109 task 4](0109-rootless-linux-runtime-gaps.md#4-start-retry-on-port-collision)
-  (the single retry).
+- The retired to-do 0109 (task 3 classified the start refusal; task 4 added
+  the single retry; task 5 found these): its evidence is the
+  [rootless re-run record](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
 - [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md)
   (the launcher used, which has no storage-driver option).
 - [Container lifecycle](../../architecture/container-lifecycle.md)

@@ -95,6 +95,17 @@ Added the same environment identity the renderer sends. Changing the manager
 would weaken its intended identity boundary; skipping the case would remove
 coverage. All history, navigation trace and address assertions stay in place.
 
+### Index row: kept Finished, with the platform runs explained (2026-11-10 housekeeping)
+
+The folder index said Finished Yes while its rating reason said Linux headless
+and shown-window qualification were untested, which read as open work. Both
+tasks are done and the cause was platform-independent, so the Finished side is
+right. Chosen: keep the file as Finished (it is linked from flakes 0620 and
+0622 and from 0042's evidence log, as 7081 and 7470 are kept for theirs) and
+say in the row and under Needs verification why no platform run is owed.
+Re-opening it for a confirmation run was the alternative; it would add a task
+to a finished file, which the to-do rules do not allow.
+
 ## Current state
 
 The corrected case passed in the two-case targeted Electron run and in the
@@ -105,7 +116,13 @@ those failures and their evidence.
 
 ## Needs verification
 
-Linux headless and shown-window qualification were not performed during this fix.
+Nothing is owed. Linux headless and shown-window runs were not performed
+during this fix, but the cause was in the test's synthetic request (no
+`environmentId`), not in a platform path: the same check failed with the same
+message on Linux headless (beelink) and on macOS hidden windows, and the
+manager's identity rule that replaced the view does not depend on the window
+mode. A later complete headless owner run on Linux will exercise the corrected
+case as a matter of course; a failure there would be a new to-do.
 
 ## Related
 

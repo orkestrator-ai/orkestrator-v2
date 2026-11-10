@@ -411,7 +411,7 @@ task 4's real rootful-host evidence.
 
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: owns the rootless qualification and task 3's result.
 - [0019-container-platform-qualification.md](0019-container-platform-qualification.md): its daemon-wide restart could use the same launcher.
-- [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md): an earlier disposable rootless daemon recipe.
+- Todo 0109 (retired on 2026-11-10): an earlier disposable rootless daemon recipe, recorded in [container qualification](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09).
 - [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md): the pool exhaustion on the shared daemon.
 - [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md): the rootless restart settings task 3 did not run.
 - [6820-agent-tools-peer-gate-linux-evidence.md](6820-agent-tools-peer-gate-linux-evidence.md): Linux Engine evidence that may use either mode.

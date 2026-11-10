@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { createEventLoopSlicer } from "../../event-loop-slice.js";
 import { writeAtomic } from "../ledger.js";
 import {
   type Conversation,
@@ -209,6 +210,8 @@ export interface SelectOptions {
   maxSegments?: number;
   /** A history file larger than this is read from its end only (tests lower it). */
   maxTranscriptBytes?: number;
+  /** Awaited between files; yields to the event loop once per slice by default. */
+  slice?: () => Promise<void>;
 }
 
 export interface Selection {
@@ -235,11 +238,17 @@ export function resumeIndex(conversation: Conversation, known: CursorEntry | und
   return Math.min(known.analyzedEntries, conversation.entries.length);
 }
 
-/** The unread parts of settled conversations, newest first, up to the run's limit. */
-export function selectSegments(options: SelectOptions): Selection {
+/**
+ * The unread parts of settled conversations, newest first, up to the run's
+ * limit. Every settled file in the lookback is read to find where it resumes
+ * (3,146 files and 4.4 s of reads on one host), so the loop yields to the event
+ * loop between files: done in one go it held the backend for 7 s.
+ */
+export async function selectSegments(options: SelectOptions): Promise<Selection> {
   const { cursor, now } = options;
   const max = options.maxSegments ?? MAX_SEGMENTS_PER_RUN;
-  const files = listTranscriptFiles(options.sources)
+  const slice = options.slice ?? createEventLoopSlicer();
+  const files = (await listTranscriptFiles(options.sources, slice))
     .filter(
       (file) => now - file.mtimeMs >= SETTLE_MS && now - file.mtimeMs <= FIRST_RUN_LOOKBACK_MS,
     )
@@ -247,6 +256,7 @@ export function selectSegments(options: SelectOptions): Selection {
   const selection: Selection = { segments: [], skipped: [], waiting: 0 };
   const seen = new Set<string>();
   for (const file of files) {
+    await slice();
     const conversation = readConversation(file, options.maxTranscriptBytes ?? MAX_TRANSCRIPT_BYTES);
     if (!conversation || seen.has(conversation.id)) continue;
     seen.add(conversation.id);

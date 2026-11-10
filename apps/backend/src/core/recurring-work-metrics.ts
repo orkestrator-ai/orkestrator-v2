@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { EventLoopStallContext } from "@orkestrator/protocol/event-loop-stall-monitor";
 import {
   RECURRING_DURATION_BUCKETS_MS,
   RECURRING_ERROR_CATEGORIES,
@@ -52,6 +53,10 @@ import {
 const BUCKET_COUNT = RECURRING_DURATION_BUCKETS_MS.length + 1;
 /** Attempts whose age is tracked for the "worst in-flight age" diagnostic. */
 export const RECURRING_WORK_MAX_TRACKED_ACTIVE = 1_024;
+/** Settled attempts kept, start and end only, to name the jobs that ran during a stall. */
+export const RECURRING_WORK_RECENT_SETTLED = 64;
+/** Job kinds named in a stall line. */
+const STALL_JOB_NAMES = 3;
 
 export interface RecurringWorkSpan {
   readonly kind: RecurringJobKind | undefined;
@@ -215,6 +220,11 @@ export class RecurringWorkMetrics {
   private readonly unattributedUnits = new Map<RecurringWorkUnit, number>();
   private unattributedBytes = 0;
   private readonly activeSpans = new Set<ActiveSpan>();
+  private readonly recentSettled: Array<{
+    kind: RecurringJobKind;
+    startedAt: number;
+    endedAt: number;
+  }> = [];
   private readonly context = new AsyncLocalStorage<ActiveSpan>();
   private readonly now: () => number;
   private readonly maxTrackedActive: number;
@@ -371,6 +381,44 @@ export class RecurringWorkMetrics {
     return result;
   }
 
+  /**
+   * For the event-loop stall line: the recurring jobs whose attempts overlapped
+   * the stall window (`fromMs`..`toMs`, this recorder's clock), newest first,
+   * and how many attempts that was. An attempt's span includes its awaits, so a
+   * named job ran around the stall rather than necessarily causing it; a name
+   * that keeps coming back is the lead. Kind names only.
+   */
+  stallContext({
+    fromMs,
+    toMs,
+  }: {
+    fromMs: number;
+    toMs: number;
+  }): EventLoopStallContext | undefined {
+    if (!this.enabledFlag) return undefined;
+    try {
+      const overlapping: Array<{ kind: RecurringJobKind; startedAt: number }> = [];
+      for (const span of this.activeSpans) {
+        if (span.startedAt <= toMs) overlapping.push(span);
+      }
+      for (const span of this.recentSettled) {
+        if (span.startedAt <= toMs && span.endedAt >= fromMs) overlapping.push(span);
+      }
+      const count = overlapping.length + this.untrackedActive;
+      if (count === 0) return { jobsInWindow: 0 };
+      overlapping.sort((left, right) => right.startedAt - left.startedAt);
+      const names: RecurringJobKind[] = [];
+      for (const { kind } of overlapping) {
+        if (names.length >= STALL_JOB_NAMES) break;
+        if (!names.includes(kind)) names.push(kind);
+      }
+      return { jobsInWindow: count, jobs: names.length > 0 ? names.join(",") : undefined };
+    } catch {
+      this.recorderFaults += 1;
+      return undefined;
+    }
+  }
+
   snapshot(): RecurringWorkSnapshot {
     const now = this.safeNow();
     const oldestByKind = new Map<RecurringJobKind, number>();
@@ -455,6 +503,7 @@ export class RecurringWorkMetrics {
     this.unattributedBytes = 0;
     for (const span of this.activeSpans) span.settled = true;
     this.activeSpans.clear();
+    this.recentSettled.length = 0;
     this.droppedLabels = 0;
     this.untrackedActive = 0;
     this.recorderFaults = 0;
@@ -492,6 +541,8 @@ export class RecurringWorkMetrics {
       const now = this.now();
       stats.active = Math.max(0, stats.active - 1);
       recordSummary(stats.duration, now - span.startedAt);
+      this.recentSettled.push({ kind: span.kind, startedAt: span.startedAt, endedAt: now });
+      if (this.recentSettled.length > RECURRING_WORK_RECENT_SETTLED) this.recentSettled.shift();
       if (failed) {
         stats.failed += 1;
         stats.lastFailureAt = now;

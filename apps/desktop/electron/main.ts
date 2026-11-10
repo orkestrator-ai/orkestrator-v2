@@ -435,6 +435,10 @@ nativeDialogs.install();
 installUncaughtExceptionDialog(process, nativeDialogs);
 startEventLoopStallMonitor({
   report: (stall) => reportMainThreadStall(stall, (lagMs) => nativeDialogs.describeStall(lagMs)),
+  cpuUsage: () => {
+    const usage = process.cpuUsage();
+    return usage.user + usage.system;
+  },
 });
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({

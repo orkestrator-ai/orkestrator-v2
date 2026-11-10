@@ -264,6 +264,44 @@ describe("RecurringWorkMetrics", () => {
     expect(metrics.snapshot().kinds).toEqual({});
   });
 
+  test("names the jobs that ran during a stall window, newest first, and counts them", async () => {
+    const time = clock(1_000);
+    const metrics = new RecurringWorkMetrics({ now: time.now });
+    // Settled before the window: not named.
+    await metrics.observe("pr-detection", async () => time.advance(10));
+    time.advance(500);
+    // Settled inside the window.
+    await metrics.observe("diff-scan", async () => time.advance(1_200));
+    // Still running at the late tick, started after the diff scan.
+    const running = deferred<void>();
+    const pending = metrics.observe("file-tree-read", () => running.promise);
+    time.advance(300);
+    const context = metrics.stallContext({ fromMs: 1_100, toMs: time.now() });
+    expect(context).toEqual({ jobsInWindow: 2, jobs: "file-tree-read,diff-scan" });
+    // Jobs that start after the late tick are not part of its stall.
+    expect(metrics.stallContext({ fromMs: 0, toMs: 1_005 })).toEqual({
+      jobsInWindow: 1,
+      jobs: "pr-detection",
+    });
+    running.resolve();
+    await pending;
+    expect(metrics.stallContext({ fromMs: 10_000, toMs: 11_000 })).toEqual({ jobsInWindow: 0 });
+    metrics.setEnabled(false);
+    expect(metrics.stallContext({ fromMs: 0, toMs: 11_000 })).toBeUndefined();
+  });
+
+  test("keeps a bounded number of settled attempts for stall windows", async () => {
+    const time = clock();
+    const metrics = new RecurringWorkMetrics({ now: time.now });
+    for (let index = 0; index < 500; index += 1) {
+      metrics.observe("diff-scan", () => time.advance(1));
+    }
+    const context = metrics.stallContext({ fromMs: 0, toMs: time.now() });
+    expect(context).toEqual({ jobsInWindow: 64, jobs: "diff-scan" });
+    metrics.reset();
+    expect(metrics.stallContext({ fromMs: 0, toMs: time.now() })).toEqual({ jobsInWindow: 0 });
+  });
+
   test("classifies spawn units and error categories by shape only", () => {
     expect(spawnWorkUnit("git", ["status"])).toBe("git-spawn");
     expect(spawnWorkUnit("/usr/local/bin/gh", ["pr", "view"])).toBe("gh-spawn");

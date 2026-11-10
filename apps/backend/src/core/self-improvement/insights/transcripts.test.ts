@@ -115,7 +115,7 @@ describe("choosing what to read", () => {
     };
   }
 
-  test("reads settled conversations once, resumes where it stopped, and skips the excluded and the too-old", () => {
+  test("reads settled conversations once, resumes where it stopped, and skips the excluded and the too-old", async () => {
     const root = scratch();
     const claudeDir = path.join(root, "claude", "projects", "-p");
     writeTranscript(
@@ -145,7 +145,7 @@ describe("choosing what to read", () => {
     );
 
     const cursor: InsightCursor = { schemaVersion: 1, conversations: {} };
-    const first = selectSegments({
+    const first = await selectSegments({
       sources: sources(root),
       cursor,
       now: NOW,
@@ -168,9 +168,9 @@ describe("choosing what to read", () => {
       };
     }
     expect(
-      selectSegments({ sources: sources(root), cursor, now: NOW, excludeDirs: [] }).segments.map(
-        (s) => s.conversationId,
-      ),
+      (
+        await selectSegments({ sources: sources(root), cursor, now: NOW, excludeDirs: [] })
+      ).segments.map((s) => s.conversationId),
     ).toEqual(["claude:own"]);
 
     writeTranscript(
@@ -182,7 +182,7 @@ describe("choosing what to read", () => {
       ]),
       NOW - 80 * 60 * 1000,
     );
-    const grown = selectSegments({
+    const grown = await selectSegments({
       sources: sources(root),
       cursor,
       now: NOW,
@@ -194,7 +194,7 @@ describe("choosing what to read", () => {
     expect(grown.segments[0]!.text).toContain("Why did the pipeline stop again?");
   });
 
-  test("leaves the rest for the next run past the limit, and marks system-only conversations read", () => {
+  test("leaves the rest for the next run past the limit, and marks system-only conversations read", async () => {
     const root = scratch();
     const claudeDir = path.join(root, "claude", "projects", "-p");
     for (let index = 0; index < 4; index += 1) {
@@ -211,7 +211,7 @@ describe("choosing what to read", () => {
       ]),
       NOW - 2 * HOUR,
     );
-    const selection = selectSegments({
+    const selection = await selectSegments({
       sources: sources(root),
       cursor: { schemaVersion: 1, conversations: {} },
       now: NOW,
@@ -222,10 +222,35 @@ describe("choosing what to read", () => {
     expect(selection.waiting).toBe(2);
     expect(selection.skipped.map((skip) => skip.conversationId)).toEqual(["claude:system"]);
   });
+
+  test("lets other work run between files instead of reading them all in one go", async () => {
+    const root = scratch();
+    const claudeDir = path.join(root, "claude", "projects", "-p");
+    for (let index = 0; index < 3; index += 1) {
+      writeTranscript(
+        path.join(claudeDir, `c${index}.jsonl`),
+        claudeJsonl(`c${index}`, CWD, TURNS),
+        NOW - (2 + index) * HOUR,
+      );
+    }
+    let slices = 0;
+    const selection = await selectSegments({
+      sources: sources(root),
+      cursor: { schemaVersion: 1, conversations: {} },
+      now: NOW,
+      excludeDirs: [],
+      slice: async () => {
+        slices += 1;
+      },
+    });
+    expect(selection.segments).toHaveLength(3);
+    // Listing: the project directory and its three files; reading: three files.
+    expect(slices).toBe(7);
+  });
 });
 
 describe("a history too large to read whole", () => {
-  test("resumes after the last entry read even when the tail it reads slides forward", () => {
+  test("resumes after the last entry read even when the tail it reads slides forward", async () => {
     const root = scratch();
     const file = path.join(root, "claude", "projects", "-p", "long.jsonl");
     const sources: TranscriptSources = {
@@ -243,11 +268,11 @@ describe("a history too large to read whole", () => {
       selectSegments({ sources, cursor, now: NOW, excludeDirs: [], maxTranscriptBytes });
 
     const cursor: InsightCursor = { schemaVersion: 1, conversations: {} };
-    const first = select(cursor);
+    const first = await select(cursor);
     expect(first.segments).toHaveLength(1);
     const read = first.segments[0]!;
     cursor.conversations[read.conversationId] = cursorAfter(read, true, undefined, NOW);
-    expect(select(cursor).segments).toEqual([]);
+    expect((await select(cursor)).segments).toEqual([]);
 
     // Two more turns of the same size: the tail drops as many entries as it gains.
     const grown = [...turns, turn(60, NOW - 2 * HOUR), turn(61, NOW - 2 * HOUR + 1)];
@@ -258,7 +283,7 @@ describe("a history too large to read whole", () => {
     )!;
     expect(conversation.entries).toHaveLength(read.to);
 
-    const next = select(cursor).segments;
+    const next = (await select(cursor)).segments;
     expect(next).toHaveLength(1);
     expect(next[0]).toMatchObject({ from: read.to - 2, to: read.to });
     expect(next[0]!.text).toContain("message 060");

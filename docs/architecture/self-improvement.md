@@ -124,7 +124,9 @@ error text.
    24 MiB, read from its end, resumes correctly as it grows. The first run
    looks back 14 days. A run reads at most 30 parts; the rest wait for the
    next run. Conversations whose working directory is inside the data
-   directory are never read.
+   directory are never read. Finding the new parts reads every quiet history
+   file of the last 14 days (thousands on a busy machine), so the scan yields
+   to the backend's event loop every 20 ms rather than holding it for seconds.
 2. **What is sent.**
    - Sent: your messages, the agents' replies (shortened), which tools ran
      (names and counts), tool errors and interruptions. Lines are marked as

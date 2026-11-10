@@ -18,8 +18,14 @@
  *
  * A stall line names what ran during it when a process registers a context
  * source ({@link addEventLoopStallContext}): the backend names its slowest
- * SQLite call and the commands in flight. Sources run only for a stall that is
- * reported, never on an ordinary tick.
+ * SQLite call, the commands in flight and the recurring jobs that ran. Sources
+ * run only for a stall that is reported, never on an ordinary tick.
+ *
+ * With a `cpuUsage` reader the line also says how much CPU the process used
+ * during the stall (`cpuMs`). Close to `lagMs` means this process was busy on
+ * its own thread (JavaScript, a synchronous call that computes); far below it
+ * means the thread waited (a synchronous call blocked on disk or a lock, or the
+ * host did not schedule the process). The reader is one `getrusage` per tick.
  */
 import { createLogger, type LogLevel, type LogScalar } from "./logger.js";
 
@@ -60,6 +66,11 @@ export interface EventLoopStallMonitorOptions {
   alwaysLogMs?: number;
   /** Takes each stall instead of the `event-loop` logger, for a process's own area. */
   report?: (stall: EventLoopStallReport) => void;
+  /**
+   * The process's CPU time so far, user and system, in microseconds
+   * (`process.cpuUsage()` summed). Read once per tick; absent, no `cpuMs`.
+   */
+  cpuUsage?: () => number;
   /** Monotonic milliseconds. */
   now?: () => number;
   wallClock?: () => number;
@@ -117,6 +128,11 @@ export interface EventLoopStallReport {
    * can filter `error`: such a stall is written whatever the threshold.
    */
   level: Extract<LogLevel, "warn" | "error">;
+  /**
+   * CPU time the process used between the last on-time tick and the late one,
+   * all threads; absent without a `cpuUsage` reader.
+   */
+  cpuMs?: number;
   /** What the registered context sources say ran during the stall. */
   context?: EventLoopStallContext;
 }
@@ -139,12 +155,14 @@ function reportStall({
   intervalMs,
   folded,
   level,
+  cpuMs,
   context,
 }: EventLoopStallReport): void {
   log[level]("stalled", {
     lagMs,
     endedAt,
     intervalMs,
+    cpuMs,
     folded: folded.replace(/^; /, "") || undefined,
     ...context,
   });
@@ -159,6 +177,16 @@ export function startEventLoopStallMonitor(
   const alwaysLogMs = options.alwaysLogMs ?? EVENT_LOOP_STALL_ALWAYS_LOG_MS;
   const report = options.report ?? reportStall;
   const now = options.now ?? (() => performance.now());
+  const cpuUsage = options.cpuUsage;
+  const readCpu = (): number | null => {
+    if (!cpuUsage) return null;
+    try {
+      const micros = cpuUsage();
+      return Number.isFinite(micros) ? micros : null;
+    } catch {
+      return null;
+    }
+  };
   const wallClock = options.wallClock ?? Date.now;
   const setTimer =
     options.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms));
@@ -176,9 +204,10 @@ export function startEventLoopStallMonitor(
   let suppressedMaxMs = 0;
   let stopped = false;
   let expected = now() + intervalMs;
+  let cpuAtLastTick = readCpu();
   let timer: { unref?: () => unknown } | null = null;
 
-  const record = (lagMs: number, fromMs: number, toMs: number) => {
+  const record = (lagMs: number, fromMs: number, toMs: number, cpuMs: number | undefined) => {
     ticks += 1;
     maxLagMs = Math.max(maxLagMs, lagMs);
     LAG_BUCKETS_MS.forEach((bound, index) => {
@@ -208,6 +237,7 @@ export function startEventLoopStallMonitor(
       intervalMs,
       folded,
       level: lagMs >= alwaysLogMs ? "error" : "warn",
+      ...(cpuMs === undefined ? {} : { cpuMs }),
       context: stallContext(fromMs, toMs),
     });
   };
@@ -220,7 +250,13 @@ export function startEventLoopStallMonitor(
   const tick = () => {
     if (stopped) return;
     const at = now();
-    record(Math.max(0, Math.round(at - expected)), expected - intervalMs, at);
+    const cpu = readCpu();
+    const cpuMs =
+      cpu !== null && cpuAtLastTick !== null
+        ? Math.max(0, Math.round((cpu - cpuAtLastTick) / 1000))
+        : undefined;
+    cpuAtLastTick = cpu;
+    record(Math.max(0, Math.round(at - expected)), expected - intervalMs, at, cpuMs);
     expected = at + intervalMs;
     schedule();
   };

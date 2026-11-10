@@ -3,7 +3,7 @@
 ## Task analysis
 
 Analysed 2026-11-10 against `main` at `04639b12b`, found while doing
-[7200](7200-event-stream-reader-gaps.md) task 1 (the OpenCode 1.x monitor's
+7200 task 1 (the OpenCode 1.x monitor's
 silence watchdog).
 
 ### Tasks
@@ -55,5 +55,5 @@ across a container pause, as for 1.x.
 
 ## Related
 
-- [7200](7200-event-stream-reader-gaps.md) task 1: the 1.x watchdog and the live observation of its heartbeat.
+- to-do 7200 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)) task 1: the 1.x watchdog and the live observation of its heartbeat.
 - [0048](0048-recurring-work-qualification.md) task 20: the event-stream reader inventory.

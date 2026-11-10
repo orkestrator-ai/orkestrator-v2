@@ -234,7 +234,6 @@ async function setup(reviewerCount = 1) {
 function keyedService(env: Awaited<ReturnType<typeof setup>>) {
   const service = env.createService({
     autoAdvance: true,
-    keyedScheduling: true,
     pollIntervalMs: 20,
     observationIntervalMs: OBSERVATION_MS,
     discoveryIntervalMs: OBSERVATION_MS,
@@ -353,7 +352,6 @@ async function dispatchReviewers(env: Awaited<ReturnType<typeof setup>>) {
 function controlledService(env: Awaited<ReturnType<typeof setup>>, time: ManualTime) {
   const service = env.createService({
     autoAdvance: true,
-    keyedScheduling: true,
     pollIntervalMs: 20,
     observationIntervalMs: 3_000,
     discoveryIntervalMs: OBSERVATION_MS,

@@ -78,6 +78,18 @@ test("a headless profile's Electron has no display and the app is served to a br
   expect(processes[0]!.commandLine).toEqual(
     expect.arrayContaining([...HEADLESS_ELECTRON_SWITCHES]),
   );
+  // An agent-test Electron on Linux writes no core dumps, so a crash cannot
+  // leave a gigabyte file in the checkout (to-do 7554), unless the launcher
+  // was asked to keep them.
+  if (!processes[0]!.environment.includes("ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1")) {
+    for (const { pid } of processes) {
+      const limits = nullSeparated(`/proc/${pid}/limits`)?.join("");
+      if (limits === undefined) continue; // Exited since the scan.
+      expect(limits, `core limit of Electron process ${pid}`).toMatch(
+        /^Max core file size\s+0\s+0\s/m,
+      );
+    }
+  }
 
   // The shared `test` fetches this page's modules outside Chromium (flake
   // 2340), but the navigation itself and the app's first commands stay in

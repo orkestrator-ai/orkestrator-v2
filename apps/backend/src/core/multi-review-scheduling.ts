@@ -6,9 +6,8 @@ import type {
 import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
 
 /**
- * Supervision rules for Multi Review, shared by the keyed driver and the
- * `WorkflowDueScheduler` rollback so both classify a record, and jitter its
- * passes, from exactly the same code.
+ * Supervision rules for Multi Review: how its keyed driver classifies a
+ * record, decides its next pass and jitters it.
  */
 
 export function reviewSession(

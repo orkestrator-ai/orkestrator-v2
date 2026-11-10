@@ -4,11 +4,11 @@ From efficiency report (`git show 413bd6219:docs/reports/2026-10-29-logging-and-
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
+Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied. Task 1's dependency re-checked 2026-11-10 against `main` at `c98b20e6f`: the 4960 soak it waited on is done.
 
 ### Tasks
 
-1. **Measure capture churn on a live run**: how many provisional captures happen, and how many find an unchanged tree. Status: open (depends on [4960](4960-measurement-rows-live-soak.md) task 1).
+1. **Measure capture churn on a live run**: how many provisional captures happen, and how many find an unchanged tree. Status: open (the 4960 soak is done, 2026-11-10, and gave a first count, under Investigation; a run whose agent writes files over time is still needed).
 2. **Decide the spacing**: E2 left it unchanged, as the report recommended, until that measurement. Status: open (depends on 1).
 
 ### 1. Measure capture churn on a live run
@@ -18,6 +18,8 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 **Context.** `TurnBoundaryService.provisional` now skips the publish when a capture's tree, consistency and inventory-truncation coverage match the latest durably published provisional turn and thread endpoints (an endpoint-less result with no start remains unchanged), but the capture and its snapshot row still happen.
 
 **Investigation.** On the generated `measurement-rows` workload the 6 passes with no tree change wrote 12 fewer measurements (38 to 26 at 20,000 files). That says what a skipped pass saves, not how often one happens in real use. No counter records skipped passes today.
+
+The 4960 busy soak on 2026-11-10 ([Change tracking: busy live soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)) took the recommended temporary count, from the ledger once a minute. In its first hour, before the hourly retention pass, 130 provisional captures were published and 0 to 3 snapshots at any sample were named by no measurement, so at most 3 provisional captures found an unchanged tree. After the pass the count is not usable: pruning freed the snapshots of 117 measurements. The workload is not a typical one for this question: the driver writes each bulk directory in one burst while the turn is held at the fake model, so a turn has one dirty moment rather than a stream of writes. A run whose agent writes files through its own tools over time (the fake model can ask for a `bash` call, `[tool:<id>]` in `recurring-live-ab-fake-model.ts`) would answer it.
 
 **Decisions.**
 
@@ -55,5 +57,5 @@ The churn measurement must use durable turn and thread publications, not the seg
 
 ## Related
 
-- [4960](4960-measurement-rows-live-soak.md)
+- 4960 (retired 2026-11-10): the soak, now in [Change tracking: busy live soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)
 - [Change tracking](../../architecture/change-tracking.md#turn-and-thread-boundaries)

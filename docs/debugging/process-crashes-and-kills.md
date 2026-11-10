@@ -13,6 +13,7 @@ Arch host running the AppImage build. Most steps apply to any Linux host.
 | Window white, backend still reachable from another machine | Main window renderer (`orkestrator-v2 --type=renderer`) | App log: `[DesktopStartup] renderer-gone reason=…`, then `Render frame was disposed before WebFrameMain could be accessed` repeated |
 | App gone, core dump `SIGTRAP` at startup | A relaunched main process | `coredumpctl`; core memory contains `Invalid file descriptor to ICU data` |
 | Core dump `SIGBUS`, `--type=utility` network service, on quit | Chromium child outliving the main process | `coredumpctl`; journal shows `tmp-.mount_orkest….mount: Deactivated` the same second |
+| `core.<pid>` (about 1 GB) in a checkout, SIGTRAP, `electron --ozone-platform=headless` | A headless `dev:test` profile's Electron main process | The profile's `logs/electron.log`: `FATAL` line just before `exited with signal SIGTRAP`; see section 5 |
 | Core dump of `~/.cache/ms-playwright/…/chrome` | A test's Playwright browser, not the app | `coredumpctl`; its command line has `--user-data-dir=/tmp/playwright_chromiumdev_profile-*` |
 | Everything times out (mail, MCP, controls) but nothing died | Nothing: the backend's or the desktop's event loop was held | App log: `[event-loop] stalled lagMs=N` (`[desktop] main-thread.stalled` for the desktop), or a gap in the log followed by `[Backend] Dropped N log line(s) … the log reader was not draining output` (the desktop stopped reading); `eventLoop` and `consoleOutput` in `/__orkestrator/metrics`. See todo 0741 |
 
@@ -178,7 +179,46 @@ which its runtime removes the moment the main process exits.
   `/tmp/.mount_*` entries means the process inherited them from an earlier
   instance (the updater launches the new image from the old process).
 
-## 5. The 2026-10-26 incidents
+## 5. Headless dev-profile Electron SIGTRAP
+
+A headless `dev:test` profile runs Electron on Chromium's headless Ozone
+platform with `--disable-gpu`. Two ways it died with SIGTRAP were found on
+2026-11-10 (to-dos 7552 and 7554). A `LOG(FATAL)` or failed `CHECK` in an
+official Chromium build is `int3; ud2`, which the kernel reports as SIGTRAP,
+and its message reaches stderr (the profile's `electron.log`) but is not kept
+in the core, so `strings` finds no `Check failed`.
+
+| `electron.log` before the exit | Stack | Cause | Status |
+| --- | --- | --- | --- |
+| `FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:389] GPU process isn't usable. Goodbye.` after three `GPU process launch failed: error_code=1002` | `IntentionallyCrashBrowserForUnusableGpuProcess` ← `FallBackToNextGpuMode` ← `GpuProcessHost::RecordProcessCrash` ← `GpuProcessHost::OnProcessLaunchFailed` | The stop sent SIGTERM to Electron's whole process group. The GPU process and its zygote died under a browser that was still running; every relaunch failed for want of the zygote, and with the GPU off there was no mode left to fall back to | Fixed: SIGTERM goes to Electron's top process only (`signalsProcessGroup` in `apps/desktop/scripts/dev/lifecycle.ts`) |
+| None (the message box never drew) | `electron::ShowMessageBox` (`message_box_gtk.cc:248`) ← `electron_api_dialog.cc` ← JavaScript `dialog.showMessageBox` | A native dialog with no display: here the launcher was SIGKILLed, the main process's stdio broke, and its uncaught-exception dialog opened | Fixed: `createNativeDialogs` cancels dialogs when the `ozone-platform` switch is `headless` |
+
+Both now leave no core in the checkout anyway: an agent-test profile's
+Electron on Linux runs with a core limit of 0 unless it was started with
+`ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1` (see
+[agent-testing.md](../development/agent-testing.md#stopping-a-profile-and-core-dumps)).
+
+To symbolise an Electron core, keep it outside the worktree and use the
+release's own debug symbols:
+
+```bash
+E=node_modules/.bun/electron@<version>/node_modules/electron/dist/electron
+readelf -n "$E" | grep 'Build ID'           # must match electron.debug's
+mkdir -p ~/.cache/electron-symbols && cd ~/.cache/electron-symbols
+curl -fLO https://github.com/electron/electron/releases/download/v<version>/electron-v<version>-linux-x64-debug.zip
+unzip -o electron-v<version>-linux-x64-debug.zip debug/electron.debug   # ~560 MB of 1.1 GB
+# The load base is the start of the first mapping of $E whose offset is 0x0.
+gdb -batch -ex "file $E" -ex "core-file core.<pid>" -ex "info proc mappings"
+gdb -batch -ex "file $E" -ex "core-file core.<pid>" \
+  -ex "symbol-file -o <base> debug/electron.debug" -ex "thread 1" -ex "bt 30"
+```
+
+To reproduce the first row on purpose, SIGTERM only the profile's
+`--type=gpu-process` and `--type=zygote --no-zygote-sandbox` processes (they
+are in the group of the profile's tracked `pids.electron`); the browser dies
+within a second.
+
+## 6. The 2026-10-26 incidents
 
 | Time (UTC) | What happened | Cause | Status |
 | --- | --- | --- | --- |

@@ -15,6 +15,7 @@ import {
 import { onGlobalSettingsRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
 import {
   mockToastError,
+  mockToastInfo,
   mockToastLoading,
   mockToastSuccess,
   mockToastWarning,
@@ -216,3 +217,67 @@ test("hostUpdateMachineLabel names the machine only when the client knows it", (
     },
   );
 });
+
+test.each([
+  {
+    state: "succeeded" as const,
+    toastMock: mockToastSuccess,
+    title: "Orkestrator updated on mini (command node)",
+    description: "Updated from 2.21.1 to 2.37.4-beta.",
+  },
+  {
+    state: "failed" as const,
+    toastMock: mockToastError,
+    title: "The update on mini (command node) failed",
+    description: "The update failed: GitHub answered HTTP 503.",
+  },
+  {
+    state: "cancelled" as const,
+    toastMock: mockToastInfo,
+    title: "The update on mini (command node) stopped",
+    description: "The update was cancelled.",
+  },
+  {
+    state: "postponed" as const,
+    toastMock: mockToastInfo,
+    title: "The update on mini (command node) stopped",
+    description: "Postponed on mini. 2.37.4-beta installs the next time Orkestrator quits there.",
+  },
+])(
+  "a $state update's final toast names the machine",
+  async ({ state, toastMock, title, description }) => {
+    connectedTo("mini", true);
+    let publish: ((snapshot: HostMaintenanceSnapshot) => void) | undefined;
+    spyOn(events, "listen").mockImplementation(async (event, handler) => {
+      if (event === HOST_MAINTENANCE_EVENT) {
+        publish = (payload) => handler({ payload } as never);
+      }
+      return () => undefined;
+    });
+    spyOn(backend, "getHostMaintenance").mockResolvedValue(
+      hostMaintenanceSnapshotFixture({
+        job: hostUpdateJobFixture({ state: "downloading", targetVersion: "2.37.4-beta" }),
+      }),
+    );
+    render(<HostUpdateBanner />);
+    await waitFor(() => expect(mockToastLoading).toHaveBeenCalled());
+    act(() =>
+      publish!(
+        hostMaintenanceSnapshotFixture({
+          revision: 2,
+          job: hostUpdateJobFixture({
+            state,
+            targetVersion: "2.37.4-beta",
+            error: state === "failed" ? "HttpError: 503" : null,
+            // Long enough ago that a backend-served page would not reload.
+            completedAt: "2026-01-01T00:00:00.000Z",
+          }),
+        }),
+      ),
+    );
+    await waitFor(() => expect(toastMock).toHaveBeenCalled());
+    const [shownTitle, options] = toastMock.mock.calls.at(-1) as [string, { description: string }];
+    expect(shownTitle).toBe(title);
+    expect(options.description).toBe(description);
+  },
+);

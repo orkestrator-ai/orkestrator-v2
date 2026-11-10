@@ -81,7 +81,6 @@ export function describeRestartImpact(impact: HostRestartImpact): string {
   return parts.length > 0 ? parts.join(" · ") : "Nothing is running on the host right now.";
 }
 
-/** One line describing an update job, for Settings and the banner. */
 /**
  * One line about a host update job. `host` names the machine being updated
  * ("mini"); without it the text says "the host", for places where the

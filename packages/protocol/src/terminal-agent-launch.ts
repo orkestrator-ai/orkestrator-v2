@@ -69,11 +69,17 @@ export function parseTerminalOpenCodeLaunchCommand(
   const match = OPENCODE_LAUNCH_PATTERN.exec(data);
   if (!match) return null;
   const [, model, initialPrompt, lineEnding] = match;
-  return {
+  const launch = {
     ...(model !== undefined ? { model: unquoteShellArg(model) } : {}),
     ...(initialPrompt !== undefined ? { initialPrompt: unquoteShellArg(initialPrompt) } : {}),
     lineEnding: lineEnding ?? "",
   };
+  // Shape alone also accepts shell expansions the builder would have escaped.
+  // Rewriting those would turn an expression into literal prompt/model text.
+  return data ===
+    `${buildTerminalAgentLaunchCommand({ tabType: "opencode", ...launch })}${launch.lineEnding}`
+    ? launch
+    : null;
 }
 
 /** Build the exact one-shot command used to start an agent inside a PTY. */

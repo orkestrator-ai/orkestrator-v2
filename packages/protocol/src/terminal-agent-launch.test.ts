@@ -50,11 +50,12 @@ describe("parseTerminalOpenCodeLaunchCommand", () => {
     { model: "provider/model'next", initialPrompt: 'Say "hi" to \\ $HOME and `id`\nthen stop' },
   ])("reads back what the builder wrote: %p", (launch) => {
     const line = buildTerminalAgentLaunchCommand({ tabType: "opencode", ...launch })!;
-    expect(parseTerminalOpenCodeLaunchCommand(line)).toEqual({ ...launch, lineEnding: "" });
-    expect(parseTerminalOpenCodeLaunchCommand(`${line}\n`)).toEqual({
-      ...launch,
-      lineEnding: "\n",
-    });
+    for (const lineEnding of ["", "\n", "\r\n"]) {
+      expect(parseTerminalOpenCodeLaunchCommand(`${line}${lineEnding}`)).toEqual({
+        ...launch,
+        lineEnding,
+      });
+    }
   });
 
   test("ignores the synthetic default model the builder omits", () => {
@@ -68,6 +69,13 @@ describe("parseTerminalOpenCodeLaunchCommand", () => {
     'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "a"; rm -rf .',
     'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "unterminated',
     'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "bad \\q escape"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "$HOME"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "$(cat notes.txt)"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt "`whoami`"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model "$MODEL"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --model "default"',
+    'OPENCODE_DISABLE_AUTOUPDATE=1 opencode --prompt ""',
+    "OPENCODE_DISABLE_AUTOUPDATE=1 opencode\n\n",
     "OPENCODE_DISABLE_AUTOUPDATE=1 opencode\nwhoami\n",
     'codex "Fix it"',
   ])("refuses anything the builder did not produce: %p", (data) => {

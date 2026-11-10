@@ -2394,8 +2394,12 @@ rewritten when `bootstrap_terminal_session` delivers it
   credentials a shell may export unset, and a user `OPENCODE_CONFIG` only as
   its mirror. Sign-ins Orkestrator mirrors into the 2.x database therefore
   reach the tab, and the user's `opencode.db` is never opened.
-- The model goes in as `OPENCODE_CONFIG_CONTENT='{"model":"…"}'`. Checked
-  against 2.2.6 in an isolated `HOME`/XDG: the TUI started on
+- The model overrides only `model` in the terminal shell's existing
+  `OPENCODE_CONFIG_CONTENT`. A managed Bun helper parses JSONC at launch time,
+  outside the worktree and without dotenv loading; invalid or non-object input
+  refuses the launch with a fixed error. The override is confined to a subshell.
+  The earlier model-selection probe against 2.2.6 in an isolated `HOME`/XDG
+  started the TUI on
   `opencode/glm-5.3-flash-free` when that was named, and on Big Pickle when it
   was not. The reasoning level is dropped, as for 1.x.
 - With the setting on and no managed `opencode2`, the tab prints the same
@@ -2406,6 +2410,32 @@ on an image that carries `opencode2` (not checked: whether anything in a
 container can put a 2.x `opencode` ahead of the image's). A 1.x tab on a host whose own
 `opencode` is 2.x, with the setting off, still runs the user's binary. Not
 run: a live terminal tab in a `dev:test` profile.
+
+### Task 5: terminal bootstrap review fixes (2026-11-10)
+
+**Choice: bootstrap ownership.** Pending ownership in the backend runtime
+(recommended) adds a transient claim but preserves delivery semantics. The runtime owns one pending
+preparation per PTY, duplicates await that operation, and snapshots report
+`bootstrapped` only after a successful write. Cleanup and shutdown invalidate
+pending ownership; continuations compare their claim, PTY and session config
+before writing. This replaces publishing success before preparation: the old
+form was smaller but could acknowledge failed launches and write to replaced
+PTYs. Tests cover concurrent same/different data, preparation/write failure,
+retry, replacement, close, shutdown and a second registry rehydrating state.
+
+**Choice: inline configuration.** A shell-time merge (recommended) overrides only `model` in the effective shell
+JSONC at execution time. A backend-only merge would be simpler but miss settings
+exported by login scripts; replacing the document drops providers and permissions.
+The Bun helper adds a short process for explicit-model launches, but preserves
+those settings and refuses malformed input without echoing it. Shell tests cover
+model/default selection, quoting, parent-environment isolation, invalid input and
+project preload avoidance.
+
+**Choice: canonical recognition.** A builder round trip (recommended) requires the parsed line to round-trip through
+the existing builder, including its line ending. Expanding the regex exclusions
+would be smaller but leave another escaping convention to maintain. Tests reject
+raw variable/command expansion, empty arguments and extra trailing newlines,
+while retaining escaped prompts and CRLF lines.
 
 ## Related
 

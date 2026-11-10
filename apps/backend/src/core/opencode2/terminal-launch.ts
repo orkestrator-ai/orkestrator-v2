@@ -38,6 +38,7 @@ const UNSET_IN_TERMINAL = [
 
 export interface OpenCode2TerminalLaunchInput {
   cliPath: string;
+  bunPath: string;
   dataDir: string;
   configDir: string;
   /** Whether the backend's `OPENCODE_CONFIG` was mirrored (`writeOpenCode2HostConfig`). */
@@ -57,7 +58,6 @@ export function buildOpenCode2TerminalCommand(input: OpenCode2TerminalLaunchInpu
   ];
   if (input.mirroredUserConfig) assignments.push(["OPENCODE_CONFIG", paths.customConfig]);
   const model = input.model && input.model !== "default" ? input.model : undefined;
-  if (model) assignments.push(["OPENCODE_CONFIG_CONTENT", JSON.stringify({ model })]);
   const args = [
     "env",
     ...UNSET_IN_TERMINAL.flatMap((name) => ["-u", name]),
@@ -66,7 +66,22 @@ export function buildOpenCode2TerminalCommand(input: OpenCode2TerminalLaunchInpu
     "--standalone",
   ];
   if (input.initialPrompt) args.push("--prompt", quoteShell(input.initialPrompt));
-  return args.join(" ");
+  const command = args.join(" ");
+  if (!model) return command;
+  // Merge at shell execution time: a login shell can export different inline
+  // config than the backend inherited. A subshell confines the override to this
+  // launch; && prevents starting the agent with lost settings on malformed input.
+  const merge = `try {
+    const config = Bun.JSONC.parse(process.env.OPENCODE_CONFIG_CONTENT || "{}");
+    if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error();
+    process.stdout.write(JSON.stringify({ ...config, model: ${JSON.stringify(model)} }));
+  } catch {
+    process.stderr.write("OpenCode inline configuration must be a JSONC object.\\n");
+    process.exitCode = 1;
+  }`;
+  // Do not load this worktree's bunfig preloads or .env while merging config.
+  const merged = `$(cd / && ${quoteShell(input.bunPath)} --no-env-file --eval ${quoteShell(merge)})`;
+  return `( OPENCODE_CONFIG_CONTENT="${merged}" && export OPENCODE_CONFIG_CONTENT && ${command} )`;
 }
 
 /** Shown in the tab, instead of a launch, when the setting asks for 2.x and none is installed. */
@@ -82,6 +97,7 @@ export interface OpenCode2TerminalContext {
   };
   /** The managed `opencode2`, or undefined when the toolchain has none. */
   resolveCliPath(): string | undefined;
+  resolveBunPath(): string;
   /** Writes the shared 2.x config directory (`writeOpenCode2HostConfig`). */
   writeConfig(dataDir: string, env: NodeJS.ProcessEnv): Promise<string>;
   env?: NodeJS.ProcessEnv;
@@ -125,6 +141,7 @@ export async function resolveOpenCode2TerminalCommand(
   const configDir = await context.writeConfig(dataDir, env);
   return buildOpenCode2TerminalCommand({
     cliPath,
+    bunPath: context.resolveBunPath(),
     dataDir,
     configDir,
     mirroredUserConfig: Boolean(env.OPENCODE_CONFIG?.trim()),

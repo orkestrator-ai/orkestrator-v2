@@ -210,6 +210,7 @@ import {
   backgroundTaskIdFromProjectedLaunch,
   discoveryAnnouncementKey,
   discoveryChangedPaths,
+  orderMcpServerTools,
   displayMessage,
   firstNamedCursor,
   firstUserMessageOf,
@@ -3926,13 +3927,16 @@ export class NativeAgentTranscriptProjection {
           return this.catalogs.slashCommands(input, provider, providerSessionId);
         case "mcp":
           return provider.mcpServers
-            ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
+            ? orderMcpServerTools((await provider.mcpServers(providerSessionId)).slice(0, 512))
             : [];
         case "runtime": {
           const health = provider.runtimeHealth
             ? await provider.runtimeHealth(providerSessionId)
             : { summary: {}, notices: [], authoritative: true };
-          return { summary: health.summary, notices: health.notices };
+          const summary = health.summary.mcp
+            ? { ...health.summary, mcp: orderMcpServerTools(health.summary.mcp) }
+            : health.summary;
+          return { summary, notices: health.notices };
         }
       }
     };
@@ -4114,7 +4118,7 @@ export class NativeAgentTranscriptProjection {
           return;
         }
         this.storeProgressiveDiscovery(this.progressiveKey(input, "discovery:mcp"), {
-          value: value.slice(0, 512),
+          value: orderMcpServerTools(value.slice(0, 512)),
           availability: "ready",
           expiresAt: this.host.now() + 30_000,
         });

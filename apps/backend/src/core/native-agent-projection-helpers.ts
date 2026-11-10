@@ -553,6 +553,22 @@ export function discoveryAnnouncementKey(value: unknown): string {
   });
 }
 
+/**
+ * MCP servers with each server's tool names in one fixed order (todo 7530).
+ * A provider may list a server's tools in a different order on every read
+ * (Codex app-server reports them as a map), and a view shows them as a set.
+ * Left alone, every 30 s renewal of an idle Codex view's MCP section stored
+ * a reordered value, announced it and reset the view's quiet backoff.
+ * Servers keep their own order: that one is the provider's, and stable.
+ */
+export function orderMcpServerTools<T>(servers: readonly T[]): T[] {
+  return servers.map((server) => {
+    const tools = (server as { tools?: unknown } | null)?.tools;
+    if (!Array.isArray(tools) || tools.length < 2) return server;
+    return { ...server, tools: [...tools].sort() };
+  });
+}
+
 /** At most this many changed paths are named per announcement. */
 export const DISCOVERY_CHANGED_PATH_LIMIT = 8;
 const DISCOVERY_CHANGED_PATH_DEPTH = 4;

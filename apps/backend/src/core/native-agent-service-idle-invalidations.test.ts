@@ -34,6 +34,7 @@ function idleCodex() {
     commands: [{ name: "review", description: "Review the change", source: "builtin" as const }],
     runtime: "ready",
     activity: "idle" as ProviderActivityObservation["state"],
+    reorderMcpTools: false,
   };
   const transcript = () => [
     {
@@ -76,7 +77,24 @@ function idleCodex() {
     notices: [],
     authoritative: true,
   }));
-  Object.assign(stub.provider, { observeActivity, runtimeHealth });
+  // Codex app-server lists an MCP server's tools as a map, in a different
+  // order on each read (todo 7530): a flag the tests flip to reproduce it.
+  let mcpReads = 0;
+  const mcpServers = mock(async () => {
+    mcpReads += 1;
+    const tools = ["alpha", "mid", "zeta"];
+    return [
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "connected" as const,
+        toolCount: tools.length,
+        tools: state.reorderMcpTools && mcpReads % 2 === 0 ? [...tools].reverse() : tools,
+        actions: ["reconnect" as const],
+      },
+    ];
+  });
+  Object.assign(stub.provider, { observeActivity, runtimeHealth, mcpServers });
   return { state, provider: stub.provider };
 }
 
@@ -251,6 +269,29 @@ describe("idle Codex session invalidations (todo 0049 task 4)", () => {
         scheduledReads: 4,
         invalidatedReads: 0,
       });
+    });
+  }, 30_000);
+
+  test("an MCP tool list read in a new order each time announces nothing (todo 7530)", async () => {
+    await withIdleCodex(async ({ service, state, counted, advance }) => {
+      state.reorderMcpTools = true;
+      const tokens: Record<string, string | undefined> = {};
+      await warmUp(service, tokens);
+      // Live, six of these in 300 s each reset the idle view's backoff.
+      expect(await idleMinute(service, counted, advance, tokens)).toEqual({
+        idle: {},
+        scheduledReads: 4,
+        invalidatedReads: 0,
+      });
+      const discovery = await service.getDiscoveryUpdate({
+        ...IDENTITY,
+        viewVersion: 1,
+        sections: ["mcp"],
+      });
+      if (!("value" in discovery)) throw new Error("Expected a discovery value");
+      expect(discovery.value?.sections.mcp?.value).toMatchObject([
+        { id: "orkestrator", tools: ["alpha", "mid", "zeta"] },
+      ]);
     });
   }, 30_000);
 

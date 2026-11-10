@@ -25,6 +25,7 @@ import {
   startTransportStack,
   type TransportMode,
 } from "./local-gateway-transport-stack";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * Electron main's CPU on each local window transport with no DevTools client
@@ -182,7 +183,7 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
       cwd: repositoryRoot,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: stack.electronEnv,
+      env: electronSpecEnvironment(stack.electronEnv),
     });
     electron = ownProcessGroup(child);
     recordProcessOutput("electron", child);

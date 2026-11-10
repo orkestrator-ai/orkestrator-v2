@@ -369,6 +369,10 @@ description = "Opt-in live goal suite: a disposable profile and real provider tu
 raw_args = true
 run = "bun apps/desktop/scripts/test-agent-goals-live.ts"
 
+[tasks."test:agent:auto-pipeline"]
+description = "Auto-pipeline launch flow end to end on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
+
 [tasks."test:agent:electron"]
 description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"

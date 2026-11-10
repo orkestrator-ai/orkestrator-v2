@@ -23,6 +23,7 @@ import {
   visibleText,
   webRoot,
 } from "./local-gateway-transport-stack";
+import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * The `localWindowGatewayTransport` setting in a real Electron window, off and
@@ -348,7 +349,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       executablePath: electronExecutable,
       args: [...ELECTRON_TEST_SWITCHES, electronMain],
       cwd: repositoryRoot,
-      env: stack.electronEnv,
+      env: electronSpecEnvironment(stack.electronEnv),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
@@ -874,7 +875,10 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         executablePath: electronExecutable,
         args: [...ELECTRON_TEST_SWITCHES, bootstrap],
         cwd: repositoryRoot,
-        env: { ...process.env, ELECTRON_DEV: "0", ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath },
+        env: electronSpecEnvironment(process.env, {
+          ELECTRON_DEV: "0",
+          ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        }),
       });
       recordElectronDiagnostics(app);
       dismissStartupDialogs(app);

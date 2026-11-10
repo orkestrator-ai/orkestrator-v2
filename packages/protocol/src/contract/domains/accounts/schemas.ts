@@ -183,6 +183,8 @@ export const PlanUsageSnapshotSchema = modelRecord<PlanUsageSnapshot>()({
   paidOverage: Schema.optional(openRecord({ enabled: Schema.Boolean, inUse: optionalBoolean })),
   stale: optionalBoolean,
   fetchedAt: Schema.String,
+  // The machine that took a shared reading; absent for one taken here.
+  readOn: Schema.optional(openRecord({ nodeId: Schema.String, nodeName: Schema.String })),
 }).annotate({ identifier: "PlanUsageSnapshot" });
 
 /**

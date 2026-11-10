@@ -48,6 +48,8 @@ on:
       - "docker/orkestrator-egress-gateway.sh"
       - "docker/orkestrator-egress-filter.pl"
       - "apps/backend/src/core/egress-gateway.ts"
+      - "apps/backend/src/core/github-ranges-cache.ts"
+      - "apps/backend/scripts/github-ranges-seed.ts"
       - "scripts/qualify-opencode-seeded-data.sh"
       - "scripts/opencode-seeded-data/**"
 
@@ -120,6 +122,26 @@ jobs:
 
       - name: Record the daemon
         run: docker info --format '{{.ServerVersion}} {{.OperatingSystem}} {{.Architecture}} cgroup={{.CgroupVersion}} {{.SecurityOptions}}'
+
+      # Restricted firewalls fail closed without GitHub's ranges, and every
+      # suite's fresh data directory would ask api.github.com/meta
+      # unauthenticated; a hosted runner's shared address has often spent that
+      # quota (60 an hour), which failed the firewall suites with `not-ready`.
+      # Fetch the ranges once with the job token for every suite
+      # (`seedLiveGithubRanges`). Best effort: without a seed the suites fetch.
+      - name: Seed GitHub's address ranges
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          seed="${RUNNER_TEMP}/github-ranges.txt"
+          if gh api meta > "${RUNNER_TEMP}/github-meta.json" &&
+            bun apps/backend/scripts/github-ranges-seed.ts "${RUNNER_TEMP}/github-meta.json" "$seed"; then
+            echo "ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=${seed}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::GitHub's ranges could not be seeded; the live suites fetch them themselves."
+          fi
 
       # One step per suite so each result maps to one check; every step runs
       # even when an earlier one fails.

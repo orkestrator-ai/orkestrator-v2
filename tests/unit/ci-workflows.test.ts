@@ -158,6 +158,10 @@ describe("CI workflow contracts", () => {
     expect(source).toContain("apps/backend/scripts/container-exec-cost.ts --image");
     // Without the gate every live test skips and the job passes vacuously.
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
+    // GitHub's ranges come from one authenticated fetch, not every suite's own
+    // unauthenticated one (a spent quota fails restricted firewalls closed).
+    expect(source).toContain("apps/backend/scripts/github-ranges-seed.ts");
+    expect(source).toContain('ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=${seed}" >> "$GITHUB_ENV"');
     expect(source).not.toContain("orkestrator-v2:latest");
   });
 });

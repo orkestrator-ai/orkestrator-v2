@@ -1,12 +1,13 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { spawnSync } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { copyFileSync, existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands-context.js";
 import type { Environment } from "../src/core/models.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
+import { GITHUB_RANGES_FILE } from "../src/core/github-ranges-cache.js";
 
 /**
  * Small, dependency-free fixtures for container lifecycle suites. They avoid
@@ -42,6 +43,25 @@ export function lifecycleEnvironment(overrides: Partial<Environment> = {}): Envi
  * `updateEnvironment` merges fields (an explicit `undefined` clears one) and
  * returns a copy, so tests observe exactly what was persisted.
  */
+/**
+ * Seeds `dataDir` with GitHub's ranges from `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`
+ * when it is set and the directory has no seed yet. A restricted firewall
+ * fails closed without the ranges, and a live suite's fresh data directory
+ * would otherwise ask `api.github.com/meta` unauthenticated, whose quota a
+ * shared CI address has often spent. The container live qualification
+ * workflow fetches the seed once with its token.
+ */
+export function seedLiveGithubRanges(
+  dataDir: string,
+  seed = process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim(),
+): boolean {
+  if (!seed || !existsSync(dataDir)) return false;
+  const target = path.join(dataDir, GITHUB_RANGES_FILE);
+  if (existsSync(target)) return false;
+  copyFileSync(seed, target);
+  return true;
+}
+
 export function memoryLifecycleContext(
   environments: Environment[],
   dataDir: string,
@@ -51,6 +71,7 @@ export function memoryLifecycleContext(
   writes: Array<{ environmentId: string; update: Record<string, unknown> }>;
   environments: Map<string, Environment>;
 } {
+  seedLiveGithubRanges(dataDir);
   const store = new Map(environments.map((environment) => [environment.id, environment]));
   const events: Array<{ event: string; payload: unknown }> = [];
   const writes: Array<{ environmentId: string; update: Record<string, unknown> }> = [];

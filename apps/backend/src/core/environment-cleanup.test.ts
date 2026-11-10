@@ -366,8 +366,15 @@ describe("environment cleanup steps", () => {
     try {
       expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
       expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
-      expect(logs.outputs.map((output) => output.method)).toEqual(["info"]);
-      expect(logs.records()[0]).toMatchObject({
+      // Only this cleanup's own records: the capture is process-wide, and a
+      // CI run once caught an unrelated warning from outside the step
+      // (Tests (backend), PR #2034).
+      const own = logs.outputs.filter((output) => {
+        const fields = output.record?.fields as Record<string, unknown> | undefined;
+        return fields?.scope === "env-kept-branch" || fields?.environmentId === "env-kept-branch";
+      });
+      expect(own.map((output) => output.method)).toEqual(["info"]);
+      expect(own[0]!.record).toMatchObject({
         area: "environment",
         event: "cleanup.branch-kept",
         fields: { scope: "env-kept-branch" },

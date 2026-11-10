@@ -110,8 +110,10 @@ export function toolPrompt(prompt: string): ToolPrompt | undefined {
 
 /**
  * The offered name of an MCP server's tool: Claude and Codex spell it
- * `mcp__<server>__<tool>`, the Pi bridge `mcp_<server>_<tool>`; a namespaced
- * listing flattens to a name ending in `<server>__<tool>`.
+ * `mcp__<server>__<tool>`, the Pi bridge `mcp_<server>_<tool>`, OpenCode
+ * `<server>_<tool>` (1.19.5's own sanitizer: anything outside
+ * `[a-zA-Z0-9_-]` becomes `_`); a namespaced listing flattens to a name
+ * ending in `<server>__<tool>`.
  */
 export function offeredToolName(
   tools: readonly string[],
@@ -123,6 +125,7 @@ export function offeredToolName(
     `mcp__${sanitized}__${tool}`,
     `mcp_${sanitized}_${tool}`,
     `${sanitized}__${tool}`,
+    `${sanitized}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
   ]);
   return (
     tools.find((name) => exact.has(name)) ??

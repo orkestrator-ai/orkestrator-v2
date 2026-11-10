@@ -451,7 +451,7 @@ turn, so its deadline grows with the plan: 5 ms per path with a 10 s floor
 and a 5 minute ceiling (`restorePreflightDeadlineMs`). A preflight that still
 runs out answers `changes.restore.runtime-unavailable`, never a partly checked
 plan. Measured on 2026-11-06 on an isolated profile, every plan a delete per
-file ([todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md)):
+file (todo 4960, retired 2026-11-10; its per-run tables are in Git history):
 
 | Files | Quieter host | Load average 50 to 63 on 18 cores |
 | --- | --- | --- |
@@ -611,7 +611,15 @@ logged and left to the retention pass. The retention pass (two minutes after
 start, then hourly) prunes any other backlog the same way: it walks the owner
 index 512 owners a page (`supersededOwnersPage`, which reads only that covering
 index), yielding between pages, and prunes each owner with more than it keeps
-through its own index range. It then releases free pages in 128-page steps,
+through its own index range. A finished turn goes further: its turn stays for
+the whole archive window, but once it has been finished for
+`FINISHED_TURN_SUPERSEDED_GRACE_MS` (15 minutes) the pass keeps only its newest
+measurement and any a selection, restore or reader holds
+(`finishedTurnOwnersPage`, which reads the owner index for `turn` owners and
+each boundary row by key). Before this a bulk turn kept its superseded
+provisional list, up to 2,000 rows nothing selects again, beside the final one
+for 30 days. A turn whose end recovery is pending is left alone, since a
+recovery capture can still publish for it. It then releases free pages in 128-page steps,
 whoever freed them. One query over every measurement used to find the backlog;
 at 85,000 measurements it took 24 s with a cold page cache, once per batch
 ([0741](../todo/cross-cutting/0741-backend-responsiveness-under-load.md) task 6). Existing databases created
@@ -786,8 +794,68 @@ retention pass" include the backlog the hourly pass would clear.
 The 12,000 is the bound: three owners (turn, segment, environment), two kept
 measurements each, 2,000 rows each. It does not grow with the bulk size. At
 58,051 files two provisional passes published nothing on either side; why was
-not investigated. Proof on a real busy profile is
-[todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md).
+not investigated. The busy live soak below is the proof on a real profile.
+
+### Busy live soak of the row cap (2026-11-10)
+
+Todo 4960 (retired 2026-11-10) soaked the cap on the busy profile of
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md)
+task 1, long enough to include the hourly retention pass. Its pass criterion
+was row count per owner and scope against the bound (two measurements of at
+most 2,000 rows), not the report's whole-database target of under 100 MB,
+which depends on how many turns a history holds.
+
+Method: `scripts/recurring-live-ab.ts --busy-rounds 50 --busy-clients 0,1,2
+--busy-environments 10 --busy-burst-files 2500 --busy-turn-files 2500
+--fixture-environments local --agent-platforms pi --keep-profiles` on a
+headless `dev:test` profile with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, on
+beelink (Linux, 16 cores) on `main` at `c98b20e6f` with this branch's
+finished-turn pruning (above) and driver changes applied, every model call on the driver's loopback fake model. A
+throwaway sampler read the profile's `change-tracking.sqlite` read-only once a
+minute (rows per owner and scope, page and free-list counts, `dbstat` every
+five minutes) and the `/metrics` retention block. The host's load average was
+about 13 at the start and 50 to 64 for most of the run, partly from the run.
+
+The busy phase ran 150 rounds over 97 minutes: every round wrote 2,500 files
+into each of 10 environments and removed them, wrote 2,500 files while the
+held turn ran (147 rounds), and kept 443 turns in all. Each round left two bulk
+turns (the held one, and the queued one, which was still running when the
+files were removed and so measured 2,500 deletions).
+
+| Sample | File | File rows | Measurements (capped) | Turns | Note |
+| --- | --- | --- | --- | --- | --- |
+| 09:46, 11 min in | 40.7 MiB | 156,318 | 225 (76) | 71 | |
+| 10:34:43 | 151.3 MiB | 555,456 | 928 (272) | 325 | peak, before the hourly pass |
+| 10:35:44 | 91.9 MiB | 328,916 | 822 (162) | 329 | the pass at 10:35:17 pruned 117 measurements, 232,540 rows |
+| 11:13, end | 133.9 MiB | 478,916 | 1,129 (237) | 443 | |
+
+- **Per owner and scope the bound held at all 97 samples**: at most 4,000 file
+  rows (two measurements of 2,000), and no measurement over 2,000 rows. One
+  sample caught an environment with a third, transient measurement inside
+  that bound. Ten environments together held 16,726 to 40,000 rows, two
+  thread segments at most 4,000.
+- **The total grows with bulk turns, by design.** A finished turn keeps its
+  measurement for the 30-day archive window, so every turn past the cap costs
+  about 2,000 rows. The file row and its primary-key index take about 270
+  bytes, so a bulk turn costs about 0.5 MiB for 30 days; file rows and that
+  index were 92 to 95% of the file.
+- **What the soak fixed.** The 2026-11-10 trial run before it showed each
+  finished bulk turn keeping its superseded provisional list beside the final
+  one, 4,000 rows instead of 2,000, for the whole window. The hourly pass now
+  prunes a finished turn to its newest and selected measurement after
+  15 minutes (above); in the soak that pass removed 232,540 rows and the file
+  shrank by 59 MiB.
+
+What it unblocks: [4961](../todo/cross-cutting/4961-measurement-directory-rows.md)
+now has its measurement (capped lists are common under bulk work, and they
+dominate the ledger's size), and
+[4962](../todo/cross-cutting/4962-provisional-capture-spacing.md) task 1 no
+longer waits on it and has a first count from this run.
+
+The soak also found, outside the cap: Multi Review launches refused after the
+ninth round because each review left its tab open (a driver fault, fixed: the
+busy driver closes each finished review's tabs), and backend event-loop stalls
+that grew over the run ([7562](../todo/cross-cutting/7562-busy-soak-event-loop-stall-growth.md)).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose

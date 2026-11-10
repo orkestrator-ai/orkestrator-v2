@@ -16,7 +16,10 @@ import {
   DEFAULT_NATIVE_FIXTURE,
   runNativeObservationBaseline,
 } from "../scripts/recurring-baseline-native.js";
-import { runWorkflowBaseline } from "../scripts/recurring-baseline-workflows.js";
+import {
+  runWorkflowBaseline,
+  type WorkflowDomainCounts,
+} from "../scripts/recurring-baseline-workflows.js";
 
 const SHORT: BaselinePhases = { startupMs: 30_000, idleMs: 6 * 60_000, clientRefreshMs: 5_000 };
 const environment = { commit: "test", platform: "test", arch: "test", runtime: "test" };
@@ -147,13 +150,12 @@ describe("driven native observation baseline (step 07)", () => {
 
 // Storage reads plus stats each workflow attempt may cost, from the current
 // supervisors (whole-store ticks list the store and read each active record;
-// a multi-review pass reads its record ten times, under either driver).
-// Raise one only for a reviewed reason.
+// a multi-review pass reads its record ten times). Multi review has no
+// rollback driver (todo 0048 task 13). Raise one only for a reviewed reason.
 const STORAGE_PER_ATTEMPT = {
-  rollback: { "feature-planning": 3, "build-pipeline": 4, "multi-review": 10 },
+  rollback: { "feature-planning": 3, "build-pipeline": 4 },
   keyed: { "feature-planning": 1, "build-pipeline": 2, "multi-review": 10 },
 } as const;
-const DOMAINS = ["feature-planning", "build-pipeline", "multi-review"] as const;
 
 describe("driven workflow supervision baseline (step 08)", () => {
   test.each([0, 30])(
@@ -243,8 +245,8 @@ describe("driven workflow supervision baseline (step 08)", () => {
         (fixture.windowMs / 1_500) * records,
       );
     }
-    // …multi review's due scheduler at start and every 15 s…
-    expect(rollback["multi-review"].recordsScanned).toBe((1 + fixture.windowMs / 15_000) * records);
+    // Multi review has no rollback to compare against any more.
+    expect(Object.keys(rollback).sort()).toEqual(["build-pipeline", "feature-planning"]);
     for (const domain of ["build-pipeline", "multi-review"] as const) {
       // …and the keyed driver only at start and every 30 s.
       expect(keyed[domain].recordsScanned).toBe(4 * records);
@@ -255,19 +257,24 @@ describe("driven workflow supervision baseline (step 08)", () => {
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
       ).toBeLessThanOrEqual(fixture.activePerStore * 2);
     }
-    // Both multi-review drivers observe running reviewers every 3 s plus the
-    // same stable jitter, and every pass reads each reviewer.
+    // The multi-review driver observes running reviewers every 3 s plus a
+    // stable jitter, and every pass reads each reviewer: two reviewers, one
+    // observation pass per 3 s window at most.
     expect(keyed["multi-review"].providerReads).toBeGreaterThan(0);
-    expect(keyed["multi-review"].providerReads).toBe(rollback["multi-review"].providerReads);
     expect(keyed["multi-review"].providerReads % 2).toBe(0);
+    expect(keyed["multi-review"].providerReads).toBeLessThanOrEqual(
+      fixture.activePerStore * 2 * (1 + fixture.windowMs / 3_000),
+    );
     // Every attempt reads storage, and none reads more than its budget, cache
     // or not: one extra read per attempt breaks a budget.
     for (const mode of ["rollback", "keyed"] as const) {
-      for (const domain of DOMAINS) {
-        const counts = first.modes[mode][domain];
+      const budgets: Record<string, number> = STORAGE_PER_ATTEMPT[mode];
+      const results: Record<string, WorkflowDomainCounts> = first.modes[mode];
+      expect(Object.keys(results).sort()).toEqual(Object.keys(budgets).sort());
+      for (const [domain, counts] of Object.entries(results)) {
         const storage = counts.storageReads + counts.storageStats;
         expect(storage).toBeGreaterThanOrEqual(counts.attempts);
-        expect(storage).toBeLessThanOrEqual(STORAGE_PER_ATTEMPT[mode][domain] * counts.attempts);
+        expect(storage).toBeLessThanOrEqual(budgets[domain]! * counts.attempts);
       }
     }
     // A feature-planning pass reads its plan's row once; a warm row cache

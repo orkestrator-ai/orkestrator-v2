@@ -78,6 +78,6 @@ Ran on the only macOS host available (macOS 27.2). That FULL, RESTART and TRUNCA
 ## Related
 
 - [5180](5180-sqlite-durability-tiers.md), [5181](5181-sqlite-cache-sizes.md)
-- [4960 measurement rows live soak](4960-measurement-rows-live-soak.md)
+- 4960 measurement rows live soak (retired 2026-11-10): [Change tracking: busy live soak](../../architecture/change-tracking.md#busy-live-soak-of-the-row-cap-2026-11-10)
 - [Backend storage: Snapshots](../../architecture/storage.md#snapshots)
 - Logging and database report, R17 and D3 (`git show 413bd6219:docs/reports/2026-10-29-logging-and-database-efficiency.md`)

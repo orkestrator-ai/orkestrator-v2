@@ -4,6 +4,8 @@
 - **Status:** resolved
 - **Observed:** 2026-10-26, Linux rootless Docker 29.9.1, RootlessKit builtin port driver.
 - **Test:** `two detached collision failures during restart preserve a later start's ports`
+  (renamed 2026-11-10 to `detached collision failures past the retries during restart preserve a later start's ports`
+  when the start path's single retry became three, to-do 7549 task 3)
 - **File:** `apps/backend/tests/container-start-docker.test.ts`
 
 The owning file initially passed alone (three tests, 3.1 seconds). Running

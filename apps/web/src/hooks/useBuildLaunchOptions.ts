@@ -202,11 +202,16 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
       ...projectCatalog,
       opencode: includeMissingOpenCodeModels(
         projectCatalog.opencode,
-        configuredOpenCodeModelIds(defaults.pipelineDefaults),
+        configuredOpenCodeModelIds(defaults.pipelineDefaults, defaults.preferredModels.opencode),
         allowedProviders,
       ),
     };
-  }, [config.global.openCodeModelProviders, defaults.pipelineDefaults, projectCatalog]);
+  }, [
+    config.global.openCodeModelProviders,
+    defaults.pipelineDefaults,
+    defaults.preferredModels.opencode,
+    projectCatalog,
+  ]);
   const [openCodeModelPreferences, setOpenCodeModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
   // Another project's (or a disabled launcher's) preferences never carry over;

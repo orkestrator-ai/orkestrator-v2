@@ -2910,9 +2910,12 @@ export class OrkestratorBackend {
     this.nodeCoordination.start();
     // Shared usage readings: once now, then a minute apart as a last resort for
     // anything an event did not trigger (a node with nothing new costs a collect).
+    // A repeated `init` must not start a second timer beside the first.
     void this.usageSync.syncAll();
-    this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
-    this.usageSyncTimer.unref?.();
+    if (!this.usageSyncTimer) {
+      this.usageSyncTimer = setInterval(() => void this.usageSync.syncAll(), 60_000);
+      this.usageSyncTimer.unref?.();
+    }
     this.coordinators.startStatusWakes();
     this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();

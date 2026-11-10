@@ -50,6 +50,12 @@ export function spawnCommand(
  * the command is seen used to kill the wrapper by default and orphan the
  * command (flake case 4471). A signal that arrives before `c` is known is
  * remembered and delivered once it is.
+ *
+ * The watcher's own stderr is discarded. A quick command makes the wrapper
+ * `kill "$w"` right after forking the watcher, and a SIGTERM that lands while
+ * Bash is still resetting the inherited trap in that subshell makes it print
+ * `run_pending_traps: bad value in trap_list[15]` warnings, which would
+ * otherwise reach the command's stderr (flake case 7341).
  */
 export const PARENT_BOUND_SCRIPT = [
   "c=",
@@ -59,7 +65,7 @@ export const PARENT_BOUND_SCRIPT = [
   '"$@" </dev/null 3<&- &',
   "c=$!",
   '[ -z "$stop" ] || kill "$c" 2>/dev/null',
-  '( while read -r _; do :; done; kill "$c" 2>/dev/null ) <&3 &',
+  '( while read -r _; do :; done; kill "$c" 2>/dev/null ) <&3 2>/dev/null &',
   "w=$!",
   "exec 3<&-",
   'wait "$c"',

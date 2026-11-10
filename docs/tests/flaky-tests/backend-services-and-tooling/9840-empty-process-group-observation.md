@@ -1,7 +1,7 @@
 # Empty process group reported as live in aggregate validation
 
 - **ID:** 9840
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `groupHasLiveMember > sees a running member and ignores an empty group`
 - **Owner:** `packages/protocol/src/node/shell-process-state.test.ts:96`
@@ -59,3 +59,35 @@ does not replace the failed aggregate or establish an environmental exemption.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-process-state-isolated -- bun test --cwd packages/protocol ./src/node/shell-process-state.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0, in 1.0 second. Passing raw output was deleted by the logged runner.
 - **Recurrence check:** `mise run flaky:recurrence -- 9840 --base 448e9fffb992c3b6306aa6562c88e23c59fb74d8` reported the case open.
 - **Assessment:** the isolated pass establishes intermittence. The existing hypothesis about the bounded `ps` inspection may also apply here, but no inspection failure or timeout was captured. No process implementation, assertion, timeout or skip changed. The aggregate remains red.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** on macOS `groupHasLiveMember`
+  (`packages/protocol/src/node/shell-process-state.ts`) runs a synchronous
+  `/bin/ps -A -o pgid=,stat=` with `PROCESS_INSPECTION_OPTIONS` (100 ms
+  timeout, `SIGKILL`) and, by design, answers `true` ("unknown is yes") when
+  the scan does not finish. On a loaded host a real `ps -A` over ~1,300
+  processes takes longer: five timed runs at load ~50 took 80 to 210 ms. The
+  test asserted the classification of a real, unbounded-in-practice scan, so
+  an empty group (`2 ** 22 + 1`) or a zombie-only group read `true`. The
+  product side is intended: its only caller, `commandGroupAlive` in
+  `command-capture.ts`, polls again with backoff, so a slow scan delays a
+  command's settlement instead of deciding it wrongly.
+- **Fix:** `shell-process-state.test.ts` runs the two classification cases
+  through `withUnhurriedInspection`, which passes `/bin/ps` calls through to
+  the real `Bun.spawnSync` with a 30 s timeout, so they check what a
+  completed scan means. The 100 ms bound and the unknown-is-yes answer stay
+  covered by `process inspection times out and treats failed ps as unknown`.
+  `withZombie` now throws if no zombie appeared within its 3 s wait rather
+  than running the check against a still-running shell. No assertion was
+  loosened.
+- **Reproduced:** yes — on the unchanged owner at host load ~50,
+  `mise run test:logged -- --name repro-group-live -- bun test --cwd
+  packages/protocol --preload ../../tests/setup-node.ts
+  ./src/node/shell-process-state.test.ts -t groupHasLiveMember
+  --rerun-each=20` failed 15 of 40 (both cases, `true` for `false`). The same
+  command after the fix (`fixed-group-live`) passed 40 of 40.
+- **Stress:** `mise run test:logged -- --name whole-process-state -- bun test
+  --cwd packages/protocol --preload ../../tests/setup-node.ts
+  ./src/node/shell-process-state.test.ts --rerun-each=20` passed (macOS, load
+  ~50).

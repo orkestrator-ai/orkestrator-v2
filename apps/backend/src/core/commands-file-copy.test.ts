@@ -169,6 +169,16 @@ describe("external workspace file copies", () => {
       child.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
       });
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        // A refusing helper exits before it reads its input, so the write can
+        // land in a closed pipe. As in the product's runCommand, that EPIPE is
+        // expected: the exit status and stderr asserted below are the result.
+        child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+          if (error.code !== "EPIPE") reject(error);
+        });
+        child.once("close", resolve);
+      });
       if (afterReady) {
         child.stdout.once("data", () => {
           void afterReady()
@@ -178,10 +188,7 @@ describe("external workspace file copies", () => {
       } else {
         child.stdin.end(contents.toString("base64"));
       }
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", resolve);
-      });
+      const code = await closed;
       return { code, stderr };
     };
 

@@ -1,7 +1,7 @@
 # OpenCode host shutdown between database-lock retries
 
 - **ID:** 0723
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Owner:** `apps/backend/src/core/opencode-host-start.test.ts`
 - **Test:** `local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn`
@@ -49,3 +49,27 @@ implementation, assertion, timeout or skip changed.
 - **Change:** [1172](../../../todo/agent-engines/1172-opencode-start-error-before-stderr.md) task 1. `waitForLocalServerStartup` decides an OpenCode exit on `close`, or 1 s after `exit` if stdio stays open, so a `database is locked` chunk read after `exit` still selects the retry path.
 - **Evidence:** new fake-child tests in the owner (`waitForLocalServerStartup on an OpenCode exit`) fail on the old code (2 of 3) and pass with the fix. The full owner passed five consecutive runs alone (12 pass each).
 - **Disposition:** stays open until an aggregate run under load passes without it; then resolve.
+
+## Resolution (2026-11-10)
+
+- **Root cause:** a product race in `waitForLocalServerStartup`
+  (`apps/backend/src/core/commands-servers.ts`): the start's failure was
+  classified in the child's `exit` handler from the stderr read so far, and
+  `exit` can fire before the last stderr chunk is read. When OpenCode's
+  `database is locked` line arrived after `exit`, the start failed as a plain
+  `exited before becoming healthy` instead of taking the lock-retry path, so
+  the retry delay (whose log line closes admission in this test) never ran
+  and the test saw that error instead of `shutting down`. A real start that
+  lost the database on a loaded host was refused the same way.
+- **Fix:** `ec35a99b3` (#1532, merged 2026-11-01, to-do 1172 task 1): an
+  OpenCode exit is decided on `close`, or 1 s after `exit` if stdio stays
+  open, so stderr in flight at `exit` is read first. The fake-child tests
+  `waitForLocalServerStartup on an OpenCode exit` order the events by hand.
+  Every observation of this case (2026-10-24 to 2026-10-26) predates it, and
+  none has been recorded since. No further change.
+- **Reproduced:** yes — recorded on 2026-11-01 above: the new fake-child
+  tests fail on the pre-fix code (2 of 3) and pass with the fix.
+- **Stress:** `mise run test:logged -- --name stress-opencode-host -- bun
+  scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload
+  ../../tests/setup-node.ts ./src/core/opencode-host-start.test.ts
+  --rerun-each=10` passed (macOS, unpinned burners, host load ~35 to 55).

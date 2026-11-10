@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
@@ -8,6 +8,13 @@ import { NodeReadModel, NODE_SUMMARY_EVENT_PREFIXES } from "./node-read-model.js
 import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import { eventMatchesSubscription } from "../../gateway-support-extra.js";
 import { NODE_OUTBOX_READY_EVENT } from "./node-mail.js";
+
+// Stop every node a test left running, so a network's summary jobs do not
+// outlive it; see `stopTestNodeNetworks`.
+afterEach(async () => {
+  const { stopTestNodeNetworks } = await import("./node-network-test-support.js");
+  await stopTestNodeNetworks();
+});
 
 function harness() {
   let now = 0;

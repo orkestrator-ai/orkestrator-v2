@@ -1,7 +1,7 @@
 # Codex title helper process discovery under aggregate load
 
 - **ID:** 0472
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `Codex session titles > hard-kills a timeout-resistant process before rejecting`
 - **File:** `bridges/codex-bridge/src/session-titles.test.ts`
@@ -25,3 +25,25 @@
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 5.6 s: `mise run test:logged -- --name design-links-owner-codex-titles -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/session-titles.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
+
+## Resolution (2026-11-10)
+
+- **Status:** resolved; the owning test and the code it exercised no longer
+  exist.
+- **Root cause:** test-side, from the deleted file. The case found the title
+  helper's `codex` fixture by scanning `ps -axo pid=,command=` every 2 ms
+  against a fixed 1 s deadline (`waitForProcessPid`). On a loaded host the
+  fixture's start plus one `ps` scan could take longer than that, which is
+  the recorded 1.30–1.73 s failures. The process was never reported missing.
+- **Fix:** already on `main`. `71fda8500` (`feat(agents): own session titles
+  and improve history recovery`, #1337, 2026-10-27) moved title generation
+  out of the Codex and Claude bridges into the backend
+  (`apps/backend/src/core/session-title-runners.ts`). It deleted
+  `bridges/codex-bridge/src/session-titles.test.ts` with
+  `generateSessionTitleWithCodexExec`, its process registry and
+  `waitForProcessPid`. Nothing in the repository references them now
+  (`git grep` finds no match), and the backend runner tests do not scan
+  `ps`. No change in this sweep. The last observation (2026-10-24) predates
+  the deletion.
+- **Reproduced:** no — the owning test and code are gone.
+- **Stress:** none; there is nothing left to run.

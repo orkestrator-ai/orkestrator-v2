@@ -27,6 +27,31 @@ const STEPS: readonly { id: AutoPipelineStep; label: string }[] = [
 const POLL_MS = 1500;
 /** Edits are saved to the backend this long after the last keystroke. */
 const SAVE_DELAY_MS = 600;
+/** A failed save is retried this long afterwards, at most `MAX_SAVE_RETRIES` times in a row. */
+const SAVE_RETRY_MS = 3000;
+const MAX_SAVE_RETRIES = 5;
+const MAX_UNSAVED_DRAFTS = 32;
+
+/**
+ * Edits whose save has not succeeded yet, by draft id. They outlive the tab's
+ * mount, so leaving an environment while the backend is unreachable does not
+ * lose them: the remounted tab shows them again and retries the save. Bounded;
+ * an entry goes once its save succeeds.
+ */
+const unsavedEdits = new Map<string, AutoPipelineEdits>();
+function keepUnsaved(draftId: string, edits: AutoPipelineEdits): void {
+  unsavedEdits.delete(draftId);
+  unsavedEdits.set(draftId, edits);
+  while (unsavedEdits.size > MAX_UNSAVED_DRAFTS)
+    unsavedEdits.delete(unsavedEdits.keys().next().value as string);
+}
+/** Forgets every kept edit; for tests. */
+export function resetAutoPipelineUnsavedEditsForTests(): void {
+  unsavedEdits.clear();
+}
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function editsOf(draft: AutoPipelineDraft): AutoPipelineEdits {
   return {
@@ -74,9 +99,17 @@ export function AutoPipelineTab({
   const [step, setStep] = useState<AutoPipelineStep>("details");
   const [local, setLocal] = useState<{ draftId: string; edits: AutoPipelineEdits } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** The newest edits not yet saved; replaced only by newer edits or a successful save. */
   const pendingSave = useRef<{ draftId: string; edits: AutoPipelineEdits } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Saves run one at a time, so an older save can never land after a newer one. */
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
+  const saveRetries = useRef(0);
+  const mounted = useRef(false);
+  const cancelRequested = useRef(false);
 
   const refresh = useCallback(
     () =>
@@ -84,8 +117,12 @@ export function AutoPipelineTab({
         (value) => {
           setState(value);
           setReadError(null);
+          return value;
         },
-        (error: unknown) => setReadError(error instanceof Error ? error.message : String(error)),
+        (error: unknown) => {
+          setReadError(messageOf(error));
+          return null;
+        },
       ),
     [backend, environmentId, sourceTabId],
   );
@@ -97,24 +134,77 @@ export function AutoPipelineTab({
     return () => clearInterval(timer);
   }, [isActive, refresh]);
 
+  /**
+   * Saves the newest pending edits. A failure keeps them pending (and in
+   * `unsavedEdits`) and rejects; only a newer edit or a successful save
+   * replaces them.
+   */
   const flushSave = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    const pending = pendingSave.current;
-    pendingSave.current = null;
-    if (!pending) return Promise.resolve();
-    return backend.saveAutoPipelineEdits(pending.draftId, pending.edits);
+    const run = saveChain.current.then(async () => {
+      const pending = pendingSave.current;
+      if (!pending) return;
+      try {
+        await backend.saveAutoPipelineEdits(pending.draftId, pending.edits);
+      } catch (error) {
+        if (mounted.current) setSaveError(messageOf(error));
+        throw error;
+      }
+      if (unsavedEdits.get(pending.draftId) === pending.edits) unsavedEdits.delete(pending.draftId);
+      if (pendingSave.current === pending) {
+        pendingSave.current = null;
+        saveRetries.current = 0;
+        if (mounted.current) setSaveError(null);
+      }
+    });
+    saveChain.current = run.catch(() => undefined);
+    return run;
   }, [backend]);
+  const scheduleSave = useCallback(
+    function schedule(delay: number) {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        void flushSave().catch(() => {
+          if (!mounted.current || !pendingSave.current) return;
+          if (saveRetries.current >= MAX_SAVE_RETRIES) return;
+          saveRetries.current += 1;
+          schedule(SAVE_RETRY_MS);
+        });
+      }, delay);
+    },
+    [flushSave],
+  );
   // Leaving the tab is not discarding it: hand the last edits to the backend.
-  useEffect(() => () => void flushSave().catch(() => undefined), [flushSave]);
+  // A save that fails here keeps them in `unsavedEdits` for the next mount.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      void flushSave().catch(() => undefined);
+    };
+  }, [flushSave]);
 
   const reviewing = state?.phase === "ready" || state?.phase === "promoting" ? state : null;
   const draft = reviewing?.draft ?? null;
+  const draftId = draft?.id ?? null;
+  // A confirmation was already submitted with this ticket: it can no longer change.
+  const locked = reviewing?.reviewed ?? null;
+  const kept = draftId && !locked ? (unsavedEdits.get(draftId) ?? null) : null;
   const edits = draft
-    ? local?.draftId === draft.id
-      ? local.edits
-      : (reviewing?.edits ?? editsOf(draft))
+    ? locked
+      ? editsOf({ ...draft, ...locked })
+      : local?.draftId === draft.id
+        ? local.edits
+        : (kept ?? reviewing?.edits ?? editsOf(draft))
     : null;
+  // Edits kept from an earlier mount whose save failed are saved again now.
+  useEffect(() => {
+    if (!draftId || !kept || pendingSave.current) return;
+    pendingSave.current = { draftId, edits: kept };
+    saveRetries.current = 0;
+    scheduleSave(0);
+  }, [draftId, kept, scheduleSave]);
   const promoting = state?.phase === "promoting" || submitting;
   // A promotion is the Confirm step's outcome, so returning mid-promotion lands there.
   const currentStep: AutoPipelineStep = !draft
@@ -127,25 +217,42 @@ export function AutoPipelineTab({
   const problems = edits ? autoPipelineProblems(edits) : {};
 
   function change(next: AutoPipelineEdits) {
-    if (!draft || promoting) return;
+    if (!draft || promoting || locked) return;
     setLocal({ draftId: draft.id, edits: next });
     pendingSave.current = { draftId: draft.id, edits: next };
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void flushSave().catch(() => undefined), SAVE_DELAY_MS);
+    keepUnsaved(draft.id, next);
+    saveRetries.current = 0;
+    scheduleSave(SAVE_DELAY_MS);
+  }
+
+  function retrySave() {
+    saveRetries.current = 0;
+    scheduleSave(0);
   }
 
   function startDrafting() {
     setActionError(null);
+    setDraftError(null);
+    cancelRequested.current = false;
     setStep("details");
     setState({ phase: "drafting" });
     // The backend records the outcome; the state read shows it, here or after a return.
     void backend.draftAutoPipeline(environmentId, sourceTabId).then(
       () => void refresh(),
-      () => void refresh(),
+      async (error: unknown) => {
+        const next = await refresh();
+        // A refusal the backend did not record (a lost connection, a rejected
+        // request) would otherwise leave the tab idle or on an older draft
+        // with no reason given. A cancel is the user's own doing.
+        if (cancelRequested.current || next?.phase === "failed" || next?.phase === "drafting")
+          return;
+        setDraftError(messageOf(error));
+      },
     );
   }
 
   function cancelDrafting() {
+    cancelRequested.current = true;
     void backend
       .cancelAutoPipelineDraft(environmentId, sourceTabId)
       .catch(() => undefined)
@@ -157,8 +264,12 @@ export function AutoPipelineTab({
     setSubmitting(true);
     setActionError(null);
     try {
-      await flushSave();
-      setState({ phase: "promoting", draft, edits });
+      if (locked) {
+        // The backend refuses edits to a locked draft; confirm the ticket it holds.
+        pendingSave.current = null;
+        unsavedEdits.delete(draft.id);
+      } else await flushSave();
+      setState({ phase: "promoting", draft, edits, ...(locked ? { reviewed: locked } : {}) });
       await backend.confirmAutoPipeline(draft.id, {
         title: edits.title,
         description: edits.description,
@@ -168,7 +279,7 @@ export function AutoPipelineTab({
         description: "The ticket was created and the pipeline continues from Review.",
       });
     } catch (failure) {
-      setActionError(failure instanceof Error ? failure.message : String(failure));
+      setActionError(messageOf(failure));
     } finally {
       setSubmitting(false);
       void refresh();
@@ -264,6 +375,15 @@ export function AutoPipelineTab({
               {readError}
             </p>
           )}
+          {draftError && state?.phase !== "failed" && state?.phase !== "drafting" && (
+            <p
+              role="alert"
+              className="mb-4 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <span className="min-w-0 break-words">Drafting did not start: {draftError}</span>
+            </p>
+          )}
           {state?.phase === "idle" && (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
@@ -319,8 +439,17 @@ export function AutoPipelineTab({
               You can close this tab.
             </p>
           )}
+          {draft && edits && locked && !promoting && (
+            <p
+              role="status"
+              className="mb-4 rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+            >
+              A confirmation was already submitted with this ticket, so it can no longer change.
+              Confirm again to retry with it, or draft again to start over.
+            </p>
+          )}
           {draft && edits && (
-            <fieldset disabled={promoting} className="min-w-0 border-0">
+            <fieldset disabled={promoting || !!locked} className="min-w-0 border-0">
               {currentStep === "details" && (
                 <div className="space-y-5">
                   <div className="space-y-1.5">
@@ -339,7 +468,7 @@ export function AutoPipelineTab({
                     <h3 className="text-sm font-medium">Description</h3>
                     <AutoPipelineDescriptionField
                       value={edits.description}
-                      disabled={promoting}
+                      disabled={promoting || !!locked}
                       onChange={(description) => change({ ...edits, description })}
                     />
                     <p className="text-xs text-muted-foreground">
@@ -410,6 +539,23 @@ export function AutoPipelineTab({
       {draft && edits && (
         <footer className="shrink-0 border-t border-divider px-5 py-3 sm:px-6">
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+            {saveError && !locked && (
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+              >
+                <span className="flex min-w-0 items-start gap-2">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                  <span className="min-w-0 break-words">
+                    Your latest edits are not saved yet: {saveError}. They are kept here and saved
+                    again when the backend answers.
+                  </span>
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={retrySave}>
+                  Retry saving
+                </Button>
+              </div>
+            )}
             {(confirmError || promoting) && (
               <div>
                 {promoting ? (

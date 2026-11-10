@@ -7,6 +7,7 @@ import { expect, test, spyOn, setDefaultTimeout } from "bun:test";
 setDefaultTimeout(30_000);
 import {
   AutoPipelineService,
+  MAX_ACTIVE_DRAFTS,
   parseAutoPipelineResult,
   type AutoPipelinePorts,
 } from "./auto-pipeline.js";
@@ -631,6 +632,20 @@ test("admission rejection removes its unpublished ticket and permits same-draft 
         admission.mockRestore();
       }
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
+      // The part-way failure locked the ticket: the tab is told so, and edits are refused.
+      expect(auto.state("env-1", "original-tab")).toMatchObject({
+        phase: "ready",
+        draft: { id: draft.id },
+        reviewed: {
+          title: result.title,
+          description: result.description,
+          acceptanceCriteria: result.acceptanceCriteria,
+        },
+        confirmError: "admission rejected",
+      });
+      expect(() =>
+        auto.saveEdits(draft.id, { title: "x", description: "y", acceptanceCriteria: ["z"] }),
+      ).toThrow("already confirmed");
       await auto.confirm(draft.id, result);
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
     },
@@ -891,9 +906,126 @@ test("explicit draft cancellation aborts the separate session and releases the p
       expect(abort).toHaveBeenCalled();
       expect(abort.mock.calls.every(([id]) => id !== "original-session")).toBe(true);
       expect(storage.latestAutoPipelineDraft("env-1", "original-tab")).toBeNull();
+      // A cancelled draft is a deliberate stop, not a failure the tab shows.
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
     } finally {
       send.mockRestore();
       abort.mockRestore();
     }
   });
+});
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 400 && !condition(); attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(condition()).toBe(true);
+}
+
+test("drafting refused at the session cap is recorded for the tab that asked", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+      gitPorts(async () => provider),
+    );
+    // Each attempt stays registered until it settles, so these fill every slot.
+    const filling = Array.from({ length: MAX_ACTIVE_DRAFTS }, (_, index) =>
+      auto.draft("env-1", `missing-${index}`).catch(() => undefined),
+    );
+    await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("Too many drafting");
+    expect(auto.state("env-1", "original-tab")).toEqual({
+      phase: "failed",
+      error: expect.stringContaining("Too many drafting sessions"),
+    });
+    await Promise.all(filling);
+    expect(provider.sent).toHaveLength(0);
+  });
+});
+
+test("a promotion in flight is reported, and locks edits, for its own draft only", async () => {
+  await withService(
+    async (buildPipelines, storage, provider) => {
+      seed(storage);
+      await storage.updateEnvironment("env-1", {
+        createdFromCommit: "1111111111111111111111111111111111111111",
+      });
+      const context = draftContext(storage, buildPipelines);
+      const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
+      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
+        await context.workflowResults!.submit(
+          { environmentId: "env-1", projectId: "project-1" },
+          options.requestId,
+          result,
+        );
+      });
+      let draft;
+      try {
+        draft = await auto.draft("env-1", "original-tab");
+      } finally {
+        send.mockRestore();
+      }
+      const edits = { title: "Edited", description: "Typed", acceptanceCriteria: ["One"] };
+      let openTerminals!: () => void;
+      const terminalsClosed = new Promise<void>((resolve) => {
+        openTerminals = resolve;
+      });
+      const terminate = spyOn(
+        context.runtime.terminals,
+        "terminateSessionsForEnvironment",
+      ).mockImplementation(async () => {
+        await terminalsClosed;
+        return [];
+      });
+      let admit!: () => void;
+      const admitted = new Promise<void>((resolve) => {
+        admit = resolve;
+      });
+      const start = buildPipelines.startFromCompletedBuild.bind(buildPipelines);
+      const admission = spyOn(buildPipelines, "startFromCompletedBuild").mockImplementation(
+        async (...args) => {
+          await admitted;
+          return start(...args);
+        },
+      );
+      try {
+        const confirming = auto.confirm(draft.id, result);
+        await until(() => terminate.mock.calls.length > 0);
+        // Before the ticket is locked in, the promotion alone refuses edits.
+        expect(auto.state("env-1", "original-tab")).toEqual({ phase: "promoting", draft });
+        expect(() => auto.saveEdits(draft.id, edits)).toThrow("being confirmed");
+        openTerminals();
+        await until(() => admission.mock.calls.length > 0);
+        expect(auto.state("env-1", "original-tab")).toMatchObject({
+          phase: "promoting",
+          draft: { id: draft.id },
+          reviewed: { title: result.title },
+        });
+        // A newer draft of the same tab is not the one being confirmed.
+        const record = storage.getAutoPipelineDraft(draft.id)!;
+        const { reviewed: _reviewed, ...unconfirmed } = record;
+        storage.putAutoPipelineDraft({
+          ...unconfirmed,
+          draft: { ...record.draft, id: "newer-draft" },
+          attempt: { ...record.attempt, completedAt: new Date(Date.now() + 60_000).toISOString() },
+        });
+        expect(auto.state("env-1", "original-tab")).toMatchObject({
+          phase: "ready",
+          draft: { id: "newer-draft" },
+        });
+        expect(() => auto.saveEdits("newer-draft", edits)).not.toThrow();
+        admit();
+        const pipelineRecord = (await confirming) as { id: string };
+        // The environment now belongs to the older draft's pipeline.
+        expect(auto.state("env-1", "original-tab")).toEqual({
+          phase: "promoted",
+          pipelineId: pipelineRecord.id,
+        });
+      } finally {
+        openTerminals();
+        admit();
+        terminate.mockRestore();
+        admission.mockRestore();
+      }
+    },
+    { realKanban: true },
+  );
 });

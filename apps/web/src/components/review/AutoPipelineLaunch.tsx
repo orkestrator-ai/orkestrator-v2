@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { toast } from "sonner";
 import type { AutoPipelineSources } from "@orkestrator/protocol/build-pipeline";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { Button } from "@/components/ui/button";
@@ -59,10 +60,17 @@ export function AutoPipelineLaunch({
   const selected = sources?.sources.find((source) => source.tabId === tabId);
   function start() {
     if (!selected || selected.disabledReason) return;
+    // Drafting starts only once its tab exists to show and cancel it; a tab
+    // that could not open (the tab limit) starts nothing.
+    if (!onOpenTab({ sourceTabId: selected.tabId, sourceLabel: selected.label })) return;
     // The backend owns drafting and records its outcome; the tab reads it, so
-    // nothing here waits for (or cancels) the draft.
-    void backend.draftAutoPipeline(environmentId, selected.tabId).catch(() => undefined);
-    onOpenTab({ sourceTabId: selected.tabId, sourceLabel: selected.label });
+    // nothing here waits for (or cancels) the draft. A refusal is still shown:
+    // this dialog has usually closed by then, so as a toast.
+    void backend.draftAutoPipeline(environmentId, selected.tabId).catch((error: unknown) => {
+      toast.error("Auto-pipeline drafting did not start", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
   if (!sources?.available || !sources.sources.length) return null;
   return (

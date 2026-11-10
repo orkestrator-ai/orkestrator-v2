@@ -195,3 +195,44 @@ test("a refused confirmation keeps the draft and shows its reason beside Confirm
   await expect(confirm).toBeEnabled();
   await shot(page, "tab-refused", testInfo.project.name);
 });
+
+test("an unsaved edit warns and stays in the tab while saves fail", async ({ page }, testInfo) => {
+  await page.goto("/auto-pipeline?saveOffline");
+  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Edited while offline");
+  const warning = page.getByRole("alert");
+  await expect(warning).toContainText("not saved yet");
+  await expect(page.getByRole("button", { name: "Retry saving" })).toBeVisible();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Edited while offline");
+  await shot(page, "tab-unsaved", testInfo.project.name);
+});
+
+test("a ticket whose confirmation began is read-only and can be confirmed again", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/auto-pipeline?refused&locked");
+  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Submitted title");
+  await steps(page)
+    .getByRole("button", { name: /Confirm/ })
+    .click();
+  await page.getByRole("button", { name: "Confirm Auto-pipeline" }).click();
+  await expect(page.getByRole("alert")).toContainText("did not close");
+  await expect(page.getByText(/can no longer change/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Confirm Auto-pipeline" })).toBeEnabled();
+  await steps(page)
+    .getByRole("button", { name: /Details/ })
+    .click();
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Submitted title");
+  await expect(page.getByLabel("Title", { exact: true })).toBeDisabled();
+  await shot(page, "tab-locked", testInfo.project.name);
+});
+
+test("a drafting request the backend never recorded says why", async ({ page }, testInfo) => {
+  await page.goto("/auto-pipeline?draftRefused");
+  await page.getByRole("button", { name: "Auto-pipeline", exact: true }).click();
+  await page.getByRole("button", { name: "Draft ticket" }).click();
+  await expect(page.getByRole("alert")).toContainText("Drafting did not start");
+  await expect(page.getByRole("button", { name: "Draft ticket" })).toBeVisible();
+  await shot(page, "tab-draft-refused", testInfo.project.name);
+});

@@ -67,7 +67,9 @@ export type AutoPipelineEdits = Schema.Schema.Type<typeof AutoPipelineEditsSchem
  * Where an environment tab's Auto-pipeline draft stands, read by the
  * `auto-pipeline` tab whenever it mounts. Drafting and promotion run in the
  * backend, so leaving the tab neither cancels nor loses them. `edits` are the
- * user's saved changes to the generated ticket fields.
+ * user's saved changes to the generated ticket fields. `reviewed` is the ticket
+ * a confirmation was already submitted with: once set the draft is locked, and
+ * only confirming that same ticket again (or drafting again) can proceed.
  */
 export type AutoPipelineState =
   | { phase: "idle" }
@@ -77,9 +79,15 @@ export type AutoPipelineState =
       phase: "ready";
       draft: AutoPipelineDraft;
       edits?: AutoPipelineEdits;
+      reviewed?: AutoPipelineTicket;
       confirmError?: string;
     }
-  | { phase: "promoting"; draft: AutoPipelineDraft; edits?: AutoPipelineEdits }
+  | {
+      phase: "promoting";
+      draft: AutoPipelineDraft;
+      edits?: AutoPipelineEdits;
+      reviewed?: AutoPipelineTicket;
+    }
   | { phase: "promoted"; pipelineId: string };
 export const AutoPipelineStateSchema = asModel<AutoPipelineState>(
   Schema.Union([
@@ -90,12 +98,14 @@ export const AutoPipelineStateSchema = asModel<AutoPipelineState>(
       phase: Schema.Literal("ready"),
       draft: AutoPipelineDraftSchema,
       edits: Schema.optional(AutoPipelineEditsSchema),
+      reviewed: Schema.optional(AutoPipelineTicketSchema),
       confirmError: Schema.optional(text),
     }),
     Schema.Struct({
       phase: Schema.Literal("promoting"),
       draft: AutoPipelineDraftSchema,
       edits: Schema.optional(AutoPipelineEditsSchema),
+      reviewed: Schema.optional(AutoPipelineTicketSchema),
     }),
     Schema.Struct({ phase: Schema.Literal("promoted"), pipelineId: text }),
   ]),

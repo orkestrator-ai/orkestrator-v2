@@ -5,9 +5,16 @@ import {
   type AutoPipelineState,
 } from "@orkestrator/protocol/build-pipeline";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
-import { AutoPipelineTab, autoPipelineProblems } from "./AutoPipelineTab";
+import {
+  AutoPipelineTab,
+  autoPipelineProblems,
+  resetAutoPipelineUnsavedEditsForTests,
+} from "./AutoPipelineTab";
 
-afterEach(cleanupNodeScopes);
+afterEach(() => {
+  cleanupNodeScopes();
+  resetAutoPipelineUnsavedEditsForTests();
+});
 const draft = {
   id: "draft-1",
   title: "Feature",
@@ -204,4 +211,118 @@ test("problems name the step that needs attention", () => {
   expect(autoPipelineProblems({ title: "t", description: "d", acceptanceCriteria: [] })).toEqual({
     criteria: "Add at least one acceptance criterion.",
   });
+});
+
+/** A save command that refuses while `offline.value` is true. */
+function flakySaves(node: FakeNodeClient) {
+  const offline = { value: true };
+  node.respond("save_auto_pipeline_edits", () => {
+    if (offline.value) throw new Error("Backend unreachable");
+    return undefined;
+  });
+  return offline;
+}
+
+test("a failed save keeps the edits, says so, and saves them when the tab is left", async () => {
+  const { node } = client({ phase: "ready", draft });
+  const offline = flakySaves(node);
+  const view = render(node);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Typed offline" } });
+  const warning = await screen.findByRole("alert", {}, { timeout: 3000 });
+  expect(warning.textContent).toContain("not saved yet");
+  expect(warning.textContent).toContain("Backend unreachable");
+  expect(screen.getByRole("button", { name: "Retry saving" })).toBeTruthy();
+  const attempts = node.calls("save_auto_pipeline_edits").length;
+  offline.value = false;
+  // No further typing: leaving the tab still saves what the failed save held.
+  view.unmount();
+  await waitFor(() => expect(node.calls("save_auto_pipeline_edits")).toHaveLength(attempts + 1));
+  expect(node.calls("save_auto_pipeline_edits").at(-1)!.args).toMatchObject({
+    draftId: "draft-1",
+    edits: { title: "Typed offline" },
+  });
+});
+
+test("edits whose save failed on leaving come back on return and are saved again", async () => {
+  const { node } = client({ phase: "ready", draft });
+  const offline = flakySaves(node);
+  const view = render(node);
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Kept" } });
+  view.unmount();
+  await waitFor(() => expect(node.calls("save_auto_pipeline_edits")).toHaveLength(1));
+  offline.value = false;
+  render(node);
+  expect(((await screen.findByLabelText("Title")) as HTMLInputElement).value).toBe("Kept");
+  await waitFor(() => expect(node.calls("save_auto_pipeline_edits")).toHaveLength(2));
+  expect(node.calls("save_auto_pipeline_edits")[1]!.args).toMatchObject({
+    edits: { title: "Kept" },
+  });
+});
+
+test("a retried save never overwrites newer edits", async () => {
+  const { node } = client({ phase: "ready", draft });
+  const offline = flakySaves(node);
+  render(node);
+  const title = await screen.findByLabelText("Title");
+  fireEvent.change(title, { target: { value: "Older" } });
+  await screen.findByRole("alert", {}, { timeout: 3000 });
+  fireEvent.change(title, { target: { value: "Newer" } });
+  offline.value = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry saving" }));
+  await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true), { timeout: 3000 });
+  expect(node.calls("save_auto_pipeline_edits").at(-1)!.args).toMatchObject({
+    edits: { title: "Newer" },
+  });
+});
+
+test("a drafting request refused before the backend recorded it shows why and can be retried", async () => {
+  const { node } = client({ phase: "idle" });
+  node.respond("draft_auto_pipeline", () => {
+    throw new Error("Backend unreachable");
+  });
+  render(node);
+  fireEvent.click(await screen.findByRole("button", { name: "Draft ticket" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Backend unreachable");
+  fireEvent.click(screen.getByRole("button", { name: "Draft ticket" }));
+  await waitFor(() => expect(node.calls("draft_auto_pipeline")).toHaveLength(2));
+});
+
+test("a recorded drafting failure is shown once, by the failed state", async () => {
+  const { node, holder } = client({ phase: "idle" });
+  node.respond("draft_auto_pipeline", () => {
+    holder.state = { phase: "failed", error: "Too many drafting sessions are running" };
+    throw new Error("Too many drafting sessions are running");
+  });
+  render(node);
+  fireEvent.click(await screen.findByRole("button", { name: "Draft ticket" }));
+  expect(await screen.findByRole("button", { name: "Retry drafting" })).toBeTruthy();
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+});
+
+test("a draft whose confirmation already began is read-only and confirms the submitted ticket", async () => {
+  const reviewed = {
+    title: "Submitted",
+    description: draft.description,
+    acceptanceCriteria: ["Submitted check"],
+  };
+  const { node, holder } = client({
+    phase: "ready",
+    draft,
+    edits: { title: "Unsubmitted", description: "x", acceptanceCriteria: ["y"] },
+    reviewed,
+    confirmError: "admission rejected",
+  });
+  render(node);
+  const title = (await screen.findByLabelText("Title")) as HTMLInputElement;
+  expect(title.value).toBe("Submitted");
+  expect(title.closest("fieldset")!.disabled).toBe(true);
+  expect(screen.getByText(/can no longer change/)).toBeTruthy();
+  fireEvent.change(title, { target: { value: "Changed" } });
+  goTo(/^4?\s*Confirm$/);
+  expect(screen.getByRole("alert").textContent).toContain("admission rejected");
+  holder.state = { phase: "promoted", pipelineId: "pipeline-1" };
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Auto-pipeline" }));
+  await waitFor(() => expect(node.calls("confirm_auto_pipeline")).toHaveLength(1));
+  expect(node.calls("confirm_auto_pipeline")[0]!.args.ticket).toEqual(reviewed);
+  expect(node.calls("save_auto_pipeline_edits")).toHaveLength(0);
 });

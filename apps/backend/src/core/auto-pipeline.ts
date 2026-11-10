@@ -91,13 +91,18 @@ const draftingByStorage = new WeakMap<
 interface AutoPipelineOutcomes {
   /** `environmentId:tabId` → why its last drafting attempt failed. */
   failures: Map<string, string>;
-  /** `environmentId:tabId` → confirmations in progress for it. */
+  /**
+   * Draft id → confirmations in progress for it. Keyed by draft rather than
+   * tab, so a newer draft of the same tab is never reported as promoting.
+   */
   promoting: Map<string, number>;
   /** Draft id → why its last confirmation was refused. */
   confirmErrors: Map<string, string>;
 }
 const outcomesByStorage = new WeakMap<CommandContext["storage"], AutoPipelineOutcomes>();
 const MAX_OUTCOMES = 256;
+/** Drafting sessions one backend runs at once, across every environment. */
+export const MAX_ACTIVE_DRAFTS = 32;
 function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.delete(key);
   map.set(key, value);
@@ -131,13 +136,21 @@ export class AutoPipelineService {
   state(environmentId: string, tabId: string): AutoPipelineState {
     const key = `${environmentId}:${tabId}`;
     const outcomes = this.outcomes();
+    // Once any draft of the tab is promoted the environment belongs to that
+    // pipeline, so a newer draft can never be confirmed: report the promotion.
+    const promoted = this.context.storage.latestAutoPipelineDraft(environmentId, tabId, {
+      includeReviewed: true,
+      promotedOnly: true,
+    });
+    if (promoted?.pipelineId) return { phase: "promoted", pipelineId: promoted.pipelineId };
     const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId, {
       includeReviewed: true,
     });
-    if (record?.pipelineId) return { phase: "promoted", pipelineId: record.pipelineId };
     const edits = record?.edits ? { edits: record.edits } : {};
-    if (record && outcomes.promoting.has(key))
-      return { phase: "promoting", draft: record.draft, ...edits };
+    // A draft whose confirmation began keeps the ticket it was confirmed with.
+    const reviewed = record?.reviewed ? { reviewed: record.reviewed } : {};
+    if (record && outcomes.promoting.has(record.draft.id))
+      return { phase: "promoting", draft: record.draft, ...edits, ...reviewed };
     if (draftingByStorage.get(this.context.storage)?.has(key)) return { phase: "drafting" };
     const failure = outcomes.failures.get(key);
     if (failure) return { phase: "failed", error: failure };
@@ -147,6 +160,7 @@ export class AutoPipelineService {
       phase: "ready",
       draft: record.draft,
       ...edits,
+      ...reviewed,
       ...(confirmError ? { confirmError } : {}),
     };
   }
@@ -156,7 +170,7 @@ export class AutoPipelineService {
     if (!record) throw new Error("Auto-pipeline draft expired. Draft again before editing");
     if (record.reviewed || record.pipelineId)
       throw new Error("This draft was already confirmed; its ticket can no longer change");
-    if (this.outcomes().promoting.has(`${record.environmentId}:${record.attempt.tabId}`))
+    if (this.outcomes().promoting.has(draftId))
       throw new Error("This draft is being confirmed; its ticket can no longer change");
     record.edits = {
       title: edits.title,
@@ -272,10 +286,14 @@ export class AutoPipelineService {
     const key = `${environmentId}:${tabId}`;
     const pending = active.get(key);
     if (pending) return pending.operation;
-    if (active.size >= 32)
-      return Promise.reject(new Error("Too many drafting sessions are running"));
-    const controller = new AbortController();
     const outcomes = this.outcomes();
+    if (active.size >= MAX_ACTIVE_DRAFTS) {
+      // Refused before any session exists; record it so the tab can say why.
+      const error = new Error("Too many drafting sessions are running. Retry when one finishes");
+      remember(outcomes.failures, key, error.message);
+      return Promise.reject(error);
+    }
+    const controller = new AbortController();
     outcomes.failures.delete(key);
     const operation = this.createDraft(environmentId, tabId, controller.signal);
     active.set(key, { operation, controller });
@@ -486,9 +504,8 @@ export class AutoPipelineService {
       return Promise.reject(
         new Error("Auto-pipeline draft expired. Draft again before confirming"),
       );
-    const key = `${record.environmentId}:${record.attempt.tabId}`;
     const outcomes = this.outcomes();
-    outcomes.promoting.set(key, (outcomes.promoting.get(key) ?? 0) + 1);
+    outcomes.promoting.set(id, (outcomes.promoting.get(id) ?? 0) + 1);
     outcomes.confirmErrors.delete(id);
     return this.context.storage
       .withAutoPipelinePromotion(record.environment.id, () =>
@@ -499,9 +516,9 @@ export class AutoPipelineService {
         throw error;
       })
       .finally(() => {
-        const remaining = (outcomes.promoting.get(key) ?? 1) - 1;
-        if (remaining > 0) outcomes.promoting.set(key, remaining);
-        else outcomes.promoting.delete(key);
+        const remaining = (outcomes.promoting.get(id) ?? 1) - 1;
+        if (remaining > 0) outcomes.promoting.set(id, remaining);
+        else outcomes.promoting.delete(id);
       });
   }
   private async confirmSerialized(

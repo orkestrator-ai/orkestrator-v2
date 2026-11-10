@@ -27,6 +27,7 @@ type FixtureState =
       phase: "ready";
       draft: ReturnType<typeof fixtureDraft>;
       edits?: unknown;
+      reviewed?: unknown;
       confirmError?: string;
     }
   | { phase: "promoting"; draft: ReturnType<typeof fixtureDraft>; edits?: unknown }
@@ -60,7 +61,10 @@ function fixtureDraft(params: URLSearchParams, id: string) {
 /**
  * A stand-in backend that keeps drafting and promotion state the way the real
  * one does, so the tab can be left and returned to. `?draftMs=` sets how long
- * drafting takes (default 400 ms).
+ * drafting takes (default 400 ms). `?draftRefused` refuses every drafting
+ * request without recording a failure (a lost connection), `?saveOffline`
+ * refuses every edit save, and `?locked` keeps a refused confirmation's ticket
+ * as the locked `reviewed` ticket, as a part-way failed promotion does.
  */
 export function installAutoPipelineFixture() {
   const params = new URLSearchParams(window.location.search);
@@ -84,6 +88,7 @@ export function installAutoPipelineFixture() {
         } as T;
       if (command === "get_auto_pipeline_state") return state as T;
       if (command === "draft_auto_pipeline") {
+        if (params.has("draftRefused")) throw new Error("The backend did not answer.");
         const current = ++generation;
         state = { phase: "drafting" };
         await new Promise((resolve) => setTimeout(resolve, draftMs));
@@ -102,6 +107,7 @@ export function installAutoPipelineFixture() {
         return undefined as T;
       }
       if (command === "save_auto_pipeline_edits") {
+        if (params.has("saveOffline")) throw new Error("The backend did not answer");
         if (state.phase === "ready") state = { ...state, edits: args?.edits };
         return undefined as T;
       }
@@ -113,7 +119,11 @@ export function installAutoPipelineFixture() {
         if (params.has("refused")) {
           const error =
             "A terminal in this environment did not close. Stop the command running in it and confirm again.";
-          state = { ...ready, confirmError: error };
+          state = {
+            ...ready,
+            ...(params.has("locked") ? { reviewed: args?.ticket } : {}),
+            confirmError: error,
+          };
           throw new Error(error);
         }
         state = { phase: "promoted", pipelineId: "pipeline-1" };

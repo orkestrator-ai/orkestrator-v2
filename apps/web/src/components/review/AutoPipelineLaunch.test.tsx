@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/render-in-node-scope";
 import type { AutoPipelineTabData } from "@/types/paneLayout";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { AutoPipelineLaunch } from "./AutoPipelineLaunch";
 import { MultiReviewLaunchDialog } from "./MultiReviewLaunchDialog";
 
@@ -49,6 +50,39 @@ test("Auto-pipeline starts drafting and opens the draft in its own tab without a
   expect(opened).toEqual([{ sourceTabId: "original", sourceLabel: "Original work" }]);
   expect(screen.queryByRole("dialog") === null).toBe(true);
   expect(node.calls("confirm_auto_pipeline")).toHaveLength(0);
+});
+
+test("a tab that cannot open, such as at the tab limit, starts no drafting", async () => {
+  const node = client();
+  let asked = 0;
+  renderInNodeScope(
+    <AutoPipelineLaunch
+      environmentId="env"
+      onOpenTab={() => {
+        asked += 1;
+        return false;
+      }}
+    />,
+    { client: node },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  expect(asked).toBe(1);
+  // `start` issues the command synchronously from the click, so had it been
+  // sent it would already be recorded.
+  expect(node.calls("draft_auto_pipeline")).toHaveLength(0);
+});
+
+test("a refused drafting request is shown even after the dialog closed", async () => {
+  const node = client().respond("draft_auto_pipeline", () => {
+    throw new Error("Backend unreachable");
+  });
+  renderInNodeScope(<AutoPipelineLaunch environmentId="env" onOpenTab={() => true} />, {
+    client: node,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Auto-pipeline" }));
+  await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
+  expect(mockToastError.mock.calls[0]?.[0]).toBe("Auto-pipeline drafting did not start");
+  expect(mockToastError.mock.calls[0]?.[1]).toEqual({ description: "Backend unreachable" });
 });
 
 test("running tab explains why drafting is disabled", async () => {

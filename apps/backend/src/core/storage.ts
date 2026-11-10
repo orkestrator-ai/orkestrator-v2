@@ -827,7 +827,7 @@ export class StorageService {
   latestAutoPipelineDraft(
     environmentId: string,
     tabId: string,
-    options?: { includeReviewed?: boolean },
+    options?: { includeReviewed?: boolean; promotedOnly?: boolean },
   ) {
     return this.repos.drafts.latestAutoPipelineDraft(environmentId, tabId, options);
   }

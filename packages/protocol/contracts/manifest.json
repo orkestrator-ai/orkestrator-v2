@@ -2857,7 +2857,7 @@
       "read": true,
       "critical": [],
       "argsDigest": "sha256:d42681845bad95c99e2909ef80ddcbeee4208d0d8ca3ec0bba654162dbd468a6",
-      "resultDigest": "sha256:d65eef7475253e092d2def2b2ae904fa96d67136703823ca02f668c44519212c"
+      "resultDigest": "sha256:ce7fa5703025ba417f465ab745b9635b921ed0e5420f4621a838566ac0044fc3"
     },
     "get_available_ai_cli": {
       "domain": "agent-servers",

@@ -3,13 +3,15 @@
 ## Task analysis
 
 Analysed 2026-11-04 against main at `c22a06060`; tasks 1 to 3 acted on
-2026-11-06 against main at `c1724ab74`.
+2026-11-06 against main at `c1724ab74`; task 1's nested rootful mode built
+2026-11-09 against main at `c6de4733c`, which added task 4.
 
 ### Tasks
 
-1. **Repo-owned disposable daemon launcher**: start, use and remove a private Docker daemon with one command. Status: partly done (the host rootless daemon is `mise run docker:disposable`, built 2026-11-06; the nested rootful mode remains open).
+1. **Repo-owned disposable daemon launcher**: start, use and remove a private Docker daemon with one command. Status: done (the host rootless daemon on 2026-11-06; the nested rootful mode, `--mode rootful`, on 2026-11-09).
 2. **Keep the default-loopback fixture**: the 2026-11-04 rootless host-loopback check exists only in a git-ignored folder. Status: done 2026-11-06 (`apps/backend/tests/container-live-rootless-loopback.test.ts`, passed 1/1).
 3. **Rootless daemon restart with runtimes**: the check [0018](0018-container-network-and-credential-isolation.md) task 2 still owes. Status: done 2026-11-06 (passed 1/1 on the launcher's daemon; result recorded in 0018 task 2).
+4. **Run the nested rootful mode on a rootful host daemon**: the 2026-11-09 live runs had only a rootless outer daemon. Status: open (needs a host where the user may use the rootful daemon).
 
 ### 1. Repo-owned disposable daemon launcher
 
@@ -71,6 +73,56 @@ The guide's [Disposable Docker daemon](../../development/container-qualification
 documents it. The nested rootful mode (`docker:29-dind`) is not built; see
 Assumptions and decisions.
 
+**Result (2026-11-09).** Built the nested rootful mode behind the same
+commands: `mise run docker:disposable -- start --mode rootful` runs
+`docker:29.9.3-dind` (pinned by index digest) as one privileged container on
+the outer daemon (`--outer-host`, else `DOCKER_HOST`, else the context; a
+local Unix socket only, Docker Desktop refused), on the outer default bridge
+so no outer pool or network is needed. Its own volume holds the data root,
+its socket sits in the instance's `0700` runtime directory, and a supervisor
+loop restarts `dockerd` and counts generations. `restart` (the printed
+`ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`) sends SIGTERM to the inner
+`dockerd` and waits for the next generation to answer. `--ipv6` and
+`--live-restore` reproduce the 2026-10-31 settings, and a shared directory
+mounted at the same path covers suites that bind-mount temporary files.
+Every outer object carries the instance's random marker as a label, and
+`stop` removes the container, root-owned leftovers (through a throwaway
+container), the volume and the dind image only if this instance pulled it.
+`start` now also prints `ORKESTRATOR_DISPOSABLE_DOCKER_MODE`. Code in
+`scripts/disposable-docker-daemon-nested.ts`;
+`tests/unit/disposable-docker-daemon-nested.test.ts` (13 tests, fake Docker
+CLI) covers it, and the 21 rootless tests still pass.
+
+Live on beelink2 (Arch Linux, kernel 7.2.15, x86_64, host Engine 29.9.2),
+with the launcher's own rootless daemon as the outer daemon, because this
+user is not in the `docker` group and cannot reach the host daemon (task 4):
+- `start --mode rootful --image ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta`
+  (the published image of `480cf0296`; `docker/` unchanged since): 2 min 15 s
+  including the dind pull and a 6.0 GB copy. `docker info` on the inner
+  daemon: Engine 29.9.3, no `rootless` security option. An inner container
+  got `10.213.0.2` and reached `registry.npmjs.org` (200).
+- `container-live-egress-conditions.test.ts` with the printed restart
+  command: **3 of 3 pass** (55 assertions), twice; each run restarted the
+  inner `dockerd` twice (supervisor generations 1 to 5).
+- The same suite on a `--ipv6` instance: **3 of 3 pass** (66 assertions:
+  IPv6 12, DNS rotation 25, daemon restart 29), the counts of the hand-built
+  2026-10-31 run.
+- One printed restart by hand: 12.5 s with a `sleep` container running
+  (stopped, exit 137, as `live-restore` is off); 2.3 s on a `--live-restore`
+  instance, where the container kept running.
+- `stop`: 3.9 s and 4.6 s, leaving no container, volume, dind image,
+  instance or runtime directory on the outer daemon or the host.
+- The suite on a `--live-restore` instance: **3 of 3 pass** (63
+  assertions; daemon restart 37, as on 2026-10-31). The first two attempts
+  failed 2 of 3 because the host's unauthenticated GitHub limit was spent
+  (the gateway's `api.github.com/meta` fetch got 403); the pass is the rerun
+  after the reset.
+- `container-live-readiness.test.ts` C09 "restart during launch" and C10,
+  with `TMPDIR` on the printed shared directory: **2 pass**, where both had
+  failed on the hand-built nested daemon on 2026-11-06 without it.
+- The guide's [record](../../development/container-qualification.md#nested-rootful-disposable-daemon-on-beelink2-2026-11-09)
+  has the details.
+
 ### 2. Keep the default-loopback fixture
 
 **Problem.** The 2026-11-04 evidence that a default rootless daemon reports `blocked` and keeps the runtime off the host came from a test that was never committed. It cannot be rerun from a clean checkout.
@@ -126,24 +178,60 @@ its network namespace and slirp4netns. The result is recorded under 0018
 task 2. VPNKit, the other drivers and `live-restore` on were not run
 ([7390](7390-rootless-restart-remaining-settings.md)).
 
+### 4. Run the nested rootful mode on a rootful host daemon
+
+**Problem.** The nested rootful mode has run live only inside the launcher's
+own rootless daemon. There the privileged container is privileged only in the
+outer daemon's user namespace, so a privileged dind on a host's rootful
+daemon (the case the mode exists for) has not been observed through the
+launcher.
+
+**Context.** On beelink2 the host daemon's socket is `root:docker` mode
+`0660` and the `docker` group has no members, so this user cannot reach it,
+and changing group membership needs `sudo` with a password. The hand-built
+equivalent ran on beelink's rootful daemon on 2026-10-31 and 2026-11-06.
+To-do [6820](6820-agent-tools-peer-gate-linux-evidence.md) may want this
+daemon for its Linux Engine evidence.
+
+**Investigation.** Code paths that differ on a rootful outer daemon: the
+socket is owned by root with the caller's gid as its group (the rootless
+outer made it the user's), and files inner root processes leave in the
+runtime or shared directory are root-owned, which `stop` removes through a
+throwaway container (covered by a unit test with a fake CLI, not live).
+Everything else ran live on 2026-11-09.
+
+**Decisions.**
+
+- **Where to run it?**
+  - **On beelink or omarchy-hp, where earlier rootful runs had the host daemon (recommended).**
+    - Pros: one `start --mode rootful`, the egress-conditions suite with
+      `--ipv6`, and a `stop` followed by a check that nothing labelled
+      `orkestrator-disposable-docker` remains; directly comparable with
+      2026-11-09.
+    - Cons: needs a free slot on that host and access to its daemon socket.
+  - **Give the beelink2 user access to the host daemon.**
+    - Pros: the same host as the 2026-11-09 run.
+    - Cons: a host change that needs the owner's password and decision;
+      `docker` group membership is root-equivalent on the host.
+
 ## Current state
 
 - Live suites can target any daemon through `DOCKER_HOST`, and
   `mise run docker:disposable -- start` provides a private host rootless one
-  (2026-11-06). A rootful daemon with free pools is still built by hand as
-  a nested `docker:29-dind`, as on 2026-10-31 and 2026-11-06.
+  (2026-11-06) or, with `--mode rootful`, a nested rootful `docker:29-dind`
+  (2026-11-09). Neither touches the host daemon's configuration, pools or
+  networks.
+- Live egress-gateway suites fetch GitHub's ranges from `api.github.com/meta`
+  without credentials, at about 7 requests per egress-conditions run, so
+  repeated runs on one host can use up GitHub's 60 an hour and fail every
+  gateway with "could not apply its network policy". Check
+  `curl -s https://api.github.com/rate_limit` (which does not count against
+  the limit) before reading such a failure as a regression.
 - On 2026-11-04 beelink's shared daemon held 32 networks, 29 of them unattached host-reachability probe networks from 2026-10-31 to 2026-11-02. That is why its pools are full. [3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md) tracks them, and `mise run disk:report -- --fix probe-networks` clears them. A disposable daemon works around that for live suites and does not replace it: new environments on the shared daemon stay blocked until it runs.
 
 ## Outstanding work
 
-- Task 1's nested rootful mode: `docker:29-dind` in a privileged container on
-  the host daemon, with its own volume, private socket directory and a
-  supervisor that restarts `dockerd`, behind the same commands. Needed for
-  rootful-only cases (the IPv6 default on a rootful daemon, a rootful
-  restart) and on hosts without rootless prerequisites. It would run with
-  its own bridge and inside its own container namespace; it was not built
-  because it needs a privileged container on the shared daemon, whose pools
-  are full on beelink.
+- Task 4: a run of the nested rootful mode on a host's rootful daemon.
 
 ## Constraints and rationale
 
@@ -160,6 +248,9 @@ task 2. VPNKit, the other drivers and `live-restore` on were not run
 ## Assumptions and decisions
 
 ### Task 1: rootless first, rootful nested left open
+
+(Superseded on 2026-11-09, when the nested rootful mode was built; kept as
+the record of the 2026-11-06 choice.)
 
 Chosen: build the host rootless daemon only, and keep the nested rootful
 mode as the open half of task 1. The work this delegation had to do (task 3)
@@ -217,6 +308,67 @@ Chosen: `orkestrator-v2:dev-f199d298c1eb`, whose firewall, gateway and
 entrypoint scripts are identical to `c1724ab74`, rather than a 5.45 GB build
 on the shared host; see 0018's decisions for the same choice.
 
+### Task 1: nested rootful mode on an outer daemon chosen by socket
+
+Chosen: run the dind container on the outer daemon named by `--outer-host`,
+else `DOCKER_HOST`, else the current context, and accept only a local
+`unix://` socket on Linux Engine. The container bind-mounts paths of this
+machine, which a TCP, SSH or Docker Desktop endpoint would resolve
+elsewhere. The outer endpoint is recorded at start because the restart
+command runs inside suites whose `DOCKER_HOST` selects the inner daemon.
+
+### Task 1: the outer default bridge, no network of its own
+
+Chosen: `--network bridge` on the outer daemon. A network of its own would
+need an address pool, and the shared daemon's pools are full on beelink
+([3320](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)).
+The inner `bip` is `10.213.0.1/24` so it never overlaps the outer default
+bridge's `172.17.0.0/16`.
+
+### Task 1: restart by signalling the inner dockerd under a supervisor
+
+Chosen: the container's entrypoint is a shell loop that runs `dind dockerd`
+and starts it again when it exits, writing a generation number to the
+runtime directory; `restart` sends SIGTERM to the inner `dockerd` through
+`docker exec` and waits for the next generation to answer. Restarting the
+container instead would also restart the supervisor and remount everything,
+which is not what a host daemon restart does, and an in-container pid is
+safe to signal because it is in the container's own pid namespace.
+
+### Task 1: the socket in the private runtime directory
+
+Chosen: bind-mount the instance's `0700` runtime directory and have
+`dockerd` create its socket there with the caller's gid as its group. No TCP
+listener, no TLS material, and only the caller can reach the socket.
+
+### Task 1: a pinned dind image, removed only if this instance pulled it
+
+Chosen: `docker:29.9.3-dind` by its index digest (the tag `29-dind`
+resolved to it on 2026-11-09), pulled only when missing, with the pull
+recorded before it starts. `stop` removes it only when this instance pulled
+it and without `--force`, so Docker refuses while any other container uses
+it and a copy someone else pulled is never removed.
+
+### Task 1: removal by marker label, root-owned leftovers by container
+
+Chosen: name and label the container and volume with the instance's random
+marker, read the label back before every removal, and remove files the user
+cannot delete with a throwaway `--network none` container of the same image
+mounted on exactly those two directories. If the outer daemon does not
+answer, `stop` fails and keeps the record rather than forget a container
+that may still exist.
+
+### Task 1: a rootless outer daemon for the live run
+
+Chosen: run the live checks with the launcher's own rootless daemon as the
+outer daemon. This user cannot reach beelink2's host daemon (task 4), and
+it kept every object of the run inside daemons this work created. The
+nested daemon then reports rootful but is root only inside the outer user
+namespace, so the run proves the launcher and rootful `dockerd` behaviour
+and leaves the rootful-host case to task 4. The image was the published
+`ghcr.io/orkestrator-ai/orkestrator-v2:2.37.3-beta` (built from `480cf0296`,
+no `docker/` change since), pulled without credentials.
+
 ## Related
 
 - [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md), task 2: owns the rootless qualification and task 3's result.
@@ -224,6 +376,7 @@ on the shared host; see 0018's decisions for the same choice.
 - [0109-rootless-linux-runtime-gaps.md](0109-rootless-linux-runtime-gaps.md): an earlier disposable rootless daemon recipe.
 - [3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md](3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md): the pool exhaustion on the shared daemon.
 - [7390-rootless-restart-remaining-settings.md](7390-rootless-restart-remaining-settings.md): the rootless restart settings task 3 did not run.
+- [6820-agent-tools-peer-gate-linux-evidence.md](6820-agent-tools-peer-gate-linux-evidence.md): Linux Engine evidence that may use either mode.
 
 ## Replaces
 

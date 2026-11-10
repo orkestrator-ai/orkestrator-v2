@@ -813,7 +813,13 @@ held in an earlier phase arriving as `complete` opens or focuses the same tab
 without waiting for the layout round trip. Both derive the tab id from
 `keyInformationTabId` (`@orkestrator/protocol/pane-layout`), so they merge into
 one tab. An open notes tab is focused rather than duplicated; a full layout
-opens nothing, leaving the Notes step selected.
+opens nothing and shows the existing tab-limit notice, leaving the Notes step
+selected without evicting a tab. The observer acknowledges the handoff in a
+bounded, window-local node-scope slot before opening Notes. A later backend
+publication cannot override a newer selection, even if the user closed Notes
+in the interval. A layout-first publication likewise suppresses the later
+observer activation. The acknowledgement is cleared when the pipeline leaves
+completion or changes environment, so a new run can perform its own handoff.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the

@@ -1,8 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mergePersistedPaneLayouts } from "@orkestrator/protocol/pane-layout-merge";
 import { keyInformationTabId } from "@orkestrator/protocol/pane-layout";
 import type { Environment } from "@/types";
-import { reconcileAuthoritativePaneLayout } from "./pane-layout-authoritative";
+import {
+  clearCompletionNotesHandled,
+  reconcileAuthoritativePaneLayout,
+} from "./pane-layout-authoritative";
+import { startBuildPipelineCompletionNotes } from "./build-pipeline-completion-notes";
+import {
+  createPersistedPaneLayoutInput,
+  flushPaneLayoutNow,
+  startPaneLayoutPersistence,
+} from "./pane-layout-persistence";
+import { appCommandScope } from "./node-scope-slots";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { appCommandStore } from "@/test/app-command-store";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
@@ -78,6 +88,7 @@ let descriptor: PropertyDescriptor | undefined;
 
 beforeEach(() => {
   localStorage.clear();
+  clearCompletionNotesHandled("pipeline-1", appCommandScope());
   appCommandStore(environmentStore).setState({
     environments: [
       {
@@ -115,6 +126,141 @@ afterEach(() => {
 });
 
 describe("completion notes arriving in an Electron window", () => {
+  test.each(["select-chat", "close-notes"])(
+    "live completion followed by backend publication preserves a newer %s through persistence",
+    async (action) => {
+      const panes = appCommandStore(paneLayoutStore);
+      const pipelines = appCommandStore(buildPipelineStore);
+      const before = current(
+        split(leaf("pane-build", [buildTab], buildTab.id), leaf("pane-chat", [chatTab], "chat")),
+        "pane-chat",
+      );
+      panes.setState({
+        environments: new Map([["env-1", before]]),
+        hydration: new Map([["env-1", "done"]]),
+      });
+      pipelines
+        .getState()
+        .replacePipeline(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+      const stopObserver = startBuildPipelineCompletionNotes();
+      let backend = persisted(before.root, before.activePaneId);
+      const save = mock(
+        async (
+          _environmentId: string,
+          input: ReturnType<typeof createPersistedPaneLayoutInput>,
+          revision?: number,
+        ) => {
+          if (revision !== backend.revision) {
+            throw new Error(
+              `Pane layout revision conflict: expected ${revision}, current ${backend.revision}`,
+            );
+          }
+          backend = {
+            ...backend,
+            ...input,
+            root: input.root as PaneNode,
+            revision: backend.revision + 1,
+          };
+          return backend;
+        },
+      );
+      const stopPersistence = startPaneLayoutPersistence({
+        save,
+        load: async () => backend,
+        hydrateDependencies: async () => undefined,
+        debounceMs: 60_000,
+        selectionDebounceMs: 60_000,
+      });
+      const flush = () =>
+        flushPaneLayoutNow(
+          "env-1",
+          createPersistedPaneLayoutInput(panes.getState().environments.get("env-1")!),
+        );
+      try {
+        pipelines
+          .getState()
+          .replacePipeline(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+        expect(
+          panes
+            .getState()
+            .getAllTabs("env-1")
+            .find((tab) => tab.id === NOTES_ID)?.keyInformationTabData?.completionPublished,
+        ).toBeUndefined();
+        expect(panes.getState().getActivePaneId("env-1")).toBe("pane-build");
+        await flush();
+
+        if (action === "close-notes") panes.getState().removeTab("pane-build", NOTES_ID, "env-1");
+        panes.getState().setActivePane("pane-chat", "env-1");
+        // Publication races the next renderer save. Exercise the real conflict
+        // rebase and authoritative install, rather than only the arrival helper.
+        backend = persisted(
+          split(
+            leaf("pane-build", [buildTab, notesTab], NOTES_ID),
+            leaf("pane-chat", [chatTab], "chat"),
+          ),
+          "pane-build",
+        );
+        backend.revision = 20;
+        await flush();
+        const chosen = panes.getState().environments.get("env-1")!;
+        expect(chosen.activePaneId).toBe("pane-chat");
+        expect(
+          panes
+            .getState()
+            .getAllTabs("env-1")
+            .some((tab) => tab.id === NOTES_ID),
+        ).toBe(action !== "close-notes");
+        expect(selection(reconcileAuthoritativePaneLayout("env-1", backend, chosen))).toEqual(
+          selection(chosen),
+        );
+        expect(save.mock.calls.length).toBeGreaterThanOrEqual(3);
+      } finally {
+        stopPersistence();
+        stopObserver();
+      }
+    },
+  );
+
+  test.each(["select-chat", "close-notes"])(
+    "backend publication before the completion event preserves %s",
+    (action) => {
+      const panes = appCommandStore(paneLayoutStore);
+      const pipelines = appCommandStore(buildPipelineStore);
+      pipelines
+        .getState()
+        .replacePipeline(buildPipelineFixture({ phase: "verifying", backendRevision: 1 }));
+      const stop = startBuildPipelineCompletionNotes();
+      try {
+        const before = current(leaf("pane-build", [buildTab], buildTab.id), "pane-build");
+        const after = persisted(
+          leaf("pane-build", [buildTab, chatTab, notesTab], NOTES_ID),
+          "pane-build",
+        );
+        const landed = reconcileAuthoritativePaneLayout("env-1", after, before)!;
+        panes.setState({
+          environments: new Map([["env-1", landed]]),
+          hydration: new Map([["env-1", "done"]]),
+        });
+        panes.getState().setActiveTab("pane-build", "chat", "env-1");
+        if (action === "close-notes") panes.getState().removeTab("pane-build", NOTES_ID, "env-1");
+        pipelines
+          .getState()
+          .replacePipeline(buildPipelineFixture({ phase: "complete", backendRevision: 2 }));
+        expect(panes.getState().environments.get("env-1")!.root).toMatchObject({
+          activeTabId: "chat",
+        });
+        expect(
+          panes
+            .getState()
+            .getAllTabs("env-1")
+            .some((tab) => tab.id === NOTES_ID),
+        ).toBe(action !== "close-notes");
+      } finally {
+        stop();
+      }
+    },
+  );
+
   test("a window that did not see the run finish follows the backend onto the new notes tab", () => {
     // The window was on the chat pane; the backend published the notes beside
     // the pipeline tab and selected them when the run completed.

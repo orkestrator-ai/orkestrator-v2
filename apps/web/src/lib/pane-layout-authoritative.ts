@@ -77,6 +77,7 @@ interface PaneActivationSlot {
   // backend does not. Keep only the latest request per environment, so a later
   // foreground action supersedes an earlier one.
   readonly pendingTabActivations: Map<string, string>;
+  readonly completionNotesHandoffs: Map<string, string>;
   readonly startupAgentActivationCommits: WeakMap<EnvironmentPaneState, string>;
   readonly buildPipelineActivationCommits: WeakMap<
     EnvironmentPaneState,
@@ -86,9 +87,34 @@ interface PaneActivationSlot {
 
 const paneActivations = defineScopedSlot<PaneActivationSlot>("pane-layout-activations", () => ({
   pendingTabActivations: new Map(),
+  completionNotesHandoffs: new Map(),
   startupAgentActivationCommits: new WeakMap(),
   buildPipelineActivationCommits: new WeakMap(),
 }));
+
+/** Window-local acknowledgement shared by the live observer and layout arrival. */
+export function markCompletionNotesHandled(
+  environmentId: string,
+  pipelineId: string,
+  scope: NodeScope,
+): void {
+  const handled = paneActivations(scope).completionNotesHandoffs;
+  handled.delete(pipelineId);
+  handled.set(pipelineId, environmentId);
+  boundActivationMap(handled);
+}
+
+export function clearCompletionNotesHandled(pipelineId: string, scope: NodeScope): void {
+  paneActivations(scope).completionNotesHandoffs.delete(pipelineId);
+}
+
+export function hasCompletionNotesHandled(
+  environmentId: string,
+  pipelineId: string,
+  scope: NodeScope,
+): boolean {
+  return paneActivations(scope).completionNotesHandoffs.get(pipelineId) === environmentId;
+}
 
 function environmentById(scope: NodeScope, environmentId: string) {
   return scope.store(environmentStore).getState().getEnvironmentById(environmentId);
@@ -165,6 +191,7 @@ function applyCompletionNotesArrival(
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
   current: EnvironmentPaneState,
+  scope: NodeScope,
 ): EnvironmentPaneState {
   const leaf = findLeaf(
     authoritative.root,
@@ -176,6 +203,10 @@ function applyCompletionNotesArrival(
     tab.keyInformationTabData?.view !== "notes" ||
     tab.keyInformationTabData.completionPublished !== true
   ) {
+    return selected;
+  }
+  const data = tab.keyInformationTabData;
+  if (hasCompletionNotesHandled(data.environmentId, data.pipelineId, scope)) {
     return selected;
   }
   if (
@@ -730,6 +761,7 @@ export function reconcileAuthoritativePaneLayout(
         current,
       ),
       current,
+      scope,
     );
     // Apply the pipeline handoff first so a Start Build during setup wins over
     // the automatic startup-agent landing in the same reconcile frame. A window

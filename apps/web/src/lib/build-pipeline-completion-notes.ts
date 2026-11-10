@@ -14,6 +14,12 @@ import type { StoreApi } from "zustand/vanilla";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { defineScopedService } from "@/lib/node-scope/scoped-service";
 import { appCommandScope } from "@/lib/node-scope-slots";
+import {
+  clearCompletionNotesHandled,
+  hasCompletionNotesHandled,
+  markCompletionNotesHandled,
+} from "./pane-layout-authoritative";
+import { showTabLimitReachedToast } from "./tab-limit-toast";
 import { buildPipelineStore, type BuildPipelineState } from "@/stores/buildPipelineStore";
 import { getAllLeaves, paneLayoutStore, type PaneLayoutState } from "@/stores/paneLayoutStore";
 
@@ -41,6 +47,12 @@ function openNotes(
   pipelineId: string,
 ): void {
   const store = paneLayouts.getState();
+  // A layout-first completion already performed the handoff. The later pipeline
+  // event must not pull the user back after they have selected another tab.
+  if (hasCompletionNotesHandled(environmentId, pipelineId, scope)) return;
+  // Acknowledge before mutating the store: persistence subscribers can publish
+  // a marked layout while the live completion handler is still unwinding.
+  markCompletionNotesHandled(environmentId, pipelineId, scope);
   const paneId =
     pipelinePaneId(paneLayouts, environmentId, pipelineId) ?? store.getActivePaneId(environmentId);
   openKeyInformationTab({
@@ -55,8 +67,7 @@ function openNotes(
       panes.addTab(pane, tab, environment);
       panes.setActivePane(pane, environment);
     },
-    // A full layout keeps the pipeline tab, where the Notes step is selected.
-    onTabLimit: () => {},
+    onTabLimit: () => showTabLimitReachedToast(MAX_TABS_PER_ENVIRONMENT),
   });
 }
 
@@ -94,6 +105,15 @@ export function startBuildPipelineCompletionNotes(
   const pendingNotes = new Map<string, string>();
   const offPipelines = pipelines.subscribe((state, previous) => {
     if (state.pipelines === previous.pipelines) return;
+    for (const [pipelineId, before] of previous.pipelines) {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (!pipeline || pipeline.environmentId !== before.environmentId) {
+        clearCompletionNotesHandled(pipelineId, scope);
+      }
+    }
+    for (const [pipelineId, pipeline] of state.pipelines) {
+      if (pipeline.phase !== "complete") clearCompletionNotesHandled(pipelineId, scope);
+    }
     for (const [pipelineId, environmentId] of Array.from(pendingNotes)) {
       const pipeline = state.pipelines.get(pipelineId);
       if (pipeline?.phase !== "complete" || pipeline.environmentId !== environmentId) {
@@ -116,6 +136,29 @@ export function startBuildPipelineCompletionNotes(
     if (added) reconcile(scope, pipelines, paneLayouts, pendingNotes);
   });
   const offPanes = paneLayouts.subscribe((state, previous) => {
+    // Remember newly installed completion markers even when the pipeline event
+    // is delayed. Keep this outside the pending queue so closing Notes before
+    // that event cannot cause a second opening. A retained old marker does not
+    // suppress a later run of the same pipeline.
+    if (state.environments !== previous.environments) {
+      for (const [environmentId, layout] of state.environments) {
+        const before = previous.environments.get(environmentId);
+        if (layout === before) continue;
+        const previousTabs = before ? getAllLeaves(before.root).flatMap((leaf) => leaf.tabs) : [];
+        for (const tab of getAllLeaves(layout.root).flatMap((leaf) => leaf.tabs)) {
+          const data = tab.keyInformationTabData;
+          if (tab.type !== "key-information" || data?.view !== "notes" || !data.completionPublished)
+            continue;
+          if (
+            !previousTabs.some(
+              (old) => old.id === tab.id && old.keyInformationTabData?.completionPublished,
+            )
+          ) {
+            markCompletionNotesHandled(environmentId, data.pipelineId, scope);
+          }
+        }
+      }
+    }
     if (pendingNotes.size === 0) return;
     if (state.hydration === previous.hydration && state.environments === previous.environments) {
       return;

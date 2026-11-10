@@ -529,7 +529,7 @@ end capture, 0.9 to 1.4 s later at 10,000 and 20,000 files on the quiet host.
 A preview of the provisional measurement answers
 `changes.restore.no-retained-endpoints`; re-reading the history gives the
 final one, which restores. The restore dialog is gated by the projection's
-`restore` action instead. [Todo 7554](../todo/cross-cutting/7554-history-names-provisional-measurement-after-finalize.md)
+`restore` action instead. [Todo 7556](../todo/cross-cutting/7556-history-names-provisional-measurement-after-finalize.md)
 owns the gap.
 
 Apply throughput at bulk sizes is

@@ -78,7 +78,9 @@ RootlessKit to delete files owned by mapped users
 
 **Investigation.** On 2026-11-10 the three data roots were already gone (the
 pipelines had stopped their daemons), and `status` listed no instances in any
-beelink2 worktree.
+beelink2 worktree. #2028 added `--mode rootful`, whose daemon keeps its data in
+a volume on the outer daemon, so only the default rootless mode writes a data
+root into the checkout.
 
 **Decisions.**
 

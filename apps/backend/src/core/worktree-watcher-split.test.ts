@@ -412,7 +412,8 @@ describe("startWorktreeWatcher, per-directory platforms", () => {
       context.state.refuse.set("/wt/src", Object.assign(new Error("denied"), { code }));
       const { watcher, errors, coverage, hints } = split(context);
       await until(() => context.live().includes("recursive /wt/apps/web/lib"));
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      // Consume the initial plan's unknown-path hint before isolating an edit.
+      await until(() => hints.length > 0);
       // Not a failure: nothing is torn down, so its owner does not retry and
       // re-walk the tree. Never qualified, so its owner keeps polling.
       expect(errors).toEqual([]);

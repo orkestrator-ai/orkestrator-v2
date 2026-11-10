@@ -1,7 +1,7 @@
 # Native tab unrelated-write assertion observes two commits
 
 - **ID:** 6622
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-05
 - **Test:** `an unrelated environment field does not render a tab holding a transcript`.
 - **File:** `apps/web/src/components/native-agent/AgentNativeTab.render-count.test.tsx:359`.
@@ -44,3 +44,35 @@ clearing this round's render-count failure. The aggregate still exited 1 because
 of the separate voice-chat fixture readiness failure recorded in case
 [9915](9915-voice-chat-reply-start-readiness.md). This pass does not establish a
 fix for case 6622's intermittent cause; the case remains open.
+
+## Resolution of the recurrence (2026-11-10)
+
+**Root cause.** Since #2015 (`3f51fb8d7`), `NativeChatShell` renders once
+more `CHAT_COLUMN_SHIFT_SETTLE_MS` (400 ms) after it mounts, when
+`useChatColumnShiftStyle` turns its column slide on. The test's `settle()`
+stopped after the first quiet 40 ms interval. When the transcript rendered
+quickly, that interval ended before the 400 ms timer, and the timer's commit
+landed inside the measured unrelated write. Waiting 4 s inside one `act` after
+`renderTab` reproduced it deterministically: one commit arrived with no write
+at all. It came from the timer, not from the environment write or the Notes
+diff. The Notes branch's change to `packages/protocol/src/pane-layout.ts`
+(an added `keyInformationTabId` export) is not involved.
+
+**Fix.** `settle()` now also waits while any mounted shell still carries a
+zero `--chat-column-shift-duration`, so measurements start after the shell's
+one settle render. The zero-commit assertion and its timeout are unchanged.
+
+Waiting for the shell to settle exposed a second, deterministic failure in the
+same file: `anchor resize does not render the native controller` also failed
+3 of 3 when selected alone on the unchanged file. The shell's compose-dock
+`ResizeObserver` called `setComposeDockHeight` with an unchanged height.
+React skips an identical update without rendering only while the fiber has no
+leftover update lanes. After the settle update it had some, so every pane
+resize rendered the shell once. `NativeChatShell` now ignores an unchanged
+measurement before it reaches React.
+
+**Verification.** With the fix, the 4 s idle probe recorded 0 commits in
+3 of 3 runs (1 before the fix). The owning file passed 3 of 3 through
+`mise run test:logged -- --name render-count-owner-N -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.render-count.test.tsx --parallel=1 --only-failures`.
+`bun test --cwd apps/web ./src/components/chat ./src/components/native-agent ./src/components/ui/floating-notice.test.tsx ./src/components/terminal/TerminalContainer.render-count.test.tsx --parallel=4 --only-failures`
+passed under the logged runner.

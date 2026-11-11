@@ -444,8 +444,13 @@ copy_agent_file() {
         agent_copy_warn "$relative_path" "Failed to copy $label file"
     else
         AGENT_FILE_PUBLISHED=true
+        # Copy helpers record what they imported only after a successful
+        # copy, so the per-entry walker keeps its successes without claiming a
+        # refused sibling. This is what `find -printf '%y%p\0'` lists for a
+        # regular file, without starting a find.
         if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
-            agent_input_record_copy "$source_root" "$relative_path"
+            printf 'f%s\0' "$relative_path" >> "$AGENT_INPUT_COPIED_PATHS" 2>/dev/null ||
+                agent_copy_warn "$relative_path" "Failed to record copied input; will retry"
         fi
     fi
 }
@@ -471,14 +476,18 @@ copy_agent_directory() {
     local destination_path="$destination_root/$relative_path"
     local max_entries="${AGENT_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
     local max_kib="${AGENT_COPY_MAX_DIRECTORY_KIB:-262144}"
-    local entry_scan
-    local entry_marks
-    local entry_count
-    local entry_scan_limit
-    local entry_scan_status
+    local walk
+    local walk_status
+    local walk_summary
+    local walk_listing=""
+    local walk_record=()
     local find_status
-    local head_status
+    local awk_status
+    local entry_count
+    local found_links
+    local directory_blocks
     local directory_kib
+    local destination_existed=false
     local found_symlink
 
     # Do not dereference an allowlist link, at any depth. In particular, a host
@@ -508,60 +517,54 @@ copy_agent_directory() {
             max_kib=262144
             ;;
     esac
-    # Read at most max_entries + 1 one-byte marks. head closes the pipe at that
-    # point, so find stops walking a pathological tree instead of scanning and
-    # buffering it in full. PIPESTATUS is appended after a newline because the
-    # marks themselves never contain one. A producer failure is expected once
-    # the cap is exceeded, but otherwise still fails closed.
-    entry_scan_limit=$((max_entries + 1))
-    entry_scan="$(
+    # One walk answers the entry bound, the link check and the size bound, and
+    # lists the directory for the input stamp when one is recording. Starting a
+    # dozen processes per directory was most of a many-skill first start
+    # (to-do 6740 task 3). Each entry is one line holding its type and its
+    # allocated 512-byte blocks, which is what `du -sk` sums, so a name holding
+    # a newline cannot be miscounted. awk stops reading after max_entries + 1
+    # entries below the directory, which closes the pipe, so find stops walking
+    # a pathological tree instead of scanning and buffering it in full. find's
+    # failure is expected once the cap is exceeded, but otherwise fails closed.
+    if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
+        walk_listing="$AGENT_INPUT_COPIED_PATHS.unit"
+        walk_record=(-fprintf "$walk_listing" '%y%p\0')
+    fi
+    walk="$(
         set +e
-        find -P "$source_path" -mindepth 1 -exec printf '%.0s.' {} + 2>/dev/null |
-            head -c "$entry_scan_limit"
-        entry_pipeline_status=("${PIPESTATUS[@]}")
-        printf '\n%s:%s' "${entry_pipeline_status[0]}" "${entry_pipeline_status[1]}"
+        cd "$source_root" 2>/dev/null || { printf '\n1:0'; exit 0; }
+        find -P "$relative_path" "${walk_record[@]}" -printf '%y %b\n' 2>/dev/null |
+            awk -v limit="$((max_entries + 1))" '
+                { entries = NR - 1; if ($1 == "l") links = 1; blocks += $2; if (entries >= limit) exit }
+                END { printf "%d %d %.0f", entries, links, blocks }'
+        walk_pipeline_status=("${PIPESTATUS[@]}")
+        printf '\n%s:%s' "${walk_pipeline_status[0]}" "${walk_pipeline_status[1]:-1}"
     )"
-    entry_scan_status="${entry_scan##*$'\n'}"
-    entry_marks="${entry_scan%$'\n'*}"
-    find_status="${entry_scan_status%%:*}"
-    head_status="${entry_scan_status#*:}"
-    case "$head_status" in
-        0) ;;
-        *)
-            agent_copy_warn "$display_path" "Failed to inspect $label directory"
-            return 0
-            ;;
+    walk_status="${walk##*$'\n'}"
+    walk_summary="${walk%$'\n'*}"
+    find_status="${walk_status%%:*}"
+    awk_status="${walk_status#*:}"
+    read -r entry_count found_links directory_blocks <<< "$walk_summary" || true
+    case "${entry_count:-x}${found_links:-x}${directory_blocks:-x}" in
+        *[!0-9]*) awk_status=1 ;;
     esac
-    entry_count="${#entry_marks}"
+    if [ "$awk_status" != 0 ]; then
+        agent_copy_warn "$display_path" "Failed to inspect $label directory"
+        return 0
+    fi
     if [ "$entry_count" -gt "$max_entries" ]; then
         agent_copy_warn "$display_path" "Skipping oversized $label directory"
         return 0
     fi
-    if [ "$find_status" -ne 0 ]; then
+    if [ "$find_status" != 0 ]; then
         agent_copy_warn "$display_path" "Failed to inspect $label directory"
         return 0
     fi
-    found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        agent_copy_warn "$display_path" "Failed to inspect $label directory"
-        return 0
-    }
-    if [ -n "$found_symlink" ]; then
+    if [ "$found_links" != 0 ]; then
         agent_copy_warn "$display_path" "Skipping $label directory containing symlink"
         return 0
     fi
-    # Same reason as above: a partial du failure still prints an undercounted
-    # total, so du's status has to be read before the total is parsed.
-    directory_kib="$(du -sk "$source_path" 2>/dev/null)" || {
-        agent_copy_warn "$display_path" "Failed to inspect $label directory"
-        return 0
-    }
-    directory_kib="${directory_kib%%[!0-9]*}"
-    case "$directory_kib" in
-        ''|*[!0-9]*)
-            agent_copy_warn "$display_path" "Failed to inspect $label directory"
-            return 0
-            ;;
-    esac
+    directory_kib=$(((directory_blocks + 1) / 2))
     if [ "$directory_kib" -gt "$max_kib" ]; then
         agent_copy_warn "$display_path" "Skipping oversized $label directory"
         return 0
@@ -571,7 +574,9 @@ copy_agent_directory() {
         agent_copy_warn "$display_path" "Failed to copy $label directory" "(destination is not a directory)"
         return 0
     fi
-    if ! mkdir -p "$destination_path" 2>/dev/null; then
+    if [ -e "$destination_path" ] || [ -L "$destination_path" ]; then
+        destination_existed=true
+    elif ! mkdir -p "$destination_path" 2>/dev/null; then
         agent_copy_warn "$display_path" "Failed to create destination for $label directory"
         return 0
     fi
@@ -579,20 +584,25 @@ copy_agent_directory() {
         agent_copy_warn "$display_path" "Skipping $label directory with symlinked destination"
         return 0
     fi
-    found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
-        agent_copy_warn "$display_path" "Failed to inspect $label directory destination"
-        return 0
-    }
-    if [ -n "$found_symlink" ]; then
-        agent_copy_warn "$display_path" "Skipping $label directory containing destination symlink"
-        return 0
+    # A directory this call just created holds nothing, so only one that was
+    # already there (an earlier boot's copy, or the workload's) is searched.
+    if [ "$destination_existed" = true ]; then
+        found_symlink="$(find -P "$destination_path" -type l -print -quit 2>/dev/null)" || {
+            agent_copy_warn "$display_path" "Failed to inspect $label directory destination"
+            return 0
+        }
+        if [ -n "$found_symlink" ]; then
+            agent_copy_warn "$display_path" "Skipping $label directory containing destination symlink"
+            return 0
+        fi
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
         agent_copy_warn "$display_path" "Failed to copy $label directory"
-    else
-        if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
-            agent_input_record_copy "$source_root" "$relative_path"
-        fi
+    elif [ -n "$walk_listing" ]; then
+        # Recorded only after the copy succeeded (see copy_agent_file). The
+        # walk above listed exactly what cp copied: the mount is read-only.
+        cat -- "$walk_listing" >> "$AGENT_INPUT_COPIED_PATHS" 2>/dev/null ||
+            agent_copy_warn "$relative_path" "Failed to record copied input; will retry"
     fi
 }
 
@@ -781,14 +791,6 @@ agent_input_home_matches() {
     ) 2>/dev/null
 }
 
-# Copy helpers publish ownership only after a successful copy. The per-entry
-# walker can therefore retain successes without claiming a refused sibling.
-agent_input_record_copy() {
-    [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ] || return 0
-    (cd "$1" && find -P "$2" -printf '%y%p\0') >> "$AGENT_INPUT_COPIED_PATHS" ||
-        agent_copy_warn "$2" "Failed to record copied input; will retry"
-}
-
 # Removes what the previous listing imported and the current one no longer has:
 # files first, then each directory if that left it empty, deepest first. The
 # listing is workload-writable, so a path through a link or `..` is refused.
@@ -945,7 +947,7 @@ import_agent_input() {
         : >> "$fresh/pending" &&
         LC_ALL=C sort -zu "$fresh/copied" "$fresh/retained" "$fresh/pending" > "$fresh/owned" &&
         mv "$fresh/owned" "$fresh/paths" &&
-        rm -f "$fresh/copied" "$fresh/retained" "$fresh/pending" || exit 1
+        rm -f "$fresh/copied" "$fresh/copied.unit" "$fresh/retained" "$fresh/pending" || exit 1
         if [ "${AGENT_COPY_SKIPPED:-}" != "$skipped_before" ]; then
             rm -f -- "$fresh/sums" || exit 1
         fi

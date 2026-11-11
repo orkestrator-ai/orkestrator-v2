@@ -446,8 +446,9 @@ On every OpenCode or Pi bump, re-read each OAuth provider's refresh function:
   non-rotating; one that stores the response's `refresh_token` rotates.
 - OpenCode 1.x: the built-in auth plugins under `packages/opencode/src/plugin/`
   at the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
-  any new plugin `internalPlugins` loads, and the npm auth plugins it pins in
-  `packages/opencode/package.json` (`opencode-gitlab-auth`, `opencode-poe-auth`).
+  any new plugin `internalPlugins` loads, and the npm auth plugins pinned in
+  the `package.json` of OpenCode's `packages/opencode/` (`opencode-gitlab-auth`,
+  `opencode-poe-auth`).
 - OpenCode 2.x: the provider plugins under `packages/core/src/plugin/provider/`
   at the release tag. A container's 2.x server is handed the same restricted
   1.x entries (`openCode2ContainerCredentialPayload`), so one list serves both.
@@ -482,7 +483,7 @@ was first made from (Pi 1.2.0, OpenCode 1.19.0):
   OpenCode's own login store the response's refresh token, and xAI and
   Snowflake Cortex keep the old one only when the response omits it. Poe now
   stores an empty `refresh`. It refreshes a login with five minutes or less
-  left (`packages/core/src/integration.ts`).
+  left (`integration.ts` in OpenCode's `packages/core/src/`).
 
 No provider moved between the two lists, so `NON_ROTATING_OAUTH_PROVIDERS`
 was left as it was.

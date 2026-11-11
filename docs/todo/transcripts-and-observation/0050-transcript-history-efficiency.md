@@ -7,9 +7,10 @@ measurement run, against `main` at `930189337` (2026-10-26).
 
 ## Task analysis
 
-Analysed 2026-11-10 against `main` at `c98b20e6f` (task 3 built, run and
-closed; tasks 1, 2 and 4 re-read, unchanged since 2026-11-06). Previously
-analysed 2026-11-06 against `main` at `c1724ab7` (task 5 run and closed).
+Analysed 2026-11-11 against `main` at `498b68766` (task 4 built, run and
+closed; task 1 re-read, unchanged). Previously analysed 2026-11-10 against
+`main` at `c98b20e6f` (task 3 built, run and closed) and 2026-11-06 against
+`main` at `c1724ab7` (task 5 run and closed).
 
 ### Tasks
 
@@ -17,7 +18,7 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 1. **Retire the `/messages` fallback**: remove `readHttpBridgeTranscriptSnapshot`'s fallback once the floor passes the first Stable release whose Claude bridge loads sessions on `/transcript`. Status: blocked (on the support window, which the floor reaches for v2.36.0 on 2027-01-02; waits on 7568: 0050 task 1 counter reading). Reading the fallback counter on the maintainer's machines moved to 7568 on 2026-11-10.
 3. **Pre-acceptance dispatch window live**: kill the backend while a build-pipeline prompt is journaled but not yet accepted, and prove the same-id retry. Status: done (2026-11-10; a test-only dispatch hold in the backend's bridge client, and `dispatch-hold-live.spec.ts` passed four times on a Pi loopback model; no product defect, two harness defects fixed; see the results section).
-4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: open. The runs with real providers moved to 7568 on 2026-11-10 (0050 task 4, Electron and container items) and need this harness first.
+4. **Electron and Docker paging harness**: make the transcript paths runnable in the Electron window and in a container environment (an Electron paging step, and a container target for `transcript-paging-live.spec.ts`); iOS only where the wrapper changes. Status: done (2026-11-11; `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` and `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, each passed on the Codex loopback model; the Electron run found one renderer defect, fixed; see the results section). The runs with real providers are on 7568 (0050 task 4, Electron and container items). iOS: no wrapper change, so nothing to run.
 5. **Mounted tab across a bridge-only restart**: no duplicate rows, and the reader's place kept, through the one remaining Codex re-key. Status: done (2026-11-06; two defects found and fixed, see the results section).
 6. **Open questions and verification items**: all answered; one sentence was stale. Status: done (the sentence corrected 2026-11-06).
 
@@ -31,13 +32,13 @@ Code items 1, 2 and 4 to 9 are done or closed and still match HEAD. Item 3's joi
 
 **Decisions.**
 
-- **Keep the retirement in this file, or hand it to 0034?**
-  - **Hand it to 0034's window-gated removals once the qualification tasks here close, and finish this file then (recommended).**
-    - Pros: this file stops being held open for months by a date; 0034 already tracks floor-gated work, and 0232 follows the same pattern.
-    - Cons: the item's rationale must be carried across, and it adds a row to another file.
-  - **Keep it here as the last item.**
-    - Pros: one place for item 3's history.
-    - Cons: this file cannot finish until the floor moves, whatever happens to its live runs.
+- **Keep the retirement in this file, or hand it to 0034?** Re-checked 2026-11-11, when task 4 closed the last qualification task here: 0034 no longer exists (retired), so there is no window-gated removals file to hand it to.
+  - **Hand it to 0034's window-gated removals once the qualification tasks here close, and finish this file then.**
+    - Pros: this file would stop being held open for months by a date.
+    - Cons: 0034 is retired; the item would need a new home, which only moves the same blocked row elsewhere.
+  - **Keep it here as the last item (recommended).**
+    - Pros: one place for item 3's history; 0232 already waits on this task by number.
+    - Cons: this file cannot finish until the floor moves.
 - **What evidence is needed before removal, besides the floor?**
   - **The counter at zero on every machine the maintainer can reach for a whole Stable cycle after the floor passes (recommended).** Reading it is a maintainer check, moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
     - Pros: catches a bridge that is somehow older than the floor suggests (a container image built before #1296).
@@ -77,14 +78,16 @@ Done on 2026-11-10 (see [Qualification results (2026-11-10)](#qualification-resu
 
 **Investigation.** Nothing recorded since 2026-10-24. `mise run test:agent:electron` and `mise run test:agent:docker` exist, but neither drives a long transcript with paging. `transcript-paging-live.spec.ts` creates its environments with `environmentType: "local"` only (`createEnvironment`), so it cannot reach a container bridge. Its Codex loopback mode (`ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1`) needs no login, so the harness can be proved on the loopback model before any paid run.
 
-Agent work left:
+Done on 2026-11-11 (see [Qualification results (2026-11-11)](#qualification-results-2026-11-11-electron-window-and-container-environment)). Two switches on `transcript-paging-live.spec.ts`'s native case:
 
-- Add an environment-type switch to `transcript-paging-live.spec.ts` (proposed name `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`, default `local`) that creates a container environment on a profile started with `--fixture-environments local,container`, and prove it once with the Codex loopback model.
-- Add a paging step to the Electron suite: a native tab whose transcript outgrows the live window, Load earlier messages, the reader's place kept, and a reload; prove it on the Codex loopback model.
+- `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` runs it in the profile's seeded `fixture-container` (used, never deleted). The trail is copied into `/workspace` with `tar` over `docker exec`; with the loopback model the model runs inside the container and the container's `$HOME/.codex/config.toml` points at it for the run; the bridge restart is `stop_codex_server`/`start_codex_server`, proved by a new bridge pid.
+- `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` renders the tab in the profile's own Electron window, attached over CDP. An agent-test profile started with `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1` (new, `electronDebugSwitches` in `apps/desktop/scripts/dev/lifecycle.ts`) opens Chromium remote debugging on an OS-chosen loopback port; the spec reads the endpoint from `electron.log`. A headless profile is enough, so this runs on a host with no display.
+
+Both passed on the Codex loopback model. The Electron run found a renderer defect: after the bridge restart the reader's history was paged back in but their place was not restored. Fixed in `TranscriptScrollController.holdPlaceAcrossReflow` (results section). Two harness defects were fixed on the way: the Docker permission dialog swallowed the spec's wheel gestures, and a container environment's pane layout must carry its container id.
 
 **Decisions.**
 
-- **How to cover it?**
+- **How to cover it?** The Electron half was done by driving the profile's own window from the same spec rather than a step in the Electron suite (Assumptions and decisions, item 26).
   - **Run `transcript-paging-live.spec.ts` once against a container fixture environment, and add a paging step to the Electron suite (recommended).** The harness is agent work here; the real-provider runs are the two 0050 task 4 items in 7568.
     - Pros: reuses the live spec's checks; the container run exercises the container bridge hop.
     - Cons: the Electron step is new work; the container run needs a profile started with `--fixture-environments local,container`.
@@ -150,12 +153,15 @@ loads Claude sessions after a bridge restart, and the renderer pages through
 joined `sync-v1` history itself. The Claude bridge now loads those sessions on
 `/transcript`, which starts the fallback's retirement clock, and the joined
 path moved to [0232](0232-direct-history-cursor-minting.md). The hidden
-browser document is measured. What remains is real-stack qualification not
-run here: Electron and Docker with real providers (the paid inactive Cursor
-run moved to the manual-test checklist on 2026-11-10). The mounted tab across a bridge-only
+browser document is measured. The mounted tab across a bridge-only
 restart ran on 2026-11-06 and found two defects, both fixed. The
 pre-acceptance pipeline dispatch window ran on 2026-11-10 through a test-only
-dispatch hold and found no product defect.
+dispatch hold and found no product defect. On 2026-11-11 the paging spec
+learned to run in the Electron window and in a container environment, and
+passed in both on a loopback model; the Electron run found one more defect,
+fixed. What remains for agents is task 1, which waits on the support window;
+the real-provider Electron, container and Cursor runs are on the manual-test
+checklist.
 
 ## Current state
 
@@ -456,10 +462,13 @@ Done on 2026-10-24 (results below):
 Done on 2026-10-26 (results below): a truly hidden and resumed document at
 an 8 MiB retained history, with `e2e/perf/hidden-resume-perf.ts`.
 
-Still open:
+Done on 2026-11-11 (results below): the native case in the Electron window
+and in a container environment, on the pinned Codex against a loopback model
+(task 4).
 
-- Electron window and Docker environments with real providers; native iOS
-  only where the wrapper changes.
+Still open, on the manual-test checklist: Electron window and Docker
+environments with real providers. Native iOS: no wrapper change, so nothing
+to run.
 
 Done on 2026-11-06 (results below): a mounted Codex tab with loaded history
 across a bridge-only restart (task 5), on the pinned Codex against a
@@ -468,6 +477,90 @@ loopback model.
 Done on 2026-11-10 (results below): the pre-acceptance build-pipeline
 dispatch window (task 3), held deterministically by a test-only dispatch hold
 in the backend's bridge client, on Pi against a loopback model.
+
+## Qualification results (2026-11-11): Electron window and container environment
+
+Task 4. Worktree at `main` `498b68766` plus this change, on beelink2 (Intel
+Core Ultra 9 285H, Linux 7.2.15, Bun 1.4.4) while other builds shared the
+host. No real login and no billed turn: both profiles used `CODEX_HOME` set to
+a throwaway directory whose `auth.json` held a made-up API key, and the
+pinned Codex (0.167.0) talked to `transcript-paging-codex-model.ts`. 150-stop
+trail, as in task 5.
+
+**Profiles.**
+
+- Electron: `CODEX_HOME=<throwaway> ORKESTRATOR_HOST_REACHABILITY_CHECK=off ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1 mise run dev:test --profile qa-0050-electron --fixture --headless --credential-source codex --agent-platforms codex`.
+  Its `electron.log` recorded `DevTools listening on ws://127.0.0.1:<port>/…`.
+- Container: this host's user cannot reach the host Docker daemon, so a
+  disposable rootless daemon (`mise run docker:disposable -- start --name q0050`)
+  served it, and `dev:test` built the profile image inside that daemon:
+  `eval "$(mise run docker:disposable -- env --name q0050)"; CODEX_HOME=<throwaway> ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile qa-0050-container --fixture --fixture-environments local,container --headless --credential-source codex --agent-platforms codex`.
+  The fixture container and its egress gateway came up `restricted`.
+
+**Command** (per run; `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron` for the
+Electron runs, `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container` and the
+same `DOCKER_HOST` for the container runs):
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_RUN_ID=<run> \
+ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 ORKESTRATOR_AGENT_TEST_PAGING_CODEX_LOOPBACK=1 \
+ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1 \
+  mise run test:logged -- --name transcript-paging-<run> -- \
+  mise run test:agent:browser -- e2e/agent-testing/transcript-paging-live.spec.ts
+```
+
+`ORKESTRATOR_AGENT_TEST_ALLOW_STALE_BRIDGES=1` was set because a later commit
+in the same change touched `packages/protocol` (the legacy projection's
+`encoded` flag), which the bridge freshness check counts as a bridge source
+change; no bridge code changed between the profile start and the runs.
+
+**Results after the fixes.**
+
+| Check | Electron (2 runs) | Container (2 runs) | Browser, Electron profile (1 run) |
+| --- | --- | --- | --- |
+| Backend window | truncated, 100-row tail, 52 rows in pages `[12, 40]`, complete | same | same |
+| Load earlier messages | reached the prompt, place held (clamp-aware, `errorPx` 0) | same | same |
+| Bridge restart under the mounted tab | 152 / 152 rows, 150 of 150 call ids kept, no row or stop twice, place held at stop 1 (offset 228 px, `errorPx` 0) | same, through `stop_codex_server`/`start_codex_server` | same |
+| Restart while another environment is active | recovered | recovered | recovered |
+| After a reload | paged to the prompt, place held | paged to the prompt after 4 clicks (3 empty pages while the restarted bridge re-read its rollout), place held | paged to the prompt |
+| Run time | 53 to 72 s | 72 to 77 s | 36 s |
+
+After every container run the container held no trail, no model directory, no
+model process, and no `$HOME/.codex/config.toml` (it had none before).
+
+**Defect: a width reflow cancelled the history recovery (Electron).** In the
+Electron window the reader lost their place after the bridge restart in all
+six runs before the fix: twice the tab stayed on the bare live tail (2 rows,
+18 stops) for the 30 s watched, and four times the history was paged back in
+but the reader was not moved to their part, which was left unrendered inside
+the open tool group. Console probes (temporary, not committed) showed the order: the drop
+commit started the recovery (`useRestorePlaceAfterHistoryDrop`), then a
+`ResizeObserver` callback ran `holdPlaceAcrossReflow`, which started a
+`reflow` navigation; that bumped the scroll generation, and the recovery,
+which treats a new generation as the reader having moved, gave up. The width
+changed because the shorter list lost its classic vertical scrollbar.
+Playwright's headless Chromium hides scrollbars, which is why the browser
+suite never saw it; Electron, and desktop browsers on Linux and Windows, have
+classic scrollbars. Fixed: while a history recovery is pending
+(`waitingForHistory`), a width change records the new width and does not
+navigate; the recovery places the reader when their part returns. Covered by
+`a width reflow leaves a pending history recovery in charge of the reader's place`
+in `transcript-scroll-controller.test.ts`, which fails without the fix.
+
+**Harness defects fixed.**
+
+- On this host the "Docker Permission Required" dialog opens after the Docker
+  probe answers, often after a reload has rendered the list. The spec's
+  locator handler runs only before actions and auto-waiting assertions, so the
+  dialog's overlay took the wheel gestures and the browser run failed
+  `native-after-reload: native paging must run`. Every wheel gesture now waits
+  for the list through an auto-waiting assertion first (`clearOverlays`).
+- A container environment's pane layout is fenced to its container: saving it
+  with `containerId: null` failed `Pane layout write targets stale environment
+  generation`. The layout now carries the environment's container id.
+
+Screenshots of the open tool group before and after the restart were taken
+by the spec (`output/visual-previews/`, not committed).
 
 ## Qualification results (2026-11-10): pre-acceptance dispatch window
 
@@ -1418,6 +1511,70 @@ measurement.
       real logins.
     - Pros: one tested place.
     - Cons: touches four specs outside the task (one-line changes each).
+
+
+Made on 2026-11-11 while doing task 4.
+
+26. **Task 4: how the Electron window is driven.**
+    - Options: a new spec in the Electron suite that launches its own
+      Electron with a temporary profile, provisions Codex and runs the paging
+      journey; or an opt-in remote-debugging port on the `dev:test` profile's
+      own Electron, driven over CDP by the existing paging spec.
+    - Chosen: the debugging port (`ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`).
+    - Why: the paging spec already has every check (window, pages, held place,
+      restart, inactive restart, reload); a separate Electron spec would
+      duplicate them and its own profile would need the toolchain
+      provisioning `dev:test` already does. CDP needs no display, so it runs on
+      this headless host.
+    - Pros: one spec, both clients; headless.
+    - Cons: a loopback debugging port while the profile runs (agent-test
+      profiles only, opt-in; whoever can reach it controls a window holding
+      only fixture state); the Electron suite itself has no paging step.
+27. **Task 4: where the loopback model runs for a container.**
+    - Options: on the host, reached through the container's host gateway;
+      inside the container.
+    - Chosen: inside the container, copied in and started with `bun` over
+      `docker exec`, stopped by closing its stdin.
+    - Why: a restricted container may reach the host only on the agent-tools
+      port, and a rootless daemon refuses host loopback by default; the
+      container's own loopback is always allowed. The firewall stays untouched.
+    - Pros: works in restricted mode on any daemon.
+    - Cons: the model runs as the container user inside the fixture container
+      for the length of the case.
+28. **Task 4: which container environment.**
+    - Options: create a container environment per run; use the profile's
+      seeded `fixture-container`.
+    - Chosen: the seeded one, never deleted; the trail and the Codex config
+      change are removed afterwards, and each run uses a new tab id so it
+      starts a new conversation.
+    - Why: a new container per run costs an image start and an address pool,
+      which this host is short of.
+    - Pros: fast, no pool use.
+    - Cons: the case shares the container with anything else run on that
+      profile.
+29. **Task 4: the reflow defect's fix.**
+    - Options: skip the reflow navigation while a history recovery is pending
+      (in the controller); make the recovery ignore generation bumps from
+      `reflow` navigations (in the hook).
+    - Chosen: skip the reflow navigation.
+    - Why: the reflow's anchor names the dropped part, so its navigation could
+      not have placed the reader anyway, and the controller already knows a
+      recovery is pending (`setWaitingForHistory`). The hook's generation
+      check stays a simple "anything moved the reader".
+    - Pros: one line in one place; a reflow after the recovery still holds the
+      place.
+    - Cons: a width change during a recovery (a window resize while history
+      loads) is not compensated until the recovery places the reader.
+30. **Task 7755 (folded in from 7553): mark the legacy projection.**
+    - Options: mark `get_native_agent_projection` spliced with its contract
+      `encoded` flag; leave it unmarked.
+    - Chosen: mark it.
+    - Why: with the narrowed splice it costs less CPU per gateway read (826
+      to 873 µs against 987 to 1,044 µs on the 430 KB benchmark window, busy
+      host); the output is byte-identical.
+    - Pros: less CPU for every gateway read of a large legacy projection.
+    - Cons: its result is no longer schema-checked in development, like the
+      four progressive reads already.
 
 ## Constraints and rationale
 

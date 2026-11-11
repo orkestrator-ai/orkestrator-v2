@@ -32,6 +32,7 @@ export interface DelegationCoordinator {
   projectId: string;
 }
 const HEARTBEAT_MS = 60_000;
+const MAX_TOOL_ERROR_CHARS = 500;
 
 /** Cleanup errors are content-free, and never prevent later cleanup steps. */
 export async function runCoordinatorCleanup(
@@ -397,15 +398,19 @@ export function createDelegationWatch(
           orkestratorToolCalls([{ name: record.toolName, args: "", state: "unknown" }], tool)
             .length > 0
         ) {
+          // A failed call reads as `{"isError":true,"error":…}`, its message
+          // bounded: evaluations read it, and a check detail may quote it.
+          const failed = (error: string) =>
+            JSON.stringify({ isError: true, error: error.slice(0, MAX_TOOL_ERROR_CHARS) });
           let text = typeof record.toolOutput === "string" ? record.toolOutput : "";
+          if (!text && typeof record.toolError === "string" && record.toolError)
+            text = failed(record.toolError);
           if (!text && typeof record.detailRef === "string") {
             const details = await invoke<ToolDetails | null>("get_native_agent_tool_details", {
               ...identity,
               detailRef: record.detailRef,
             }).catch(() => null);
-            text = details?.toolError
-              ? JSON.stringify({ isError: true })
-              : (details?.toolOutput ?? "");
+            text = details?.toolError ? failed(details.toolError) : (details?.toolOutput ?? "");
           }
           outputs.push(text);
         }

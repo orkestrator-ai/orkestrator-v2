@@ -2351,6 +2351,54 @@ ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 It attaches the leaf, adds projects and changes both profiles' messaging and
 Pi settings, so reset both afterwards.
 
+### Coordinator gap tools on this node and a leaf (fake model)
+
+`mise run test:agent:coordinator:gap-tools-fake` runs the live coordinator
+suite's `gap-tools` case (above) on a loopback fake model, with no login and
+nothing billed (to-do 1021 (retired) tasks 1 and 4). It starts two disposable
+`dev:test --fixture --headless --no-agent-credentials --agent-platforms pi`
+profiles, the second as a companion profile, with
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs
+`e2e/agent-testing/coordinator-gap-tools-fake.spec.ts`, then stops and resets
+both. Each profile's isolated Pi `models.json` and `settings.json` (never
+`~/.pi`) name `coordinator-gap-tools-fake-model.ts` (one loopback server, base
+paths `/desk/v1` and `/leaf/v1`; script in
+`coordinator-gap-tools-fake-model-script.ts`), and set Pi's
+`compaction.keepRecentTokens` to 1: Pi refuses to compact a session shorter
+than that, and the fake worker's is a few hundred tokens, so without it
+`/compact` would be refused rather than run. The real backends, coordinator
+policy, Control MCP, Pi bridges and SDK, change tracking, fork, turn stop,
+slash-command dispatch, scheduled jobs, the question relay, status wakes and
+agent mail run; only the model is fake.
+
+- **This node.** A Pi coordinator on the command node's fixture project runs
+  the case against a worker it launches there.
+- **A connected node.** The command node attaches the leaf with `add_node`
+  over the leaf's real gateway (the token read in memory, never printed), both
+  profiles get a checkout of one shared repository, and the coordinator runs
+  the case with `nodeId` on every worker tool, so each goes through its
+  node-link-only controller command on the leaf. The harness reads the
+  worker's turn and environments from the leaf's own backend.
+
+The fake coordinator replays each turn's numbered steps; the fake worker runs
+the launch command through Pi's `bash` tool and parks its long turn until Pi
+aborts the request. Besides the case's own checks, the spec requires that the
+fake saw each gap tool called once, one parked and released worker request,
+at least one compaction summary request (offered no tools), and exactly one
+wake saying the coordinator stopped the turn. A pass proves
+the plumbing, not that a real model reads the tool descriptions right; that
+needs the billed run on the manual-test checklist. The content-free summaries
+are `output/agent-testing/<desk-profile>/coordinator-gap-tools-fake/local.json`
+and `remote.json`.
+
+To run the spec against two profiles you started yourself, start both with
+the same flags and pass `ORKESTRATOR_AGENT_TEST_PROFILE=<command node>
+ORKESTRATOR_AGENT_TEST_GAP_TOOLS_LEAF_PROFILE=<leaf>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_GAP_TOOLS_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-gap-tools-fake.config.ts`.
+It attaches the leaf, adds projects and changes both profiles' Pi settings, so
+reset both afterwards.
+
 ### Coordinator checkout sync with a slow remote (fake model)
 
 `mise run test:agent:coordinator-slow-remote` qualifies the coordinator's
@@ -2425,7 +2473,8 @@ status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
 (`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
 coordinator once (`goal`), that plain requests naming no workflow start the right
-one (`routing`), and that peer mail between two ordinary environments wakes
+one (`routing`), that each tool from the coordinator gap review works against a
+real worker (`gap-tools`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -2755,8 +2804,49 @@ prompts and verdict are in `coordinator-live-routing.ts`;
 `coordinator-live-routing-orchestration.test.ts` runs the orchestration over a
 scripted command transport.
 
+The `gap-tools` case (to-do 1021 (retired) task 1) calls each tool from the coordinator
+gap review once against one worker the coordinator launches, in seven harness
+turns. Every tool step in a prompt is one line naming the tool and its exact
+arguments, and `<tool.field>` stands for a field of an earlier result in the
+same turn, so a real model can follow it and a fake model can replay it:
+
+```bash
+mise run test:agent:coordinator --credential-source codex --scenario gap-tools
+```
+
+1. Launch: the worker's one shell command commits one line of a file and
+   leaves a second line uncommitted.
+2. `get_worker_changes` with `diffScope: "split"` must list the file as both
+   committed and uncommitted, with each line on its own side only
+   (`changes-split`). `fork_worker` with no prompt must name one new
+   environment that exists, whose base is the worker's commit rather than the
+   coordinator base (`fork-from-last-commit`).
+3. `send_prompt_to_tab` gives the worker a long turn (`sleep 900`), and
+   `stop_worker_turn` must stop it (`turn-stopped`) and wake the coordinator
+   once with a notice saying it stopped the turn itself (`stop-wakes-once`).
+4. `list_worker_commands` must list `/compact`, and `run_worker_command`
+   running it must answer without an agent turn or a delegation
+   (`command-ran-without-a-turn`).
+5. `create_schedule` (a self-timer six hours away), then `pause_schedule`,
+   `update_schedule`, `resume_schedule` and `cancel_schedule`: paused, then
+   active, then gone (`schedule-edits`). Scheduling is experimental and its
+   tools are offered only while it is on, so the case turns
+   `experimentalScheduling` on and restores it afterwards.
+6. `resolve_conflicts` and `answer_worker_question` against a worker with no
+   pull request and no question must both be refused, and no approval
+   request may be created (`resolve-refused-without-pr`,
+   `answer-refused-without-question`). Real conflicts, PR wakes and real
+   worker questions are on the manual-test checklist (7568).
+
+`each-gap-tool-called-once` requires exactly one call of each of the ten
+tools. The prompts and verdict are in `coordinator-live-gap-tools.ts`, the
+orchestration in `coordinator-live-gap-tools-orchestration.ts`; it takes
+`nodeId`, the node's own backend and its project to run the same case against a
+worker on a connected node. `mise run test:agent:coordinator:gap-tools-fake`
+(below) runs it on a fake model, on this node and through a leaf.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now`, `goal`, `routing` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal`, `routing`, `gap-tools` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the protocol package's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

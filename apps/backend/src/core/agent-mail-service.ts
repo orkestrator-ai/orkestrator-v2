@@ -382,20 +382,26 @@ export class AgentMailService {
   private async refreshPresenceOnce(): Promise<void> {
     // Nothing reads presence while messaging is off. Paused still refreshes:
     // it only holds delivery, and the mail surfaces stay visible.
-    if (!(await this.storage.loadConfig()).global.agentMessaging?.enabled) return;
+    const config = await this.storage.loadConfig();
+    if (!config.global.agentMessaging?.enabled) return;
     const mailboxes: MailboxDescriptor[] = [];
     let offset = 0;
     while (true) {
+      // The listing takes the config this pass already read: a second read
+      // was the pass's second revision check (todo 7567 task 2).
       const page = await this.storage.listAgentMailboxes({
         offset,
         limit: AGENT_MAIL_MAX_LIST_LIMIT,
+        config,
       });
       mailboxes.push(...page.mailboxes);
       offset += page.mailboxes.length;
       if (page.mailboxes.length === 0 || offset >= page.total) break;
     }
     // One environment read per environment per pass rather than one per
-    // mailbox, so a stopped environment costs no per-mailbox read at all.
+    // mailbox, so a stopped environment costs no per-mailbox read at all, and
+    // the gate of a running one takes this read instead of repeating it
+    // (todo 7567 task 2).
     const environments = new Map<string, Promise<Environment | null | undefined>>();
     const environmentFor = (environmentId: string) => {
       let read = environments.get(environmentId);
@@ -414,6 +420,11 @@ export class AgentMailService {
             await this.recordPresence(mailbox.mailboxId, stopped);
             return;
           }
+          // Only a read this pass already made; a failed one stays undefined
+          // and the gate reads the row itself.
+          const known = environments.has(mailbox.environmentId)
+            ? { environment: await environments.get(mailbox.environmentId) }
+            : {};
           if (mailbox.kind === "native" && mailbox.agent) {
             const logicalSessionKey =
               mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
@@ -423,11 +434,14 @@ export class AgentMailService {
               logicalSessionKey,
             );
             const presence = this.nativeAgents.mailInjectPresence
-              ? await this.nativeAgents.mailInjectPresence({
-                  environmentId: mailbox.environmentId,
-                  agent: mailbox.agent,
-                  logicalSessionKey,
-                })
+              ? await this.nativeAgents.mailInjectPresence(
+                  {
+                    environmentId: mailbox.environmentId,
+                    agent: mailbox.agent,
+                    logicalSessionKey,
+                  },
+                  known,
+                )
               : activity === "idle" || activity === "working" || activity === "waiting"
                 ? activity
                 : "unknown";
@@ -435,10 +449,13 @@ export class AgentMailService {
           } else if (mailbox.kind === "tmux" && this.tmux.mailInjectPresence) {
             await this.recordPresence(
               mailbox.mailboxId,
-              await this.tmux.mailInjectPresence({
-                environmentId: mailbox.environmentId,
-                tabId: mailbox.tabId,
-              }),
+              await this.tmux.mailInjectPresence(
+                {
+                  environmentId: mailbox.environmentId,
+                  tabId: mailbox.tabId,
+                },
+                known,
+              ),
             );
           }
         }),

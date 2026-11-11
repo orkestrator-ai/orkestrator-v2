@@ -735,8 +735,9 @@ same suite, `e2e/agent-testing/service-preview-seeded-electron.spec.ts`. It
 gives the fixture project an `entryPort` and a `run` command, creates two local
 environments, and checks the wait state, two servers on one port with the
 port-move offer, a restart, agent links and framework hints in the real window
-([0045](../todo/previews-and-annotations/0045-preview-service-discovery.md),
-task 1). Both specs launch Electron through
+([browser-previews.md](../architecture/browser-previews.md#local-environments)).
+It also runs headless on Linux through `playwright.electron-headless.config.ts`
+with `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`. Both specs launch Electron through
 `e2e/agent-testing/service-preview-electron-launch.ts`.
 
 Record results in the evidence log of
@@ -1305,7 +1306,8 @@ turns; the idle tab with its transcript bound; the container stopped with
 `recurringWork` counters and every `docker exec` Docker itself reports for
 the container (`docker events --filter event=exec_start`), labelled by
 program only. Use Docker's count to compare commits: the claude-tmux tab
-loop has no recurring kind on any commit so far (`tmux-poll` is the
+loop has its own recurring kind, `tmux-tab-loop` (B30), only from
+2026-11-11 (todo 7567, retired that day); on older commits it is uncounted (`tmux-poll` is the
 per-container Claude state poll), and an older backend leaves more loops
 uncounted. Afterwards it starts the container again, removes the fake model
 and stops the tab.
@@ -1318,8 +1320,8 @@ the public `environment.stop` action (so the presence pass meets stopped
 environments that own mailboxes), and starts them again.
 
 ```bash
-PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
 ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
 ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
   mise run dev:test --profile ctab --fixture --fixture-environments local,container \
   --no-agent-credentials --agent-platforms claude --headless
@@ -1336,6 +1338,11 @@ mise run dev:test --profile <the kept profile> --fixture --fixture-environments 
 mise exec -- bun scripts/busy-item-counts-live.ts --profile <the kept profile> \
   --out output/benchmarks/items.json
 ```
+
+Set `ORKESTRATOR_QUALIFICATION_DOCKER` before `PATH`: Bash expands these
+assignments in order, so with the shim's directory already on `PATH`
+`command -v docker` names the shim itself, which then execs itself in a loop
+and the profile never leaves `starting` (seen 2026-11-11).
 
 The busy driver needs `packages/cli/dist` (`bun run --cwd packages/cli
 build`) in whichever checkout runs the profile; with `--checkout` its busy

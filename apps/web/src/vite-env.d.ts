@@ -14,6 +14,15 @@ interface ImportMetaEnv {
 interface Window {
   __orkestratorClientPlatform?:
     "desktop-browser" | "ios-wkwebview" | "ipad-wkwebview" | "iphone-wkwebview";
+  /**
+   * iOS app only (its document-start bridge script): native shell controls.
+   * `setWebInspectable` lets Safari's Web Inspector attach to this page while
+   * renderer debug logging is on; the shell turns it off again on every
+   * navigation.
+   */
+  orkestratorNativeShell?: {
+    setWebInspectable?(enabled: boolean): Promise<unknown>;
+  };
   orkestratorGateway?: {
     enabled: boolean;
     /** True when gateway metadata was supplied by the Electron preload. */

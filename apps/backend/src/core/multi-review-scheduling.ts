@@ -123,6 +123,26 @@ export function isGraphEngineProjection(workflow: MultiReviewWorkflow): boolean 
   return workflow.engine === "graph" && workflow.graphRun?.settled !== true;
 }
 
+/**
+ * Whether the workflow's validation run is running and started less than
+ * `windowMs` ago. A short run usually ends inside that window, and its end
+ * raises no wake (todo 7564 task 3). A graph-engine projection is driven by
+ * its graph run, and a run being stopped has no completion to wait for, so
+ * neither gets the fast cadence; nor does a run whose start is unreadable.
+ */
+export function validationRunJustStarted(
+  workflow: MultiReviewWorkflow,
+  now: number,
+  windowMs: number,
+): boolean {
+  const run = workflow.validationRun;
+  if (workflow.phase !== "preparing" || run?.status !== "running") return false;
+  if (isGraphEngineProjection(workflow)) return false;
+  if (workflow.validationStopRequested === true) return false;
+  const startedAt = Date.parse(run.startedAt);
+  return Number.isFinite(startedAt) && now - startedAt < windowMs;
+}
+
 /** The initial interactive Fix turn is observed until its durable runtime settles. */
 export function needsInteractiveAddressFindingsObservation(workflow: MultiReviewWorkflow): boolean {
   return (

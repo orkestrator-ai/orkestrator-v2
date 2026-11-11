@@ -52,6 +52,7 @@ import {
   tmuxSelectionPromptFingerprint,
   tmuxSessionName,
 } from "./tmux-shared.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./tmux-transcript-reader.js";
 import type { TerminalRuntime } from "./terminal-runtime.js";
@@ -134,6 +135,8 @@ export type TmuxSessionTimingOptions = {
   now?: () => number;
   /** Pause before startup readiness and between deadline checks. */
   sleep?: (delayMs: number) => Promise<void>;
+  /** Recorder the poll loop's ticks report into; tests isolate one. */
+  metrics?: RecurringWorkMetrics;
 };
 
 const log = createLogger("tmux");
@@ -207,6 +210,7 @@ export class TmuxSession {
   private lastLiveness: { alive: boolean; at: number } | undefined;
   private readonly now: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
+  private readonly metrics: RecurringWorkMetrics;
 
   constructor(
     readonly environmentId: string,
@@ -220,6 +224,7 @@ export class TmuxSession {
     this.pollTick = timing.pollTick ?? ((intervalMs) => delay(intervalMs));
     this.now = timing.now ?? (() => Date.now());
     this.sleep = timing.sleep ?? ((delayMs) => delay(delayMs));
+    this.metrics = timing.metrics ?? recurringWorkMetrics;
     this.resumed = resumeSessionId !== undefined;
     // A resumed provider session already has authoritative conversation state,
     // even if its transcript has not been discovered by this backend yet.
@@ -691,6 +696,201 @@ export class TmuxSession {
     /** Rings counted when a safety read found a hook file no ring had announced. */
     let unannouncedAtRings: number | undefined;
 
+    /**
+     * One tick of the loop after its wait. `next` keeps the loop going;
+     * `stop` ends it (the session stopped or was replaced).
+     */
+    const runTick = async ({
+      idle,
+      signalled,
+      ringsBeforeWait,
+      woke,
+    }: {
+      idle: boolean;
+      signalled: boolean;
+      ringsBeforeWait: number;
+      woke: "timer" | "wake";
+    }): Promise<"next" | "stop"> => {
+      tick += 1;
+      quietTicks += 1;
+
+      // Liveness and the pane ride in the same round trip as the hook
+      // listing: in a container each was its own `docker exec`.
+      const livenessEvery = idle
+        ? TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS
+        : LIVENESS_CHECK_EVERY_TICKS;
+      const livenessDue = signalled || this.livenessDueNow || tick % livenessEvery === 0;
+      this.livenessDueNow = false;
+      const observationDue =
+        !this.observationInFlight && (signalled || Date.now() >= this.nextObservationAt);
+      const forceEmit = observationDue && this.forceNextObservation;
+      if (observationDue) {
+        this.nextObservationAt =
+          Date.now() +
+          (this.busy ? TMUX_BUSY_OBSERVATION_INTERVAL_MS : TMUX_OBSERVATION_INTERVAL_MS);
+        this.forceNextObservation = false;
+      }
+      const nonce = observationDue ? randomBytes(12).toString("hex") : undefined;
+
+      let snapshot: TmuxPollSnapshot | undefined;
+      this.lastSnapshotStartedAt = Date.now();
+      const tailEpoch = this.transcript.tailEpoch;
+      const tailPath = this.transcript.tailFilePath;
+      try {
+        snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tailPath, {
+          ...(tailPath ? {} : { candidatePath: this.expectedTranscriptPath() }),
+          tmux: {
+            command: this.tmuxCommand,
+            session: this.tmuxSession,
+            liveness: livenessDue,
+            pane: observationDue,
+          },
+          ...(nonce ? { nonce } : {}),
+        });
+        log.recovered("poll.snapshot-failed", this.pollLogScope);
+      } catch (error) {
+        this.warnPollFailed("poll.snapshot-failed", error);
+      }
+
+      if (snapshot && !this.transcript.tailFilePath && typeof snapshot.candidateSize === "number") {
+        this.transcriptPath ??= this.expectedTranscriptPath();
+        this.transcript.bindTail(this.transcriptPath);
+        if (this.transcriptPath === this.expectedTranscriptPath()) {
+          snapshot.transcriptSize = snapshot.candidateSize;
+        }
+      }
+
+      // The fallback search for a transcript Claude did not name after this
+      // session id, on its backoff. The expected file is in every snapshot,
+      // so a tab it binds never searches. A transcript found here is
+      // tailed from the next tick.
+      if (!this.transcript.tailFilePath && Date.now() >= nextDiscoveryAt) {
+        try {
+          const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
+          if (transcriptPath) this.transcript.bindTail(transcriptPath);
+          log.recovered("poll.discovery-failed", this.pollLogScope);
+        } catch (error) {
+          this.warnPollFailed("poll.discovery-failed", error);
+        }
+        nextDiscoveryAt = Date.now() + discoveryInterval;
+        discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
+      }
+
+      if (snapshot) {
+        const names = [...snapshot.pending, ...snapshot.timeouts];
+        const fresh = names.some((name) => !knownHookFiles.has(name));
+        knownHookFiles = new Set(names);
+        if (doorbell) {
+          // Judged a read later, so a ring still in flight is not a miss.
+          if (unannouncedAtRings !== undefined && doorbell.rings() === unannouncedAtRings) {
+            doorbell.missed();
+          }
+          unannouncedAtRings =
+            fresh && signalled && woke === "timer" && doorbell.rings() === ringsBeforeWait
+              ? doorbell.rings()
+              : undefined;
+        }
+        if (names.length > 0) {
+          quietTicks = 0;
+          nextDiscoveryAt = 0;
+          discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
+        }
+        try {
+          const events = await drainPending(
+            this.backend,
+            this.sessionHookPaths,
+            snapshot.pending,
+            emittedBlockingIds,
+          );
+          for (const event of events) this.emitHook(context, event);
+          log.recovered("poll.drain-pending-failed", this.pollLogScope);
+        } catch (error) {
+          this.warnPollFailed("poll.drain-pending-failed", error);
+        }
+
+        try {
+          const timeouts = await drainTimeouts(
+            this.backend,
+            this.sessionHookPaths,
+            snapshot.timeouts,
+          );
+          for (const timeout of timeouts) {
+            emittedBlockingIds.delete(timeout.id);
+            context.emit(claudeTmuxEvent, {
+              kind: "hook-timed-out",
+              tab_id: this.tabId,
+              environment_id: this.environmentId,
+              session_id: this.sessionId,
+              event_kind: timeout.kind,
+              event_id: timeout.id,
+            });
+          }
+          log.recovered("poll.drain-timeouts-failed", this.pollLogScope);
+        } catch (error) {
+          this.warnPollFailed("poll.drain-timeouts-failed", error);
+        }
+
+        if (this.transcript.tailFilePath) {
+          try {
+            const lines = await this.transcript.drainTail(
+              (line, stamped) => this.publishTranscriptLine(context, line, stamped),
+              snapshot.transcriptSize,
+              tailEpoch,
+            );
+            if (lines > 0) quietTicks = 0;
+            log.recovered("poll.tail-failed", this.pollLogScope);
+          } catch (error) {
+            this.warnPollFailed("poll.tail-failed", error);
+          }
+        }
+      }
+
+      if (observationDue) {
+        // A snapshot that did not carry the pane (it failed) costs the
+        // separate capture it always did.
+        this.startObservation(context, forceEmit, snapshot?.pane);
+      }
+
+      if (!livenessDue) return "next";
+      let alive: boolean;
+      if (snapshot?.alive !== undefined) {
+        alive = snapshot.alive;
+        this.lastLiveness = { alive, at: this.now() };
+      } else {
+        alive = await this.tmuxAlive().catch(() => false);
+      }
+      if (!alive) {
+        let removed = false;
+        const sessions = context.runtime.tmux.sessions;
+        await sessions.installLock(this.environmentId).runExclusive(async () => {
+          // A replace/stop may have won while the liveness process was in
+          // flight. It owns the transition and any newer session under the
+          // same tab key; never emit a stale stopped frame for that case.
+          if (this.stopRequested) return;
+          if (await this.tmuxAlive().catch(() => false)) return;
+          removed = sessions.removeIfSame(this.environmentId, this.tabId, this);
+          if (!removed) return;
+          this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
+          this.setBusyState(false);
+          await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
+          if (sessions.sessionsInEnvironment(this.environmentId) === 0) {
+            await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch((error) => {
+              log.warn("hooks.uninstall-failed", { error: formatLogError(error) });
+            });
+          }
+        });
+        if (!removed) return this.stopRequested ? "stop" : "next";
+        context.emit(claudeTmuxEvent, {
+          kind: "stopped",
+          tab_id: this.tabId,
+          environment_id: this.environmentId,
+        });
+        await context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
+        return "stop";
+      }
+      return "next";
+    };
+
     void (async () => {
       try {
         while (!this.stopRequested) {
@@ -708,192 +908,18 @@ export class TmuxSession {
             idle ? TMUX_IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
           );
           if (this.stopRequested) break;
-          tick += 1;
-          quietTicks += 1;
-
-          // Liveness and the pane ride in the same round trip as the hook
-          // listing: in a container each was its own `docker exec`.
-          const livenessEvery = idle
-            ? TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS
-            : LIVENESS_CHECK_EVERY_TICKS;
-          const livenessDue = signalled || this.livenessDueNow || tick % livenessEvery === 0;
-          this.livenessDueNow = false;
-          const observationDue =
-            !this.observationInFlight && (signalled || Date.now() >= this.nextObservationAt);
-          const forceEmit = observationDue && this.forceNextObservation;
-          if (observationDue) {
-            this.nextObservationAt =
-              Date.now() +
-              (this.busy ? TMUX_BUSY_OBSERVATION_INTERVAL_MS : TMUX_OBSERVATION_INTERVAL_MS);
-            this.forceNextObservation = false;
-          }
-          const nonce = observationDue ? randomBytes(12).toString("hex") : undefined;
-
-          let snapshot: TmuxPollSnapshot | undefined;
-          this.lastSnapshotStartedAt = Date.now();
-          const tailEpoch = this.transcript.tailEpoch;
-          const tailPath = this.transcript.tailFilePath;
-          try {
-            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tailPath, {
-              ...(tailPath ? {} : { candidatePath: this.expectedTranscriptPath() }),
-              tmux: {
-                command: this.tmuxCommand,
-                session: this.tmuxSession,
-                liveness: livenessDue,
-                pane: observationDue,
-              },
-              ...(nonce ? { nonce } : {}),
-            });
-            log.recovered("poll.snapshot-failed", this.pollLogScope);
-          } catch (error) {
-            this.warnPollFailed("poll.snapshot-failed", error);
-          }
-
-          if (
-            snapshot &&
-            !this.transcript.tailFilePath &&
-            typeof snapshot.candidateSize === "number"
-          ) {
-            this.transcriptPath ??= this.expectedTranscriptPath();
-            this.transcript.bindTail(this.transcriptPath);
-            if (this.transcriptPath === this.expectedTranscriptPath()) {
-              snapshot.transcriptSize = snapshot.candidateSize;
-            }
-          }
-
-          // The fallback search for a transcript Claude did not name after this
-          // session id, on its backoff. The expected file is in every snapshot,
-          // so a tab it binds never searches. A transcript found here is
-          // tailed from the next tick.
-          if (!this.transcript.tailFilePath && Date.now() >= nextDiscoveryAt) {
-            try {
-              const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
-              if (transcriptPath) this.transcript.bindTail(transcriptPath);
-              log.recovered("poll.discovery-failed", this.pollLogScope);
-            } catch (error) {
-              this.warnPollFailed("poll.discovery-failed", error);
-            }
-            nextDiscoveryAt = Date.now() + discoveryInterval;
-            discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
-          }
-
-          if (snapshot) {
-            const names = [...snapshot.pending, ...snapshot.timeouts];
-            const fresh = names.some((name) => !knownHookFiles.has(name));
-            knownHookFiles = new Set(names);
-            if (doorbell) {
-              // Judged a read later, so a ring still in flight is not a miss.
-              if (unannouncedAtRings !== undefined && doorbell.rings() === unannouncedAtRings) {
-                doorbell.missed();
-              }
-              unannouncedAtRings =
-                fresh && signalled && woke === "timer" && doorbell.rings() === ringsBeforeWait
-                  ? doorbell.rings()
-                  : undefined;
-            }
-            if (names.length > 0) {
-              quietTicks = 0;
-              nextDiscoveryAt = 0;
-              discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
-            }
-            try {
-              const events = await drainPending(
-                this.backend,
-                this.sessionHookPaths,
-                snapshot.pending,
-                emittedBlockingIds,
-              );
-              for (const event of events) this.emitHook(context, event);
-              log.recovered("poll.drain-pending-failed", this.pollLogScope);
-            } catch (error) {
-              this.warnPollFailed("poll.drain-pending-failed", error);
-            }
-
-            try {
-              const timeouts = await drainTimeouts(
-                this.backend,
-                this.sessionHookPaths,
-                snapshot.timeouts,
-              );
-              for (const timeout of timeouts) {
-                emittedBlockingIds.delete(timeout.id);
-                context.emit(claudeTmuxEvent, {
-                  kind: "hook-timed-out",
-                  tab_id: this.tabId,
-                  environment_id: this.environmentId,
-                  session_id: this.sessionId,
-                  event_kind: timeout.kind,
-                  event_id: timeout.id,
-                });
-              }
-              log.recovered("poll.drain-timeouts-failed", this.pollLogScope);
-            } catch (error) {
-              this.warnPollFailed("poll.drain-timeouts-failed", error);
-            }
-
-            if (this.transcript.tailFilePath) {
-              try {
-                const lines = await this.transcript.drainTail(
-                  (line, stamped) => this.publishTranscriptLine(context, line, stamped),
-                  snapshot.transcriptSize,
-                  tailEpoch,
-                );
-                if (lines > 0) quietTicks = 0;
-                log.recovered("poll.tail-failed", this.pollLogScope);
-              } catch (error) {
-                this.warnPollFailed("poll.tail-failed", error);
-              }
-            }
-          }
-
-          if (observationDue) {
-            // A snapshot that did not carry the pane (it failed) costs the
-            // separate capture it always did.
-            this.startObservation(context, forceEmit, snapshot?.pane);
-          }
-
-          if (!livenessDue) continue;
-          let alive: boolean;
-          if (snapshot?.alive !== undefined) {
-            alive = snapshot.alive;
-            this.lastLiveness = { alive, at: this.now() };
-          } else {
-            alive = await this.tmuxAlive().catch(() => false);
-          }
-          if (!alive) {
-            let removed = false;
-            const sessions = context.runtime.tmux.sessions;
-            await sessions.installLock(this.environmentId).runExclusive(async () => {
-              // A replace/stop may have won while the liveness process was in
-              // flight. It owns the transition and any newer session under the
-              // same tab key; never emit a stale stopped frame for that case.
-              if (this.stopRequested) return;
-              if (await this.tmuxAlive().catch(() => false)) return;
-              removed = sessions.removeIfSame(this.environmentId, this.tabId, this);
-              if (!removed) return;
-              this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
-              this.setBusyState(false);
-              await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
-              if (sessions.sessionsInEnvironment(this.environmentId) === 0) {
-                await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch(
-                  (error) => {
-                    log.warn("hooks.uninstall-failed", { error: formatLogError(error) });
-                  },
-                );
-              }
-            });
-            if (!removed) {
-              if (this.stopRequested) break;
-              continue;
-            }
-            context.emit(claudeTmuxEvent, {
-              kind: "stopped",
-              tab_id: this.tabId,
-              environment_id: this.environmentId,
-            });
-            await context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
-            break;
-          }
+          // One tick of this tab's loop is one `tmux-tab-loop` attempt: the
+          // snapshot's `docker exec` or tmux spawn, the transcript search, the
+          // hook drains and the pane observation it starts are charged to it
+          // (todo 7567).
+          const next = await this.metrics.observe("tmux-tab-loop", async (span) => {
+            const outcome = await runTick({ idle, signalled, ringsBeforeWait, woke });
+            // A tick that found hook files or transcript lines changed something.
+            if (quietTicks === 0) span.changed();
+            else span.unchanged();
+            return outcome;
+          });
+          if (next === "stop") break;
         }
       } finally {
         this.pollLoopRunning = false;

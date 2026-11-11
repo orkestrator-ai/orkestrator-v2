@@ -203,16 +203,25 @@ export class PromptQueueDrainer {
     return null;
   }
 
-  /** Read-only gate used by agent mail before it claims a durable message. */
-  async mailInjectPresence(input: {
-    environmentId: string;
-    tabId: string;
-  }): Promise<"idle" | "working" | "draft" | "environment_unready"> {
+  /**
+   * Read-only gate used by agent mail before it claims a durable message.
+   * `known.environment` is a read of the environment row the caller made in
+   * the same pass; absent, the gate reads it itself (todo 7567 task 2).
+   */
+  async mailInjectPresence(
+    input: {
+      environmentId: string;
+      tabId: string;
+    },
+    known: { environment?: Environment | null } = {},
+  ): Promise<"idle" | "working" | "draft" | "environment_unready"> {
     const stateKey = createClaudeTmuxStateKey(input.environmentId, input.tabId);
     const queueKey = `${TMUX_AGENT}\0${stateKey}`;
     const draftKey = `${TMUX_AGENT}:${input.environmentId}:${encodeURIComponent(stateKey)}`;
     const [environment, queue, draft] = await Promise.all([
-      this.storage.getEnvironment(input.environmentId),
+      known.environment !== undefined
+        ? known.environment
+        : this.storage.getEnvironment(input.environmentId),
       this.storage.getPromptQueue(queueKey),
       this.storage.getComposeDraft(draftKey),
     ]);

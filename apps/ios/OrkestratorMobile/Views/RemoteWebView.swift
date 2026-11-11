@@ -102,6 +102,11 @@ struct RemoteWebView: UIViewRepresentable {
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
           };
+          // Safari's Web Inspector, only while the page's renderer debug logging
+          // is on (Settings → Debug); the shell turns it off on every navigation.
+          window.orkestratorNativeShell = Object.freeze({
+            setWebInspectable: (enabled) => call("set-inspectable", { enabled: enabled === true }),
+          });
           window.__orkestratorNativeConnectionReply = (id, ok, value) => {
             const callback = pending.get(id);
             if (!callback) return;
@@ -400,6 +405,23 @@ struct RemoteWebView: UIViewRepresentable {
             }
             cookieMutationTask = operation
             await operation.value
+        }
+
+        /// Lets Safari's Web Inspector on a connected Mac attach to this web view.
+        /// Only the trusted main frame asks (`userContentController`), and only
+        /// while its renderer debug logging is on; the page reports it at every
+        /// start, so a reload with it off takes inspection away again.
+        func setInspectable(_ enabled: Bool) {
+            webView?.isInspectable = enabled
+        }
+
+        /// A new document has not asked for inspection, whatever the last one did.
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            navigationDidCommit()
+        }
+
+        func navigationDidCommit() {
+            setInspectable(false)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -713,6 +735,12 @@ struct RemoteWebView: UIViewRepresentable {
                         nickname: nickname as? String
                     )
                     try await reply(id: requestID, result: result)
+                case "set-inspectable":
+                    guard let enabled = body["enabled"] as? Bool else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    setInspectable(enabled)
+                    try await reply(id: requestID, result: enabled)
                 case "forget":
                     guard let connectionID = body["connectionId"] as? String else {
                         throw ConnectionBridgeError.invalidInput

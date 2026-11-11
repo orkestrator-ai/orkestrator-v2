@@ -1,3 +1,4 @@
+import { applyAgentTestAnthropicOrigin } from "./agent-test-fixtures.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import {
@@ -1063,6 +1064,11 @@ async function startLocalServerAttempt(
     } else {
       launchedAccountId = await applyActiveAgentAccountEnvironment(context, "claude", env);
     }
+    // An isolated agent-test profile's scripted model, for coordinators too.
+    applyAgentTestAnthropicOrigin(env, {
+      runtimeFlavor: context.runtimeFlavor,
+      dataDir: () => context.storage.getDataDir(),
+    });
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");

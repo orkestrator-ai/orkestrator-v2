@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -158,38 +158,126 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
 }
 
 /**
+ * How often the section re-reads the policy while it shows refusal counts.
+ * Each read is one `docker exec` in the gateway, and the daemon rewrites its
+ * counts at most once a second, so a slow interval is enough.
+ */
+export const REFUSAL_COUNTS_REFRESH_MS = 15_000;
+
+const showsRefusalCounts = (policy: EnvironmentNetworkPolicy) =>
+  policy.effective?.egressFilter === "enforced" && Boolean(policy.effective.refusals);
+
+/**
+ * A report that settles whether the gateway has counts to show: one that
+ * reached the container (`policyVersion` and `effective` both present) and
+ * says the name checks are not enforced. A missing report (a stopped
+ * container, a failed `docker exec` or inspection) settles nothing.
+ */
+const reportsNoRefusalCounts = (policy: EnvironmentNetworkPolicy) =>
+  policy.policyVersion !== null &&
+  policy.effective !== null &&
+  policy.effective.egressFilter !== "enforced";
+
+/**
+ * The policy on screen, for the environment it was read for. `polling` is
+ * whether the section keeps re-reading it: it starts when counts are shown
+ * and stops only on a report that settles there are none, so a transient
+ * missing report does not end the refresh.
+ */
+interface ShownPolicy {
+  environmentId: string;
+  policy: EnvironmentNetworkPolicy | null;
+  polling: boolean;
+}
+
+/**
+ * The state after reading `next` for `forEnvironment`. A refresh keeps the
+ * last answer when the report could not be read at all (`policyVersion:
+ * null`), as it does when the read throws.
+ */
+function withPolicy(
+  previous: ShownPolicy | null,
+  forEnvironment: string,
+  next: EnvironmentNetworkPolicy | null | undefined,
+  keepOnUnreadable = false,
+): ShownPolicy {
+  const prior = previous?.environmentId === forEnvironment ? previous : null;
+  // An answer with no policy at all (an older or stubbed backend) shows
+  // nothing, as before, and is not a report to keep refreshing on.
+  if (!next) {
+    return keepOnUnreadable && prior?.policy
+      ? prior
+      : { environmentId: forEnvironment, policy: null, polling: false };
+  }
+  const polling =
+    showsRefusalCounts(next) || (!reportsNoRefusalCounts(next) && (prior?.polling ?? false));
+  if (keepOnUnreadable && next.policyVersion === null && prior?.policy) {
+    return { ...prior, polling };
+  }
+  return { environmentId: forEnvironment, policy: next, polling };
+}
+
+/**
  * What the container's firewall actually applied, next to what is configured.
  * A difference (a stale container, a failed application, the legacy shared
  * network) is stated rather than implied.
  */
-export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentId: string }) {
+export function EnvironmentNetworkPolicyStatus({
+  environmentId,
+  refreshIntervalMs = REFUSAL_COUNTS_REFRESH_MS,
+}: {
+  environmentId: string;
+  /** Tests shorten it; the section uses the default. */
+  refreshIntervalMs?: number;
+}) {
   const nodeBackend = useScopeBackend();
-  const [policy, setPolicy] = useState<EnvironmentNetworkPolicy | null>(null);
+  const [shown, setShown] = useState<ShownPolicy | null>(null);
   const [applying, setApplying] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
+  // Every load, refresh or apply takes the next number; only the latest may
+  // set the policy, so a read that was in flight cannot undo a newer answer.
+  const generation = useRef(0);
+  const applyingNow = useRef(false);
+
+  // A policy read for another environment is never shown, so switching
+  // environments neither shows the old counts nor keeps refreshing them.
+  const forThis = shown?.environmentId === environmentId ? shown : null;
+  const policy = forThis?.policy ?? null;
+  const polls = forThis?.polling ?? false;
 
   const apply = async () => {
     setApplying(true);
     setOutcome(null);
+    applyingNow.current = true;
+    const target = environmentId;
+    const current = ++generation.current;
     try {
-      const result = await nodeBackend.applyEnvironmentAllowedDomains(environmentId);
-      setPolicy(result.policy);
+      const result = await nodeBackend.applyEnvironmentAllowedDomains(target);
+      if (generation.current === current) {
+        setShown((previous) => withPolicy(previous, target, result.policy));
+      }
       setOutcome(APPLY_OUTCOME[result.kind] ?? null);
     } catch {
       setOutcome(APPLY_OUTCOME.failed ?? null);
     } finally {
+      applyingNow.current = false;
       setApplying(false);
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    const current = ++generation.current;
     const load = async () => {
       try {
         const next = await nodeBackend.getEnvironmentNetworkPolicy(environmentId);
-        if (!cancelled) setPolicy(next);
+        if (!cancelled && generation.current === current) {
+          setShown((previous) => withPolicy(previous, environmentId, next));
+        }
       } catch {
-        if (!cancelled) setPolicy(null);
+        if (!cancelled && generation.current === current) {
+          setShown({ environmentId, policy: null, polling: false });
+        }
       }
     };
     void load();
@@ -197,6 +285,59 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
       cancelled = true;
     };
   }, [environmentId, nodeBackend]);
+
+  // The refusal counts change while the section is open (an agent failing on
+  // a host off the list), and nothing pushes them. Re-read the policy on a
+  // slow timer while the window is visible, and once when it becomes visible
+  // again. The next read is armed only after the last one settles, so reads
+  // never overlap. Unmounting or switching environments stops it.
+  useEffect(() => {
+    if (!polls) return;
+    let cancelled = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      if (cancelled) return;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = undefined;
+        void refresh();
+      }, refreshIntervalMs);
+    };
+    const refresh = async () => {
+      if (inFlight) return;
+      // Hidden: nothing is armed; becoming visible reads again.
+      if (document.visibilityState === "hidden") return;
+      if (applyingNow.current) {
+        schedule();
+        return;
+      }
+      inFlight = true;
+      const current = ++generation.current;
+      try {
+        const next = await nodeBackend.getEnvironmentNetworkPolicy(environmentId);
+        if (!cancelled && generation.current === current) {
+          setShown((previous) => withPolicy(previous, environmentId, next, true));
+        }
+      } catch {
+        // Keep the last answer: one failed read is not a reason to hide the
+        // section, and the next read tries again.
+      } finally {
+        inFlight = false;
+        schedule();
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    if (document.visibilityState !== "hidden") schedule();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [polls, environmentId, nodeBackend, refreshIntervalMs]);
 
   if (!policy || policy.policyVersion === null) return null;
   const effective = policy.effective;

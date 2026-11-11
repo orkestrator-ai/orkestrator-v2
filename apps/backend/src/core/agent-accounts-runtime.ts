@@ -83,6 +83,64 @@ export class HostMcpRefreshDigests {
   }
 }
 
+const MAX_TOKEN_DIGESTS_PER_SLOT = 16;
+const MAX_TOKEN_SLOTS = MAX_MCP_SERVERS + 1;
+
+/**
+ * Digests of every Claude token, access and refresh, the backend has read from
+ * the host, most recent first, per login slot (`claudeAiOauth`, or
+ * `mcpOAuth/<server>`). Handed to the in-container drop, restrict and merge
+ * commands, so an entry carrying one of these tokens is known to be a copy of
+ * the host's login whoever wrote it there, even after the host signed out.
+ * Kept in memory only: a backend restart starts empty.
+ */
+export class HostClaudeTokenDigests {
+  private readonly digests = new Map<string, string[]>();
+
+  remember(credentials: string): void {
+    let login: { claudeAiOauth?: unknown; mcpOAuth?: unknown } | null;
+    try {
+      login = JSON.parse(credentials) as typeof login;
+    } catch {
+      return;
+    }
+    if (!login || typeof login !== "object") return;
+    const slots: Array<[string, unknown]> = [["claudeAiOauth", login.claudeAiOauth]];
+    if (login.mcpOAuth && typeof login.mcpOAuth === "object" && !Array.isArray(login.mcpOAuth)) {
+      for (const [key, entry] of Object.entries(login.mcpOAuth))
+        slots.push([`mcpOAuth/${key}`, entry]);
+    }
+    for (const [slot, entry] of slots) {
+      if (!entry || typeof entry !== "object") continue;
+      const { accessToken, refreshToken } = entry as {
+        accessToken?: unknown;
+        refreshToken?: unknown;
+      };
+      const seen = [accessToken, refreshToken]
+        .filter((token): token is string => typeof token === "string" && token.trim() !== "")
+        .map((token) => createHash("sha256").update(token).digest("hex"));
+      if (seen.length === 0) continue;
+      const known = this.digests.get(slot) ?? [];
+      this.digests.delete(slot);
+      this.digests.set(
+        slot,
+        [...seen, ...known.filter((value) => !seen.includes(value))].slice(
+          0,
+          MAX_TOKEN_DIGESTS_PER_SLOT,
+        ),
+      );
+    }
+    for (const slot of this.digests.keys()) {
+      if (this.digests.size <= MAX_TOKEN_SLOTS) break;
+      this.digests.delete(slot);
+    }
+  }
+
+  snapshot(): Record<string, string[]> {
+    return Object.fromEntries(this.digests);
+  }
+}
+
 /**
  * Agent-account state of one backend: the account mutation chain, the single
  * in-flight sign-in, per-account usage, plan usage (`planUsage`, `readPlanUsage`,
@@ -102,6 +160,8 @@ export class AgentAccountsRuntime {
   readonly readPlanUsage: PlanUsageReader = createPlanUsageReader({ cache: this.planUsage.cache });
   /** MCP refresh tokens seen on the host, as digests handed to containers. */
   readonly hostMcpRefreshDigests = new HostMcpRefreshDigests();
+  /** Every Claude token seen on the host, as digests handed to containers. */
+  readonly hostClaudeTokenDigests = new HostClaudeTokenDigests();
   private readonly options: AgentAccountsRuntimeOptions;
   private readonly clearedCoordinatorKeychainHomes = new Set<string>();
   private mutation: Promise<void> = Promise.resolve();

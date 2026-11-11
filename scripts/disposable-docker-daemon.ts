@@ -52,9 +52,10 @@ import {
  * - The daemon runs rootless, inside RootlessKit's own user, mount and network
  *   namespaces, so its bridges and iptables rules never reach the host's
  *   firewall, routes or interfaces. Nothing here runs as root.
- * - Every directory it creates is under the instance root (this worktree's
- *   `output/disposable-docker/` by default) or a runtime directory under the
- *   temporary directory, and removal refuses any path outside those.
+ * - Every directory it creates is under the instance root (by default this
+ *   checkout's own directory under `$XDG_STATE_HOME/orkestrator-disposable-docker/`,
+ *   outside every worktree the backend watches) or a runtime directory under
+ *   the temporary directory, and removal refuses any path outside those.
  * - A process is signalled only after its identity is confirmed: the start
  *   time recorded at spawn and an instance marker in its environment that
  *   only this launcher sets.
@@ -166,11 +167,65 @@ export type InstanceRecord = {
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
 
-export function defaultInstanceRoot(): string {
+/** Names the checkout a default instance root belongs to, for `disk:report`. */
+export const CHECKOUT_FILE = ".checkout";
+
+/**
+ * Where every checkout's default instance root lives: the user's state
+ * directory, never a worktree. Bun's recursive watch on Linux walks the whole
+ * tree of a watched worktree on the backend's event loop, and a rootless data
+ * root holds tens of thousands of directories: three of them in worktrees
+ * stalled beelink2's backend for 30 to 60 s at a time (to-do 7560).
+ */
+export function disposableDockerStateBase(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): string {
+  const state = env.XDG_STATE_HOME?.trim();
+  const base = state && path.isAbsolute(state) ? state : path.join(home, ".local", "state");
+  return path.join(base, "orkestrator-disposable-docker");
+}
+
+/** One directory per checkout: its name, then a hash of its path. */
+export function checkoutRootName(checkout: string): string {
+  const resolved = path.resolve(checkout);
+  const hash = createHash("sha256").update(resolved).digest("hex").slice(0, 12);
+  const name = path
+    .basename(resolved)
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .slice(0, 48);
+  return `${name || "checkout"}-${hash}`;
+}
+
+export function defaultInstanceRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  checkout: string = repositoryRoot,
+  home: string = os.homedir(),
+): string {
   return (
-    process.env.ORKESTRATOR_DISPOSABLE_DOCKER_ROOT?.trim() ||
-    path.join(repositoryRoot, "output", "disposable-docker")
+    env.ORKESTRATOR_DISPOSABLE_DOCKER_ROOT?.trim() ||
+    path.join(disposableDockerStateBase(env, home), checkoutRootName(checkout))
   );
+}
+
+/** The default before 2026-11-11, inside the checkout; `status` still looks there. */
+export function legacyInstanceRoot(checkout: string = repositoryRoot): string {
+  return path.join(checkout, "output", "disposable-docker");
+}
+
+/**
+ * Records which checkout a root under {@link disposableDockerStateBase} serves,
+ * so a root whose checkout is gone can be found and stopped.
+ */
+export function recordCheckout(
+  root: string,
+  checkout: string = repositoryRoot,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): void {
+  const base = disposableDockerStateBase(env, home);
+  if (path.dirname(path.resolve(root)) !== base) return;
+  writeFileSync(path.join(root, CHECKOUT_FILE), `${path.resolve(checkout)}\n`, { mode: 0o600 });
 }
 
 export const DEFAULT_SETTINGS: InstanceSettings = {
@@ -1260,7 +1315,9 @@ Commands:
 
 Options:
   --name <n>            Instance name (default: default)
-  --root <dir>          Instance root (default: output/disposable-docker in this checkout)
+  --root <dir>          Instance root (default: this checkout's directory under
+                        $XDG_STATE_HOME/orkestrator-disposable-docker, or
+                        ORKESTRATOR_DISPOSABLE_DOCKER_ROOT)
   --image <reference>   With start: copy this image in (repeatable); never orkestrator-v2:latest
   --mode <mode>         rootless (default): host dockerd under RootlessKit
                         rootful: nested privileged docker:dind on the outer daemon
@@ -1315,6 +1372,7 @@ async function main(argv: string[]): Promise<void> {
       if (missing.length > 0)
         throw new Error(`Cannot start a ${mode} daemon:\n- ${missing.join("\n- ")}`);
       mkdirSync(parsed.root, { recursive: true });
+      recordCheckout(parsed.root);
       const record = await startWithImages(parsed.name, parsed.settings, parsed.images, options);
       printEnvironment(record, parsed.json);
       return;
@@ -1363,6 +1421,13 @@ async function main(argv: string[]): Promise<void> {
               )
               .join("\n") || "No disposable daemons",
       );
+      // Instances started before the default moved out of the checkout.
+      const legacy = legacyInstanceRoot();
+      if (parsed.root === defaultInstanceRoot() && listRecords(legacy).length > 0) {
+        console.error(
+          `Instances under the old default root ${legacy}: run status, restart or stop with --root ${shellQuote(legacy)}`,
+        );
+      }
       return;
     }
     case "help":

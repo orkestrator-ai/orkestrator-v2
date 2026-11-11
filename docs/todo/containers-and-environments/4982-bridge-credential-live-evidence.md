@@ -21,7 +21,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 **Decisions.**
 
 - **Where should the extra runs happen?**
-  - **Add this suite to the existing rootless and Desktop passes in [`0019-container-platform-qualification.md`](0019-container-platform-qualification.md) (recommended).**
+  - **Add this suite to the existing rootless and Desktop passes recorded in [container qualification](../../development/container-qualification.md) (recommended; to-do 0019, which scheduled them, retired 2026-11-11).**
     - Pros: no new setup; those passes are scheduled anyway.
     - Cons: waits for the next pass.
   - **A dedicated run now.**

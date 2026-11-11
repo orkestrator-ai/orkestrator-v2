@@ -37,6 +37,7 @@ import {
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import type { AppConfig } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import {
@@ -852,11 +853,13 @@ export class AgentMailboxDirectory {
       includeTombstoned?: boolean;
       currentEnvironmentId?: string;
       environmentId?: string;
+      /** The config the caller already read for this pass; read here when absent. */
+      config?: AppConfig;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
     const [store, config] = await Promise.all([
       this.store.snapshot(),
-      this.repos.config.loadConfig(),
+      options.config ?? this.repos.config.loadConfig(),
     ]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const query = options.q?.trim().toLocaleLowerCase();

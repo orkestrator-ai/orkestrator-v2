@@ -184,6 +184,16 @@ describe("classification", () => {
     }
   });
 
+  test("holds printable text until a newline, even text that can never become a method", () => {
+    // A request line sent a byte at a time must not be relayed before its
+    // Host is read, so no newline-less printable write is released early
+    // (to-do 7000, retired 2026-11-11, kept it; documented in docker/AGENTS.md).
+    for (const write of ["probe", "PING", '{"op":1}', "hello world"]) {
+      expect(classify(write)).toBe("need");
+      expect(classify(`${write}\n`)).toBe("other");
+    }
+  });
+
   test("allows a name only on the ports its entries name, and GitHub's names on 443 and 22", () => {
     const allowed = (name: string, port: number) =>
       perl(`print main::name_allowed_on_port("${name}", ${port}) ? 1 : 0;`);
@@ -422,6 +432,33 @@ describe("proxy classification and DNS backpressure", () => {
       print 'ok';`),
       ).toBe("ok");
     }
+  });
+
+  test("a newline-less text first write on a named port is held, then refused with no reply", () => {
+    expect(
+      runtimePerl(`
+      $opt{names} = ${JSON.stringify(join(dir, "names"))}; load_names();
+      for my $write ('probe', '{"op":1}') {
+        socketpair(my $client, my $peer, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        socketpair(my $upstream, my $origin, PF_UNIX, SOCK_STREAM, 0) or die $!;
+        nonblocking($peer); nonblocking($origin);
+        my $c = { kind => 'proxy', client => $client, upstream => $upstream,
+          port => 5432, classified => 0, peek => $write, created => time,
+          first_byte => time, to_upstream => '', to_client => '' };
+        $connections{fileno($client)} = $connections{fileno($upstream)} = $c;
+        $connection_count++;
+        decide($c, 0);
+        die 'relayed before a newline' if $c->{classified} || length $c->{to_upstream} || $c->{closed};
+        # What expire_connections does once CLASSIFY_TIMEOUT has passed.
+        $c->{first_byte} = time - 31; expire_connections();
+        die 'still held after the timeout' unless $c->{closed};
+        my $n = sysread($peer, my $reply, 64);
+        die 'the refusal sent a reply' if $n;
+        die 'bytes reached the upstream' if sysread($origin, my $leak, 64);
+      }
+      die 'connection leaked' unless $connection_count == 0 && keys(%connections) == 0;
+      print 'ok';`),
+    ).toBe("ok");
   });
 
   test("a non-reading DNS client cannot accumulate responses and pipelined queries resume in order", () => {

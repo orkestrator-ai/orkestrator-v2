@@ -832,7 +832,7 @@ describe("StorageDatabase read observation", () => {
 });
 
 describe("StorageDatabase space reclamation", () => {
-  test("a new database uses incremental auto-vacuum and shrinks after a scrubbed delete", async () => {
+  test("a new database uses incremental auto-vacuum and a release shrinks it after a delete", async () => {
     const directory = await dataDir();
     const db = database(directory);
     expect((db.db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum).toBe(
@@ -850,6 +850,10 @@ describe("StorageDatabase space reclamation", () => {
     const before = pages();
     db.deleteStore("records");
     db.scrubDeletedContent();
+    // The scrub leaves the freed (zeroed) pages to the upkeep (storage.md, "Durability and deletion").
+    expect(pages()).toBe(before);
+    expect(db.releasableFreePages()).toBeGreaterThan(before / 2);
+    while (db.releaseFreePages() > 0);
     expect(pages()).toBeLessThan(before / 2);
   });
 });
@@ -919,8 +923,10 @@ describe("StorageDatabase failure logging", () => {
     }
   });
 
-  test("vacuum faults are throttled separately from successful checkpoints", async () => {
+  test("the scrub never releases free pages on the backend's connection", async () => {
     const db = database(await dataDir());
+    db.writeStore("records", { secret: "x".repeat(50_000) });
+    db.deleteStore("records");
     const original = db.db.exec.bind(db.db);
     const exec = spyOn(db.db, "exec").mockImplementation((sql) => {
       if (sql.includes("incremental_vacuum")) throw failure();
@@ -929,18 +935,9 @@ describe("StorageDatabase failure logging", () => {
     const logs = captureLogs();
     try {
       db.scrubDeletedContent();
-      db.scrubDeletedContent();
-      expect(logs.records()).toMatchObject([
-        { event: "scrub.vacuum-failed", fields: { error: { code: "SQLITE_IOERR" } } },
-      ]);
-      expect(logs.records()).toHaveLength(1);
-      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
-      exec.mockRestore();
-      db.scrubDeletedContent();
-      expect(logs.records().at(-1)).toMatchObject({
-        event: "throttle.recovered",
-        fields: { site: "scrub.vacuum-failed", failures: 2 },
-      });
+      expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
+      expect(logs.records()).toEqual([]);
+      expect(db.hasDeferredScrub()).toBe(false);
     } finally {
       exec.mockRestore();
       logs.restore();
@@ -959,7 +956,6 @@ describe("StorageDatabase failure logging", () => {
       const logs = captureLogs();
       try {
         expect(db.releaseFreePages()).toBe(-1);
-        db.scrubDeletedContent();
         expect(db.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 10000 });
         expect(logs.records()).toEqual([]);
       } finally {

@@ -30,6 +30,21 @@
   3060–3077) under `.orkestrator/review-artifacts/review-validation-085f2243-54bc-4625-8ead-8f255e326766/`
   in that worktree.
 
+## Recurrence — 2026-11-11 (provisional captures review repairs)
+
+Observed 2026-11-11 on `provisional-captures-510c8fc4900c-r1` (head `e188947f2`), base commit `963ffa6ab70bcc7e412e9748078cdbc0333a7ad1`
+(`mise run flaky:recurrence 9963 --base 963ffa6ab…` answered "open. Record
+the failure as a recurrence"). The branch changes only backend change-tracking code, the worktree watcher, a benchmark script and documentation; it touches nothing under `apps/web/` and no container code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on beelink (Linux x86_64, 16 cores), guard stage skipped for an unrelated
+  `main` finding; host load average about 35 to 42 at the end of the run.
+- **Failure:** the same case, Expected false, Received true.
+- **Suite counts:** backend 18,020 pass and 1 fail; web 14,637 pass and 1
+  fail ([9932](../native-agents-and-transcripts/9932-virtuoso-cancellation-fake-clock-timer-count.md));
+  the other groups passed.
+- **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (1.2s)`.
+
 ## Hypothesis
 
 Unconfirmed. The assertion reads the whole fake Docker log written during

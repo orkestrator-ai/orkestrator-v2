@@ -401,3 +401,22 @@ test; it does not touch this file or anything under `apps/web/`.
   `NODE_ENV=production` from the agent session. React's production build then
   failed every case of this file with `React.act is not a function`; that is
   the environment, not this flake, which is why the runs above unset it.
+
+## Recurrence — 2026-11-11 (provisional captures review repairs)
+
+Observed 2026-11-11 on `provisional-captures-510c8fc4900c-r1` (head `e188947f2`), base commit `963ffa6ab70bcc7e412e9748078cdbc0333a7ad1`
+(`mise run flaky:recurrence 9932 --base 963ffa6ab…` answered "open. Record
+the failure as a recurrence"). The branch changes only backend change-tracking code, the worktree watcher, a benchmark script and documentation; it touches nothing under `apps/web/` and no container code.
+
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  on beelink (Linux x86_64, 16 cores); the guard stage was skipped because of
+  an unrelated `main` finding in `ToPipelineButton.test.tsx`. Host load
+  average about 35 to 42 at the end of the run.
+- **Failure:** one case, `restored snapshot transitions from hidden to visible
+  (cancel=%s)`, Expected 0, Received 1.
+- **Suite counts:** web 14,637 pass and 1 fail; backend 18,020 pass and 1 fail
+  ([9963](../environments-and-containers/9963-rootful-create-logs-owned-port-listing.md));
+  desktop, protocol, toolchain, web-public, root, bridge and lockfile groups
+  passed.
+- **Isolated rerun:** the runner's own rerun reported `PASSED ALONE (790ms)`.
+

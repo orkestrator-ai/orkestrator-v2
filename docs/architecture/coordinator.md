@@ -492,11 +492,14 @@ move, and the provider's error in its transcript is what the user sees. A side a
 stop reaches its main. So a wake that fails on a limit ends there rather than raising
 another wake: a notice cannot trigger another notice about the same stop.
 
-To check this live, with real accounts and two machines: attach a leaf to a command node
-that has the same repository, run a tab on the leaf until the provider refuses it, and
-look for one wake on the command node's coordinator and none on the leaf's. Repeat with
-the link down across a leaf restart, and with the command node's coordinator on the same
-email as the stopped tab, with and without another included account.
+`mise run test:agent:coordinator:notice-live` checks this on two real backends, on
+fixture Claude accounts and a loopback provider
+([agent-testing.md](../development/agent-testing.md#coordinator-usage-limit-notices-between-two-profiles-fixture-accounts)):
+a leaf's tab, delegated worker and pipeline session stopping on one account reach the
+command node's coordinator as one wake and the leaf's as none; a coordinator on its own
+entry of the limited login is moved, unpinned, before its wake; and a stop raised while
+the command node is down arrives once after a leaf restart. With real accounts and two
+machines, the same check is on the manual-test checklist.
 
 ## Coordinators on two nodes
 
@@ -794,7 +797,13 @@ with the stored record and the renderer adopts it, which is why a layout change
 lost in that race is not retried. Other clients hear `coordinator-pane-layout`
 and re-read. A browser's earlier local copy is imported once at revision 0, so it
 never replaces a layout already stored, and then deleted; against a backend
-without the capability the layout stays in that copy. It never opens or closes a
+without the capability the layout stays in that copy. Until a read of the
+stored layout (or of the backend's capabilities) succeeds, the panel shows no
+groups and saves nothing: a default grouping reconciled from "nothing known"
+would otherwise be saved over the user's groups. It shows **Could not load the
+tab groups** with **Retry now** instead, reads again after 1, 3 and 10 seconds,
+and then on the next resync, safety check, mount or Retry
+(`coordinatorPaneLayoutStore.ts`). It never opens or closes a
 conversation; on every snapshot it is reconciled against the backend's open set,
 dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere

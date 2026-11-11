@@ -191,6 +191,12 @@ to everything it runs, on every machine it controls.
   (including the default projects folder a copied project is cloned into),
   installed or enabled platforms, container budgets, network policy,
   previews, MCP servers and logs.
+- One exception, made only when the user asks: Use it here in a command
+  node's Linear tab copies a connected leaf's Linear key to the command node
+  once, over the node link (`copy_linear_connection_from_node`). Otherwise the
+  window sends the key to each machine itself, and only board links and
+  disconnects (by key fingerprint) sync; see
+  [tickets.md](tickets.md#linear).
 
 ## Node registry (on the command node)
 

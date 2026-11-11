@@ -22,6 +22,7 @@ import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { KanbanBoardStore } from "./storage-kanban-board.js";
 import { KanbanSyncRepository } from "./storage-kanban-sync-repository.js";
+import { LinearRepository } from "./storage-linear.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 import { NodesRepository } from "./storage-nodes.js";
@@ -69,6 +70,7 @@ export class StorageRepositories {
   readonly agentMailBudgets: AgentMailBudgets;
   readonly kanban: KanbanRepository;
   readonly ticketSync: KanbanSyncRepository;
+  readonly linear: LinearRepository;
   readonly previewServices: PreviewServicesRepository;
   readonly nodes: NodesRepository;
   readonly coordinatorNotices: CoordinatorNoticesRepository;
@@ -108,6 +110,7 @@ export class StorageRepositories {
     const kanbanBoard = new KanbanBoardStore(context, files);
     this.kanban = new KanbanRepository(context, files, kanbanBoard);
     this.ticketSync = new KanbanSyncRepository(context, files, kanbanBoard);
+    this.linear = new LinearRepository(context);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);
     this.coordinatorNotices = new CoordinatorNoticesRepository(context);

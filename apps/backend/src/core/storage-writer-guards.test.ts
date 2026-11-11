@@ -309,6 +309,7 @@ describe("StorageService store writers", () => {
       "graphRuns",
       "graphTemplates",
       "kanban",
+      "linear",
       "nodes",
       "previewServices",
       "publicOperations",

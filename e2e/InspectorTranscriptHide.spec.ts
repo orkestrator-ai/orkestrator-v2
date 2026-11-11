@@ -238,3 +238,50 @@ test("Build Pipeline opens another stage at its newest message after the Ticket"
   await settledOffset(transcript, 10);
   expect(await bottomGap()).toBeLessThanOrEqual(1);
 });
+
+// A node whose remembered inspector view is Tests hides the transcript in the
+// same render that hands it that node's session. The stage the reader left is
+// still the one they were reading, so showing the node's transcript opens it at
+// its newest message rather than at the previous stage's offset.
+test("Build Pipeline opens a stage whose Tests view was showing at its newest message", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 700 });
+  await page.goto("/pipeline-flow?scenario=validation&longTranscript=stages&paneControls");
+  const transcript = page.locator("[data-transcript-scroller]");
+  const graph = page.getByRole("tablist", { name: "Build pipeline" });
+  const views = page.getByRole("tablist", { name: "Inspector views" });
+  const bottomGap = () =>
+    transcript.evaluate(
+      (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+    );
+  // Prepare is selected; leave it on its Tests view.
+  await expect(graph.getByRole("tab", { name: /^Prepare,/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await views.getByRole("tab", { name: "Tests", exact: true }).click();
+  await expect(transcript).toBeHidden();
+
+  await graph.getByRole("tab", { name: /^Build,/ }).click();
+  await expect(transcript.locator('[data-chat-message-key="build-40"]')).toBeVisible();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  await transcript.scrollIntoViewIfNeeded();
+  await transcript.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(bottomGap).toBeGreaterThan(100);
+  await settledOffset(transcript);
+
+  await graph.getByRole("tab", { name: /^Prepare,/ }).click();
+  await expect(views.getByRole("tab", { name: "Tests", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(transcript).toBeHidden();
+  await views.getByRole("tab", { name: "Transcript", exact: true }).click();
+  await expect(transcript.locator('[data-chat-message-key="prep-40"]')).toBeVisible();
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  // Held there, rather than settling back to Build's offset.
+  await settledOffset(transcript, 10);
+  expect(await bottomGap()).toBeLessThanOrEqual(1);
+});

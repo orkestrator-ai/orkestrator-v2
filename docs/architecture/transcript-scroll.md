@@ -219,22 +219,29 @@ footer has no row on screen, so their last captured anchor is an older place.
 The `latest` jump applies once the host itself has been left, even if the view
 was hidden at the time. A view whose one mounted list is reused for other
 content also passes `viewKey` (the pipeline passes the stage's session key):
-when the key it comes back with differs from the one it was hidden with, the
-return is not a view return, and the list opens at the newest message under
-either policy, because no place in the old content belongs to the new one.
-So Ticket and back to the same stage keeps the place, while Ticket and then a
-different stage shows that stage's newest message. The build pipeline transcript passes `visible` and `viewKey`; the
+when the key it comes back with differs from the last key it showed while
+active, the return is not a view return, and the list opens at the newest
+message under either policy, because no place in the old content belongs to
+the new one. The comparison uses the last key shown, not the key of the render
+that hid the view: selecting a node whose remembered inspector view is Tests
+hides the transcript and hands it that node's session in one render. So
+Ticket and back to the same stage keeps the place, while Ticket (or a node
+left on its Tests view) and then a different stage shows that stage's newest
+message. The build pipeline transcript passes `visible` and `viewKey`; the
 Graph Run transcript unmounts in its Details view instead. Before 2026-11-11
 the pipeline folded `visible` into `isActive`, so every return to a stage went
 to the newest message although its comments said the place was kept (to-do
 5620, retired 2026-11-11). `useVirtuosoScrollState.return.test.ts` covers
-both kinds of return under both policies, and a changed `viewKey`, with
-animation frames held and drained rather than a wall-clock wait.
+both kinds of return under both policies, and a changed `viewKey` (including
+one that arrives in the hiding render), with animation frames held and drained
+rather than a wall-clock wait.
 `InspectorTranscriptHide.spec.ts` checks a reader's first visible frame and
 settled offset after Ticket and back, in Chromium and WebKit, with and without
 the review report. Its Ticket-then-another-stage case (`longTranscript=stages`)
-checks that the other stage settles at its newest message; it was added on
-2026-11-11 and run in Chromium.
+checks that the other stage settles at its newest message, and a Prepare node
+left on its Tests view (`scenario=validation&longTranscript=stages`) checks that
+its transcript opens at its newest message after another stage. Both were
+added on 2026-11-11 and pass in Chromium and in Playwright WebKit (build 2388).
 
 The two inspector transcripts were measured across a pane hide on 2026-11-05,
 in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths

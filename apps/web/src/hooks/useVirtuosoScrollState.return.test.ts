@@ -348,6 +348,20 @@ describe("a `latest` view hidden inside an active host", () => {
     scroller.remove();
   });
 
+  test("other content arriving in the render that hides the view opens at its newest message", () => {
+    // Stage A's transcript, then a node whose remembered view is Tests: the
+    // hiding render already carries that node's session, which is then shown.
+    frames = controlFrames();
+    const { view, scroller } = detachedView("latest", "stage-a");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false, viewKey: "stage-b" });
+    view.rerender({ isActive: true, visible: true, viewKey: "stage-b" });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(4400);
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
   test("the same content back keeps the reader's place", () => {
     frames = controlFrames();
     const { view, virtualizer, scroller } = detachedView("latest", "stage-a");
@@ -391,6 +405,18 @@ describe("a `respect-intent` view hidden inside an active host", () => {
     scroller.scrollTop = 3000;
     view.rerender({ isActive: true, visible: true });
     await waitFor(() => expect(scroller.scrollTop).toBe(4400));
+    expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
+    scroller.remove();
+  });
+
+  test("other content arriving in the render that hides the view opens at its newest message", () => {
+    frames = controlFrames();
+    const { view, scroller } = detachedView("respect-intent", "session-a");
+    frames.drain();
+    view.rerender({ isActive: true, visible: false, viewKey: "session-b" });
+    view.rerender({ isActive: true, visible: true, viewKey: "session-b" });
+    frames.drain();
+    expect(scroller.scrollTop).toBe(4400);
     expect(view.result.current.scrollProps.followOutput(true)).toBe("auto");
     scroller.remove();
   });

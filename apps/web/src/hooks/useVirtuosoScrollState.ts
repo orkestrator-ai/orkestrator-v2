@@ -451,12 +451,19 @@ export function useVirtuosoScrollState(
   const explicitTargetPendingRef = useRef(explicitTargetPending);
   const runPendingActivationRef = useRef(runPendingActivation);
   const viewKeyRef = useRef(viewKey);
-  /** The `viewKey` shown when the view last deactivated. */
+  /**
+   * The `viewKey` last on screen while active. Only active renders update it,
+   * so the render that hides the view leaves it alone even when it also brings
+   * another key (a node whose remembered inspector view is not the transcript).
+   */
+  const shownViewKeyRef = useRef(viewKey);
+  /** The `viewKey` the reader was reading when the view last deactivated. */
   const hiddenViewKeyRef = useRef(viewKey);
   useLayoutEffect(() => {
     explicitTargetPendingRef.current = explicitTargetPending;
     runPendingActivationRef.current = runPendingActivation;
     viewKeyRef.current = viewKey;
+    if (isActive) shownViewKeyRef.current = viewKey;
   });
 
   useEffect(() => {
@@ -464,7 +471,7 @@ export function useVirtuosoScrollState(
       // Counted here rather than on activation so StrictMode's replayed
       // mount effect still reads as the first activation.
       deactivatedSinceMountRef.current = true;
-      hiddenViewKeyRef.current = viewKeyRef.current;
+      hiddenViewKeyRef.current = shownViewKeyRef.current;
       pendingActivationRef.current = null;
       cancelActivationFrame();
       return;

@@ -1,8 +1,10 @@
 import { terminalOutputEvents } from "@orkestrator/protocol/contract/domains/events";
+import { CLAUDE_TMUX_INTERACTIVE_LEASE_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
 
 const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
@@ -115,26 +117,56 @@ export type InteractiveTerminalSession = {
   intervalMs: number;
   /** When the armed timer is due, so a reschedule can tell sooner from later. */
   nextCaptureAt?: number;
+  /**
+   * When the client's lease runs out (to-do 7745). Unset for a terminal whose
+   * client never announced a lease (an older renderer), which keeps today's
+   * detach-on-unmount behaviour.
+   */
+  leaseExpiresAt?: number;
   context?: CommandContext;
 };
 
 export type InteractiveTmuxTerminalManagerOptions = {
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
+  /** Wall-clock milliseconds for lease expiry; tests step it. */
+  now?: () => number;
+  /** How long a lease lasts after a renewal; tests shorten it. */
+  leaseMs?: number;
+  metrics?: RecurringWorkMetrics;
+};
+
+export type CreateInteractiveTerminalOptions = {
+  /** The client renews the terminal and wants it detached when it stops. */
+  leased?: boolean;
 };
 
 export class InteractiveTmuxTerminalManager {
   private readonly terminals = new Map<string, InteractiveTerminalSession>();
   private readonly scheduleTimeout: (callback: () => void, delayMs: number) => unknown;
   private readonly cancelTimeout: (timer: unknown) => void;
+  private readonly now: () => number;
+  private readonly leaseMs: number;
+  private readonly metrics: RecurringWorkMetrics;
 
   constructor(options: InteractiveTmuxTerminalManagerOptions = {}) {
     this.scheduleTimeout =
       options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.cancelTimeout = options.cancel ?? ((timer) => clearTimeout(timer as NodeJS.Timeout));
+    this.now = options.now ?? Date.now;
+    this.leaseMs = options.leaseMs ?? CLAUDE_TMUX_INTERACTIVE_LEASE_MS;
+    this.metrics = options.metrics ?? recurringWorkMetrics;
   }
 
-  create(tmux: TmuxSession, cols: number, rows: number): string {
+  create(
+    tmux: TmuxSession,
+    cols: number,
+    rows: number,
+    options: CreateInteractiveTerminalOptions = {},
+  ): string {
+    // A leased terminal that was created but never started has no timer to
+    // notice its lapse, so creation sweeps those.
+    this.detachLapsed();
     const id = `tmux:${tmux.environmentId}:${tmux.tabId}:${randomUUID()}`;
     this.terminals.set(id, {
       id,
@@ -146,8 +178,31 @@ export class InteractiveTmuxTerminalManager {
       captureSuspended: false,
       forceNextSnapshot: true,
       geometryTail: Promise.resolve(),
+      ...(options.leased ? { leaseExpiresAt: this.now() + this.leaseMs } : {}),
     });
     return id;
+  }
+
+  /**
+   * Extends the terminal's lease; `false` when the backend no longer holds
+   * it (lapsed, detached, or its environment's tmux was cleaned up), so the
+   * client creates a new one. Renewing a terminal created without a lease
+   * arms one: only a client that renews ever calls this.
+   */
+  renew(id: string): boolean {
+    const terminal = this.terminals.get(id);
+    if (!terminal) return false;
+    if (this.lapsed(terminal)) {
+      this.detachForLapse(terminal);
+      return false;
+    }
+    terminal.leaseExpiresAt = this.now() + this.leaseMs;
+    return true;
+  }
+
+  /** How many terminals this manager holds; diagnostics and tests. */
+  size(): number {
+    return this.terminals.size;
   }
 
   async start(id: string, context: CommandContext): Promise<void> {
@@ -207,8 +262,29 @@ export class InteractiveTmuxTerminalManager {
 
   private require(id: string): InteractiveTerminalSession {
     const terminal = this.terminals.get(id);
-    if (!terminal) throw new Error("tmux interactive terminal session not found");
+    if (!terminal || this.lapsed(terminal)) {
+      if (terminal) this.detachForLapse(terminal);
+      throw new Error("tmux interactive terminal session not found");
+    }
     return terminal;
+  }
+
+  private lapsed(terminal: InteractiveTerminalSession): boolean {
+    return terminal.leaseExpiresAt !== undefined && this.now() >= terminal.leaseExpiresAt;
+  }
+
+  private detachForLapse(terminal: InteractiveTerminalSession): void {
+    // Content-free: the terminal id names only the environment and tab.
+    log.info("interactive.lease-lapsed", () => ({
+      environmentId: terminal.tmux.environmentId,
+    }));
+    this.detach(terminal.id);
+  }
+
+  private detachLapsed(): void {
+    for (const terminal of Array.from(this.terminals.values())) {
+      if (this.lapsed(terminal)) this.detachForLapse(terminal);
+    }
   }
 
   private beginGeometryChange(terminal: InteractiveTerminalSession): number {
@@ -269,7 +345,19 @@ export class InteractiveTmuxTerminalManager {
       terminal.nextCaptureAt = undefined;
       const context = terminal.context;
       if (!context || this.terminals.get(terminal.id) !== terminal) return;
-      void this.emitSnapshot(terminal, context, false)
+      // No client renewed the lease: whoever attached reloaded, closed the
+      // window or lost the link without detaching (to-do 7745).
+      if (this.lapsed(terminal)) {
+        this.detachForLapse(terminal);
+        return;
+      }
+      // One timer capture is one B19 attempt; its `docker exec` or tmux spawn
+      // is charged to it.
+      void this.metrics
+        .observe("tmux-interactive-capture", async (span) => {
+          if (await this.emitSnapshot(terminal, context, false)) span.changed();
+          else span.unchanged();
+        })
         .catch((error) => {
           log.debug("interactive.snapshot-failed", () => ({
             error: formatLogError(error, { stack: false }),
@@ -281,12 +369,13 @@ export class InteractiveTmuxTerminalManager {
     }, terminal.intervalMs);
   }
 
+  /** Captures the pane; `true` when something changed (or a repaint was sent). */
   private async emitSnapshot(
     terminal: InteractiveTerminalSession,
     context: CommandContext,
     force: boolean,
-  ): Promise<void> {
-    if (terminal.captureSuspended) return;
+  ): Promise<boolean> {
+    if (terminal.captureSuspended) return false;
     const generation = terminal.captureGeneration;
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
     // Detach can happen while capture-pane is in flight. Never emit the late
@@ -298,12 +387,12 @@ export class InteractiveTmuxTerminalManager {
       terminal.captureGeneration !== generation ||
       terminal.captureSuspended
     ) {
-      return;
+      return false;
     }
     const repaint = force || terminal.forceNextSnapshot;
     if (!repaint && snapshot === terminal.lastSnapshot) {
       terminal.intervalMs = Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, terminal.intervalMs * 2);
-      return;
+      return false;
     }
     // Any change snaps the cadence back: output usually arrives in bursts.
     terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
@@ -313,5 +402,6 @@ export class InteractiveTmuxTerminalManager {
     if (update.text) {
       context.emit(terminalOutputEvents.at(terminal.id), bytesPayload(update.text, update.full));
     }
+    return true;
   }
 }

@@ -132,6 +132,9 @@ const startInteractiveTerminalMock = mock(async () => {});
 const writeInteractiveTerminalMock = mock(async (_terminalSessionId: string, _data: string) => {});
 const resizeInteractiveTerminalMock = mock(async () => {});
 const detachInteractiveTerminalMock = mock(async () => {});
+const renewInteractiveTerminalMock = mock(
+  async (_terminalSessionId: string): Promise<"renewed" | "lapsed" | "unsupported"> => "renewed",
+);
 const handleTerminalPasteMock = mock(async (_options: TerminalPasteOptions) => {});
 
 mock.module("@xterm/xterm", () => ({
@@ -154,6 +157,7 @@ mock.module("@/lib/claude-tmux-client", () => ({
   writeInteractiveTerminal: writeInteractiveTerminalMock,
   resizeInteractiveTerminal: resizeInteractiveTerminalMock,
   detachInteractiveTerminal: detachInteractiveTerminalMock,
+  renewInteractiveTerminal: renewInteractiveTerminalMock,
 }));
 
 mock.module("@/lib/terminal-paste", () => ({
@@ -210,6 +214,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     writeInteractiveTerminalMock.mockClear();
     resizeInteractiveTerminalMock.mockClear();
     detachInteractiveTerminalMock.mockClear();
+    renewInteractiveTerminalMock.mockReset();
+    renewInteractiveTerminalMock.mockResolvedValue("renewed");
     handleTerminalPasteMock.mockClear();
     handleTerminalPasteMock.mockResolvedValue(undefined);
     capturedImagePasteOptions = null;
@@ -966,5 +972,84 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
 
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
+  });
+  // To-do 7745: the backend stops capturing a terminal nobody renews, so a
+  // reload or a closed window no longer leaves a capture loop behind.
+  describe("interactive terminal lease", () => {
+    const becomeVisible = () =>
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+    test("renews the lease when the page becomes visible", async () => {
+      const { unmount } = renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      becomeVisible();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+
+      unmount();
+      renewInteractiveTerminalMock.mockClear();
+      becomeVisible();
+      expect(renewInteractiveTerminalMock).not.toHaveBeenCalled();
+    });
+
+    test("attaches a new terminal when the backend reports the lease lapsed", async () => {
+      createInteractiveTerminalMock.mockResolvedValueOnce("pty-1").mockResolvedValueOnce("pty-2");
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      const { unmount } = renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      becomeVisible();
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-2"));
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(2);
+      expect(listenMock.mock.calls.at(-1)?.[0]).toBe("terminal-output-pty-2");
+      expect(terminalInstances[0]!.disposed).toBe(true);
+
+      becomeVisible();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenLastCalledWith("pty-2"));
+      unmount();
+      expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-2");
+    });
+
+    test("stops renewing against a backend that predates leases", async () => {
+      renewInteractiveTerminalMock.mockResolvedValue("unsupported");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      becomeVisible();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+      becomeVisible();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("keeps the terminal when a renewal fails transiently", async () => {
+      const logs = captureLogs();
+      try {
+        renewInteractiveTerminalMock.mockRejectedValueOnce(new Error("gateway reconnecting"));
+        renderInAppCommandScope(
+          <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+        );
+        await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+        becomeVisible();
+        await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+        becomeVisible();
+        await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(2));
+        expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+        expect(detachInteractiveTerminalMock).not.toHaveBeenCalled();
+      } finally {
+        logs.restore();
+      }
+    });
   });
 });

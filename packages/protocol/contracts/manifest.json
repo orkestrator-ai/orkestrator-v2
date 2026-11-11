@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1007,
-    "defined": 1007,
+    "commands": 1008,
+    "defined": 1008,
     "untyped": 0,
     "events": 45
   },
@@ -1024,7 +1024,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:0250bafd36aa815f589364caf84e9dd8d64a031206a6681691fef73b44b7e2c8",
+      "argsDigest": "sha256:b0c38d7045cd8abe558e67a47362c40fe653d0aa082e4b7130e55f248d400399",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "claude_tmux_detach_interactive_terminal": {
@@ -1080,6 +1080,15 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:691e4c6f1b2858ee182fded4e35f62d0ac3342823392eb7df96eea7c1d942d01"
+    },
+    "claude_tmux_renew_interactive_terminal": {
+      "domain": "claude-tmux",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:5ab13a310102ef398b6e36b6dbc6498bebd23b604a40e4df14f402f135dc9659",
+      "resultDigest": "sha256:a74434be5ffcad928221e020a53ef3c32d02c641af6a9b2ba7ceae76b8915ba1"
     },
     "claude_tmux_reply_hook": {
       "domain": "claude-tmux",

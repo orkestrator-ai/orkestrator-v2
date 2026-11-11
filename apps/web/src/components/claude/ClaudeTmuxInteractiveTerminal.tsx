@@ -23,6 +23,7 @@ import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
 import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useClaudeTmuxClient } from "@/lib/claude-tmux-scope";
+import { CLAUDE_TMUX_INTERACTIVE_RENEW_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
 
 const log = createLogger("web.claude-tmux");
 
@@ -62,6 +63,9 @@ export function ClaudeTmuxInteractiveTerminal({
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  // Bumped when the backend reports that it dropped this terminal (its lease
+  // lapsed while the page slept or was throttled), to attach a new one.
+  const [attachGeneration, setAttachGeneration] = useState(0);
 
   useEffect(() => {
     isMobileRef.current = isMobile;
@@ -258,8 +262,51 @@ export function ClaudeTmuxInteractiveTerminal({
     let activeUnlisten: UnlistenFn | null = null;
     let detached = false;
     const listenAbortController = new AbortController();
+    let renewTimer: ReturnType<typeof setInterval> | null = null;
+    let renewInFlight = false;
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void renewLease();
+    };
+    const stopRenewing = () => {
+      if (renewTimer !== null) clearInterval(renewTimer);
+      renewTimer = null;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+    // The backend stops capturing a terminal whose client stops renewing, so a
+    // reload, a closed window or a cut link no longer leaves its capture loop
+    // running for nobody (to-do 7745). Unmount still detaches at once.
+    async function renewLease(): Promise<void> {
+      const sessionId = createdSessionId;
+      if (renewInFlight || cancelled || !sessionId || detached) return;
+      renewInFlight = true;
+      try {
+        const renewal = await nodeTmux.renewInteractiveTerminal(sessionId);
+        if (cancelled || sessionIdRef.current !== sessionId) return;
+        if (renewal === "unsupported") {
+          // An older backend never detaches on its own.
+          stopRenewing();
+        } else if (renewal === "lapsed") {
+          stopRenewing();
+          log.info("terminal.lease-lapsed", { sessionId });
+          setAttachGeneration((generation) => generation + 1);
+        }
+      } catch (renewError) {
+        // Transient (a reconnecting link): the next renewal retries well
+        // inside the lease.
+        log.warn("terminal.renew-failed", { sessionId, error: formatLogError(renewError) });
+      } finally {
+        renewInFlight = false;
+      }
+    }
+    const startRenewing = () => {
+      if (renewTimer !== null) return;
+      renewTimer = setInterval(() => void renewLease(), CLAUDE_TMUX_INTERACTIVE_RENEW_MS);
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    };
 
     const cleanupCreatedSession = () => {
+      stopRenewing();
       listenAbortController.abort();
       const unlisten = activeUnlisten;
       activeUnlisten = null;
@@ -295,6 +342,7 @@ export function ClaudeTmuxInteractiveTerminal({
         }
 
         sessionIdRef.current = sessionId;
+        startRenewing();
         let recoveryInFlight: Promise<void> | null = null;
         const recoverFromDesync = () => {
           if (recoveryInFlight) return;
@@ -377,6 +425,7 @@ export function ClaudeTmuxInteractiveTerminal({
     terminalBackgroundColor,
     terminalScrollback,
     nodeTmux,
+    attachGeneration,
   ]);
 
   useEffect(() => {

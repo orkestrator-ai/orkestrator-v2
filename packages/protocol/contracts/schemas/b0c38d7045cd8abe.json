@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:b0c38d7045cd8abe558e67a47362c40fe653d0aa082e4b7130e55f248d400399",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cols": {},
+        "environmentId": {
+          "type": "string"
+        },
+        "leased": {
+          "type": "boolean"
+        },
+        "rows": {},
+        "tabId": {
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "tabId"],
+      "type": "object"
+    }
+  }
+}

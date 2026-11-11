@@ -122,3 +122,21 @@ passed alone with `--parallel=1` in a five-owner rerun
 (`orkestrator-test-run.WIUK3M`, whose only failure was flake 9936). Evidence:
 `orkestrator-test-run.tOQhj5` under the host temporary directory. No
 assertion, timeout, skip or implementation changed.
+
+## Recurrence — 2026-11-11 (SQLite activity metrics branch)
+
+Base `498b68766f5c9f357a3a86782406d1e9e0977559`, head `9530616a0`
+(`sqlite-storage-tuning-d0d420a0c5e2-r1`), which does not change
+`preview-listener-ownership.ts`, its test or `command-capture.ts`.
+`mise run flaky:recurrence -- 4843 --base 498b68766` answered `open`. In
+`ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+default-tests-skip-guards -- mise run test` (macOS, 18 CPUs, load average
+about 34–39) three listener cases failed: `attributes a real 127.0.0.1
+listener and refuses another environment` (3780 ms; expected `unattributed`,
+received `unchecked` at `preview-listener-ownership.test.ts:454`),
+`attributes a real :: listener and refuses another environment` (2130 ms) and
+`same-port listeners on loopback and a different interface keep distinct
+owners` (3572 ms). The runner's one-file rerun of the complete owner passed
+(8.3 s). Same symptom as the 2026-11-06 follow-up: the checker's `lsof` (2 s
+`timeoutMs`) did not finish under load. Evidence:
+`orkestrator-test-run.tVTJUs/` under the host temporary directory.

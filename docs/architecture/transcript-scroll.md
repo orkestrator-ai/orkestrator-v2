@@ -216,6 +216,41 @@ element's top relative to the viewport.
 is happening now: the build pipeline transcript, the Graph Run transcript and
 the spec chat.
 
+A view hidden inside a host that stays active passes `visible` separately
+from `isActive`; the view is active only while both are true. When it comes
+back with the host active throughout (the pipeline inspector's Ticket node or
+a Tests view, then the stage again), the policy is not applied: a follower
+catches up to the latest message, and a detached reader stays at the offset
+the hidden element kept, under either policy. That offset is used rather than
+the semantic anchor because a reader looking at the review report in the
+footer has no row on screen, so their last captured anchor is an older place.
+The `latest` jump applies once the host itself has been left, even if the view
+was hidden at the time. A view whose one mounted list is reused for other
+content also passes `viewKey` (the pipeline passes the stage's session key):
+when the key it comes back with differs from the last key it showed while
+active, the return is not a view return, and the list opens at the newest
+message under either policy, because no place in the old content belongs to
+the new one. The comparison uses the last key shown, not the key of the render
+that hid the view: selecting a node whose remembered inspector view is Tests
+hides the transcript and hands it that node's session in one render. So
+Ticket and back to the same stage keeps the place, while Ticket (or a node
+left on its Tests view) and then a different stage shows that stage's newest
+message. The build pipeline transcript passes `visible` and `viewKey`; the
+Graph Run transcript unmounts in its Details view instead. Before 2026-11-11
+the pipeline folded `visible` into `isActive`, so every return to a stage went
+to the newest message although its comments said the place was kept (to-do
+5620, retired 2026-11-11). `useVirtuosoScrollState.return.test.ts` covers
+both kinds of return under both policies, and a changed `viewKey` (including
+one that arrives in the hiding render), with animation frames held and drained
+rather than a wall-clock wait.
+`InspectorTranscriptHide.spec.ts` checks a reader's first visible frame and
+settled offset after Ticket and back, in Chromium and WebKit, with and without
+the review report. Its Ticket-then-another-stage case (`longTranscript=stages`)
+checks that the other stage settles at its newest message, and a Prepare node
+left on its Tests view (`scenario=validation&longTranscript=stages`) checks that
+its transcript opens at its newest message after another stage. Both were
+added on 2026-11-11 and pass in Chromium and in Playwright WebKit (build 2388).
+
 The two inspector transcripts were measured across a pane hide on 2026-11-05,
 in Playwright WebKit (build 2370) and Chromium, at phone and desktop widths
 (`e2e/InspectorTranscriptHide.spec.ts`). Every case settled on the newest
@@ -229,8 +264,7 @@ offset before the frame's animation callbacks. In a pipeline transcript the
 container is the review report in the footer: a reader near the end, or a
 follower, came back 466 px (desktop) higher than they left
 ([flake 6380](../tests/flaky-tests/web-ui/6380-inspector-transcript-hide-webkit-offset.md),
-[5620](../todo/coordinator-and-multi-review/5620-pipeline-transcript-place-and-webkit-settling.md)
-task 2). When the scroller is, or wraps, the container, that range would be 0,
+to-do 5620 task 2, retired 2026-11-11). When the scroller is, or wraps, the container, that range would be 0,
 which fits the reset to the top that to-do 0860 (retired 2026-11-10) found
 in the Multi Review inspector tail (see
 [`build-pipeline-view.md`](build-pipeline-view.md#shared-flow-graph)). So the

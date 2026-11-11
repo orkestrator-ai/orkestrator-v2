@@ -4,6 +4,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import {
   decideAutoMerge,
+  PR_AUTO_MERGE_RESOLVE_SETTLE_MS,
   PR_AUTO_MERGE_RETRY_BASE_MS,
   PR_AUTO_MERGE_RETRY_MAX_MS,
   PrAutoMergeController,
@@ -137,7 +138,11 @@ describe("decideAutoMerge", () => {
   });
 });
 
-function harness(initial: Environment, defaultLogging = false) {
+function harness(
+  initial: Environment,
+  defaultLogging = false,
+  resolveSettled?: (environmentId: string) => boolean,
+) {
   let stored = initial;
   let monitorState: PrMonitorEnvironmentState | null = monitor(initial);
   const listeners = new Set<(event: PrMonitorEvent) => void>();
@@ -185,6 +190,9 @@ function harness(initial: Environment, defaultLogging = false) {
       return () => listeners.delete(listener);
     },
     monitorState: () => monitorState,
+    ...(resolveSettled
+      ? { resolveSettled: async (environmentId: string) => resolveSettled(environmentId) }
+      : {}),
     schedule: (callback, delayMs) => {
       const timer = { callback, delayMs, cancelled: false };
       timers.push(timer);
@@ -631,24 +639,45 @@ test("a conflict-free reading does not lift a pending merge's hold", async () =>
   expect(h.timers.at(-1)!.cancelled).toBe(false);
 });
 
-test("completed resolution retries only after a newer reading, then stops at three", async () => {
-  const completed = new Date(Date.now() - 100).toISOString();
-  const h = harness(
-    environment({
-      hasMergeConflicts: true,
-      prMergeability: "dirty",
-      prRecheckAfterAgentCompletionArmedAt: completed,
-      autoMergeResolveCompletedAt: completed,
-    }),
-  );
-  h.setMonitor(monitor(h.stored, { lastSuccessfulCheckStartedAt: completed }));
+/** An armed, conflicting environment whose monitor readings are all fresh. */
+function resolvingEnvironment(overrides: Partial<Environment> = {}): Environment {
+  return environment({
+    autoMergeEnabledAt: new Date(Date.now() - 55_000).toISOString(),
+    hasMergeConflicts: true,
+    prMergeability: "dirty",
+    prRecheckAfterAgentCompletionArmedAt: new Date(Date.now() - 54_000).toISOString(),
+    ...overrides,
+  });
+}
+
+/** Lets the controller's unawaited follow-up pass run. */
+async function flush(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function isoAgo(ms: number): string {
+  return new Date(Date.now() - ms).toISOString();
+}
+
+test("completed resolution retries only after a reading past the settle window, then stops at three", async () => {
+  const completed = isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000);
+  const h = harness(resolvingEnvironment({ autoMergeResolveCompletedAt: completed }));
+  // A reading from inside the settle window may still show the old conflict.
+  h.setMonitor(monitor(h.stored, { lastSuccessfulCheckStartedAt: isoAgo(15_000) }));
   await h.controller.evaluate("env-1");
   expect(h.invocations).toHaveLength(0);
+  expect(h.stored.autoMergeResolveAttempts ?? 0).toBe(0);
   h.setMonitor(monitor(h.stored));
   await h.controller.evaluate("env-1");
+  await flush();
   expect(h.stored.autoMergeResolveAttempts).toBe(1);
-  await h.controller.evaluate("env-1");
-  expect(h.invocations[0]?.command).toBe("launch_native_agent_job");
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+  // The prompt goes back to the open Resolve tab without waiting for another reading.
+  expect(h.invocations).toHaveLength(1);
+  expect(h.invocations[0]).toMatchObject({
+    command: "launch_native_agent_job",
+    args: { title: "Resolve", tabReuse: "any-agent" },
+  });
   h.set({
     ...h.stored,
     autoMergeResolveAttempts: 2,
@@ -656,24 +685,20 @@ test("completed resolution retries only after a newer reading, then stops at thr
     autoMergeResolveCompletedAt: completed,
   });
   await h.controller.evaluate("env-1");
+  await flush();
   expect(h.stored.autoMerge).toBe(false);
   expect(h.stored.autoMergeError).toContain("three attempts");
+  expect(h.invocations).toHaveLength(1);
   h.controller.dispose();
 });
 
 test("a second Resolve can clear conflicts and continue to merge with cleanup", async () => {
-  const completed = new Date(Date.now() - 100).toISOString();
+  const completed = isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000);
   const h = harness(
-    environment({
-      autoMergeCleanup: true,
-      hasMergeConflicts: true,
-      prMergeability: "dirty",
-      prRecheckAfterAgentCompletionArmedAt: completed,
-      autoMergeResolveCompletedAt: completed,
-    }),
+    resolvingEnvironment({ autoMergeCleanup: true, autoMergeResolveCompletedAt: completed }),
   );
   await h.controller.evaluate("env-1");
-  await h.controller.evaluate("env-1");
+  await flush();
   expect(h.invocations[0]?.command).toBe("launch_native_agent_job");
   h.set({
     ...h.stored,
@@ -686,5 +711,74 @@ test("a second Resolve can clear conflicts and continue to merge with cleanup", 
     command: "merge_environment_pr",
     args: { cleanupAfterMerge: true },
   });
+  h.controller.dispose();
+});
+
+test("a settled manual Resolve records its completion and is sent again after the settle window", async () => {
+  let settled = false;
+  // Armed by a manual press: no automatic request id, no completion time.
+  const h = harness(resolvingEnvironment(), false, () => settled);
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveCompletedAt).toBeUndefined();
+  expect(h.invocations).toHaveLength(0);
+
+  settled = true;
+  await h.controller.evaluate("env-1");
+  const completedAt = Date.parse(h.stored.autoMergeResolveCompletedAt ?? "");
+  expect(Number.isFinite(completedAt)).toBe(true);
+  // The reading that noticed the settle started before it; nothing is sent yet.
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(0);
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBeDefined();
+
+  h.set({ ...h.stored, autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS) });
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMergeResolveAttempts).toBe(1);
+  expect(h.invocations).toHaveLength(1);
+  expect(h.invocations[0]).toMatchObject({
+    command: "launch_native_agent_job",
+    args: { tabReuse: "any-agent", completionAction: "refresh-pr-after-agent-completion" },
+  });
+  h.controller.dispose();
+});
+
+test("a Resolve working again restarts the settle window instead of counting an attempt", async () => {
+  let settled = false;
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+    }),
+    false,
+    () => settled,
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.stored.autoMergeResolveCompletedAt).toBeUndefined();
+  expect(h.stored.prRecheckAfterAgentCompletionArmedAt).toBeDefined();
+  expect(h.stored.autoMergeResolveAttempts ?? 0).toBe(0);
+  expect(h.invocations).toHaveLength(0);
+
+  settled = true;
+  await h.controller.evaluate("env-1");
+  expect(h.stored.autoMergeResolveCompletedAt).toBeDefined();
+  expect(h.invocations).toHaveLength(0);
+  h.controller.dispose();
+});
+
+test("a conflict-free reading after Resolve merges without sending the prompt again", async () => {
+  const h = harness(
+    resolvingEnvironment({
+      autoMergeResolveCompletedAt: isoAgo(PR_AUTO_MERGE_RESOLVE_SETTLE_MS + 10_000),
+      hasMergeConflicts: false,
+      prMergeability: "clean",
+      prRecheckAfterAgentCompletionArmedAt: undefined,
+    }),
+    false,
+    () => true,
+  );
+  await h.controller.evaluate("env-1");
+  await flush();
+  expect(h.invocations.map((invocation) => invocation.command)).toEqual(["merge_environment_pr"]);
   h.controller.dispose();
 });

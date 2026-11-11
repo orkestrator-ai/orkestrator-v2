@@ -301,6 +301,7 @@ import {
 import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { PrAutoMergeController } from "./pr-auto-merge.js";
+import { resolveTabsSettled } from "./pr-auto-merge-resolve-settled.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
@@ -1683,6 +1684,7 @@ export class OrkestratorBackend {
       subscribe: (listener) => context.runtime.prMonitor.onEvent(listener),
       monitorState: (environmentId) =>
         context.runtime.prMonitor.announcedStates().get(environmentId) ?? null,
+      resolveSettled: (environmentId) => resolveTabsSettled(storage, environmentId),
     });
     context.prAutoMerge = this.prAutoMerge;
     // Mock runs (item 213): mock agent, system and human executors; no

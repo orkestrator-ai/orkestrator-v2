@@ -66,7 +66,11 @@
  * provider merged into the profile's own global `opencode.json`
  * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
- * credential source either.
+ * credential source either. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+ * puts the run's OpenCode sessions on the 2.x preview for the run (the
+ * profile's `openCodeProtocol`, restored afterwards); only 2.x's `shell` can
+ * background a command, so only then does `background` exercise OpenCode
+ * (todo 0049 task 8).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -104,7 +108,7 @@ import {
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
 import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
-import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
+import { allowOpenCodeFakeProvider, useOpenCodeProtocol } from "./opencode-fake-provider";
 import {
   requireRecoveredBackoff,
   backgroundOutputEvidence,
@@ -206,6 +210,12 @@ const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIME
 const DETACH_WAIT_OVERRIDE = process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS;
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
 const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
+/**
+ * `v2` puts the run's OpenCode sessions on the 2.x preview (`openCodeProtocol`),
+ * whose `bash` can background a command; 1.19.5's cannot (todo 0049 task 8).
+ */
+const OPENCODE_PROTOCOL: "legacy" | "v2" =
+  process.env.ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL === "v2" ? "v2" : "legacy";
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -543,6 +553,7 @@ test.describe("live idle observation", () => {
       const fakeModels: FakeModelHandle[] = [];
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
+      let restoreOpenCodeProtocol: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -576,6 +587,14 @@ test.describe("live idle observation", () => {
               PI_FAKE_PROVIDER,
             );
           }
+        }
+        if (platform === "opencode" && OPENCODE_PROTOCOL === "v2") {
+          // Before the environment's first session: the line is fixed at creation.
+          restoreOpenCodeProtocol = await useOpenCodeProtocol(
+            (command, args) => client.invoke(command, args),
+            OPENCODE_PROTOCOL,
+          );
+          summary.openCodeProtocol = OPENCODE_PROTOCOL;
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1643,14 +1662,40 @@ test.describe("live idle observation", () => {
               "the exercised background task's output reached a tool result or its task output file",
             ).not.toBe("none");
           } else {
-            // No task surface (Codex): read what the transcript shows once the
-            // 20 s command has surely ended, with no further turn.
-            const endedBy = sentAt + 30_000 - Date.now();
+            // No task surface (Codex, OpenCode 2.x): read what the transcript
+            // shows once the 20 s command has surely ended, with no turn from us.
+            // OpenCode 2.x promises to resume the session with the output, so
+            // allow it 25 s for that.
+            const endedBy = sentAt + 45_000 - Date.now();
             if (endedBy > 0) await sleep(endedBy);
-            const afterEnd = freshToolStates((await projection())?.messages ?? [], before);
+            const ended = await projection();
+            const afterEnd = freshToolStates(ended?.messages ?? [], before);
             record.notes.push(
               `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
+            // Content-free: which rows arrived, and whether any shows the marker.
+            const freshRows = (ended?.messages ?? []).filter((message) => !before.has(message.id));
+            const markerInRow = freshRows.some((message) => textOf(message).includes(marker));
+            record.notes.push(
+              `fresh rows after the command ended: ${freshRows.map((message) => message.role).join(",") || "none"}; marker in a row's text: ${markerInRow}; phase ${ended?.turn.phase ?? "none"}`,
+            );
+            // A foreground run (OpenCode 1.19.5, Pi) returns the output in the
+            // call's own result, which proves nothing about a late arrival.
+            if (markerInRow && evidence === "none") {
+              // The provider resumed the idle session with the output (OpenCode
+              // 2.x): an idle, backed-off page must catch up with no turn of ours.
+              const lookedAt = Date.now();
+              await expect(page().getByText(marker).first()).toBeVisible({
+                timeout: LOST_ANNOUNCEMENT_BOUND_MS,
+              });
+              record.timings.lateOutputShownMs = Date.now() - lookedAt;
+              // A backgrounded command whose output reached the idle page is
+              // exercised, task surface or not.
+              record.status = "passed";
+              record.notes.push(
+                "exercised: the output arrived in a resumed turn of the idle session",
+              );
+            }
             // Nothing reports the end of a command the turn left running, so its
             // card must not keep claiming to run on an idle thread (#2064).
             expect(
@@ -1862,10 +1907,16 @@ test.describe("live idle observation", () => {
             await sleep(15_000);
             if (closesRenderer) {
               // The no-touch read: stop as soon as the thread is released.
-              if ((await runtimeState()) === "detached") {
+              const state = await runtimeState();
+              if (state === "detached") {
                 record.timings.detachObservedAfterMs = Date.now() - idleStart;
                 break;
               }
+              // No page reads to print during a 35 min wait: keep the logged
+              // runner's no-output watchdog fed (content-free).
+              progress(
+                `detach wait ${Math.round((Date.now() - idleStart) / 60_000)} min: runtime ${state ?? "unknown"}`,
+              );
               continue;
             }
             if ((await stopButton().count()) > 0) sawStop = true;
@@ -1996,6 +2047,12 @@ test.describe("live idle observation", () => {
           if (restoreOpenCodeAllowlist) {
             await restoreOpenCodeAllowlist().catch((error: unknown) => {
               summary.allowlistRestoreError = String(error).slice(0, 300);
+              writeSummary();
+            });
+          }
+          if (restoreOpenCodeProtocol) {
+            await restoreOpenCodeProtocol().catch((error: unknown) => {
+              summary.protocolRestoreError = String(error).slice(0, 300);
               writeSummary();
             });
           }

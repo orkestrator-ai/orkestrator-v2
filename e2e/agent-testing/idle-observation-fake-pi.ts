@@ -14,8 +14,10 @@ import { piCompletionChunk, piProviderConfig } from "../../scripts/pi-fake-model
  * ends the turn with the reply. OpenCode reaches the same endpoint through a
  * custom provider (`idle-observation-fake-models.ts`, todo 0049 task 6); its
  * `bash` tool also takes a description, which the call adds when the offered
- * schema names one. Pi has no sub-agent, background or question
- * tool, so those steps reply in text. It keeps no request body and logs
+ * schema names one. OpenCode 2.x names the tool `shell`, and its schema
+ * offers `background`, which a background step sets (todo 0049 task 8). Pi has no sub-agent,
+ * background or question tool, so those steps reply in text or run in the
+ * foreground. It keeps no request body and logs
  * nothing.
  */
 import { finalReply, scriptedStep } from "./idle-observation-fake-claude";
@@ -52,25 +54,34 @@ export function piRequestState(body: ChatBody): { prompt: string; afterTool: boo
   return { prompt, afterTool };
 }
 
-/** The assistant message for one request: a `bash` call only when Pi offers it. */
+/** The assistant message for one request: a shell call only when the agent offers one. */
 export function piAssistantMessage(
   body: ChatBody,
   id: number,
 ): { content: string | null; toolCall?: { id: string; name: string; arguments: string } } {
   const { prompt, afterTool } = piRequestState(body);
   const step = scriptedStep(prompt, afterTool);
-  const bash = (body.tools ?? []).find((tool) => tool.function?.name === "bash");
+  // Pi and OpenCode 1.x call their shell tool `bash`; OpenCode 2.x calls it `shell`.
+  const bash = (body.tools ?? []).find(
+    (tool) => tool.function?.name === "bash" || tool.function?.name === "shell",
+  );
   if (step.kind === "shell" && bash) {
     // OpenCode's `bash` also requires a description; Pi's takes the command alone.
-    const describe = Boolean(bash.function?.parameters?.properties?.description);
+    const properties = bash.function?.parameters?.properties;
+    const describe = Boolean(properties?.description);
+    // OpenCode 2.x's `shell` backgrounds a command itself (`background: true`);
+    // Pi's and OpenCode 1.19.5's `bash` offer no such parameter, so they run
+    // it in the foreground (todo 0049 task 8).
+    const background = step.background && Boolean(properties?.background);
     return {
       content: null,
       toolCall: {
         id: `call_idleqa_${id}`,
-        name: "bash",
+        name: bash.function!.name!,
         arguments: JSON.stringify({
           command: step.command,
           ...(describe ? { description: "Run the requested command" } : {}),
+          ...(background ? { background: true } : {}),
         }),
       },
     };

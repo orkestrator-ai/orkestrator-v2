@@ -33,6 +33,39 @@ describe("scripted fake Pi model", () => {
     ).toEqual({ command: "sleep 5; echo IDLEQA-WARM-1" });
   });
 
+  test("backgrounds the background step only where the shell tool offers it (OpenCode 2.x)", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "Start this shell command as a background task and do not wait for it: sleep 20; echo IDLEQA-BGOUT-1 Right after starting it, reply with exactly IDLEQA-BG-1 and nothing else.",
+      },
+    ];
+    const tools = (name: string, properties: Record<string, unknown>) => [
+      { type: "function", function: { name, parameters: { properties } } },
+    ];
+    // 2.x: the tool is `shell`, with no description and a background flag.
+    const v2 = tools("shell", { command: {}, workdir: {}, timeout: {}, background: {} });
+    const call = piAssistantMessage({ messages, tools: v2 }, 1).toolCall!;
+    expect(call.name).toBe("shell");
+    expect(JSON.parse(call.arguments)).toEqual({
+      command: "sleep 20; echo IDLEQA-BGOUT-1",
+      background: true,
+    });
+    // 1.19.5 and Pi: `bash` has no such parameter, so the command runs in the foreground.
+    const v1 = tools("bash", { command: {}, description: {} });
+    expect(
+      JSON.parse(piAssistantMessage({ messages, tools: v1 }, 1).toolCall!.arguments),
+    ).not.toHaveProperty("background");
+    // A foreground step never asks for the background, even where it is offered.
+    expect(
+      JSON.parse(
+        piAssistantMessage({ messages: [{ role: "user", content: warmup }], tools: v2 }, 1)
+          .toolCall!.arguments,
+      ),
+    ).not.toHaveProperty("background");
+  });
+
   test("calls Pi's bash tool for a command, then replies once its result is back", () => {
     const asked = {
       messages: [

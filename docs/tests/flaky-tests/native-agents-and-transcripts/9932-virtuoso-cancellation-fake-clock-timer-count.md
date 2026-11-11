@@ -266,3 +266,27 @@ it does not touch this file or the transcript-scroll code.
   this flake.)
 
 Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups, second review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `b307c086f`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes no `apps/web` code.
+
+- **Command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, with
+  the shared host queueing behind other worktrees' runs.
+- **Suite counts:** backend 18,593 passed and 1 failed (flake 9963); web 14,570
+  passed and 9 failed (this case); root, bridge and lockfile groups passed.
+- **Failure:** nine cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`), among them
+  `control: without cancellation the library retries the index target after a refresh`
+  (148.9 ms) and both `restored snapshot transitions from hidden to visible (cancel=%s)`
+  cases.
+- **Isolated rerun:** the aggregate runner's rerun budget was spent before it
+  reached this file. Two manual runs of
+  `NODE_ENV=test mise run test:logged -- --name virtuoso-alone-test-env-N -- bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
+  passed (14 of 14, load average about 11 after the suite finished).
+
+Status stays open; no assertion, timeout or skip changed.

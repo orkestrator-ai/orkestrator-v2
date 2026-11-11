@@ -58,6 +58,7 @@ async function startContractGateway() {
   const register = createRegistryRegistrar(commands, { validateResults: true });
   register(probe, (args) => ({ echoed: args.text, keys: Object.keys(args) }));
   const seen: unknown[][] = [];
+  const signals: AbortSignal[] = [];
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-envelope-ipc-"));
   cleanups.push(() => rm(dataDir, { recursive: true, force: true }));
   const rendererRoot = path.join(dataDir, "dist");
@@ -66,7 +67,11 @@ async function startContractGateway() {
   const gateway = new OrkestratorGateway({
     backend: {
       invoke: (command, args, invocation) => {
-        seen.push(invocation === undefined ? [command, args] : [command, args, invocation]);
+        // `seen` records the envelope fields; every gateway call also carries
+        // its own cancellation signal (to-do 7543 task 6), recorded apart.
+        const { signal, ...envelope } = invocation ?? {};
+        if (signal) signals.push(signal);
+        seen.push(Object.keys(envelope).length ? [command, args, envelope] : [command, args]);
         // A backend error with a registered code (`contract/ipc-error.ts`).
         if (command === "adopt_missing_session") throw new NativeAgentProviderSessionMissingError();
         if (command === "fail_with_unregistered_code")
@@ -89,7 +94,7 @@ async function startContractGateway() {
   const info = await gateway.start();
   if (!info) throw new Error("Gateway did not start");
   cleanups.push(() => gateway.stop());
-  return { url: info.url, seen };
+  return { url: info.url, seen, signals };
 }
 
 /** Main's invoke handler over the backend client, and a renderer talking to it over fake IPC. */
@@ -177,6 +182,9 @@ describe("Electron IPC invoke envelope", () => {
       { text: "hi", extra: 1 },
       { domain: "system", version: 2 },
     ]);
+    // Its own cancellation signal, not aborted: the client waited for the answer.
+    expect(gateway.signals).toHaveLength(1);
+    expect(gateway.signals[0]!.aborted).toBe(false);
   });
 
   test("an older two-argument call keeps the plain body", async () => {

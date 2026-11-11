@@ -122,7 +122,7 @@ describe("NodeLinearSync", () => {
     const sync = commandSync(command, leafLink(leaf).link);
     await sync.sync(LEAF);
     expect(await leaf.kanban.getLinearAuth()).toBeNull();
-    expect(sync.nodeConnections()).toEqual([
+    expect(await sync.nodeConnections()).toEqual([
       expect.objectContaining({ nodeId: LEAF, nodeName: "Laptop", connected: false }),
     ]);
 
@@ -145,7 +145,7 @@ describe("NodeLinearSync", () => {
     const sync = commandSync(command, leafLink(leaf).link);
     await sync.sync(LEAF);
     expect((await leaf.kanban.getLinearAuth())?.apiKey).toBe("lin_api_shared");
-    const [connection] = sync.nodeConnections();
+    const [connection] = await sync.nodeConnections();
     expect(connection).toMatchObject({
       connected: true,
       viewerName: "Ada",
@@ -169,6 +169,97 @@ describe("NodeLinearSync", () => {
     expect(await command.kanban.getLinearAuth()).toBeNull();
   });
 
+  test("a reading of a key disconnected since is reported disconnected before the next pass", async () => {
+    const [command, leaf] = await Promise.all([storage(), storage()]);
+    await leaf.kanban.saveLinearAuth("lin_api_shared", { id: "v", name: "Ada" });
+    const sync = commandSync(command, leafLink(leaf).link);
+    await sync.sync(LEAF);
+    expect(await sync.nodeConnections()).toEqual([
+      expect.objectContaining({
+        connected: true,
+        keyFingerprint: linearKeyFingerprint("lin_api_shared"),
+      }),
+    ]);
+
+    // Disconnect everywhere here; the leaf has not been synced since.
+    await Bun.sleep(5);
+    command.linear.mergeLinearRevocations([
+      {
+        keyFingerprint: linearKeyFingerprint("lin_api_shared"),
+        revokedAt: new Date().toISOString(),
+      },
+    ]);
+    const [reading] = await sync.nodeConnections();
+    expect(reading).toMatchObject({ nodeId: LEAF, connected: false });
+    // Nothing left to offer as "Use it here".
+    expect(reading?.keyFingerprint).toBeUndefined();
+    expect(reading?.viewerName).toBeUndefined();
+    // The leaf still holds it until that pass.
+    expect((await leaf.kanban.getLinearAuth())?.apiKey).toBe("lin_api_shared");
+  });
+
+  test("a change read from one leaf reaches the other leaves on the debounced pass", async () => {
+    const [command, leafA, leafB] = await Promise.all([storage(), storage(), storage()]);
+    leafA.linear.saveLinearBoardLink({ key: REPO, teamId: "team-1" }, new Set([REPO]));
+    const a = leafLink(leafA);
+    const b = leafLink(leafB);
+    const sync = new NodeLinearSync({
+      selfId: async () => "command-node",
+      link: (nodeId) => (nodeId === "leaf-a" ? a.link : nodeId === "leaf-b" ? b.link : null),
+      nodes: async () => [
+        { nodeId: "leaf-a", available: true },
+        { nodeId: "leaf-b", available: true },
+      ],
+      storage: command,
+      isCommandNode: () => true,
+      debounceMs: 1,
+    });
+    syncs.push(sync);
+    await sync.sync("leaf-a");
+    expect(b.calls).toEqual([]);
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (await leafB.linear.getLinearBoardLink(REPO)) break;
+      await Bun.sleep(5);
+    }
+    expect(await leafB.linear.getLinearBoardLink(REPO)).toMatchObject({ teamId: "team-1" });
+  });
+
+  test("two machines that link different repositories to one board converge on one owner", async () => {
+    const API = "repo:github.com/acme/api";
+    const [command, leaf] = await Promise.all([storage(), storage()]);
+    // The leaf has both repositories; each was linked to team-1 on a different machine.
+    for (const [id, gitUrl] of [
+      ["leaf-web", "https://github.com/acme/web.git"],
+      ["leaf-api", "https://github.com/acme/api.git"],
+    ] as const) {
+      await leaf.addProject({
+        id,
+        name: id,
+        gitUrl,
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      });
+    }
+    leaf.linear.saveLinearBoardLink({ key: REPO, teamId: "team-1" }, new Set([REPO, API]));
+    await Bun.sleep(5);
+    command.linear.saveLinearBoardLink({ key: API, teamId: "team-1" }, new Set([API]));
+
+    const sync = commandSync(command, leafLink(leaf).link);
+    await sync.sync(LEAF);
+    // The leaf keeps the newer link (api) and records why web lost its board.
+    expect(await leaf.linear.getLinearBoardLink(API)).toMatchObject({ teamId: "team-1" });
+    expect(await leaf.linear.getLinearBoardLink(REPO)).toBeNull();
+    expect(
+      (await leaf.linear.listLinearBoardLinks()).find((link) => link.key === REPO),
+    ).toMatchObject({ cleared: true, supersededBy: API });
+
+    // The clear travels back: the command node settles on the same owner.
+    await sync.sync(LEAF);
+    expect(await command.linear.getLinearBoardLink(REPO)).toBeNull();
+    expect(await command.linear.getLinearBoardLink(API)).toMatchObject({ teamId: "team-1" });
+  });
+
   test("an older leaf is left as it is", async () => {
     const [command, leaf] = await Promise.all([storage(), storage()]);
     command.linear.saveLinearBoardLink({ key: REPO, teamId: "team-1" }, new Set([REPO]));
@@ -176,7 +267,7 @@ describe("NodeLinearSync", () => {
     const sync = commandSync(command, link);
     await sync.sync(LEAF);
     expect(calls).toEqual(["get_linear_sync_state"]);
-    expect(sync.nodeConnections()).toEqual([]);
+    expect(await sync.nodeConnections()).toEqual([]);
   });
 
   test("a leaf syncs nothing itself", async () => {

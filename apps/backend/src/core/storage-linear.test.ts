@@ -147,6 +147,67 @@ describe("LinearRepository", () => {
     expect(await service.linear.getLinearBoardLink(REPO)).toBeNull();
   });
 
+  test("a synced link may not give two of this machine's projects one board: the newer keeps it", async () => {
+    const API = "repo:github.com/acme/api";
+    const local = new Set([REPO, API]);
+    const service = await storage();
+    // Linked here first: web → team t1.
+    service.linear.saveLinearBoardLink({ key: REPO, projectId: "p1", teamId: "t1" }, local);
+    const [mine] = await service.linear.listLinearBoardLinks();
+
+    // Another machine linked api → t1 later: it keeps the board, web is cleared.
+    const later = new Date(Date.parse(mine!.updatedAt) + 1_000).toISOString();
+    expect(
+      service.linear.mergeLinearBoardLinks([{ key: API, teamId: "t1", updatedAt: later }], local),
+    ).toBe(2);
+    expect(await service.linear.getLinearBoardLink(API)).toMatchObject({ teamId: "t1" });
+    expect(await service.linear.getLinearBoardLink(REPO)).toBeNull();
+    const webTombstone = (await service.linear.listLinearBoardLinks()).find(
+      (link) => link.key === REPO,
+    );
+    expect(webTombstone).toMatchObject({ cleared: true, supersededBy: API });
+    // Stamped after the link it replaced, so the clear wins on every machine.
+    expect(Date.parse(webTombstone!.updatedAt)).toBeGreaterThan(Date.parse(mine!.updatedAt));
+
+    // An older link to the same board from elsewhere loses and is cleared instead.
+    const older = new Date(Date.parse(later) - 500).toISOString();
+    const DOCS = "repo:github.com/acme/docs";
+    const withDocs = new Set([...local, DOCS]);
+    expect(
+      service.linear.mergeLinearBoardLinks(
+        [{ key: DOCS, teamId: "t1", updatedAt: older }],
+        withDocs,
+      ),
+    ).toBe(1);
+    expect(await service.linear.getLinearBoardLink(DOCS)).toBeNull();
+    expect(await service.linear.getLinearBoardLink(API)).toMatchObject({ teamId: "t1" });
+    expect(
+      (await service.linear.listLinearBoardLinks()).find((link) => link.key === DOCS),
+    ).toMatchObject({ cleared: true, supersededBy: API });
+
+    // A tombstone keeps its winner through parsing (it travels with sync).
+    expect(
+      parseLinearBoardLink({ key: REPO, cleared: true, supersededBy: API, updatedAt: later }),
+    ).toMatchObject({ supersededBy: API });
+  });
+
+  test("links to one board for repositories this machine does not both have are both kept", async () => {
+    const API = "repo:github.com/acme/api";
+    const service = await storage();
+    const at = new Date().toISOString();
+    expect(
+      service.linear.mergeLinearBoardLinks(
+        [
+          { key: REPO, teamId: "t1", updatedAt: at },
+          { key: API, teamId: "t1", updatedAt: at },
+        ],
+        new Set([REPO]),
+      ),
+    ).toBe(2);
+    expect(await service.linear.getLinearBoardLink(REPO)).toMatchObject({ teamId: "t1" });
+    expect(await service.linear.getLinearBoardLink(API)).toMatchObject({ teamId: "t1" });
+  });
+
   test("keeps the newest disconnect per key, bounded", async () => {
     const service = await storage();
     const now = Date.now();

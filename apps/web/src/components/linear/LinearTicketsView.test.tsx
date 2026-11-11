@@ -1491,6 +1491,25 @@ describe("LinearTicketsView", () => {
     });
   });
 
+  test("after Disconnect everywhere, no machine's revoked key is offered here", async () => {
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    // After the disconnect this node is not connected; the backend reports the
+    // leaves that held the revoked key as disconnected until they sync.
+    getLinearConnectionMock.mockResolvedValue({ connected: false, hasToken: false });
+    getLinearNodeConnectionsMock.mockResolvedValue([
+      { nodeId: "node-laptop", nodeName: "Laptop", connected: false },
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect everywhere" }));
+
+    await waitFor(() => expect(getLinearNodeConnectionsMock).toHaveBeenCalled());
+    await waitFor(() => expect(disconnectLinearMock).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByRole("button", { name: "Use the Linear connection from Laptop here" }) === null,
+    ).toBe(true);
+    expect(copyLinearConnectionFromNodeMock).not.toHaveBeenCalled();
+  });
+
   describe("board view", () => {
     function openLanesMenu() {
       const trigger = screen.getByRole("button", { name: "Choose board lanes" });
@@ -1623,6 +1642,130 @@ describe("LinearTicketsView", () => {
       expect(within(review).getByText("Add Linear integration")).toBeTruthy();
       const todo = screen.getByRole("region", { name: "Todo lane" });
       expect(within(todo).queryByText("Add Linear integration") === null).toBe(true);
+    });
+
+    async function openBoardAndDrag(title: string, lane: string) {
+      const restore = layOutLinearBoard();
+      try {
+        await dragLinearCard(title, lane);
+      } finally {
+        restore();
+      }
+    }
+
+    async function showBoard() {
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+      await screen.findByRole("region", { name: "In Review lane" });
+    }
+
+    const laneOf = (title: string) =>
+      screen.getByText(title).closest("section[aria-label$=' lane']")?.getAttribute("aria-label");
+
+    test("a card cannot be moved again until its move settles", async () => {
+      const first = deferred<LinearIssueDetail>();
+      updateLinearIssueMock.mockImplementation(() => first.promise);
+      await showBoard();
+
+      await openBoardAndDrag("Add Linear integration", "In Review");
+      expect(laneOf("Add Linear integration")).toBe("In Review lane");
+      // Held mid-move: the card cannot be picked up, while the others can.
+      const card = (title: string) =>
+        screen.getByText(title).closest("[data-testid='linear-board-card']")!;
+      expect(card("Add Linear integration").getAttribute("aria-roledescription")).toBeNull();
+      expect(card("Polish dashboard").getAttribute("aria-roledescription")).toBe("draggable");
+      expect(updateLinearIssueMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        first.resolve({ ...issueDetail, status: "In Review", statusType: "started" });
+        await first.promise;
+      });
+      expect(laneOf("Add Linear integration")).toBe("In Review lane");
+      await waitFor(() =>
+        expect(card("Add Linear integration").getAttribute("aria-roledescription")).toBe(
+          "draggable",
+        ),
+      );
+
+      // Settled: it can move again.
+      updateLinearIssueMock.mockImplementation(async () => ({
+        ...issueDetail,
+        status: "Done",
+        statusType: "completed",
+      }));
+      await openBoardAndDrag("Add Linear integration", "Done");
+      await waitFor(() => expect(laneOf("Add Linear integration")).toBe("Done lane"));
+      expect(updateLinearIssueMock).toHaveBeenCalledTimes(2);
+    });
+
+    test("a failed move after a successful one puts the card back where the first left it", async () => {
+      updateLinearIssueMock.mockImplementationOnce(async () => ({
+        ...issueDetail,
+        status: "In Review",
+        statusType: "started",
+      }));
+      await showBoard();
+      await openBoardAndDrag("Add Linear integration", "In Review");
+      await waitFor(() =>
+        expect(toastSuccessMock).toHaveBeenCalledWith("ENG-123 moved to In Review"),
+      );
+
+      updateLinearIssueMock.mockImplementationOnce(async () => {
+        throw new Error("Linear refused");
+      });
+      await openBoardAndDrag("Add Linear integration", "Done");
+      await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+      expect(laneOf("Add Linear integration")).toBe("In Review lane");
+    });
+
+    test("a refresh that lands during a failing move wins over the rollback", async () => {
+      const move = deferred<LinearIssueDetail>();
+      updateLinearIssueMock.mockImplementation(() => move.promise);
+      await showBoard();
+      await openBoardAndDrag("Add Linear integration", "In Review");
+
+      // Linear applied the move although its answer will fail; a refresh reads it.
+      getLinearIssuesMock.mockResolvedValue([
+        { ...issues[0]!, status: "In Review", updatedAt: "2026-06-29T12:00:00.000Z" },
+        issues[1]!,
+      ]);
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+      await waitFor(() => expect(getLinearIssuesMock).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(laneOf("Add Linear integration")).toBe("In Review lane"));
+
+      await act(async () => {
+        move.reject(new Error("The connection dropped"));
+        await move.promise.catch(() => undefined);
+      });
+      await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+      expect(laneOf("Add Linear integration")).toBe("In Review lane");
+    });
+
+    test("a move's answer does not overwrite a newer read of the issue", async () => {
+      const move = deferred<LinearIssueDetail>();
+      updateLinearIssueMock.mockImplementation(() => move.promise);
+      await showBoard();
+      await openBoardAndDrag("Add Linear integration", "In Review");
+
+      // Someone moved it on to Done after this move; a refresh reads that.
+      getLinearIssuesMock.mockResolvedValue([
+        { ...issues[0]!, status: "Done", updatedAt: "2026-06-30T12:00:00.000Z" },
+        issues[1]!,
+      ]);
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+      await waitFor(() => expect(laneOf("Add Linear integration")).toBe("Done lane"));
+
+      await act(async () => {
+        move.resolve({
+          ...issueDetail,
+          status: "In Review",
+          statusType: "started",
+          updatedAt: "2026-06-29T12:00:00.000Z",
+        });
+        await move.promise;
+      });
+      expect(laneOf("Add Linear integration")).toBe("Done lane");
     });
 
     test("a move Linear refuses puts the card back and says why", async () => {

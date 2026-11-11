@@ -121,6 +121,14 @@ function formatUpdatedDate(value: string): string {
   }).format(date);
 }
 
+/** Whether `seen` is a strictly later `updatedAt` than `answered`; unknown times are not. */
+function readAfter(seen: string | undefined, answered: string | undefined): boolean {
+  if (!seen || !answered) return false;
+  const a = Date.parse(seen);
+  const b = Date.parse(answered);
+  return !Number.isNaN(a) && !Number.isNaN(b) && a > b;
+}
+
 function getIssuePipeline(
   pipelines: Map<string, BuildPipeline>,
   issueId: string,
@@ -236,6 +244,11 @@ export function LinearTicketsViewContent({
   const connectionRequestRef = useRef(0);
   const issuesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  /** Bumped whenever a load replaces the issues: a move's rollback is stale after one. */
+  const issuesLoadedRef = useRef(0);
+  /** Issues with a move in flight; another move of the same issue waits for it to settle. */
+  const movingIssuesRef = useRef(new Set<string>());
+  const [movingIssueIds, setMovingIssueIds] = useState<ReadonlySet<string>>(() => new Set());
   const buildLaunchTriggerRef = useRef<HTMLButtonElement>(null);
   const selectedIssueIdRef = useRef(selectedIssueId);
   const commentBodyRef = useRef(commentBody);
@@ -321,6 +334,7 @@ export function LinearTicketsViewContent({
       .then(async (status) => {
         if (issuesRequestRef.current !== requestId) return;
         if (!status?.connected) {
+          issuesLoadedRef.current += 1;
           setIssues([]);
           setIssuesState("loaded");
           if (onCommandNode) void loadNodeConnections(requestId);
@@ -332,6 +346,7 @@ export function LinearTicketsViewContent({
         setBoardLink(board.link);
         setBoardState(board.state);
         if (board.state === "unlinked") {
+          issuesLoadedRef.current += 1;
           setIssues([]);
           setBoardStates([]);
           setIssuesState("loaded");
@@ -351,6 +366,7 @@ export function LinearTicketsViewContent({
             : Promise.resolve([]),
         ]);
         if (issuesRequestRef.current !== requestId) return;
+        issuesLoadedRef.current += 1;
         setIssues(nextIssues);
         setBoardStates(states);
         setIssuesState("loaded");
@@ -408,21 +424,36 @@ export function LinearTicketsViewContent({
   /**
    * A card dropped on another lane: show it there at once, move the issue to
    * that lane's workflow state in Linear, and put it back if Linear refuses.
-   * A refresh that lands meanwhile wins; it read Linear after the move began.
+   *
+   * One move per issue at a time: the card cannot be dragged again until its
+   * move settles, so an earlier answer can never land after a later one. A
+   * load that lands meanwhile read Linear after the move began, so it wins
+   * over the rollback (the move may have been applied even though its answer
+   * failed). Linear's answer to a successful move is applied unless the issue
+   * has since been read with a newer `updatedAt`.
    */
   const handleMoveIssue = useCallback(
     async (issue: LinearIssueListItem, to: LinearLane) => {
-      if (!to.stateId) return;
+      if (!to.stateId || movingIssuesRef.current.has(issue.id)) return;
+      const setMoving = (moving: boolean) => {
+        if (moving) movingIssuesRef.current.add(issue.id);
+        else movingIssuesRef.current.delete(issue.id);
+        setMovingIssueIds(new Set(movingIssuesRef.current));
+      };
+      setMoving(true);
+      const loadedAtStart = issuesLoadedRef.current;
       const before = {
         status: issue.status,
         statusType: issue.statusType,
         statusPosition: issue.statusPosition,
       };
-      const patch = (fields: Partial<LinearIssueListItem>, onlyIfStatus?: string) =>
+      const patch = (
+        fields: Partial<LinearIssueListItem>,
+        applies: (candidate: LinearIssueListItem) => boolean = () => true,
+      ) =>
         setIssues((current) =>
           current.map((candidate) =>
-            candidate.id === issue.id &&
-            (onlyIfStatus === undefined || candidate.status === onlyIfStatus)
+            candidate.id === issue.id && applies(candidate)
               ? { ...candidate, ...fields }
               : candidate,
           ),
@@ -432,18 +463,25 @@ export function LinearTicketsViewContent({
         const updated = await nodeBackend.updateLinearIssue(projectId, issue.id, {
           stateId: to.stateId,
         });
-        patch({
-          status: updated.status ?? to.status,
-          statusType: updated.statusType ?? to.type,
-          statusPosition: updated.statusPosition ?? to.position,
-          ...(updated.updatedAt ? { updatedAt: updated.updatedAt } : {}),
-        });
+        patch(
+          {
+            status: updated.status ?? to.status,
+            statusType: updated.statusType ?? to.type,
+            statusPosition: updated.statusPosition ?? to.position,
+            ...(updated.updatedAt ? { updatedAt: updated.updatedAt } : {}),
+          },
+          (candidate) => !readAfter(candidate.updatedAt, updated.updatedAt),
+        );
         toast.success(`${issue.identifier} moved to ${to.status}`);
       } catch (error) {
-        patch(before, to.status);
+        if (issuesLoadedRef.current === loadedAtStart) {
+          patch(before, (candidate) => candidate.status === to.status);
+        }
         toast.error(`Could not move ${issue.identifier} to ${to.status}`, {
           description: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        setMoving(false);
       }
     },
     [nodeBackend, projectId],
@@ -1168,6 +1206,7 @@ export function LinearTicketsViewContent({
               onMoveIssue={
                 boardState === "linked" ? (issue, to) => void handleMoveIssue(issue, to) : undefined
               }
+              movingIssueIds={movingIssueIds}
             />
           ) : (
             <ScrollArea className="min-h-0 flex-1">

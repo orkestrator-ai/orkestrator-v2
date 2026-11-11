@@ -11,6 +11,7 @@
  * another machine.
  */
 import type { McpServer } from "@modelcontextprotocol/server";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { Schema } from "effect";
 import { describe, int, list, num, str, toolInput, withDefault } from "./tool-schema.js";
 import {
@@ -109,24 +110,61 @@ export function registerLinearTools(server: McpServer, context: ControlMcpToolCo
   /**
    * Where a call runs: this machine with the given project, or with `nodeId`
    * the coordinator's own project on that machine (the same repository).
+   *
+   * `board()` reads the project's link there. On another machine it must
+   * exist before any issue read or write: `get_linear_board_link` is new in
+   * this domain version, so a machine from before board links refuses it as
+   * an unknown command, while its older `get_linear_issue`,
+   * `get_linear_issues` and `post_linear_issue_comment` would silently drop
+   * `projectId` and act on any issue its key can see.
    */
   const target = async (
     projectId: string,
     nodeId: string | undefined,
   ): Promise<{
     call<T>(command: string, args: JsonRecord, requestKey?: string): Promise<T>;
+    board(): Promise<unknown>;
+    /** Another machine: `board()` first, see above. */
+    remote: boolean;
     projectId: string;
     where: JsonRecord;
   }> => {
     const node = await onNode(nodeId);
     if (!node) {
-      return { call: (command, args) => invoke(command, args), projectId, where: {} };
+      return {
+        call: (command, args) => invoke(command, args),
+        board: () => invoke("get_linear_board_link", { projectId }),
+        remote: false,
+        projectId,
+        where: {},
+      };
     }
     if (coordinatorScope && projectId !== coordinatorScope.projectId) {
       throw new Error("A coordinator's Linear tools with nodeId act on its own project.");
     }
+    const board = async () => {
+      let link: unknown;
+      try {
+        link = await node.call<unknown>("get_linear_board_link", { projectId: node.projectId });
+      } catch (error) {
+        if (incompatibility(error, "get_linear_board_link")?.code === "unknown-command") {
+          throw new Error(
+            `${node.nodeName} runs an Orkestrator from before Linear boards; update it before using its Linear tools.`,
+          );
+        }
+        throw error;
+      }
+      if (!boardOf(link)) {
+        throw new Error(
+          `This project has no Linear board linked on ${node.nodeName}. Link one from the project's Linear tab there.`,
+        );
+      }
+      return link;
+    };
     return {
       call: (command, args, requestKey) => node.call(command, args, requestKey),
+      board,
+      remote: true,
       projectId: node.projectId,
       where: onNodeResult(node),
     };
@@ -160,10 +198,17 @@ export function registerLinearTools(server: McpServer, context: ControlMcpToolCo
     },
     async ({ projectId, status, assignee, text, limit, nodeId }) => {
       const on = await target(projectId, nodeId);
-      const [issues, link] = await Promise.all([
-        on.call<unknown>("get_linear_issues", { projectId: on.projectId }),
-        on.call<unknown>("get_linear_board_link", { projectId: on.projectId }),
-      ]);
+      const [issues, link] = on.remote
+        ? await on
+            .board()
+            .then(async (link) => [
+              await on.call<unknown>("get_linear_issues", { projectId: on.projectId }),
+              link,
+            ])
+        : await Promise.all([
+            on.call<unknown>("get_linear_issues", { projectId: on.projectId }),
+            on.board(),
+          ]);
       const wanted = status?.toLowerCase();
       const who = assignee?.toLowerCase();
       const matching = asArray(issues).filter(
@@ -200,6 +245,7 @@ export function registerLinearTools(server: McpServer, context: ControlMcpToolCo
     },
     async ({ projectId, issueId, nodeId }) => {
       const on = await target(projectId, nodeId);
+      if (on.remote) await on.board();
       const issue = await on.call<unknown>("get_linear_issue", {
         projectId: on.projectId,
         issueId,
@@ -331,6 +377,7 @@ export function registerLinearTools(server: McpServer, context: ControlMcpToolCo
     },
     async ({ requestId, projectId, issueId, text, nodeId }) => {
       const on = await target(projectId, nodeId);
+      if (on.remote) await on.board();
       const comment = await on.call<unknown>(
         "post_linear_issue_comment",
         { projectId: on.projectId, issueId, body: text },
@@ -354,7 +401,7 @@ export function registerLinearTools(server: McpServer, context: ControlMcpToolCo
       const on = await target(projectId, nodeId);
       const [options, link] = await Promise.all([
         on.call<unknown>("get_linear_board_options", { projectId: on.projectId }),
-        on.call<unknown>("get_linear_board_link", { projectId: on.projectId }),
+        on.board(),
       ]);
       if (!isRecord(options)) throw new Error("Linear returned no board options");
       return toolResult({

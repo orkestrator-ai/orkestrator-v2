@@ -9,6 +9,7 @@ import { linearKeyFingerprint } from "./linear-boards.js";
 import type { KanbanStorage, LinearStorage } from "./storage.js";
 import {
   isSyncableLinearLinkKey,
+  linearBoardLinkKey,
   type LinearBoardLink,
   type LinearRevocation,
 } from "./storage-linear.js";
@@ -16,6 +17,8 @@ import {
 const log = createLogger("linear");
 
 export type LinearSyncStorage = {
+  /** This machine's projects: a synced link may not give two of them one board. */
+  loadProjects(): Promise<ReadonlyArray<{ id: string; gitUrl?: string | null }>>;
   kanban: Pick<KanbanStorage, "getLinearAuth" | "clearLinearAuth">;
   linear: Pick<
     LinearStorage,
@@ -56,22 +59,35 @@ export async function readLinearSyncState(storage: LinearSyncStorage): Promise<L
 
 /**
  * Clears this machine's key when a disconnect names it and came after it was
- * connected here. A key connected again after the disconnect stays.
+ * connected here. A key connected again after the disconnect stays. The
+ * connection is judged inside the auth store's lease, so a reconnect (the
+ * same key or another) saved while the disconnects were read is never
+ * cleared by a disconnect of the connection it replaced.
  */
 export async function applyLinearRevocations(storage: LinearSyncStorage): Promise<boolean> {
-  const auth = await storage.kanban.getLinearAuth();
-  if (!auth?.apiKey) return false;
+  if (!(await storage.kanban.getLinearAuth())?.apiKey) return false;
+  const revocations = await storage.linear.listLinearRevocations();
+  if (revocations.length === 0) return false;
+  const cleared = await storage.kanban.clearLinearAuth((auth) =>
+    isRevokedConnection(auth, revocations),
+  );
+  if (cleared) log.info("connection.revoked-by-sync");
+  return cleared;
+}
+
+/** Whether a disconnect names this connection's key and came after it was connected. */
+export function isRevokedConnection(
+  auth: { apiKey?: string; connectedAt?: string },
+  revocations: readonly LinearRevocation[],
+): boolean {
+  if (!auth.apiKey) return false;
   const fingerprint = linearKeyFingerprint(auth.apiKey);
-  const connectedAt = Date.parse(auth.connectedAt);
-  const revoked = (await storage.linear.listLinearRevocations()).some(
+  const connectedAt = Date.parse(auth.connectedAt ?? "");
+  return revocations.some(
     (revocation) =>
       revocation.keyFingerprint === fingerprint &&
       (Number.isNaN(connectedAt) || Date.parse(revocation.revokedAt) > connectedAt),
   );
-  if (!revoked) return false;
-  await storage.kanban.clearLinearAuth();
-  log.info("connection.revoked-by-sync");
-  return true;
 }
 
 /** Applies another machine's links and disconnects here. */
@@ -81,7 +97,8 @@ export async function applyLinearSyncState(
 ): Promise<{ applied: number; cleared: boolean }> {
   const links = Array.isArray(input.links) ? input.links : [];
   const revocations = Array.isArray(input.revocations) ? input.revocations : [];
-  const applied = storage.linear.mergeLinearBoardLinks(links);
+  const localKeys = new Set((await storage.loadProjects()).map(linearBoardLinkKey));
+  const applied = storage.linear.mergeLinearBoardLinks(links, localKeys);
   storage.linear.mergeLinearRevocations(revocations);
   const cleared = await applyLinearRevocations(storage);
   return { applied, cleared };

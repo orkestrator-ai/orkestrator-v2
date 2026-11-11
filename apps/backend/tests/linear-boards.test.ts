@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   issueIsOnBoard,
+  linearIssueCreateId,
   linearIssueUpdateFields,
   linearKeyFingerprint,
 } from "../src/core/linear-boards";
@@ -28,7 +29,11 @@ afterEach(async () => {
 
 type GraphqlRequest = { query: string; variables: Record<string, unknown> };
 
-/** Answers Linear GraphQL calls by operation name, recording each request. */
+/**
+ * Answers Linear GraphQL calls by operation name, recording each request. A
+ * handler may answer later (a promise), and one that throws answers as a
+ * GraphQL error, the way Linear refuses a request.
+ */
 function fakeLinear(handlers: Record<string, (variables: Record<string, unknown>) => unknown>) {
   const requests: GraphqlRequest[] = [];
   globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -37,12 +42,50 @@ function fakeLinear(handlers: Record<string, (variables: Record<string, unknown>
     const name = /(?:query|mutation)\s+(\w+)/.exec(request.query)?.[1] ?? "";
     const handler = handlers[name];
     if (!handler) throw new Error(`Unexpected Linear operation ${name}`);
-    return new Response(JSON.stringify({ data: handler(request.variables) }), {
+    let body: unknown;
+    try {
+      body = { data: await handler(request.variables) };
+    } catch (error) {
+      body = { errors: [{ message: error instanceof Error ? error.message : String(error) }] };
+    }
+    return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   }) as unknown as typeof fetch;
   return requests;
+}
+
+const operations = (requests: GraphqlRequest[]) =>
+  requests.map((request) => /(?:query|mutation)\s+(\w+)/.exec(request.query)?.[1]);
+
+/**
+ * A Linear that keeps the issues `issueCreate` made, by id, and refuses an
+ * id it already has, as Linear's uniqueness check does.
+ */
+function linearWithIssueStore(options: { holdCreate?: Promise<void> } = {}) {
+  const issues = new Map<string, Record<string, unknown>>();
+  let creates = 0;
+  const requests = fakeLinear({
+    OrkestratorLinearIssueCreate: async (variables) => {
+      creates += 1;
+      const input = variables.input as { id?: string; title: string };
+      if (!input.id) throw new Error("expected a client id");
+      if (issues.has(input.id)) throw new Error("Entity already exists");
+      const issue = issueNode({ id: input.id, title: input.title });
+      issues.set(input.id, issue);
+      await options.holdCreate;
+      return { issueCreate: { success: true, issue } };
+    },
+    OrkestratorLinearIssueBoard: (variables) => {
+      const issue = issues.get(String(variables.id));
+      return { issue: issue ? { id: issue.id, team: { id: "team-1" } } : null };
+    },
+    OrkestratorLinearIssueWithIds: (variables) => ({
+      issue: issues.get(String(variables.id)) ?? null,
+    }),
+  });
+  return { issues, requests, creates: () => creates };
 }
 
 const TEAM = {
@@ -233,6 +276,7 @@ describe("Linear board commands", () => {
       OrkestratorLinearIssueCreate: (variables) => {
         creates += 1;
         expect(variables.input).toEqual({
+          id: linearIssueCreateId("repo:github.com/acme/web", "req-1"),
           teamId: "team-1",
           projectId: "lp-1",
           title: "New issue",
@@ -264,6 +308,123 @@ describe("Linear board commands", () => {
     expect(
       requests.map((request) => /(?:query|mutation)\s+(\w+)/.exec(request.query)?.[1]),
     ).toEqual(["OrkestratorLinearIssueCreate", "OrkestratorLinearIssueWithIds"]);
+  });
+
+  test("the id an issue is created with is a stable UUID v4 per board link and request key", () => {
+    const id = linearIssueCreateId("repo:github.com/acme/web", "req-1");
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(linearIssueCreateId("repo:github.com/acme/web", "req-1")).toBe(id);
+    expect(linearIssueCreateId("repo:github.com/acme/web", "req-2")).not.toBe(id);
+    expect(linearIssueCreateId("repo:github.com/acme/api", "req-1")).not.toBe(id);
+  });
+
+  test("a retry while the first create is in flight waits for it and returns the same issue", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    let release!: () => void;
+    const holdCreate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const linear = linearWithIssueStore({ holdCreate });
+    const args = { projectId: "p1", requestKey: "req-concurrent", title: "Once" };
+    const first = Promise.resolve(commands.get("create_linear_issue")?.(args, context));
+    const second = Promise.resolve(commands.get("create_linear_issue")?.(args, context));
+    await Bun.sleep(10);
+    // The second call has not reached Linear while the first is held.
+    expect(linear.creates()).toBe(1);
+    release();
+    const [a, b] = (await Promise.all([first, second])) as [{ id: string }, { id: string }];
+    expect(a.id).toBe(b.id);
+    expect(linear.creates()).toBe(1);
+    expect(linear.issues.size).toBe(1);
+    expect(operations(linear.requests)).toEqual([
+      "OrkestratorLinearIssueCreate",
+      "OrkestratorLinearIssueWithIds",
+    ]);
+  });
+
+  test("a retry after the create's record was lost finds the issue Linear already made", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    const linear = linearWithIssueStore();
+    const record = real.linear.recordLinearIssueCreate.bind(real.linear);
+    let failRecord = true;
+    real.linear.recordLinearIssueCreate = (entry) => {
+      if (failRecord) {
+        failRecord = false;
+        throw new Error("disk full");
+      }
+      record(entry);
+    };
+    const args = { projectId: "p1", requestKey: "req-lost", title: "Once" };
+    await expect(
+      Promise.resolve(commands.get("create_linear_issue")?.(args, context)),
+    ).rejects.toThrow("disk full");
+    expect(linear.issues.size).toBe(1);
+
+    const retried = (await commands.get("create_linear_issue")?.(args, context)) as { id: string };
+    expect(retried.id).toBe(linearIssueCreateId("repo:github.com/acme/web", "req-lost"));
+    // Linear refused the second create; nothing new was made.
+    expect(linear.issues.size).toBe(1);
+    expect(linear.creates()).toBe(2);
+    expect(await real.linear.findLinearIssueCreate("req-lost")).toMatchObject({
+      issueId: retried.id,
+    });
+  });
+
+  test("a failed create whose id names no issue reports Linear's error", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    fakeLinear({
+      OrkestratorLinearIssueCreate: () => {
+        throw new Error("Title is too long");
+      },
+      OrkestratorLinearIssueBoard: () => ({ issue: null }),
+    });
+    await expect(
+      Promise.resolve(
+        commands.get("create_linear_issue")?.(
+          { projectId: "p1", requestKey: "req-bad", title: "x" },
+          context,
+        ),
+      ),
+    ).rejects.toThrow("Title is too long");
+    expect(await real.linear.findLinearIssueCreate("req-bad")).toBeNull();
+  });
+
+  test("a request key used for one project's issue is refused for another project", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web", "repo:github.com/acme/api"]),
+    );
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/api", teamId: "team-2" },
+      new Set(["repo:github.com/acme/web", "repo:github.com/acme/api"]),
+    );
+    const linear = linearWithIssueStore();
+    await commands.get("create_linear_issue")?.(
+      { projectId: "p1", requestKey: "req-shared", title: "Web issue" },
+      context,
+    );
+    await expect(
+      Promise.resolve(
+        commands.get("create_linear_issue")?.(
+          { projectId: "p2", requestKey: "req-shared", title: "Api issue" },
+          context,
+        ),
+      ),
+    ).rejects.toThrow("That requestKey was already used for another project's issue.");
+    expect(linear.creates()).toBe(1);
   });
 
   test("updates an issue on the board with only the fields given", async () => {
@@ -347,5 +508,112 @@ describe("Linear sync link commands", () => {
     const state = await commands.get("get_linear_sync_state")?.({ controllerId }, context);
     expect(state).toMatchObject({ connection: { connected: true } });
     expect(JSON.stringify(state)).not.toContain("lin_api_secret");
+  });
+});
+
+describe("copy_linear_connection_from_node", () => {
+  const LEAF_KEY = "lin_api_leaf_secret";
+
+  /** A command node with one connected leaf whose export answers `exported`. */
+  async function copyContext(
+    options: { mode?: "command" | "leaf"; exported?: unknown; linked?: boolean } = {},
+  ) {
+    const { context, commands } = await boardContext();
+    const exportCalls: Array<{ name: string; args: unknown }> = [];
+    const saveLinearAuth = mock(async (apiKey: string, viewer?: unknown) => ({
+      apiKey,
+      viewer,
+      connectedAt: "2026-11-11T12:00:00.000Z",
+    }));
+    Object.assign(context.storage.kanban, { saveLinearAuth });
+    Object.assign(context, {
+      nodes: {
+        mode: () => options.mode ?? "command",
+        selfIdentity: async () => "command-node",
+        link: (nodeId: string) =>
+          options.linked === false || nodeId !== "leaf-1"
+            ? null
+            : {
+                invokeCommand: async (def: { name: string }, args: unknown) => {
+                  exportCalls.push({ name: def.name, args });
+                  return options.exported ?? { apiKey: LEAF_KEY };
+                },
+              },
+      },
+    });
+    return { context, commands, exportCalls, saveLinearAuth };
+  }
+
+  const copy = (
+    commands: Awaited<ReturnType<typeof boardContext>>["commands"],
+    context: unknown,
+    nodeId: string,
+  ) =>
+    Promise.resolve(
+      commands.get("copy_linear_connection_from_node")?.({ nodeId }, context as never),
+    );
+
+  test("only a command node copies, and only from a connected node identity", async () => {
+    const leaf = await copyContext({ mode: "leaf" });
+    await expect(copy(leaf.commands, leaf.context, "leaf-1")).rejects.toThrow(
+      "Only a command node can copy another machine's Linear connection.",
+    );
+    const command = await copyContext();
+    await expect(copy(command.commands, command.context, "not a node!")).rejects.toThrow(
+      "Expected nodeId to be a node identity.",
+    );
+    await expect(copy(command.commands, command.context, "leaf-2")).rejects.toThrow(
+      "That machine is not connected.",
+    );
+    const unlinked = await copyContext({ linked: false });
+    await expect(copy(unlinked.commands, unlinked.context, "leaf-1")).rejects.toThrow(
+      "That machine is not connected.",
+    );
+    expect(command.saveLinearAuth).not.toHaveBeenCalled();
+  });
+
+  test("a machine with no key is reported, and nothing is saved", async () => {
+    for (const exported of [{}, { apiKey: "   " }]) {
+      const { context, commands, saveLinearAuth } = await copyContext({ exported });
+      await expect(copy(commands, context, "leaf-1")).rejects.toThrow(
+        "That machine is not connected to Linear.",
+      );
+      expect(saveLinearAuth).not.toHaveBeenCalled();
+    }
+  });
+
+  test("verifies the copied key before saving it, and never returns it", async () => {
+    const { context, commands, exportCalls, saveLinearAuth } = await copyContext();
+    const requests = fakeLinear({
+      OrkestratorLinearViewer: () => ({ viewer: { id: "viewer-1", name: "Ada", email: "a@x" } }),
+    });
+    const status = await copy(commands, context, "leaf-1");
+    expect(exportCalls).toEqual([
+      { name: "export_linear_connection", args: { controllerId: "command-node" } },
+    ]);
+    expect(operations(requests)).toEqual(["OrkestratorLinearViewer"]);
+    expect(saveLinearAuth).toHaveBeenCalledTimes(1);
+    expect(saveLinearAuth.mock.calls[0]?.[0]).toBe(LEAF_KEY);
+    expect(status).toMatchObject({
+      connected: true,
+      hasToken: true,
+      viewer: { name: "Ada" },
+      keyFingerprint: linearKeyFingerprint(LEAF_KEY),
+      connectedAt: "2026-11-11T12:00:00.000Z",
+    });
+    expect(JSON.stringify(status)).not.toContain(LEAF_KEY);
+  });
+
+  test("a copied key Linear rejects is not saved, and the error does not carry it", async () => {
+    const { context, commands, saveLinearAuth } = await copyContext();
+    fakeLinear({
+      OrkestratorLinearViewer: () => {
+        throw new Error(`Authentication failed for ${LEAF_KEY}`);
+      },
+    });
+    const error = await copy(commands, context, "leaf-1").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain(LEAF_KEY);
+    expect(saveLinearAuth).not.toHaveBeenCalled();
   });
 });

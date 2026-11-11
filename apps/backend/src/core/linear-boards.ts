@@ -50,6 +50,28 @@ export function linearKeyFingerprint(apiKey: string): string {
   return createHash("sha256").update(apiKey.trim()).digest("hex").slice(0, 16);
 }
 
+/**
+ * The id `create_linear_issue` gives the issue it creates for one request
+ * key on one board link: the same pair always names the same issue, so a
+ * retry after Linear accepted a create (a lost response, a crash before the
+ * request was recorded) meets Linear's uniqueness check instead of creating a
+ * second issue. Linear takes a client id in UUID v4 format; this is a SHA-256
+ * digest laid out as one (version 4, RFC 4122 variant).
+ */
+export function linearIssueCreateId(linkKey: string, requestKey: string): string {
+  const hex = createHash("sha256")
+    .update(`orkestrator-linear-issue\0${linkKey}\0${requestKey}`)
+    .digest("hex");
+  const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `${variant}${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join("-");
+}
+
 const ISSUE_DETAIL_FIELDS = `
         id
         identifier
@@ -296,6 +318,8 @@ export async function getLinearIssueWithIds(
 }
 
 export type LinearIssueCreateInput = {
+  /** A client-chosen id (UUID v4 format); see `linearIssueCreateId`. */
+  id?: string;
   title: string;
   description?: string;
   priority?: number;
@@ -324,6 +348,7 @@ export async function createLinearIssue(
     }`,
     {
       input: {
+        ...(input.id ? { id: input.id } : {}),
         teamId: board.teamId,
         title,
         ...(board.linearProjectId ? { projectId: board.linearProjectId } : {}),

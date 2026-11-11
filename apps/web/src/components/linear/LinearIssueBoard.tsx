@@ -222,6 +222,7 @@ function LinearLaneColumn({
   lane,
   dragging,
   canDrag,
+  moving,
   onSelectIssue,
   pipelinePhase,
 }: {
@@ -229,6 +230,8 @@ function LinearLaneColumn({
   /** The lane of the card being dragged, when one is. */
   dragging: LinearLane | null;
   canDrag: boolean;
+  /** Issues whose move has not settled yet; they cannot be dragged again until it does. */
+  moving: ReadonlySet<string>;
   onSelectIssue: (issueId: string) => void;
   pipelinePhase: (issueId: string) => string | undefined;
 }) {
@@ -265,7 +268,7 @@ function LinearLaneColumn({
               issue={issue}
               type={lane.type}
               pipelinePhase={pipelinePhase(issue.id)}
-              draggable={accepts}
+              draggable={accepts && !moving.has(issue.id)}
               onClick={() => onSelectIssue(issue.id)}
             />
           ))}
@@ -287,6 +290,8 @@ function LinearLaneColumn({
   );
 }
 
+const NO_ISSUES: ReadonlySet<string> = new Set();
+
 /**
  * The Linear tab's board view: one vertical lane per workflow state, in
  * Linear's order, like the Kanban board. Lanes the user hid are left out;
@@ -295,6 +300,7 @@ function LinearLaneColumn({
  * With `onMoveIssue`, a card dragged to another lane moves the issue to that
  * lane's workflow state in Linear. Only lanes with a state id (read from the
  * board) take part; the caller moves the card and puts it back on a failure.
+ * A card in `movingIssueIds` stays put until its move settles.
  */
 export function LinearIssueBoard({
   lanes,
@@ -303,6 +309,7 @@ export function LinearIssueBoard({
   onSelectIssue,
   pipelinePhase,
   onMoveIssue,
+  movingIssueIds = NO_ISSUES,
 }: {
   lanes: readonly LinearLane[];
   hidden: ReadonlySet<string>;
@@ -310,6 +317,8 @@ export function LinearIssueBoard({
   onSelectIssue: (issueId: string) => void;
   pipelinePhase: (issueId: string) => string | undefined;
   onMoveIssue?: (issue: LinearIssueListItem, to: LinearLane) => void;
+  /** Issues with a move in flight: shown, but not draggable until it settles. */
+  movingIssueIds?: ReadonlySet<string>;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -328,6 +337,7 @@ export function LinearIssueBoard({
     const from = laneOf(String(event.active.id));
     const issue = from?.issues.find((candidate) => candidate.id === String(event.active.id));
     if (!to?.stateId || !from || !issue || from.status === to.status) return;
+    if (movingIssueIds.has(issue.id)) return;
     onMoveIssue(issue, to);
   };
 
@@ -370,6 +380,7 @@ export function LinearIssueBoard({
               lane={lane}
               dragging={activeLane}
               canDrag={Boolean(onMoveIssue)}
+              moving={movingIssueIds}
               onSelectIssue={onSelectIssue}
               pipelinePhase={pipelinePhase}
             />

@@ -23,6 +23,7 @@ import {
   getLinearIssueWithIds,
   getLinearTeam,
   issueIsOnBoard,
+  linearIssueCreateId,
   linearKeyFingerprint,
   listLinearTeams,
   updateLinearIssue,
@@ -98,6 +99,27 @@ export async function requireIssueOnProjectBoard(
 /** A board change here goes to every machine with the repository. */
 export function noteLinearChange(context: CommandContext): void {
   context.nodeCoordination?.linearSync?.noteLocalChange();
+}
+
+/**
+ * `create_linear_issue` calls in flight, by request key. The lookup, the
+ * create and the record of one key run one at a time, so a concurrent retry
+ * finds the first call's record instead of creating a second issue.
+ */
+const issueCreatesInFlight = new Map<string, Promise<unknown>>();
+
+function serializeIssueCreate<T>(requestKey: string, run: () => Promise<T>): Promise<T> {
+  const previous = issueCreatesInFlight.get(requestKey) ?? Promise.resolve();
+  const next = previous.then(run);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  issueCreatesInFlight.set(requestKey, settled);
+  void settled.then(() => {
+    if (issueCreatesInFlight.get(requestKey) === settled) issueCreatesInFlight.delete(requestKey);
+  });
+  return next;
 }
 
 async function withLinearKey<T>(
@@ -190,22 +212,34 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
       const key = requestKey.trim();
       if (!key || key.length > 256) throw new Error("Expected requestKey.");
       const { key: linkKey, board } = await requireProjectLinearBoard(context, projectId);
-      return withLinearKey(context, async (apiKey) => {
-        const earlier = await context.storage.linear.findLinearIssueCreate(key);
-        if (earlier) {
-          if (earlier.linkKey !== linkKey) {
-            throw new Error("That requestKey was already used for another project's issue.");
+      return withLinearKey(context, (apiKey) =>
+        serializeIssueCreate(key, async () => {
+          const earlier = await context.storage.linear.findLinearIssueCreate(key);
+          if (earlier) {
+            if (earlier.linkKey !== linkKey) {
+              throw new Error("That requestKey was already used for another project's issue.");
+            }
+            return getLinearIssueWithIds(apiKey, earlier.issueId);
           }
-          return getLinearIssueWithIds(apiKey, earlier.issueId);
-        }
-        const issue = await createLinearIssue(apiKey, board, input);
-        context.storage.linear.recordLinearIssueCreate({
-          requestKey: key,
-          linkKey,
-          issueId: issue.id,
-        });
-        return issue;
-      });
+          const issueId = linearIssueCreateId(linkKey, key);
+          let issue: Awaited<ReturnType<typeof createLinearIssue>>;
+          try {
+            issue = await createLinearIssue(apiKey, board, { ...input, id: issueId });
+          } catch (error) {
+            // An earlier attempt may have created it without recording it (its
+            // response or the record was lost): Linear then refuses the id.
+            const existing = await getLinearIssueBoard(apiKey, issueId).catch(() => null);
+            if (!existing || !issueIsOnBoard(existing, board)) throw error;
+            issue = await getLinearIssueWithIds(apiKey, issueId);
+          }
+          context.storage.linear.recordLinearIssueCreate({
+            requestKey: key,
+            linkKey,
+            issueId: issue.id,
+          });
+          return issue;
+        }),
+      );
     },
     ASYNC_HANDLER,
   );

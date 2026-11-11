@@ -561,7 +561,11 @@ they hold the same key without exposing it. The connect dialog in a
 project's Linear tab lists the machines the window can reach that have a
 project for the same repository, and the window sends the key to each one
 the user ticks (`connect_linear` through `invokeOnMachine`); each machine
-checks the key with Linear itself.
+checks the key with Linear itself. A machine is ticked by default only when
+its status is known and it holds no key or this same one: one still being
+checked, one whose status could not be read, and one holding a different key
+are left for the user to tick, so Connect never replaces a key the dialog
+could not see.
 
 **A key copied from a machine the window cannot reach.** A leaf never reaches
 its command node, so a window on a laptop cannot connect the home server. The
@@ -578,8 +582,12 @@ here like a typed one.
 fingerprint and the time (`linear-sync`), and sync carries it to every
 machine. A machine clears its key when the fingerprint matches and its key was
 connected before the disconnect, so a machine connected again afterwards
-stays connected and a different key is left alone. Disconnects are kept for
-180 days, at most 50.
+stays connected and a different key is left alone. The check and the clear
+share the connection's storage lease (`clearLinearAuth` with a predicate), so
+a reconnect saved while sync was reading the disconnects is judged on its own.
+Until a leaf's next pass, the command node reports a reading of a revoked key
+as disconnected (`nodeConnections`), so Use it here never offers it back.
+Disconnects are kept for 180 days, at most 50.
 
 **One board per project, by repository.** A project links to one Linear team
 (its board), optionally narrowed to one Linear project in that team
@@ -587,7 +595,11 @@ stays connected and a different key is left alone. Disconnects are kept for
 (`repo:<host/owner/name>`, `linearBoardLinkKey` in `storage-linear.ts`), so the
 same repository's project on every machine uses it; a project with no Git
 remote is keyed by its id and stays on its machine. A machine refuses a second
-of its projects on a board another one already has. The Linear tab of an
+of its projects on a board another one already has, and sync keeps that rule:
+when a synced link names the board another of the receiving machine's
+projects has, the link changed last keeps it and the other becomes a
+tombstone stamped now and naming the winner (`supersededBy`), so every machine
+settles on the same owner (`mergeLinearBoardLinks`). The Linear tab of an
 unlinked project shows a board picker instead of every issue the key can see,
 and a linked one lists only that board's issues (`get_linear_issues` with
 `projectId`).
@@ -604,7 +616,10 @@ nothing in Linear. Cards open the same issue detail as the list.
 **Moving a card.** Dragging a card to another lane moves the issue to that
 lane's workflow state in Linear (`update_linear_issue` with `stateId`, which
 the backend refuses for an issue not on the project's board). The card moves
-at once and goes back, with the reason, if Linear refuses. Only lanes read from
+at once and goes back, with the reason, if Linear refuses. A card cannot be
+dragged again until its move settles. A refresh that lands during a move wins
+over its rollback, and Linear's answer is not applied over a newer read of the
+issue (`updatedAt`). Only lanes read from
 the board's states take a card, so a board whose states could not be read, or
 a node from before board links, shows the lanes without dragging. While a card
 is held the board stops snapping to lanes, because snapping fights the drag's
@@ -627,13 +642,22 @@ with a `projectId`, `get_linear_issue` and `post_linear_issue_comment` refuse
 an issue that is not on the project's linked board (its team, and its Linear
 project when the link names one). `create_linear_issue` records its
 `requestKey` and the issue it made (`linear-issue-creates`, at most 500), so a
-retry returns that issue instead of creating another; Linear has no
-idempotency key of its own.
+retry returns that issue instead of creating another. Calls with one request
+key run one at a time, so a concurrent retry finds the first call's record.
+Linear has no idempotency key, but it takes a client-chosen issue id: the
+issue gets one derived from the board link and request key
+(`linearIssueCreateId`), so a retry after Linear accepted the create but the
+record was lost meets Linear's uniqueness check, and the backend returns the
+issue it already made.
 
 **Coordinator tools.** `list_linear_issues`, `get_linear_issue`,
 `create_linear_issue`, `update_linear_issue`, `add_linear_comment` and
 `list_linear_board_options` (`control-mcp-linear-tools.ts`) are offered to
 coordinators, not to operator credentials. They run on the coordinator's own
 machine with its own key; with a `nodeId` they act on the coordinator's
-project on that machine through `invoke_on_node`. `add_linear_comment` is not
-idempotent: a retry posts again.
+project on that machine through `invoke_on_node`. On another machine every
+tool reads the project's board link there first and stops unless it is live:
+a machine from before board links answers `unknown-command`, and its older
+`get_linear_issue`, `get_linear_issues` and `post_linear_issue_comment` would
+ignore `projectId`. `add_linear_comment` is not idempotent: a retry posts
+again.

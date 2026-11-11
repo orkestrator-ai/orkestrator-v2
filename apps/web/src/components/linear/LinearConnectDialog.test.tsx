@@ -27,7 +27,7 @@ const connectLinearMock = mock(
     };
   },
 );
-const getLinearConnectionMock = mock(async (machine?: unknown): Promise<LinearConnectionStatus> => {
+const defaultGetLinearConnection = async (machine?: unknown): Promise<LinearConnectionStatus> => {
   if (machine === "node-laptop") {
     return {
       connected: true,
@@ -37,7 +37,8 @@ const getLinearConnectionMock = mock(async (machine?: unknown): Promise<LinearCo
     };
   }
   return { connected: false, hasToken: false };
-});
+};
+const getLinearConnectionMock = mock(defaultGetLinearConnection);
 const getLinearNodeConnectionsMock = mock(
   async (_machine?: unknown): Promise<LinearNodeConnection[]> => [],
 );
@@ -188,6 +189,63 @@ describe("LinearConnectDialog", () => {
     expect(within(current).getByText("Connected as Ada")).toBeTruthy();
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain(PASTED_KEY);
+  });
+
+  for (const [state, answer] of [
+    ["still loading", () => new Promise<LinearConnectionStatus>(() => undefined)],
+    [
+      "unknown",
+      async (): Promise<LinearConnectionStatus> => {
+        throw new Error("The machine did not answer");
+      },
+    ],
+  ] as const) {
+    test(`a machine whose status is ${state} is not connected unless the user ticks it`, async () => {
+      getLinearConnectionMock.mockImplementation(async (machine?: unknown) => {
+        if (machine === "node-laptop") return answer();
+        return { connected: false, hasToken: false };
+      });
+      try {
+        renderDialog();
+        fireEvent.change(screen.getByLabelText("Linear API key"), {
+          target: { value: PASTED_KEY },
+        });
+        await within(row("CI box")).findByText("Not connected");
+        if (state === "unknown") {
+          await within(row("Laptop")).findByText(/^Status unknown/);
+        } else {
+          expect(within(row("Laptop")).getByText("Checking")).toBeTruthy();
+        }
+        expect(within(row("Laptop")).getByRole("checkbox").getAttribute("data-state")).toBe(
+          "unchecked",
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+        await waitFor(() => expect(connectLinearMock).toHaveBeenCalledWith(PASTED_KEY, "node-ci"));
+        expect(connectLinearMock).not.toHaveBeenCalledWith(PASTED_KEY, "node-laptop");
+      } finally {
+        getLinearConnectionMock.mockImplementation(defaultGetLinearConnection);
+      }
+    });
+  }
+
+  test("a machine whose status is unknown is connected once the user ticks it", async () => {
+    getLinearConnectionMock.mockImplementation(async (machine?: unknown) => {
+      if (machine === "node-laptop") throw new Error("The machine did not answer");
+      return { connected: false, hasToken: false };
+    });
+    try {
+      renderDialog();
+      fireEvent.change(screen.getByLabelText("Linear API key"), { target: { value: PASTED_KEY } });
+      await within(row("Laptop")).findByText(/^Status unknown/);
+      fireEvent.click(within(row("Laptop")).getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+      await waitFor(() =>
+        expect(connectLinearMock).toHaveBeenCalledWith(PASTED_KEY, "node-laptop"),
+      );
+    } finally {
+      getLinearConnectionMock.mockImplementation(defaultGetLinearConnection);
+    }
   });
 
   test("a machine the user ticks is connected even with a different key there", async () => {

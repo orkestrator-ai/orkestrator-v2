@@ -99,11 +99,29 @@ export class NodeLinearSync {
     await Promise.all(nodes.filter((node) => node.available).map((node) => this.sync(node.nodeId)));
   }
 
-  /** Each other machine's connection as last read. Never a key. */
-  nodeConnections(): LinearNodeConnection[] {
-    return [...this.connections.values()].sort((a, b) =>
-      (a.nodeName ?? a.nodeId).localeCompare(b.nodeName ?? b.nodeId),
-    );
+  /**
+   * Each other machine's connection as last read. Never a key. A reading of a
+   * key this node has since seen disconnected (here, or merged from another
+   * machine) reports that machine as disconnected: the leaf clears that key
+   * at its next pass, and offering it meanwhile would copy a revoked key back.
+   */
+  async nodeConnections(): Promise<LinearNodeConnection[]> {
+    const revocations = await this.deps.storage.linear.listLinearRevocations().catch(() => []);
+    return [...this.connections.values()]
+      .map((connection) => {
+        const revoked =
+          connection.connected &&
+          connection.keyFingerprint !== undefined &&
+          revocations.some(
+            (revocation) =>
+              revocation.keyFingerprint === connection.keyFingerprint &&
+              Date.parse(revocation.revokedAt) >= Date.parse(connection.readAt),
+          );
+        if (!revoked) return connection;
+        const { viewerName: _viewerName, keyFingerprint: _keyFingerprint, ...rest } = connection;
+        return { ...rest, connected: false };
+      })
+      .sort((a, b) => (a.nodeName ?? a.nodeId).localeCompare(b.nodeName ?? b.nodeId));
   }
 
   /** Syncs one node; concurrent calls share a run, and a call during one runs once more after it. */

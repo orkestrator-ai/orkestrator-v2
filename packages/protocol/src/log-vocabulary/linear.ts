@@ -5,6 +5,8 @@ export const LINEAR_LOG_AREAS = defineLogAreas({
     description:
       "Linear issues read for build actions, project board links and the Linear connection across machines.",
     events: {
+      "board-link.conflict":
+        "Two of this machine's projects were linked to one Linear board on different machines; the link changed last kept it and the other was cleared.",
       "comments.load-failed":
         "An issue's comments could not be loaded; the issue still renders without them.",
       "connection.revoked-by-sync":

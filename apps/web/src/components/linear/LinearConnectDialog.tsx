@@ -93,6 +93,21 @@ export function holdsDifferentKey(status: MachineStatus | undefined, fingerprint
   );
 }
 
+/**
+ * Whether connecting there can only add or refresh this key: the machine's
+ * state is known, and it holds no key or this same one. A machine still
+ * loading, unknown, or holding a key whose fingerprint it did not report
+ * might hold another account's key, so it is left for the user to tick.
+ */
+export function safeToConnectByDefault(
+  status: MachineStatus | undefined,
+  fingerprint: string | null,
+) {
+  if (status?.state !== "known") return false;
+  if (!status.hasToken) return true;
+  return !!fingerprint && status.keyFingerprint === fingerprint;
+}
+
 function StatusLine({
   target,
   status,
@@ -119,7 +134,11 @@ function StatusLine({
     );
   }
   if (status.state === "unknown") {
-    return <span className="text-muted-foreground">Status unknown</span>;
+    return (
+      <span className="text-muted-foreground">
+        Status unknown: tick it to connect anyway (it may hold another key)
+      </span>
+    );
   }
   const as = status.viewerName ? ` as ${status.viewerName}` : "";
   if (holdsDifferentKey(status, fingerprint)) {
@@ -271,8 +290,8 @@ export function LinearConnectDialog({
     if (!target.available) return false;
     const choice = choices.get(target.key);
     if (choice !== undefined) return choice;
-    // Ticked by default, unless connecting would replace another account's key.
-    return !holdsDifferentKey(statusOf(target), fingerprint);
+    // Ticked by default only when connecting cannot replace another key there.
+    return safeToConnectByDefault(statusOf(target), fingerprint);
   };
 
   const reset = () => {

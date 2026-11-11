@@ -1186,10 +1186,21 @@ export class KanbanRepository {
     return auth;
   }
 
-  async clearLinearAuth(): Promise<void> {
-    await this.enqueueLinearAuthMutation(() =>
-      this.context.deleteStore(this.files.linearAuthFile()),
-    );
+  /**
+   * Clears the connection. With `shouldClear`, only when it accepts the
+   * connection current at that moment: the check and the delete share the
+   * store's lease, so a connection saved after the caller last read one is
+   * judged on its own. Returns whether a connection was cleared.
+   */
+  async clearLinearAuth(shouldClear?: (auth: LinearAuth) => boolean): Promise<boolean> {
+    return this.enqueueLinearAuthMutation(async () => {
+      if (shouldClear) {
+        const current = await this.getLinearAuth();
+        if (!current || !shouldClear(current)) return false;
+      }
+      await this.context.deleteStore(this.files.linearAuthFile());
+      return true;
+    });
   }
 
   // Saves and clears take the store's lease, like every other whole-value

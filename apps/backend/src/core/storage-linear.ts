@@ -11,9 +11,12 @@
  * Nothing here holds a credential: a disconnect is recorded by the key's
  * fingerprint only.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import type { StorageContext } from "./storage-context.js";
 import { isRecord, nowIso } from "./storage-shared-core.js";
+
+const log = createLogger("linear");
 
 export type LinearBoardLink = {
   key: string;
@@ -26,6 +29,11 @@ export type LinearBoardLink = {
   linearProjectName?: string;
   updatedAt: string;
   cleared?: boolean;
+  /**
+   * On a tombstone: the key of the link that kept this board when two of
+   * this machine's projects were linked to it on different machines.
+   */
+  supersededBy?: string;
 };
 
 export type LinearRevocation = {
@@ -100,6 +108,8 @@ export function parseLinearBoardLink(value: unknown): LinearBoardLink | null {
     link.cleared = true;
     const hint = boundedString(value.repositoryHint);
     if (hint) link.repositoryHint = hint;
+    const supersededBy = boundedString(value.supersededBy);
+    if (supersededBy) link.supersededBy = supersededBy;
   }
   return link;
 }
@@ -120,6 +130,24 @@ export function sameLinearBoard(a: LinearBoardLink, b: LinearBoardLink): boolean
 
 function newer(a: string, b: string): boolean {
   return Date.parse(a) > Date.parse(b);
+}
+
+/** Now, or just after `after` when this machine's clock is behind it, so the change wins. */
+function stampAfter(after: string): string {
+  const now = Date.now();
+  const floor = Date.parse(after) + 1;
+  return new Date(Number.isNaN(floor) ? now : Math.max(now, floor)).toISOString();
+}
+
+/** A tombstone for a link that lost its board to `winner`. */
+function supersededTombstone(link: LinearBoardLink, winner: string): LinearBoardLink {
+  return {
+    key: link.key,
+    ...(link.repositoryHint ? { repositoryHint: link.repositoryHint } : {}),
+    updatedAt: stampAfter(link.updatedAt),
+    cleared: true,
+    supersededBy: winner,
+  };
 }
 
 function boundLinks(links: LinearBoardLink[]): void {
@@ -243,8 +271,19 @@ export class LinearRepository {
   /**
    * Applies links from another machine: for each key, the side that changed it
    * last wins. Only repository keys travel. Returns how many changed here.
+   *
+   * A board belongs to one project here too: when an incoming link names the
+   * board a live link of another of `localKeys` (this machine's projects)
+   * already has, the link changed last keeps it and the other is replaced by
+   * a tombstone naming the winner (`supersededBy`), stamped now so the clear
+   * reaches every machine and they all settle on the same owner. Two
+   * machines that each linked a different repository to one board therefore
+   * converge instead of leaving two projects on it.
    */
-  mergeLinearBoardLinks(incoming: readonly unknown[]): number {
+  mergeLinearBoardLinks(
+    incoming: readonly unknown[],
+    localKeys: ReadonlySet<string> = new Set(),
+  ): number {
     const parsed = incoming
       .slice(0, MAX_LINEAR_BOARD_LINKS)
       .map(parseLinearBoardLink)
@@ -257,15 +296,41 @@ export class LinearRepository {
       (): LinearBoardLink[] => [],
       (links) => {
         let changed = 0;
+        const put = (link: LinearBoardLink) => {
+          const index = links.findIndex((entry) => isRecord(entry) && entry.key === link.key);
+          if (index >= 0) links[index] = link;
+          else links.push(link);
+          changed += 1;
+        };
         for (const link of parsed) {
           const index = links.findIndex((entry) => isRecord(entry) && entry.key === link.key);
           const existing = index >= 0 ? parseLinearBoardLink(links[index]) : null;
           if (existing && !newer(link.updatedAt, existing.updatedAt)) continue;
           // A synced link names no project of this machine.
           const { projectId: _projectId, ...portable } = link;
-          if (index >= 0) links[index] = portable;
-          else links.push(portable);
-          changed += 1;
+          const rivals = localKeys.has(portable.key)
+            ? links
+                .map(parseLinearBoardLink)
+                .filter(
+                  (other): other is LinearBoardLink =>
+                    other !== null &&
+                    other.key !== portable.key &&
+                    localKeys.has(other.key) &&
+                    sameLinearBoard(other, portable),
+                )
+            : [];
+          const winner = [portable, ...rivals].reduce((best, candidate) =>
+            newer(candidate.updatedAt, best.updatedAt) ||
+            (candidate.updatedAt === best.updatedAt && candidate.key < best.key)
+              ? candidate
+              : best,
+          );
+          for (const loser of [portable, ...rivals]) {
+            if (loser === winner) continue;
+            log.warn("board-link.conflict", { kept: winner.key, cleared: loser.key });
+            put(supersededTombstone(loser, winner.key));
+          }
+          if (winner === portable) put(portable);
         }
         if (changed > 0) boundLinks(links);
         return changed;

@@ -34,6 +34,7 @@ import { CONNECTION_BANNER_DELAY_MS } from "@/components/layout/ConnectionStatus
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import type { GatewayEventStreamConnectionState } from "@/lib/native/web-gateway";
+import { PINNED_SCROLL_ATTRIBUTE } from "@/lib/pinned-scroll";
 
 import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realLayout from "@/components/layout";
@@ -765,6 +766,33 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     expect(mockUseEnvironmentLifecycleService).toHaveBeenCalledTimes(1);
+  });
+
+  test("pins the window's layout roots while mounted and stops once unmounted", () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    // Stands in for a shell frame: `AppShell` is mocked here.
+    const frame = document.createElement("div");
+    frame.setAttribute(PINNED_SCROLL_ATTRIBUTE, "");
+    document.body.appendChild(frame);
+    const scrollFrame = () => {
+      frame.scrollTop = 320;
+      frame.dispatchEvent(new Event("scroll"));
+    };
+    try {
+      const view = render(<App />);
+      scrollFrame();
+      expect(frame.scrollTop).toBe(0);
+
+      view.unmount();
+      scrollFrame();
+      expect(frame.scrollTop).toBe(320);
+    } finally {
+      frame.remove();
+    }
   });
 
   test("mounts the Codex background synchronizer exactly once at the app root", () => {

@@ -53,7 +53,6 @@ import {
   sharedProject,
   signIn,
   until,
-  type Profile,
 } from "./coordinator-two-node-support";
 import {
   qaPrompt,

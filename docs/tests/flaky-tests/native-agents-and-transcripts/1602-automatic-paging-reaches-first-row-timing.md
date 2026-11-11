@@ -116,3 +116,20 @@ so its activation path is unchanged.
 - `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559 --registry-ref origin/main` reported `open`.
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+Review round 2, same day and base, after commit `7fac685f4` changed the
+hook's `viewKey` comparison (again only for callers that pass `viewKey`):
+
+- `ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name browser-rerun -- mise run test:browser`,
+  at host load average about 30, was stopped by the 30-minute group deadline
+  at 1849 of 1852 tests with three failures. On desktop this case exceeded
+  the test timeout while tearing down its context.
+- The complete owner alone (`bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --retries=0`)
+  failed this case on both viewports (expected 1, received 0, then the test
+  timeout); 37 passed.
+- The case alone (`e2e/TranscriptPaging.spec.ts:450`) then passed, once with
+  the hook restored to the validated commit `7b45fc7a0` (27.1 s) and once at
+  `7fac685f4` (28.5 s), so the failure does not depend on that commit.
+- `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559` reported `open`.
+
+Status stays open. No assertion, timeout or skip changed.

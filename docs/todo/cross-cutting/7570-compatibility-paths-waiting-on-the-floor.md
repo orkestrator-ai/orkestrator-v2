@@ -85,7 +85,7 @@ row and a counter (task 1):
 - `/session/:id/human-prompts` 404 or 405 answered as `null` (`http-bridge/human-prompts.ts`, `readBridgeHumanPrompts`): bridges before 2026-10-26 (first in v2.33.0-beta).
 - The `read_host_agent_sign_ins` fallback (`agent-accounts-machines.ts`): nodes before 2026-10-24 (first in v2.29.0-beta).
 - `diffScopeUnsupported` (`coordinator-worker-changes.ts`, `olderNodeDiffScopeNote`) and the "machine predates this" auto-switch pin (`control-mcp-account-tools.ts`, `set_account_auto_switch`): nodes before 2026-11-01 (first in v2.35.0-beta).
-- `normalizeKanbanTask` rebuilding sections on every read (`storage-kanban-board.ts`): sections arrived in #1388 (first in v2.34.2-beta), so v2.21.0 to v2.34.1 write rows without them. When the floor passes, convert it into a one-time upgrade in `storage-record-upgrades.ts` (the data rule makes the upgrade permanent) and keep the `sectionsBasis` mismatch check.
+- `normalizeKanbanTask` rebuilding sections on every read (`storage-kanban-board.ts`): sections arrived in #1388 (first in v2.34.2-beta), so v2.21.0 to v2.34.1 write rows without them. When the floor passes, convert it into a one-time upgrade in `storage-record-upgrades.ts` (the data rule makes the upgrade permanent) and keep the `sectionsBasis` mismatch check. The floor alone gates this path: its counter keeps rising while untouched old rows stay on disk, and only that upgrade rewrites them, so a non-zero count does not block it.
 - `read_file_at_branch` and `read_local_file_at_branch` (`commands-registry-terminal.ts`): the diff viewer of v2.21.0 to v2.23.0 calls them. Unused renderer wrappers stayed in `lib/backend/files-sessions.ts` until v2.37.4-beta, but nothing called them after v2.23.0.
 - `get_coordinator_upstream_auto_merge` and `set_coordinator_upstream_auto_merge` (`commands-registry-client-state.ts`): v2.35.5-beta is the last renderer that calls them; v2.36.0 does not.
 
@@ -306,8 +306,8 @@ their counters.
 Counters were added where the backend itself takes the older-peer branch,
 and each counts only that branch, never the current path (the tests assert
 both). `kanban.legacy-row-derived` counts row reads rather than rows, because
-the derivation runs on every read; a quiet counter still means no such row
-was read. `auto-switch.older-node` counts only a remote machine whose whole
+the derivation runs on every read. It is informational only; see the next
+decision. `auto-switch.older-node` counts only a remote machine whose whole
 account list has no automatic-switch state, since every current backend
 sends that state for each platform. `legacyAutoSwitchEvent` has no counter:
 the backend emits the event for every subscriber and cannot tell which
@@ -335,6 +335,22 @@ Reading the eight counters on the user's own machines needs their real
 installs, which an agent must not touch, so that part of task 2 is an item
 on [7568](../manual-test/7568-manual-test-checklist.md) naming this to-do and
 task. The removal itself stays here, blocked until 2027-01-02.
+
+### Task 2: the Kanban legacy-row counter does not gate the upgrade
+
+Review round 2 found that a quiet `kanban.legacy-row-derived` counter could
+never be reached: an old row is rewritten only when its ticket next changes,
+so an untouched one keeps the counter rising on every board read and sync,
+with or without an older peer, and only the one-time upgrade that the quiet
+counter was meant to unlock would stop it. The path covers stored user state
+that needs a permanent record upgrade, like task 7's legacy state file, so
+its retire condition is now the floor alone (v2.36.0, 2027-01-02): after
+that no supported node writes or syncs a row without `sections`, and the
+upgrade rewrites the rows already on disk. The counter stays as information
+(a non-zero count says old rows remain on that machine) and the Register row
+and the 7568 item say it does not block. Counting only rows that arrive by
+sync from an older peer was not chosen: it needs new plumbing in the sync
+path for a signal the floor already settles.
 
 ### Task 7: keep the task open with a date
 

@@ -1,7 +1,7 @@
 # Copy-plan deadline test sees both children close before its deadline
 
 - **ID:** 9979
-- **Status:** resolved (2026-11-11)
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Test:** `copy plan > the deadline fails the step even when neither child can be seen to close`
 - **File:** `apps/backend/tests/container-replacement.test.ts:89`

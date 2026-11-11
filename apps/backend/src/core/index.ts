@@ -7,6 +7,7 @@ import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-tes
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
+import { coordinatorRepairJob } from "./coordinator-repair-job.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -2721,22 +2722,17 @@ export class OrkestratorBackend {
           run: () => this.agentMail.drainInjects(),
           ...jobLog("mail-injection"),
         },
-        {
-          name: "coordinator-repair",
-          kind: "coordinator-repair",
-          priority: "recovery",
+        // Agent-test profiles only: a spec may shorten the period after which
+        // a stopped worker's delegation closes (`coordinator-repair-job.ts`).
+        coordinatorRepairJob({
           intervalMs: MAINTENANCE_JOB_MS,
-          run: async () => {
+          timing: this.agentTestTiming,
+          repair: async () => {
             reconcileCoordinatorWorkflows();
             await coordinatorWorkflowReconcileInFlight;
-            // Agent-test profiles only: a spec may shorten the period after
-            // which a stopped worker's delegation closes. Nothing elsewhere.
-            return this.agentTestTiming
-              ? timingValue(this.agentTestTiming, "coordinatorRepairIntervalMs", MAINTENANCE_JOB_MS)
-              : undefined;
           },
           ...jobLog("coordinator-repair"),
-        },
+        }),
         {
           name: "mail-retention",
           kind: "mail-retention",

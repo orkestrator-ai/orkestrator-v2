@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   claudeProjectDirectoryName,
+  disposableDockerRow,
   environmentCleanupLedgerRow,
   formatBytes,
   formatProbeNetworkSweepSummary,
@@ -238,6 +239,22 @@ describe("disk report", () => {
     database.close();
 
     expect(gitMirrorRow(dataDir).orphaned).toBe("1 of 2");
+  });
+
+  test("the disposable Docker row counts roots whose checkout is gone", async () => {
+    const base = path.join(root, "state", "orkestrator-disposable-docker");
+    expect(disposableDockerRow(base)).toBeNull();
+    const checkout = path.join(root, "checkout");
+    await mkdir(checkout);
+    await mkdir(path.join(base, "live-0123456789ab"), { recursive: true });
+    await writeFile(path.join(base, "live-0123456789ab", ".checkout"), `${checkout}\n`);
+    await mkdir(path.join(base, "gone-0123456789ab"));
+    await writeFile(path.join(base, "gone-0123456789ab", ".checkout"), `${root}/deleted\n`);
+    await mkdir(path.join(base, "unmarked-0123456789ab"));
+    const row = disposableDockerRow(base)!;
+    expect(row.location).toBe(`${base} (one per checkout)`);
+    expect(row.orphaned).toBe("2 of 3 without their checkout");
+    expect(row.cleanup).toContain("stop --name");
   });
 
   test("names the first stuck deletions and counts the rest", async () => {

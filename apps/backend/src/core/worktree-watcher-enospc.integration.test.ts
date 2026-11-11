@@ -55,6 +55,18 @@ test.skipIf(!enabled || process.platform !== "linux")(
       let allocationError: NodeJS.ErrnoException | undefined;
       let exclusions: readonly string[] | undefined;
       let qualified = 0;
+      // The real root watch already exists. Exhaust the kernel quota before
+      // the real planner attaches its recursive src watch.
+      const exhaustQuota = () => {
+        for (let index = 0; index <= quota; index += 1) {
+          try {
+            fillers.push(watch(path.join(root, `fill-${index}`), { persistent: false }));
+          } catch (error) {
+            allocationError = error as NodeJS.ErrnoException;
+            break;
+          }
+        }
+      };
       watcher = startWorktreeWatcher({
         worktreePath: worktree,
         onChange: () => undefined,
@@ -62,19 +74,17 @@ test.skipIf(!enabled || process.platform !== "linux")(
         onCoverageChange: () => qualified++,
         plan: {
           ...worktreeWatchPlanIo,
+          // Linux reads the proof through `listIgnoredTrees`; wrap both reads.
           listExcluded: async (target) => {
             exclusions = await worktreeWatchPlanIo.listExcluded(target);
-            // The real root watch already exists. Exhaust the kernel quota
-            // before the real planner attaches its recursive src watch.
-            for (let index = 0; index <= quota; index += 1) {
-              try {
-                fillers.push(watch(path.join(root, `fill-${index}`), { persistent: false }));
-              } catch (error) {
-                allocationError = error as NodeJS.ErrnoException;
-                break;
-              }
-            }
+            exhaustQuota();
             return exclusions;
+          },
+          listIgnoredTrees: async (target) => {
+            const trees = await worktreeWatchPlanIo.listIgnoredTrees!(target);
+            exclusions = trees?.dependencies;
+            exhaustQuota();
+            return trees;
           },
         },
       });

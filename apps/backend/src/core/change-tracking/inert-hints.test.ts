@@ -10,6 +10,7 @@ import {
 } from "./capture.js";
 import { filterablePaths, manifestCovers, type WorktreeActivity } from "./inert-hints.js";
 import { createHarness, git, type Harness } from "./service-test-support.js";
+import { turnIdFor } from "./turn-boundaries.js";
 
 /**
  * Todo 7840: a provisional capture whose hint names only Git-ignored output
@@ -284,6 +285,8 @@ describe("provisional captures from watcher hints", () => {
     send(["a.txt"]);
     await until(() => captures() === 1);
     expect(h.service.turns.provisionalInertSkips).toBe(1);
+    // Let the pass release its slot before the harness is cleaned up.
+    await until(() => h.service.turns.provisionalPassesFinished === 1);
   });
 
   test("ignored paths with Git metadata, or with no paths, capture as before", async () => {
@@ -292,8 +295,117 @@ describe("provisional captures from watcher hints", () => {
     writeFileSync(join(h.repo, "dist", "out.js"), "built\n");
     send(["dist/out.js"], true);
     await until(() => captures() === 1);
+    // An attempt row is reserved before the capture runs; a hint sent while
+    // the pass still holds its slot would be dropped, not captured.
+    await until(() => h.service.turns.provisionalPassesFinished === 1);
     send(null);
     await until(() => captures() === 2);
+    await until(() => h.service.turns.provisionalPassesFinished === 2);
     expect(h.service.turns.provisionalInertSkips).toBe(0);
+  });
+});
+
+describe("hints the provisional gate drops", () => {
+  const requestId = "dropped";
+  const inertHint = async () => true;
+  const visibleHint = async () => false;
+
+  /** A running turn with a one-second local spacing and a clock the test drives. */
+  async function gate(spacingMs = 1_000) {
+    const h = createHarness({ policy: { provisionalSpacingLocalMs: spacingMs } });
+    harnesses.push(h);
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId,
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", requestId, "accepted");
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    const owner = h.service.registry.owner(identity!);
+    const turnKey = `turn-net/turn/${encodeURIComponent(turnIdFor("env-1", "env-env-1:tab", requestId))}/live`;
+    const additions = () =>
+      h.service.projections.selectedMeasurement(turnKey)?.totals.additions.value ?? null;
+    const captures = () =>
+      (
+        h
+          .database()
+          .db.query(
+            "SELECT COUNT(*) AS n FROM change_capture_attempts WHERE purpose = 'provisional'",
+          )
+          .get() as { n: number }
+      ).n;
+    const pass = (atMs: number, inert?: () => Promise<boolean>) =>
+      h.service.turns.provisional("env-1", owner, atMs, inert);
+    return { h, additions, captures, pass, start: Date.now() };
+  }
+
+  test("an inert hint after a visible one the spacing dropped still captures", async () => {
+    const { h, additions, captures, pass, start } = await gate();
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+    expect(await pass(start)).not.toEqual([]);
+    expect(additions()).toBe(1);
+
+    // A tracked edit whose hint lands inside the spacing starts nothing.
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\nfour\n");
+    expect(await pass(start + 500, visibleHint)).toEqual([]);
+    expect(captures()).toBe(1);
+
+    // After the spacing, a hint naming only ignored output must not hide it.
+    expect(await pass(start + 2_000, inertHint)).not.toEqual([]);
+    expect(h.service.turns.provisionalInertSkips).toBe(0);
+    expect(captures()).toBe(2);
+    expect(additions()).toBe(2);
+
+    // That capture covered the dropped hint, so the next inert one skips.
+    expect(await pass(start + 4_000, inertHint)).toEqual([]);
+    expect(h.service.turns.provisionalInertSkips).toBe(1);
+    expect(captures()).toBe(2);
+  });
+
+  test("a dropped hint that is itself inert does not stop a later skip", async () => {
+    const { h, captures, pass, start } = await gate();
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+    await pass(start);
+    expect(await pass(start + 500, inertHint)).toEqual([]);
+    expect(await pass(start + 2_000, inertHint)).toEqual([]);
+    expect(h.service.turns.provisionalInertSkips).toBe(1);
+    expect(captures()).toBe(1);
+  });
+
+  test("a hint dropped while a capture runs stays pending after it", async () => {
+    const { h, additions, captures, pass, start } = await gate(0);
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+    // No inert check, so the pass claims its slot before its first await.
+    const running = pass(start);
+    // A write the running capture may already have read past.
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\nfour\n");
+    expect(await pass(start + 1, visibleHint)).toEqual([]);
+    await running;
+    expect(captures()).toBe(1);
+
+    await pass(start + 2, inertHint);
+    expect(h.service.turns.provisionalInertSkips).toBe(0);
+    expect(captures()).toBe(2);
+    expect(additions()).toBe(2);
+  });
+
+  test("a pass claimed while the check runs captures in its place", async () => {
+    const { h, additions, captures, pass, start } = await gate(0);
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+    let claimed: Promise<string[]> | undefined;
+    // While this hint's check runs, another hint's pass claims the slot.
+    const result = await pass(start, async () => {
+      claimed = pass(start);
+      return false;
+    });
+    expect(result).toEqual([]);
+    expect(await claimed!).not.toEqual([]);
+    expect(captures()).toBe(1);
+    expect(additions()).toBe(1);
+    // That capture read the tree after this hint, so nothing stays pending.
+    expect(await pass(start + 1, inertHint)).toEqual([]);
+    expect(h.service.turns.provisionalInertSkips).toBe(1);
+    expect(h.service.turns.provisionalPassesFinished).toBe(1);
   });
 });

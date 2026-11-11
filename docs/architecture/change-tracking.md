@@ -354,10 +354,16 @@ hold, and otherwise the pass captures as before:
 
 Any failure, a timeout, output past 64 KiB, or a container (whose hints carry
 no paths and whose executor has no such check) captures. The check runs only
-once a pass would otherwise capture, so an idle worktree pays nothing; a
-skipped pass leaves the spacing untouched, so the next visible write captures
-at once, and it does not hold the pass slot, so a hint arriving meanwhile is
-judged on its own paths. An edit to `.git/info/exclude` or a global excludes
+while a turn is running, so an idle worktree pays nothing; a skipped pass
+leaves the spacing untouched, so the next visible write captures at once, and
+it does not hold the pass slot, so a hint arriving meanwhile is judged on its
+own paths. The check compares only its own hint with the previous manifest,
+so a hint the spacing or a running pass dropped stays pending in
+`TurnBoundaryService` until a later pass claims the slot, unless its own check
+proves it inert; a pass that captures or publishes nothing marks the worktree
+pending too. While anything is pending, an inert hint captures instead of
+skipping, so a dropped visible write never waits for the next visible hint or
+the turn's end. An edit to `.git/info/exclude` or a global excludes
 file produces no hint at all, so the next pass that captures picks it up, as
 before. The turn's end capture is never filtered. On this worktree (about
 11,700 tracked files) the check took 3.3 ms p50 and 5.4 ms at most over 20
@@ -1132,7 +1138,8 @@ first were skipped: the first creates `dist/`, `coverage/` and
 watches and send a hint without paths, which captures. The unchanged
 captures left are that first test run in both runs and, in the first run, a
 `git status` index refresh, whose hint names only Git metadata and so no
-path.
+path. A rerun after dropped hints became pending (same day, load average
+about 5) gave the same counts in both runs.
 The workload is synthetic: a real agent's mix of tool calls, and a real
 repository's build output, set the actual ratio.
 

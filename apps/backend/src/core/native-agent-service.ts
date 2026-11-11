@@ -2553,6 +2553,25 @@ export class NativeAgentService {
     return projection;
   }
 
+  /**
+   * Stops the session's turn only while `requestId` is still the turn it is
+   * running; a turn that ended or was replaced by a newer one is left alone.
+   * For a caller that sent one turn into a tab it shares with the user. Unlike
+   * a user's Stop it leaves goals and suborks alone.
+   */
+  stopRequest(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<{ stopped: boolean }> {
+    return this.sessionOperations.stopProjectionRequest(
+      {
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+      },
+      input.requestId,
+    );
+  }
+
   /** A tab's close, or the person's Stop on the group: stops what the session asked for. */
   async stopSuborksForSession(sessionKey: string, batchId?: string): Promise<void> {
     await this.options.suborks?.stopForSession(sessionKey, batchId);
@@ -4480,6 +4499,40 @@ export class NativeAgentService {
     if (!snapshot || snapshot.status === "missing") return undefined;
     const resumable = snapshot.resumableSessionId?.trim();
     return resumable || (agent === "codex" ? undefined : providerSessionId);
+  }
+
+  /**
+   * Which of these resume-list ids the agent lists as archived (design links
+   * use it to tell an archived conversation from one that can be resumed).
+   *
+   * Observe only: never starts a bridge, and asks only a platform that can
+   * archive. `undefined` when no bridge answers or the list fails, so a
+   * caller never reads "not known" as "not archived" or the reverse.
+   */
+  async archivedResumableSessionIdsIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    resumableSessionIds: readonly string[],
+  ): Promise<ReadonlySet<string> | undefined> {
+    if (resumableSessionIds.length === 0 || !nativeCapabilities(agent).actions?.archive) {
+      return undefined;
+    }
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "design-link-archived",
+    }).catch(() => undefined);
+    if (!provider?.listResumableSessions) return undefined;
+    const entries = await provider
+      .listResumableSessions({ includeArchived: true })
+      .catch(() => undefined);
+    if (!entries) return undefined;
+    const wanted = new Set(resumableSessionIds);
+    return new Set(
+      entries
+        .filter((entry) => entry.archived === true && wanted.has(entry.sessionId))
+        .map((entry) => entry.sessionId),
+    );
   }
 
   /**

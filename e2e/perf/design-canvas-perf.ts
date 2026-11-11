@@ -5,7 +5,8 @@
  *     [--runs 3] [--samples 20] [--moves 3] [--html-samples 5] [--cycles 12] \
  *     [--library-samples 5] [--frames 1,16,64] [--library 1,50,256] \
  *     [--skip-canvas] [--skip-library] [--port 1470] [--headed] [--no-minify] \
- *     [--dist output/tmp/design-canvas-perf-dist] [--rev HEAD] [--browser chrome]
+ *     [--dist output/tmp/design-canvas-perf-dist] [--rev HEAD] [--browser chrome] \
+ *     [--listener-census [--heap-snapshots output/tmp/design-perf-heap]]
  *
  * The `e2e/fixture` app is built with `apps/web`'s Vite config (production
  * React) into a temporary directory (or `--dist`, which is reused when it
@@ -42,6 +43,13 @@
  *  - leak check: N cycles of deactivate/activate (the tab's `isActive`) plus a
  *    cull (pan every frame out of view and back), sampling listeners (CDP
  *    metrics and DOMDebugger), iframes, timers, animation frames and blob URLs.
+ *    `--listener-census` (a diagnostic, never for measured numbers) adds a
+ *    census of the page's listeners to each sample and names the ones that
+ *    differ between the lowest and highest `jsEventListeners` sample, a second
+ *    `jsEventListeners` reading after more collection and idle time, and with
+ *    `--heap-snapshots <dir>` a heap snapshot at cycle 1 and at the first
+ *    sample whose count differs from it (snapshots hold page strings: keep
+ *    them out of commits).
  *
  * The library (`DesignLibrary` in `DesignWorkspaceDialog`) is opened at
  * `/design-library-perf` (`DesignLibraryPerfFixture.tsx`) against 1, 50 and
@@ -69,6 +77,7 @@ import { DESIGN_EVENT } from "../../packages/protocol/src/design-canvas";
 import { startDesignServiceHost, type DesignServiceHost } from "../design-service-client";
 import { DESIGN_FIXTURE_ENVIRONMENT } from "../design-service-protocol";
 
+import { confirmFloor, peakGrowth } from "./design-canvas-leak-verdict";
 import { startOwnedPreview } from "./preview-server";
 import { stopProcessGroup } from "../process-cleanup";
 
@@ -93,6 +102,8 @@ interface Options {
   dist: string | null;
   rev: string | null;
   browser: "chrome" | "chromium";
+  listenerCensus: boolean;
+  heapSnapshots: string | null;
 }
 
 function parseOptions(argv: string[]): Options {
@@ -113,6 +124,8 @@ function parseOptions(argv: string[]): Options {
     dist: null,
     rev: null,
     browser: "chrome",
+    listenerCensus: false,
+    heapSnapshots: null,
   };
   const list = (value: string) =>
     value.split(",").map((entry) => {
@@ -142,12 +155,16 @@ function parseOptions(argv: string[]): Options {
     else if (arg === "--no-minify") options.minify = false;
     else if (arg === "--dist") options.dist = path.resolve(value());
     else if (arg === "--rev") options.rev = value();
+    else if (arg === "--listener-census") options.listenerCensus = true;
+    else if (arg === "--heap-snapshots") options.heapSnapshots = path.resolve(value());
     else if (arg === "--browser") {
       const browser = value();
       if (browser !== "chrome" && browser !== "chromium") throw new Error(`Bad browser ${browser}`);
       options.browser = browser;
     } else throw new Error(`Unknown option ${arg}`);
   }
+  if (options.heapSnapshots && !options.listenerCensus)
+    throw new Error("--heap-snapshots needs --listener-census");
   if (options.frames.some((count) => count > 64)) throw new Error("At most 64 frames per canvas");
   if (options.library.some((count) => count > 256)) throw new Error("At most 256 live canvases");
   return options;
@@ -627,6 +644,97 @@ const INIT_SCRIPT = `(() => {
   };
 })();`;
 
+/**
+ * `--listener-census` only (to-do 7440's diagnostic, retired 2026-11-11; see
+ * docs/architecture/design-canvas.md, "Tests"): counts the page's live
+ * `addEventListener` registrations by target, type and the adding call site,
+ * so the two values the leak check's `jsEventListeners` samples take can be
+ * named. A registration leaves the count when it is removed, when a `once`
+ * listener fires, when its `signal` aborts, or when its target is garbage
+ * collected. Main frame only; `on*` handler properties are not seen (the DOM
+ * census in `listenerCensus` covers those on nodes). It adds one native
+ * listener per `signal` registration, so it is never on in a measured run.
+ */
+const LISTENER_CENSUS_SCRIPT = `(() => {
+  if (window !== window.top) return;
+  const proto = EventTarget.prototype;
+  const nativeAdd = proto.addEventListener, nativeRemove = proto.removeEventListener;
+  const live = new Map();
+  const byTarget = new WeakMap();
+  const heldCounts = new WeakMap();
+  const bump = (map, label, delta) => {
+    const next = (map.get(label) || 0) + delta;
+    if (next) map.set(label, next); else map.delete(label);
+  };
+  const registry = new FinalizationRegistry((counts) => {
+    for (const [label, count] of counts) bump(live, label, -count);
+  });
+  const site = () => {
+    const frames = [];
+    for (const line of (new Error().stack || "").split("\\n").slice(1)) {
+      const match = /\\/([^/\\s()]+\\.m?js)(?:\\?[^:\\s)]*)?:(\\d+):(\\d+)/.exec(line);
+      if (!match) continue;
+      frames.push(match[1] + ":" + match[2] + ":" + match[3]);
+      if (frames.length === 3) break;
+    }
+    return frames.join(" < ") || "unknown";
+  };
+  const captureOf = (options) => typeof options === "boolean" ? options : !!(options && options.capture);
+  const nameOf = (target) => {
+    if (target instanceof Element) return target.tagName.toLowerCase();
+    try { return (target && target.constructor && target.constructor.name) || "?"; } catch { return "?"; }
+  };
+  proto.addEventListener = function (type, listener, options) {
+    const target = this ?? window;
+    if (!listener) return nativeAdd.call(target, type, listener, options);
+    const capture = captureOf(options);
+    let perTarget = byTarget.get(target);
+    if (!perTarget) {
+      perTarget = new Map();
+      byTarget.set(target, perTarget);
+      const counts = new Map();
+      heldCounts.set(target, counts);
+      registry.register(target, counts);
+    }
+    const key = type + "|" + capture;
+    let entries = perTarget.get(key);
+    if (!entries) perTarget.set(key, (entries = new Map()));
+    if (entries.has(listener)) return;
+    const signal = options && typeof options === "object" ? options.signal : undefined;
+    if (signal && signal.aborted) return;
+    const counts = heldCounts.get(target);
+    const label = nameOf(target) + ":" + type + (capture ? " (capture)" : "") + " @ " + site();
+    const record = { label, wrapper: listener };
+    const forget = () => {
+      if (entries.get(listener) !== record) return;
+      entries.delete(listener);
+      bump(counts, label, -1);
+      bump(live, label, -1);
+    };
+    if (options && typeof options === "object" && options.once)
+      record.wrapper = function (event) {
+        forget();
+        return typeof listener === "function" ? listener.call(this, event) : listener.handleEvent(event);
+      };
+    if (signal) nativeAdd.call(signal, "abort", forget, { once: true });
+    entries.set(listener, record);
+    bump(counts, label, 1);
+    bump(live, label, 1);
+    return nativeAdd.call(target, type, record.wrapper, options);
+  };
+  proto.removeEventListener = function (type, listener, options) {
+    const target = this ?? window;
+    const entries = byTarget.get(target)?.get(type + "|" + captureOf(options));
+    const record = entries && listener ? entries.get(listener) : undefined;
+    if (!record) return nativeRemove.call(target, type, listener, options);
+    entries.delete(listener);
+    bump(heldCounts.get(target), record.label, -1);
+    bump(live, record.label, -1);
+    return nativeRemove.call(target, type, record.wrapper, options);
+  };
+  window.__designPerfListeners = () => Object.fromEntries(live);
+})();`;
+
 type PerfApi = Record<string, (...args: unknown[]) => unknown>;
 
 /** Calls one `window.__designPerf` method in the page. */
@@ -699,6 +807,76 @@ async function listenerCounts(cdp: CDPSession) {
     }
   };
   return { window: await count("window"), document: await count("document") };
+}
+
+/**
+ * `--listener-census`: the tracked registrations (`LISTENER_CENSUS_SCRIPT`)
+ * and every listener on the page's nodes, iframe documents included, by type.
+ */
+async function listenerCensus(page: Page, cdp: CDPSession) {
+  const tracked = await page.evaluate(() =>
+    (
+      window as unknown as { __designPerfListeners: () => Record<string, number> }
+    ).__designPerfListeners(),
+  );
+  const { result } = await cdp.send("Runtime.evaluate", { expression: "document" });
+  const domByType: Record<string, number> = {};
+  let dom = -1;
+  if (result.objectId) {
+    try {
+      const { listeners } = await cdp.send("DOMDebugger.getEventListeners", {
+        objectId: result.objectId,
+        depth: -1,
+        pierce: true,
+      });
+      dom = listeners.length;
+      for (const listener of listeners)
+        domByType[listener.type] = (domByType[listener.type] ?? 0) + 1;
+    } finally {
+      await cdp.send("Runtime.releaseObject", { objectId: result.objectId });
+    }
+  }
+  return { tracked, trackedTotal: sum(Object.values(tracked)), dom, domByType };
+}
+
+type Census = Awaited<ReturnType<typeof listenerCensus>>;
+
+/**
+ * `--listener-census`: `jsEventListeners` read again after two more forced
+ * collections with a second of idle time after each, long enough for Blink to
+ * finalize listener objects the earlier collection found dead.
+ */
+async function settledListeners(cdp: CDPSession) {
+  for (let round = 0; round < 2; round++) {
+    await cdp.send("HeapProfiler.collectGarbage");
+    await sleep(1_000);
+  }
+  return (await cdpMetrics(cdp)).jsEventListeners;
+}
+
+/** `--heap-snapshots` (with `--listener-census`): one V8 heap snapshot (Blink objects included) to `file`. */
+async function writeHeapSnapshot(cdp: CDPSession, file: string) {
+  const chunks: string[] = [];
+  const onChunk = (event: { chunk: string }) => chunks.push(event.chunk);
+  cdp.on("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  try {
+    await cdp.send("HeapProfiler.takeHeapSnapshot", {
+      reportProgress: false,
+      exposeInternals: true,
+    } as never);
+  } finally {
+    cdp.off("HeapProfiler.addHeapSnapshotChunk", onChunk);
+  }
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, chunks.join(""));
+}
+
+/** Labels whose counts differ between two censuses, largest change first. */
+function censusDiff(low: Record<string, number>, high: Record<string, number>) {
+  return [...new Set([...Object.keys(low), ...Object.keys(high)])]
+    .map((label) => ({ label, low: low[label] ?? 0, high: high[label] ?? 0 }))
+    .filter((entry) => entry.low !== entry.high)
+    .sort((a, b) => Math.abs(b.high - b.low) - Math.abs(a.high - a.low));
 }
 
 /** Resident memory of every renderer process of this browser (MiB), from the OS. */
@@ -1019,9 +1197,24 @@ async function measurePan(page: Page) {
 }
 
 const CULL_DISTANCE = 12_000;
+/** Extra `jsEventListeners` readings taken before a raised floor fails the leak check. */
+const LISTENER_CONFIRMATIONS = 8;
 
-async function leakCycles(page: Page, cdp: CDPSession, browserCdp: CDPSession, cycles: number) {
+async function leakCycles(
+  page: Page,
+  cdp: CDPSession,
+  browserCdp: CDPSession,
+  cycles: number,
+  census = false,
+  heapSnapshots: string | null = null,
+) {
   const switchTab = page.getByRole("button", { name: "Switch tab" });
+  // `--listener-census` only: a census beside every sample, and a second
+  // `jsEventListeners` reading right after each reactivation (before the cull).
+  const censuses: Census[] = [];
+  const settledReadings: number[] = [];
+  let snapshotPair = false;
+  const afterReactivate: number[] = [];
   const sample = async (cycle: number) => {
     const snapshot = await memory(page, cdp, browserCdp);
     return {
@@ -1045,12 +1238,17 @@ async function leakCycles(page: Page, cdp: CDPSession, browserCdp: CDPSession, c
   };
   type Sample = Awaited<ReturnType<typeof sample>>;
   const samples: Sample[] = [await sample(0)];
+  if (census) {
+    censuses.push(await listenerCensus(page, cdp));
+    settledReadings.push(await settledListeners(cdp));
+  }
   for (let cycle = 1; cycle <= cycles; cycle++) {
     // Deactivate and reactivate the canvas the way a tab switch does (isActive).
     await switchTab.click();
     await sleep(300);
     await switchTab.click();
     await waitRendered(page);
+    if (census) afterReactivate.push((await memory(page, cdp, browserCdp)).jsEventListeners);
     // Cull: pan every frame out of view, then back.
     await wheelPan(page, CULL_DISTANCE, 0, 6);
     await waitFor(
@@ -1064,26 +1262,76 @@ async function leakCycles(page: Page, cdp: CDPSession, browserCdp: CDPSession, c
     // Let exited frame processes and deferred cleanups finish before sampling.
     await sleep(1_500);
     samples.push(await sample(cycle));
+    if (census) {
+      censuses.push(await listenerCensus(page, cdp));
+      settledReadings.push(await settledListeners(cdp));
+      // One snapshot at cycle 1 and one at the first sample that differs from it.
+      const value = samples.at(-1)!.jsEventListeners;
+      if (
+        heapSnapshots &&
+        (cycle === 1 || (!snapshotPair && value !== samples[1]!.jsEventListeners))
+      ) {
+        if (cycle !== 1) snapshotPair = true;
+        await writeHeapSnapshot(
+          cdp,
+          path.join(
+            heapSnapshots,
+            `${samples[0]!.nodes}-nodes-cycle${cycle}-${value}.heapsnapshot`,
+          ),
+        );
+      }
+    }
     // Long retention runs exceed test:logged's inactivity deadline. Emit only
     // numeric progress after completed work; a stalled cycle still times out.
     if (cycle % 10 === 0 || cycle === cycles)
       console.log(`[perf] retention cycles ${cycle}/${cycles}`);
   }
   // Converged: after the first cycle (warm-up), the second half of the cycles
-  // does not exceed the first half beyond a small slack.
+  // does not exceed the first half beyond a small slack (for `jsEventListeners`,
+  // its lowest value, confirmed by extra readings; see `floorGrowth`).
   const failures: string[] = [];
   const settled = samples.slice(1);
   const half = Math.floor(settled.length / 2);
   const early = settled.slice(0, half);
   const late = settled.slice(half);
   const check = (key: keyof Sample, absolute: number, relative: number) => {
-    if (early.length === 0 || late.length === 0) return;
-    const earlyMax = Math.max(...early.map((entry) => Number(entry[key])));
-    const lateMax = Math.max(...late.map((entry) => Number(entry[key])));
-    if (lateMax > earlyMax * (1 + relative) + absolute)
-      failures.push(`${String(key)} grew from ${earlyMax} to ${lateMax}`);
+    const grew = peakGrowth(
+      early.map((entry) => Number(entry[key])),
+      late.map((entry) => Number(entry[key])),
+      absolute,
+      relative,
+    );
+    if (grew) failures.push(`${String(key)} grew from ${grew.from} to ${grew.to}`);
   };
-  check("jsEventListeners", 2, 0);
+  // `jsEventListeners` compares the halves' floors, not their peaks. The CDP
+  // counter also counts listener objects no event target holds any more until
+  // Blink finalizes them, which the forced collection in `memory()` does not
+  // wait for, so a sample reads one of two values at random (+25, +55 and +85
+  // at 1, 16 and 64 frames on Linux in 2026-11). A leak raises the floor; a
+  // peak landing only in the second half is that noise. A second half that
+  // read only the high value looks like a raised floor too, so before failing
+  // the check takes up to LISTENER_CONFIRMATIONS more readings with no page
+  // action between them (`floorGrowth`): noise drops one back to the floor, a
+  // leak does not. The listeners pages actually hold are covered by the window
+  // and document counts below, and `--listener-census` counts every
+  // registration.
+  const listenerFloor = await confirmFloor(
+    early.map((entry) => entry.jsEventListeners),
+    late.map((entry) => entry.jsEventListeners),
+    2,
+    LISTENER_CONFIRMATIONS,
+    async () => {
+      await sleep(1_000);
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.collectGarbage");
+      await sleep(200);
+      return (await cdpMetrics(cdp)).jsEventListeners;
+    },
+  );
+  if (listenerFloor.growth)
+    failures.push(
+      `jsEventListeners floor grew from ${listenerFloor.growth.from} to ${listenerFloor.growth.to}`,
+    );
   check("windowListeners", 0, 0);
   check("documentListeners", 0, 0);
   check("iframes", 0, 0);
@@ -1107,6 +1355,46 @@ async function leakCycles(page: Page, cdp: CDPSession, browserCdp: CDPSession, c
     samples,
     growthFromBaseline: growth,
     verdict: { converged: !failures.length, failures },
+    ...(listenerFloor.confirmations.length
+      ? { listenerFloorConfirmations: listenerFloor.confirmations }
+      : {}),
+    ...(census
+      ? { listenerCensus: summarizeCensus(samples, censuses, afterReactivate, settledReadings) }
+      : {}),
+  };
+}
+
+/**
+ * `--listener-census`: per-sample totals, and the tracked labels that differ
+ * between the settled sample with the fewest `jsEventListeners` and the one
+ * with the most (cycle 0, the warm-up, is left out).
+ */
+function summarizeCensus(
+  samples: Array<{ cycle: number; jsEventListeners: number }>,
+  censuses: Census[],
+  afterReactivate: number[],
+  settledReadings: number[],
+) {
+  const perSample = samples.map((entry, index) => ({
+    cycle: entry.cycle,
+    jsEventListeners: entry.jsEventListeners,
+    afterReactivate: entry.cycle === 0 ? null : (afterReactivate[entry.cycle - 1] ?? null),
+    settled: settledReadings[index] ?? -1,
+    tracked: censuses[index]?.trackedTotal ?? -1,
+    domListeners: censuses[index]?.dom ?? -1,
+  }));
+  const settled = perSample.slice(1);
+  if (settled.length === 0) return { perSample, low: null, high: null, diff: [], domDiff: [] };
+  const low = settled.reduce((a, b) => (b.jsEventListeners < a.jsEventListeners ? b : a));
+  const high = settled.reduce((a, b) => (b.jsEventListeners > a.jsEventListeners ? b : a));
+  const lowCensus = censuses[low.cycle]!;
+  const highCensus = censuses[high.cycle]!;
+  return {
+    perSample,
+    low: low.cycle,
+    high: high.cycle,
+    diff: censusDiff(lowCensus.tracked, highCensus.tracked),
+    domDiff: censusDiff(lowCensus.domByType, highCensus.domByType),
   };
 }
 
@@ -1135,6 +1423,7 @@ async function measureCanvas(
   options: Options,
 ) {
   const context = await browser.newContext({ viewport: VIEWPORT });
+  if (options.listenerCensus) await context.addInitScript(LISTENER_CENSUS_SCRIPT);
   await context.addInitScript(INIT_SCRIPT);
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
@@ -1204,7 +1493,14 @@ async function measureCanvas(
     await waitRendered(page);
     await sleep(500);
 
-    const cycles = await leakCycles(page, cdp, browserCdp, options.cycles);
+    const cycles = await leakCycles(
+      page,
+      cdp,
+      browserCdp,
+      options.cycles,
+      options.listenerCensus,
+      options.heapSnapshots,
+    );
     const after = restSummary(await memory(page, cdp, browserCdp));
     return {
       openToRenderedMs,

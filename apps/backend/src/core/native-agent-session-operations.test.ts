@@ -95,6 +95,14 @@ function harness(
         events.push("intent:exit");
       }
     },
+    withSessionWorkFence: async <T>(_input: unknown, operation: () => Promise<T>) => {
+      events.push("work-fence:enter");
+      try {
+        return await operation();
+      } finally {
+        events.push("work-fence:exit");
+      }
+    },
     fenceTurnInterrupt: (_key: string, _providerSessionId: string, requestId: string) => {
       events.push(`fence:${requestId}`);
     },
@@ -199,6 +207,82 @@ describe("NativeAgentSessionOperations", () => {
       await expect(operations.stopProjectionSession(identity)).rejects.toThrow("abort failed");
       expect(events).toEqual(["intent:enter", "refresh", "intent:exit"]);
       expect(stopNotices).toEqual(["The turn stopped after a graceful interrupt."]);
+    });
+  });
+
+  describe("request-scoped Stop", () => {
+    const running = { status: async () => "running" };
+
+    test("stops the turn its request is running, under the work fence", async () => {
+      const { operations, events } = harness({
+        session: { dispatchedRequestIds: ["older", "drafting"] },
+        provider: running,
+      });
+      expect(await operations.stopProjectionRequest(identity, "drafting")).toEqual({
+        stopped: true,
+      });
+      expect(events.slice(0, 4)).toEqual([
+        "work-fence:enter",
+        "intent:enter",
+        "fence:drafting",
+        "record-interrupt",
+      ]);
+      expect(events).toContain("abort");
+      expect(events.at(-1)).toBe("work-fence:exit");
+    });
+
+    test("stops a request the provider has not accepted yet", async () => {
+      const { operations, events } = harness({
+        session: {
+          dispatchedRequestIds: ["older"],
+          pendingDispatch: {
+            requestId: "drafting",
+          } as PersistedNativeAgentSession["pendingDispatch"],
+        },
+        provider: running,
+      });
+      expect((await operations.stopProjectionRequest(identity, "drafting")).stopped).toBe(true);
+      expect(events).toContain("abort");
+    });
+
+    for (const [name, session] of [
+      ["a newer user turn replaced it", { dispatchedRequestIds: ["drafting", "user-turn"] }],
+      [
+        "a newer user turn is being dispatched",
+        {
+          dispatchedRequestIds: ["drafting"],
+          pendingDispatch: { requestId: "user-turn" },
+        },
+      ],
+      [
+        "its turn already ended",
+        {
+          dispatchedRequestIds: ["drafting"],
+          turnOutcomes: [{ requestId: "drafting", outcome: "completed" }],
+        },
+      ],
+      [
+        "its turn was already interrupted",
+        { dispatchedRequestIds: ["drafting"], interruptedRequestIds: ["drafting"] },
+      ],
+      ["it was never dispatched", { dispatchedRequestIds: ["user-turn"] }],
+    ] as const) {
+      test(`leaves the session alone when ${name}`, async () => {
+        const { operations, events } = harness({
+          session: session as unknown as Partial<PersistedNativeAgentSession>,
+          provider: running,
+        });
+        expect(await operations.stopProjectionRequest(identity, "drafting")).toEqual({
+          stopped: false,
+        });
+        expect(events).toEqual(["work-fence:enter", "work-fence:exit"]);
+      });
+    }
+
+    test("an unknown session is not stopped", async () => {
+      const { operations, events } = harness({ session: null });
+      expect((await operations.stopProjectionRequest(identity, "drafting")).stopped).toBe(false);
+      expect(events).toEqual(["work-fence:enter", "work-fence:exit"]);
     });
   });
 

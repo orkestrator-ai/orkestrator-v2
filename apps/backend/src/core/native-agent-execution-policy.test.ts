@@ -1,5 +1,6 @@
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { describe, expect, test } from "bun:test";
@@ -289,6 +290,7 @@ describe("OpenCode execution policy translation", () => {
         ...ARTIFACT_TOOL_NAMES,
         ...AGENT_GOAL_TOOL_NAMES,
         ...AGENT_SUBORK_TOOL_NAMES,
+        ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
       ].map((name) => ({
         permission: `orkestrator_${name}`,
         pattern: "*",

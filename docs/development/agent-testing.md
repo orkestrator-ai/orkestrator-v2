@@ -2525,8 +2525,8 @@ session writes.
 
 ### Auto-pipeline flow (fake model)
 
-`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline launch
-end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
+`mise run test:agent:auto-pipeline` qualifies the manual Auto-pipeline flow
+(the toolbar's **To pipeline** button) end to end (to-do 7547 task 4) without a login or a billed turn. It starts a
 disposable `dev:test --fixture --headless --no-agent-credentials
 --agent-platforms pi` profile, runs `e2e/agent-testing/auto-pipeline-live.spec.ts`,
 then stops and resets the profile. The real backend, Pi bridge, Pi SDK
@@ -2535,18 +2535,22 @@ fake. The spec points the profile's isolated Pi `models.json` at a loopback
 model (`auto-pipeline-fake-model.ts`, script in
 `auto-pipeline-fake-model-script.ts`) and saves the fixture project's Build
 defaults as Pi on that model with one reviewer. The fake answers each stage's
-result tool with a fixed, valid, finding-free result, keeps only counts, and
-parks Verify until the spec releases it.
+result tool with a fixed, valid, finding-free result, answers the drafting
+request by calling `convert_to_pipeline` with a fixed draft, keeps only counts,
+and parks Verify until the spec releases it.
 
 The one case walks the user's path: an interactive Pi tab writes a file and
-goes idle; in the browser the user right-clicks **Multi Review**, chooses
-**Auto-pipeline**, edits the drafted title, adds a criterion and confirms. It
+goes idle; in the browser the user clicks **To pipeline**, which sends that
+tab the drafting request, and the tab's own agent submits the draft. The user
+edits the drafted title, adds a criterion and confirms. It
 then checks the ticket, the promotion commit and its trailer, and the adopted
 Build; sets the ticket's delivery to commit-only while Verify is parked;
 switches to another environment, releases Verify, and waits for the pipeline
 to finish unwatched. Back on the environment, and again after a reload and at
 a 390 px viewport, the graph must show the commit-only completion from backend
-state, and the source tab must have received no further turn. Screenshots go to
+state. The drafting request is the only turn the source tab receives: it
+grows the transcript once, and confirming and the pipeline add nothing.
+Screenshots go to
 `output/visual-previews/auto-pipeline-live-*.png`.
 
 To run the spec against a profile you started yourself, start it with the same

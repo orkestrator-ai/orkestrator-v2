@@ -1,6 +1,7 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
@@ -828,6 +829,7 @@ export function codexAppServerConfigOverrides(
             ...ARTIFACT_TOOL_NAMES,
             ...AGENT_GOAL_TOOL_NAMES,
             ...AGENT_SUBORK_TOOL_NAMES,
+            ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
             ...KEY_INFORMATION_TOOL_NAMES,
           ]) {
             overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =

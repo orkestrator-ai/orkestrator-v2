@@ -34,8 +34,8 @@ until a new host note refers to them.
 | Contract | `packages/protocol/src/web-annotations.ts`, `web-annotations-validation.ts`, `testing/web-annotations-fixtures.ts`; capture transport at the end of `browser-preview.ts` |
 | Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts`, `browser-preview-pins-script.ts`; host side in `browser-preview-capture-pins.ts` |
 | Native capture and spool | `apps/desktop/electron/browser-preview-capture.ts`, `browser-preview-capture-store.ts`, `browser-preview-capture-validation.ts` |
-| Backend storage and service | `apps/backend/src/core/web-annotation-storage.ts`, `web-annotation-store-layout.ts`, `web-annotation-store-rows.ts`, `web-annotation-legacy-import.ts`, `web-annotation-assets.ts`, `web-annotation-sync.ts`, `web-annotation-service*.ts`, `web-annotation-migration.ts` |
-| Execution adapters | `web-annotation-brief.ts`, `web-annotation-dispatch.ts`, `web-annotation-tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
+| Backend storage and service | `apps/backend/src/core/web-annotations/storage.ts`, `web-annotations/store-layout.ts`, `web-annotations/store-rows.ts`, `web-annotations/legacy-import.ts`, `web-annotations/assets.ts`, `web-annotations/sync.ts`, `web-annotations/service*.ts`, `web-annotations/migration.ts` |
+| Execution adapters | `web-annotations/brief.ts`, `web-annotations/dispatch.ts`, `web-annotations/tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
 | Commands | `commands-registry-web-annotations.ts` (every name in `WEB_ANNOTATION_COMMANDS`) |
 | Renderer | `apps/web/src/lib/web-annotations/`, `stores/webAnnotationStore.ts`, `hooks/useWebAnnotations.ts`, `components/browser/annotations/`, `components/chat/WebAnnotationRequestChip.tsx` |
 
@@ -165,7 +165,7 @@ Losing the record costs only the automatic retry; the capture stays pending.
 Metadata lives in the backend database (`orkestrator.sqlite`, see
 [storage](storage.md)): one envelope store per environment,
 `web-annotations/<environment-id>`, whose collections are listed in
-`web-annotation-store-layout.ts`. Each annotation, capture index, entry
+`web-annotations/store-layout.ts`. Each annotation, capture index, entry
 index, request (with its instruction and response excerpt), result, asset
 record, receipt and draft is one row; `records` holds the immutable bodies
 (captures, entries, request briefs, results, draft text) keyed
@@ -229,7 +229,7 @@ small batches from the reconciler loop.
 A commit costs CPU in proportion to the rows it changes, not to the size of
 the environment. The committed manifest and every row in it are deep-frozen,
 so an unchanged object is an unchanged row. A transaction works on a
-copy-on-write manifest (`web-annotation-working-manifest.ts`): a collection is
+copy-on-write manifest (`web-annotations/working-manifest.ts`): a collection is
 shallow-copied the first time the transaction touches it, and that copy
 records which keys are written. A change replaces a row
 (`tx.manifest.requests[id] = { ...request, state }`) or edits the private clone
@@ -247,7 +247,7 @@ shallow freeze of the copied containers. Copying keeps an older manifest
 intact for readers that hold it across an `await`, and for a commit that rolls
 back. Each commit reports `storage_commit_rows_serialized` and
 `storage_commit_collections_copied` (gauges, per scope);
-`web-annotation-payloads.bench.test.ts` asserts that a create at 1,900 notes
+`web-annotations/payloads.bench.test.ts` asserts that a create at 1,900 notes
 serializes and copies exactly as much as one at 1 note.
 `bun scripts/web-annotation-commit-profile.ts` measures median CPU per create
 as the environment fills. Two before/after runs, each the same script on a
@@ -265,7 +265,7 @@ figures:
 The 2026-11-11 ranges are four interleaved runs per side (25 creates per
 level, `main` at `498b68766`). Every after run serialized 6 rows and copied 5
 collections at every size. The payload bench's growth case
-(`web-annotation-payloads.bench.test.ts`, three batches of 60 creates) took
+(`web-annotations/payloads.bench.test.ts`, three batches of 60 creates) took
 29 / 71 / 110 ms before and 20 / 21 / 25 ms after on 2026-11-11 (47 / 73 /
 111 and 26 / 28 / 30 ms on 2026-10-26), with 9 rows and 4,174–4,496 bytes
 written per create on both sides. At 1,900 notes the largest remaining share
@@ -547,7 +547,7 @@ reservations are taken.
 
 The last five are terminal. `WEB_ANNOTATION_REQUEST_TRANSITIONS`
 (`web-annotations.ts`) lists the allowed moves, and `applyStateInTx`
-(`web-annotation-service-requests.ts`) applies them: an identity update is
+(`web-annotations/service-requests.ts`) applies them: an identity update is
 accepted, so duplicate and out-of-order updates are idempotent; any other
 disallowed move is ignored rather than regressing the request; a terminal
 request never changes. Settling releases reservations and clears pending

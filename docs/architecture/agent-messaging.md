@@ -620,7 +620,12 @@ wins.
 `report_goal` shares the mail tools' footing: it never prompts, and it writes only
 to Orkestrator's own record ([goals.md](goals.md)). So does `ask_agents`, which
 writes only to that record and starts read-only sessions. Its answers come back as
-a system-route notice ([suborks.md](suborks.md#results-delivery)).
+a system-route notice ([suborks.md](suborks.md#results-delivery)). And so does
+`convert_to_pipeline`, which only records an Auto-pipeline draft for the user to
+review: it creates no ticket and starts no pipeline
+([build-pipeline-view.md](build-pipeline-view.md#manual-auto-pipeline-promotion)).
+Its name is `AGENT_AUTO_PIPELINE_TOOL_NAMES`, a dependency-free module so a
+bridge does not load the draft schema for a name.
 
 ## How each provider gets the tools
 

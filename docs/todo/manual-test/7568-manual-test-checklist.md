@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (300 items): run each check under
+1. **Manual tests and live checks** (302 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -83,11 +83,11 @@ agent can apply it.
 | Containers and environments | 24 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
 | Cross-cutting | 74 | 20 |
-| Design canvas | 4 | 0 |
+| Design canvas | 5 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 301 | 53 |
+| **Total** | 302 | 53 |
 
 ## Outstanding work
 
@@ -170,7 +170,7 @@ agent can apply it.
   Record: pass/fail and what was shown per check, in 1031's Needs verification.
 
 - [ ] **[0008](../agent-engines/0008-opencode-v2.md) task 5: live coordinator suite on OpenCode 2.x.** On a host signed in to OpenCode with a real provider credential, run `mise run test:agent:coordinator --credential-source opencode` (OpenCode 2 is the only line since 2026-11-11, so no setting is needed). Check that each new coordinator conversation starts its own OpenCode server. Record: pass or fail per scenario, the 2.x pin, and any refusal or error text, in 0008's "Task 5: coordinators on 2.x" section.
-- [ ] **0081 (retired) task 2: live tab label with a transcript annotation.** On a profile signed in to Codex (`mise run dev:test --profile titles-qa --fixture --credential-source codex --agent-platforms codex`), open a new Codex tab whose first prompt is a short request plus a transcript excerpt (or open one from the design dialog, as in [0038](../design-canvas/0038-design-agent-conversation-links.md)'s live design-link run), send it, then reload. Record: the tab label before and after the reload. It should be the request text only, with no `<orke…` fence or quoted JSON. Reply to the coordinator. How it works: [Session titles](../../architecture/agent-engines.md#session-titles).
+- [ ] **0081 (retired) task 2: live tab label with a transcript annotation.** On a profile signed in to Codex (`mise run dev:test --profile titles-qa --fixture --credential-source codex --agent-platforms codex`), open a new Codex tab whose first prompt is a short request plus a transcript excerpt (or open one from the design dialog, as in 0038 (retired)'s live design-link run), send it, then reload. Record: the tab label before and after the reload. It should be the request text only, with no `<orke…` fence or quoted JSON. Reply to the coordinator. How it works: [Session titles](../../architecture/agent-engines.md#session-titles).
 - [ ] **1250 (retired) task 1: a real Claude weekly refusal.** With automatic switching on for Claude (two included accounts) on a `dev:test` profile with Debug logging, wait for a Claude account that really hits its weekly limit. Record: the turn's error text, the forced reading's `seven_day` utilization, the 429's `anthropic-ratelimit-unified-status` and `-representative-claim` headers if logged, `rate_limit_event.rate_limit_info.rateLimitType`, and whether the machine moved (`lastSwitch`). Reply to the coordinator. How it works: [Automatic switching](../../architecture/agent-accounts.md#automatic-switching).
 - [ ] **1250 (retired) task 2: a real Codex weekly refusal.** As task 1, for a Codex account at its weekly limit. Record: the refusal text, which window (primary or secondary) holds the 10,080-minute week, the `rateLimitsByLimitId` keys, and whether the machine moved. Reply to the coordinator.
 - [ ] **1250 (retired) task 3: a real model-specific refusal stays stopped.** With automatic switching on, when a Claude account hits a model-specific (Fable) limit while the general limits have room, check that nothing moves and nothing is resent. Record: the refusal text, the fresh reading (`seven_day`, `five_hour`), and that `lastSwitch` is unchanged. Reply to the coordinator.
@@ -563,6 +563,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 4: human screen-reader pass.** A daily screen-reader user, VoiceOver on macOS first, then NVDA on Windows, completes every journey step of `e2e/DesignCanvasAccessibility.spec.ts` by speech alone on a design canvas in a disposable profile, covering the layer tree, frame list, inspector and both status regions: verbosity, live-region timing during nudge bursts, the frame `aria-description`, Preview-mode frames, rotor and browse-mode navigation. Record: findings per area, reader, OS and browser versions, and whether the label-only inspector naming is confirmed or reversed, in 0036's accessibility evidence; file each defect as a new numbered to-do.
 - [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 5: client performance on a slower laptop.** On a laptop clearly slower than beelink (Intel Core Ultra 9 285H) and the M5 Max, on a quiet host, run `mise exec -- bun e2e/perf/design-canvas-perf.ts --runs 3 --samples 20 --moves 3 --html-samples 5 --cycles 12 --skip-library --rev HEAD --browser chromium`, then `--skip-canvas --library-samples 5 --rev HEAD --browser chromium`, each through `mise run test:logged` (drop `--browser chromium` if Google Chrome is installed). Record: the host (CPU, RAM, OS), load during the run, the two JSON report names and the headline figures (pan frame drops, acknowledgment p95, live iframes, library open time) next to the Linux and M5 Max ones, in a new 0036 "Qualification evidence" section.
 - [ ] **[0036](../design-canvas/0036-design-canvas-qualification.md) task 12: 64-frame retention run on the Apple M5 Max.** On the Apple M5 Max (the 2026-10-22 host), quiet, at current `main`: `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 mise run test:logged -- --name retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames 1,64 --cycles 100 --skip-library --rev HEAD` (Google Chrome, so no `--browser chromium`). Keep the final JSON report under `output/benchmarks/design-canvas/`. Pass: all three runs report `converged true`, with `windowListeners` and `cdpFrames` settled at 64 frames and at most 8 iframes. Record: pass/fail, the settled counts, the report name and commit, compared with the 2026-10-22 run on `60a75b73`, in 0036's "Retention run" evidence.
+- [ ] **0038 (retired) task 1 (live part): a design link to an archived Codex conversation.** (Background: [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context).) The archived state is covered by backend, dialog and browser tests against fixed answers; no run has archived a real Codex thread, because that needs a Codex login and a billed turn. On a disposable `mise run dev:test` profile signed in to Codex (`--fixture --credential-source codex --agent-platforms codex`), start a design workspace with Codex and a one-word brief, close the design conversation's tab, open a new Codex tab's resume list, **Remove from list** that conversation, then open **Ask agent** on the canvas. Expect the link to read "Closed — archived by the agent" with **Unarchive and resume** and **Remove link**, and a new conversation (not the archived one) as the default destination. Press **Unarchive and resume**: the conversation must reopen in a new tab with its transcript and nothing sent, and the resume list must show it again without "Show archived". Also stop the profile's Codex bridge before opening **Ask agent** once: the link must read "Closed — can be resumed" (the archived list is asked only of a running bridge). Record: each state seen, the Codex CLI version, the commit, and whether the reopened transcript kept its user turns.
 
 #### MCP
 

@@ -2155,7 +2155,7 @@
       "read": false,
       "critical": [],
       "argsDigest": "sha256:7df53ddd13c177fe96a7d36466a8beba55b798b696de618892d28f9d29bc1088",
-      "resultDigest": "sha256:e86e0297c16c1fc0071f8b3253c07eca0e9287bb2a0fb8eb7fa820e50c4e1751"
+      "resultDigest": "sha256:0f6a5a528581c7039907254284ea3a3055abbb9d9726c4eeedfcb6d86dba7413"
     },
     "design_session_resume": {
       "domain": "design",
@@ -2163,7 +2163,7 @@
       "access": "workspace",
       "read": false,
       "critical": ["expectedTabId"],
-      "argsDigest": "sha256:1dffde9857593328026d368f73a0f5be3506961ce83fc81d4e1aedd24409d34a",
+      "argsDigest": "sha256:068887a3fe9da6f93dd49b10d86085319d4b9687b66a72c4308ab2bbe12182f9",
       "resultDigest": "sha256:1549043105579ae1534c6addfd23191cb843a92ab9ab9d3414d0c26715ab0861"
     },
     "design_session_unlink": {

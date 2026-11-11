@@ -154,6 +154,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     localWindowGatewayTransport: global.localWindowGatewayTransport ?? true,
     experimentalGraphs: global.experimentalGraphs ?? false,
     experimentalSelfImprovement: global.experimentalSelfImprovement ?? false,
+    experimentalTmux: global.experimentalTmux ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     logDetail: resolveLogDetail(global),
@@ -244,6 +245,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.localWindowGatewayTransport ?? true,
     global.experimentalGraphs ?? false,
     global.experimentalSelfImprovement ?? false,
+    global.experimentalTmux ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     resolveLogDetail(global),
@@ -365,6 +367,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [experimentalSelfImprovement, setExperimentalSelfImprovement] = useState(
     global.experimentalSelfImprovement ?? false,
   );
+  const [experimentalTmux, setExperimentalTmux] = useState(global.experimentalTmux ?? false);
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -484,6 +487,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? true);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
     setExperimentalSelfImprovement(global.experimentalSelfImprovement ?? false);
+    setExperimentalTmux(global.experimentalTmux ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setLogDetail(resolveLogDetail(global));
@@ -671,6 +675,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       localWindowGatewayTransport,
       experimentalGraphs,
       experimentalSelfImprovement,
+      experimentalTmux,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -713,6 +718,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       localWindowGatewayTransport,
       experimentalGraphs,
       experimentalSelfImprovement,
+      experimentalTmux,
       debugLogging,
       debugLogRetentionDays,
       logDetail,
@@ -1136,6 +1142,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setExperimentalGraphs,
     experimentalSelfImprovement,
     setExperimentalSelfImprovement,
+    experimentalTmux,
+    setExperimentalTmux,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

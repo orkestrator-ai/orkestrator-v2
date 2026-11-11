@@ -50,6 +50,9 @@ describe("what the worker bundle holds", () => {
     expect(build.success).toBe(true);
     const bundle = await build.outputs[0]!.text();
     expect(bundle).toContain("installDesignRuntime");
+    // The text Find searches before a document is shown is read at verification
+    // with a copy of the frame's walk, not with the presentation runtime (5780).
+    expect(bundle).toContain("staticHtmlDocumentText");
     for (const name of [
       "installStaticHtmlPresentationRuntime",
       "orkestrator-static-html",

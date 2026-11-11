@@ -55,6 +55,7 @@ const REPRESENTATIONS: readonly ArtifactRepresentation[] = [
   "chart-csv",
   "workflow-json",
   "pdf",
+  "search-text",
 ];
 
 /** The rejection every artifact command uses: JSON message plus `code`/`error` properties. */

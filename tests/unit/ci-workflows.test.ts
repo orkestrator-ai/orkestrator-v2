@@ -48,6 +48,7 @@ describe("CI workflow contracts", () => {
       "validate-bun-runtime",
       "container-live-qualification",
       "native-application-menu",
+      "claude-apparmor-qualification",
     ]) {
       const parsed = Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as {
         on: { pull_request?: { types?: string[] } };
@@ -85,7 +86,11 @@ describe("CI workflow contracts", () => {
     }
   });
 
-  for (const name of ["validate-bun-runtime", "container-live-qualification"]) {
+  for (const name of [
+    "validate-bun-runtime",
+    "container-live-qualification",
+    "claude-apparmor-qualification",
+  ]) {
     test(`${name} only coalesces pull request runs`, () => {
       const { concurrency } = workflow(name);
       // A branch-wide group loses pending main runs even with cancellation off.
@@ -181,6 +186,50 @@ describe("CI workflow contracts", () => {
     expect(install?.[1]?.split(/\s+/)).toEqual(
       expect.arrayContaining(["bubblewrap", "socat", "zsh", "fish"]),
     );
+  });
+
+  test("Ubuntu 24.04 qualifies Claude's sandbox on its stock AppArmor policy, then remediated", () => {
+    const parsed = Bun.YAML.parse(read(".github/workflows/claude-apparmor-qualification.yml")) as {
+      on: { schedule?: { cron: string }[]; pull_request: { paths: string[] } };
+    } & Workflow;
+    // Runner images change under the job, so it also runs on a schedule.
+    expect(parsed.on.schedule?.length).toBe(1);
+    for (const path of [
+      "bridges/claude-bridge/src/conformance-apparmor-live.test.ts",
+      "packages/protocol/src/node/claude-linux-sandbox.ts",
+      "packages/toolchain/src/manifest.ts",
+    ])
+      expect(parsed.on.pull_request.paths).toContain(path);
+    const job = parsed.jobs["ubuntu-2404"]!;
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(job.permissions).toEqual({ contents: "read" });
+    const steps = job.steps!;
+    const index = (match: (step: (typeof steps)[number]) => boolean) => {
+      const found = steps.findIndex(match);
+      expect(found).toBeGreaterThanOrEqual(0);
+      return found;
+    };
+    const install = index((step) => /apt-get install .*bubblewrap socat/.test(step.run ?? ""));
+    const stock = index((step) => step.env?.ORKESTRATOR_CLAUDE_APPARMOR_PHASE === "stock");
+    const remediation = index((step) => (step.run ?? "").includes("apparmor_parser --remove"));
+    const remediated = index(
+      (step) => step.env?.ORKESTRATOR_CLAUDE_APPARMOR_PHASE === "remediated",
+    );
+    // The stock phase must see the runner's policy before anything changes it.
+    expect(install).toBeLessThan(stock);
+    expect(stock).toBeLessThan(remediation);
+    expect(remediation).toBeLessThan(remediated);
+    for (const phase of [steps[stock]!, steps[remediated]!]) {
+      expect(phase.run).toContain("./src/conformance-apparmor-live.test.ts --parallel=1");
+      // The pinned CLI downloaded by this job, never a host toolchain.
+      expect(phase.env?.ORKESTRATOR_POLICY_CLAUDE_PATH).toBe(
+        "${{ github.workspace }}/binaries/claude",
+      );
+      expect(phase.env?.ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE).toBe(
+        "${{ runner.temp }}/claude-apparmor",
+      );
+    }
+    expect(steps.some((step) => step.run === "mise run download:claude")).toBe(true);
   });
 
   test("the scheduled live job runs every opt-in live container suite", () => {

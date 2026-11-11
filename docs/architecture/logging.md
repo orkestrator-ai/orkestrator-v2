@@ -335,9 +335,11 @@ into `folded` and `foldedMaxMs`; a call of 5 s or more is always written. The
 same records, without the spacing, are in `get_database_stats` and
 `database.json` as `slowOperations`: counts, total and longest per series (64
 series at most, then `overflowed`) and the last 32 operations. Below the
-threshold a call costs two `performance.now()` reads:
-`apps/backend/scripts/storage-timing-overhead.ts` measured about 55–80 ns per
-statement and 250–290 ns per transaction on an in-memory database.
+threshold a call costs two `performance.now()` reads and its addition to the
+call buckets below: `apps/backend/scripts/storage-timing-overhead.ts` measured
+about 55–80 ns per statement and 250–290 ns per transaction on an in-memory
+database, and 58–94 ns per statement and 170 ns per transaction with the call
+buckets on 2026-11-11 (a busy Linux host).
 
 **`command.slow`.** The command registry wraps every registered command
 (`createCommandRegistry`'s `register`), so it covers every caller: the
@@ -354,7 +356,13 @@ counts and summed durations of gateway invokes were already in
 that is reported, with the window from the last on-time tick to the late one.
 The storage source adds the slow SQLite operations overlapping the window:
 `storageMs` in total and the longest one's `storageDatabase`, `storageOp`,
-`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. The command
+`storageTable`, `storageStore`, `storageLongestMs` and `storageBusy`. It also
+adds every call that ended in the window, slow or not: `storageCalls`, their
+time `storageCallMs`, and the parts of it on the main database
+(`storageMainCallMs`) and the change-tracking ledger (`storageLedgerCallMs`).
+Those come from 250 ms buckets by end time, kept for 32 s, so they are exact
+to one bucket at either edge. A call is an outermost statement or a whole
+transaction. The command
 source adds `commandsInFlight`, the names of up to three of the most recently
 started (`commands`), and `blockingCommand` with `blockingCommandMs` when a
 command's synchronous part of 250 ms or more overlapped the window. The
@@ -367,7 +375,10 @@ it is in flight and, once settled, only for windows it overlapped, but its kind
 is not named. An
 attempt's span includes its awaits, so a named job ran around the stall rather
 than necessarily causing it; a kind that keeps coming back is the lead. A stall
-with no storage fields was not SQLite holding the loop for 250 ms at a time.
+with no `storageMs` was not SQLite holding the loop for 250 ms at a time; its
+`storageCallMs` says whether many shorter calls did (to-do 7562 found stalls
+that were mostly the thread waiting on disk with no single call reaching
+250 ms).
 
 The backend and the desktop also pass the monitor a CPU reader
 (`process.cpuUsage()`, one `getrusage` per tick), so both stall lines carry
@@ -518,6 +529,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
 | `renderer-errors` | `error.recorded` | `errorClass`, `boundary`, `route`, `fingerprint`, `count` | A desktop window reported new occurrences of a renderer failure; see [Renderer failures in the essential log](#renderer-failures-in-the-essential-log). |
+| `review` | `consolidation.budget-exceeded` | `reviewers`, `sourceFindings`, `compactBytes`, `maxBytes` | A review panel's reports did not fit one consolidation turn (`CONSOLIDATION_MAX_EVIDENCE_BYTES`) after optional prose was removed, so consolidation failed before dispatch. It counts how often real panels need [hierarchical consolidation](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md). |
 
 A lease is **regained** by the next backend, not by the one that lost it: a lost lease
 is final until that process restarts, so `writer-lease.regained` is written by whichever

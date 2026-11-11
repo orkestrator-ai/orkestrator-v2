@@ -89,7 +89,13 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
-import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
+import { MergePrDialog, prMergeability } from "./MergePrDialog";
+import { armAutoMergeCleanup } from "./auto-merge-cleanup";
+import { useAutoMergeHold } from "@/hooks/useEnvironmentNameSignal";
+import {
+  DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
+  isTmuxModeEnabled,
+} from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_MIN_REVIEWERS,
@@ -390,6 +396,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     handleResolveConflicts,
     resolveLaunchInFlight,
     openResolveDialog,
+    canConfigureResolve,
     resolveLongPress,
     resolveEligibilityError,
     handleConfiguredResolve,
@@ -400,6 +407,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   } = useActionBarController({ presentation });
   const coordinatorActivity = useCoordinatorActivity(selectedProjectId);
   const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
+  const autoMergeHold = useAutoMergeHold(selectedEnvironment?.id ?? "", selectedEnvironment);
+  const mergeability = prMergeability(hasMergeConflicts);
+
+  // Every way the Merge PR dialog closes clears an earlier merge failure, so a
+  // reopened dialog (possibly for another environment) never shows a stale one.
+  const setMergeDialogOpenClearingError = (open: boolean) => {
+    setMergeDialogOpen(open);
+    if (!open) setMergeError(null);
+  };
 
   // Configure dialogs open on the Settings action default, which is the same
   // value `actionDefaultFor` gives a plain click on the same button.
@@ -417,6 +433,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   // Graphs are experimental: their buttons show only while they are on.
   const graphsEnabled = config.global.experimentalGraphs === true;
+  // Tmux mode is experimental: "Claude Tmux Tab" shows only while it is on.
+  const tmuxModeEnabled = isTmuxModeEnabled(config.global);
   const multiReviewResolvedDefaults = useMultiReviewLaunchDefaults(
     multiReviewDialogOpen,
     selectedEnvironmentId,
@@ -828,7 +846,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <Plus className="mr-2 h-4 w-4" />
                         Native Tab
                       </ContextMenuItem>
-                      {enabledAgents.has("claude") && (
+                      {tmuxModeEnabled && enabledAgents.has("claude") && (
                         <ContextMenuItem
                           onClick={() => handleCreateAgentTab("claude", "tmux")}
                           disabled={!canCreateTab}
@@ -1292,11 +1310,18 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         autoMerge.enabled ? (
                           <>
                             <p>
-                              Auto-merge is on: this PR merges as soon as GitHub reports it ready
+                              {autoMerge.cleanup ? "Auto-merge & Cleanup" : "Auto-merge"} is on:
+                              this PR merges as soon as GitHub reports it ready
+                              {autoMerge.cleanup ? ", then this environment is deleted" : ""}
                             </p>
                             <p className="text-xs text-muted-foreground">
                               Merge conflicts launch Resolve automatically. Click to turn off.
                             </p>
+                            {autoMergeHold && (
+                              <p className="text-xs text-muted-foreground">
+                                Waiting: {autoMergeHold.message}
+                              </p>
+                            )}
                           </>
                         ) : (
                           "Merge this PR automatically once it is ready, resolving conflicts as needed"
@@ -1324,25 +1349,58 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     </ToolbarTooltipTrigger>
                   )}
 
-                  {!isPRFinished && hasMergeConflicts === false && (
+                  {!isPRFinished && (
                     <ToolbarTooltipTrigger
                       tooltip={
-                        isMerging
-                          ? "Merge in progress..."
-                          : !isRunning
-                            ? isLocalEnvironment
-                              ? "Environment must be ready"
-                              : "Container must be running"
-                            : "Squash and merge this PR"
+                        isMerging ? (
+                          "Merge in progress..."
+                        ) : (
+                          <>
+                            <p>
+                              {mergeability === "conflicts"
+                                ? "PR has merge conflicts - click to resolve them or choose another option"
+                                : mergeability === "checking"
+                                  ? "GitHub is still checking whether this PR can be merged"
+                                  : "Squash and merge this PR"}
+                            </p>
+                            {canConfigureResolve && (
+                              <p className="text-xs text-muted-foreground">
+                                ⌘⇧U or right-click/long-press to configure Resolve
+                              </p>
+                            )}
+                          </>
+                        )
                       }
                     >
+                      {/* One button for every way to end the PR. It stays
+                          enabled while GitHub computes mergeability: the
+                          dialog disables only the options that need the
+                          answer. Red means conflicts; green with a spinner
+                          means the check is still running. */}
                       <Button
+                        ref={resolveButtonRef}
                         variant={isGrid ? "ghost" : "default"}
                         size="sm"
                         className={cn(
-                          "gap-2",
-                          !isGrid && "bg-green-600 text-white hover:bg-green-700",
+                          "gap-2 touch-manipulation",
+                          !isGrid &&
+                            (mergeability === "conflicts"
+                              ? "bg-destructive text-white hover:bg-destructive/90"
+                              : "bg-green-600 text-white hover:bg-green-700"),
+                          isGrid &&
+                            (mergeability === "conflicts"
+                              ? "text-destructive"
+                              : "text-green-600 dark:text-green-400"),
                         )}
+                        data-mergeability={mergeability}
+                        aria-description={
+                          mergeability === "conflicts"
+                            ? "Merge conflicts to resolve"
+                            : mergeability === "checking"
+                              ? "Checking mergeability"
+                              : undefined
+                        }
+                        aria-haspopup="dialog"
                         onClick={(event) => {
                           if (resolveLongPress.shouldSuppressClick()) {
                             event.preventDefault();
@@ -1350,7 +1408,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           }
                           if (!isMerging) setMergeDialogOpen(true);
                         }}
-                        disabled={!isRunning || isMerging}
+                        onContextMenu={(event) => {
+                          if (!canConfigureResolve) return;
+                          event.preventDefault();
+                          resolveLongPress.cancel();
+                          openResolveDialog();
+                        }}
+                        {...resolveLongPress.handlers}
+                        data-toolbar-custom-context-menu={canConfigureResolve ? "true" : undefined}
+                        disabled={isMerging}
                       >
                         {isMerging ? (
                           <>
@@ -1359,103 +1425,19 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           </>
                         ) : (
                           <>
-                            <GitMerge className="h-4 w-4" />
+                            {mergeability === "checking" ? (
+                              <Loader2
+                                className="h-4 w-4 animate-spin"
+                                data-testid="merge-pr-checking"
+                              />
+                            ) : mergeability === "conflicts" ? (
+                              <AlertTriangle className="h-4 w-4" />
+                            ) : (
+                              <GitMerge className="h-4 w-4" />
+                            )}
                             <span className={cn(isGrid && "truncate text-xs")}>Merge PR</span>
                           </>
                         )}
-                      </Button>
-                    </ToolbarTooltipTrigger>
-                  )}
-
-                  {!isPRFinished && hasMergeConflicts === null && (
-                    <ToolbarTooltipTrigger
-                      tooltip={
-                        <>
-                          <p>GitHub is still checking whether this PR can be merged</p>
-                          {isRunning && canLaunchResolve && (
-                            <p className="text-xs text-muted-foreground">
-                              ⌘⇧U or right-click/long-press to resolve conflicts anyway
-                            </p>
-                          )}
-                        </>
-                      }
-                    >
-                      {/* Soft-disabled rather than `disabled`: a disabled button
-                          receives no contextmenu or pointer events, and the
-                          Resolve configuration must stay reachable while
-                          mergeability is still being computed. */}
-                      <Button
-                        ref={resolveButtonRef}
-                        variant={isGrid ? "ghost" : "outline"}
-                        size="sm"
-                        className="gap-2 touch-manipulation cursor-not-allowed opacity-50"
-                        onClick={(event) => {
-                          // Consume a long press's trailing click so it cannot
-                          // launch from the Resolve button that may replace this.
-                          resolveLongPress.shouldSuppressClick();
-                          event.preventDefault();
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          resolveLongPress.cancel();
-                          openResolveDialog();
-                        }}
-                        {...resolveLongPress.handlers}
-                        data-toolbar-custom-context-menu="true"
-                        aria-disabled
-                      >
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span className={cn(isGrid && "truncate text-xs")}>
-                          Checking mergeability…
-                        </span>
-                      </Button>
-                    </ToolbarTooltipTrigger>
-                  )}
-
-                  {!isPRFinished && hasMergeConflicts && (
-                    <ToolbarTooltipTrigger
-                      tooltip={
-                        !isRunning ? (
-                          isLocalEnvironment ? (
-                            "Environment must be ready"
-                          ) : (
-                            "Container must be running"
-                          )
-                        ) : !canLaunchResolve ? (
-                          "Maximum tabs reached"
-                        ) : (
-                          <>
-                            <p>PR has merge conflicts - launch agent to resolve them</p>
-                            <p className="text-xs text-muted-foreground">
-                              ⌘⇧U or right-click/long-press to configure
-                            </p>
-                          </>
-                        )
-                      }
-                    >
-                      <Button
-                        ref={resolveButtonRef}
-                        variant={isGrid ? "ghost" : "destructive"}
-                        size="sm"
-                        className="gap-2 touch-manipulation"
-                        onClick={(event) => {
-                          if (resolveLongPress.shouldSuppressClick()) {
-                            event.preventDefault();
-                            return;
-                          }
-                          void handleResolveConflicts();
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          resolveLongPress.cancel();
-                          openResolveDialog();
-                        }}
-                        {...resolveLongPress.handlers}
-                        data-toolbar-custom-context-menu="true"
-                        disabled={!isRunning || !canLaunchResolve || resolveLaunchInFlight}
-                      >
-                        <AlertTriangle className="h-4 w-4" />
-                        <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
                       </Button>
                     </ToolbarTooltipTrigger>
                   )}
@@ -1831,51 +1813,70 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Merge PR Confirmation Dialog */}
-      <AlertDialog
+      {/* Merge PR options: merge, merge & cleanup, resolve, auto-merge & cleanup */}
+      <MergePrDialog
         open={mergeDialogOpen}
-        onOpenChange={(open) => {
-          setMergeDialogOpen(open);
-          if (!open) setMergeError(null); // Clear error when closing
+        onOpenChange={setMergeDialogOpenClearingError}
+        mergeability={mergeability}
+        sourceBranch={<BranchName>{sourceBranch}</BranchName>}
+        targetBranch={<BranchName>{targetBranch}</BranchName>}
+        deletesBranch={Boolean(
+          selectedEnvironment &&
+          isEnvironmentOwnedBranch(selectedEnvironment.id, selectedEnvironment.branch),
+        )}
+        mergeError={mergeError}
+        merge={{
+          disabledReason: isMerging
+            ? "A merge is already in progress."
+            : !isRunning
+              ? isLocalEnvironment
+                ? "The environment must be ready to merge."
+                : "The container must be running to merge."
+              : mergeability === "checking"
+                ? "Available once GitHub finishes checking whether this PR can be merged."
+                : mergeability === "conflicts"
+                  ? "Resolve the merge conflicts before merging."
+                  : null,
+          onMerge: (cleanupAfterMerge) => void handleMergePR(cleanupAfterMerge),
         }}
-      >
-        <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will squash and merge <BranchName>{sourceBranch}</BranchName> into{" "}
-              <BranchName>{targetBranch}</BranchName>. If the pull request is a draft, it will be
-              marked ready for review first.{" "}
-              {selectedEnvironment &&
-              isEnvironmentOwnedBranch(selectedEnvironment.id, selectedEnvironment.branch)
-                ? "The feature branch will be deleted after merging if it is the PR head in the same repository."
-                : "The feature branch will be kept because it is not owned by this environment."}{" "}
-              Merge &amp; Cleanup also permanently deletes this environment, but only after the
-              merge is confirmed successful.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {mergeError && (
-            <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-              Failed to merge PR: {mergeError}
-            </div>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => void handleMergePR(false)}
-              className="bg-green-600 text-white hover:bg-green-700"
-            >
-              Merge PR
-            </AlertDialogAction>
-            <AlertDialogAction
-              onClick={() => void handleMergePR(true)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Merge &amp; Cleanup
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        resolve={{
+          disabledReason:
+            mergeability === "mergeable"
+              ? "GitHub reports no merge conflicts to resolve."
+              : !isRunning
+                ? isLocalEnvironment
+                  ? "The environment must be ready to resolve conflicts."
+                  : "The container must be running to resolve conflicts."
+                : !canLaunchResolve
+                  ? "Maximum tabs reached."
+                  : null,
+          busy: resolveLaunchInFlight,
+          onResolve: () => {
+            setMergeDialogOpenClearingError(false);
+            void handleResolveConflicts();
+          },
+          onConfigure: canConfigureResolve
+            ? () => {
+                setMergeDialogOpenClearingError(false);
+                openResolveDialog();
+              }
+            : null,
+        }}
+        autoMergeCleanup={{
+          disabledReason: selectedEnvironment?.projectHome
+            ? "The project's home environment is never deleted; use the auto-merge toggle instead."
+            : null,
+          active: autoMerge.cleanup,
+          saving: autoMerge.saving,
+          hold: autoMergeHold,
+          onArm: () => {
+            setMergeDialogOpenClearingError(false);
+            if (selectedEnvironment) {
+              void armAutoMergeCleanup(selectedEnvironment.id, autoMerge.set, autoMergeHold);
+            }
+          },
+        }}
+      />
     </>
   );
 }

@@ -4,7 +4,7 @@ import type { ReadContext } from "@/lib/read-coordinator";
 
 /**
  * Shared background reads for several mounted views of one native session
- * (docs/todo/transcripts-and-observation/0049, code item 3).
+ * (todo 0049 code item 3, retired 2026-11-11).
  *
  * Every mounted `useNativeAgentSession` keeps its own fenced state: refresh
  * sequence, operation epoch and the conditional tokens it last applied. That

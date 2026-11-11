@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
-import { COORDINATOR_LAUNCH_OVERRIDES_COMMAND } from "@orkestrator/protocol/coordinator-launch-overrides";
+import {
+  COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
+  type CoordinatorLaunchOverridesSnapshot,
+} from "@orkestrator/protocol/coordinator-launch-overrides";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { launchDelegationRequest } from "./coordinator-delegation-request.js";
@@ -149,14 +152,20 @@ describe(COORDINATOR_LAUNCH_OVERRIDES_COMMAND, () => {
     }
   });
 
-  test("answers across projects from one read, and leaves out a worker on another node", async () => {
+  test("answers across projects from one read, with workers on other nodes apart", async () => {
     await launch("here", { initialAgentModel: "opus" });
     await launch("elsewhere", { initialAgentModel: "opus" }, { projectId: "other-project" });
     await launch("remote", { initialAgentModel: "opus" }, { nodeId: "bk_leaf" });
-    const { overrides } = (await list()) as { overrides: Array<{ environmentId: string }> };
-    expect(overrides.map((override) => override.environmentId).sort()).toEqual([
+    await launch("remote-default", {}, { nodeId: "bk_leaf" });
+    const answer = (await list()) as CoordinatorLaunchOverridesSnapshot;
+    // An older renderer reads only `overrides`, so no remote row may be there.
+    expect(answer.overrides.map((override) => override.environmentId).sort()).toEqual([
       "worker-elsewhere",
       "worker-here",
+    ]);
+    expect(answer.overrides.some((override) => override.nodeId)).toBe(false);
+    expect(answer.remoteOverrides).toEqual([
+      { nodeId: "bk_leaf", environmentId: "worker-remote", tabId: "startup-agent", model: "opus" },
     ]);
   });
 });

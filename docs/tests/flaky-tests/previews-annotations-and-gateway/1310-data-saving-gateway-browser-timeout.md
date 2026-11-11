@@ -307,3 +307,25 @@ NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flak
 ```
 
 Status stays open. No assertion, deadline, retry or skip changed.
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+the recorded `mise run test:browser` rerun (default workers, stopped at its
+30-minute group deadline) failed the mobile case with
+`browserContext.close: Target page, context or browser has been closed`. A
+two-worker owner rerun failed both viewports (the switch was not found after
+reload); the complete unchanged owner then passed both viewports with one
+worker, as earlier recurrences did, in 48.7 s. `mise run flaky:recurrence --
+1310 --base 498b68766` reported the case open. The branch does not touch the
+gateway or data-saving code. Details:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Launch-override marker review repair — 2026-11-11
+
+On `launch-override-marker-043a84998c41-r1` (base `498b68766`), the mobile case
+exceeded its 60 s deadline in the component browser suite (load average about
+42) and again in a four-owner multi-worker rerun; the complete unchanged owner
+passed with one worker (61.3 s, with `PaneBreakpoint.spec.ts`).
+`flaky:recurrence 1310` reported `open`. Full run: [9953](../aggregate-validation-runs/9953-launch-override-marker-browser-owners.md).

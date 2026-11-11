@@ -2627,7 +2627,22 @@ describe("GlobalSettings", () => {
     );
   });
 
+  test("hides the Claude native backend choice while experimental tmux mode is off", () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
+
+    expect(screen.queryByRole("radiogroup", { name: "Claude native backend" }) === null).toBe(true);
+  });
+
   test("saves the Claude native backend selection", async () => {
+    appCommandStore(configStore)
+      .getState()
+      .setConfig({
+        ...appCommandStore(configStore).getState().config,
+        global: {
+          ...appCommandStore(configStore).getState().config.global,
+          experimentalTmux: true,
+        },
+      });
     renderInAppCommandScope(<GlobalSettings activeSection="claude" />);
 
     fireEvent.click(
@@ -3057,6 +3072,22 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ experimentalGraphs: true }),
+        SAVE_OPTIONS,
+      );
+    });
+  });
+
+  test("saves the experimental tmux mode switch, off by default", async () => {
+    renderInAppCommandScope(<GlobalSettings activeSection="experimental" />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable tmux mode" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await flushAutoSave();
+
+    await waitFor(() => {
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalTmux: true }),
         SAVE_OPTIONS,
       );
     });

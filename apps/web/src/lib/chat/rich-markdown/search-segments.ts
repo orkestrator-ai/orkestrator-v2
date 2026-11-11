@@ -168,6 +168,12 @@ export function pairBlockGroups(
 export type SearchTextGetter<T> = ((item: T) => string) & {
   /** Optional semantic projection whose `text` equals the getter's result. */
   projection?: (item: T) => SearchProjection;
+  /**
+   * Optional: the raw artifact references an item shows (`part.artifact`), so
+   * Find can fetch the stored text of documents no card has reported yet
+   * (`useStaticDocumentSearchIndex`).
+   */
+  artifacts?: (item: T) => readonly unknown[];
 };
 
 /** Attach a projection to a search-text getter (keeps the getter's identity). */

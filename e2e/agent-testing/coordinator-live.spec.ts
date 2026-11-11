@@ -8,8 +8,13 @@
  * `coordinator-live-deliver-now.ts`), `goal` (a worker's goal runs to a passing
  * check and wakes the coordinator once, see `coordinator-live-goal.ts`),
  * `routing` (plain requests routed to the right workflow, see
- * `coordinator-live-routing.ts`), `gap-tools` (each gap-review tool called once
- * against one worker, see `coordinator-live-gap-tools.ts`) and `peer`. Every
+ * `coordinator-live-routing.ts`), `research` (a research MCP server call
+ * under the default research setting, attributed to that server in the
+ * transcript, see `coordinator-live-research.ts`), `surfaces` (each
+ * worker-surface tool once and the root-changes approval accepted in its
+ * dialog, Claude only, see `coordinator-live-surfaces.ts`), `gap-tools` (each
+ * gap-review tool called once against one worker, see
+ * `coordinator-live-gap-tools.ts`) and `peer`. Every
  * scenario with mail also judges each echoed carrier through the renderer's
  * tile parser (`coordinator-mail-tiles.ts`).
  *
@@ -116,6 +121,16 @@ import { deliverNowApplies } from "../../apps/desktop/scripts/dev/coordinator-li
 import { runGoalScenario } from "../../apps/desktop/scripts/dev/coordinator-live-goal-orchestration";
 import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goal";
 import { runRoutingScenario } from "../../apps/desktop/scripts/dev/coordinator-live-routing-orchestration";
+import {
+  runSurfacesScenario,
+  type RootChangesApproval,
+} from "../../apps/desktop/scripts/dev/coordinator-live-surfaces-orchestration";
+import { surfacesApplies } from "../../apps/desktop/scripts/dev/coordinator-live-surfaces";
+import { runResearchScenario } from "../../apps/desktop/scripts/dev/coordinator-live-research-orchestration";
+import {
+  RESEARCH_SCENARIO_SETTINGS,
+  researchApplies,
+} from "../../apps/desktop/scripts/dev/coordinator-live-research";
 import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
 import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
@@ -980,6 +995,57 @@ async function routingCase(input: {
 }
 
 /**
+ * The user's part of the surfaces scenario: the root-changes request is
+ * approved in the profile's own dialog, with the file the coordinator named
+ * pre-selected, as the user would approve it.
+ */
+async function approveRootChangesInDialog(page: Page, request: RootChangesApproval) {
+  const dialog = page.getByTestId("root-changes-request");
+  await expect(dialog, "the root-changes dialog opens").toBeVisible({ timeout: 120_000 });
+  await expect(dialog.getByText(request.workerName)).toBeVisible();
+  await expect(dialog.getByRole("checkbox", { name: request.file })).toBeChecked({
+    timeout: 30_000,
+  });
+  await dialog.getByRole("button", { name: "Apply 1 file" }).click();
+  await expect(dialog).toBeHidden({ timeout: 120_000 });
+}
+
+/**
+ * The surfaces scenario: one coordinator turn calls each worker-surface tool
+ * once on a worker the harness made, and the root-changes request it raises is
+ * approved in the dialog.
+ */
+async function surfacesCase(input: {
+  page: Page;
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { page, coordinator, summary, cleanup } = input;
+  const platform = coordinator.identity.agent;
+  const coordinatorEnvironmentId = coordinator.identity.environmentId;
+  const { checks, watch, mail } = await runSurfacesScenario({
+    coordinator,
+    summary,
+    cleanup,
+    checkout: coordinator.checkout,
+    approveRootChanges: (request) => approveRootChangesInDialog(page, request),
+  });
+  const projection = watch.projection();
+  const messages = projection?.messages ?? [];
+  const tiles = coordinatorTiles(mail, coordinatorEnvironmentId, messages, false);
+  const calls = transcriptToolCalls(messages);
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  summary.turn = { phase: projection?.turn.phase ?? "idle" };
+  const failures = recordChecks(summary, [...checks, ...tiles.checks], {
+    ...mailCountsObserved(mail, coordinatorEnvironmentId, messages),
+    ...tileCounts(tiles.observed),
+    observations: watch.observations.length,
+  });
+  expect(failures, `${platform}: the surfaces scenario`).toEqual([]);
+}
+
+/**
  * The gap-tools scenario: one worker, and each tool from the coordinator gap
  * review called once against it (changes split at HEAD, a fork, a stopped
  * turn, a slash command, schedule edits, and the PR and question tools
@@ -1066,6 +1132,31 @@ async function peerCase(input: {
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
 }
 
+/**
+ * The research scenario: under the default research setting, one turn asks
+ * for React's Context7 library ID, and passes only when a transcript row is
+ * attributed to the research server. Grok, which loads no research servers,
+ * is skipped with the reason before any turn is spent. Why each platform
+ * attributes the call as it does: `docs/architecture/coordinator-read-only-decisions.md`.
+ */
+async function researchCase(input: {
+  coordinator: CoordinatorCase;
+  summary: CoordinatorLivePlatformSummary;
+}): Promise<void> {
+  const { coordinator, summary } = input;
+  const platform = coordinator.identity.agent;
+  const { checks, observed } = await runResearchScenario({
+    invoke: coordinator.invoke,
+    identity: coordinator.identity,
+    checkout: coordinator.checkout,
+    summary,
+    timeoutMs: TURN_TIMEOUT_MS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+  });
+  const failures = recordChecks(summary, checks, observed);
+  expect(failures, `${platform}: the research scenario`).toEqual([]);
+}
+
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -1106,6 +1197,30 @@ test.describe("live coordinator", () => {
             skip,
             cleanup,
           });
+        });
+      });
+    }
+
+    if (scenarios.includes("research")) {
+      test(`research on ${platform}: under the default research setting a coordinator calls the research MCP server, and the row is attributed to it`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.research);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "research", async ({ summary, skip, cleanup }) => {
+          const applies = researchApplies(platform);
+          if (!applies.applies) skip(applies.reason);
+          // The bridge reads the research setting at launch, so it is set
+          // before the conversation's agent starts.
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: { ...RESEARCH_SCENARIO_SETTINGS },
+            skip,
+            cleanup,
+          });
+          await researchCase({ coordinator, summary });
         });
       });
     }
@@ -1234,6 +1349,31 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await routingCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("surfaces")) {
+      test(`worker surfaces on ${platform}: a terminal, a browser tab, list_tabs, a focus and a close in a worker, and uncommitted changes copied into it once the user approves in the dialog`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.surfaces);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "surfaces", async ({ summary, skip, cleanup }) => {
+          if (!surfacesApplies(platform)) {
+            skip(
+              `the surfaces scenario runs on Claude only: its tools are Control MCP calls, so one provider covers them`,
+            );
+          }
+          const coordinator = await startCoordinatorCase({
+            page,
+            entry,
+            summary,
+            settings: {},
+            skip,
+            cleanup,
+          });
+          await surfacesCase({ page, coordinator, summary, cleanup });
         });
       });
     }

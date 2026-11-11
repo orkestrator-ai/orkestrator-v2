@@ -4,6 +4,7 @@ import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
+import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -296,6 +297,7 @@ import {
 import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { PrAutoMergeController } from "./pr-auto-merge.js";
+import { resolveTabsSettled } from "./pr-auto-merge-resolve-settled.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
@@ -1515,6 +1517,12 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
+        // Agent-test profiles only: the fan-out's peak concurrency for the live
+        // scale case. Undefined (the no-op observer) everywhere else.
+        ...multiReviewEfficiencyOption({
+          dataDir: options.dataDir,
+          runtimeFlavor: options.runtimeFlavor,
+        }),
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,
@@ -1667,6 +1675,7 @@ export class OrkestratorBackend {
       subscribe: (listener) => context.runtime.prMonitor.onEvent(listener),
       monitorState: (environmentId) =>
         context.runtime.prMonitor.announcedStates().get(environmentId) ?? null,
+      resolveSettled: (environmentId) => resolveTabsSettled(storage, environmentId),
     });
     context.prAutoMerge = this.prAutoMerge;
     // Mock runs (item 213): mock agent, system and human executors; no

@@ -53,6 +53,7 @@ import {
   withReadOnlyGitConfig,
   withUnattendedOverloadRetry,
 } from "./runtime-env.js";
+import { withReadOnlyConnectionEnv } from "./read-only-connection-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -297,12 +298,14 @@ export async function resolveQueryPlan(
     testHooks?.afterAttachmentInitialValidation,
   );
 
-  // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
+  // A graph agent's policy denies `github.write`: its CLI gets no GitHub
+  // credential. A read-only turn loads no settings file, so it gets the user
+  // settings' model connection here instead (to-do 7565).
   const queryEnvironment = withReadOnlyGitConfig(
     policy,
     withUnattendedOverloadRetry(
       session.executionPolicy,
-      await runtimeEnvironmentForSessionQuery(policy),
+      await withReadOnlyConnectionEnv(policy, await runtimeEnvironmentForSessionQuery(policy)),
     ),
   );
   const liveSettings = claudeLiveSettings({

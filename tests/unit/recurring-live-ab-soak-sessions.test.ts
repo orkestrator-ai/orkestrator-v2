@@ -109,6 +109,7 @@ function sessionHarness(options: {
     },
     fixtureProjectId: async () => "project-1",
     fixtureLocalEnvironmentId: async () => "env-fixture",
+    environmentName: async (_cli: unknown, id: string) => (id === "env-fixture" ? "fixture" : null),
     startFakeModel: () => fake,
     writeFakePiModels: (dataDir: string, baseUrl: string) => {
       written.push({ dataDir, baseUrl });
@@ -240,6 +241,80 @@ describe("soak sessions and trends", () => {
     ).rejects.toThrow("did not list the fake model");
     expect(h.calls.some((args) => args[0] === "session")).toBe(false);
     expect(h.stop).toHaveBeenCalledTimes(1);
+  });
+
+  test("a browser reader needs sessions and is at most one", () => {
+    expect(parseOptions(["--soak-sessions", "2", "--soak-readers", "1"]).soakReaders).toBe(1);
+    expect(parseOptions([]).soakReaders).toBe(0);
+    expect(() => parseOptions(["--soak-readers", "1"])).toThrow("needs --soak-sessions");
+    expect(() => parseOptions(["--soak-sessions", "1", "--soak-readers", "2"])).toThrow();
+  });
+
+  test("a reader opens each cycle's session tab, then the long-lived ones, every cycle", async () => {
+    const h = sessionHarness({ cycleRows: () => 1 });
+    // The reader's page holds an event stream of its own while it is open.
+    let readerOpen = false;
+    h.gateway.metrics = mock(async () => {
+      const sample = metrics(1, 1);
+      sample.stream.open += readerOpen ? 1 : 0;
+      return sample;
+    });
+    const reads: string[] = [];
+    const reader = {
+      read: mock(async (name: string) => {
+        readerOpen = true;
+        reads.push(name);
+        // The fixture's tabs are the two long-lived sessions.
+        if (name === "soak-local-2") throw new Error("tab never showed the reply");
+        return name === "fixture" ? 2 : 1;
+      }),
+      close: mock(async () => {
+        readerOpen = false;
+      }),
+    };
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      {
+        soakCycles: 3,
+        soakEnvironments: ["local"],
+        settleMs: 0,
+        soakSessions: 2,
+        dataDir: "/profile/data",
+        reader,
+      },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(reads).toEqual([
+      "soak-local-1",
+      "fixture",
+      "soak-local-2",
+      "fixture",
+      "soak-local-3",
+      "fixture",
+    ]);
+    // A read that fails is the cycle's `read` step; the soak carries on.
+    expect(result.failures).toEqual([{ cycle: 2, kind: "local", step: "read" }]);
+    expect(result.cyclesCompleted).toBe(3);
+    expect(result.reader).toEqual({ reads: 5, tabs: 8 });
+    // Closed before the final footprint, so its own event stream is not a leak.
+    expect(reader.close).toHaveBeenCalledTimes(1);
+    expect(result.leaks).toEqual([]);
+  });
+
+  test("a soak without a reader reports none", async () => {
+    const h = sessionHarness({ cycleRows: () => 1 });
+    const result = await measureSoak(
+      h.gateway,
+      h.cli,
+      { soakCycles: 1, soakEnvironments: ["local"], settleMs: 0 },
+      () => null,
+      undefined,
+      h.runtime,
+    );
+    expect(result.reader).toBeUndefined();
   });
 
   test("sessions need the profile's data directory", async () => {

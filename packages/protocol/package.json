@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.37.5-beta",
+  "version": "2.37.6-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -377,6 +377,7 @@
     "./transcript-artifacts-validation": "./src/transcript-artifacts-validation.ts",
     "./artifact-frame-channel": "./src/artifact-frame-channel.ts",
     "./static-html-presentation": "./src/static-html-presentation.ts",
+    "./static-html-document-text": "./src/static-html-document-text.ts",
     "./css-resource-scan": "./src/css-resource-scan.ts",
     "./transcript-artifact-commands": "./src/transcript-artifact-commands.ts",
     "./transcript-media-pins": "./src/transcript-media-pins.ts",

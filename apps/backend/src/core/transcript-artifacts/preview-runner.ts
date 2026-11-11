@@ -31,6 +31,7 @@ import {
   PREVIEW_ADMISSION_POLICY,
   PREVIEW_CAPTURE_POLICY,
   STATIC_HTML_POLICY,
+  STATIC_PRESENTATION_POLICY,
   utf8ByteLength,
 } from "@orkestrator/protocol/rich-content-policy";
 import {
@@ -1353,6 +1354,11 @@ export class TranscriptPreviewRunner implements PreviewRunner {
         captures,
         sanitizer: result.sanitizer,
         elementCount: result.elementCount ?? 0,
+        // The worker is not trusted to have bounded it.
+        ...(typeof result.searchText === "string" &&
+        result.searchText.length <= STATIC_PRESENTATION_POLICY.maxSearchTextCharacters
+          ? { searchText: result.searchText }
+          : {}),
       });
       return;
     }

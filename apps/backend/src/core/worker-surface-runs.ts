@@ -9,6 +9,7 @@ import {
   parsePreviewUrlIntent,
 } from "@orkestrator/protocol/preview-services";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
+import { isTmuxModeEnabled } from "@orkestrator/protocol/agent-settings";
 import { isTabTeardownKind, type TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
@@ -101,6 +102,10 @@ export function parseTerminalLaunch(input: JsonRecord): TerminalLaunch {
   return { type, command, prompt, title, model, reasoningEffort };
 }
 
+/** Why a `claude-tmux` launch was refused; names the setting that allows it. */
+export const TMUX_MODE_DISABLED_MESSAGE =
+  "Claude tmux mode is an experimental feature that is turned off on this machine (Settings → Experimental → Tmux mode)";
+
 /** `jobRequestId` names the job; `launch_terminal_job` reattaches to it on a retry. */
 export async function launchWorkerTerminal(
   context: CommandContext,
@@ -110,6 +115,9 @@ export async function launchWorkerTerminal(
   jobRequestId: string,
 ): Promise<JsonRecord> {
   const { type, command, prompt, title, model, reasoningEffort } = launch;
+  // Tmux mode is experimental and off by default; this node's own setting decides.
+  if (type === "claude-tmux" && !isTmuxModeEnabled((await context.storage.loadConfig()).global))
+    throw new Error(TMUX_MODE_DISABLED_MESSAGE);
   let data: string | undefined;
   if (type === "plain") data = `${command}\n`;
   else if (type !== "claude-tmux") {

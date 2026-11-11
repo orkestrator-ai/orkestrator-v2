@@ -1,6 +1,6 @@
 {
   "name": "acp-bridge",
-  "version": "2.37.5-beta",
+  "version": "2.37.6-beta",
   "private": true,
   "type": "module",
   "main": "dist/index.js",

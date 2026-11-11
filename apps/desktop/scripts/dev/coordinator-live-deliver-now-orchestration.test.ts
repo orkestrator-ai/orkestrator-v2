@@ -25,6 +25,8 @@ type WakeScript = {
   wakeReads?: number;
   duplicate?: "sampled" | "between-polls";
   durable?: boolean;
+  /** The profile's stored `experimentalTmux`; absent leaves it unset. */
+  experimentalTmux?: boolean;
 };
 
 function fixture(
@@ -52,6 +54,13 @@ function fixture(
   let idleWakeReads = 0;
   const turns: Array<{ turnId: string }> = [];
   let workerDone = false;
+  // The node's global config. `launch_terminal` refuses `claude-tmux` while
+  // `experimentalTmux` is not exactly true, as the backend does.
+  let global: Record<string, unknown> = {
+    theme: "dark",
+    ...(script.experimentalTmux === undefined ? {} : { experimentalTmux: script.experimentalTmux }),
+  };
+  let tmuxEnabledAtLaunch: boolean | null = null;
   const touch = (prompt: string, key: string) => {
     const match = /touch '([^']+)'/.exec(prompt);
     const gate = /\[ -f '([^']+)' \]/.exec(prompt);
@@ -105,6 +114,12 @@ function fixture(
       case "get_environments":
         value = [...environments];
         break;
+      case "get_config":
+        value = { global: { ...global }, repositories: {} };
+        break;
+      case "update_global_config":
+        global = { ...(args.global as Record<string, unknown>) };
+        break;
       case "get_prompt_queue":
         value = { messages: [] };
         break;
@@ -139,7 +154,12 @@ function fixture(
             JSON.parse(`"${/this exact prompt: "((?:[^"\\]|\\.)*)"/.exec(prompt)![1]}"`),
             "terminal",
           );
-          messages.push(tool("mcp__orkestrator__launch_terminal", '{"tabId":"tmux-1"}'));
+          tmuxEnabledAtLaunch = global.experimentalTmux === true;
+          messages.push(
+            tmuxEnabledAtLaunch
+              ? tool("mcp__orkestrator__launch_terminal", '{"tabId":"tmux-1"}')
+              : tool("mcp__orkestrator__launch_terminal", '{"error":"Tmux mode is off"}'),
+          );
         } else if (prompt.includes('toTabId "tmux-1"')) {
           tmuxMail.push({
             id: "tmux-correction",
@@ -233,7 +253,12 @@ function fixture(
     verdict: "passed",
     startedAt: "test",
   };
-  return { coordinator, summary, paths };
+  return {
+    coordinator,
+    summary,
+    paths,
+    tmux: () => ({ global: { ...global }, enabledAtLaunch: tmuxEnabledAtLaunch }),
+  };
 }
 
 async function run(
@@ -241,7 +266,7 @@ async function run(
   steer: "steered" | "queued until idle",
   script: WakeScript = {},
 ) {
-  const { coordinator, summary, paths } = fixture(platform, steer, script);
+  const { coordinator, summary, paths, tmux } = fixture(platform, steer, script);
   const cleanup: Array<() => Promise<unknown>> = [];
   try {
     const result = await runDeliverNowScenario({
@@ -253,7 +278,7 @@ async function run(
       quietMs: 25,
       steerWaitMs: 50,
     });
-    return { ...result, paths };
+    return { ...result, paths, tmux };
   } finally {
     await runCoordinatorCleanup(cleanup, summary);
   }
@@ -270,10 +295,25 @@ test("a steered correction on a native worker qualifies, with no terminal case o
   expect(existsSync(paths.workerGate!)).toBe(false);
 });
 
-test("on Claude the tmux worker reports unsupported and gets the mail after its gate", async () => {
-  const { checks } = await run("claude", "steered");
-  expect(failures(checks)).toEqual([]);
-  expect(checks.filter((item) => item.name.startsWith("terminal-"))).toHaveLength(4);
+for (const experimentalTmux of [undefined, false, true] as const) {
+  test(`on Claude the tmux worker reports unsupported and gets the mail after its gate (experimentalTmux ${String(experimentalTmux)})`, async () => {
+    const { checks, tmux } = await run("claude", "steered", { experimentalTmux });
+    expect(failures(checks)).toEqual([]);
+    expect(checks.filter((item) => item.name.startsWith("terminal-"))).toHaveLength(4);
+    // Tmux mode was on when the terminal launched, and the profile's own
+    // setting is back afterwards (still absent when it started absent).
+    const { global, enabledAtLaunch } = tmux();
+    expect(enabledAtLaunch).toBe(true);
+    expect(global).toEqual({
+      theme: "dark",
+      ...(experimentalTmux === undefined ? {} : { experimentalTmux }),
+    });
+  });
+}
+
+test("a native worker off Claude leaves tmux mode untouched", async () => {
+  const { tmux } = await run("codex", "steered");
+  expect(tmux()).toEqual({ global: { theme: "dark" }, enabledAtLaunch: null });
 });
 
 test("a correction that only reaches the worker at idle fails the scenario", async () => {

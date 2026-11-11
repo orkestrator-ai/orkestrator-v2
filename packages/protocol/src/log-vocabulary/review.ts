@@ -21,6 +21,17 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
         "Consuming a workflow result failed; it stays staged and is retried.",
       "failure-triage.failed":
         "Classifying a review package's failing tests failed; the package is sealed without the triage and says so.",
+      "consolidation.budget-exceeded": {
+        description:
+          "A panel's reports did not fit one consolidation turn even after optional prose was removed, so consolidation failed before dispatch. Counts only.",
+        essential: true,
+        fields: {
+          reviewers: "number",
+          sourceFindings: "number",
+          compactBytes: "number",
+          maxBytes: "number",
+        },
+      },
     },
   },
   "pull-request": {

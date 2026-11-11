@@ -58,7 +58,7 @@ import {
   type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
 import {
-  coordinatorLaunchOverrides,
+  coordinatorLaunchOverridesSnapshot,
   type CoordinatorLaunchOverridesSnapshot,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
 import { randomUUID } from "node:crypto";
@@ -254,14 +254,15 @@ export function registerCoordinatorCommands(
   // The worker tabs whose launch overrode the default, for the marker on the
   // tab. Reads only the coordinator store, across every project, so one read
   // answers every tab and a project with no coordinator costs nothing and cannot
-  // fail. Bounded by the store's own association limit.
+  // fail. Bounded by the store's own association limit. Workers this node's
+  // coordinators launched on other nodes come back apart, by node, for their
+  // tabs on those nodes' scopes in the same window (docs/architecture/coordinator.md, "Launch defaults").
   register(
     listCoordinatorLaunchOverridesCommand,
-    async (_args, context): Promise<CoordinatorLaunchOverridesSnapshot> => ({
-      overrides: coordinatorLaunchOverrides(
+    async (_args, context): Promise<CoordinatorLaunchOverridesSnapshot> =>
+      coordinatorLaunchOverridesSnapshot(
         await context.storage.coordinators.listAllCoordinatorWorkflowAssociations(),
       ),
-    }),
   );
   // Which turn is holding the project's checkout, for the panel's Git controls.
   // The panel's own projections only cover the tabs it has mounted, so it has

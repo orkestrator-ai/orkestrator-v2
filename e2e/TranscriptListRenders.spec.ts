@@ -38,16 +38,9 @@ async function openTranscript(page: Page, query = "") {
   await settle(page);
 }
 
-/**
- * Opens find past its first navigation, which can stop short of the match while
- * the rows above are unmeasured (docs/todo/transcripts-and-observation/6620-first-find-stops-short.md).
- */
 async function openFind(page: Page) {
   await page.keyboard.press("ControlOrMeta+f");
-  const input = page.getByRole("textbox", { name: "Find in chat" });
-  await input.fill("Fixture row 40");
-  await page.waitForTimeout(300);
-  return input;
+  return page.getByRole("textbox", { name: "Find in chat" });
 }
 
 /** Renders the tab without changing anything the list shows, and counts the commits. */

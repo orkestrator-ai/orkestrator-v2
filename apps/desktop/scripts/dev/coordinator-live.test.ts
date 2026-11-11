@@ -1163,12 +1163,14 @@ describe("suite verdict", () => {
     const all = COORDINATOR_LIVE_SCENARIOS;
     const passed = {
       "read-only": summary("passed"),
+      research: summary("passed", undefined, "research"),
       async: summary("passed", undefined, "async"),
       family: summary("passed", undefined, "family"),
       status: summary("passed", undefined, "status"),
       "deliver-now": summary("passed", undefined, "deliver-now"),
       goal: summary("passed", undefined, "goal"),
       routing: summary("passed", undefined, "routing"),
+      surfaces: summary("passed", undefined, "surfaces"),
       "gap-tools": summary("passed", undefined, "gap-tools"),
       peer: summary("passed", undefined, "peer"),
     };
@@ -1205,19 +1207,21 @@ describe("suite verdict", () => {
     });
     const skipped = {
       "read-only": summary("skipped", "no credential"),
+      research: summary("skipped", "no credential", "research"),
       async: summary("skipped", "no credential", "async"),
       family: summary("skipped", "no credential", "family"),
       status: summary("skipped", "no credential", "status"),
       "deliver-now": summary("skipped", "no credential", "deliver-now"),
       goal: summary("skipped", "no credential", "goal"),
       routing: summary("skipped", "no credential", "routing"),
+      surfaces: summary("skipped", "no credential", "surfaces"),
       "gap-tools": summary("skipped", "no credential", "gap-tools"),
       peer: summary("skipped", "no credential", "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
       verdict: "skipped",
       reason:
-        "read-only: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; goal: no credential; routing: no credential; gap-tools: no credential; peer: no credential",
+        "read-only: no credential; research: no credential; async: no credential; family: no credential; status: no credential; deliver-now: no credential; goal: no credential; routing: no credential; surfaces: no credential; gap-tools: no credential; peer: no credential",
     });
   });
 

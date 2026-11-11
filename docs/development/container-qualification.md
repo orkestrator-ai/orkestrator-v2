@@ -176,14 +176,26 @@ variables clear Docker context and TLS selection so the private socket wins.
 - **What it runs.** The host's own `dockerd`, `containerd` and `runc` under
   RootlessKit, through `dockerd-rootless.sh`. RootlessKit and
   `dockerd-rootless.sh` come from Docker's static rootless extras 29.9.2 and
-  slirp4netns from its 1.3.3 release, downloaded once into
-  `output/disposable-docker/tools/` and checked against pinned SHA-256
+  slirp4netns from its 1.3.3 release, downloaded once into the instance
+  root's `tools/` and checked against pinned SHA-256
   digests before anything is unpacked or run. Host prerequisites, which
   `start` checks and names: an unprivileged user, `newuidmap` and
   `newgidmap`, ranges for the user in `/etc/subuid` and `/etc/subgid`,
   unprivileged user namespaces, and `/dev/net/tun`.
-- **What it owns.** The instance directory
-  `output/disposable-docker/<name>/` (git-ignored) holds the record, the
+- **What it owns.** The instance root defaults to one directory per checkout
+  under the user's state directory,
+  `${XDG_STATE_HOME:-~/.local/state}/orkestrator-disposable-docker/<checkout name>-<hash of its path>/`,
+  which also holds a `.checkout` file naming the checkout
+  (`ORKESTRATOR_DISPOSABLE_DOCKER_ROOT` or `--root` choose another). It is
+  kept out of the checkout because the backend watches every environment's
+  worktree, and on Linux Bun walks a watched tree on the backend's event
+  loop: three data roots in worktrees stalled beelink2's backend for 30 to
+  60 s at a time (to-do 7560). Instances started before 2026-11-11 are under
+  the old default, `output/disposable-docker/` in the checkout; `status`
+  names that root when it still holds any, and `stop --root
+  output/disposable-docker` removes them. `mise run disk:report` counts the
+  roots and those whose checkout is gone. The instance directory
+  `<root>/<name>/` holds the record, the
   `daemon.json`, the log, a private `HOME` and the data root. A short
   runtime directory, `$TMPDIR/ork-ddd-<uid>-<name>/`, holds the socket
   (mode `0700` directory: access to it is root-equivalent over that daemon),
@@ -253,7 +265,7 @@ mise run docker:disposable -- stop --name r1
   turns IPv6 on by default for new bridge networks, as the 2026-10-31 IPv6
   case needs. Its bridges and iptables rules live in the container's network
   namespace, never the host's.
-- **Shared directory.** `output/disposable-docker/<name>/share/` is mounted at
+- **Shared directory.** `<root>/<name>/share/` is mounted at
   the same path inside the container and printed as
   `ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR`. Suites that bind-mount
   temporary files (readiness C09, C10) need `TMPDIR` there, because the inner
@@ -985,7 +997,8 @@ does the budget read-back stay truthful?
   /run/lock --tmpfs /tmp:exec,mode=1777 --tmpfs
   /home/bun/ddd:exec,uid=1000,gid=1000,size=2g -v "$PWD:$PWD:ro" -v
   "$PWD/output/disposable-docker/tools:/home/bun/ddd/tools:ro" <image>`
-  (the tools are the launcher's verified download from a host start). The
+  (the tools are the launcher's verified download from a host start, then
+  kept in the checkout; they are now under the instance root's `tools/`). The
   lingering `bun` user (uid 1000) gets `user@1000.service`; `user.slice`,
   `user-1000.slice` and `user@1000.service` all listed `memory pids` as
   their controllers. Three details mattered: `Delegate=` lists merge, so

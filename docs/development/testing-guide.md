@@ -1134,7 +1134,12 @@ credential, login or provider: every turn goes to the fake model.
   --enqueue`), with `--busy-turn-files` (default 0) files written into
   `busy-1` while that turn is held and removed when the round ends, so the
   turn and thread-segment owners get file lists past the 2,000-row
-  measurement cap (todo 4960); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
+  measurement cap (todo 4960), after which the round waits until the
+  backend's diff stats for `busy-1` no longer show them (the
+  `turn-clear-backend` row: the next burst writes as many one-line files into
+  `busy-1`, and a removal the backend saw only together with it read as the
+  same numbers, so that scan did not count as changed and the burst's
+  `diff-scan` wait ran out; to-do 7765, retired 2026-11-11); a `bash` call the model asks for in `busy-ask` (`[tool:<id>]`),
   which Pi parks as an approval, and agent mail to that tab; with two
   clients the second one's link cut (the outage link of
   `client-outage-support.ts`), with one its document hidden; the approval
@@ -1167,6 +1172,14 @@ credential, login or provider: every turn goes to the fake model.
   prompt reaches the model exactly once, the approval is answered and its
   turn finishes, and every review reaches `ready`. `recurringWork` and
   process totals are sampled at every round boundary for the arm comparison.
+  Each burst also records every environment's backend diff stats before it
+  and when its wait ended (`burstRescans` in the artifact), and the summary
+  names, for the rounds whose `burst-backend` wait ran out, the environments
+  whose numbers did not move. On beelink2 on 2026-11-11 (8 rounds without
+  clients, 10 environments, 2,500 burst and turn files) the driver without
+  the `turn-clear-backend` wait timed out 4 of 8 bursts, each one short of
+  +10, every time with `busy-1` reading 2,500 files and 2,000 lines on both
+  sides; with it, none, each removal rescanned in 417 to 469 ms.
 - A busy phase fails the run (exit 1) on a failed step, a wait that ran out,
   a duplicated dispatch or a guard line.
 
@@ -1386,6 +1399,43 @@ eval "$(mise run docker:disposable -- env --name ctab)"
 # commands as above, in this shell, so the profile and the driver use that daemon
 mise run docker:disposable -- stop --name ctab
 ```
+
+`scripts/tmux-interactive-orphan-live.ts` measures the interactive
+terminal's capture loop (B19) left by a client that vanished without
+detaching (to-do 7745, retired 2026-11-11). On the same container profile
+and fake model as `container-tmux-tab-live.ts`, it opens one claude-tmux tab,
+attaches interactive terminals through the gateway as the renderer does and
+never detaches them, and counts Docker's `exec_start` events and the
+`tmux-interactive-capture` attempts in four windows: the tab alone, an
+unleased terminal (what every client left before the lease), a leased
+terminal renewed every 15 s, and a leased terminal nobody renews, measured
+from 50 s after it was created. It exits 1 unless the last window counted no
+capture at all while the unleased and renewed windows counted some, and the
+orphan's late renewal was refused; a refused late renewal alone proves
+nothing, because a renewal detaches a lapsed terminal itself. It detaches
+every terminal it made and stops the tab afterwards. On a host whose own Docker the session cannot reach, run
+the profile on a disposable rootless daemon with the image built inside it:
+
+```bash
+mise run docker:disposable -- start --name orphan --host-loopback
+eval "$(mise run docker:disposable -- env --name orphan)"
+ORKESTRATOR_QUALIFICATION_DOCKER="$(command -v docker)" \
+PATH="$PWD/apps/desktop/scripts/dev/docker-qualification-bin:$PATH" \
+  mise run docker:build:dev --profile orphan
+# the same dev:test command as above with --profile orphan, then:
+mise exec -- bun scripts/tmux-interactive-orphan-live.ts --profile orphan \
+  --out output/benchmarks/orphan.json
+mise run dev:stop --profile orphan && mise run dev:reset --profile orphan
+mise run docker:disposable -- stop --name orphan
+```
+
+On beelink2 on 2026-11-11 (commit `53fe65bb6`, 120 s windows, rootless
+disposable daemon): the tab alone made 33.5 container execs a minute; an
+unleased orphan added 57.5 `tmux-interactive-capture` attempts and as many
+`docker exec`s a minute (91.5 in all) for as long as it was left; a renewed
+leased terminal the same 56.5 (8 renewals, none refused); and a leased
+terminal nobody renewed none at all (33 execs a minute, its late renewal
+answered `renewed: false`).
 
 `scripts/human-prompt-reads-live.ts` measures BG-9: one native Claude
 session started through the profile's CLI (`--checkout` for an older

@@ -258,7 +258,13 @@ describe("Electron tmux hooks and transcripts", () => {
         cols: 100,
         rows: 30,
       });
+      await expect(
+        invoke(handlers, "claude_tmux_renew_interactive_terminal", { terminalSessionId }),
+      ).resolves.toEqual({ renewed: true });
       await invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId });
+      await expect(
+        invoke(handlers, "claude_tmux_renew_interactive_terminal", { terminalSessionId }),
+      ).resolves.toEqual({ renewed: false });
       await invoke(
         handlers,
         "claude_tmux_stop",

@@ -35,11 +35,7 @@ import {
   truncatedText,
 } from "../agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./transport.js";
-import {
-  acpRuleDetail,
-  claudeRuleDetail,
-  codexRuleDetail,
-} from "../permission-rules/request-detail.js";
+import { acpRuleDetail, claudeRuleDetail, codexRuleDetail } from "../permission-rules/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

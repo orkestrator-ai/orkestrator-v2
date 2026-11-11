@@ -9,7 +9,7 @@
     "apps/backend/src/core/commands-environment-cleanup.test.ts": 1,
     "apps/backend/src/core/commands-merge-cleanup-recovery.test.ts": 4,
     "apps/backend/src/core/commands-terminal-terminate.test.ts": 1,
-    "apps/backend/src/core/control-mcp-port.test.ts": 2,
+    "apps/backend/src/core/control-mcp/port.test.ts": 2,
     "apps/backend/src/core/coordinator-delegation-wakes.test.ts": 1,
     "apps/backend/src/core/coordinator-mail-upstream.test.ts": 1,
     "apps/backend/src/core/coordinator-message-upstream.test.ts": 1,

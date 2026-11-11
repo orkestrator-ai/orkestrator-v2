@@ -6,12 +6,14 @@ import {
 import { gitScopeResourceKey } from "./change-tracking/git-scopes.js";
 import {
   committedChangeResourceKey,
+  olderNodeDiffScopeNote,
   olderNodeIgnoredDiffScope,
   parseWorkerChangesOptions,
   readWorkerChanges,
   renderDiffBody,
   uncommittedChangeResourceKey,
 } from "./coordinator-worker-changes.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment } from "./models.js";
 
 const BASE = "a".repeat(40);
@@ -392,6 +394,20 @@ describe("get_worker_changes reader", () => {
         {},
       ),
     ).toBe(false);
+  });
+
+  test("only an older node's ignored diffScope gets the note, and it is counted", () => {
+    const id = "worker-changes.diff-scope-older-node";
+    const count = () => compatibilityPathUsage.snapshot().paths[id]?.count ?? 0;
+    const before = count();
+    const split = parseWorkerChangesOptions({ diffScope: "split" });
+    expect(olderNodeDiffScopeNote(split, { committedDiffs: {}, uncommittedDiffs: {} })).toEqual({});
+    expect(olderNodeDiffScopeNote(parseWorkerChangesOptions({}), { diffs: {} })).toEqual({});
+    expect(count()).toBe(before);
+    expect(olderNodeDiffScopeNote(split, { diffs: { files: [] } }).diffScopeUnsupported).toContain(
+      "predates diffScope",
+    );
+    expect(count()).toBe(before + 1);
   });
 
   test("options refuse paths outside the worker and out-of-range bounds", () => {

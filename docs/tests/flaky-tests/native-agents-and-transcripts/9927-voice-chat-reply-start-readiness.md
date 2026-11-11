@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-11-10
 - **Test:** `agent voice chat tools > a slow reply is heard later with listen`.
-- **File:** `apps/backend/src/core/control-mcp-agent-voice-chat.test.ts:324`.
+- **File:** `apps/backend/src/core/control-mcp/agent-voice-chat.test.ts:324`.
 - **Observed base:** `60afa4b715bd465d441d28a4cb9a513928d2ccb8`.
 - **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`.
 - **Workers:** default aggregate plan; workspace group used six slots, root one,
@@ -16,7 +16,7 @@
 - **Failure artifacts:**
   `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.OKeiWm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
   and wrapper `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BNpXlp/review-default-tests.log.gz`.
-- **Owning-file rerun:** `mise run test:logged -- --name findings-voice-chat-alone -- bun test --cwd apps/backend ./src/core/control-mcp-agent-voice-chat.test.ts --parallel=1 --only-failures`
+- **Owning-file rerun:** `mise run test:logged -- --name findings-voice-chat-alone -- bun test --cwd apps/backend ./src/core/control-mcp/agent-voice-chat.test.ts --parallel=1 --only-failures`
   passed unchanged (logged runner 5.5 s).
 - **Hypothesis:** the test waits 20 ms for the reply, then invokes a resolver
   assigned only when the asynchronous reply handler starts. The pending answer

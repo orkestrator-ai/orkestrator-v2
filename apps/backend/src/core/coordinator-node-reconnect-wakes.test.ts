@@ -14,7 +14,7 @@ import {
   coordinatorNodeTarget,
   registerCoordinatorNodeCommands,
 } from "./commands-registry-coordinator-nodes.js";
-import { createNodeTargets } from "./control-mcp-nodes.js";
+import { createNodeTargets } from "./control-mcp/nodes.js";
 import {
   CoordinatorNodeReconnectWakes,
   connectCoordinatorNodeWakes,

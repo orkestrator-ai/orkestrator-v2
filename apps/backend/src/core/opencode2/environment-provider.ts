@@ -49,6 +49,7 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -412,9 +413,9 @@ export class OpenCodeEnvironmentProvider implements NativeAgentRuntimeProvider {
   }
 
   /** A catalogue read never starts the server. */
-  async mcpServers(_sessionId: string) {
+  async mcpServers(sessionId: string, options?: ProviderReadOptions) {
     const provider = await this.observed();
-    return provider ? provider.mcpServers() : [];
+    return provider ? provider.mcpServers(sessionId, options) : [];
   }
 
   async mcpServerAction(...args: Parameters<OpenCode2Provider["mcpServerAction"]>) {

@@ -1,5 +1,5 @@
 import type { PublicPermissionRuleList } from "@orkestrator/protocol/public-api-resources";
-import type { PermissionRuleStore } from "../permission-rules/store.js";
+import type { PermissionRuleStore } from "../permission-rules/index.js";
 import { PublicActionError } from "./errors.js";
 import { onlyActionKeys, optionalString, requiredId } from "./input.js";
 import type {

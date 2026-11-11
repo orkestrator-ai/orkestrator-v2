@@ -2,7 +2,7 @@
 // code imports. Re-export by name (never `export *`) so the surface stays
 // reviewable. The storage layer imports layout.js and store.js, and the MCP
 // tool servers import tools.js, directly: routing them through here would close
-// runtime import cycles with storage and control-mcp-tools.
+// runtime import cycles with storage and control-mcp/tools.
 export { ScheduleAuthorityError, ScheduledJobExecutor } from "./executor.js";
 export { ScheduleStateError } from "./model.js";
 export {

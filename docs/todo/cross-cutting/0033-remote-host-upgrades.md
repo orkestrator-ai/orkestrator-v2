@@ -46,7 +46,7 @@ Items 4 and 5 (per-environment Rebuild… and container terminals in the restart
 
 **Context.** The 2026-10-26 attempt was skipped because the host's disk was 97% full and pulling retags the configured image. The file gives a headless-backend command with a private `--docker-image` tag and the Control MCP disabled.
 
-**Investigation.** The suggested backend command uses `--runtime-flavor agent-test`, which since `0a2ea7e3` also defaults the Control MCP to an ephemeral port (`controlMcpPortOverride`, `apps/backend/src/core/control-mcp-server.ts:103`), so the explicit `ORKESTRATOR_CONTROL_MCP_DISABLED=1` is now belt and braces rather than required. The image is published for linux/amd64 and linux/arm64. macOS covers the `gh` zip layout; Linux the tar layout.
+**Investigation.** The suggested backend command uses `--runtime-flavor agent-test`, which since `0a2ea7e3` also defaults the Control MCP to an ephemeral port (`controlMcpPortOverride`, `apps/backend/src/core/control-mcp/server.ts:103`), so the explicit `ORKESTRATOR_CONTROL_MCP_DISABLED=1` is now belt and braces rather than required. The image is published for linux/amd64 and linux/arm64. macOS covers the `gh` zip layout; Linux the tar layout.
 
 **Decisions.**
 

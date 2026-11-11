@@ -121,7 +121,7 @@ import { legacyCompatibilityCounts } from "./change-tracking/index.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionSnapshot } from "@orkestrator/protocol/agent-interactions";
-import type { PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import type { PermissionRuleEnforcer } from "./permission-rules/index.js";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,
@@ -235,6 +235,7 @@ import {
   deferredToolArgsPreview,
 } from "./native-agent-deferred-display.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { runWithTimeout } from "./abortable-timing.js";
 
 const log = createLogger("native-agent");
 
@@ -4187,22 +4188,15 @@ export class NativeAgentTranscriptProjection {
       input.logicalSessionKey,
     );
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
-    if (provider.mcpServers) {
+    const mcpServers = provider.mcpServers?.bind(provider);
+    if (mcpServers) {
       try {
-        // Bound the action response as well as the read. A late provider result
-        // is observed by Promise.race but can never publish into the cache.
-        let deadline: ReturnType<typeof setTimeout> | undefined;
-        let value;
-        try {
-          value = await Promise.race([
-            provider.mcpServers(providerSessionId),
-            new Promise<never>((_, reject) => {
-              deadline = setTimeout(() => reject(new Error("MCP discovery timed out")), 2_000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(deadline);
-        }
+        // Bound the action response as well as the read: the deadline aborts
+        // the provider's request, and a late result can never publish here.
+        const value = await runWithTimeout((signal) => mcpServers(providerSessionId, { signal }), {
+          timeoutMs: 2_000,
+          message: "MCP discovery timed out",
+        });
         // A later identity change owns the section now; this read is not its.
         if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) {
           return;

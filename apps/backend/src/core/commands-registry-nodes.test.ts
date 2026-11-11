@@ -80,3 +80,14 @@ test("setup fan-out validates arguments before accessing the portal", async () =
     ).rejects.toThrow();
   }
 });
+
+test("invoke_on_node passes the call's signal to the portal, and nothing without one", async () => {
+  const { handlers } = setup();
+  const invokeOnNode = mock(async () => ({ outcome: "ok", result: 1 }));
+  const context = { nodePortal: { invokeOnNode } } as unknown as CommandContext;
+  const args = { nodeId: "bk_leaf", command: "get_machine_load", args: {} };
+  const signal = new AbortController().signal;
+  await handlers.get("invoke_on_node")!(args, context, { signal });
+  await handlers.get("invoke_on_node")!(args, context);
+  expect(invokeOnNode.mock.calls as unknown[][]).toEqual([[args, { signal }], [args]]);
+});

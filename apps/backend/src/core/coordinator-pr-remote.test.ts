@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
-import { ControlMcpServer } from "./control-mcp-server.js";
+import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp/tools.js";
+import { ControlMcpServer } from "./control-mcp/server.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";

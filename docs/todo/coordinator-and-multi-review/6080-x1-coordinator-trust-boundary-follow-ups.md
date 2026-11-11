@@ -98,7 +98,7 @@ Confirmed on 2026-11-06: the backend still deletes `ORKESTRATOR_COORDINATOR_PROT
 
 **Investigation.** The frame is parsed strictly at offset zero and saved as a presentation, so a new line changes stored content older readers parse. `send_prompt_to_tab` sends no frame at all today.
 
-Not started on 2026-11-06: the change edits `control-mcp-tools.ts`, which another build was splitting at the time. That split had merged by 2026-11-09: `send_prompt_to_tab` is in `control-mcp-environment-tools.ts` and `launch_job` in `control-mcp-launch-tools.ts`.
+Not started on 2026-11-06: the change edits `control-mcp/tools.ts`, which another build was splitting at the time. That split had merged by 2026-11-09: `send_prompt_to_tab` is in `control-mcp/environment-tools.ts` and `launch_job` in `control-mcp/launch-tools.ts`.
 
 Found on 2026-11-09:
 

@@ -41,7 +41,7 @@ import type {
   NativeAgentTranscriptProjection,
   ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
-import type { PermissionRuleChoice, PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import type { PermissionRuleChoice, PermissionRuleEnforcer } from "./permission-rules/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

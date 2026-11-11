@@ -19,6 +19,7 @@
     "./agent-system-instructions": "./src/agent-system-instructions.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
+    "./auto-pipeline-tool": "./src/auto-pipeline-tool.ts",
     "./suborks": "./src/suborks.ts",
     "./ticket-labels": "./src/ticket-labels.ts",
     "./ticket-sections": "./src/ticket-sections.ts",

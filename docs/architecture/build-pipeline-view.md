@@ -1005,27 +1005,44 @@ user reviews its draft.
 
 ### Manual Auto-pipeline promotion
 
-The manual Multi Review configuration dialog offers **Auto-pipeline** for an
-open interactive native agent tab in a prompt environment. A picker identifies
-the transcript when several tabs are open. Running turns disable drafting with
-an explanation. Existing pipeline environments and coordinator or pipeline
-review launchers do not offer promotion.
+The toolbar's **To pipeline** button acts on the active tab, when that is an
+open interactive native agent tab in a prompt environment. A running turn
+disables it with an explanation. Existing pipeline environments and coordinator
+or pipeline review launchers do not offer promotion.
 
-A separate read-only session uses the saved Build agent, model and effort. It
-receives the selected transcript and the branch diff against the environment's
-base commit. Its `submit_auto_pipeline_draft` result contains the ticket and the
-Build handoff together. It never sends a turn to the original tab. The backend
-bounds the transcript, diff and result, and refuses a changed checkout.
+The tab's own agent writes the draft. The button sends the tab an ordinary
+message (`autoPipelineDraftPrompt`, `packages/protocol/src/auto-pipeline.ts`)
+asking it to call `convert_to_pipeline`, an Orkestrator MCP tool listed on the
+general server to every interactive tab of a prompt environment that belongs to
+no pipeline (`agent-tools-auto-pipeline.ts`). Asking for a pipeline in plain
+chat takes the same path. The agent works from its own record of the session
+(which its provider has already compacted) and from `git status`, `git diff`
+and `git log`, so no transcript or diff is copied into a prompt and nothing
+about drafting depends on how long the session ran. The tool's input is the
+ticket and the Build handoff together.
+
+The tool only records a draft. It never creates a ticket or starts a pipeline:
+confirming is the user's click. The backend, not the agent, reads the checkout's
+fingerprint and the tab's newest dispatched request when the tool is called, and
+refuses a changed checkout or a newer message in the tab at confirmation. A
+second call replaces an unconfirmed draft. Asking again when neither has changed
+returns the existing draft without another message. Cancelling a request stops
+the tab's turn. A turn that ends without the tool being called fails the
+request with that reason; the wait itself ends after 30 minutes. A draft the
+agent submits after a failed or timed-out wait still reaches the tab.
 
 The user edits the title, description and ordered acceptance criteria before
 confirming. Generated Build notes and the pending paths are shown read-only.
 Cancel creates no ticket or pipeline; a failed draft offers retry and plain
 Multi Review. Drafts and confirmation receipts are backend-owned SQLite records.
 
-Confirmation rechecks the source and checkout, creates an in-progress ticket,
+Confirmation rechecks the source tab and checkout, creates an in-progress ticket,
 commits pending work with normal Git hooks, and admits a completed Build on the
 existing environment. The normal pipeline tab becomes active. The graph's first
-Build attempt retains the original transcript and immutable generated notes;
+Build attempt retains the original transcript, cut at confirmation to what
+adoption accepts (the first message and the newest that fit within 5,000
+messages and 4 MiB, with long strings shortened; `auto-pipeline-transcript.ts`),
+and immutable generated notes;
 its inspector also shows the reviewed acceptance criteria. The usual Review,
 Address, Verify, delivery, conflict resolution and Notes lifecycle follows.
 Restarting Build creates an ordinary ticket-based session and retains the

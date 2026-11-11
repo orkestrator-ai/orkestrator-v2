@@ -35,6 +35,7 @@ import {
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import {
   AGENT_SUBORK_TOOL_NAMES,
   SUBORK_RESULT_KIND,
@@ -103,6 +104,7 @@ const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
     ...ARTIFACT_TOOL_NAMES,
     ...AGENT_GOAL_TOOL_NAMES,
     ...AGENT_SUBORK_TOOL_NAMES,
+    ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
   ].map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 

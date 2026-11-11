@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  autoPipelineDraftPrompt,
   isVerificationVerdict,
   parseAutoPipelineResult,
 } from "@orkestrator/protocol/build-pipeline";
@@ -26,26 +27,35 @@ describe("Auto-pipeline fake model script", () => {
     expect(() => parseAutoPipelineResult(FAKE_DRAFT)).not.toThrow();
   });
 
-  test("a drafting turn submits once with its key and capability, then replies", () => {
-    const prompt = `Draft a ticket.\n${workflowResultInstruction("auto-pipeline-draft", KEY, {
-      capability: "cap-123",
-    })}`;
+  test("the To pipeline request is answered by calling convert_to_pipeline once, then replying", () => {
+    const prompt = autoPipelineDraftPrompt();
     const first = scriptedTurn({
       messages: [user(prompt)],
-      tools: tools("read", "submit_auto_pipeline_draft"),
+      tools: tools("read", "bash", "convert_to_pipeline"),
     });
     expect(first.submits).toBe(true);
-    expect(first.step).toEqual({
-      kind: "tool",
-      name: "submit_auto_pipeline_draft",
-      input: { resultKey: KEY, capability: "cap-123", result: FAKE_DRAFT },
-    });
+    expect(first.workflow).toBe("convert_to_pipeline");
+    expect(first.step).toEqual({ kind: "tool", name: "convert_to_pipeline", input: FAKE_DRAFT });
     const after = scriptedTurn({
-      messages: [user(prompt), { role: "assistant" }, { role: "tool", content: "accepted" }],
-      tools: tools("submit_auto_pipeline_draft"),
+      messages: [user(prompt), { role: "assistant" }, { role: "tool", content: "saved" }],
+      tools: tools("convert_to_pipeline"),
     });
     expect(after.step).toEqual({ kind: "text", text: FAKE_REPLY });
     expect(after.submits).toBeUndefined();
+    // The runtime may namespace the tool by its MCP server.
+    expect(
+      scriptedTurn({ messages: [user(prompt)], tools: tools("orkestrator__convert_to_pipeline") })
+        .step,
+    ).toMatchObject({ kind: "tool", name: "orkestrator__convert_to_pipeline" });
+  });
+
+  test("a runtime that does not offer the tool gets a plain explanation, not a silent pass", () => {
+    const turn = scriptedTurn({
+      messages: [user(autoPipelineDraftPrompt())],
+      tools: tools("read"),
+    });
+    expect(turn.step).toMatchObject({ kind: "text" });
+    expect(turn.submits).toBeUndefined();
   });
 
   test("a validation plan reads HEAD first and submits the SHA it read", () => {

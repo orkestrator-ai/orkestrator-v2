@@ -14,9 +14,9 @@
  *
  * 1. An interactive Pi tab in a prompt environment writes a file (one fake
  *    shell call) and goes idle.
- * 2. In the browser: right-click Multi Review, choose Auto-pipeline, wait for
- *    the read-only drafting session's draft, edit the title, add a criterion,
- *    confirm.
+ * 2. In the browser: click "To pipeline" on that tab. The tab's own agent is
+ *    sent the drafting request and calls `convert_to_pipeline`; wait for its
+ *    draft, edit the title, add a criterion, confirm.
  * 3. The backend creates the in-progress ticket, commits the pending file with
  *    the promotion trailer and adopts the tab as the finished Build.
  * 4. The ticket's delivery is set to commit-only while Verify is parked, the
@@ -307,29 +307,28 @@ test.describe("Auto-pipeline on a fake model", () => {
       await page.goto(status.browserUrl!);
       const open = sidebarNavigator(page, fixture!.name);
       await open(source.name);
-      const multiReview = page.getByRole("button", { name: "Multi Review", exact: true });
-      await expect(multiReview).toBeEnabled({ timeout: 60_000 });
-      await multiReview.click({ button: "right" });
-      const configure = page.getByRole("dialog", { name: "Configure Multi Review" });
-      await expect(configure).toBeVisible();
-      const launch = configure.getByRole("button", { name: "Auto-pipeline", exact: true });
-      await expect(launch).toBeEnabled({ timeout: 30_000 });
+      const toPipeline = page.getByRole("button", { name: "To pipeline", exact: true });
+      await expect(toPipeline).toBeEnabled({ timeout: 60_000 });
       await shot(page, "launch-desktop");
-      await page.keyboard.press("Escape");
-      await expect(configure).toHaveCount(0);
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.getByRole("button", { name: "Open tools", exact: true }).click();
-      await multiReview.click({ button: "right" });
-      await expect(launch).toBeEnabled({ timeout: 30_000 });
-      await shot(page, "launch-narrow");
-      await launch.click();
+      await toPipeline.click();
 
-      // The draft opens in its own Auto-pipeline tab; the Multi Review dialog closes.
-      await expect(configure).toHaveCount(0);
+      // The draft opens in its own Auto-pipeline tab, written by the tab's own agent.
       const review = page.getByRole("region", { name: "Auto-pipeline draft" });
       const title = review.getByLabel("Title", { exact: true });
       await expect(title).toHaveValue(FAKE_DRAFT_TITLE, { timeout: TURN_TIMEOUT_MS });
-      expect((await calls(model.origin)).submissions.submit_auto_pipeline_draft).toBe(1);
+      expect((await calls(model.origin)).submissions.convert_to_pipeline).toBe(1);
+      // The agent's closing reply follows its tool call; confirming needs the tab idle.
+      await expect
+        .poll(async () => (await projection()).turn.phase, {
+          timeout: TURN_TIMEOUT_MS,
+          intervals: [1_000],
+          message: "the source tab never went idle after drafting",
+        })
+        .toBe("idle");
+      // Drafting was an ordinary turn in the source tab: it grew the transcript.
+      const draftedRows = (await projection()).messages.length;
+      expect(draftedRows).toBeGreaterThan(sourceRows);
+      await page.setViewportSize({ width: 390, height: 844 });
       await shot(page, "draft-narrow");
 
       await title.fill(EDITED_TITLE);
@@ -434,12 +433,12 @@ test.describe("Auto-pipeline on a fake model", () => {
       await showFinished();
       await shot(page, "complete-narrow");
 
-      // Drafting and the pipeline never sent the source tab another turn.
-      expect((await projection()).messages.length).toBe(sourceRows);
+      // Confirming and the pipeline never sent the source tab another turn.
+      expect((await projection()).messages.length).toBe(draftedRows);
       const final = await calls(model.origin);
       expect(final.completions).toBeGreaterThan(sourceCalls);
       expect(final.submissions).toMatchObject({
-        submit_auto_pipeline_draft: 1,
+        convert_to_pipeline: 1,
         submit_validation_plan: 1,
         submit_review_report: 1,
         [VERIFY_TOOL]: 1,

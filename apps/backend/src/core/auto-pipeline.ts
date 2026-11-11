@@ -1,12 +1,8 @@
 import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import {
-  workflowResultInstruction,
-  workflowResultToolName,
-} from "@orkestrator/protocol/workflow-results";
-/** Manual-only promotion. Drafting never dispatches to the source session. */
+/** Manual-only promotion. The tab's own agent drafts; the user confirms. */
 import { randomUUID, createHash } from "node:crypto";
 import {
+  autoPipelineDraftPrompt,
   parseAutoPipelineTicket,
   parseAutoPipelineResult,
   type AutoPipelineDraft,
@@ -27,7 +23,7 @@ import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { boundAdoptedTranscript } from "./auto-pipeline-transcript.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 
@@ -51,29 +47,20 @@ export interface AutoPipelineDraftRecord {
   edits?: AutoPipelineEdits;
   reviewed?: AutoPipelineTicket;
   pipelineId?: string;
+  /**
+   * The source tab's newest dispatched request when the agent submitted this
+   * draft. Confirming refuses once the tab has taken another message, so the
+   * draft always describes the conversation the user is looking at. Absent on
+   * a draft an earlier version wrote, which therefore expires.
+   */
+  sourceMark?: string;
+}
+/** The newest request the tab has dispatched; what a draft is checked against. */
+function sourceMarkOf(session: PersistedNativeAgentSession | undefined): string {
+  return session?.dispatchedRequestIds?.at(-1) ?? "";
 }
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Auto-pipeline drafting timed out")),
-          Math.max(0, deadline - Date.now()),
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function bounded(value: unknown, max: number): void {
-  if (Buffer.byteLength(JSON.stringify(value)) > max)
-    throw new Error("Auto-pipeline input exceeds its size limit");
 }
 export { parseAutoPipelineResult } from "@orkestrator/protocol/build-pipeline";
 
@@ -118,7 +105,10 @@ export class AutoPipelineService {
   constructor(
     private readonly context: CommandContext,
     private readonly ports: () => AutoPipelinePorts,
-    private readonly draftTimeoutMs = 120_000,
+    /** How long a request waits for the agent's draft; the turn ending ends it sooner. */
+    private readonly draftTimeoutMs = 30 * 60_000,
+    /** How often a request looks for the draft and for the end of the agent's turn. */
+    private readonly pollMs = 1_000,
   ) {}
 
   private outcomes(): AutoPipelineOutcomes {
@@ -195,6 +185,8 @@ export class AutoPipelineService {
    */
   private async sessions(
     id: string,
+    /** Read the shared frozen snapshot, for a caller that only reads. */
+    snapshot = false,
   ): Promise<{ tabId: string; session: PersistedNativeAgentSession }[]> {
     const layout = await this.context.storage.getPaneLayout(id);
     const leaves = paneLayoutLeaves(layout?.root);
@@ -204,7 +196,9 @@ export class AutoPipelineService {
       if (typeof tab.id === "string")
         tabIdByKey.set(nativeTabLogicalSessionKey(id, tab.id), tab.id);
     }
-    const sessions = await this.context.storage.listNativeAgentSessions();
+    const sessions = snapshot
+      ? await this.context.storage.readNativeAgentSessionsSnapshot()
+      : await this.context.storage.listNativeAgentSessions();
     return sessions
       .flatMap((session) => {
         const tabId = tabIdByKey.get(session.logicalSessionKey);
@@ -269,7 +263,6 @@ export class AutoPipelineService {
       .filter(Boolean);
     if (untracked.length > 1000) throw new Error("Too many pending files to promote");
     const hashes = untracked.length ? await ports.git(id, ["hash-object", "--", ...untracked]) : "";
-    bounded({ status, diff, untracked, hashes }, 2 * 1024 * 1024);
     return {
       head,
       status,
@@ -277,6 +270,17 @@ export class AutoPipelineService {
       fingerprint: digest({ head, branch, status, diff, untracked, hashes }),
     };
   }
+  /**
+   * Asks the source tab's own agent to draft, and resolves with the draft it
+   * submits through `convert_to_pipeline`. The agent works from its own record
+   * of the session and from the repository, so no transcript or diff is copied
+   * into a prompt and nothing here can outgrow one. The request is an ordinary
+   * message in the tab, sent at most once under its own request id.
+   *
+   * Outcomes are recorded for the tab's state read; a restart ends the wait,
+   * but an agent that still calls the tool afterwards leaves a draft the tab
+   * then shows.
+   */
   draft(environmentId: string, tabId: string): Promise<AutoPipelineDraft> {
     let active = draftingByStorage.get(this.context.storage);
     if (!active) {
@@ -288,14 +292,14 @@ export class AutoPipelineService {
     if (pending) return pending.operation;
     const outcomes = this.outcomes();
     if (active.size >= MAX_ACTIVE_DRAFTS) {
-      // Refused before any session exists; record it so the tab can say why.
-      const error = new Error("Too many drafting sessions are running. Retry when one finishes");
+      // Refused before the tab is asked anything; record it so the tab can say why.
+      const error = new Error("Too many drafting requests are running. Retry when one finishes");
       remember(outcomes.failures, key, error.message);
       return Promise.reject(error);
     }
     const controller = new AbortController();
     outcomes.failures.delete(key);
-    const operation = this.createDraft(environmentId, tabId, controller.signal);
+    const operation = this.requestDraft(environmentId, tabId, controller.signal);
     active.set(key, { operation, controller });
     operation.catch((error: unknown) => {
       // A cancelled draft is a deliberate stop, not a failure to show.
@@ -311,42 +315,129 @@ export class AutoPipelineService {
       ?.get(`${environmentId}:${tabId}`)
       ?.controller.abort(new Error("Auto-pipeline drafting cancelled"));
   }
-  private async createDraft(
+  private async requestDraft(
     environmentId: string,
     tabId: string,
     signal: AbortSignal,
   ): Promise<AutoPipelineDraft> {
+    const nativeAgents = this.context.nativeAgents;
+    if (!nativeAgents) throw new Error("Native agent service is unavailable");
     const environment = await this.environment(environmentId);
     const source = await this.session(environmentId, tabId);
     if (!source) throw new Error("Choose an open interactive agent tab");
     const ports = this.ports();
-    let drafting: { provider: BuildPipelineProvider; id: string } | undefined;
-    let resultKey: string | undefined;
-    let onAbort: (() => void) | undefined;
-    const cancelled = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(signal.reason);
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    // Cancellation may arrive during preparation, before the send race is installed.
-    void cancelled.catch(() => undefined);
+    let provider: BuildPipelineProvider | undefined;
     try {
       signal.throwIfAborted();
-      const original = await ports.provider(environment, source.agent);
+      provider = await ports.provider(environment, source.agent);
       if (
         source.pendingDispatch ||
         source.pendingSteer ||
-        (await original.status(source.providerSessionId)) !== "idle"
+        (await provider.status(source.providerSessionId)) !== "idle"
       )
         throw new Error("Wait for this tab's turn to finish");
-      const messages = await original.messages(source.providerSessionId);
-      bounded(messages, 2 * 1024 * 1024);
+      // Refuse a checkout that could never be promoted before asking the agent to describe it.
       const state = await this.fingerprint(ports, environment);
+      // Nothing changed since the last draft: it still describes the tab.
       const existing = this.context.storage.latestAutoPipelineDraft(environmentId, tabId);
       if (
-        existing?.fingerprint === state.fingerprint &&
-        digest(existing.attempt.messages) === digest(messages)
+        existing?.sourceMark !== undefined &&
+        existing.sourceMark === sourceMarkOf(source) &&
+        existing.fingerprint === state.fingerprint
       )
         return existing.draft;
+      signal.throwIfAborted();
+      const startedAt = Date.now();
+      const deadline = startedAt + this.draftTimeoutMs;
+      const requestId = `auto-pipeline:${randomUUID()}`;
+      const identity = {
+        environmentId,
+        agent: source.agent,
+        logicalSessionKey: source.logicalSessionKey,
+      };
+      const outcome = await nativeAgents.dispatchIntent({
+        ...identity,
+        origin: "interactive-native",
+        prompt: autoPipelineDraftPrompt(),
+        requestId,
+      });
+      if (outcome.outcome !== "accepted")
+        throw new Error(
+          ("error" in outcome && outcome.error) || "The tab did not accept the drafting request",
+        );
+      const submitted = () => {
+        const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId);
+        return record && Date.parse(record.attempt.completedAt) >= startedAt ? record.draft : null;
+      };
+      while (Date.now() < deadline) {
+        signal.throwIfAborted();
+        const found = submitted();
+        if (found) return found;
+        const turn = await nativeAgents.sessionTurnOutcome({ ...identity, requestId });
+        if (turn.outcome !== "pending") {
+          // The call is made inside the turn, so a draft stored before the turn
+          // settled is visible now.
+          const late = submitted();
+          if (late) return late;
+          if (turn.outcome === "failed")
+            throw new Error(turn.error?.trim() || "The agent's turn failed before it drafted");
+          throw new Error(
+            turn.outcome === "completed"
+              ? "The agent finished without submitting a draft. Retry drafting"
+              : "Could not confirm the agent's turn finished. Retry drafting",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.pollMs));
+      }
+      throw new Error("Drafting timed out waiting for the agent");
+    } catch (error) {
+      // Stopping the wait stops the agent's turn: it would otherwise carry on
+      // drafting something nobody is waiting for.
+      if (signal.aborted && provider)
+        await provider.abort(source.providerSessionId).catch(() => undefined);
+      throw error;
+    } finally {
+      ports.release();
+    }
+  }
+  /**
+   * Whether this tab may be offered `convert_to_pipeline`: an open interactive
+   * agent tab of a prompt environment that does not belong to a pipeline.
+   * Read-only and bounded to one environment's tabs (the sessions come from the
+   * shared frozen snapshot), because the tool list asks on every MCP request.
+   */
+  async offered(environmentId: string, tabId: string): Promise<boolean> {
+    try {
+      await this.environment(environmentId);
+      return (await this.sessions(environmentId, true)).some((entry) => entry.tabId === tabId);
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Stores the draft an interactive tab's agent submitted. Called by
+   * `convert_to_pipeline`, whether the user pressed the toolbar button or asked
+   * in plain chat. It only records a draft: nothing is created or started
+   * until the user reviews it and confirms.
+   *
+   * The agent supplies the ticket and notes; the checkout's state and the tab's
+   * newest message are read here, so a draft cannot claim a different state
+   * than the one it was written against. A later call replaces an unconfirmed
+   * draft of the same tab. Once a draft has started a pipeline the environment
+   * belongs to it, so `environment()` refuses any further submission.
+   */
+  async submitDraft(
+    environmentId: string,
+    tabId: string,
+    value: unknown,
+  ): Promise<{ draftId: string }> {
+    const environment = await this.environment(environmentId);
+    const source = await this.session(environmentId, tabId);
+    if (!source) throw new Error("This tab is not an open interactive agent tab");
+    const parsed = parseAutoPipelineResult(value);
+    const ports = this.ports();
+    try {
+      const state = await this.fingerprint(ports, environment);
       const input = await buildPipelineStartWithSavedDefaults(
         {
           projectId: environment.projectId,
@@ -370,101 +461,21 @@ export class AutoPipelineService {
         await this.context.storage.getRepositoryConfig(environment.projectId),
       );
       const configured = input.steps?.build;
-      const selection = {
-        agent: input.agentType,
-        model: configured?.model ?? defaults.model,
-        reasoningEffort: configured?.reasoningEffort ?? defaults.effort,
-        fastMode: configured?.fastMode ?? defaults.fastMode,
-      };
-      input.steps = { ...input.steps, build: selection };
-      const provider = await ports.provider(environment, input.agentType);
-      const policy = resolveEnvironmentExecutionPolicy(environment, "coordinator");
-      const id = await provider.createSession("build", "Auto-pipeline draft", {
-        readOnly: true,
-        interaction: {
-          origin: "automated-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      input.steps = {
+        ...input.steps,
+        build: {
+          agent: input.agentType,
+          model: configured?.model ?? defaults.model,
+          reasoningEffort: configured?.reasoningEffort ?? defaults.effort,
+          fastMode: configured?.fastMode ?? defaults.fastMode,
         },
-        mode: "plan",
-        model: selection?.model,
-        effort: selection.reasoningEffort,
-        fastMode: selection.fastMode,
-        policy,
-      });
-      drafting = { provider, id };
-      signal.throwIfAborted();
-      const requestId = randomUUID();
-      const results = this.context.workflowResults;
-      if (!results || !this.context.agentTools?.workflowResultConnection)
-        throw new Error("Structured Auto-pipeline result tools are unavailable");
-      resultKey = requestId;
-      await results.prepare({
-        resultKey: requestId,
-        kind: "auto-pipeline-draft",
-        environmentId,
-        projectId: environment.projectId,
-        provider: input.agentType,
-      });
-      const agentMcp = this.context.agentTools.workflowResultConnection(
-        environmentId,
-        environment.projectId,
-        environment.environmentType === "local" ? "host" : "container",
-        requestId,
-        input.agentType,
-      );
-      const instruction = workflowResultInstruction("auto-pipeline-draft", requestId, {
-        capability: agentMcp.workflowResultCapability,
-      });
-      const deadline = Date.now() + this.draftTimeoutMs;
-      signal.throwIfAborted();
-      await beforeDeadline(
-        Promise.race([
-          cancelled,
-          provider.send(
-            id,
-            `Draft a ticket and finished Build handoff from this completed interactive work. Do not edit files, commit, or send messages. Return the schema-constrained result. Description must contain Summary, Problem and Context. Each acceptance criterion must be independently checkable. Notes must record only observed decisions, files touched, checks and results, and unfinished work.\nTranscript:\n${JSON.stringify(messages)}\nBranch diff:\n${state.diff}\nPending paths:\n${state.status}\n${instruction}`,
-            {
-              requestId,
-              agentMcp,
-              workflowResultTool: workflowResultToolName("auto-pipeline-draft"),
-              workflowResultKey: requestId,
-              readOnly: true,
-              mode: "plan",
-              model: selection?.model,
-              effort: selection.reasoningEffort,
-              fastMode: selection.fastMode,
-            },
-          ),
-        ]),
-        deadline,
-      );
-      let result;
-      while (Date.now() < deadline) {
-        const status = await beforeDeadline(
-          Promise.race([cancelled, provider.status(id)]),
-          deadline,
-        );
-        if (status === "error") throw new Error("Auto-pipeline drafting session failed");
-        result = await beforeDeadline(
-          Promise.race([cancelled, results.structured(requestId)]),
-          deadline,
-        );
-        if (result) break;
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      if (!result?.ok)
-        throw new Error("Auto-pipeline drafting did not return a valid structured result");
-      signal.throwIfAborted();
-      const parsed = parseAutoPipelineResult(result.value);
-      if ((await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint)
-        throw new Error("Work changed during drafting. Retry to review the current work");
-      signal.throwIfAborted();
+      };
       const draft: AutoPipelineDraft = {
         ...parsed,
         id: randomUUID(),
         uncommittedFiles: state.status.split("\n").filter(Boolean),
       };
-      const now = new Date().toISOString();
+      const key = `${environmentId}:${tabId}`;
       this.context.storage.putAutoPipelineDraft({
         environmentId,
         environment,
@@ -472,29 +483,25 @@ export class AutoPipelineService {
         input,
         draft,
         fingerprint: state.fingerprint,
+        sourceMark: source.dispatchedRequestIds?.at(-1) ?? "",
         attempt: {
           tabId,
           sessionId: source.providerSessionId,
           agent: source.agent,
           startedAt: source.createdAt,
-          completedAt: now,
+          completedAt: new Date().toISOString(),
           commit: state.head,
           model: source.controls?.modelId,
           reasoningEffort: source.controls?.reasoningId,
-          messages,
+          // Read from the provider at confirmation, when the tab is idle.
+          messages: [],
           notes: parsed.notes,
         },
       });
-      await results.consume(requestId);
-      return draft;
+      // A draft now exists, so an earlier failure or timeout no longer describes the tab.
+      this.outcomes().failures.delete(key);
+      return { draftId: draft.id };
     } finally {
-      if (onAbort) signal.removeEventListener("abort", onAbort);
-      if (drafting) {
-        await drafting.provider.abort(drafting.id).catch(() => undefined);
-        await drafting.provider.closeSession?.(drafting.id).catch(() => undefined);
-      }
-      if (resultKey)
-        await this.context.workflowResults?.close(resultKey, "cancelled").catch(() => undefined);
       ports.release();
     }
   }
@@ -635,12 +642,15 @@ export class AutoPipelineService {
     if (!provider) throw new Error("Source provider is unavailable");
     if ((await provider.status(record.source.providerSessionId)) !== "idle")
       throw new Error("Wait for this tab's turn to finish");
+    // An agent that submitted this draft recorded the tab's newest message; a
+    // draft without one predates that and cannot be trusted to match the tab.
+    if (record.sourceMark === undefined)
+      throw new Error("Auto-pipeline draft expired. Draft again before confirming");
     const state = await this.fingerprint(ports, environment);
-    if (
-      digest(await provider.messages(record.source.providerSessionId)) !==
-      digest(record.attempt.messages)
-    )
-      throw new Error("The source transcript changed. Draft again before confirming");
+    if (sourceMarkOf(source) !== record.sourceMark)
+      throw new Error(
+        "The tab received a new message since drafting. Draft again before confirming",
+      );
     if (state.fingerprint !== record.fingerprint) {
       const lastMessage = record.reviewed
         ? await ports.git(environment.id, ["log", "-1", "--format=%B"])
@@ -666,7 +676,7 @@ export class AutoPipelineService {
     if (
       (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
       (await provider.status(source.providerSessionId)) !== "idle" ||
-      digest(await provider.messages(source.providerSessionId)) !== digest(record.attempt.messages)
+      sourceMarkOf(await this.session(environment.id, record.attempt.tabId)) !== record.sourceMark
     )
       throw new Error("Work changed during confirmation. Draft again before confirming");
     if ((await ports.git(environment.id, ["status", "--porcelain"])).trim()) {
@@ -677,6 +687,11 @@ export class AutoPipelineService {
         `${ticket.title}\n\nOrkestrator-Auto-Pipeline: ${id}`,
       ]);
     }
+    // The adopted Build keeps the conversation, cut to what adoption accepts, so
+    // a long session cannot make confirming fail on its size.
+    record.attempt.messages = boundAdoptedTranscript(
+      await provider.messages(source.providerSessionId),
+    );
     record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
     record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
     this.context.storage.putAutoPipelineDraft(record);

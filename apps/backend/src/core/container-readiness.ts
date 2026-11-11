@@ -5,7 +5,8 @@ import {
 import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
 import { COPY_REFUSED_REMEDY } from "./docker-copy-refusal.js";
 import type { EnvironmentOperations } from "./environment-operations.js";
-import { runCommand } from "./shell.js";
+import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 /**
@@ -76,20 +77,31 @@ export function parseBootProbe(output: string): BootObservation {
   return { kind: "current", bootId, phase, failureCode };
 }
 
-/** Whether the container runs, and when its current (or last) run started. */
+/**
+ * Whether the container runs, and when its current (or last) run started.
+ * `running` is null when the daemon itself did not answer (its socket gone or
+ * the call timed out, as during a daemon restart): that says nothing about the
+ * container, which may still be running (live-restore) or be stopped once the
+ * daemon is back. Any other failure, such as a container that no longer
+ * exists, reads as not running.
+ */
 async function containerRunState(
   containerId: string,
-): Promise<{ running: boolean; startedAt: string }> {
+  timeoutMs = 10_000,
+): Promise<{ running: boolean | null; startedAt: string }> {
   try {
     const { stdout } = await runCommand(
       "docker",
       ["inspect", "-f", "{{.State.Running}} {{.State.StartedAt}}", containerId],
-      { timeoutMs: 10_000 },
+      { timeoutMs },
     );
     const [running = "", startedAt = ""] = stdout.trim().split(/\s+/, 2);
     return { running: running === "true", startedAt };
-  } catch {
-    return { running: false, startedAt: "" };
+  } catch (error) {
+    const unanswered =
+      (error instanceof CommandFailedError && error.timedOut) ||
+      isDockerDaemonUnreachable(error instanceof Error ? error.message : String(error));
+    return { running: unanswered ? null : false, startedAt: "" };
   }
 }
 
@@ -267,11 +279,18 @@ export const BOOT_WAIT_TIMEOUT_MS = 120_000;
  * (`windowMs`), so readiness is seen within {@link IN_CONTAINER_CHECK_MS} of
  * the entrypoint writing it. `pollMs` is only a floor between probes that
  * came back early without a final state, and the base of the backoff while
- * the container cannot be reached.
+ * the container cannot be reached. `inspectTimeoutMs` bounds the `docker
+ * inspect` that asks whether an unreachable container is still running.
  */
 export async function waitForContainerBoot(
   containerId: string,
-  options: { timeoutMs?: number; pollMs?: number; windowMs?: number; now?: () => number } = {},
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    windowMs?: number;
+    inspectTimeoutMs?: number;
+    now?: () => number;
+  } = {},
 ): Promise<string | null> {
   const now = options.now ?? Date.now;
   const deadline = now() + (options.timeoutMs ?? BOOT_WAIT_TIMEOUT_MS);
@@ -295,9 +314,11 @@ export async function waitForContainerBoot(
     // then fails for as long as we care to wait. Its last record usually
     // still names why (a fail-closed firewall exits at once, before the next
     // poll), so that code is reported when this run wrote it.
+    // A daemon that does not answer is waited out until the deadline rather
+    // than read as an exited container (to-do 0019 (retired) task 5).
     if (observation.kind === "unreachable") {
-      const state = await containerRunState(containerId);
-      if (!state.running) {
+      const state = await containerRunState(containerId, options.inspectTimeoutMs);
+      if (state.running === false) {
         const recorded = await readExitedBootFailure(containerId, state.startedAt);
         throw new ContainerInitializationError("failed", recorded ?? "container-exited");
       }

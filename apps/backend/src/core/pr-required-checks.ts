@@ -1,7 +1,7 @@
 /**
  * How many of a pull request's failing checks GitHub requires, so a
  * coordinator is woken for `pr-checks-failed` only when a required check
- * fails (to-do 1021 task 7).
+ * fails (to-do 1021 (retired) task 7).
  *
  * The monitor's rollup (`gh pr view --json statusCheckRollup`) has no
  * required flag. GraphQL's `isRequired(pullRequestNumber:)` does, so the

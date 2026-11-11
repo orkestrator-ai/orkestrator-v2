@@ -94,6 +94,28 @@ mise run test:logged -- --name browser-owners -- bun scripts/loopback-network.ts
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
 
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 1602 --base 498b68766` reported `open`.
+The owning spec and its implementation are unchanged on the branch.
+
+Review preparation's `mise run test:browser` (nine workers, 1690 passed, 152
+skipped, two failed in 28.8 m) failed the mobile case at
+`e2e/TranscriptPaging.spec.ts:477`: the opening request count stayed 0 after the
+30 s poll, on the first attempt and the retry. Port 1422 was held by another
+checkout's fixture server during the address stage. The complete unchanged owner,
+with `DataSavingGateway`, then passed this case on both viewports with one worker
+on port 14722:
+
+```sh
+NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flake-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/TranscriptPaging.spec.ts e2e/DataSavingGateway.spec.ts
+```
+
+That run (40 passed, one skipped, one failed in 6.3 m) failed only the mobile
+byte-bounded prepend case recorded in 0483. Status stays open. No assertion,
+timeout or skip changed.
+
 ## Transcript history efficiency review repair — 2026-11-11
 
 Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](../web-ui/0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 1602 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.

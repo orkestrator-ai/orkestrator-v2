@@ -2,8 +2,8 @@
 
 Checked against `main` at `863b5782` (2026-10-27).
 
-The worker surfaces built for
-[0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
+The worker surfaces built for to-do 0142 (retired 2026-11-11; see
+[`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces))
 (terminal, browser, tab edits, reviewer tabs, custom fix, feature plans,
 the root-changes request) acted on this node only, and feature plans did not
 wake the coordinator (task 3 since added that). (A looped review surface was also built; it was removed
@@ -234,11 +234,18 @@ association, and re-opening it re-sends the reply notice to the adopter.
 
 **Context.** The live suite's scenarios are `read-only`, `async`, `family`,
 `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56-62`);
-the spec is `e2e/agent-testing/coordinator-live.spec.ts`. 0142's own live runs
-cover the same tools on this node.
+the spec is `e2e/agent-testing/coordinator-live.spec.ts`. The billed run of
+the same tools on this node, carried from to-do 0142 (retired), is on the
+manual-test checklist. On a loopback fake model,
+`mise run test:agent:coordinator:surfaces-fake` (passed 2026-11-11) already
+drives `request_root_changes` through the approval dialog and
+`open_worker_browser` on a container worker
+([agent-testing.md](../../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
 **Investigation.** No `surfaces` scenario exists. The root-changes approval
-needs a person or the spec to approve the node action request.
+needs a person or the spec to approve the node action request;
+`coordinator-surfaces-fake.spec.ts` clicks the dialog, which this scenario can
+reuse.
 
 **Decisions.**
 
@@ -464,7 +471,7 @@ Task 5 depends on task 3.
 
 ## Related
 
-- [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
+- To-do 0142 (retired 2026-11-11; see [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces)).
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
   for the live suite.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the scope call of task 2, the billed Claude run of task 4) moved there on 2026-11-10.

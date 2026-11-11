@@ -19,6 +19,11 @@ import {
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
 import { bundleElectron, formatBuildLogs } from "../electron-bundle.js";
+import {
+  chooseAgentToolsPort,
+  claimAgentToolsPort,
+  developmentRootOfProfile,
+} from "./agent-tools-port-claims.js";
 import type { DevArguments } from "./arguments.js";
 import {
   assertAgentToolsPortFree,
@@ -877,13 +882,30 @@ export async function startDevelopment(
   }
   await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
+  const launcherStart = processStartTime(process.pid) ?? Date.now();
   // Recorded in the profile, so a restart without the flag keeps the port the
   // host firewall admits; `dev:reset` forgets it.
-  const agentToolsPort =
+  const requestedAgentToolsPort =
     flavor === "agent-test" ? (args.agentToolsPort ?? existingProfile.agentToolsPort) : undefined;
-  if (agentToolsPort !== undefined) {
-    // Before the profile is written, so a busy port is never recorded.
-    await (dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree)(agentToolsPort);
+  let agentToolsPort: number | undefined;
+  if (requestedAgentToolsPort !== undefined) {
+    // Before the profile is written, so a busy port is never recorded. The
+    // claim names this launcher, so another profile starting before this
+    // one's backend binds does not take the same port.
+    const claim = {
+      developmentRoot: developmentRootOfProfile(existingProfile.profileRoot),
+      owner: { profile: existingProfile.id, pid: process.pid, startTime: launcherStart },
+      checkFree: dependencies.checkAgentToolsPort ?? assertAgentToolsPortFree,
+    };
+    if (requestedAgentToolsPort === "auto") {
+      agentToolsPort = await chooseAgentToolsPort({
+        ...claim,
+        preferred: existingProfile.agentToolsPort,
+      });
+      console.log(`Agent tools port: ${agentToolsPort} (--agent-tools-port auto)`);
+    } else {
+      agentToolsPort = await claimAgentToolsPort({ ...claim, port: requestedAgentToolsPort });
+    }
   }
 
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
@@ -908,7 +930,6 @@ export async function startDevelopment(
   const statusPath = statusManifestPath(profile);
   let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();
-  const launcherStart = processStartTime(process.pid) ?? Date.now();
   let status: RuntimeStatusManifest = {
     version: 1,
     status: "starting",

@@ -47,3 +47,10 @@ validation, not classified as flakes solely from this run.
 idle-observation, revision-token; 5002 to 5012 ms) at host load 20 to 40. The
 complete unchanged owner passed alone in 9.0 s. Recorded with the rest of that
 run in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md).
+
+## Coordinator gap-tools fix validation — 2026-11-11
+
+- **Original command:** `mise run test:logged -- --name desktop-scripts-dev -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev --parallel=4 --only-failures` on branch `coordinator-gap-tools-followups` (base `498b6876`), changes to the coordinator gap-tools harness only.
+- **Failure:** `companion startup-hang stops the suite and resets both started profiles` failed after 1939.99 ms: `toThrow("startup timed out")` received `Command timed out`. 584 of 585 tests across 26 files passed.
+- **Isolated rerun:** `mise run test:logged -- --name isolated-browser -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/isolated-browser.test.ts --parallel=1 --only-failures` passed unchanged in 14.1 s.
+- **Hypothesis:** plausibly the same deadline sensitivity with a different symptom: under four-worker load another deadline ("Command timed out") fired before the case's 1.5 s `startupTimeoutMs` was reported. Not reproduced alone; no assertion, timeout or skip was changed. The branch does not touch `isolated-browser.ts` or its test. `mise run flaky:recurrence -- 9855 --base 498b6876…` answered "open; record the failure as a recurrence".

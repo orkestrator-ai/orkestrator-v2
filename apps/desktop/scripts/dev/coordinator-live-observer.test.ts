@@ -67,6 +67,7 @@ function fixture() {
     commands: [] as string[],
     onCommand: (_command: string, _args: Record<string, unknown>) => {},
     outputs: new Map<string, string>(),
+    errors: new Map<string, string>(),
   };
   const invoke: DelegationCoordinator["invoke"] = async <T>(
     command: string,
@@ -113,7 +114,10 @@ function fixture() {
         value = [{ id: "reporter", name: "second-worker" }];
         break;
       case "get_native_agent_tool_details":
-        value = { toolOutput: state.outputs.get(String(args.detailRef)) };
+        value = {
+          toolOutput: state.outputs.get(String(args.detailRef)),
+          toolError: state.errors.get(String(args.detailRef)),
+        };
         break;
       case "dispatch_native_agent_intent":
       case "enqueue_prompt_queue_message":
@@ -178,6 +182,27 @@ describe("delegation observer", () => {
     expect(results).toHaveLength(5);
     expect(JSON.parse(results[3]!).content[0].text).toBe('{"repeatedRead":true}');
     expect(state.commands).toEqual(["get_native_agent_tool_details"]);
+  });
+
+  test("a failed call reads as isError with its message, bounded, inline or behind a detail ref", async () => {
+    const { state, watch } = fixture();
+    state.errors.set("refused", `No pull request. ${"x".repeat(2_000)}`);
+    const messages = [
+      {
+        role: "assistant",
+        parts: [
+          { toolName: "resolve_conflicts", detailRef: "refused" },
+          { toolName: "resolve_conflicts", toolError: "Inline refusal" },
+        ],
+      },
+    ];
+    const [behind, inline] = (await watch.toolOutputs("resolve_conflicts", messages)).map(
+      (text) => JSON.parse(text) as { isError: boolean; error: string },
+    );
+    expect(behind!.isError).toBe(true);
+    expect(behind!.error.startsWith("No pull request.")).toBe(true);
+    expect(behind!.error.length).toBe(500);
+    expect(inline).toEqual({ isError: true, error: "Inline refusal" });
   });
 });
 

@@ -17,14 +17,16 @@
  * development source hints, from fixture HTML and from a real Vite 8 dev
  * server running the documented emitter, in a local worktree and, with
  * ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1, a container environment; the
- * gateway spec's recorded desktop captures still match a fresh capture.
+ * gateway spec's recorded desktop captures still match a fresh capture; an
+ * element note and a quote inside an open shadow root pinned and shown again
+ * after a reload.
  * ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 runs it headless on Linux.
  *
  * Native window (rendered by the real renderer, not fixed bounds): the Notes
  * column shrinks the view to its host at app zoom 0.8, 1 and 1.25 (150% turns
- * the layout narrow); menus and dialogs hide the view; the narrow
- * Preview/Notes switch; keyboard-only create and send with focus handed to the
- * view and back to the editor. Capture pixels and the selection highlight
+ * the layout narrow); a dialog, or a menu that overlaps the view, hides it;
+ * the narrow Preview/Notes switch; keyboard-only create and send with focus
+ * handed to the view and back to the editor. Capture pixels and the selection highlight
  * stay on the target at preview zoom 0.8, 1 and 1.5 and at DPR 1 and 2.
  */
 import type { Page, TestInfo } from "@playwright/test";
@@ -1466,6 +1468,128 @@ test("text, region, and page modes capture end to end; open roots select inner c
   record(testInfo, "embedded-hosts", hosts.join("; "));
 });
 
+/**
+ * To-do 2580 (retired) task 4: notes inside an open shadow root, end to end in the
+ * desktop's own preview view (isolated world, main-side parse, backend
+ * storage), then re-shown from the stored capture after a reload.
+ */
+test("an element note and a quote inside an open shadow root are saved, then pinned and shown again after a reload", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(120_000);
+  const host = '[data-testid="shadow-card"]';
+  const innerRect = (part: string) =>
+    inPreview<WebAnnotationRect | null>(
+      `(() => { const el = document.querySelector(${JSON.stringify(host)})?.shadowRoot?.querySelector(${JSON.stringify(part)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`,
+    );
+  const start = async (mode: string) =>
+    expect(
+      (
+        await preview<BrowserPreviewSelectionStatus>("startCapture", {
+          tabId: TAB_ID,
+          mode,
+          environmentId: s().environmentId,
+        })
+      ).status,
+    ).toBe("selecting");
+  const within = (rect: WebAnnotationRect | null | undefined, box: WebAnnotationRect | null) =>
+    Boolean(
+      rect &&
+      box &&
+      rect.width > 0 &&
+      rect.x >= box.x - 2 &&
+      rect.y >= box.y - 2 &&
+      rect.x + rect.width <= box.x + box.width + 2 &&
+      rect.y + rect.height <= box.y + box.height + 2,
+    );
+  const outcomes: string[] = [];
+  const shadowScope = { kind: "shadow", hosts: [{ tagName: "fixture-shadow-card" }] };
+
+  await navigate(ROUTE_VARIANTS.pricing);
+  await settledRect(host);
+
+  // Element: a trusted click on the button inside the root.
+  await start("element");
+  const button = (await innerRect("button"))!;
+  expect(button).not.toBeNull();
+  await trustedClick(button.x + button.width / 2, button.y + button.height / 2);
+  const element = await readPending((await awaitCaptured()).captureId);
+  const elementTarget = element.capture.target;
+  expect(elementTarget.kind).toBe("element");
+  if (elementTarget.kind !== "element") throw new Error("Expected an element target");
+  expect(elementTarget.anchor.semantic.tagName.toLowerCase()).toBe("button");
+  expect(elementTarget.anchor.scope).toMatchObject(shadowScope);
+  const elementNote = await saveCapture(element.descriptor.captureId, "Shadow action label");
+
+  // Text: a native drag along the paragraph inside the same root.
+  await start("text");
+  const paragraph = (await innerRect("p"))!;
+  expect(paragraph).not.toBeNull();
+  const lineY = paragraph.y + paragraph.height / 2;
+  await trustedInput(
+    drag({ x: paragraph.x + 1, y: lineY }, { x: paragraph.x + paragraph.width - 2, y: lineY }),
+  );
+  const text = await readPending((await awaitCaptured()).captureId);
+  const textTarget = text.capture.target;
+  expect(textTarget.kind).toBe("text-range");
+  if (textTarget.kind !== "text-range") throw new Error("Expected a text-range target");
+  const quote = textTarget.quote.exact.trim();
+  record(testInfo, "shadow-quote", quote);
+  expect(quote.length).toBeGreaterThan(5);
+  expect("Shadow root card".includes(quote)).toBe(true);
+  expect(textTarget.container.scope).toMatchObject(shadowScope);
+  const textNote = await saveCapture(text.descriptor.captureId, "Shadow card heading");
+
+  // The pins are built from what the backend stored, not from the captures.
+  const elementPin = await pinQuery(elementNote.annotationId, 1);
+  const textPin = await pinQuery(textNote.annotationId, 2);
+  expect(elementPin.target.kind === "element" && elementPin.target.anchor.scope).toMatchObject(
+    shadowScope,
+  );
+  expect(textPin.target.kind === "text-range" && textPin.target.container.scope).toMatchObject(
+    shadowScope,
+  );
+
+  const check = async (label: string) => {
+    await inPreview("window.scrollTo(0, 0); true");
+    const elementResolution = await pinOnce(elementPin);
+    const elementVerdict = verdict(elementResolution, await innerRect("button"));
+    const textResolution = await pinOnce(textPin);
+    const textInside = within(textResolution.rect, await innerRect("p"));
+    outcomes.push(
+      `${label}: element ${elementResolution.state}/${elementResolution.rule} -> ${elementVerdict}; quote ${textResolution.state}/${textResolution.rule} inside=${textInside}`,
+    );
+    expect(elementVerdict, `${label} element`).toBe("matched-correct");
+    expect(textResolution.state, `${label} quote`).toBe("matched");
+    expect(textInside, `${label} quote rect`).toBe(true);
+  };
+  await check("before reload");
+
+  // A new document: the root is attached again by the page's own definition.
+  await inPreview("window.__previousDocument = true; true");
+  await preview("reload", TAB_ID);
+  await waitForFixturePage(ROUTE_VARIANTS.pricing);
+  expect(await inPreview<boolean>("window.__previousDocument !== true")).toBe(true);
+  await check("after reload");
+
+  // Both pins drawn together, then Show on page from the stored element note.
+  const drawn = await preview<BrowserPreviewAnchorResult[]>("showPins", {
+    tabId: TAB_ID,
+    pins: [elementPin, textPin],
+  });
+  expect(drawn.map((result) => result.resolution.state)).toEqual(["matched", "matched"]);
+  await preview("clearPins", TAB_ID);
+  const shown = await preview<{ outcome: string; navigated: boolean }>("showOnPage", {
+    tabId: TAB_ID,
+    pin: elementPin,
+    pins: [],
+    timeoutMs: 10_000,
+  });
+  outcomes.push(`show on page: ${shown.outcome} navigated=${shown.navigated}`);
+  expect(shown).toMatchObject({ outcome: "shown", navigated: false });
+  await preview("clearPins", TAB_ID);
+  record(testInfo, "shadow-pins", outcomes.join("; "));
+});
+
 // ---------------------------------------------------------------------------
 // The real Notes column beside the native view, keyboard flow, zoom and DPR.
 
@@ -1989,12 +2113,48 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     expect(ring).not.toBeNull();
     expect(overlaps(view.bounds, ring!)).toBe(false);
 
-    // A menu and a dialog over the window hide the native view (it is a
-    // separate surface and would otherwise paint over them), then it returns.
+    // The native view is a separate surface and would paint over the
+    // renderer, so it must never cover a menu or a dialog. Since #2110 a menu
+    // hides it only where the two overlap, while a modal dialog hides it
+    // wherever it sits. The server menu opens in the sidebar, beside the
+    // view, so the case checks that branch first, then moves the same open
+    // menu over the preview host and requires the view hidden under it.
     const servers = s().window.getByRole("button", { name: /^Connected server: / });
     await pressControl(servers);
     await expect(s().window.getByRole("menu")).toBeVisible();
-    await expect.poll(async () => (await nativePreviewView())?.visible).toBe(false);
+    let menuLayout = "";
+    const menuAgainstView = async () => {
+      const [view, layout] = await Promise.all([
+        nativePreviewView(),
+        rendererLayout({ menu: '[role="menu"]' }),
+      ]);
+      const menu = layout.dip.menu;
+      if (!view || !menu) return "unmeasured";
+      const covered = overlaps(view.bounds, menu);
+      menuLayout = JSON.stringify({ view, menu, covered });
+      if (covered) return view.visible ? "view over the menu" : "covered: hidden";
+      return view.visible ? "beside: visible" : "hidden beside the menu";
+    };
+    await expect.poll(menuAgainstView).toBe("beside: visible");
+    record(testInfo, "menu-beside-view", menuLayout);
+    // Radix positions the menu through its popper wrapper's `transform`, so a
+    // `translate` on the menu itself survives repositioning. The renderer's
+    // overlay watcher sees the style change and rechecks the geometry, as it
+    // does when Floating UI moves a menu.
+    await s().window.evaluate((hostSelector) => {
+      const menu = document.querySelector<HTMLElement>('[role="menu"]');
+      const host = document.querySelector(hostSelector);
+      if (!menu || !host) throw new Error("menu or preview host missing");
+      const from = menu.getBoundingClientRect();
+      const to = host.getBoundingClientRect();
+      menu.style.translate = `${to.left + 24 - from.left}px ${to.top + 24 - from.top}px`;
+    }, PREVIEW_HOST);
+    await expect.poll(menuAgainstView).toBe("covered: hidden");
+    record(testInfo, "menu-over-view", menuLayout);
+    await s().window.evaluate(() => {
+      document.querySelector<HTMLElement>('[role="menu"]')?.style.removeProperty("translate");
+    });
+    await expect.poll(menuAgainstView).toBe("beside: visible");
     await s().window.keyboard.press("Escape");
     await expect(s().window.getByRole("menu")).toHaveCount(0);
     await expect.poll(async () => (await nativePreviewView())?.visible).toBe(true);

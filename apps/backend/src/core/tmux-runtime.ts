@@ -14,6 +14,14 @@ const log = createLogger("tmux");
 /** How often the orphaned-session sweep may run. */
 const ORPHAN_SWEEP_INTERVAL_MS = 60_000;
 
+/**
+ * How long the sweep leaves a quiet environment alone (see
+ * `orphanSweepMaySkip`). A quiet environment can gain an orphan only from a
+ * tmux session this backend did not start, so this bounds how much later than
+ * the hour's grace such a session is reaped.
+ */
+export const QUIET_ENVIRONMENT_RECHECK_MS = 30 * 60_000;
+
 export type TmuxRuntimeOptions = {
   /**
    * The Claude configuration directory a local tmux launch exports. The
@@ -60,6 +68,11 @@ export class TmuxRuntime {
   /** First time each orphaned tmux session was seen without a managed tab. */
   private readonly orphanMissingSince = new Map<string, number>();
   private lastOrphanSweepAt = 0;
+  /** Environments the sweep last found quiet, with the session generation it saw. */
+  private readonly quietEnvironments = new Map<
+    string,
+    { backend: string; generation: number; since: number }
+  >();
   private readonly configDirectory: (context: CommandContext) => Promise<string | undefined>;
   private readonly removeSignalDiagnostics: () => void;
 
@@ -204,6 +217,51 @@ export class TmuxRuntime {
     if (missingSince !== undefined) return missingSince;
     this.orphanMissingSince.set(key, now);
     return now;
+  }
+
+  /**
+   * True when the sweep may skip the environment without asking tmux: its
+   * last pass found no tmux session to reap or wait on and removed the
+   * workspace hooks, this backend has started no session there since, the
+   * environment still runs on the same backend (`backend`: a container id or
+   * a worktree), and the recheck is not due. Only this backend starts
+   * Orkestrator tmux sessions, so a quiet environment stays quiet; skipping it
+   * saves the listing, the process census behind an unreachable socket and
+   * the hook removal, five commands a minute in a container (to-do 7531, retired).
+   */
+  orphanSweepMaySkip(environmentId: string, backend: string, now: number): boolean {
+    const quiet = this.quietEnvironments.get(environmentId);
+    if (!quiet) return false;
+    if (
+      quiet.backend !== backend ||
+      quiet.generation !== this.sessions.insertGeneration(environmentId) ||
+      now - quiet.since >= QUIET_ENVIRONMENT_RECHECK_MS
+    ) {
+      this.quietEnvironments.delete(environmentId);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Records a quiet sweep of the environment. `generation` is the value read
+   * before the sweep listed tmux, so a session started while it ran makes the
+   * record stale rather than hiding the session.
+   */
+  markOrphanSweepQuiet(
+    environmentId: string,
+    backend: string,
+    generation: number,
+    now: number,
+  ): void {
+    this.quietEnvironments.set(environmentId, { backend, generation, since: now });
+  }
+
+  /** Drops quiet records of environments that no longer exist. */
+  retainQuietEnvironments(environmentIds: ReadonlySet<string>): void {
+    for (const environmentId of Array.from(this.quietEnvironments.keys())) {
+      if (!environmentIds.has(environmentId)) this.quietEnvironments.delete(environmentId);
+    }
   }
 
   forgetOrphan(key: string): void {

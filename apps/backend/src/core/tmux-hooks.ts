@@ -621,13 +621,20 @@ export async function installWorkspaceHooks(
   await backend.writeFile(paths.claudeSettings, mergeSettingsJson(existingSettings, paths.script));
 }
 
+/**
+ * Restores the user's Claude settings and removes the runtime root. Rejects
+ * when the settings could not be restored; resolves `false` when they were
+ * but the backup or the runtime root is still there, so a caller that stops
+ * retrying once cleanup is done (the orphan sweep's quiet record) retries.
+ */
 export async function uninstallWorkspaceHooks(
   backend: TmuxBackend,
   paths: WorkspaceHookPaths,
-): Promise<void> {
+): Promise<boolean> {
   await restoreWorkspaceHooks(backend, paths);
-  await backend.removeFile(paths.claudeSettingsBackup).catch(() => undefined);
-  await backend.removeDir(paths.root).catch(() => undefined);
+  const backupRemoved = await backend.tryRemoveFile(paths.claudeSettingsBackup);
+  const rootRemoved = await backend.tryRemoveDir(paths.root);
+  return backupRemoved && rootRemoved;
 }
 
 export async function restoreWorkspaceHooks(
@@ -636,7 +643,8 @@ export async function restoreWorkspaceHooks(
 ): Promise<void> {
   const backup = await backend.readFile(paths.claudeSettingsBackup);
   if (backup === BACKUP_SENTINEL_NO_ORIGINAL) {
-    await backend.removeFile(paths.claudeSettings);
+    if (!(await backend.tryRemoveFile(paths.claudeSettings)))
+      throw new Error("failed to remove the managed Claude settings");
   } else if (backup !== undefined) {
     await backend.writeFile(paths.claudeSettings, backup);
   }

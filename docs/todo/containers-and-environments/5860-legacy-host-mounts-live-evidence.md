@@ -32,7 +32,7 @@ Run on 2026-11-06 (Docker Desktop 29.9.2, linux/arm64, profile `legacy-5860`, cr
 
 Screenshots were taken under `output/visual-previews/legacy-5860-*.png` (not committed). The profile was reset afterwards, which removed the four owner-labelled containers (both hand-built ones included), their volumes and networks; the labelled image was removed.
 
-Not run live: the refusal to *create* a new runtime from an old image (the rebuild here used the current image, as the row requires). A credential-free profile also stages no provider, so the rebuilt runtime's inputs section is an empty box; that is [7320](7320-empty-inputs-section.md).
+Not run live: the refusal to *create* a new runtime from an old image (the rebuild here used the current image, as the row requires). A credential-free profile also stages no provider, so the rebuilt runtime's inputs section was an empty box; since 7320 (retired 2026-11-11) it says "Nothing was staged into this container." ([Portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 
 **Decisions.**
 
@@ -121,7 +121,7 @@ binds used a scratch directory of dummy files, never a real agent home.
 
 ## Related
 
-- [7320: the inputs section shows an empty box for a staged revision with no providers](7320-empty-inputs-section.md)
+- 7320 (retired 2026-11-11): the inputs section showed an empty box for a staged revision with no providers; fixed in `EnvironmentInputsSection.tsx`.
 - [Container lifecycle: rollout switches and legacy runtimes](../../architecture/container-lifecycle.md#rollout-switches-and-legacy-runtimes)
 - Security review, M9 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
 - Security index (`git show 413bd6219:docs/reports/security/0000-index.md`)

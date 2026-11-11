@@ -47,6 +47,16 @@ export function EnvironmentInputsSection({
   const revoked = status.revokedProviders ?? [];
   // A runtime with nothing staged or mounted still keeps its revocations.
   if (status.mode === "none" && revoked.length === 0) return null;
+  const listed = status.providers.filter((entry) => !revoked.includes(entry.provider));
+  // A staged revision can hold no provider at all (no enabled agent had
+  // anything to stage, and Git had no identity); say so rather than leaving
+  // the heading over an empty box.
+  const nothingStaged =
+    status.mode === "staged" &&
+    listed.length === 0 &&
+    revoked.length === 0 &&
+    status.missingProviders.length === 0 &&
+    status.disabledProviders.length === 0;
 
   const allowAgain = async (provider: string) => {
     setRevoking(provider);
@@ -113,42 +123,41 @@ export function EnvironmentInputsSection({
         <p className="text-muted-foreground">
           The record of this container&apos;s inputs is unavailable.
         </p>
-      ) : status.mode === "none" ? null : (
+      ) : status.mode === "none" ? null : nothingStaged ? (
+        <p className="text-muted-foreground">Nothing was staged into this container.</p>
+      ) : (
         <ul className="flex flex-col gap-1">
-          {status.providers
-            .filter((entry) => !revoked.includes(entry.provider))
-            .map((entry) => {
-              const skipped = Object.values(entry.skipped).reduce(
-                (sum, count) => sum + (count ?? 0),
-                0,
-              );
-              return (
-                <li key={entry.provider} className="flex items-center justify-between gap-2">
-                  <span>
-                    {providerLabel(entry.provider)} · {entry.files} files ·{" "}
-                    {formatBytes(entry.bytes)}
-                    {skipped > 0 ? ` · ${skipped} skipped` : ""}
-                    {(entry.skipped["login-withheld"] ?? 0) > 0 ? (
-                      <span className="block text-muted-foreground">
-                        Login withheld. Sign in to {providerLabel(entry.provider)} on the host, then
-                        restart the container or sync its login.
-                      </span>
-                    ) : null}
-                  </span>
-                  {entry.provider !== "git" && entry.provider !== SHARED_SKILLS_INPUT ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={!dockerAvailable || revoking !== null}
-                      onClick={() => void revoke(entry.provider)}
-                    >
-                      Remove credentials
-                    </Button>
+          {listed.map((entry) => {
+            const skipped = Object.values(entry.skipped).reduce(
+              (sum, count) => sum + (count ?? 0),
+              0,
+            );
+            return (
+              <li key={entry.provider} className="flex items-center justify-between gap-2">
+                <span>
+                  {providerLabel(entry.provider)} · {entry.files} files · {formatBytes(entry.bytes)}
+                  {skipped > 0 ? ` · ${skipped} skipped` : ""}
+                  {(entry.skipped["login-withheld"] ?? 0) > 0 ? (
+                    <span className="block text-muted-foreground">
+                      Login withheld. Sign in to {providerLabel(entry.provider)} on the host, then
+                      restart the container or sync its login.
+                    </span>
                   ) : null}
-                </li>
-              );
-            })}
+                </span>
+                {entry.provider !== "git" && entry.provider !== SHARED_SKILLS_INPUT ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!dockerAvailable || revoking !== null}
+                    onClick={() => void revoke(entry.provider)}
+                  >
+                    Remove credentials
+                  </Button>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
       {revoked.length > 0 ? (

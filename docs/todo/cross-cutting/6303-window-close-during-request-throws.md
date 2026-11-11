@@ -87,7 +87,7 @@ disposable display was available.
 
 ## Related
 
-- [6301](6301-log-controls-live-evidence.md)
+- 6301 (retired 2026-11-11; `git show 498b68766:docs/todo/cross-cutting/6301-log-controls-live-evidence.md`): its renderer log controls are described in [Application logging, the renderer](../../architecture/logging.md#the-renderer)
 - [Flake 2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 - [Flake 0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md),
   [to-do 0042](../previews-and-annotations/0042-service-preview-rollout.md) (task 11, D22),

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser } from "@playwright/test";
 import {
+  dismissDialogs,
   loadScript,
   measureStatus,
   parseOptions,
@@ -95,6 +96,37 @@ describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
   // unnamed hook of this describe block (cases 2711 and 2882).
   afterAll(async () => {
     await browser?.close();
+  }, 60_000);
+  test("dismisses dialogs that open over the workspace and reports their titles", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent(`
+        <button id="row">row</button>
+        <div role="alertdialog" aria-labelledby="t1" id="first">
+          <h2 id="t1">Claude Code Is Not Logged In</h2>
+          <button onclick="document.getElementById('first').remove()">Continue Without Claude</button>
+        </div>
+        <div role="dialog" id="second"><h2>Notice</h2></div>
+        <script>
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") document.getElementById("second")?.remove();
+          });
+        </script>`);
+      const dismissed: string[] = [];
+      expect(await dismissDialogs(page, dismissed)).toBe(2);
+      expect(dismissed).toEqual(["Claude Code Is Not Logged In", "Notice"]);
+      expect(await page.locator('[role="dialog"], [role="alertdialog"]').count()).toBe(0);
+      // Nothing open: no work, nothing reported.
+      expect(await dismissDialogs(page, dismissed)).toBe(0);
+      expect(dismissed).toHaveLength(2);
+      // A dialog that will not close is reported a bounded number of times.
+      await page.setContent(`<div role="alertdialog"><h2>Stuck</h2></div>`);
+      const stuck: string[] = [];
+      expect(await dismissDialogs(page, stuck, 50)).toBe(5);
+      expect(new Set(stuck)).toEqual(new Set(["Stuck"]));
+    } finally {
+      await page.close();
+    }
   }, 60_000);
   for (const stalled of ["headers", "body", "failure"] as const) {
     test(`cleans up watch and status observers for stalled ${stalled}`, async () => {

@@ -203,7 +203,7 @@ describe("container log service", () => {
   test.skipIf(process.platform === "win32")(
     "a follower does not outlive a SIGKILLed backend",
     async () => {
-      // 0019 task 6: with a log view open, a SIGKILLed backend left
+      // To-do 0019 (retired) task 6: with a log view open, a SIGKILLed backend left
       // `docker logs -f` on a quiet container running under systemd. The
       // backend here is a child process using the real default spawn.
       const root = mkdtempSync(path.join(tmpdir(), "ork-log-follower-"));

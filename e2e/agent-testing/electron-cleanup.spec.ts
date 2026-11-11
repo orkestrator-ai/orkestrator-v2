@@ -30,7 +30,10 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
         event.preventDefault();
         fs.writeFileSync(${JSON.stringify(attempted)}, "blocked");
       });
-      app.whenReady().then(() => new BrowserWindow({ show: false }));
+      // Playwright 1.65 connects without Inspector.enable and waits for every
+      // existing page's first real navigation, so a window that never loads
+      // anything holds electron.launch() until the test times out.
+      app.whenReady().then(() => new BrowserWindow({ show: false }).loadURL("about:blank"));
     `,
     );
     const app = await electron.launch({

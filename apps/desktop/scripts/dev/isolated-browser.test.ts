@@ -206,6 +206,13 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "31505",
   ]);
   expect(() => isolatedProfileArguments(["--agent-tools-port", "34121"])).toThrow("reserved");
+  // Fixture environments without the Docker qualification run (`test:agent:coordinator:surfaces-fake`).
+  expect(isolatedProfileArguments(["--fixture-environments", "local,container"]).slice(-2)).toEqual(
+    ["--fixture-environments", "local,container"],
+  );
+  expect(() => isolatedProfileArguments(["--fixture-environments", "remote"])).toThrow(
+    "local,container",
+  );
   expect(() => isolatedProfileArguments(["--agent-platforms", "nope"])).toThrow("accepts");
 
   const f = await fixture();

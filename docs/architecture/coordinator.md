@@ -3563,7 +3563,11 @@ runs `git apply --check` and `git apply` in the worker (a local worktree, or
 `docker exec` in a running container): the patch applies whole or not at
 all. Paths the checkout no longer reports as changed are refused. The
 outcome is mailed to the conversation as a system notice, which wakes it.
-The coordinator never sees the patch.
+The coordinator never sees the patch. `mise run test:agent:coordinator:surfaces-fake`
+runs a reject and two approvals (a local and a container worker) end to end
+in the browser client on a loopback fake model, together with
+`open_worker_browser` on the container worker
+([agent-testing.md](../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
 **Answering a worker's question.** A delegated worker waiting on a question
 needs a person, and the coordinator cannot answer for them, but it can save

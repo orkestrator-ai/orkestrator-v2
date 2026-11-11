@@ -433,7 +433,7 @@ GitHub and two-node qualification remain tasks 1–4.
 ## Related
 
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
-- [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
+- To-do 0142 (retired 2026-11-11; see [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces)).
 - [0395-coordinator-worker-surfaces-follow-ups.md](0395-coordinator-worker-surfaces-follow-ups.md)
 - to-do 0740 (retired 2026-11-10; see [coordinator.md](../../architecture/coordinator.md#course-corrections-with-delivernow))
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the real-provider run of task 1, task 2, the live half of task 3) moved there on 2026-11-10.

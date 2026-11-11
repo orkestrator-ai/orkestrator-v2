@@ -377,6 +377,10 @@ run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 description = "Coordinator routing build case (a cancelled build is not restarted) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-routing-fake.ts"
 
+[tasks."test:agent:coordinator:surfaces-fake"]
+description = "Coordinator worker surfaces (root-changes approval to local and container workers, a container worker's browser preview) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-surfaces-fake.ts"
+
 [tasks."test:agent:coordinator:node-mail-fake"]
 description = "Coordinator-to-coordinator node mail (round trip, loop bound, main replacement) between two disposable Pi-only profiles, one the other's leaf, with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-node-mail-fake.ts"

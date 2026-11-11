@@ -86,7 +86,14 @@ const PROFILE_FLAGS = new Set([
   "--no-agent-credentials",
   "--use-dev-worktree-folder",
 ]);
-const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms", "--agent-tools-port"]);
+const PROFILE_OPTIONS = new Set([
+  "--credential-source",
+  "--agent-platforms",
+  "--agent-tools-port",
+  // A suite that needs the fixture's environments without the Docker
+  // qualification run (`docker`), for example a container worker.
+  "--fixture-environments",
+]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex
@@ -291,7 +298,8 @@ export interface IsolatedBrowserOptions {
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
 export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): Promise<number> {
   const profileArgs = isolatedProfileArguments(options.profileArgs);
-  if (options.docker) profileArgs.push("--fixture-environments", "local,container");
+  if (options.docker && !profileArgs.includes("--fixture-environments"))
+    profileArgs.push("--fixture-environments", "local,container");
   const profile = options.profile ?? `qa-browser-${randomUUID().slice(0, 12)}`;
   const root = options.root ?? repositoryRoot;
   const companions = [...(options.companionProfiles ?? [])];

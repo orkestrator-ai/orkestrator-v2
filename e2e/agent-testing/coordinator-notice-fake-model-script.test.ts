@@ -57,6 +57,12 @@ describe("fixture accounts", () => {
     expect(Date.parse(limited.seven_day.resets_at)).toBeLessThan(
       Date.parse(headroom.seven_day.resets_at),
     );
+    // Once the login has refused, both of its entries read the week used up.
+    const refused = new Set(["limited-b@example.com"]);
+    for (const account of ["leaf-b", "desk-b"] as const) {
+      const reading = claudeUsage(account, now, refused) as { seven_day: { utilization: number } };
+      expect(reading.seven_day.utilization).toBe(100);
+    }
   });
 });
 

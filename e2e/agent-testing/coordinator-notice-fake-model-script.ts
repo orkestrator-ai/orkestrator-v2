@@ -17,11 +17,10 @@
  *   so a delegated worker exists; anything else gets one line of text. A wake
  *   carrying a usage-limit notice is counted, because the leaf's coordinator
  *   must never get one while a command node takes its repository's notices.
- * - **Usage** (`/api/oauth/usage`). Every account reads below its weekly
- *   limit, so a refusal is a stop the machine does not switch on (the leaf has
- *   automatic switching off anyway). The limited login shared with the command
- *   node resets sooner than the account with headroom, so automatic switching
- *   there stays on it until a notice moves it off.
+ * - **Usage** (`/api/oauth/usage`). A limited login reads half its week
+ *   until it refuses a call, then all of it; the account with headroom reads
+ *   little. The limited login shared with the command node resets sooner, so
+ *   automatic switching there stays on it until it is used up.
  */
 
 export type FixtureAccount = "leaf-a" | "leaf-b" | "leaf-c" | "desk-b" | "desk-h";
@@ -317,10 +316,18 @@ export function piTurn(request: { messages: unknown; tools?: unknown }): PiTurn 
 
 // --- Usage ---
 
-/** The Claude OAuth usage reading of a fixture account. */
-export function claudeUsage(account: FixtureAccount, now: number): Record<string, unknown> {
+/**
+ * The Claude OAuth usage reading of a fixture account. A limited login reads
+ * half its week until it has refused a call, then all of it, as a real weekly
+ * refusal does; `exhausted` holds the logins that have refused.
+ */
+export function claudeUsage(
+  account: FixtureAccount,
+  now: number,
+  exhausted: ReadonlySet<string> = new Set(),
+): Record<string, unknown> {
   const { email, resetDays } = FIXTURE_ACCOUNTS[account];
-  const weekly = LIMITED_EMAILS.has(email) ? 50 : 10;
+  const weekly = exhausted.has(email) ? 100 : LIMITED_EMAILS.has(email) ? 50 : 10;
   return {
     five_hour: { utilization: 1, resets_at: new Date(now + 5 * 3_600_000).toISOString() },
     seven_day: {

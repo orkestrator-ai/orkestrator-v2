@@ -106,6 +106,7 @@ type ClaudeCall = {
   marker?: { kind: SessionKind; run: string };
   refused: boolean;
   parked: boolean;
+  at: number;
 };
 type Wake = { by: "claude" | "pi"; account?: FixtureAccount | "unknown"; notices: NoticeFacts[] };
 type Calls = {
@@ -796,9 +797,22 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       const task3 = {
         leafCalls: markerCalls(fake, run3).map(({ account, refused }) => ({ account, refused })),
         deskWakes: wakesOf(fake, "claude").slice(wakesOf(beforeTask3, "claude").length),
-        callsOnSharedLoginAtDesk: fake.claude
+        callsOnSharedLoginAtDesk: (() => {
+          const refusedAt = Math.min(
+            ...markerCalls(fake, run3)
+              .filter((call) => call.refused)
+              .map((call) => call.at),
+          );
+          return fake.claude.filter((call) => call.account === "desk-b" && call.at >= refusedAt)
+            .length;
+        })(),
+        callsOnSharedLoginBeforeStop: fake.claude
           .slice(beforeTask3.claude.length)
-          .filter((call) => call.account === "desk-b").length,
+          .filter(
+            (call) =>
+              call.account === "desk-b" &&
+              !markerCalls(fake!, run3).some((stop) => stop.refused && stop.at <= call.at),
+          ).length,
         deskActiveMovedToHeadroom: deskAfter.active?.claude === deskAccounts.ids["desk-h"],
         deskPinned: Boolean(deskAfter.autoSwitch?.claude?.pin),
         lastSwitchReason: deskAfter.autoSwitch?.claude?.lastSwitch?.reason ?? null,

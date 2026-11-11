@@ -22,6 +22,7 @@
  *   A scenario holds so every session's stop lands in one coalescing window.
  */
 import {
+  FIXTURE_ACCOUNTS,
   accountOfToken,
   claudeLastUserText,
   claudeUsage,
@@ -49,6 +50,8 @@ interface ClaudeCall {
   marker?: { kind: SessionKind; run: string };
   refused: boolean;
   parked: boolean;
+  /** When it arrived, in ms since the epoch. */
+  at: number;
 }
 interface Wake {
   /** Which platform's coordinator was woken: the command node's Claude or the leaf's Pi. */
@@ -68,6 +71,8 @@ const state = {
   hold: false,
 };
 const seenWakes = new Set<string>();
+/** Logins that have refused a call, which then read their week used up. */
+const exhausted = new Set<string>();
 const parked: Array<() => void> = [];
 
 function track<T>(list: T[], item: T): void {
@@ -181,12 +186,15 @@ async function claudeMessages(request: Request): Promise<Response> {
     ...(marker ? { marker } : {}),
     refused: refuse,
     parked: refuse && state.hold,
+    at: Date.now(),
   };
   track(state.claude, call);
   if (!refuse) return claudeReply(stream);
   if (call.parked) {
     await new Promise<void>((resolve) => parked.push(resolve));
   }
+  // Marked as the refusal goes out, so no read can see the limit before it.
+  exhausted.add(FIXTURE_ACCOUNTS[account as FixtureAccount].email);
   return claudeRefusal();
 }
 
@@ -263,7 +271,7 @@ function usage(request: Request): Response {
     return Response.json({ error: "unknown token" }, { status: 401 });
   }
   state.usageReads[account] = (state.usageReads[account] ?? 0) + 1;
-  return Response.json(claudeUsage(account, Date.now()));
+  return Response.json(claudeUsage(account, Date.now(), exhausted));
 }
 
 function release(): void {

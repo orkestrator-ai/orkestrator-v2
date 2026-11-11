@@ -5,6 +5,8 @@ import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
+import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
+import { agentTestTiming, timingValue } from "./agent-test-timing.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -156,6 +158,7 @@ import {
   WebAnnotationDispatchAdapter,
   WebAnnotationRollout,
   WebAnnotationService,
+  WEB_ANNOTATION_GC_EVERY_TICKS,
   type WebAnnotationToolHost,
 } from "./web-annotations/index.js";
 import {
@@ -676,10 +679,23 @@ export class OrkestratorBackend {
       runtimeFlavor: options.runtimeFlavor,
     });
     if (dispatchHold) this.uninstallDispatchHold = installAgentTestDispatchHold(dispatchHold);
+    // Agent-test profiles only: a spec may shorten the container tree cache
+    // and the web annotation collection period (`agent-test-timing.ts`).
+    // Undefined (the production constants) everywhere else.
+    const timing = agentTestTiming({
+      dataDir: options.dataDir,
+      runtimeFlavor: options.runtimeFlavor,
+    });
     this.runtime =
       options.runtime ??
       new BackendRuntime({
         emit,
+        ...(timing
+          ? {
+              containerTreeMaxAgeMs: () =>
+                timingValue(timing, "containerTreeMaxAgeMs", CONTAINER_TREE_MAX_AGE_MS),
+            }
+          : {}),
         // Docker-backed, so unit tests keep the unwatched bounds unless they inject one.
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
@@ -1410,6 +1426,12 @@ export class OrkestratorBackend {
       composeText: composeWebAnnotationDispatchText,
       invoke: (command, args) => this.invoke(command, args),
       resultTools: typeof annotationTools.setWebAnnotationToolHost === "function",
+      ...(timing
+        ? {
+            gcEveryTicks: () =>
+              timingValue(timing, "webAnnotationGcEveryTicks", WEB_ANNOTATION_GC_EVERY_TICKS),
+          }
+        : {}),
     });
     annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
     context.webAnnotations = this.webAnnotations;

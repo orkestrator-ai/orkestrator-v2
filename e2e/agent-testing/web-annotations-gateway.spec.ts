@@ -54,6 +54,7 @@ import {
   type FixtureServer,
 } from "./web-annotations-support";
 import { recordedNativeCapture } from "./web-annotations-native-captures";
+import { setBackendTiming } from "./agent-test-timing-support";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -61,7 +62,7 @@ const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS === "1";
 const LIVE_AGENT = (process.env.ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT ??
   "codex") as WebAnnotationDestination["agent"];
 
-type Status = { status: string; browserUrl?: string; testProject?: string };
+type Status = { status: string; browserUrl?: string; testProject?: string; dataDir?: string };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Preparation = {
   preparationId: string;
@@ -854,12 +855,16 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
 }, testInfo) => {
   test.skip(!DOCKER, "Docker fixture profile required");
   // Settled-evidence cleanup runs on the reconciler's garbage-collection pass
-  // (every 100 ticks of 3 s), so allow one full period.
-  testInfo.setTimeout(9 * 60_000);
+  // (every 100 ticks of 3 s in production). This test shortens the period
+  // through the profile's timing override (to-do 7569, task 3), so the real
+  // pass still runs on its real trigger, just every two ticks.
+  testInfo.setTimeout(4 * 60_000);
   const status = profileStatus();
   expect(status.status).toBe("ready");
+  expect(status.dataDir, "dev:status reported no data directory").toBeTruthy();
   const setup = await setUpContainer(browser, status, "codex", { holdQueue: true });
   const link = ".orkestrator/annotations/outside-link";
+  let restoreTiming = () => {};
   try {
     const image = await stageScreenshot(setup, setup.page, ROUTE_VARIANTS.pricing);
     const receipt = await createNote(
@@ -903,12 +908,20 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
     testInfo.annotations.push({ type: "container-file-checks", description: checks.join(",") });
 
     // Settled, and its note deleted: the backend removes only its own file.
+    const gc = setBackendTiming(status.dataDir!, { webAnnotationGcEveryTicks: 2 });
+    restoreTiming = gc.restore;
+    // Three of the periods this test runs with (each pass stops at a 250 ms
+    // deadline, so another environment can push this one to a later pass),
+    // plus margin for the container exec on a loaded host.
+    const removalBudgetMs =
+      3 * (gc.timing.webAnnotationGcEveryTicks! + 1) * WEB_ANNOTATION_LIMITS.reconcileIntervalMs +
+      30_000;
     await settleAndDelete(setup, requestId, [receipt.annotationId]);
     const removedAfter = Date.now();
     await expect
       .poll(
         () => inContainer(setup.containerId, ["test", "-e", attachment!.materializedPath!]).status,
-        { timeout: 7 * 60_000, intervals: [5_000] },
+        { timeout: removalBudgetMs, intervals: [1_000] },
       )
       .toBe(1);
     await expect
@@ -922,6 +935,7 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
       description: `removed ${Math.round((Date.now() - removedAfter) / 1_000)} s after settlement`,
     });
   } finally {
+    restoreTiming();
     inContainer(setup.containerId, ["rm", "-f", link]);
     await setup.cleanup();
     await setup.page.context().close();

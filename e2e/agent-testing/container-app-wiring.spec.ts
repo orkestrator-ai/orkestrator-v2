@@ -452,6 +452,14 @@ test("Docker fixture coordinator view follows delegations and context across swi
 }, testInfo) => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
   test.setTimeout(8 * 60_000);
+  // Durations of the phases outside a `test.step` (to-do 7569, task 4); the
+  // steps' own durations are in the JSON report.
+  let phaseStarted = Date.now();
+  const phaseDone = (phase: string) => {
+    const now = Date.now();
+    testInfo.annotations.push({ type: "phase-ms", description: `${phase}: ${now - phaseStarted}` });
+    phaseStarted = now;
+  };
   const container = await fixtureEnvironment(containerName);
   const local = await fixtureEnvironment(localName);
   expect(container.environmentType).toBe("containerized");
@@ -557,11 +565,14 @@ test("Docker fixture coordinator view follows delegations and context across swi
       )
       .toBe(count + elsewhere);
 
+  phaseDone("coordinator set-up");
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
+  phaseDone("login");
   try {
     let panel = await openCoordinator(page);
     if (baseline === 0) await awaiting(0);
+    phaseDone("first coordinator open");
 
     await test.step("a delegation survives an environment switch and the coordinator returns without a Work rail", async () => {
       await selectEnvironment(page, containerName);
@@ -587,8 +598,10 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await awaiting(baseline + 2);
     });
 
+    phaseStarted = Date.now();
     const second = await openSecondWindow(page.context(), testInfo);
     const secondPanel = await openCoordinator(second);
+    phaseDone("second window");
     await test.step("a repository context change shows in both windows", async () => {
       await awaiting(baseline + 2);
       const before = (
@@ -622,6 +635,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await second.close();
     });
   } finally {
+    phaseStarted = Date.now();
     if (git("branch", "--show-current") !== originalBranch) {
       git("checkout", "-q", originalBranch);
     }
@@ -636,5 +650,6 @@ test("Docker fixture coordinator view follows delegations and context across swi
     }
     await waitForEnvironmentStatus(localName, "running");
     await waitForEnvironmentStatus(containerName, "running", 240_000);
+    phaseDone("restart the fixture environments");
   }
 });

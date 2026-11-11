@@ -114,6 +114,12 @@ export type DiffStatsTrackingOptions = {
    * Absent in tests and fixtures: every container keeps the unwatched bounds.
    */
   worktreeSignal?: ContainerWorktreeSignalInstaller | null;
+  /**
+   * The container tree bound, read on every tree read. Only an agent-test
+   * profile's timing override (`agent-test-timing.ts`) sets it; everywhere
+   * else it is `CONTAINER_TREE_MAX_AGE_MS`.
+   */
+  containerTreeMaxAgeMs?: () => number;
 };
 
 /** What the baseline check needs to know about one local environment. */
@@ -246,7 +252,7 @@ export class DiffStatsTracking {
       emit: options.emit,
       admission: gitDockerScanPool,
       fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
-      containerTreeMaxAgeMs: CONTAINER_TREE_MAX_AGE_MS,
+      containerTreeMaxAgeMs: options.containerTreeMaxAgeMs ?? CONTAINER_TREE_MAX_AGE_MS,
       remoteFreshness: (target) =>
         target.kind === "container" && target.containerId
           ? this.containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)

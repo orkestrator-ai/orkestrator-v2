@@ -1,6 +1,7 @@
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
- * Remote client bandwidth baseline (todo 0052, task 2: the baseline matrix).
+ * Remote client bandwidth baseline (to-do 0052 (retired), task 2: the baseline
+ * matrix; results in docs/development/remote-bandwidth.md).
  * Runs the real gateway in this process against a fake backend and synthetic
  * workloads, and measures what remote clients would receive:
  *

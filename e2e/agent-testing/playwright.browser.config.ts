@@ -60,6 +60,7 @@ export default defineConfig({
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
     "multi-client-restarts-live.spec.ts",
+    "remote-bandwidth-live.spec.ts",
     "restore-apply-bulk-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",

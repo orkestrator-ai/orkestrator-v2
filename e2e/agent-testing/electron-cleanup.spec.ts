@@ -6,8 +6,19 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { closeElectronWithin, electronProcessTree } from "./design-electron-cleanup";
 import { processAlive, signalProcess, waitForStopped } from "../process-cleanup";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+
+// With the config's `screenshot: "only-on-failure"`, Playwright 1.65 held
+// app.close() for about four seconds on this hidden window before it called
+// app.quit(), so before-quit never ran inside the 500 ms bound below (about
+// 100 ms with screenshots off). The window draws nothing worth capturing.
+test.use({ screenshot: "off" });
 
 test("bounded cleanup stops a real Electron close blocked by before-quit", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "electron-close-regression-"));
@@ -30,18 +41,26 @@ test("bounded cleanup stops a real Electron close blocked by before-quit", async
         event.preventDefault();
         fs.writeFileSync(${JSON.stringify(attempted)}, "blocked");
       });
-      app.whenReady().then(() => new BrowserWindow({ show: false }));
+      // Playwright 1.65's electron.launch() does not return until a window has
+      // loaded a page, so a window that loads nothing hangs the launch.
+      app.whenReady().then(() => new BrowserWindow({ show: false }).loadURL("about:blank"));
     `,
     );
+    // The fixture's window is never shown, so the case needs no display: on
+    // Linux it runs headless with ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1.
+    const headless = headlessElectronRequested();
     const app = await electron.launch({
       executablePath: createRequire(import.meta.url)("electron") as string,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
         "--no-sandbox",
         `--user-data-dir=${path.join(directory, "profile")}`,
         fixture,
       ],
-      env: electronSpecEnvironment(process.env, { ELECTRON_RUN_AS_NODE: undefined }),
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
+        ELECTRON_RUN_AS_NODE: undefined,
+      }),
     });
     owned = electronProcessTree(app);
     const helper = Number(await readFile(helperFile, "utf8"));

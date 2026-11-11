@@ -62,6 +62,7 @@ export function headlessElectronRequested(
  */
 export const HEADLESS_CAPABLE_ELECTRON_SPECS: readonly string[] = [
   "design-canvas-electron.spec.ts",
+  "electron-cleanup.spec.ts",
   "web-annotations-electron.spec.ts",
 ];
 

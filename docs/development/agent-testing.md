@@ -663,7 +663,9 @@ open until all of the following have observed evidence:
 
 Record the commit, macOS/Electron versions, profile, exact commands, results
 and cleanup. A Linux pass or a mocked activation-policy call cannot close this
-qualification. Current task tracking is in
+qualification. Steps 1, 2 and 5 need a person watching the Mac's screen and
+are on the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+steps 3 and 4 are agent work tracked in
 [2181, task 4](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
 
 None of this reaches the [Electron specs](#electron-specs-and-their-display),
@@ -1226,10 +1228,10 @@ failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
-`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
-with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
-`electron-launch-switches.ts`; the preflight admits a run with no display only
-when it is limited to those). Each reads
+`design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts` and
+`web-annotations-electron.spec.ts` can run with no display at all
+(`HEADLESS_CAPABLE_ELECTRON_SPECS` in `electron-launch-switches.ts`; the
+preflight admits a run with no display only when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
 with the same switches and no display variables:
 

@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (288 items): run each check under
+1. **Manual tests and live checks** (289 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -74,12 +74,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 21 | 9 |
 | Coordinator and Multi Review | 77 | 6 |
-| Cross-cutting | 69 | 20 |
+| Cross-cutting | 70 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 23 | 3 |
-| **Total** | 288 | 53 |
+| **Total** | 289 | 53 |
 
 ## Outstanding work
 
@@ -487,6 +487,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[0325](../cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md) task 6: packaged macOS native qualification.** A person on a Mac: `mise run package:mac`, then run the matrix under 0325's Outstanding work, Qualification by hand, and also: with a Cyrillic input source, ⌘⇧ and the physical `Slash` key open the dialog when it reports a non-ASCII character; on layouts that type ASCII, the typed `/` or `?` wins even on another physical key, and a different ASCII character on `Slash` must not open it. Record per row: macOS version, input source, physical key and typed character, packaged commit, surface, the separate-press and resumed-typing results, in 0325's Current state.
 - [ ] **[0325](../cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md) task 7: packaged About panel on macOS.** During task 6's run, open the app menu's About and check it reads "Orkestrator AI" (not "OrkestratorV2") with the right version and icon. Windows has no configured build (`build.win` unset), so the recommended close is on macOS alone, noting Windows as unconfigured. Record: a screenshot and the result, in 0325's Current state.
 - [ ] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 1 (Windows): `dev:test --headless` on Windows.** On a Windows host, start a profile with `mise run dev:test --profile <name> --fixture --no-agent-credentials --agent-platforms codex --headless`, then again with no flag from a shell without a terminal. Expect the flag accepted, the profile reaching ready, and the launcher saying Electron opens a window because headless mode exists only on Linux. Record: the launcher lines and Electron's command line, in 2181's Current state.
+- [ ] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 4 (watching the desktop): a hidden agent-test profile on a Mac.** Follow steps 1, 2 and 5 of [Live macOS hidden-profile qualification](../../development/agent-testing.md#live-macos-hidden-profile-qualification) while watching the Mac's screen. Focus another application, then start a fresh `mise run dev:test --profile <name> --fixture --no-agent-credentials --agent-platforms codex` from a shell with no terminal (for example `< /dev/null > log 2>&1`). Through readiness, focus must stay where it was, no Dock icon may appear even briefly, and no chooser, progress, main or DevTools window may appear. Repeat with a fresh profile whose isolated toolchain needs bootstrap, watching the platform selection and progress windows. Then stop and reset, and start a fresh profile with `--no-headless`: its window and Dock icon must appear. Stop and reset every profile. Record: the commit, macOS and Electron versions, the commands and what you saw at each step, in 2181's Current state. The browser smoke and the native-dialog checks (steps 3 and 4) stay agent work in 2181 task 4.
 
 - [ ] **5761 (retired) task 1: look for log-writer queue drops in real saved logs.** (Background: [the file writer](../../architecture/logging.md#the-file-writer).) On each of your own machines, turn on Settings → Save Logs to Disk and use the app normally for a week. Then search the saved log files for `entries.dropped` lines (area `logging`, level `warn`, fields `entries`, `bytes`, `reason`). The writer drops entries once 4 MiB or 65,536 entries are queued and not yet written. Record: for each machine, the days covered and the number of `entries.dropped` lines with `reason=queue-full`, with their `entries` and `bytes`. Reply to the coordinator. Drops would need a new to-do (raise the bound, or add a drop counter to the health surface).
 - [ ] **4500 (retired) task 1: preview page-load time over a real remote route.** (Background: [desktop tunnel](../../architecture/browser-previews.md#desktop-tunnel).) Run a desktop on one machine with a backend on a second machine reached over Tailscale. Load one real service preview page cold, once on tunnel v2 (a current backend) and once on v1 (a backend from before tunnel v2, whose attachments carry no `multiplexSubprotocol`). Record: page-load time, `desktop.connect_ms` per stream or tunnel, and the number of tunnel WebSockets opened for each load. Reply to the coordinator. This is efficiency report `0692`'s "first-load cost over a real remote link".
@@ -716,7 +717,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
   - Leave everything as it is.
 
   Record: the decision and its reason in 5180's Assumptions and decisions.
-- [ ] **[6303](../cross-cutting/6303-window-close-during-request-throws.md) task 2: provide a host with a disposable display for Electron specs.** Decide whether beelink, or another fleet host, gets Xvfb, and install it if so. Specs must never use the signed-in desktop. The run command is `env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:agent:electron` ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). Record: the host's name, or "no display host", as a reply to the coordinator. This unblocks 6303 task 2 (the earlier spec under Xvfb), 7062 task 1, 7340's two Electron owners and the run of 5460 task 3.
+- [ ] **[6303](../cross-cutting/6303-window-close-during-request-throws.md) task 2: provide a host with a disposable display for Electron specs.** Decide whether beelink, or another fleet host, gets Xvfb, and install it if so. Specs must never use the signed-in desktop. The run command is `env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:agent:electron` ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). Record: the host's name, or "no display host", as a reply to the coordinator. This unblocks 6303 task 2 (the earlier spec under Xvfb), 7062 task 1, 7340's two Electron owners the run of 5460 task 3, and 2181 task 1's real-display run of the Electron specs.
 - [ ] **[7551](../cross-cutting/7551-macos-watch-churn-loses-events.md) task 2: approve and file the Bun upstream report.** Do this once 7551 task 2's draft is in the file. Read the draft and its reproduction (`bun scripts/benchmark-recursive-watch-stall.ts --count=1 --churn=10`). Decide whether to file it; if yes, file it with Bun, asking for a rebuilt FSEvents stream to start from the last delivered event id (`sinceWhen`). Record: the issue URL, or "not filed", in 7551 task 2.
 
 - [ ] **[7571](../cross-cutting/7571-removal-candidates-needing-a-decision.md) task 4: decide the `envFilePatterns` setting.** Settings offers an "Environment Files" field saying matching files are copied into containers, but the backend never reads it; only `.env` and `.env.local` are copied. Choose one: implement the copy (recommended; needs a security review of copying arbitrary patterns into containers) or remove the control and leave the schema key ignored. Record: the choice in 7571's Assumptions and decisions.

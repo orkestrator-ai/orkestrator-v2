@@ -669,3 +669,51 @@ esac
     );
   });
 });
+
+describe("rootless daemon with live-restore", () => {
+  const infoScript = (info: Record<string, unknown>) => `#!/bin/sh
+case "$1" in
+  info) echo '${JSON.stringify(info)}' ;;
+esac
+`;
+
+  test("is warned about once per process", async () => {
+    const logs = captureLogs();
+    try {
+      await withDockerScript(
+        infoScript({ SecurityOptions: ["name=rootless"], LiveRestoreEnabled: true }),
+        async () => {
+          await dockerCapacity({ refresh: true });
+          await dockerCapacity({ refresh: true });
+        },
+      );
+      expect(
+        logs
+          .records()
+          .filter((record) => record.event === "daemon.rootless-live-restore")
+          .map((record) => record.level),
+      ).toEqual(["warn"]);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a rootful live-restore daemon, or a rootless one without it, is not warned about", async () => {
+    const logs = captureLogs();
+    try {
+      for (const info of [
+        { SecurityOptions: ["name=seccomp,profile=builtin"], LiveRestoreEnabled: true },
+        { SecurityOptions: ["name=rootless"], LiveRestoreEnabled: false },
+      ]) {
+        await withDockerScript(infoScript(info), async () => {
+          await dockerCapacity({ refresh: true });
+        });
+      }
+      expect(logs.records().map((record) => record.event)).not.toContain(
+        "daemon.rootless-live-restore",
+      );
+    } finally {
+      logs.restore();
+    }
+  });
+});

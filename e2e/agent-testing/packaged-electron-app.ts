@@ -1,5 +1,6 @@
 import path from "node:path";
 import { PACKAGED_TEST_OUTPUT_DIRECTORY } from "../../electron-builder.packaged-test.config";
+import { withCleanup } from "../process-cleanup";
 import { HEADLESS_ELECTRON_SWITCHES } from "./electron-launch-switches";
 import { electronSpecEnvironment } from "./electron-spec-environment";
 
@@ -76,6 +77,18 @@ export function packagedLaunchEnvironment(
 }
 
 /**
+ * The design-preview Chromium override (`ORKESTRATOR_DESIGN_CHROMIUM_PATH`,
+ * read by the backend's `resolveDesignChromiumPath`) when the caller set a
+ * non-empty one. `packagedLaunchEnvironment` drops it with every other
+ * `ORKESTRATOR_*` variable; a spec that opens a design canvas on a host whose
+ * Chromium is not at a default location forwards it explicitly with this.
+ */
+export function designChromiumEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const value = env.ORKESTRATOR_DESIGN_CHROMIUM_PATH?.trim();
+  return value ? { ORKESTRATOR_DESIGN_CHROMIUM_PATH: value } : {};
+}
+
+/**
  * Chromium switches for the packaged app: on Linux always headless
  * (`HEADLESS_ELECTRON_SWITCHES`), so no window reaches the signed-in desktop
  * and `safeStorage` stays off any keyring. The environment above already has
@@ -83,4 +96,41 @@ export function packagedLaunchEnvironment(
  */
 export function packagedLaunchSwitches(platform: NodeJS.Platform): readonly string[] {
   return platform === "linux" ? HEADLESS_ELECTRON_SWITCHES : [];
+}
+
+/**
+ * A packaged spec's final cleanup: stop the app it launched, release what the
+ * run served, then remove the temporary profile. It runs after the journey,
+ * so `app` is the launched application whenever a launch succeeded, and null
+ * only for a run that never launched one.
+ *
+ * The profile is removed only once the app's own process tree is proven
+ * stopped. A launched app whose tree could not be snapshotted keeps its
+ * profile, and the snapshot error is reported with the cleanup failure,
+ * rather than deleting a profile a live app may still be writing.
+ */
+export async function stopPackagedAppThenRemoveProfile<App>(
+  app: App | null,
+  steps: {
+    snapshot: (app: App) => number[];
+    close: (app: App, owned: number[]) => Promise<void>;
+    release: () => Promise<void>;
+    waitForStopped: (owned: number[]) => Promise<void>;
+    removeProfile: () => Promise<void>;
+  },
+): Promise<void> {
+  // Nothing to wait for only when nothing was launched.
+  let owned: number[] | undefined = app === null ? [] : undefined;
+  await withCleanup(async () => {
+    if (app === null) return;
+    owned = steps.snapshot(app);
+    await steps.close(app, owned);
+  }, [
+    async () => {
+      await steps.release();
+      if (!owned) throw new Error("Cannot remove profile without an owned-process snapshot");
+      await steps.waitForStopped(owned);
+      await steps.removeProfile();
+    },
+  ]);
 }

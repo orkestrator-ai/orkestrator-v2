@@ -33,8 +33,8 @@ const browserTimer: UploadTimer = {
  * journaled in per-window session storage until acknowledged (an ambiguous
  * delivery may be counted again after reload). A failed send puts
  * the counts back and waits longer each time, up to five minutes; a backend
- * that predates the command stops the upload for this load. Only a desktop
- * window's own renderer starts this (`renderer-diagnostics.ts`).
+ * that predates the command stops the upload for this load. A desktop
+ * window's own renderer and a browser tab start this (`renderer-diagnostics.ts`).
  */
 export function startRendererErrorUpload({
   ring,

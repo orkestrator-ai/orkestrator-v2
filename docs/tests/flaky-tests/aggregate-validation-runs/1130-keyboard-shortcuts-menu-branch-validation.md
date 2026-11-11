@@ -77,8 +77,9 @@ through `test:logged`, with separate run IDs:
 
 The native realm run recorded `native-focus`: macOS did not activate the test
 window, so DOM handoffs ran while physical native-focus assertions could not.
-Packaged macOS/Linux qualification remains open in
-[0325](../../../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md).
+Packaged macOS/Linux qualification was tracked in to-do 0325 (retired
+2026-11-11); its results and what is still owed are in
+[keyboard-shortcuts.md](../../../architecture/keyboard-shortcuts.md#packaged-native-qualification).
 
 The full non-iOS aggregate,
 `mise run test:logged -- --name shortcuts-unit-suite -- mise run test`, finished

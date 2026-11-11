@@ -21,6 +21,7 @@
 		A1000000000000000000000C /* VaultReadFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* VaultReadFailureTests.swift */; };
 		A1000000000000000000000D /* SessionEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* SessionEndTests.swift */; };
 		A1000000000000000000000E /* PrivacyCoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* PrivacyCoverTests.swift */; };
+		A1000000000000000000000F /* WebInspectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* WebInspectorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +52,7 @@
 		A2000000000000000000000F /* VaultReadFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultReadFailureTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* SessionEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEndTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000011 /* PrivacyCoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyCoverTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* WebInspectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebInspectorTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +148,7 @@
 				A2000000000000000000000F /* VaultReadFailureTests.swift */,
 				A20000000000000000000010 /* SessionEndTests.swift */,
 				A20000000000000000000011 /* PrivacyCoverTests.swift */,
+				A20000000000000000000012 /* WebInspectorTests.swift */,
 			);
 			path = OrkestratorMobileTests;
 			sourceTree = "<group>";
@@ -257,6 +260,7 @@
 				A1000000000000000000000C /* VaultReadFailureTests.swift in Sources */,
 				A1000000000000000000000D /* SessionEndTests.swift in Sources */,
 				A1000000000000000000000E /* PrivacyCoverTests.swift in Sources */,
+				A1000000000000000000000F /* WebInspectorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

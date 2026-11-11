@@ -24,23 +24,26 @@ async function dataDir(config?: string): Promise<string> {
 }
 
 describe("the localWindowGatewayTransport setting", () => {
-  test("is off unless the config turns it on", async () => {
-    expect(readLocalWindowGatewayTransport(await dataDir())).toBe(false);
-    expect(readLocalWindowGatewayTransport(await dataDir("{not json"))).toBe(false);
-    expect(readLocalWindowGatewayTransport(await dataDir("null"))).toBe(false);
+  test("is on unless the config turns it off", async () => {
+    expect(readLocalWindowGatewayTransport(await dataDir())).toBe(true);
+    expect(readLocalWindowGatewayTransport(await dataDir("{not json"))).toBe(true);
+    expect(readLocalWindowGatewayTransport(await dataDir("null"))).toBe(true);
     expect(readLocalWindowGatewayTransport(await dataDir(JSON.stringify({ global: {} })))).toBe(
-      false,
+      true,
     );
-    expect(
-      readLocalWindowGatewayTransport(
-        await dataDir(JSON.stringify({ global: { localWindowGatewayTransport: "true" } })),
-      ),
-    ).toBe(false);
     expect(
       readLocalWindowGatewayTransport(
         await dataDir(JSON.stringify({ global: { localWindowGatewayTransport: true } })),
       ),
     ).toBe(true);
+  });
+
+  test("keeps an explicit false, as a release before the flip stored it, off", async () => {
+    expect(
+      readLocalWindowGatewayTransport(
+        await dataDir(JSON.stringify({ global: { localWindowGatewayTransport: false } })),
+      ),
+    ).toBe(false);
   });
 });
 

@@ -73,6 +73,51 @@ describe("environment inputs section", () => {
     expect(alert.textContent).toContain("Rebuild it on a current image");
   });
 
+  test("says so when a staged revision holds no provider", async () => {
+    const empty = { ...staged, providers: [], missingProviders: [], disabledProviders: [] };
+    install({ get_environment_inputs: () => empty });
+    render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+    await screen.findByText("Nothing was staged into this container.");
+    expect(screen.getByText("Agent inputs")).toBeTruthy();
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  test("an empty staged list with a note to show does not claim nothing was staged", async () => {
+    const cases: Array<Partial<EnvironmentInputStatus>> = [
+      { missingProviders: ["codex"] },
+      { disabledProviders: ["grok"] },
+      { revokedProviders: ["claude"] },
+    ];
+    for (const extra of cases) {
+      install({
+        get_environment_inputs: () => ({
+          ...staged,
+          providers: [],
+          missingProviders: [],
+          disabledProviders: [],
+          revokedProviders: [],
+          ...extra,
+        }),
+      });
+      render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+      await screen.findByText("Agent inputs");
+      expect(screen.queryAllByText(/Nothing was staged/)).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  test("a legacy or unknown record never claims nothing was staged", async () => {
+    for (const mode of ["host-mounts", "unknown"] as const) {
+      install({
+        get_environment_inputs: () => ({ ...staged, mode, providers: [], missingProviders: [] }),
+      });
+      render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+      await screen.findByText("Agent inputs");
+      expect(screen.queryAllByText(/Nothing was staged/)).toHaveLength(0);
+      cleanup();
+    }
+  });
+
   test("explains a legacy container's whole-home mounts", async () => {
     install({ get_environment_inputs: () => ({ ...staged, mode: "host-mounts", providers: [] }) });
     render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);

@@ -125,7 +125,13 @@ Users and isolation:
   host user is not uid 1000 (GitHub's runners). The root entrypoint relays
   each one `node` cannot read into `node`'s own
   `/run/orkestrator-inputs` before dropping privileges
-  (`relay_staged_inputs`). `entrypoint.sh` reads a relayed copy in place of
+  (`relay_staged_inputs`). It leaves a copy alone when the digest root kept
+  of that mount in its own `/run/orkestrator-relay-state` still matches;
+  take that digest from the read-only mount only, never from the copy,
+  which `node` owns, and remove or replace a copy as `node`
+  (`remove_relay_copies`). A copy that will not go must never stay at its
+  live path: fall back to root rebuilding the whole relay, as when nothing is
+  kept. `entrypoint.sh` reads a relayed copy in place of
   its mount (the copy helpers resolve their source root inline, and
   `staged_input_path` elsewhere); `workspace-setup.sh` uses `project_input`.
   Keep `STAGED_INPUT_MOUNTS` in step with the backend's mount targets
@@ -311,10 +317,19 @@ whichever container owns the network namespace.
     digest of one to a counter, log or report: a refused name can carry the
     data an agent tried to send. The firewall's own boot checks run under
     `egress-filter.quiet` so they are not counted.
+  - It holds a first write of printable text that has no newline yet, so
+    a request line sent a byte at a time cannot pass the Host check, and
+    refuses it with no reply after `CLASSIFY_TIMEOUT` (30 s). A client-first
+    text protocol on a named port must end its first command with `\n`
+    (SMTP, Redis and the like already do); a live test must send whole
+    lines, never a bare word. Do not relay a printable partial line early
+    to make such a client work: that is the byte-at-a-time bypass.
   - It does not see a name hidden inside TLS (an encrypted ClientHello,
     domain fronting), checks only the first request of a kept-alive HTTP
     connection, and leaves UDP entries and other protocols to the address
-    rules. Never describe it as preventing exfiltration.
+    rules. A connection to an allowed address completes its handshake with
+    the daemon first, so a closed upstream port reads as a reset rather than
+    a refusal. Never describe it as preventing exfiltration.
 - The one host port a restricted container may call is the backend's
   agent-tools server, at `host.docker.internal:<port>`
   (`host-service-ports`). That server listens on every host interface but

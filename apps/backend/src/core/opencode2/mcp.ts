@@ -38,7 +38,7 @@ import {
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ORKESTRATOR_ARTIFACT_MCP_PATH } from "@orkestrator/protocol/transcript-artifacts";
 import { ProviderDispatchPreparationError } from "../agent-provider-contract.js";
-import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "../opencode-user-mcp.js";
+import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "./policy-rules.js";
 import type { OpenCode2Client } from "./client.js";
 import {
   isOrkestratorOpenCode2McpServer,
@@ -258,9 +258,9 @@ export class OpenCode2McpServers {
  * The user's server names (the location's servers, Orkestrator's left out) a
  * policy's MCP selection is computed over, or undefined when the policy
  * narrows nothing (no request is made). The user's global servers reach 2.x
- * through the config mirror (`user-config.ts`), so they are listed here as on
- * 1.x. Throws when the list cannot be read: without it the rules would leave
- * every server callable (`opencode-user-mcp.ts`).
+ * through the config mirror (`user-config.ts`), so they are listed here. Throws
+ * when the list cannot be read: without it the rules would leave every server
+ * callable (`policy-rules.ts`).
  */
 export async function openCode2ConfiguredUserMcpServers(
   client: Pick<OpenCode2Client, "listMcpServers">,

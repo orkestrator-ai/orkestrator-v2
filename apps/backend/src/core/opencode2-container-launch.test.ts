@@ -21,19 +21,11 @@ import {
   OPENCODE2_LAUNCH_HOME,
   OPENCODE2_LAUNCH_PROJECT_CONFIG,
   OPENCODE2_LAUNCH_ROOT,
-  OPENCODE_LAUNCH_CACHE_HOME,
-  OPENCODE_LAUNCH_CONFIG_HOME,
-  OPENCODE_LAUNCH_HOME,
-  OPENCODE_LAUNCH_PROJECT_CONFIG,
-  OPENCODE_LAUNCH_ROOT,
 } from "./agent-credential-files.js";
-import { OPENCODE2_SERVER_PORT, OPENCODE_SERVER_PORT } from "./constants.js";
-import { OPENCODE_HOST_CONFIG_INPUT } from "./opencode-container-launch.js";
+import { OPENCODE2_SERVER_PORT, RETIRED_OPENCODE1_SERVER_PORT } from "./constants.js";
+import { OPENCODE2_CONTAINER_BINARY } from "./opencode-listener-identity.js";
 import {
-  OPENCODE2_CONTAINER_BINARY,
-  OPENCODE_CONTAINER_BINARY,
-} from "./opencode-listener-identity.js";
-import {
+  OPENCODE_HOST_CONFIG_INPUT,
   OPENCODE2_LAUNCH_FINGERPRINT,
   openCode2Launch,
   openCode2LaunchConfigScript,
@@ -79,10 +71,13 @@ describe("the image, the launcher and the backend agree on the 2.x server", () =
     expect(launcher).toContain(
       `binary=${OPENCODE2_CONTAINER_BINARY} port=${OPENCODE2_SERVER_PORT}\n`,
     );
-    expect(launcher).toContain(`root=${OPENCODE_LAUNCH_ROOT}\n`);
-    expect(launcher).toContain(
-      `binary=${OPENCODE_CONTAINER_BINARY} port=${OPENCODE_SERVER_PORT}\n`,
-    );
+    // OpenCode 1.x's kind, binary and root are gone with it.
+    expect(launcher).not.toContain("ORKESTRATOR_CAPABILITY opencode-launch=");
+    expect(launcher).not.toContain("/run/orkestrator-opencode/");
+    expect(launcher).not.toContain(`port=${RETIRED_OPENCODE1_SERVER_PORT}`);
+    expect(launcher).not.toMatch(/^\s+opencode\)/m);
+    expect(dockerfile).not.toContain("OPENCODE_CLI_VERSION");
+    expect(dockerfile).not.toContain("/run/orkestrator-opencode ");
     expect(dockerfile).toContain(
       `mv /tmp/opencode2/package/bin/opencode ${OPENCODE2_CONTAINER_BINARY}`,
     );
@@ -153,6 +148,15 @@ describe.skipIf(process.platform !== "linux")("the launcher starts each OpenCode
     kind: "opencode" | "opencode2",
     project?: string | ((projectDirectory: string) => Promise<void>),
   ) {
+    const result = await runLauncher(kind, project);
+    expect(result.exitCode).toBe(0);
+    return result.report();
+  }
+
+  async function runLauncher(
+    kind: "opencode" | "opencode2",
+    project?: string | ((projectDirectory: string) => Promise<void>),
+  ) {
     const directory = await scratch("ork-opencode-launcher-");
     const report = path.join(directory, "server.env");
     const fake = path.join(directory, "server");
@@ -165,26 +169,20 @@ describe.skipIf(process.platform !== "linux")("the launcher starts each OpenCode
     await chmod(fake, 0o755);
     await chmod(writer, 0o755);
     const workspace = path.join(directory, "workspace");
-    const roots = {
-      opencode: path.join(directory, "run1"),
-      opencode2: path.join(directory, "run2"),
-    };
+    const roots = { opencode2: path.join(directory, "run2") };
     await mkdir(workspace);
-    for (const root of Object.values(roots))
-      await mkdir(path.join(root, "project"), { recursive: true });
+    await mkdir(path.join(roots.opencode2, "project"), { recursive: true });
     if (typeof project === "string") {
-      await writeFile(path.join(roots[kind], "project", "opencode.json"), project);
+      await writeFile(path.join(roots.opencode2, "project", "opencode.json"), project);
     } else if (project) {
-      await project(path.join(roots[kind], "project"));
+      await project(path.join(roots.opencode2, "project"));
     }
     const script = path.join(directory, "launch.sh");
     await writeFile(
       script,
       launcher
         .replaceAll(OPENCODE2_CONTAINER_BINARY, fake)
-        .replaceAll(OPENCODE_CONTAINER_BINARY, fake)
         .replaceAll(OPENCODE2_LAUNCH_ROOT, roots.opencode2)
-        .replaceAll(OPENCODE_LAUNCH_ROOT, roots.opencode)
         .replaceAll("/usr/local/bin/orkestrator-log-writer", writer)
         .replaceAll("/usr/local/bin/orkestrator-bridge-launch", script)
         .replaceAll("workdir=/workspace", `workdir=${workspace}`),
@@ -204,19 +202,24 @@ describe.skipIf(process.platform !== "linux")("the launcher starts each OpenCode
         OPENCODE_CONFIG_CONTENT: '{"plugin":["planted"]}',
       },
     });
-    expect(result.exitCode).toBe(0);
-    let text = "";
-    for (let attempt = 0; attempt < 100 && !text; attempt++) {
-      text = await readFile(report, "utf8").catch(() => "");
-      if (!text) await Bun.sleep(20);
-    }
-    const env = Object.fromEntries(
-      text
-        .split("\n")
-        .filter((line) => line.includes("="))
-        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
-    );
-    return { env, roots, workspace, password, snapshot };
+    return {
+      exitCode: result.exitCode,
+      stderr: result.stderr.toString(),
+      async report() {
+        let text = "";
+        for (let attempt = 0; attempt < 100 && !text; attempt++) {
+          text = await readFile(report, "utf8").catch(() => "");
+          if (!text) await Bun.sleep(20);
+        }
+        const env = Object.fromEntries(
+          text
+            .split("\n")
+            .filter((line) => line.includes("="))
+            .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+        );
+        return { env, roots, workspace, password, snapshot };
+      },
+    };
   }
 
   test("2.x: root's configuration directory, an empty home and config, root's cache", async () => {
@@ -255,25 +258,11 @@ describe.skipIf(process.platform !== "linux")("the launcher starts each OpenCode
     );
   });
 
-  test("1.x: unchanged configuration and home, plus root's cache and the project file", async () => {
-    const { env, roots, password } = await launch("opencode", "{}\n");
-    expect(env.ARGS).toBe(`serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`);
-    expect(env.OPENCODE_SERVER_PASSWORD).toBe(password);
-    expect(env.OPENCODE_SERVER_USERNAME).toBe("opencode");
-    expect(env.XDG_CONFIG_HOME).toBe(
-      OPENCODE_LAUNCH_CONFIG_HOME.replace(OPENCODE_LAUNCH_ROOT, roots.opencode),
-    );
-    expect(env.OPENCODE_TEST_HOME).toBe(
-      OPENCODE_LAUNCH_HOME.replace(OPENCODE_LAUNCH_ROOT, roots.opencode),
-    );
-    expect(env.XDG_CACHE_HOME).toBe(
-      OPENCODE_LAUNCH_CACHE_HOME.replace(OPENCODE_LAUNCH_ROOT, roots.opencode),
-    );
-    expect(env.OPENCODE_CONFIG).toBe(
-      OPENCODE_LAUNCH_PROJECT_CONFIG.replace(OPENCODE_LAUNCH_ROOT, roots.opencode),
-    );
-    // 1.x adds OPENCODE_CONFIG_DIR to what it reads; none may be named.
-    expect(env.OPENCODE_CONFIG_DIR).toBeUndefined();
+  test("1.x's retired kind is refused and starts nothing", async () => {
+    const result = await runLauncher("opencode", "{}\n");
+    expect(result.exitCode).not.toBe(0);
+    // Refused before anything is put in the background.
+    expect(result.stderr).toContain("unknown bridge: opencode");
   });
 
   test("a linked project file is not passed", async () => {

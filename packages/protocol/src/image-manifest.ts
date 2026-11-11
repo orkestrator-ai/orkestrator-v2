@@ -122,23 +122,16 @@ export const IMAGE_CAPABILITIES = {
    */
   "bridge-launch": 1,
   /**
-   * `orkestrator-bridge-launch opencode` starts the container's OpenCode 1.x
-   * server from the root-owned `/opt/opencode` binary under `env -i`, with
-   * project configuration off and its global configuration and home in
-   * root-owned `/run/orkestrator-opencode`, so no plugin or configuration the
-   * agent's uid can write loads inside it. An older image keeps the login-shell
-   * start from node's own binary and configuration.
-   */
-  "opencode-launch": 1,
-  /**
-   * `orkestrator-bridge-launch opencode2` starts the container's OpenCode 2.x
-   * server the same way, from the root-owned `/opt/opencode/bin/opencode2`,
-   * with its configuration, home and package cache in root-owned
-   * `/run/orkestrator-opencode2`, and the backend records its listening
-   * socket. The same launcher points the 1.x server's package cache at
-   * root-owned `/run/orkestrator-opencode/cache` and reads a project
-   * configuration the backend filtered (`OPENCODE_CONFIG`). An older image
-   * keeps the 2.x login-shell start from node's own binary and configuration.
+   * `orkestrator-bridge-launch opencode2` starts the container's OpenCode
+   * server (2.x) the same way as a bridge, from the root-owned
+   * `/opt/opencode/bin/opencode2` under `env -i`, with project configuration
+   * off, its configuration, home and package cache in root-owned
+   * `/run/orkestrator-opencode2`, and a project configuration the backend
+   * filtered (`OPENCODE_CONFIG`); the backend records its listening socket.
+   * An older image keeps the login-shell start from node's own binary and
+   * configuration. (`opencode-launch`, the same contract for OpenCode 1.x,
+   * was retired with 1.x: a manifest that still declares it has it dropped
+   * as unknown.)
    */
   "opencode2-launch": 1,
 } as const;

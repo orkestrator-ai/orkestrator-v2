@@ -3,7 +3,6 @@ import {
   environmentSetupStartedEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { isRootlessKitHostLoopbackAddress } from "@orkestrator/protocol/container-host-reachability";
-import { hostOpenCodeDatabaseEnvironment } from "./opencode-host-database.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
@@ -708,7 +707,6 @@ export async function spawnSetupTerminal(
     const setupEnvironment = envWithManagedBinaries(context);
     terminals.rememberSession(sessionId, {
       kind: "local",
-      openCodeDatabase: hostOpenCodeDatabaseEnvironment(setupEnvironment).OPENCODE_DB,
       environmentId: environment.id,
       cols: 80,
       rows: 24,
@@ -2076,7 +2074,6 @@ async function recreateEnvironmentOnceUnfenced(
       throw error;
     }
     invalidateDiscovery(environment.id);
-    context.runtime.localServers.openCodeAgentTools.cancel(`container:${environment.containerId}`);
     // Per-runtime watchers of the replaced container are retired; everything
     // keyed by environment (sessions, parked dispatches, queued prompts)
     // resolves the new runtime on its next use.
@@ -2130,7 +2127,6 @@ async function recreateEnvironmentOnceUnfenced(
     invalidateDiscovery(environment.id);
     context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
     shutdownClaudeStatePolling(context, containerId);
-    context.runtime.localServers.openCodeAgentTools.cancel(`container:${containerId}`);
     await advanceContainerOperation(context, environment.id, operationId, { phase: "removing" });
   } catch (error) {
     await completeContainerOperation(context, environment.id, operationId, "failed", {
@@ -2235,9 +2231,6 @@ export function restoreRecoveryCopyTask(
     invalidateDiscovery(environment.id);
     if (environment.containerId) {
       context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
-      context.runtime.localServers.openCodeAgentTools.cancel(
-        `container:${environment.containerId}`,
-      );
     }
     cleanupEnvironmentSetupState(context, environment.id);
     const { createdFromCommit: _kept, ...setupReset } = discardedRuntimeSetupUpdates();

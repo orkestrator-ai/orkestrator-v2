@@ -22,7 +22,7 @@ import {
 } from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { nativeAgentSessionResumeIdentity } from "./models.js";
-import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import { normalizeOpenCodeEnvelope } from "./opencode-display-transcript.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
 import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
@@ -167,7 +167,7 @@ describe("NativeAgentService transcript projection", () => {
     // edit is normalized, then the projection moves its heavy diff body behind a
     // detail reference. The row the renderer reads must still know the file and
     // the +/- counts, and the reference must resolve back to the full diff.
-    const normalized = normalizeOpenCodeInteractiveMessage(
+    const normalized = normalizeOpenCodeEnvelope(
       {
         info: { id: "msg-opencode-edit", role: "assistant", time: { created: 0 } },
         parts: [

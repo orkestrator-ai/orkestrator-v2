@@ -136,7 +136,7 @@ A bridge that predates the marker keeps asking.
 | OpenCode | `bash` only from the full `metadata.command` when it is the single pattern; `edit`/`write` by `metadata.filepath` or a single pattern; `webfetch` by URL | compound commands, a multi-file patch, anything else |
 | Cursor | none (the SDK bridge raises no approvals) | |
 
-OpenCode 1.19.4 (`ShellTool.ask`, read from the pinned binary) sends one
+OpenCode 1.19.4 (`ShellTool.ask`, read from the 1.x binary; not re-read on 2.x) sent one
 `bash` pattern per tree-sitter `command` node: the node's trimmed text, with
 its redirect, skipping `cd`/`pushd`/`popd`. So a plain single command
 (`git status --short`, `npm run test -- --watch`) arrives with its one

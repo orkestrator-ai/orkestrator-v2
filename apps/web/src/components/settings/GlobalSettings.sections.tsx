@@ -6,8 +6,6 @@ import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
-import { OpenCodeProtocolSetting } from "./OpenCodeProtocolSetting";
-import type { OpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
 import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
@@ -222,8 +220,6 @@ export type GlobalSettingsSectionSettings = Record<string, any> & {
   setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
   openCodeModelProviders: string[];
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
-  openCodeProtocol: OpenCodeProtocol;
-  setOpenCodeProtocol: Dispatch<SetStateAction<OpenCodeProtocol>>;
   /** Bumped after a credential save so the plan-usage card refetches at once. */
   planUsageRefreshToken: number;
   setPlanUsageRefreshToken: Dispatch<SetStateAction<number>>;
@@ -327,8 +323,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
-    openCodeProtocol,
-    setOpenCodeProtocol,
     planUsageRefreshToken,
     setPlanUsageRefreshToken,
     openCodeProviderDraft,
@@ -1597,10 +1591,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Reset to defaults
             </Button>
           )}
-        </div>
-
-        <div className="border-t border-border/60 pt-5">
-          <OpenCodeProtocolSetting value={openCodeProtocol} onChange={setOpenCodeProtocol} />
         </div>
       </>,
     );

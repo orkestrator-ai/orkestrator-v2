@@ -129,6 +129,15 @@ export async function isHttpServerReachable(
   });
 }
 
+/**
+ * The route a server answers once it is ready: the bridges' `/global/health`,
+ * or OpenCode's `/api/info` (`/global/health` is not an OpenCode 2 route, and
+ * its web app answers it with HTML, which `checkHttpHealth` refuses).
+ */
+export function localServerHealthPath(kind: LocalServerKind): string {
+  return kind === "opencode" ? "/api/info" : "/global/health";
+}
+
 export function localServerHealthAttempts(kind: LocalServerKind): number {
   // Cursor, Grok, and Pi use the longer budget because their cold
   // start builds a model runtime and may refresh a provider catalogue over the
@@ -177,6 +186,8 @@ export async function confirmRunningServerHealth(
   dependencies: {
     checkHealth?: typeof checkHttpHealth;
     delay?: (milliseconds: number) => Promise<void>;
+    /** The readiness route ({@link localServerHealthPath}); `/global/health` by default. */
+    path?: string;
   } = {},
 ): Promise<{ healthy: boolean; failedProbes: number }> {
   const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
@@ -189,7 +200,7 @@ export async function confirmRunningServerHealth(
       failedProbes === 0
         ? LOCAL_SERVER_REUSE_FIRST_PROBE_TIMEOUT_MS
         : LOCAL_SERVER_REUSE_RETRY_PROBE_TIMEOUT_MS;
-    if (await checkHealth(port, "/global/health", headers, timeoutMs)) {
+    if (await checkHealth(port, dependencies.path ?? "/global/health", headers, timeoutMs)) {
       return { healthy: true, failedProbes };
     }
     failedProbes += 1;
@@ -207,7 +218,7 @@ export async function waitForLocalServerHealth(
 ): Promise<void> {
   await waitForHealth(
     port,
-    "/global/health",
+    localServerHealthPath(kind),
     localServerHealthAttempts(kind),
     headers,
     dependencies,

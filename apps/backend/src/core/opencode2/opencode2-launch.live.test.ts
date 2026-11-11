@@ -18,8 +18,8 @@ import path from "node:path";
 import { ScriptedModel } from "../../../../../scripts/opencode2-steer-probe.js";
 import { OPENCODE2_LAUNCH_ROOT } from "../agent-credential-files.js";
 import { filterProjectOpenCodeConfig } from "../opencode-project-config.js";
-import { OPENCODE_HOST_CONFIG_INPUT } from "../opencode-container-launch.js";
 import {
+  OPENCODE_HOST_CONFIG_INPUT,
   openCode2LaunchConfigScript,
   openCode2LaunchPlugins,
 } from "../opencode2-container-launch.js";

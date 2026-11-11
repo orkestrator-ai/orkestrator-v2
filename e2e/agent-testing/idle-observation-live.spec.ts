@@ -35,7 +35,7 @@
  *   the view must settle within the completion budget.
  * - `no-renderer`: the only page is closed while a turn runs. A second client
  *   signs in afterwards and must see the completed, idle conversation.
- * - `steer`: OpenCode 2 only (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`).
+ * - `steer`: OpenCode only.
  *   While a turn runs a shell command, a prompt queued from the composer is
  *   steered into it from its queue strip. The turn must end on the steer's
  *   reply, never the first prompt's, with the steer shown once, before and
@@ -71,9 +71,7 @@
  * provider merged into the profile's own global `opencode.json`
  * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
- * credential source either. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
- * switches the profile's OpenCode 2 preview on for the run (and back after),
- * so the OpenCode cases run on 2.x, whose server mirrors the same profile
+ * credential source either. OpenCode's server mirrors the same profile
  * configuration (todo 0008 task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
@@ -211,7 +209,6 @@ const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "co
  * put back afterwards. The 2.x server mirrors the same profile-local global
  * configuration, so the fake provider reaches it too.
  */
-const OPENCODE_PROTOCOL = process.env.ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL?.trim();
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -549,7 +546,6 @@ test.describe("live idle observation", () => {
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
       /** Puts the profile's OpenCode protocol setting back; set only when the run changed it. */
-      let restoreOpenCodeProtocol: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -583,25 +579,6 @@ test.describe("live idle observation", () => {
               PI_FAKE_PROVIDER,
             );
           }
-        }
-        if (platform === "opencode" && OPENCODE_PROTOCOL) {
-          expect(OPENCODE_PROTOCOL, "ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL").toBe("v2");
-          const global =
-            (await bootstrapInvoke<{ global?: Record<string, unknown> }>("get_config")).global ??
-            {};
-          const had = Object.hasOwn(global, "openCodeProtocol");
-          const original = global.openCodeProtocol;
-          await bootstrapInvoke("patch_global_config", { patch: { openCodeProtocol: "v2" } });
-          restoreOpenCodeProtocol = async () => {
-            await client.invoke(
-              "patch_global_config",
-              had
-                ? { patch: { openCodeProtocol: original } }
-                : { patch: {}, unset: ["openCodeProtocol"] },
-            );
-          };
-          summary.openCodeProtocol = "v2";
-          progress("OpenCode 2 preview on");
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1853,11 +1830,11 @@ test.describe("live idle observation", () => {
         });
 
         await runCase("steer", async (record) => {
-          // OpenCode 2 is the line whose composer steer had not been driven
+          // OpenCode is the platform whose composer steer had not been driven
           // through the UI (todo 0008 task 7); the other fakes do not script it.
-          if (platform !== "opencode" || OPENCODE_PROTOCOL !== "v2") {
+          if (platform !== "opencode") {
             record.status = "skipped";
-            record.notes.push("composer steer is checked on OpenCode 2 only");
+            record.notes.push("composer steer is checked on OpenCode only");
             return;
           }
           const baseWord = `IDLEQA-STEER-BASE-${nonce()}`;
@@ -2058,12 +2035,6 @@ test.describe("live idle observation", () => {
           if (restoreOpenCodeAllowlist) {
             await restoreOpenCodeAllowlist().catch((error: unknown) => {
               summary.allowlistRestoreError = String(error).slice(0, 300);
-              writeSummary();
-            });
-          }
-          if (restoreOpenCodeProtocol) {
-            await restoreOpenCodeProtocol().catch((error: unknown) => {
-              summary.protocolRestoreError = String(error).slice(0, 300);
               writeSummary();
             });
           }

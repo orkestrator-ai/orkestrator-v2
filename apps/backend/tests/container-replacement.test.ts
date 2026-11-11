@@ -155,10 +155,8 @@ exit 125
       select: [".codex/*.sqlite", ".codex/*.sqlite-wal", ".codex/*.sqlite-shm"],
     });
     const opencode = plan.find((step) => step.target.subdir === "opencode/db");
+    // OpenCode 1.x's opencode.db is left behind.
     expect(opencode?.select).toEqual([
-      "opencode/opencode.db",
-      "opencode/opencode.db-wal",
-      "opencode/opencode.db-shm",
       "opencode/opencode2.db",
       "opencode/opencode2.db-wal",
       "opencode/opencode2.db-shm",

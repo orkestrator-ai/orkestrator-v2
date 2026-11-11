@@ -22,7 +22,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Item 10 (D10, D11, D12). Codex and Claude were shown live on 2026-10-16. The file says this belongs with 0024's per-platform runs.
 
-**Investigation.** The adapters are still present: OpenCode `apps/backend/src/core/opencode-coordinator-research.ts` (with `-live`, `-registration` and unit tests); Cursor `hostResearchCustomTools` (`bridges/cursor-bridge/src/agent-session.ts:447`); Pi's `research` scope (`bridges/pi-bridge/src/mcp.ts:499`). The live suite cannot produce this evidence yet. `COORDINATOR_LIVE_SCENARIOS` is `read-only`, `async`, `family`, `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56`), and none of them asks for a research call. The read-only case switches research off on purpose (`settings: { coordinatorWebResearch: "off" }`, `e2e/agent-testing/coordinator-live.spec.ts:945`). Pins are unchanged since the work: Cursor SDK 1.0.40, OpenCode 1.19.4, Pi 1.4.0 (`docker/Dockerfile:195`, `:197`). #1308 also changed the Pi, Cursor and OpenCode coordinator boundaries (skill loading, plus an `orkestrator-skills__load` custom tool on Cursor), after the last read-only evidence.
+**Investigation.** The adapters are still present: OpenCode `apps/backend/src/core/opencode-coordinator-research.ts` (with `-live`, `-registration` and unit tests; removed with OpenCode 1.x on 2026-11-11, and now `opencode2/research-tools.ts` with the registration in `opencode2/coordinator.ts`, tested by `research-tools.test.ts` and `opencode2-coordinator.live.test.ts`); Cursor `hostResearchCustomTools` (`bridges/cursor-bridge/src/agent-session.ts:447`); Pi's `research` scope (`bridges/pi-bridge/src/mcp.ts:499`). The live suite cannot produce this evidence yet. `COORDINATOR_LIVE_SCENARIOS` is `read-only`, `async`, `family`, `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56`), and none of them asks for a research call. The read-only case switches research off on purpose (`settings: { coordinatorWebResearch: "off" }`, `e2e/agent-testing/coordinator-live.spec.ts:945`). Pins are unchanged since the work: Cursor SDK 1.0.40, OpenCode 1.19.4, Pi 1.4.0 (`docker/Dockerfile:195`, `:197`). #1308 also changed the Pi, Cursor and OpenCode coordinator boundaries (skill loading, plus an `orkestrator-skills__load` custom tool on Cursor), after the last read-only evidence.
 
 The live runs themselves (a billed turn per platform, and the read-only
 re-run below) are on the manual-test checklist; this task is the scenario they
@@ -134,9 +134,12 @@ advertises.
   - Grok: `effectiveExecutionPolicy` in `bridges/acp-bridge/src/acp-policy.ts`,
     with `restorePersistedPolicy` (`acp-persistence.ts`) refusing a permissive
     persisted policy;
-  - OpenCode has no bridge. The backend applies `effectiveOpenCodePolicy`,
-    `openCodePermissionRules` and `openCodeCoordinatorAgent` (the `plan`
-    agent) from `apps/backend/src/core/opencode-provider-helpers.ts`.
+  - OpenCode has no bridge. The backend applies `effectiveOpenCodePolicy` and
+    `openCodePermissionRules` from
+    `apps/backend/src/core/opencode2/policy-rules.ts`, and a coordinator's
+    process authority and `plan` agent (`OPENCODE2_COORDINATOR_AGENT`) from
+    `apps/backend/src/core/opencode2/coordinator.ts` (the 1.x
+    `opencode-provider-helpers.ts` was retired on 2026-11-11).
 - Qualification is one table: `judge` and `coordinatorProviderQualification`
   in `apps/backend/src/core/coordinator-providers.ts`. Claude's tier depends on
   the host probe `defaultCoordinatorHostCapabilities`: always on macOS, never
@@ -153,7 +156,7 @@ advertises.
   | Claude (Windows; Linux without `bwrap` or `socat`, or whose policy refuses the nested namespace) | `provider-configured` | Same, with the sandbox left off (0145); the hook allowlist is the boundary | No OS containment; not yet run live on Windows |
   | Codex | `enforced` | Permission profile that denies filesystem writes and network in the child; the bridge refuses a turn unless app-server echoes the profile back. Hosted web search (`web__run`) is switched off with `web_search = "disabled"`, and the bridge refuses a thread unless `config/read` reads it back | `sleep` is not denied (decided: not needed, item 2) |
   | Pi | `enforced` | In-process `tool_call` gate in the bridge; a name allowlist, so an extension's web tool is refused; research server tools admitted by exact registered name | None known |
-  | OpenCode | `provider-configured` (final, item 3) | SDK `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools and research tools by exact id, then named denies for `webfetch`, `websearch` and `codesearch`) | Always loads the checkout's project configuration, including command-backed MCP servers in `opencode.json` |
+  | OpenCode | `provider-configured` (final, item 3) | `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools and research tools by exact id, then named denies for `webfetch`, `websearch` and `codesearch`) | OpenCode 1.x always loaded the checkout's project configuration, including command-backed MCP servers in `opencode.json`; since 1.x was retired (2026-11-11) a coordinator's OpenCode 2 server starts with `OPENCODE_DISABLE_PROJECT_CONFIG=1` (`opencode2/coordinator.ts`). The permission engine is still no OS sandbox |
   | Cursor | `provider-configured` (final, item 4) | SDK sandbox plus a built-in tool allowlist (`CURSOR_READ_ONLY_TOOLS`, with denied capabilities mapped by `CURSOR_CAPABILITY_TOOLS`), which leaves out `webFetch` and `webSearch`; a read-only session without a sandbox boundary is refused before attach | No approval callback in SDK 1.0.40, so a denial cannot be verified |
   | Grok | `advisory` | Write, edit, shell, built-in subagents and `monitor` removed with a private `--agent-profile`; web search, its `open_page` actions and web fetch removed with `--disable-web-search`; `--no-leader` keeps those restrictions local; remaining permission requests refused | A tool that does not ask is not stopped, including xAI's hosted X search tools, which no switch removes; not offered at the default safety level |
 
@@ -329,7 +332,10 @@ still needs hardware or live runs this node cannot provide is under
       `context7_x` server and a command-backed `context7` entry:
       `opencode-coordinator-research-live.test.ts`; rules and attribution:
       `opencode-coordinator-research.test.ts`,
-      `coordinator-conformance.test.ts`.
+      `coordinator-conformance.test.ts`. The 1.x adapter and its tests were
+      removed with OpenCode 1.x on 2026-11-11
+      (`git show 5f4e27b1c:apps/backend/src/core/opencode-coordinator-research.ts`);
+      OpenCode 2 keeps the exact-id rule in `opencode2/research-tools.ts`.
     - Cursor: `hostResearchCustomTools` hosts each server's tools in-process as
       `<name>__<tool>` custom tools beside Orkestrator's (a sandboxed
       read-only attach cannot call an HTTP MCP server). Calls and inventory are

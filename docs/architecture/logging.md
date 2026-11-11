@@ -1574,7 +1574,7 @@ record what was observed at the time and are left as they are.
 | `[container-host-reachability]` | `[docker.reachability] <event>` |
 | `[graphs]`, `[graph-runs]`, `[graph-system]`, `[graph-describe]` | `[graph] launch.*`, `run.*`, `rewind.*`, `system.*`, `describe.*` |
 | `[goals]`, `[goal-verifier]` | `[native-agent.goal] <event>` |
-| `[opencode-provider]` | `[native-agent.opencode] <event>` |
+| `[opencode-provider]` | `[native-agent.opencode] <event>` (provider sign-in); the OpenCode provider itself logs as `[native-agent.opencode2] <event>` since OpenCode 1.x was retired (2026-11-11) |
 | `[native-agent-job]`, `[NativeAgentService]`, `[human-prompts]`, `[agent-handoffs]` | `[native-agent] <event>` |
 | `[ElectronBackend]` model catalogue lines | `[models] <event>` |
 | `[ElectronBackend] Installing ... support` | `[local-server] bridge-runtime.*` |

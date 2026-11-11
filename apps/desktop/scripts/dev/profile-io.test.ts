@@ -1567,9 +1567,9 @@ describe("development profile lifecycle primitives", () => {
     ]);
   });
 
-  test("prefetches and seeds both OpenCode binaries for the opencode platform", async () => {
+  test("prefetches and seeds the OpenCode binary for the opencode platform", async () => {
     const { profile, roots: profileRoots } = await toolchainFixture(["pi"]);
-    const opencode = (name: "opencode" | "opencode2", version: string): ToolchainArtifact => ({
+    const opencode = (name: "opencode2", version: string): ToolchainArtifact => ({
       name,
       version,
       platform: "darwin",
@@ -1584,11 +1584,7 @@ describe("development profile lifecycle primitives", () => {
       },
       executable: { fileName: name, size: 1, sha256: "0".repeat(64) },
     });
-    const artifacts = [
-      opencode("opencode", "1.19.5"),
-      opencode("opencode2", "2.2.6"),
-      toolchainArtifact("pi", "0.84.3"),
-    ];
+    const artifacts = [opencode("opencode2", "2.2.6"), toolchainArtifact("pi", "0.84.3")];
     const received: string[][] = [];
 
     await expect(
@@ -1601,13 +1597,10 @@ describe("development profile lifecycle primitives", () => {
           return { rootDir: "", binDir: "", executables: {} as never };
         },
       }),
-    ).resolves.toEqual({ downloaded: ["opencode@1.19.5", "opencode2@2.2.6"] });
-    expect(received).toEqual([["opencode", "opencode2"]]);
+    ).resolves.toEqual({ downloaded: ["opencode2@2.2.6"] });
+    expect(received).toEqual([["opencode2"]]);
 
-    for (const [name, version] of [
-      ["opencode", "1.19.5"],
-      ["opencode2", "2.2.6"],
-    ] as const) {
+    for (const [name, version] of [["opencode2", "2.2.6"]] as const) {
       const host = path.join(
         profileRoots.productionDataDir,
         "toolchains",
@@ -1623,7 +1616,7 @@ describe("development profile lifecycle primitives", () => {
         { ...profile, agentPlatforms: ["opencode"] },
         { roots: profileRoots, artifacts, platform: "darwin", architecture: "arm64" },
       ),
-    ).resolves.toEqual({ seeded: ["opencode@1.19.5", "opencode2@2.2.6"], failed: [] });
+    ).resolves.toEqual({ seeded: ["opencode2@2.2.6"], failed: [] });
   });
 
   test.each(["downloaded", "seeded", "failed"] as const)(

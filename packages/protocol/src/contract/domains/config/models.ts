@@ -40,7 +40,6 @@ import type { WorktreeLocationSettings } from "../../../disk-usage.js";
 import type { LogDetail } from "../../../log-policy.js";
 import type { McpManagementRolloutSettings } from "../../../mcp-management.js";
 import { MULTI_REVIEW_ENGINES } from "../../../multi-review.js";
-import { OPENCODE_PROTOCOLS } from "../../../opencode-protocol.js";
 import type { NotificationSoundSettings } from "../../../notification-sounds.js";
 import type { SelfImprovementSettings } from "../../../self-improvement.js";
 import {
@@ -132,8 +131,12 @@ export const globalSettingsFields = {
   agentSettings: Schema.optional(AgentSettingsTierSchema),
   /** OpenCode provider catalogues offered in model pickers; empty means unrestricted. */
   openCodeModelProviders: optionalStrings,
-  /** Which OpenCode line runs new interactive host sessions; absent means `legacy` (1.x). */
-  openCodeProtocol: Schema.optional(Schema.Literals(OPENCODE_PROTOCOLS)),
+  /**
+   * Retired on 2026-11-11 with OpenCode 1.x: OpenCode 2 runs every session and
+   * nothing reads this. Kept so the schema an older peer exchanges is
+   * unchanged; see the version compatibility register.
+   */
+  openCodeProtocol: Schema.optional(Schema.Literals(["legacy", "v2"])),
   /** Maximum concurrently open spawned-agent threads per native Codex session. */
   codexMaxConcurrentThreads: Schema.Finite,
   /** Longest a Claude native background shell command may run, in hours. */

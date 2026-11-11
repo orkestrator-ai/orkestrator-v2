@@ -1259,11 +1259,10 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
       // `PATCH /api/session/:id`, while every 1.x row in the same list carries
       // `archivable: false` and the router refuses a 1.x id.
       actions: { compact: true, undo: true, redo: true, steer: true, archive: true },
-      // `permission.asked` and the v2-only `question.asked`. No MCP
-      // elicitation surface on the v1 wire this repo uses. Every OpenCode
-      // permission, a bash or edit approval included, is mapped as
-      // `permission` (`opencode-interactions.ts`), so the command and file
-      // kinds are not claimed.
+      // OpenCode's permission requests and forms. No MCP elicitation
+      // surface. Every OpenCode permission, a bash or edit approval
+      // included, is mapped as `permission` (`opencode2/interactions.ts`),
+      // so the command and file kinds are not claimed.
       interactions: { kinds: ["question", "permission"] },
     };
   }

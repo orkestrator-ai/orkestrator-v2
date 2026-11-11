@@ -199,14 +199,8 @@ export function replacementCopyPlan(sourceFormat: ContainerStorageIdentity["form
       steps.push({
         source: { kind: "container-path", path: "/home/node/.local/share/opencode" },
         target: { role: "state", subdir: entry.subdir },
-        select: [
-          "opencode/opencode.db",
-          "opencode/opencode.db-wal",
-          "opencode/opencode.db-shm",
-          "opencode/opencode2.db",
-          "opencode/opencode2.db-wal",
-          "opencode/opencode2.db-shm",
-        ],
+        // OpenCode 1.x's `opencode.db` is left behind: nothing reads it now.
+        select: ["opencode/opencode2.db", "opencode/opencode2.db-wal", "opencode/opencode2.db-shm"],
       });
     } else {
       steps.push({

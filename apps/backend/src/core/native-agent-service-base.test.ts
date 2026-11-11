@@ -45,6 +45,8 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 import { createEnvironment, createProject } from "./storage.js";
 import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
 import {
@@ -172,43 +174,38 @@ function createProviderStub(
   };
 }
 
-function createOpenCodeLifecycleProvider(existingSessionIds: readonly string[]) {
-  const existing = new Set(existingSessionIds);
-  const client = {
-    session: {
-      async status() {
-        // OpenCode's real status map omits idle sessions.
-        return { data: {} };
-      },
-      async list() {
-        return { data: [...existing].map((id) => ({ id })) };
-      },
-      async get(parameters: { sessionID: string }) {
-        return existing.has(parameters.sessionID)
-          ? { data: { id: parameters.sessionID, directory: "/workspace" } }
-          : { error: { name: "NotFound" }, response: { status: 404 } };
-      },
-    },
-    question: {
-      async list() {
-        return { data: [] };
-      },
-    },
-    permission: {
-      async list() {
-        return { data: [] };
-      },
-    },
-  };
-  return createNativeAgentProvider(
+/**
+ * An OpenCode provider over a fake OpenCode server holding one session per
+ * name in `existing`; `ids` maps each name to the id the server minted.
+ */
+async function createOpenCodeLifecycleProvider(existing: readonly string[]) {
+  const server = new FakeOpenCode2Server();
+  const ids = new Map<string, string>();
+  for (const name of existing) ids.set(name, (await server.client().createSession({})).id);
+  const provider = createNativeAgentProvider(
     {
       agent: "opencode",
       baseUrl: "http://opencode.test",
       authToken: "test-token",
       directory: "/workspace",
     },
-    { openCodeClient: client as never },
+    {
+      openCode: {
+        connection: async () => ({
+          baseUrl: "http://127.0.0.1:1",
+          password: "pw",
+          directory: "/workspace",
+          generation: "g1",
+        }),
+        createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+      },
+    },
   );
+  const close = async () => {
+    await provider.dispose?.();
+    server.stop();
+  };
+  return { provider, ids, close };
 }
 
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
@@ -1842,7 +1839,8 @@ describe("NativeAgentService", () => {
   });
 
   test("preserves an existing idle OpenCode native-session mapping", async () => {
-    const provider = createOpenCodeLifecycleProvider(["provider-idle"]);
+    const { provider, ids, close } = await createOpenCodeLifecycleProvider(["provider-idle"]);
+    const idleId = ids.get("provider-idle")!;
     await withService(
       {
         prefix: "orkestrator-native-opencode-idle-existing-",
@@ -1855,40 +1853,16 @@ describe("NativeAgentService", () => {
           environmentId: "env-1",
           agent: "opencode",
           logicalSessionKey: "tab-idle",
-          providerSessionId: "provider-idle",
+          providerSessionId: idleId,
         });
 
         await service.reconcileAgentActivity();
 
         expect(await storage.getNativeAgentSession(key)).toMatchObject({
-          providerSessionId: "provider-idle",
+          providerSessionId: idleId,
         });
       },
-    );
-  });
-
-  test("invalidates a genuinely missing OpenCode native-session mapping", async () => {
-    const provider = createOpenCodeLifecycleProvider([]);
-    await withService(
-      {
-        prefix: "orkestrator-native-opencode-missing-",
-        provider: async () => provider,
-      },
-      async ({ storage, service }) => {
-        const key = nativeAgentSessionStorageKey("env-1", "opencode", "tab-deleted");
-        await storage.adoptNativeAgentSession({
-          key,
-          environmentId: "env-1",
-          agent: "opencode",
-          logicalSessionKey: "tab-deleted",
-          providerSessionId: "provider-deleted",
-        });
-
-        await service.reconcileAgentActivity();
-
-        expect(await storage.getNativeAgentSession(key)).toBeNull();
-      },
-    );
+    ).finally(close);
   });
 
   test("coalesces overlapping scans and shutdown waits for the active read", async () => {

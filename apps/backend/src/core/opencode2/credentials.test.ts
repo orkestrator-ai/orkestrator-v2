@@ -1,19 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import {
-  legacyOpenCodeAuthFile,
-  mirrorOpenCode2Credential,
+  exportOpenCode2Logins,
+  exportOpenCode2Refreshes,
+  keepActiveOpenCode2Credential,
+  legacyLoginFromOpenCode2,
   openCode2AuthStatus,
   openCode2CredentialFromLegacy,
-  readLegacyOpenCodeCredential,
-  reconcileOpenCode2Credentials,
+  removeOpenCode2Credentials,
+  runningOpenCode2HostClient,
 } from "./credentials.js";
+import { openCode2ServerKey } from "./host-server-state.js";
 
 // Fake values only; nothing here is a real credential.
-const FAKE_KEY = "sk-fake-opencode2-mirror-key";
+const FAKE_KEY = "sk-fake-opencode2-store-key";
 
 let server: FakeOpenCode2Server | undefined;
 let dir: string | undefined;
@@ -24,7 +27,33 @@ afterEach(async () => {
   dir = undefined;
 });
 
-describe("openCode2CredentialFromLegacy", () => {
+async function authFile(contents?: unknown): Promise<string> {
+  dir = await mkdtemp(path.join(tmpdir(), "ork-oc2-auth-"));
+  const file = path.join(dir, "opencode", "auth.json");
+  await mkdir(path.dirname(file), { recursive: true });
+  if (contents !== undefined) await writeFile(file, JSON.stringify(contents));
+  return file;
+}
+
+async function readJson(file: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+}
+
+function store(...entries: Array<[string, unknown, boolean?]>) {
+  server = new FakeOpenCode2Server();
+  entries.forEach(([integrationID, value, active], index) =>
+    server!.credentials.push({
+      id: `cred_${index}`,
+      integrationID,
+      label: "x",
+      active: active ?? true,
+      value,
+    }),
+  );
+  return server;
+}
+
+describe("the two credential shapes", () => {
   test("maps auth.json entries the way 2.x's own import does", () => {
     expect(
       openCode2CredentialFromLegacy("opencode-go", {
@@ -52,60 +81,188 @@ describe("openCode2CredentialFromLegacy", () => {
     expect(openCode2CredentialFromLegacy("x", { type: "api" })).toBeUndefined();
     expect(openCode2CredentialFromLegacy("x", { type: "oauth", refresh: "r" })).toBeUndefined();
   });
-});
 
-describe("readLegacyOpenCodeCredential", () => {
-  test("reads one provider's entry; a missing store is signed out, a broken one throws", async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "ork-oc2-auth-"));
-    const file = path.join(dir, "auth.json");
-    expect(await readLegacyOpenCodeCredential(file, "opencode-go")).toBeUndefined();
-    await writeFile(
-      file,
-      JSON.stringify({ "opencode-go": { type: "api", key: FAKE_KEY }, "openai/": { type: "x" } }),
-    );
-    expect(await readLegacyOpenCodeCredential(file, "opencode-go")).toEqual({
-      type: "key",
-      key: FAKE_KEY,
-    });
-    expect(await readLegacyOpenCodeCredential(file, "openai")).toBeUndefined();
-    await writeFile(file, "{not json");
-    await expect(readLegacyOpenCodeCredential(file, "opencode-go")).rejects.toThrow(
-      "not valid JSON",
-    );
-  });
-
-  test("the store path follows XDG_DATA_HOME", () => {
-    expect(legacyOpenCodeAuthFile({ HOME: "/h" })).toBe("/h/.local/share/opencode/auth.json");
-    expect(legacyOpenCodeAuthFile({ HOME: "/h", XDG_DATA_HOME: "/x" })).toBe(
-      "/x/opencode/auth.json",
-    );
-  });
-});
-
-describe("mirrorOpenCode2Credential", () => {
-  test("replaces the provider's credentials with the new one, then removes them all", async () => {
-    server = new FakeOpenCode2Server();
-    const client = server.client();
-    server.credentials.push(
-      { id: "cred_old", integrationID: "opencode-go", label: "API key", active: true, value: {} },
-      { id: "cred_other", integrationID: "anthropic", label: "API key", active: true, value: {} },
-    );
+  test.each([
+    { refresh: "", access: "a" },
+    { refresh: "r", access: "" },
+    { refresh: "", access: "" },
+  ])("rejects empty OAuth secrets: %j", (secrets) => {
     expect(
-      await mirrorOpenCode2Credential(client, "opencode-go", { type: "key", key: FAKE_KEY }),
-    ).toBe("written");
-    expect(server.credentials.map((credential) => credential.integrationID).sort()).toEqual([
-      "anthropic",
-      "opencode-go",
-    ]);
-    const written = server.credentials.find((c) => c.integrationID === "opencode-go")!;
-    expect(written).toMatchObject({ active: true, value: { type: "key", key: FAKE_KEY } });
-    expect(written.id).not.toBe("cred_old");
-    expect(await mirrorOpenCode2Credential(client, "opencode-go", undefined)).toBe("removed");
-    expect(await mirrorOpenCode2Credential(client, "opencode-go", undefined)).toBe("unchanged");
-    expect(server.credentials.map((credential) => credential.id)).toEqual(["cred_other"]);
-    await expect(mirrorOpenCode2Credential(client, "../x", undefined)).rejects.toThrow(
+      openCode2CredentialFromLegacy("openai", { type: "oauth", expires: 123, ...secrets }),
+    ).toBeUndefined();
+    expect(
+      legacyLoginFromOpenCode2({ type: "oauth", methodID: "m", expires: 123, ...secrets }),
+    ).toBeUndefined();
+  });
+
+  test("a 2.x credential becomes the auth.json entry 2.x would import back into it", () => {
+    const key = { type: "key", key: FAKE_KEY, metadata: { resourceName: "res" } };
+    expect(legacyLoginFromOpenCode2(key)).toEqual({
+      type: "api",
+      key: FAKE_KEY,
+      metadata: { resourceName: "res" },
+    });
+    const oauth = {
+      type: "oauth" as const,
+      methodID: "device",
+      refresh: "r",
+      access: "a",
+      expires: 9,
+      metadata: { accountID: "acct", enterpriseUrl: "ghe.example", other: "x" },
+    };
+    const legacy = legacyLoginFromOpenCode2(oauth)!;
+    expect(legacy).toEqual({
+      type: "oauth",
+      refresh: "r",
+      access: "a",
+      expires: 9,
+      accountId: "acct",
+      enterpriseUrl: "ghe.example",
+    });
+    expect(openCode2CredentialFromLegacy("github-copilot", legacy)).toEqual({
+      ...oauth,
+      metadata: { accountID: "acct", enterpriseUrl: "ghe.example" },
+    });
+    // An AWS profile names host configuration; auth.json has no shape for it.
+    expect(legacyLoginFromOpenCode2({ type: "external", methodID: "aws-profile" })).toBeUndefined();
+  });
+});
+
+describe("the host store", () => {
+  test("keeps the active credential of a provider after a connect, and signs it out", async () => {
+    const fake = store(
+      ["opencode-go", { type: "key", key: "old" }, false],
+      ["anthropic", { type: "key", key: "other" }],
+      ["opencode-go", { type: "key", key: FAKE_KEY }],
+    );
+    await keepActiveOpenCode2Credential(fake.client(), "opencode-go");
+    expect(fake.credentials.map((credential) => credential.id)).toEqual(["cred_1", "cred_2"]);
+    expect(await removeOpenCode2Credentials(fake.client(), "opencode-go")).toBe(1);
+    expect(await removeOpenCode2Credentials(fake.client(), "opencode-go")).toBe(0);
+    expect(fake.credentials.map((credential) => credential.id)).toEqual(["cred_1"]);
+    await expect(removeOpenCode2Credentials(fake.client(), "../x")).rejects.toThrow(
       "Invalid OpenCode provider id",
     );
+  });
+
+  test("with no active credential nothing is removed", async () => {
+    const fake = store(["openai", { type: "key", key: "a" }, false]);
+    await keepActiveOpenCode2Credential(fake.client(), "openai");
+    expect(fake.credentials).toHaveLength(1);
+  });
+
+  test("the running host server is the first live one this backend owns", () => {
+    const child = { exitCode: null, signalCode: null };
+    const stale = { exitCode: null, signalCode: null };
+    const records = [
+      ["stale", { child: stale, port: 1, password: "p1", directory: "/a" }],
+      ["env-1", { child, port: 4242, password: "p2", directory: "/work" }],
+    ] as const;
+    const localServers = {
+      openCode2: { live: () => records },
+      process: (key: string) => (key === openCode2ServerKey("env-1") ? child : undefined),
+    };
+    const client = runningOpenCode2HostClient(localServers as never);
+    expect(client?.baseUrl).toBe("http://127.0.0.1:4242");
+    expect(client?.directory).toBe("/work");
+    expect(
+      runningOpenCode2HostClient({
+        openCode2: { live: () => [] },
+        process: () => undefined,
+      } as never),
+    ).toBeUndefined();
+  });
+});
+
+describe("the container hand-off file", () => {
+  test("a sign-in change writes the provider's entry, replacing its old one; a sign-out removes it", async () => {
+    const file = await authFile({
+      "opencode-go/": { type: "api", key: "old" },
+      pi: { type: "api", key: "untouched" },
+    });
+    const fake = store(["opencode-go", { type: "key", key: FAKE_KEY }]);
+    await exportOpenCode2Logins(fake.client(), file, ["opencode-go"]);
+    expect(await readJson(file)).toEqual({
+      pi: { type: "api", key: "untouched" },
+      "opencode-go": { type: "api", key: FAKE_KEY },
+    });
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    fake.credentials.length = 0;
+    await exportOpenCode2Logins(fake.client(), file, ["opencode-go"]);
+    expect(await readJson(file)).toEqual({ pi: { type: "api", key: "untouched" } });
+  });
+
+  test("an unchanged login, an external one or a missing file with nothing to remove writes nothing", async () => {
+    const file = await authFile({ openai: { type: "wellknown", key: "k", token: FAKE_KEY } });
+    const before = (await stat(file)).mtimeMs;
+    const fake = store(
+      ["openai", { type: "key", key: FAKE_KEY }],
+      ["amazon-bedrock", { type: "external", methodID: "aws-profile" }],
+    );
+    await exportOpenCode2Logins(fake.client(), file, ["openai", "amazon-bedrock"]);
+    expect((await stat(file)).mtimeMs).toBe(before);
+    expect(await readJson(file)).toEqual({
+      openai: { type: "wellknown", key: "k", token: FAKE_KEY },
+    });
+    const absent = path.join(dir!, "elsewhere", "auth.json");
+    await exportOpenCode2Logins(fake.client(), absent, ["anthropic"]);
+    await expect(stat(absent)).rejects.toThrow();
+  });
+
+  test("a file that cannot be parsed is never replaced", async () => {
+    const file = await authFile();
+    await writeFile(file, "{broken");
+    const fake = store(["openai", { type: "key", key: FAKE_KEY }]);
+    await expect(exportOpenCode2Logins(fake.client(), file, ["openai"])).rejects.toThrow(
+      "not valid JSON",
+    );
+    expect(await readFile(file, "utf8")).toBe("{broken");
+  });
+
+  test("only an OAuth login 2.x has refreshed moves the file forward", async () => {
+    const file = await authFile({
+      openai: { type: "oauth", refresh: "r1", access: "a1", expires: 100, accountId: "acct" },
+      xai: { type: "oauth", refresh: "newer", access: "newer", expires: 900 },
+      anthropic: { type: "api", key: "file-key" },
+    });
+    const fake = store(
+      [
+        "openai",
+        { type: "oauth", methodID: "chatgpt-browser", refresh: "r2", access: "a2", expires: 200 },
+      ],
+      [
+        "xai",
+        { type: "oauth", methodID: "device", refresh: "older", access: "older", expires: 500 },
+      ],
+      // Keys never refresh, and a provider the file lacks is a sign-in's business.
+      ["anthropic", { type: "key", key: FAKE_KEY }],
+      [
+        "github-copilot",
+        { type: "oauth", methodID: "device", refresh: "g", access: "g", expires: 1 },
+      ],
+    );
+    expect(await exportOpenCode2Refreshes(fake.client(), file)).toBe(1);
+    expect(await readJson(file)).toEqual({
+      openai: { type: "oauth", refresh: "r2", access: "a2", expires: 200, accountId: "acct" },
+      xai: { type: "oauth", refresh: "newer", access: "newer", expires: 900 },
+      anthropic: { type: "api", key: "file-key" },
+    });
+    const before = (await stat(file)).mtimeMs;
+    expect(await exportOpenCode2Refreshes(fake.client(), file)).toBe(0);
+    expect((await stat(file)).mtimeMs).toBe(before);
+  });
+
+  test("concurrent exports to one file are serialized, so neither change is lost", async () => {
+    const file = await authFile({});
+    const fake = store(
+      ["openai", { type: "key", key: "k1" }],
+      ["anthropic", { type: "key", key: "k2" }],
+    );
+    await Promise.all([
+      exportOpenCode2Logins(fake.client(), file, ["openai"]),
+      exportOpenCode2Logins(fake.client(), file, ["anthropic"]),
+    ]);
+    expect(Object.keys(await readJson(file)).sort()).toEqual(["anthropic", "openai"]);
   });
 });
 
@@ -122,29 +279,4 @@ describe("openCode2AuthStatus", () => {
     expect(JSON.stringify(status)).not.toContain(FAKE_KEY);
     expect(openCode2AuthStatus(providers, ["anthropic"], "hint").state).toBe("needs-auth");
   });
-});
-
-test.each([
-  { refresh: "", access: "a" },
-  { refresh: "r", access: "" },
-  { refresh: "", access: "" },
-])("rejects empty OAuth secrets: %j", (secrets) => {
-  expect(
-    openCode2CredentialFromLegacy("openai", { type: "oauth", expires: 123, ...secrets }),
-  ).toBeUndefined();
-});
-
-test("starting 2.x reconciles credentials deferred while preview was disabled", async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "oc2-deferred-login-"));
-  const file = path.join(dir, "auth.json");
-  server = new FakeOpenCode2Server();
-  const client = server.client();
-  await mirrorOpenCode2Credential(client, "openai", { type: "key", key: "old-fake-key" });
-  await writeFile(file, JSON.stringify({ openai: { type: "api", key: "renewed-fake-key" } }));
-  await reconcileOpenCode2Credentials(client, file);
-  expect(server.credentials).toHaveLength(1);
-  expect(server.credentials[0]!.value).toEqual({ type: "key", key: "renewed-fake-key" });
-  await writeFile(file, "{}");
-  await reconcileOpenCode2Credentials(client, file);
-  expect(server.credentials).toEqual([]);
 });

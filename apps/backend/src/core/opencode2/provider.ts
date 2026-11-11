@@ -1,10 +1,10 @@
 /**
- * The OpenCode 2.x session provider (docs/todo/agent-engines/0008-opencode-v2.md,
- * build plan phase 3).
+ * The OpenCode session provider for one server generation
+ * (docs/todo/agent-engines/0008-opencode-v2.md). `OpenCodeEnvironmentProvider`
+ * (`environment-provider.ts`) builds one per server and hands it every call.
  *
- * It drives a 2.x `opencode serve` through {@link OpenCode2Client}. It is not
- * routed to yet: the routing provider and the per-session protocol marker
- * come next. The provider covers the required session contract and steering:
+ * It drives OpenCode 2's `opencode serve` through {@link OpenCode2Client},
+ * covering the session contract and steering:
  *
  * - **Dispatch evidence lives in the input.** Every prompt and steer carries
  *   `metadata.orkestrator.requestId`, which 2.x echoes on the user row (and on
@@ -36,6 +36,7 @@
  */
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type {
+  AgentModel,
   NativeAgentAuthStatus,
   NativeAgentForkOutcome,
   NativeAgentMcpServer,
@@ -65,12 +66,14 @@ import {
   type ProviderSteerDispatchStatus,
 } from "../agent-provider-contract.js";
 import { OpenCode2Client, OpenCode2RequestError } from "./client.js";
+import { readOpenCode2ModelCatalogue } from "./models.js";
+import { attachOpenCode2Instructions } from "./instructions.js";
 import { OpenCode2SequenceTracker, readOpenCode2Events } from "./events.js";
 import {
   OPENCODE2_EVENT_STREAM_SILENCE_MS,
   OpenCodeStreamSilenceWatchdog,
   type OpenCodeSilenceClock,
-} from "../opencode-stream-silence.js";
+} from "./stream-silence.js";
 import { OpenCode2SessionReads, openCode2EventSessionId } from "./reads.js";
 import { OpenCode2McpServers, openCode2ConfiguredUserMcpServers } from "./mcp.js";
 import { openCode2CreateRules, openCode2PolicyRules } from "./permissions.js";
@@ -233,6 +236,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
       });
     }
     this.features.noteCreated(session.id, model, options);
+    // A coordinator's server runs the read-only policy: no shared instructions.
+    if (!this.coordinator)
+      await attachOpenCode2Instructions(this.client, session.id, options.policy);
     this.registerSession(session.id);
     return session.id;
   }
@@ -575,6 +581,8 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     return this.grants.runExclusive(key, async () => {
       const sessionId = await this.features.resumableSession(resumableSessionId);
       if (this.coordinator) await this.grants.restate(sessionId);
+      // A conversation from before the instructions entry existed gets it now.
+      else await attachOpenCode2Instructions(this.client, sessionId);
       this.registerSession(sessionId);
       return sessionId;
     });
@@ -627,6 +635,23 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
 
   refreshCatalog(): void {
     this.features.refreshCatalog();
+  }
+
+  /** The unfiltered catalogue (no allowlist), for the durable cache. */
+  async rawModelCatalog(): Promise<AgentModel[]> {
+    return (await readOpenCode2ModelCatalogue(this.client, [])).models;
+  }
+
+  /**
+   * Rebuild every loaded location, so the server reads its configuration
+   * again (`POST /api/location/reload`). It cancels pending permissions and
+   * forms; callers reload only an idle server.
+   */
+  async reloadLocations(): Promise<void> {
+    await this.client.api("POST", "/api/location/reload", "OpenCode configuration reload", {
+      signal: AbortSignal.timeout(30_000),
+    });
+    this.refreshCatalog();
   }
 
   observationStreamLive(): boolean {

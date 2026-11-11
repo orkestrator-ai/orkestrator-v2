@@ -2,7 +2,7 @@
 
 Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `terminal-runtime.ts`, `terminal-history.ts`, `local-server-runtime.ts`,
-`opencode-agent-tools.ts`, `opencode-host-start.ts`, `pi-catalog-probes.ts`,
+`opencode2/host-server-state.ts`, `pi-catalog-probes.ts`,
 `environment-operations.ts`, `environment-replacement-fence.ts`,
 `pr-monitor-runtime.ts`, `docker-container-state-cache.ts`,
 `diff-stats-tracking.ts`, `tmux-runtime.ts`, `agent-accounts-runtime.ts`,
@@ -12,7 +12,7 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
-`coordinator-request-flights.ts`, `opencode-coordinator-research.ts`,
+`coordinator-request-flights.ts`,
 `github-cli-binary.ts`, `host-catalog-seeds.ts`.
 
 One backend instance owns its process state through one `BackendRuntime`.
@@ -30,7 +30,7 @@ environment operations (`backend-runtime.test.ts`; the state moved by todo 1070 
 | `gitHubCli` | `GitHubCliSelection` | The `gh` this backend runs: its toolchain's pin, recorded at startup (`pin`), or the newest release under its data directory when the gh channel follows upstream (`select`, from `applyGhChannel` and `startGhUpdate`). Host `gh` runs take it as an argument (`gitHubCli(selection)`), beside `gitHubCliEnv`'s config source; `PrMonitorRuntime` and `CoordinatorPullRequestWatches` are handed it at construction. |
 | `diffStats` | `DiffStatsTracking` | Diff-stats tracking, Git freshness, worktree watchers. |
 | `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. Its write queue holds raw output chunks and is bounded per session and overall, by bytes (each chunk also charged for its in-memory overhead) and by chunks; output past a bound is dropped and reported as `historyGap`, and the archive then resumes at the next whole line. Chunks become sanitized, numbered rows only when a flush writes them, or earlier when a snapshot or checkpoint needs `session.sequence`, which numbers them without waiting for the disk. A flush starts at a high-water mark as well as on its timer, and writes in bounded batches. |
-| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation and, as `research` (`OpenCodeCoordinatorResearch`), the coordinator research registrations it forgets with the same keys; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `catalogSeeds` (`HostCatalogSeeds`) owns the host model catalogue seeds (`host-model-catalog-seed.ts`): one flight per platform (and project, for OpenCode), the failure cooldown and the generation a sign-in bumps (`resetHostModelCatalogSeedCooldown(context, agent)`); `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
+| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCode2` (`OpenCode2HostServerState`) holds each host OpenCode server's password, directory and, for a coordinator, its launch authority, and its `startGate` takes host OpenCode starts one at a time, because every host server shares one `OPENCODE_DB`; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `catalogSeeds` (`HostCatalogSeeds`) owns the host model catalogue seeds (`host-model-catalog-seed.ts`): one flight per platform (and project, for OpenCode), the failure cooldown and the generation a sign-in bumps (`resetHostModelCatalogSeedCooldown(context, agent)`); `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
 | `environments` | `EnvironmentOperations` | Setup sessions, the start/setup/baseline dedupe tasks, the per-environment lifecycle queue, the project-home ensures per project, the allowlist apply queue per environment, the environments a stop is draining (`container-readiness.ts` fences their containers), container replacement cancellations, and the delete and merge guards. `fence` (`EnvironmentMutationFence`) admits agent work, file writes and worker starts against a runtime replacement or a worktree move. |
 | `prMonitor` | `PrMonitorRuntime` | The `PrMonitorService` and its timers, its `external-pr` admission pool (both created on first use, because every pool registers in the process-wide diagnostics registry, capped at `MAX_DIAGNOSTIC_SOURCES` = 32, and most test runtimes never monitor a PR), the storage/emit binding of the latest caller (not the runtime's own `emit`, so tests that capture events through their context still see them), and the serialised sync queue. Merge cleanup is a construction option (`prMonitor.scheduleMergeCleanup`). |
 | `tmux` | `TmuxRuntime` | claude-tmux sessions and their install locks (`sessions`), interactive pane terminals (`interactiveTerminals`), Claude state polls (`claudeStatePolls`, registered as the `claude-state-signal` diagnostics source), per-container claude-tmux hook doorbells (`hookSignals`, the `tmux-hook-signal` source), the serialised activity writes, and the orphaned-session sweep's clock and first-seen times. A session's poll loop reaches it through the context it was started with. |
@@ -71,7 +71,7 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `openAgentsMdPullRequest(coordinatorRequests, ...)`,
   `openCoordinatorDelegation(coordinatorRequests.workerTabs, ...)`) or a narrow option
   (`NativeAgentService`'s `localBridgeAccountId`, `environmentFence` and
-  `openCodeCoordinatorResearch`, a
+  `openCodeServer`, a
   bridge provider's `planUsage`, `gitHubCliEnv`'s config source, the
   `GitHubCliSelection` that `gitHubCli`, the token readers and the `gh`
   runners take), not the whole
@@ -91,7 +91,7 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   return `undefined` while no keeper runs, which callers read as "nothing
   was asked".
 - Test seams are construction options, not setters:
-  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, openCodeAgentTools, openCodeLockedStartRetryDelaysMs, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, hookSignal, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher }, containerOom: { spawn }, containerLogs: { spawn, now } })`.
+  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, hookSignal, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher }, containerOom: { spawn }, containerLogs: { spawn, now } })`.
   A test that runs whole backends passes the two Docker follower seams to
   `OrkestratorBackend` as `dockerFollowers`, which keeps the backend's own
   refresher wiring (passing a whole `runtime` would replace it).
@@ -162,7 +162,7 @@ On an idle machine nice changes nothing.
 
 | Lowered | How |
 | --- | --- |
-| Local bridges and `opencode serve`, with everything they start | `LocalServerRuntime`'s default `spawn` |
+| Local bridges and the host OpenCode servers, with everything they start | `LocalServerRuntime`'s default `spawn` |
 | Local setup terminals and user commands | `lowPriorityCommand` around the PTY's shell |
 | Review validation commands | `LOW_PRIORITY_SHELL_PREFIX` in the worker's command shell; the worker keeps normal priority so its heartbeat stays prompt |
 | A local Claude tmux pane | `LOW_PRIORITY_SHELL_PREFIX` in the pane; the tmux server keeps normal priority |
@@ -250,8 +250,6 @@ declaration:
 | `disk-usage.ts` | `running`, `waiting` | Bound disk scans on the host, like `gitDockerScanPool`; a bound per backend would multiply it. |
 | `transcript-artifacts/interactive-modules.ts` | `macroCheck` | A fact about this Bun: whether it honours `macros: false`. |
 | `storage-agent-mail.ts` | `lastIdTime`, `idSequence` | One clock orders mail ids across every repository in the process, a stronger guarantee than one per repository; it shares nothing but ordering. |
-| `opencode-command-changes.ts` | `sharedProbe` | Orders snapshots per repository on the host, so two providers on one worktree must share it. |
-| `opencode-command-changes.ts` | `journals`, `removedJournalDirectories` | Keyed by paths inside a backend's data directory, so two data directories never share an entry. The removed set gains one entry per deleted OpenCode environment for the life of the process. |
 | `agent-test-cursor-credential.ts` | `hostCursorCredential` | Agent-test profiles only: the process entry loads it once from its own data directory, so two agent-test backends in one process would see one key. |
 | `container-lifecycle-service.ts` | `activeOperations`, `operationClocks` | Keyed by the data directory's Docker owner namespace and the operation id, so two data directories never share an entry. |
 | `container-lifecycle-service.ts` | `ownedByLabel` | A bounded memo of a container's owner label, which is immutable; a hit counts only for the owner the caller asks with. |

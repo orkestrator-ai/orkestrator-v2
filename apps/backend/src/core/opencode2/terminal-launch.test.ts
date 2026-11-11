@@ -173,7 +173,6 @@ describe("buildOpenCode2TerminalCommand", () => {
 describe("resolveOpenCode2TerminalCommand", () => {
   function context(
     overrides: {
-      setting?: unknown;
       environmentType?: string;
       cliPath?: string | undefined;
       fail?: boolean;
@@ -187,9 +186,6 @@ describe("resolveOpenCode2TerminalCommand", () => {
           if (overrides.fail) throw new Error("unreadable");
           return { environmentType: overrides.environmentType ?? "local" };
         },
-        loadConfig: async () => ({
-          global: { openCodeProtocol: "setting" in overrides ? overrides.setting : "v2" },
-        }),
       },
       resolveBunPath: () => process.execPath,
       resolveCliPath: () =>
@@ -200,7 +196,7 @@ describe("resolveOpenCode2TerminalCommand", () => {
     return { value, writeConfig };
   }
 
-  test("launches 2.x in a local environment while the setting asks for it", async () => {
+  test("launches the managed TUI in a local environment", async () => {
     const { value, writeConfig } = context();
     const command = await resolveOpenCode2TerminalCommand(value, "env-1", {
       model: "anthropic/claude-sonnet",
@@ -211,21 +207,19 @@ describe("resolveOpenCode2TerminalCommand", () => {
     expect(writeConfig).toHaveBeenCalledTimes(1);
   });
 
-  test.each([
-    { setting: "legacy" },
-    { setting: undefined },
-    { environmentType: "containerized" },
-    { fail: true },
-  ])("keeps the 1.x launch for %p", async (overrides) => {
-    const { value, writeConfig } = context(overrides);
-    expect(await resolveOpenCode2TerminalCommand(value, "env-1", {})).toBeUndefined();
-    expect(writeConfig).not.toHaveBeenCalled();
-  });
+  test.each([{ environmentType: "containerized" }, { fail: true }])(
+    "keeps the renderer's launch line for %p",
+    async (overrides) => {
+      const { value, writeConfig } = context(overrides);
+      expect(await resolveOpenCode2TerminalCommand(value, "env-1", {})).toBeUndefined();
+      expect(writeConfig).not.toHaveBeenCalled();
+    },
+  );
 
-  test("says 2.x is missing rather than running 1.x when the toolchain has none", async () => {
+  test("says OpenCode is missing rather than running whatever is on PATH", async () => {
     const { value, writeConfig } = context({ cliPath: undefined });
     const command = await resolveOpenCode2TerminalCommand(value, "env-1", { initialPrompt: "Hi" });
-    expect(command).toStartWith("printf '%s\\n' 'OpenCode 2 is not installed yet.");
+    expect(command).toStartWith("printf '%s\\n' 'OpenCode is not installed yet.");
     expect(writeConfig).not.toHaveBeenCalled();
   });
 });

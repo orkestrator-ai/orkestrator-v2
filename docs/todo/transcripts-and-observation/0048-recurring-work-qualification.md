@@ -858,7 +858,10 @@ and the decisions below were recorded.
   (`http-bridge-transport.ts`): the provider's default client
   (`createOpenCodeSdkClient`, `opencode-sdk-client.ts`), the host catalogue
   refresh and provider sign-in. Each SDK request, event-stream connects and
-  reconnects included, is a `provider-request` like a `bridgeFetch`.
+  reconnects included, is a `provider-request` like a `bridgeFetch`. The SDK
+  and `opencode-sdk-client.ts` were removed with OpenCode 1.x on 2026-11-11;
+  OpenCode 2 is reached through Orkestrator's own HTTP client
+  (`opencode2/client.ts`), which nothing now passes `openCodeSdkFetch`.
 - The activity jobs `coordinator-repair`, `claude-state-reconcile` and
   `pending-rename-reconcile` register as `recovery`, as catalogued (they were
   `maintenance`, `progress` and `progress`). In `BackendActivityJobs` the
@@ -1448,7 +1451,7 @@ owners: the child's exit is the signal.
 | Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
 | `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
 | Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was 7200 task 4, fixed |
-| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream (`opencode2/provider.ts`, `/api/event`) got the same watchdog on 2026-11-11, armed by its `: heartbeat` comment (every 15 s on 2.2.6) with a 50 s deadline: 7559 (retired; see [recurring-work.md](../../architecture/recurring-work.md) B22) |
+| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`; removed with OpenCode 1.x on 2026-11-11) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream (`opencode2/provider.ts`, `/api/event`) got the same watchdog on 2026-11-11, armed by its `: heartbeat` comment (every 15 s on 2.2.6) with a 50 s deadline: 7559 (retired; see [recurring-work.md](../../architecture/recurring-work.md) B22) |
 | Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
 | Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
 | Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |

@@ -16,7 +16,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 ag
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: done (2026-11-06, both providers, loopback models; all passed).
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: done (2026-11-10, loopback model through a custom OpenCode provider: an idle OpenCode view read 8 times a minute over 300 s with no invalidation of any cause, so nothing is left to attribute).
 7. **Pi rerun**: Pi was skipped as signed out on 2026-10-21. Status: done (Pi ran 2026-11-06 on a loopback model: every case settled, and the full detach wait found an open idle tab keeps Pi attached, moved to 7540, closed 2026-11-10: the full 630 s wait now passes, see `bridges/pi-bridge/AGENTS.md`). The Grok rerun needs a Grok login (no loopback model reaches it) and moved to 7568 on 2026-11-10.
-8. **Unexercised cases**: Codex sub-agents, and background shells on Codex and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); OpenCode open (2026-11-10, loopback model: the case ran, but the scripted model reuses Pi's script, which has no background call, so the command ran in the foreground; it needs a scripted background call, if OpenCode 1.19.5's `bash` offers one). The Cursor background shell needs a Cursor login (no loopback model reaches it) and moved to 7568 on 2026-11-10.
+8. **Unexercised cases**: Codex sub-agents, and background shells on Codex and OpenCode. Status: partly done (2026-11-06, loopback model: Codex sub-agents passed and Codex's background shell ran, see task 3); OpenCode open (2026-11-10, loopback model: the case ran, but the scripted model reuses Pi's script, which has no background call, so the command ran in the foreground; it needs a scripted background call, if OpenCode's `bash` offers one; checked for neither 1.19.5 nor, since OpenCode 1.x was retired on 2026-11-11, the 2.x pin). The Cursor background shell needs a Cursor login (no loopback model reaches it) and moved to 7568 on 2026-11-10.
 9. **Container environment**: no-renderer completion in a container, and an older bridge image staying at the baseline cadence on both sides. Status: partly done (2026-11-06: a current-image container's stream is live and its idle group backs off; turns after the first are blocked on this host by [7080](../containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md); no older image exists here).
 10. **Full detach wait**: observe `detached` before and `attached` after through no-touch runtime discovery. Status: done for Claude (2026-11-06); Codex open in [7380](7380-codex-idle-detach-observation.md).
 
@@ -424,7 +424,8 @@ loopback model (task 6), and its `background` case ran, but it recorded
 background call, so `sleep …; echo <marker>` ran in the foreground and its
 output came back in the tool result. Exercising it needs the fake to send
 OpenCode's background form, if its `bash` has one at 1.19.5 (not checked
-here). Its `subagents` case was `not-exercised` for the same reason (the
+here; since 2026-11-11 the question is for the OpenCode 2 pin, 1.x being
+retired). Its `subagents` case was `not-exercised` for the same reason (the
 script answers in text; OpenCode's `task` tool was not scripted).
 
 ### 9. Container environment

@@ -17,6 +17,7 @@ import {
   RETIRED_LEGACY_STORES,
   queueLoopedReviewSessions,
   retireLoopedReviewsMigration,
+  retireOpenCode2SessionsMigration,
 } from "./storage-retired-features.js";
 import {
   WEB_ANNOTATION_STORE_LAYOUT,
@@ -133,9 +134,6 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
   // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
-  // OpenCode 2.x sessions workflows created, one row per environment
-  // (`storage-opencode2-sessions.ts`).
-  "opencode2-sessions": { kind: "record", owner: ownerField("environmentId") },
 };
 
 /**
@@ -273,6 +271,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   retireLoopedReviewsMigration,
   buildPipelineReviewReportUpgradeMigration,
   moveChangeLedgerMigration,
+  retireOpenCode2SessionsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

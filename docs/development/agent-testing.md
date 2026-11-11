@@ -1018,13 +1018,11 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
 (the profile setup is in the spec's header).
-`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
-OpenCode 2: it turns the profile's preview setting on for the run and back off
-afterwards, and adds a `steer` case (a prompt queued from the composer while a
+OpenCode also runs a `steer` case (a prompt queued from the composer while a
 turn runs is steered into it from its queue strip, then checked again after a
 reload) that every other platform records as skipped. `mise run
-verify:opencode2:real-stack` runs exactly that against the running profile
-named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+verify:opencode2:real-stack` runs the OpenCode cases against the running
+profile named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, with
 scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
 `no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
 overrides the list). Start the profile with `--fixture --no-agent-credentials

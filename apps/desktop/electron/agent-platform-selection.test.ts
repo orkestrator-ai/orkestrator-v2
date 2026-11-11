@@ -139,9 +139,8 @@ describe("pinned artifacts for a platform selection", () => {
     ]);
   });
 
-  test("OpenCode installs its 1.x and 2.x binaries; opencode2 is not a platform", () => {
+  test("OpenCode installs only its 2.x binary; opencode2 is not a platform", () => {
     expect(pinnedArtifactsForPlatforms(["opencode"], "linux", "arm64").map((a) => a.name)).toEqual([
-      "opencode",
       "opencode2",
       "gh",
     ]);

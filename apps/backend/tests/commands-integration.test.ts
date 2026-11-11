@@ -61,6 +61,49 @@ import type { CommandContext, Environment, RepositoryConfig } from "./command-fi
 // explicit operation deadlines and shorter test budgets remain unchanged.
 setDefaultTimeout(30_000);
 
+/**
+ * A managed `opencode2` stand-in: answers `/api/info` as OpenCode 2 behind
+ * Basic `opencode:<OPENCODE_PASSWORD>` and, when `markerPath` is given,
+ * records the launch it was given there.
+ */
+async function writeManagedOpenCode2(toolchainBinDir: string, markerPath?: string) {
+  const binary = path.join(toolchainBinDir, "opencode2");
+  const script = `
+const fs = require("node:fs");
+const http = require("node:http");
+const args = process.argv.slice(2);
+const port = Number(args[args.indexOf("--port") + 1]);
+const marker = process.env.ORK_TEST_OPENCODE2_MARKER;
+if (marker) {
+  fs.writeFileSync(marker, JSON.stringify({
+    args: args.join(" "),
+    configContent: process.env.OPENCODE_CONFIG_CONTENT ?? null,
+    configDir: process.env.OPENCODE_CONFIG_DIR ?? null,
+    db: process.env.OPENCODE_DB ?? null,
+    filewatcher: process.env.OPENCODE_DISABLE_FILEWATCHER ?? null,
+    autoupdate: process.env.OPENCODE_DISABLE_AUTOUPDATE ?? null,
+  }));
+}
+const expected = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_PASSWORD).toString("base64");
+process.on("SIGTERM", () => process.exit(0));
+http.createServer((req, res) => {
+  if (req.headers.authorization !== expected) { res.writeHead(401); res.end(); return; }
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(req.url && req.url.startsWith("/api/credential")
+    ? JSON.stringify({ data: [] })
+    : JSON.stringify({ version: "2.2.6", pid: process.pid }));
+}).listen(port, "127.0.0.1");
+`;
+  const scriptPath = `${binary}.cjs`;
+  await fs.writeFile(scriptPath, script);
+  const marker = markerPath ? `ORK_TEST_OPENCODE2_MARKER=${JSON.stringify(markerPath)} ` : "";
+  await fs.writeFile(
+    binary,
+    `#!/bin/sh\n${marker}exec node ${JSON.stringify(scriptPath)} "$@" </dev/null\n`,
+  );
+  await fs.chmod(binary, 0o755);
+}
+
 /** The settings a stored global config always holds: config results are validated in tests. */
 const REQUIRED_GLOBAL_CONFIG = {
   containerResources: { cpuCores: 2, memoryGb: 4 },
@@ -3890,28 +3933,7 @@ printf '%s' ${JSON.stringify(
     const worktreePath = await createTempDir("ork-electron-worktree-delete-all-servers-");
     await writeBridgeServer(appRoot, "claude-bridge");
     await writeBridgeServer(appRoot, "codex-bridge");
-    const opencodePath = path.join(toolchainBinDir, "opencode");
-    await fs.writeFile(
-      opencodePath,
-      `#!/bin/sh
-PORT=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--port" ]; then shift; PORT="$1"; fi
-  shift
-done
-exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.writeHead(req.url==="/global/health"?200:404);res.end();}).listen(Number(process.env.PORT_ARG),"127.0.0.1");' \
-  </dev/null
-`,
-    );
-    // The wrapper receives the port as argv, so preserve it for the Node server.
-    await fs.writeFile(
-      opencodePath,
-      (await fs.readFile(opencodePath, "utf8")).replace(
-        "exec node",
-        'export PORT_ARG="$PORT"\nexec node',
-      ),
-    );
-    await fs.chmod(opencodePath, 0o755);
+    await writeManagedOpenCode2(toolchainBinDir);
 
     const environment = createEnvironment({ worktreePath });
     const { context } = createContext(environment);
@@ -4079,34 +4101,8 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
     const toolchainBinDir = await createTempDir("ork-electron-tools-opencode-");
     const worktreePath = await createTempDir("ork-electron-worktree-opencode-");
 
-    const markerPath = path.join(toolchainBinDir, "opencode-was-used.log");
-    const configMarkerPath = path.join(toolchainBinDir, "opencode-config-content.json");
-    const opencodeWrapperPath = path.join(toolchainBinDir, "opencode");
-    await fs.writeFile(
-      opencodeWrapperPath,
-      `#!/bin/sh
-printf 'used %s\\n' "$*" >> "${markerPath}"
-printf '%s' "$OPENCODE_CONFIG_CONTENT" > "${configMarkerPath}"
-printf '%s' "$OPENCODE_CONFIG_DIR" > "${configMarkerPath}.dir"
-PORT=""
-HOST="127.0.0.1"
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --port)
-      shift
-      PORT="$1"
-      ;;
-    --hostname)
-      shift
-      HOST="$1"
-      ;;
-  esac
-  shift
-done
-exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; const expected = "Basic " + Buffer.from("opencode:" + process.env.OPENCODE_SERVER_PASSWORD).toString("base64"); http.createServer((req, res) => { if (req.headers.authorization !== expected) { res.writeHead(401); res.end(); return; } if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
-`,
-    );
-    await fs.chmod(opencodeWrapperPath, 0o755);
+    const markerPath = path.join(toolchainBinDir, "opencode-launch.json");
+    await writeManagedOpenCode2(toolchainBinDir, markerPath);
 
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
@@ -4135,22 +4131,32 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
       expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
-      await expect(requestOk(result.port, "/global/health")).resolves.toBe(false);
+      await expect(requestOk(result.port, "/api/info")).resolves.toBe(false);
       await expect(
-        requestOk(result.port, "/global/health", {
+        requestOk(result.port, "/api/info", {
           Authorization: `Basic ${Buffer.from(`opencode:${result.authToken}`).toString("base64")}`,
         }),
       ).resolves.toBe(true);
-      expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
-      expect(await fs.readFile(configMarkerPath, "utf8")).toBe(userOpenCodeConfigContent);
+      const launched = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, string>;
+      expect(launched.args).toContain("serve --hostname 127.0.0.1 --port");
+      // The user's inline configuration reaches the server untouched.
+      expect(launched.configContent).toBe(userOpenCodeConfigContent);
+      const dataDir = context.storage.getDataDir();
+      expect(launched).toMatchObject({
+        db: path.join(dataDir, "opencode2", "opencode.db"),
+        configDir: path.join(dataDir, "opencode2", "config"),
+        filewatcher: "1",
+        autoupdate: "1",
+      });
       expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
-      // Nothing was named, so the server gets the plugin that keeps its password from its tools.
-      const configDirectory = await fs.readFile(`${configMarkerPath}.dir`, "utf8");
-      expect(configDirectory).toBe(path.join(context.storage.getDataDir(), "opencode-host-config"));
-      const plugin = path.join(configDirectory, "plugins", "orkestrator-credential.js");
-      expect(await fs.readFile(plugin, "utf8")).toContain(
-        "delete process.env.OPENCODE_SERVER_PASSWORD",
+      // The plugin that keeps the password from the server's tools.
+      const plugin = path.join(
+        launched.configDir!,
+        "plugins",
+        "orkestrator-credential",
+        "index.ts",
       );
+      expect(await fs.readFile(plugin, "utf8")).toContain("OPENCODE_PASSWORD");
     } finally {
       await commands.get("stop_local_opencode_server_cmd")?.(
         { environmentId: environment.id },

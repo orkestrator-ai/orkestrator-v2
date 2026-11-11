@@ -613,7 +613,7 @@ describe("prepareProviderRuntime", () => {
       const runtime = await prepareProviderRuntime({ root, dataDir, packageRoot, provider });
       expect(runtime.toolchainTools).toEqual(
         provider === "opencode"
-          ? ["opencode", "opencode2"]
+          ? ["opencode2"]
           : PINNED_PLATFORMS.includes(provider)
             ? [provider]
             : [],

@@ -901,7 +901,6 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/claude-warm-runtime-support.test.ts",
   "./e2e/agent-testing/opencode-fake-provider.test.ts",
   "./e2e/agent-testing/mcp-probe-server.integration.test.ts",
-  "./scripts/opencode-live-compatibility-probe.test.ts",
   "./test-fixtures/agent-project/server.test.ts",
 ];
 

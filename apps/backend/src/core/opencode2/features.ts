@@ -28,9 +28,7 @@ import {
   type ProviderSendOptions,
   type ProviderSessionStateSnapshot,
 } from "../agent-provider-contract.js";
-import { OPENCODE_SIGN_IN_COMMAND_HINT } from "../opencode-capabilities.js";
-import type { OpenCodeCommandDispatch, OpenCodeCommandRegistry } from "../opencode-commands.js";
-import { openCodeRevertNotice } from "../opencode-revert.js";
+import type { OpenCodeCommandDispatch, OpenCodeCommandRegistry } from "./command-catalogue.js";
 import { openCode2PromptFiles } from "./attachments.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import {
@@ -48,6 +46,7 @@ import {
 import {
   clearOpenCode2Revert,
   openCode2RevertMarker,
+  openCode2RevertNotice,
   openCode2UndoTarget,
   stageOpenCode2Revert,
   withoutStagedOpenCode2Revert,
@@ -345,7 +344,7 @@ export class OpenCode2SessionFeatures {
       ...(details.reasoningId ? { sessionReasoningId: details.reasoningId } : {}),
       ...(details.title ? { title: details.title } : {}),
       resumableSessionId: `${OPENCODE2_RESUME_PREFIX}${sessionId}`,
-      notices: openCodeRevertNotice(revert),
+      notices: openCode2RevertNotice(revert),
     };
   }
 
@@ -373,7 +372,7 @@ export class OpenCode2SessionFeatures {
       }),
       this.allowedModelProviders(),
     ]);
-    return openCode2AuthStatus(providers, allowed, OPENCODE_SIGN_IN_COMMAND_HINT);
+    return openCode2AuthStatus(providers, allowed, "Sign a provider in from Settings → OpenCode.");
   }
 
   commandCatalogue(): Promise<ProviderCommandCatalogue> {

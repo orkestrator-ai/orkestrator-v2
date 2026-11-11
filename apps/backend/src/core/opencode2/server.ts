@@ -65,8 +65,7 @@ export const OPENCODE2_DISABLE_FILEWATCHER = { OPENCODE_DISABLE_FILEWATCHER: "1"
  * `hardened: "refuse-tools"` is the container form. Deleting the variable
  * does not change `/proc/<pid>/environ`, which any process of the same uid
  * can read on Linux, so the plugin also marks the server non-dumpable, as the
- * 1.x plugin does (`buildOpenCodeCredentialPluginSource`), and refuses every
- * tool when it cannot. The host form only removes the variable: a host
+ * retired 1.x plugin did, and refuses every tool when it cannot. The host form only removes the variable: a host
  * promises no boundary between the agent and the user's own processes
  * (docs/architecture/agent-approvals.md).
  */

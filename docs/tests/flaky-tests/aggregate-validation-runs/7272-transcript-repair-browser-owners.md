@@ -35,7 +35,7 @@ and [4350](4350-suborks-branch-browser-validation.md). `TabLaunchOverride`
 failed both viewports in the aggregate and again in the seven-owner rerun
 (54 passed, two failed in 1.1 min); it is not classified as a flake. That
 failure is left to the verifier rather than changing unrelated launch UI.
-Its cause was found on 2026-11-11 ([9937](9937-launch-override-marker-browser-owners.md)): under the fixture's
+Its cause was found on 2026-11-11 ([9953](9953-launch-override-marker-browser-owners.md)): under the fixture's
 React StrictMode the override store was re-retained while its first read ran
 and queued a second read 500 ms later, so "the whole strip makes one
 coordinator read" saw two reads whenever the click came late. Commit

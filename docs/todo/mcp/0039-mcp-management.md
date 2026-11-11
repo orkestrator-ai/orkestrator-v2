@@ -113,9 +113,22 @@ once an upstream release stops the old process, changing the canary to
   runs the repro and pins this table, so the file a maintainer attaches keeps
   reproducing on the pin. Both it and the canary fail when upstream fixes the
   leak: flip both then. `mise run verify:claude:mcp-live` with
-  `CLAUDE_CLI_PATH` at 2.1.319: 2 pass, 13 expects, 25.9 s. The canary alone
-  also still passes there (`alive: ["alpha", "alpha"]`), so the bug is not
-  fixed upstream at 2.1.319.
+  `CLAUDE_CLI_PATH` at the throwaway 2.1.319 install
+  (`mise run toolchain:install --data-dir <throwaway dir>` into the worktree's
+  `output/p0039-r2/toolchain-data`, removed after the run; point
+  `CLAUDE_CLI_PATH` at `toolchains/claude/2.1.319/linux-x64/claude` there) and every
+  variable naming the real data directory unset (`CLAUDE_CONFIG_DIR`,
+  `ORKESTRATOR_CLAUDE_ACCOUNT_HOME`, `CLAUDE_CODE_EXECPATH`,
+  `ORKESTRATOR_RESOURCE_ROOT`, `ORKESTRATOR_APP_ROOT`): passed, 26.2 s
+  (2026-11-11). The canary in that run also still passes
+  (`alive: ["alpha", "alpha"]`), so the bug is not fixed upstream at 2.1.319.
+  Disclosure: two earlier runs of the same task on 2026-11-11 (2 pass,
+  13 expects, 25.9 s, and one after the SIGTERM fix) inherited the session's
+  `CLAUDE_CLI_PATH`, so they executed the host's pinned 2.1.319 from the real
+  data directory's `toolchains/bin`. That was a read-only execution; the
+  probes give the CLI temporary `HOME` and `CLAUDE_CONFIG_DIR` and send no
+  prompt, so no login or model request was made. The run above replaces them
+  as the recorded evidence.
 - Left: filing the report (7568) and, after an upstream fix, the canary flip.
 
 ### 2. Re-derive Grok rules at 1.0.70

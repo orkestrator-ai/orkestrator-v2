@@ -190,7 +190,8 @@ is not permission to execute. The editor never changes an execution policy.
   the switch (unverified) and never writes `enabled`.
 - **Claude plugins** (todo 0121 (retired 2026-11-11), rules read from the
   pinned CLI 2.1.309 and proven by `mise run verify:claude:plugin-mcp-live`,
-  last on 2.1.319 on 2026-11-11):
+  last on 2.1.319 on 2026-11-11, from a throwaway toolchain install through
+  `CLAUDE_CLI_PATH`: 2 pass, 64 expects):
   - The plugin set is the bridge's (`getPluginsForSdk`): `plugins` in
     `~/.claude.json`, the installs in `installed_plugins.json` that Claude
     Code's own settings enable, remapped onto the local plugins folder (or,

@@ -3,8 +3,8 @@
 Living guide to how the backend owns environment containers. Qualifying a
 change against a real daemon is in
 [container-qualification.md](../development/container-qualification.md);
-outstanding work is in `docs/todo/containers-and-environments/`, starting with
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+outstanding work is in `docs/todo/containers-and-environments/`
+([index](../todo/containers-and-environments/0000-index.md)).
 
 ## Authority
 
@@ -596,8 +596,8 @@ the user rebuilds it.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
-| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host. Its Linux Engine and rootless qualification is summarised in [container qualification](../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11); what is still unproved on rootless is [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md). The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
+| `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([environment networks](#environment-networks-network-policy2)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
 
@@ -917,9 +917,12 @@ on revocation described above.
   start that finds the host token expired asks for that refresh at once
   rather than waiting for the next pass. An agent-test profile never
   refreshes the host. A switch also rewrites `oauthAccount` in
-  the running container's `~/.claude.json`. Remaining qualification and renewal
-  work is tracked in
-  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+  the running container's `~/.claude.json`. The refresh trigger is re-checked
+  with a fake login on every Claude Code bump
+  (`scripts/claude-host-refresh-trigger-probe.ts`, see
+  [upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation));
+  the live renewal checks with a real login are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 - Neither the Cursor key nor the Anthropic API key (when used instead of
   OAuth) is in a staged-inputs container's creation environment. The bridge
   reads the synced owner-only Cursor file. The Anthropic key is written to
@@ -1053,7 +1056,8 @@ bridge. The network asks for nothing about IPv6, so a daemon whose
 owner (the egress gateway, or the container itself) is created with
 `net.ipv6.conf.all.disable_ipv6=1`, which leaves every interface, including
 one attached later, without an IPv6 address; that was checked live on Engine
-29.9.2 with IPv6 on by default (0018 task 3). The container also gets
+29.9.2 with IPv6 on by default
+([container qualification](../development/container-qualification.md#egress-gateway-conditions-on-linux-engine-2026-10-31)). The container also gets
 three policy inputs the root bootstrap captures once, root-owned:
 
 | File | Meaning |
@@ -1096,12 +1100,36 @@ host listeners, so RootlessKit's bind on the host can collide (`address
 already in use`); when the colliding port is not one the user fixed, the
 start is retried, up to three times (`PORT_COLLISION_RETRIES`): rootless
 dockerd hands out automatic ports in sequence, and short-lived outbound
-sockets held two in a row in a 2026-11-09 run. Docker 29.9 detaches the
+sockets held two in a row in a 2026-11-09 run (and four in a row right after
+a daemon restart on 2026-11-11, which hands ports out again from the bottom
+of the range;
+[7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+task 4). Docker 29.9 detaches the
 container from its network on each failed start, and a bare retry ran it
 with no network and no published ports, so the helper connects the
 container's own network again before every retry and stops it if the
 started container still has none. A collision past the retries, or one on
-a fixed port, is the existing `port-conflict`.
+a port the user fixed, is the existing `port-conflict`.
+
+Each failed start moves rootless dockerd on by one port, so no retry count
+gets past a held run longer than itself. On a rootless daemon the backend
+therefore chooses every automatic host port itself when it creates a
+runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+the host, where the kernel sees every socket and prefers odd ports for
+`bind` (outbound `connect` prefers even ones), publishes the result as a
+fixed port and lists it in the `orkestrator-backend-host-ports` label. A
+stopped container's ports hold no host socket, so the choice also refuses
+the ports the same create fixes, the ports labelled on every container of
+the same owner (`docker ps -a`) and, for the window before a new container
+exists, the ports this backend chose in the last 30 minutes. The
+port then stays the container's own across starts and daemon restarts. A
+collision on a labelled port is retried on the same port after a pause
+(1, 2 and 4 s, `PORT_HOLD_RETRY_DELAYS_MS`) for its short-lived holder to
+go; one still held after the retries is a `port-conflict` that says to stop
+the holder or rebuild the environment, which chooses new ports. A port the
+user fixed is still never retried. Rootful daemons keep
+Docker's own automatic ports, since they see the host's sockets, and a
+container created before this keeps them until it is rebuilt.
 
 The same rootless daemon refuses every `docker cp` into or out of a
 container with a read-only bind whose source filesystem is mounted
@@ -1117,6 +1145,19 @@ boot record read reports `boot-record-copy-refused` instead of
 `refusal=read-only-bind-remount`. The CLI hides the daemon's answer for a
 copy into a directory (`must be a directory`), so a failed copy asks once
 more with a copy out of a path that cannot exist.
+
+`live-restore` cannot work on a rootless daemon: a rootless restart replaces
+RootlessKit, its user and network namespaces, containerd and the shims, so
+the new daemon reports every container exited while the old containers'
+processes keep running in the old namespaces with no network, on the same
+volumes the restarted containers then mount (observed 2026-11-11,
+[evidence](../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
+The backend starts those containers again as it does after any restart with
+`live-restore` off, and cannot find or stop the orphans, so it warns once per
+process when a rootless daemon reports `live-restore` on (`docker`
+`daemon.rootless-live-restore`, from the capacity probe in
+`container-resources.ts`); the remedy is `"live-restore": false` in that
+daemon's `daemon.json`.
 
 In restricted mode `init-firewall.sh` then allows the host only on those ports
 (gateway and `host.docker.internal` addresses) instead of the gateway `/24`,
@@ -1301,7 +1342,13 @@ Docker's own DNS rules:
   gets an `access_denied` alert, an HTTP client a 403 naming the gateway.
   Other protocols are refused on TCP 443 and relayed by address on any other
   named port; a server that speaks first (SSH, a database banner) is relayed
-  to the client while its first bytes are awaited.
+  to the client while its first bytes are awaited. A first write of
+  printable text with no newline yet is held, because it could still become
+  an HTTP request line sent a byte at a time; the daemon refuses it, with no
+  reply, after 30 s. A client-first text protocol on a named port must
+  therefore end its first command with a newline (SMTP, POP3, IMAP, Redis
+  and memcached do); a bare word such as `probe`, or `{"op":1}`, is never
+  relayed. Binary first bytes (TLS, PostgreSQL, MongoDB) are not held.
 - a redirect of every unmarked DNS query, to Docker's resolver or straight
   to any server, to the daemon. It forwards an allowlisted name (exact),
   GitHub's names and `*.docker.internal` (only when asked through Docker's
@@ -1347,7 +1394,13 @@ one moved; a restarted worker carries them on, and a new boot (fresh `/run`)
 starts at zero. The backend reads the file in the same `docker exec` as the
 firewall report and returns it as `effective.refusals` only beside
 `egressFilter: enforced` (`null` from an image before the counts), and the
-Network section says how many were refused. Counts only: no refused name,
+Network section says how many were refused. While it shows the counts and
+the window is visible, the section re-reads the policy every 15 s (one
+`docker exec` in the gateway each time) and once more when the window becomes
+visible again, so refusals made while it stays open appear without reopening
+it; closing the section stops the reads. Nothing is pushed: the file has no
+revision, and a watcher across the gateway boundary for one dialog's numbers
+was not worth its cost. Counts only: no refused name,
 part of one or digest of one is stored, logged or reported, because a refused
 name can carry the data an agent tried to send (`<secret>.attacker.tld`).
 `init-firewall.sh` holds `egress-filter.quiet` while its own boot checks ask
@@ -1365,12 +1418,67 @@ connection to an allowed address now completes its TCP handshake with the
 daemon before the upstream answers, so an unreachable upstream shows as a
 reset rather than a refusal.
 
+These limits were decided, not overlooked (to-do 6102, retired 2026-11-11):
+
+- Names inside TLS stay unseen. Seeing them needs TLS termination with a
+  per-environment CA the workload must trust, which breaks pinned clients
+  and hands the gateway every byte. Refusing any ClientHello that carries
+  the ECH extension is not an option either: Chrome and Playwright send a
+  GREASE ECH extension on every connection.
+- Only the first request on a plain HTTP connection is checked. Checking
+  every one needs body framing (chunked, `Content-Length`, upgrades) on the
+  data path, for plain HTTP on a named port, which is rare and was answered
+  by the same server.
+- UDP entries and other protocols stay address-only. They are opt-in per
+  port, and reading a QUIC Initial's SNI needs QUIC decryption in the daemon.
+- A refused upstream stays a reset. Keeping it a refusal needs TPROXY with
+  `IP_TRANSPARENT` and policy routing in the gateway, and clients treat both
+  as a failed connection.
+
 The workload's own `NET_ADMIN` and the `init-firewall.sh` sudo grant are
 gone: every image now runs the firewall step from the root entrypoint before
 privileges drop, and an in-container runtime gets `NET_ADMIN` only for that
 firewall. `no-new-privileges` stays off: the image's entrypoint is `sudo
 network-policy-entrypoint.sh` as `node`, which it would break, and starting
 runtimes as root instead would make every `docker exec` default to root.
+
+### Isolation constraints
+
+These were decided while building network and credential isolation (to-do
+0018, retired 2026-11-11) and should keep holding:
+
+- Default ports: TCP 443 for allowed domains, TCP 443 and 22 for GitHub's
+  ranges. Everything on the default lists is HTTPS on 443, so anything else
+  needs a `host:port` (or `host:port/udp`) entry; plain HTTP (80) and SSH to
+  other Git hosts are not defaults. Lists that relied on another port are not
+  rewritten; the network status and settings help say what applies.
+- Never claim that IP allowlisting prevents exfiltration. Shared CDN
+  addresses, allowed services and DNS remain channels.
+- Never fall back to the shared default bridge when the environment network
+  cannot be created; that is an explicit error.
+- No allow-all or empty window during a refresh: build the next set beside
+  the live one, swap it in, then revoke tracked connections of removed
+  entries.
+- IPv6 stays dropped unless equivalent IPv6 enforcement is implemented and
+  tested.
+- Keep the restricted-mode sudo policy exact. Never add blanket sudo and never
+  mount the Docker socket. Do not describe a root workload as unable to change
+  its firewall unless its firewall runs in a gateway.
+- Published ports stay on loopback and authenticated.
+- A container never holds a refresh token it shares with the host or another
+  container when that provider's refresh tokens are single-use or rotating. It
+  gets the access token, re-read from the host on start, and signs out on its
+  own when that expires. A refresh token that is reused rather than rotated
+  (GitHub Copilot, Pi's Meta) may be copied, like an API key. Only the host
+  refreshes, through the provider's own CLI; Orkestrator never calls a token
+  endpoint or writes a host credential store itself, and an agent-test profile
+  never refreshes the host. Which providers rotate is re-checked on every
+  agent bump
+  ([upgrading agents](../development/upgrade-agents.md#re-check-oauth-refresh-token-rotation)).
+- Credentials go only to enabled, authorized, non-revoked providers.
+  Revocation is recorded before anything else, so an interrupted revoke still
+  gates staging and syncs. Never promise that removal retracts a credential a
+  workload already read, and never revoke an account-wide key.
 
 ## Agent tools reachability (`container-host-reachability.ts`)
 
@@ -1621,7 +1729,19 @@ least 2 GiB). The default contains a runaway environment — a leak or a fork
 bomb is killed inside its own cgroup instead of exhausting the VM or host,
 the backend and sibling environments; it is not a packing target, and the
 sum over environments may exceed the daemon. The measurements behind it are
-in [container-qualification.md](../development/container-qualification.md#workload-budgets).
+in [container-qualification.md](../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25).
+
+It is a preset capped at a fraction of the daemon's memory, not either alone.
+The experiment's fixed preset (2 CPUs, 4 GiB, 1,024 PIDs) broke the heavy
+browser workload on Docker Desktop with OOM kills, page crashes and failed
+rounds, and a pure fraction would give a 32 GiB Linux host a 24 GiB
+"budget" that contains nothing. The cap keeps one environment from
+exhausting a small Desktop VM. The margin on Desktop's heavy-browser case is
+thin (5,885 MiB peak against 5,888 MiB, with reclaim): a heavier browser
+load would fail inside its own cgroup instead of taking the VM down. Long
+agent sessions, providers other than Claude Code, and repositories larger
+than this one were not measured. Rolling the default back is "No limits" in
+Settings, or all-`null` limits on an environment.
 
 An axis the daemon cannot enforce (support `false`, or unknown on a rootless
 daemon) is left off the default and reported in the policy's `unsupported`
@@ -1695,6 +1815,20 @@ not keep answering for a container that just ended. A memory update below curren
 | Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
 | Followers | one per container, 16 per backend, 5 s idle grace, 60 s lease | `ContainerLogService` |
+
+Together these bound a runtime's diagnostic logs by construction, so nothing
+measures them live. Seven launch logs (the Claude, Codex, Cursor, Pi and Grok
+bridges and both OpenCode servers, the table in [The previous run](#the-previous-run))
+each hold at most the active file, its `.1` and `.2` rotations and one
+`.prev.log`: 4 × 5 MiB = 20 MiB, or 140 MiB for all seven. Docker's own log
+adds 10 MiB × 3, so a runtime holds at most about 170 MiB of diagnostic
+output (plus the writer's dropped-line markers), and a rebuild discards the
+`/tmp` copies. A live per-environment total would need a `docker exec` per
+environment, the polling cost
+[0020](../todo/containers-and-environments/0020-container-state-observation.md)
+works to remove, so it is not built while the bound holds (to-do 0022
+task 6, retired 2026-11-11). Revisit if a surface needs actual sizes, or when
+another launch log is added, which also raises this bound.
 
 Bridges and the OpenCode server start through `boundedBackgroundLaunch`: when
 the image ships the writer, `setsid sh -c '<cmd> 2>&1 | orkestrator-log-writer

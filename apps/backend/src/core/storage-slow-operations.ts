@@ -23,9 +23,13 @@ import { leaseFamily } from "./storage-lease-metrics.js";
  *
  * {@link instrumentSqliteConnection} times every statement call and every
  * outermost transaction on one connection. Below the threshold a call costs
- * two `performance.now()` reads and a comparison; the SQL text stays in the
- * closure and is parsed for its kind and table only when a call is slow.
- * Never kept or logged: SQL text, parameters, rows.
+ * two `performance.now()` reads, a comparison and its commit/read count
+ * (`storage-activity-metrics.ts`). Counting needs the statement's kind: a
+ * prepared statement (`query`, `prepare`) is classified once, on its first
+ * call, but `db.run` and `db.exec` carry their SQL per call, so each of those
+ * calls lowercases and matches the first 512 characters of its SQL
+ * ({@link classifyStatement}). The slow-operation record parses the SQL again
+ * only when a call is slow. Never kept or logged: SQL text, parameters, rows.
  */
 const log = createLogger("storage");
 

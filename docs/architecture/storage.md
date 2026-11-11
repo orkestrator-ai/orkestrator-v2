@@ -714,9 +714,16 @@ fixture project), creating and starting one local environment took the main file
 from 48 to 105 commits and stopping and deleting it to 220, 11 of them followed by
 the deletion scrub's checkpoint; the ledger went from 4 to 8. Every commit took
 under 6 ms, nearly all under 1 ms, and the slowest read series
-(`table:stores`, `environments`) stayed under 2 ms. The counting costs a map lookup per call: over 200,000 calls the
-difference from no counting was within run-to-run noise (about 2 µs a call either
-way). Nothing a statement carries is kept: a series is a family or a table name.
+(`table:stores`, `environments`) stayed under 2 ms. Counting a call costs a
+histogram update and, for the statement's kind, a classification: once per
+prepared statement (`query`, `prepare`), but on every call of `db.run` and
+`db.exec`, which carry their SQL per call, so each of those lowercases and
+matches the first 512 characters of its SQL. Over 200,000 calls the difference
+from no counting was within run-to-run noise (about 2 µs a call either way).
+A rolled-back savepoint inside a transaction that then commits is still a commit:
+SQLite writes the pages it touched to the WAL at COMMIT. An INSERT, UPDATE or
+DELETE read through `get`, `all` or `values` (a `RETURNING` statement) reports no
+change count, so it is counted as a commit whatever it returned. Nothing a statement carries is kept: a series is a family or a table name.
 
 ## Provider secrets at rest
 

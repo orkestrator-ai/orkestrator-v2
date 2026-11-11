@@ -223,6 +223,97 @@ describe("commit and read counts on a StorageDatabase", () => {
     expect(activity.snapshot().files.main!.checkpoints.count).toBe(before + 1);
   });
 
+  test("a nested savepoint's write is the outer transaction's one commit", async () => {
+    const directory = await dataDir();
+    const activity = new StorageActivityMetrics();
+    const db = database(directory, activity);
+    db.writeStore("records", { a: "one" });
+    const before = activity.snapshot().files.main!;
+
+    db.transaction(() => {
+      db.transaction(() => {
+        db.db.run("INSERT INTO storage_meta (key, value) VALUES ('nested-ok', 'x')");
+      });
+    });
+
+    const after = activity.snapshot().files.main!;
+    expect(after.commits.count - before.commits.count).toBe(1);
+    expect(after.reads).toEqual(before.reads);
+    expect(db.db.query("SELECT value FROM storage_meta WHERE key = 'nested-ok'").get()).toEqual({
+      value: "x",
+    });
+  });
+
+  test("a caught nested rollback still commits: its COMMIT appends to the WAL", async () => {
+    // A savepoint rolled back inside a transaction that then commits leaves no
+    // row, but SQLite still writes the touched page to the WAL and syncs it, so
+    // it is counted as a commit, not a read. The WAL size pins that premise.
+    const directory = await dataDir();
+    const file = path.join(directory, STORAGE_DATABASE_FILE);
+    const raw = new Database(file);
+    open.push(raw);
+    raw.run("PRAGMA journal_mode = WAL");
+    raw.run("PRAGMA wal_autocheckpoint = 0");
+    raw.run("CREATE TABLE t (a)");
+    const activity = new StorageActivityMetrics();
+    instrumentSqliteConnection(raw, "main", { activity });
+    const walBefore = (await fs.stat(`${file}-wal`)).size;
+
+    raw.transaction(() => {
+      try {
+        raw.transaction(() => {
+          raw.run("INSERT INTO t VALUES (1)");
+          throw new Error("nested rolled back");
+        })();
+      } catch {
+        // The outer transaction carries on and commits.
+      }
+    })();
+
+    const main = activity.snapshot().files.main!;
+    expect(main.commits.count).toBe(1);
+    expect(main.reads).toEqual({});
+    expect((await fs.stat(`${file}-wal`)).size).toBeGreaterThan(walBefore);
+    expect(raw.query("SELECT a FROM t").all()).toEqual([]);
+  });
+
+  test("a store-less read-only transaction is a read of its slowest statement's table", async () => {
+    const directory = await dataDir();
+    const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));
+    open.push(raw);
+    raw.run("CREATE TABLE things (a)");
+    raw.run("INSERT INTO things VALUES (1)");
+    const activity = new StorageActivityMetrics();
+    instrumentSqliteConnection(raw, "main", { activity });
+
+    expect(raw.transaction(() => raw.query("SELECT a FROM things").all())()).toEqual([{ a: 1 }]);
+
+    const main = activity.snapshot().files.main!;
+    expect(main.commits.count).toBe(0);
+    expect(Object.keys(main.reads)).toEqual(["table:things"]);
+    expect(main.reads["table:things"]!.count).toBe(1);
+  });
+
+  test("a RETURNING change read through get, all or values counts as a commit", async () => {
+    // Only `run` reports `changes`; the other methods count a change statement
+    // as a commit whatever it returned, erring towards the higher fsync rate.
+    const directory = await dataDir();
+    const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));
+    open.push(raw);
+    raw.run("CREATE TABLE t (a)");
+    const activity = new StorageActivityMetrics();
+    instrumentSqliteConnection(raw, "main", { activity });
+
+    expect(raw.query("INSERT INTO t VALUES (1) RETURNING a").get()).toEqual({ a: 1 });
+    expect(raw.query("UPDATE t SET a = 2 RETURNING a").all()).toEqual([{ a: 2 }]);
+    expect(raw.query("DELETE FROM t WHERE a = 2 RETURNING a").values()).toEqual([[2]]);
+    expect(raw.query("DELETE FROM t WHERE a = 99 RETURNING a").all()).toEqual([]);
+
+    const main = activity.snapshot().files.main!;
+    expect(main.commits.count).toBe(4);
+    expect(main.reads).toEqual({});
+  });
+
   test("a counting fault never fails the call it describes", async () => {
     const directory = await dataDir();
     const raw = new Database(path.join(directory, STORAGE_DATABASE_FILE));

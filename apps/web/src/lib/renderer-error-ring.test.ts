@@ -98,5 +98,16 @@ describe("where a failure was caught", () => {
     expect(rendererErrorRoute({ orkestratorGateway: { enabled: true, desktop: true } })).toBe(
       "window",
     );
+    // Before a browser tab's gateway is installed: an HTTP page with no
+    // desktop API that is not Electron.
+    const page = (protocol: string, userAgent = "Mozilla/5.0 Safari") => ({
+      location: { protocol },
+      navigator: { userAgent },
+    });
+    expect(rendererErrorRoute(page("https:"))).toBe("browser");
+    expect(rendererErrorRoute(page("http:", "Chrome Electron/41.0.0"))).toBe("window");
+    expect(rendererErrorRoute(page("file:"))).toBe("window");
+    expect(rendererErrorRoute({ ...page("http:"), orkestratorDesktopHost: {} })).toBe("window");
+    expect(rendererErrorRoute({ ...page("http:"), orkestrator: {} })).toBe("window");
   });
 });

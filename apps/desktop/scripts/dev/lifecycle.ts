@@ -506,6 +506,22 @@ export type ProfileSeedDependencies = {
 };
 
 /**
+ * Whether this start skips the host seed. An explicit `--no-host-seed` or
+ * `--host-seed` wins; otherwise the choice recorded in the stored profile
+ * holds, so a restart that rebuilds its arguments from `profile.json` (or a
+ * person who forgets the flag) does not start reading the host installation
+ * again. Only `agent-test` profiles have the switch.
+ */
+export function resolveHostSeedDisabled(
+  args: Pick<DevArguments, "hostSeedDisabled">,
+  stored: Pick<RuntimeProfile, "hostSeedDisabled">,
+  flavor: "development" | "agent-test",
+): boolean {
+  if (flavor !== "agent-test") return false;
+  return args.hostSeedDisabled ?? stored.hostSeedDisabled === true;
+}
+
+/**
  * Pre-populate an isolated profile from the host installation, before Electron.
  *
  * Only `agent-test` seeds anything: an ordinary `dev` run uses the durable
@@ -925,6 +941,7 @@ export async function startDevelopment(
     }
   }
 
+  const hostSeedDisabled = resolveHostSeedDisabled(args, existingProfile, flavor);
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   let profile = resolveRuntimeProfile({
     repositoryRoot,
@@ -935,6 +952,7 @@ export async function startDevelopment(
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
     agentToolsPort,
+    hostSeedDisabled,
     roots: dependencies.roots,
     ...(await profileWorktreeLocation(
       existingProfile,
@@ -943,7 +961,7 @@ export async function startDevelopment(
     )),
   });
   const profilePath = await initializeProfile(profile);
-  await seedAgentTestProfileState(profile, flavor, { hostSeed: args.hostSeedDisabled !== true });
+  await seedAgentTestProfileState(profile, flavor, { hostSeed: !hostSeedDisabled });
   const statusPath = statusManifestPath(profile);
   let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();

@@ -23,7 +23,7 @@
  * fixture projects one repository identity and attaches the leaf:
  *
  * ```bash
- * FLAGS="--fixture --headless --no-agent-credentials --agent-platforms pi"
+ * FLAGS="--fixture --headless --no-agent-credentials --no-host-seed --agent-platforms pi"
  * env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
  *   mise run dev:test --profile fts-cmd $FLAGS    # own terminal
  * env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \

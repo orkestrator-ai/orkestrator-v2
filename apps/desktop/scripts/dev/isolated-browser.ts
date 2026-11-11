@@ -85,11 +85,12 @@ const PROFILE_FLAGS = new Set([
   "--headless",
   "--no-agent-credentials",
   "--no-host-seed",
+  "--host-seed",
   "--use-dev-worktree-folder",
 ]);
 /**
- * Runner-only: keep `dev:test`'s copy from the host installation for a
- * credential-free run. Never forwarded.
+ * Keeps `dev:test`'s copy from the host installation for a credential-free
+ * run. Forwarded, so it also clears an opt-out the profile recorded earlier.
  */
 const HOST_SEED_FLAG = "--host-seed";
 const PROFILE_OPTIONS = new Set([
@@ -115,13 +116,14 @@ const PROFILE_OPTIONS = new Set([
  * the production data directory or the host's agent homes: it downloads its
  * toolchains and starts with no cached model metadata. Review preparation runs
  * these suites for tickets that forbid reading those directories (to-do 7835's
- * pipeline did, and its seeded run broke that rule). `--host-seed` keeps the
+ * pipeline did, and its seeded run broke that rule). The profile records the
+ * choice, so a suite that restarts it keeps it. `--host-seed` keeps the
  * faster local copy; a run that names credential sources already reads the
  * host and keeps it too.
  */
 export function isolatedProfileArguments(input: readonly string[] = []): string[] {
-  const hostSeed = input.includes(HOST_SEED_FLAG);
-  const extra = input.filter((argument) => argument !== HOST_SEED_FLAG);
+  const extra = [...input];
+  const hostSeed = extra.includes(HOST_SEED_FLAG);
   if (hostSeed && extra.includes("--no-host-seed")) {
     throw new Error("--host-seed cannot be combined with --no-host-seed");
   }
@@ -130,7 +132,7 @@ export function isolatedProfileArguments(input: readonly string[] = []): string[
     if (PROFILE_OPTIONS.has(argument)) index += 1;
     else if (!PROFILE_FLAGS.has(argument)) {
       throw new Error(
-        `Unsupported isolated profile option ${argument}; accepted: ${[...PROFILE_OPTIONS, ...PROFILE_FLAGS, HOST_SEED_FLAG].join(", ")}`,
+        `Unsupported isolated profile option ${argument}; accepted: ${[...PROFILE_OPTIONS, ...PROFILE_FLAGS].join(", ")}`,
       );
     }
   }

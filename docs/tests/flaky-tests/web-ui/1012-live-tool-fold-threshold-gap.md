@@ -221,3 +221,15 @@ mise run test:logged -- --name transcript-browser-alone -- bun scripts/loopback-
 ```
 
 The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.
+
+## Client-outage restart review — 2026-11-11
+
+Preparation for `beelink2-restart-failure-b5978072af7f-r1` (base `963ffa6ab`, validated at `e7e25352f`) ran `mise run test:logged -- --name browser -- mise run test:browser`: 2 failed, 153 skipped, 1719 passed (23.3 m). The branch changes the To pipeline toolbar button and its test; this spec does not render it. `mise run flaky:recurrence -- 1012 --base 963ffa6ab` answered "open. Record the failure as a recurrence". Evidence: `validation-05.stderr.txt` under `.orkestrator/review-artifacts/review-validation-63babffd-7be4-45f4-9eba-00d573593669/`. Both projects failed `expect(received).toBeLessThanOrEqual(2)` at line 122 (received 9 and 15).
+
+The case then passed alone with one worker (exit 0, 16.2 s):
+
+```sh
+mise run test:logged -- --name toolgroupfold-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts -g "crossing the fold threshold" --workers=1
+```
+
+The cause remains unconfirmed. Status stays open. No assertion, timeout or skip changed.

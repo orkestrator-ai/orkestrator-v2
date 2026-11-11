@@ -30,6 +30,9 @@ export type DevArguments = {
    * `~/.codex` and `~/.grok`, before Electron (`seedAgentTestProfileState`).
    * With it the profile downloads its toolchains and starts with no cached
    * model metadata. Credential seeding is separate (`--no-agent-credentials`).
+   * `false` (`--host-seed`) seeds from the host again. The choice is recorded
+   * in the profile, so a later start without either flag keeps it
+   * (`resolveHostSeedDisabled`).
    */
   hostSeedDisabled?: boolean;
   /**
@@ -103,11 +106,15 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
       }
       result.useDevWorktreeFolder = true;
-    } else if (argument === "--no-host-seed") {
+    } else if (argument === "--no-host-seed" || argument === "--host-seed") {
       if (!options.agentTest) {
-        throw new Error("--no-host-seed is only supported by mise run dev:test");
+        throw new Error(`${argument} is only supported by mise run dev:test`);
       }
-      result.hostSeedDisabled = true;
+      const disabled = argument === "--no-host-seed";
+      if (result.hostSeedDisabled === !disabled) {
+        throw new Error("--host-seed cannot be combined with --no-host-seed");
+      }
+      result.hostSeedDisabled = disabled;
     } else if (
       argument === "--headless" ||
       argument === "--headless-electron" ||

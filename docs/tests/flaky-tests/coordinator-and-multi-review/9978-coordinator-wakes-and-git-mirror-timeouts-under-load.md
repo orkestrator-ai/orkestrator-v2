@@ -123,3 +123,20 @@ Status stays open; no assertion, timeout or skip changed.
   `bun test --preload ../../tests/setup-node.ts` run of the four files from
   `apps/backend` (`--parallel=2`) passed (7.9 s) at a load average of about 35
   and falling.
+
+## Client-outage restart review — 2026-11-11
+
+Preparation for `beelink2-restart-failure-b5978072af7f-r1` (base `963ffa6ab`,
+validated at `e7e25352f`) ran `mise run test:logged -- --name review-default-tests -- mise run test`.
+
+- **Failure:** one backend case, `pull request status wakes > a review joining
+  a create_pr follow is found by its own request; one of them reports`, timed
+  out at 5,001.53 ms. The log has the same
+  `updateCoordinatorWorkflowAssociations is not a function` reconcile error.
+  The branch changes no backend code. `mise run flaky:recurrence -- 9978 --base 963ffa6ab`
+  answered "open. Record the failure as a recurrence".
+- **Evidence:** `validation-04.stderr.txt` under `.orkestrator/review-artifacts/review-validation-63babffd-7be4-45f4-9eba-00d573593669/`.
+- **Isolated rerun:** `mise run test:logged -- --name pr-wakes-alone -- bun test --cwd apps/backend src/core/coordinator-status-wakes-pr.test.ts --only-failures`
+  passed (7.3 s).
+
+The cause remains unconfirmed. Status stays open.

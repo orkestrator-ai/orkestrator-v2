@@ -252,7 +252,8 @@ test("a credential-free run reads nothing from the host installation unless aske
     isolatedProfileArguments(["--no-host-seed"]).filter((a) => a === "--no-host-seed"),
   ).toEqual(["--no-host-seed"]);
   expect(parseAgentTestArguments(isolatedProfileArguments()).hostSeedDisabled).toBe(true);
-  // `--host-seed` keeps the local copy and is never forwarded to dev:test.
+  // `--host-seed` keeps the local copy, and is forwarded so dev:test also
+  // clears an opt-out the profile recorded on an earlier start.
   const seeded = isolatedProfileArguments(["--host-seed"]);
   expect(seeded).toEqual([
     "--fixture",
@@ -260,8 +261,9 @@ test("a credential-free run reads nothing from the host installation unless aske
     "--no-agent-credentials",
     "--agent-platforms",
     "codex",
+    "--host-seed",
   ]);
-  expect(parseAgentTestArguments(seeded).hostSeedDisabled).toBeUndefined();
+  expect(parseAgentTestArguments(seeded).hostSeedDisabled).toBe(false);
   expect(() => isolatedProfileArguments(["--host-seed", "--no-host-seed"])).toThrow(
     "cannot be combined",
   );

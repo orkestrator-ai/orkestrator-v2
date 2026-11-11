@@ -1603,7 +1603,8 @@ Both copies read the host installation: toolchains and catalogues from the
 production data directory, model caches from `~/.codex` and `~/.grok`. When a
 run must not read them (a ticket that forbids the real data directory), add
 `--no-host-seed`: the profile downloads every toolchain and starts with no
-cached model metadata. The one-shot isolated runners
+cached model metadata, and records the choice so its restarts keep it
+(`--host-seed` clears it). The one-shot isolated runners
 (`test-agent-browser-isolated.ts`) add it to every credential-free run;
 `--host-seed` keeps the local copy there.
 

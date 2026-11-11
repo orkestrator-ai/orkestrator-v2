@@ -122,7 +122,7 @@ async function restartProfile(mode: "graceful" | "crash"): Promise<Status> {
   });
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   if (mode === "crash") {
     const backend = profileStatus().pids?.backend;
     expect(backend, "dev:status names no backend pid").toBeTruthy();

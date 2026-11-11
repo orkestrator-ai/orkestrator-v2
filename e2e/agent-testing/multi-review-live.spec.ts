@@ -188,7 +188,7 @@ async function restartProfile(logFile: string): Promise<Status> {
   });
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   const stop = spawnSync("mise", ["run", "dev:stop", "--profile", profile], {
     cwd: repositoryRoot,
     encoding: "utf8",

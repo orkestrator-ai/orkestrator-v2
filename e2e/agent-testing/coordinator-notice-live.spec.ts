@@ -509,7 +509,7 @@ async function startProfile(name: string): Promise<void> {
   });
   const stored = JSON.parse(
     readFileSync(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   const output = openSync(
     test.info().outputPath(`dev-test-restart-${name}-${Date.now()}.log`),
     "a",

@@ -55,6 +55,14 @@ export type RuntimeProfile = {
    * random one). Only `agent-test` profiles carry it.
    */
   agentToolsPort?: number;
+  /**
+   * `dev:test --no-host-seed`: this profile reads nothing from the host
+   * installation (toolchains, model catalogues and caches). Recorded so a
+   * restart that omits the flag keeps the opt-out, as `agentToolsPort` is;
+   * `dev:test --host-seed` clears it and `dev:reset` forgets it. Absent means
+   * the host is seeded. Only `agent-test` profiles carry it.
+   */
+  hostSeedDisabled?: true;
 };
 
 /** Only isolated agent-test launches may pin the backend's agent tools port. */
@@ -168,6 +176,7 @@ export function resolveRuntimeProfile(options: {
   credentialSources?: RuntimeProfile["credentialSources"];
   agentPlatforms?: RuntimeProfile["agentPlatforms"];
   agentToolsPort?: number;
+  hostSeedDisabled?: boolean;
   /**
    * A folder to keep this profile's worktrees in, as `<root>/<id>`, instead
    * of `worktrees/` inside the profile (the dev worktree location setting).
@@ -214,6 +223,7 @@ export function resolveRuntimeProfile(options: {
     credentialSources: [...new Set(options.credentialSources ?? [])],
     agentPlatforms: [...new Set(options.agentPlatforms ?? [])],
     ...(options.agentToolsPort === undefined ? {} : { agentToolsPort: options.agentToolsPort }),
+    ...(options.hostSeedDisabled === true ? { hostSeedDisabled: true } : {}),
   });
 }
 
@@ -297,6 +307,14 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     if (problem) throw new Error(`Runtime profile agentToolsPort ${problem}`);
     if (candidate.flavor !== "agent-test") {
       throw new Error("Runtime profile agentToolsPort is only supported by agent-test profiles");
+    }
+  }
+  if (candidate.hostSeedDisabled !== undefined) {
+    if (candidate.hostSeedDisabled !== true) {
+      throw new Error("Runtime profile hostSeedDisabled is invalid");
+    }
+    if (candidate.flavor !== "agent-test") {
+      throw new Error("Runtime profile hostSeedDisabled is only supported by agent-test profiles");
     }
   }
   const parsed = candidate as RuntimeProfile;

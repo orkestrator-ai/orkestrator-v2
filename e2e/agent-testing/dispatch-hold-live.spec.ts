@@ -275,7 +275,7 @@ async function crashAndRestart(
   });
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
-  ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  ) as { credentialSources?: string[]; agentPlatforms?: string[]; hostSeedDisabled?: boolean };
   const current = profileStatus(profile) as RestartStatus;
   expect(current.status).toBe("ready");
   expect(current.flavor).toBe("agent-test");

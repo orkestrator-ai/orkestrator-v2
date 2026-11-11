@@ -552,7 +552,11 @@ The launcher then logs `Host seeding is off (--no-host-seed)`, downloads every
 selected toolchain before Electron (Electron fetches the support tools such
 as `gh`), and the profile starts with no cached model metadata. It needs
 network access. Credentials are a separate switch (`--no-agent-credentials`).
-The one-shot isolated runners (`mise run test:agent:browser:isolated` and the
+The profile records the choice in its `profile.json`, so a later start of the
+same profile without the flag (a spec that restarts it through
+`devTestRestartArgs`, or a person who forgets it) still reads nothing from the
+host; `--host-seed` seeds again and clears the record, and `dev:reset` forgets
+it. The one-shot isolated runners (`mise run test:agent:browser:isolated` and the
 suites built on `isolatedProfileArguments`) add `--no-host-seed` to every
 credential-free run, so review preparation never reads the production
 directory; pass `--host-seed` to keep the faster local copy. A run that names

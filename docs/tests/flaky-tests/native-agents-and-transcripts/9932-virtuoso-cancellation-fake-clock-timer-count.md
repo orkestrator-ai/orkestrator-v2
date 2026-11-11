@@ -261,3 +261,32 @@ the transcript-scroll code.
   from `apps/web`, through `test:logged`: passed (0.4 s).
 
 Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (backend domain restructure, review round 2)
+
+Observed 2026-11-11 on `backend-domain-restructure-13639d788e59-r1` at
+`78e449ad3`, base `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch's only web change is still the one
+comment in `apps/web/src/stores/conversationScrollTargetStore.ts`; this file's
+local import graph (140 files) does not reach it.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`,
+  host load average 47 to 76 on 16 cores.
+- **Failure:** `expect(jest.getTimerCount()).toBe(0)`, Expected 0,
+  Received 1, at line 110 (`elapsePastEveryDeadline`), in eight cases,
+  among them `restored snapshot transitions from hidden to visible (cancel=%s)`
+  (14.5 ms, 11.2 ms), `control: an append while following publishes the queued follow`
+  and `a literal false follow prop never scrolls on growth`.
+- **Suite counts:** web 14,571 pass, 8 fail (14,589 tests across 1,008 files,
+  620.2 s), all eight in this file. Backend 18,573, desktop 2,143, protocol
+  5,830, CLI 517, toolchain 135, web-public 52, root 4,515 and all five
+  bridges passed with 0 failures. The runner's automatic solo rerun was cut
+  off by the 1,800 s group deadline (INCOMPLETE, no verdict).
+- **Isolated rerun:** `NODE_ENV=test bun --cwd=apps/web --no-env-file test ./src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
+  through `test:logged`, four times at a load average of 77 to 79: failed
+  each time (6, 10, 10 and 10 of 14 cases, all Received 1). As in the second
+  2026-11-11 recurrence above, the file fails alone at this load; it passed
+  alone at lower load in earlier recurrences.
+
+Status stays open; no assertion, timeout or skip changed.

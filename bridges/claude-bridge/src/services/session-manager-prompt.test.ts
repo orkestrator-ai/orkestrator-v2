@@ -53,6 +53,7 @@ import {
   withControlledNewDate,
   withWorkspaceCwd,
 } from "./session-manager-test-harness.js";
+import { UNATTENDED_OVERLOAD_RETRY_ENV } from "./runtime-env.js";
 
 // ---------------------------------------------------------------------------
 // sendPrompt — happy path, errors, abort, init
@@ -5099,6 +5100,27 @@ describe("sendPrompt", () => {
     ["a read-only reviewer turn of one", "pipeline", true, true],
     ["an interactive session", "interactive-host", undefined, false],
   ] as const)("the overload backoff of %s", async (_label, id, readOnly, longer) => {
+    // A value already in the bridge's environment keeps precedence, and an
+    // agent running this suite inside an Orkestrator pipeline session
+    // inherits exactly these two: clear them so the case sees only the bridge's.
+    const inherited = Object.keys(UNATTENDED_OVERLOAD_RETRY_ENV).map(
+      (name) => [name, process.env[name]] as const,
+    );
+    for (const [name] of inherited) delete process.env[name];
+    try {
+      await overloadBackoffCase(id, readOnly, longer);
+    } finally {
+      for (const [name, value] of inherited) {
+        if (value !== undefined) process.env[name] = value;
+      }
+    }
+  });
+
+  async function overloadBackoffCase(
+    id: "pipeline" | "interactive-host",
+    readOnly: true | undefined,
+    longer: boolean,
+  ) {
     const session = createSession("overload backoff");
     track(session.id);
     session.executionPolicy = {
@@ -5123,7 +5145,7 @@ describe("sendPrompt", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await prompt;
-  });
+  }
 
   test("a worker whose policy denies tools can still use Orkestrator's mail tools", async () => {
     mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({

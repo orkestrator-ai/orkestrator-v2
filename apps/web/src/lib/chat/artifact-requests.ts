@@ -119,6 +119,15 @@ function subscribeEpoch(listener: () => void): () => void {
 
 const readEpoch = () => cacheEpoch;
 
+/**
+ * Changes whenever cached reads are cleared. A read made outside
+ * `useScopedArtifactRead` compares it across its await, so a clear (logout,
+ * deletion, revocation) is never undone by a response that was in flight.
+ */
+export function artifactRequestEpoch(): number {
+  return cacheEpoch;
+}
+
 export function clearArtifactRequestCache(): void {
   settled.clear();
   inflight.clear();
@@ -689,7 +698,8 @@ export function useArtifactRepresentation(
  * A card writes it when it has loaded and is showing that body (chart or
  * workflow labels, Mermaid source while the source view is shown, a static
  * document's text once its frame reports it) and clears it when it stops
- * showing it. Find's message projection reads it synchronously
+ * showing it. An open Find bar also writes a static document's stored text
+ * for a card the reader has not reached (`useStaticDocumentSearchIndex`). Find's message projection reads it synchronously
  * (`artifactPartSearchSegments` in `rich-search-text.ts`), so an unloaded body
  * contributes nothing and a loaded one matches the card's body search root
  * exactly. Each entry names its conversation, so clearing that conversation's
@@ -733,6 +743,9 @@ function dropSearchBody(publicationId: string): boolean {
 }
 
 function clearSearchBodiesWhere(matches: (scope: RichConversationScope) => boolean): void {
+  for (const [publicationId, entry] of Array.from(withheldBodies.entries())) {
+    if (matches(entry.scope)) withheldBodies.delete(publicationId);
+  }
   let changed = false;
   for (const [publicationId, entry] of Array.from(searchBodies.entries())) {
     if (matches(entry.scope)) changed = dropSearchBody(publicationId) || changed;
@@ -790,5 +803,72 @@ export function cachedArtifactSearchBody(artifact: unknown): string | null {
 export function useCachedArtifactSearchBody(artifact: unknown): string | null {
   return useSyncExternalStore(subscribeArtifactSearchBodies, () =>
     cachedArtifactSearchBody(artifact),
+  );
+}
+
+/*
+ * Static documents a card could not display: its read failed, the document is
+ * over the inline budget, or its frame gave up. The card shows its saved
+ * preview and withdraws the body text, so a body written for it by
+ * `useStaticDocumentSearchIndex` would be a match Find counts but can never
+ * highlight. The card withholds the document per occurrence when it fails and
+ * releases it once a frame displays the document again (a successful Retry,
+ * or a remount whose frame renders). Unmounting keeps it withheld, as the
+ * card's failure is still what the reader would see. Cleared with the
+ * conversation's search bodies; bounded by count, oldest dropped first.
+ */
+const MAX_WITHHELD_BODIES = 256;
+const withheldBodies = new Map<
+  string,
+  { artifactId: string; revision: number; occurrences: Set<string>; scope: RichConversationScope }
+>();
+
+export function withholdArtifactSearchBody(
+  artifact: { publicationId: string; artifactId: string; revision: number },
+  occurrenceKey: string,
+  scope: RichConversationScope,
+): void {
+  const previous = withheldBodies.get(artifact.publicationId);
+  const occurrences =
+    previous?.artifactId === artifact.artifactId && previous.revision === artifact.revision
+      ? previous.occurrences
+      : new Set<string>();
+  occurrences.add(occurrenceKey);
+  withheldBodies.delete(artifact.publicationId);
+  withheldBodies.set(artifact.publicationId, {
+    artifactId: artifact.artifactId,
+    revision: artifact.revision,
+    occurrences,
+    scope,
+  });
+  while (withheldBodies.size > MAX_WITHHELD_BODIES) {
+    const oldest = withheldBodies.keys().next().value;
+    if (oldest === undefined) break;
+    withheldBodies.delete(oldest);
+  }
+}
+
+export function releaseArtifactSearchBody(
+  artifact: { publicationId: string; artifactId: string; revision: number },
+  occurrenceKey: string,
+): void {
+  const entry = withheldBodies.get(artifact.publicationId);
+  if (!entry || entry.artifactId !== artifact.artifactId || entry.revision !== artifact.revision)
+    return;
+  entry.occurrences.delete(occurrenceKey);
+  if (entry.occurrences.size === 0) withheldBodies.delete(artifact.publicationId);
+}
+
+/** Whether a card for this static document could not display it. */
+export function artifactSearchBodyWithheld(artifact: {
+  publicationId: string;
+  artifactId: string;
+  revision: number;
+}): boolean {
+  const entry = withheldBodies.get(artifact.publicationId);
+  return (
+    entry !== undefined &&
+    entry.artifactId === artifact.artifactId &&
+    entry.revision === artifact.revision
   );
 }

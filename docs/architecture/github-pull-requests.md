@@ -384,11 +384,19 @@ to a minute for the next throttled read. `decideAutoMerge` uses
   `refresh-pr-after-agent-completion` completion action, without taking focus.
   That action arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor
   clears only once GitHub stops reporting conflicts. While it is armed no
-  second Resolve is launched. A confirmed automatic completion records a
-  durable completion time; only a newer successful conflict reading permits
-  another attempt. Three completed attempts with conflicts turn auto-merge off
-  and record an actionable error (shown beside the auto-merge toggle). Re-enabling
-  resets the attempt budget. Manual and unconfirmed Resolve jobs stay armed.
+  second Resolve is launched. The controller records a durable completion
+  time once the Resolve has ended: on the completion edge of a confirmed
+  automatic turn, or, for any Resolve including one pressed by hand, once
+  every open Resolve tab has settled (`resolveTabsSettled` in
+  `pr-auto-merge-resolve-settled.ts`: nothing queued, in flight, unconfirmed
+  or still running). A successful conflict reading that started at least 30
+  seconds after that time (`PR_AUTO_MERGE_RESOLVE_SETTLE_MS`, room for GitHub
+  to recompute mergeability after the push) consumes the token and sends the
+  Resolve prompt again at once, to the open Resolve tab. A Resolve tab that is
+  working again clears the completion time, so the window restarts when it
+  ends. Three completed attempts with conflicts turn auto-merge off and record an
+  actionable error (shown beside the auto-merge toggle). Re-enabling resets
+  the attempt budget.
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
   no merge permission, and checks pending or failing when checks are
   required): it waits for the next reading.

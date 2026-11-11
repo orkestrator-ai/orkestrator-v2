@@ -23,13 +23,16 @@ import {
 } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
+import { seedLocalWindowTransport } from "./local-window-transport-config";
 import { watchElectronStartup } from "./electron-startup-recovery";
 
 /**
  * The desktop's relay of another node's events through the real main process,
  * preload and IPC (docs/architecture/command-nodes.md): each window says which
  * per-node events it listens to, and main opens one filtered stream for their
- * union. The leaf is a second backend on loopback.
+ * union. The leaf is a second backend on loopback. The window is pinned to the
+ * relay (`localWindowGatewayTransport: false`): a window on the direct gateway
+ * transport reads these events on its own stream.
  */
 
 type Project = { id: string; name: string };
@@ -97,6 +100,9 @@ test("main takes a node's relayed events only for the windows listening", async 
     },
   });
   const profilePath = await initializeProfile(profile);
+  // This spec is about main's relay, which a local window takes only with the
+  // direct transport turned off (on by default since to-do 4501 task 2).
+  await seedLocalWindowTransport(profile.dataDir, false);
   const projectPath = await prepareFixtureRepository(
     profile,
     path.join(repositoryRoot, "test-fixtures", "agent-project"),

@@ -377,9 +377,25 @@ run = "bun apps/desktop/scripts/test-agent-auto-pipeline.ts"
 description = "Coordinator routing build case (a cancelled build is not restarted) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-routing-fake.ts"
 
+[tasks."test:agent:coordinator:surfaces-fake"]
+description = "Coordinator worker surfaces (root-changes approval to local and container workers, a container worker's browser preview) on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-surfaces-fake.ts"
+
 [tasks."test:agent:coordinator:node-mail-fake"]
 description = "Coordinator-to-coordinator node mail (round trip, loop bound, main replacement) between two disposable Pi-only profiles, one the other's leaf, with a loopback fake model (no credentials, nothing billed)"
 run = "bun apps/desktop/scripts/test-agent-coordinator-node-mail-fake.ts"
+
+[tasks."test:agent:coordinator:restart-fake"]
+description = "Coordinator restarts a build pipeline step a usage limit stopped, on this node and on a leaf, between two disposable Pi-only profiles with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-restart-fake.ts"
+
+[tasks."test:agent:coordinator:notice-live"]
+description = "Coordinator usage-limit notices (grouped stops from a leaf, a move off the limited login, a stop queued across restarts) between two disposable Claude and Pi profiles on fixture accounts and a loopback provider (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-notice-live.ts"
+
+[tasks."test:agent:coordinator:gap-tools-fake"]
+description = "Coordinator gap tools (worker changes, fork, stop, slash command, schedule edits, PR and question refusals) on this node and through a leaf node, on two disposable Pi-only profiles with a loopback fake model (no credentials, nothing billed)"
+run = "bun apps/desktop/scripts/test-agent-coordinator-gap-tools-fake.ts"
 
 [tasks."test:agent:coordinator-slow-remote"]
 description = "Coordinator typed message and mail fast-forward with a slow local remote, on a disposable Pi-only profile with a loopback fake model (no credentials, nothing billed)"
@@ -464,6 +480,23 @@ run = [
   "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
   "bun test --cwd apps/backend src/core/native-agent-suborks-opencode.live.test.ts",
+]
+
+[tasks."verify:opencode2:live"]
+description = "Run the OpenCode 2.x live set against the pinned 2.x binary (OPENCODE2_CLI_PATH; isolated HOME, scripted local model, no credentials)"
+env = { RUN_LIVE_OPENCODE2 = "1" }
+run = [
+  'test -x "${OPENCODE2_CLI_PATH:-}" || { echo "verify:opencode2:live: set OPENCODE2_CLI_PATH to the pinned 2.x binary" >&2; exit 2; }',
+  "bun test --cwd apps/backend src/core/opencode2/opencode2- --parallel=1",
+]
+
+[tasks."verify:opencode2:real-stack"]
+description = "Run the idle-observation spec's OpenCode cases, steer included, on OpenCode 2 with scripted models against a running dev:test profile (ORKESTRATOR_AGENT_TEST_PROFILE)"
+depends = ["build:cli:test", "playwright:install"]
+env = { ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION = "1", ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS = "1", ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS = "opencode", ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL = "v2" }
+run = [
+  'test -n "${ORKESTRATOR_AGENT_TEST_PROFILE:-}" || { echo "verify:opencode2:real-stack: set ORKESTRATOR_AGENT_TEST_PROFILE to a running dev:test profile" >&2; exit 2; }',
+  'ORKESTRATOR_AGENT_TEST_IDLE_CASES="${ORKESTRATOR_AGENT_TEST_IDLE_CASES:-missed-final,approval,reconnect,hidden,no-renderer,steer}" bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/idle-observation-live.spec.ts',
 ]
 
 [tasks."verify:accounts:resend-live"]

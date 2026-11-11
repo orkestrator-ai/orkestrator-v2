@@ -77,11 +77,36 @@ export function snapshotNotices(options: {
 }
 
 /**
+ * The state a Codex runtime-health body reports for its session.
+ *
+ * A Codex bridge since todo 7380 reports `session.state` (`attached` while the
+ * session's thread is loaded in the running app-server, `detached` once the
+ * idle sweep released it), the vocabulary Claude, Cursor and Pi use. It wins
+ * only while the engine itself is `ready`: a starting, restarting or failed
+ * engine is the more useful thing to show, and no thread is loaded then
+ * anyway. An older bridge sends no `session`, so its engine state stays.
+ */
+function codexRuntimeState(
+  engine: Record<string, unknown> | null | undefined,
+  session: Record<string, unknown> | null | undefined,
+): string | undefined {
+  const engineState = typeof engine?.state === "string" ? engine.state.slice(0, 64) : undefined;
+  const sessionState = session?.state;
+  if (
+    (sessionState === "attached" || sessionState === "detached") &&
+    (engineState === undefined || engineState === "ready")
+  ) {
+    return sessionState;
+  }
+  return engineState;
+}
+
+/**
  * Normalize a `/session/:id/runtime-health` body into the shared summary.
  *
  * Two shapes arrive here. The Codex bridge has served this route since before
  * the shared contract existed and answers with its own inventory —
- * `{ engine, mcp, skills, hooks, protocol, notices }` — where each notice is
+ * `{ engine, session, mcp, skills, hooks, protocol, notices }` — where each notice is
  * one occurrence and grouping happens at this hop. Every other bridge answers
  * the shared `{ summary, notices }`, where the bridge's own recorder has
  * already grouped and bounded. Both are accepted, so gaining drift reporting
@@ -109,6 +134,7 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
   ].some((key) => Object.hasOwn(health, key));
   if (!hasLegacyCodexShape) return undefined;
   const engine = asRecord(health.engine);
+  const state = codexRuntimeState(engine, asRecord(health.session));
   const groupedNotices = new Map<
     string,
     NonNullable<NativeAgentRuntimeSummary["notices"]>[number]
@@ -176,7 +202,7 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
     mcpServers: providerInventoryCount(health.mcp),
     skills: providerInventoryCount(health.skills),
     hooks: providerInventoryCount(health.hooks),
-    ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
+    ...(state ? { state } : {}),
     ...(typeof engine?.codexVersion === "string"
       ? { version: engine.codexVersion.slice(0, 64) }
       : {}),

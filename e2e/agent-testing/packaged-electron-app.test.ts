@@ -210,7 +210,9 @@ test("headless config selects only the supported specs", async () => {
   const { default: config } = await import("./playwright.electron-headless.config");
   expect(config.testMatch).toEqual([
     "design-canvas-electron.spec.ts",
+    "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",
+    "service-preview-seeded-electron.spec.ts",
   ]);
 });
 
@@ -233,6 +235,10 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
     displaySetup(config(["design-canvas-electron.spec.ts", "web-annotations-electron.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["service-preview-seeded-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["service-preview-seeded-electron.spec.ts", "electron-main.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config(["web-annotations-electron.spec.ts", "electron-main.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config([]));

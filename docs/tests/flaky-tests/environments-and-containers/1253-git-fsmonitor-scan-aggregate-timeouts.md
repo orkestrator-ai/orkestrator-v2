@@ -1,7 +1,7 @@
 # Git fsmonitor scans exceed the aggregate test deadline
 
 - **ID:** 1253
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-28
 - **File:** `apps/backend/src/core/git-fsmonitor.test.ts`
 - **Original command:** `mise run test` during review preparation at `05737aff0133f4d7a377ec30d1cfb37f514b71de`.
@@ -320,3 +320,31 @@ No assertion, timeout, skip, or unrelated implementation changed.
   the test preload` fails, and it fails identically on the unchanged file
   (`--rerun-each=2`: 49 pass, 1 fail). It is a rerun artifact of preload
   state, not this flake.
+
+## Launch-override marker review repair recurrence — 2026-11-11
+
+Reopened: `mise run flaky:recurrence 1253 --base 498b68766f5c9f357a3a86782406d1e9e0977559`
+reported the base contains the 2026-11-06 fix (`cddc3e004`), so this is a real
+recurrence.
+
+- **Branch / base:** `launch-override-marker-043a84998c41-r1` at `3fadd7c66`,
+  merge base `498b68766f5c9f357a3a86782406d1e9e0977559`. The branch does not
+  change the owner, `git-fsmonitor.ts` or `ProjectGitService`.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+  review-default-tests-rerun -- mise run test` (default concurrent groups; the
+  guard stage was skipped because it fails on an unrelated finding already on
+  the base, and was run separately).
+- **Failure:** `git fsmonitor > project-home status auto-starts and preserves
+  the configured daemon` failed at 11,422.97 ms, not at a deadline: after
+  `ProjectGitService.status` returned, `git fsmonitor--daemon status` rejected
+  where the test expected it to resolve containing "is watching"
+  (`git-fsmonitor.test.ts:281`). So the daemon was not (yet) watching when
+  status returned on a loaded host. That is a different signature from the
+  earlier deadline timeouts and the 30 s file budget does not cover it.
+- **Suite counts:** backend 18,325 pass, 200 skip, 1 fail across 1,276 files
+  (339.66 s); every other group passed.
+- **Isolated rerun:** the runner's own one-file rerun of
+  `apps/backend/src/core/git-fsmonitor.test.ts` passed (25 pass, 0 fail, 4.6 s).
+- **Hypothesis (unconfirmed):** the daemon auto-start is asynchronous, and under
+  load `git fsmonitor--daemon status` can run before the daemon reports
+  watching. Not investigated further in this change.

@@ -6,6 +6,12 @@ import type {
 } from "@orkestrator/protocol/backend-diagnostics";
 import type { EventLoopStallContext } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { createLogger } from "@orkestrator/protocol/logger";
+import {
+  readSeriesForStore,
+  readSeriesForTable,
+  storageActivityMetrics,
+  type StorageActivityMetrics,
+} from "./storage-activity-metrics.js";
 import { leaseFamily } from "./storage-lease-metrics.js";
 
 /**
@@ -17,9 +23,13 @@ import { leaseFamily } from "./storage-lease-metrics.js";
  *
  * {@link instrumentSqliteConnection} times every statement call and every
  * outermost transaction on one connection. Below the threshold a call costs
- * two `performance.now()` reads and a comparison; the SQL text stays in the
- * closure and is parsed for its kind and table only when a call is slow.
- * Never kept or logged: SQL text, parameters, rows.
+ * two `performance.now()` reads, a comparison and its commit/read count
+ * (`storage-activity-metrics.ts`). Counting needs the statement's kind: a
+ * prepared statement (`query`, `prepare`) is classified once, on its first
+ * call, but `db.run` and `db.exec` carry their SQL per call, so each of those
+ * calls lowercases and matches the first 512 characters of its SQL
+ * ({@link classifyStatement}). The slow-operation record parses the SQL again
+ * only when a call is slow. Never kept or logged: SQL text, parameters, rows.
  */
 const log = createLogger("storage");
 
@@ -31,6 +41,17 @@ export const SLOW_STORAGE_LOG_INTERVAL_MS = 10_000;
 export const SLOW_STORAGE_ALWAYS_LOG_MS = 5_000;
 export const RECENT_SLOW_STORAGE_OPERATIONS = 32;
 export const MAX_SLOW_STORAGE_SERIES = 64;
+/**
+ * Every call's time, slow or not, is summed into buckets of this width by the
+ * monotonic time it ended, so a stall line can say how much of its window
+ * SQLite took in calls each under the threshold (to-do 7562: a busy run's
+ * stalls were the event-loop thread waiting on disk with no call reaching
+ * 250 ms). A window's sum is exact to one bucket at either edge.
+ */
+export const STORAGE_CALL_BUCKET_MS = 250;
+/** Buckets kept: 32 s, longer than any stall worth attributing. */
+export const STORAGE_CALL_BUCKETS = 128;
+const STORAGE_DATABASE_NAMES: readonly StorageDatabaseName[] = ["main", "ledger", "other"];
 
 export type StorageDatabaseName = "main" | "ledger" | "other";
 export type TransactionMode = "deferred" | "immediate" | "exclusive";
@@ -89,6 +110,50 @@ export function describeStatement(sql: string | null): {
   return { op, table: table && table.length <= 64 && IDENTIFIER.test(table) ? table : null };
 }
 
+/**
+ * What a statement does to the file, for the commit and read counts
+ * (`storage-activity-metrics.ts`): `read` a SELECT; `change` an INSERT,
+ * UPDATE or DELETE, which writes only when it changes a row; `write` a schema
+ * change or an incremental vacuum; `checkpoint` a `wal_checkpoint`; `none`
+ * anything else (other pragmas, BEGIN and COMMIT, VACUUM INTO).
+ */
+export type StatementEffect = "read" | "change" | "write" | "checkpoint" | "none";
+
+export interface ClassifiedStatement {
+  effect: StatementEffect;
+  table: string | null;
+}
+
+export function classifyStatement(sql: string | null): ClassifiedStatement {
+  const { op, table } = describeStatement(sql);
+  switch (op) {
+    case "select":
+      return { effect: "read", table };
+    case "insert":
+    case "update":
+    case "delete":
+      return { effect: "change", table };
+    case "schema":
+      return { effect: "write", table };
+    case "pragma":
+      if (table === "incremental_vacuum") return { effect: "write", table };
+      if (table === "wal_checkpoint") return { effect: "checkpoint", table };
+      return { effect: "none", table };
+    default:
+      return { effect: "none", table };
+  }
+}
+
+/** Whether a call that completed wrote to the file. */
+function wrote(effect: StatementEffect, result: unknown): boolean {
+  if (effect === "write") return true;
+  if (effect !== "change") return false;
+  // `run` reports what it changed; a RETURNING read through `get` or `all`
+  // does not, and counts as a change.
+  const changes = (result as { changes?: unknown } | null)?.changes;
+  return typeof changes === "number" ? changes > 0 : true;
+}
+
 export function storageDatabaseName(file: string): StorageDatabaseName {
   if (file === "orkestrator.sqlite") return "main";
   if (file === "change-tracking.sqlite") return "ledger";
@@ -128,6 +193,12 @@ export class SlowStorageOperations {
   private readonly series = new Map<string, Series>();
   private overflowed = 0;
   private readonly recent: RecentOperation[] = [];
+  /** Bucket number each slot holds; a slot from an older lap reads as empty. */
+  private readonly callBucket = new Float64Array(STORAGE_CALL_BUCKETS).fill(-1);
+  private readonly callCount = new Float64Array(STORAGE_CALL_BUCKETS);
+  private readonly callMs = Object.fromEntries(
+    STORAGE_DATABASE_NAMES.map((name) => [name, new Float64Array(STORAGE_CALL_BUCKETS)]),
+  ) as Record<StorageDatabaseName, Float64Array>;
 
   constructor(
     readonly thresholdMs = SLOW_STORAGE_OPERATION_MS,
@@ -212,8 +283,47 @@ export class SlowStorageOperations {
   }
 
   /**
+   * Counts one outermost statement or transaction of any length. A slot check
+   * and two additions: this runs for every SQLite call the backend makes.
+   */
+  recordCall(database: StorageDatabaseName, durationMs: number, endedAtMs: number): void {
+    if (!Number.isFinite(durationMs) || !Number.isFinite(endedAtMs)) return;
+    const bucket = Math.floor(endedAtMs / STORAGE_CALL_BUCKET_MS);
+    const slot = bucket % STORAGE_CALL_BUCKETS;
+    if (this.callBucket[slot] !== bucket) {
+      this.callBucket[slot] = bucket;
+      this.callCount[slot] = 0;
+      for (const name of STORAGE_DATABASE_NAMES) this.callMs[name][slot] = 0;
+    }
+    this.callCount[slot]! += 1;
+    this.callMs[database][slot]! += Math.max(0, durationMs);
+  }
+
+  /** Every call that ended in `fromMs`–`toMs`, at bucket resolution. */
+  private callsIn(fromMs: number, toMs: number): EventLoopStallContext | undefined {
+    const first = Math.floor(fromMs / STORAGE_CALL_BUCKET_MS);
+    const last = Math.floor(toMs / STORAGE_CALL_BUCKET_MS);
+    let calls = 0;
+    const ms: Record<StorageDatabaseName, number> = { main: 0, ledger: 0, other: 0 };
+    for (let bucket = Math.max(first, last - STORAGE_CALL_BUCKETS + 1); bucket <= last; bucket++) {
+      const slot = bucket % STORAGE_CALL_BUCKETS;
+      if (this.callBucket[slot] !== bucket) continue;
+      calls += this.callCount[slot]!;
+      for (const name of STORAGE_DATABASE_NAMES) ms[name] += this.callMs[name][slot]!;
+    }
+    if (calls === 0) return undefined;
+    return {
+      storageCalls: calls,
+      storageCallMs: Math.round(ms.main + ms.ledger + ms.other),
+      storageMainCallMs: Math.round(ms.main),
+      storageLedgerCallMs: Math.round(ms.ledger),
+    };
+  }
+
+  /**
    * The longest slow operation overlapping `fromMs`–`toMs` (monotonic), as
-   * stall-line fields, plus how much slow storage time fell in the window.
+   * stall-line fields, plus how much slow storage time fell in the window,
+   * and every call's count and time in the window ({@link recordCall}).
    */
   stallContext({
     fromMs,
@@ -230,8 +340,10 @@ export class SlowStorageOperations {
       totalMs += Math.min(operation.endedAtMs, toMs) - Math.max(startedAtMs, fromMs);
       if (!longest || operation.durationMs > longest.durationMs) longest = operation;
     }
-    if (!longest) return undefined;
+    const calls = this.callsIn(fromMs, toMs);
+    if (!longest) return calls;
     return {
+      ...calls,
       storageMs: totalMs,
       storageDatabase: longest.database,
       storageOp: longest.op,
@@ -282,23 +394,39 @@ interface TransactionState extends SqliteConnectionTiming {
   sqlMs: number;
   slowestMs: number;
   slowestSql: string | null;
+  /** A statement in it changed the file, so its COMMIT writes the WAL. */
+  wrote: boolean;
 }
 
 /**
  * Times every statement (`query`, `prepare`, `run`, `exec`) and outermost
- * transaction on `db`, reporting those at or over the recorder's threshold.
+ * transaction on `db`, reporting those at or over the recorder's threshold
+ * and counting each outermost call (a statement outside a transaction, or a
+ * whole transaction) into the recorder's call buckets
+ * ({@link SlowStorageOperations.recordCall}).
  * Only the outermost transaction is timed (bun:sqlite turns a nested one into
  * a savepoint), and its time is split: `begin` and `commit` are the time
  * before and after its body, which is where the write lock and the WAL sync
  * are paid. Statement methods are own properties of each bun:sqlite
  * statement, so they are wrapped in place, once per statement.
+ *
+ * Every completed call and outermost transaction is also counted in
+ * `activity` (`storage-activity-metrics.ts`): a transaction or a statement
+ * outside one that changed the file is a commit, timed by its COMMIT (or the
+ * whole statement); one that only read is a read, timed by its statements. A
+ * prepared statement is classified once, when first called.
  */
 export function instrumentSqliteConnection(
   db: Database,
   database: StorageDatabaseName,
-  options: { recorder?: SlowStorageOperations; now?: () => number } = {},
+  options: {
+    recorder?: SlowStorageOperations;
+    activity?: StorageActivityMetrics;
+    now?: () => number;
+  } = {},
 ): SqliteConnectionTiming {
   const recorder = options.recorder ?? slowStorageOperations;
+  const activity = options.activity ?? storageActivityMetrics;
   const now = options.now ?? (() => performance.now());
   const state: TransactionState = {
     store: null,
@@ -306,7 +434,9 @@ export function instrumentSqliteConnection(
     sqlMs: 0,
     slowestMs: -1,
     slowestSql: null,
+    wrote: false,
   };
+  activity.connectionOpened(database);
   const timedStatements = new WeakSet<object>();
 
   const slow = (sample: Omit<SlowStorageSample, "database">): void => {
@@ -317,19 +447,55 @@ export function instrumentSqliteConnection(
     }
   };
 
-  /** Wraps a call whose SQL is `sqlOf(args)`. */
-  const timed = (method: AnyFunction, sqlOf: (args: unknown[]) => string | null): AnyFunction =>
+  const call = (ms: number, endedAt: number): void => {
+    try {
+      recorder.recordCall(database, ms, endedAt);
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
+  };
+
+  /** Counts a completed call; never throws into it. */
+  const count = (classified: ClassifiedStatement, result: unknown, ms: number): void => {
+    try {
+      const changed = wrote(classified.effect, result);
+      if (state.depth > 0) {
+        if (changed) state.wrote = true;
+      } else if (changed) {
+        activity.commit(database, ms);
+      } else if (classified.effect === "read") {
+        activity.read(database, readSeriesForTable(classified.table), ms);
+      } else if (classified.effect === "checkpoint") {
+        activity.checkpoint(database, ms);
+      }
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
+  };
+
+  /** Wraps a call whose SQL is `sqlOf(args)`, classified by `classify(args)`. */
+  const timed = (
+    method: AnyFunction,
+    sqlOf: (args: unknown[]) => string | null,
+    classify: (args: unknown[]) => ClassifiedStatement,
+  ): AnyFunction =>
     function (this: unknown, ...args: unknown[]) {
       const startedAt = now();
       let busy = false;
+      let completed = false;
+      let result: unknown;
       try {
-        return method.apply(this, args);
+        result = method.apply(this, args);
+        completed = true;
+        return result;
       } catch (error) {
         busy = isBusy(error);
         throw error;
       } finally {
         const endedAt = now();
         const ms = endedAt - startedAt;
+        if (completed) count(classify(args), result, ms);
+        if (state.depth === 0) call(ms, endedAt);
         if (state.depth > 0) {
           state.sqlMs += ms;
           if (ms > state.slowestMs) {
@@ -358,11 +524,36 @@ export function instrumentSqliteConnection(
     const target = created as Record<string, AnyFunction>;
     if (timedStatements.has(target)) return created;
     timedStatements.add(target);
+    let classified: ClassifiedStatement | null = null;
+    const classify = () => (classified ??= classifyStatement(sql));
     for (const name of TIMED_STATEMENT_METHODS) {
       const method = target[name];
-      if (typeof method === "function") target[name] = timed(method, () => sql);
+      if (typeof method === "function") target[name] = timed(method, () => sql, classify);
     }
     return created;
+  };
+
+  /** Counts an outermost transaction that returned; never throws into it. */
+  const countTransaction = (
+    store: string | null,
+    endedAt: number,
+    marks: { bodyStartedAt: number; bodyEndedAt: number },
+  ): void => {
+    try {
+      if (state.wrote) {
+        const bodyEndedAt = Number.isNaN(marks.bodyEndedAt) ? endedAt : marks.bodyEndedAt;
+        activity.commit(database, endedAt - bodyEndedAt);
+      } else if (state.slowestMs >= 0) {
+        // Only a transaction that ran a statement read anything.
+        const series =
+          store === null
+            ? readSeriesForTable(describeStatement(state.slowestSql).table)
+            : readSeriesForStore(store);
+        activity.read(database, series, state.sqlMs);
+      }
+    } catch {
+      // Evidence must never fail the call it describes.
+    }
   };
 
   const timedTransaction = (
@@ -378,12 +569,16 @@ export function instrumentSqliteConnection(
       state.sqlMs = 0;
       state.slowestMs = -1;
       state.slowestSql = null;
+      state.wrote = false;
       marks.bodyStartedAt = Number.NaN;
       marks.bodyEndedAt = Number.NaN;
       const startedAt = now();
       let busy = false;
+      let committed = false;
       try {
-        return variant.apply(this, args);
+        const result = variant.apply(this, args);
+        committed = true;
+        return result;
       } catch (error) {
         busy = isBusy(error);
         throw error;
@@ -391,6 +586,8 @@ export function instrumentSqliteConnection(
         state.depth = 0;
         const endedAt = now();
         const ms = endedAt - startedAt;
+        if (committed) countTransaction(store, endedAt, marks);
+        call(ms, endedAt);
         if (ms >= recorder.thresholdMs) {
           const ran = !Number.isNaN(marks.bodyStartedAt);
           const bodyEndedAt = Number.isNaN(marks.bodyEndedAt) ? endedAt : marks.bodyEndedAt;
@@ -418,9 +615,12 @@ export function instrumentSqliteConnection(
   target.prepare = (sql: unknown, ...rest: unknown[]) =>
     statement(prepare.call(db, sql, ...rest), String(sql));
   const sqlArgument = (args: unknown[]) => (typeof args[0] === "string" ? args[0] : null);
+  const classifyArgument = (args: unknown[]) => classifyStatement(sqlArgument(args));
   for (const name of ["run", "exec"] as const) {
     const method = target[name];
-    if (typeof method === "function") target[name] = timed(method.bind(db), sqlArgument);
+    if (typeof method === "function") {
+      target[name] = timed(method.bind(db), sqlArgument, classifyArgument);
+    }
   }
   const transaction = target.transaction!;
   target.transaction = (fn: unknown) => {

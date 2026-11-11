@@ -31,9 +31,10 @@ function harness() {
   row.getBoundingClientRect = () =>
     ({ top: rowTop - top, bottom: rowTop - top + 200, height: 200 }) as DOMRect;
   document.body.appendChild(scroller);
+  const scrollToIndex = mock((_location: unknown) => {});
   const controller = new TranscriptScrollController({
     current: {
-      scrollToIndex: mock(() => {}),
+      scrollToIndex,
       scrollTo: mock(() => {}),
       cancelPendingNavigation: mock(() => {}),
     },
@@ -47,6 +48,7 @@ function harness() {
     controller,
     scroller,
     row,
+    scrollToIndex,
     scrollTo(value: number) {
       top = value;
       scroller.dispatchEvent(new Event("scroll"));
@@ -60,6 +62,9 @@ function harness() {
     reflow() {
       width = 600;
       rowTop += 150;
+    },
+    setWidth(value: number) {
+      width = value;
     },
   };
 }
@@ -248,6 +253,60 @@ describe("transcript reading ownership", () => {
     expect(view.controller.diagnostics().operationsStarted).toBe(operations + 1);
     expect(view.row.getBoundingClientRect().top).toBe(80);
     expect(view.scroller.scrollTop).toBe(2070);
+  });
+
+  test("a width reflow leaves a pending history recovery in charge of the reader's place", () => {
+    const original = globalThis.ResizeObserver;
+    let resize: ResizeObserverCallback | undefined;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        resize = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    disposals.push(() => {
+      globalThis.ResizeObserver = original;
+    });
+    const idle = installControlledTimeout(150, { label: "reading anchor" });
+    disposals.unshift(() => {
+      idle.assertDrained();
+      idle.restore();
+    });
+    const view = harness();
+    view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    view.scrollTo(1920);
+    expect(idle.advance()).toBe(1);
+    expect(view.controller.readingAnchor).not.toBeNull();
+    const resized = () =>
+      resize?.(
+        [
+          {
+            target: view.scroller,
+            contentRect: view.scroller.getBoundingClientRect(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          },
+        ],
+        {} as ResizeObserver,
+      );
+    // The reader's history was dropped and is being paged back in; the
+    // shorter list lost its scrollbar, so the scroller is wider now.
+    view.controller.setWaitingForHistory(true);
+    const generation = view.controller.generation;
+    const operations = view.controller.diagnostics().operationsStarted;
+    view.reflow();
+    resized();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.generation).toBe(generation);
+    expect(view.controller.diagnostics().operationsStarted).toBe(operations);
+    // Once the recovery is over, a later width change holds the place again.
+    view.controller.setWaitingForHistory(false);
+    view.setWidth(700);
+    resized();
+    expect(view.controller.currentOwner).toBe("reflow");
   });
 
   test("a settled reader keeps their place throughout a tool-group fold above them", async () => {
@@ -457,6 +516,83 @@ describe("transcript reading ownership", () => {
     view.scrollTo(4399);
     window.dispatchEvent(new PointerEvent("pointerup"));
     expect(view.controller.wantsFollow).toBe(true);
+  });
+
+  test("a match box whose row unmounts brings that row back by index", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    expect(view.controller.navigateTo({ kind: "row", index: 5, key: "k5" }, "find")).toBe(true);
+    const generation = view.controller.generation;
+    // The rows above measured smaller and the list moved the match's row out
+    // of the rendered window: its box no longer resolves.
+    let lost = true;
+    const box = () => (lost ? null : view.row.getBoundingClientRect());
+    expect(
+      view.controller.retarget(
+        "find",
+        { kind: "rect", rect: box, row: { kind: "row", index: 5, key: "k5", align: "center" } },
+        generation,
+      ),
+    ).toBe(true);
+    expect(view.scrollToIndex).not.toHaveBeenCalled();
+    frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    expect(view.scrollToIndex.mock.calls[0]![0]).toMatchObject({ index: 5, align: "center" });
+    expect(view.controller.currentOwner).toBe("find");
+    // The row is back and its owner resolves the box again: the navigation lands.
+    lost = false;
+    for (let index = 0; index < 10 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().lastOutcome).toBe("converged");
+    const rect = view.row.getBoundingClientRect();
+    expect(rect.top).toBe(200);
+  });
+
+  test("a match box lost after its index navigation reissues it on the row's bound, then stops", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    // The row was not rendered when find began: the navigation went by index.
+    expect(view.controller.navigateTo({ kind: "row", index: 9, key: "k9" }, "find")).toBe(true);
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    // The row mounted, find refined onto its match box, and the row left the
+    // rendered window again: the box no longer resolves.
+    view.controller.retarget(
+      "find",
+      {
+        kind: "rect",
+        rect: () => null,
+        row: { kind: "row", index: 9, key: "k9", align: "center" },
+      },
+      view.controller.generation,
+    );
+    // An index navigation was already issued, so the box waits a few frames
+    // before going back by index, exactly as a row target would.
+    for (let index = 0; index < 7; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(1);
+    frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(2);
+    expect(view.scrollToIndex.mock.calls[1]![0]).toMatchObject({ index: 9, align: "center" });
+    for (let index = 0; index < 8; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(3);
+    // The reissue bound holds: no more index navigations, and the budget ends it.
+    for (let index = 0; index < 40 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.scrollToIndex).toHaveBeenCalledTimes(3);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.diagnostics().lastOutcome).toBe("unresolved");
+  });
+
+  test("a match box with no row to return to waits out its budget", () => {
+    const frame = controlledFrames();
+    const view = harness();
+    expect(view.controller.navigateTo({ kind: "row", index: 5, key: "k5" }, "find")).toBe(true);
+    view.controller.retarget(
+      "find",
+      { kind: "rect", rect: () => null },
+      view.controller.generation,
+    );
+    for (let index = 0; index < 40 && view.controller.currentOwner === "find"; index += 1) frame();
+    expect(view.scrollToIndex).not.toHaveBeenCalled();
+    expect(view.controller.diagnostics().lastOutcome).toBe("unresolved");
   });
 
   test("scrollbar movement after completed find invalidates late match refinement", async () => {

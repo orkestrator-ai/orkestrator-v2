@@ -531,6 +531,36 @@ them breaks a build when it changes, so check them on a bump:
 - **Cursor:** whether the SDK now names a capacity error (task 4 is waiting on
   this).
 
+## Re-check coordinator tier decisions
+
+Some coordinator tiers rest on facts read from one pinned version
+([coordinator-read-only-decisions.md](../architecture/coordinator-read-only-decisions.md)).
+None of them breaks a build when it changes, so check them on a bump:
+
+- **Claude (Assumptions):** the pinned CLI keeps its Windows sandbox behind a
+  vendor feature flag that is off by default (`tengu_nankeen_kestrel` in the
+  2.1.309 binary). Search the new binary for that flag name. If it is gone or
+  on by default, Windows Claude coordinators may now get the sandbox
+  (`unavailable` already asks for it); the tier stays `provider-configured`
+  until the Windows live run on the manual-test checklist passes.
+- **Codex (D9):** if `live-network-lock.test.ts` fails, or a coordinator's
+  first turn is refused by `assertHostedNetworkLock`, fix the lock first, then
+  decide whether a `NativeAgentReadiness` state is now worth adding.
+- **Codex (D4):** when the live coordinator suite runs on the new version,
+  check the `async` and `family` summaries for a Codex coordinator running
+  `sleep`; if one does, add an argv0 deny to the coordinator permission profile.
+- **Cursor (D6):** read `LocalAgentOptions` in the new `@cursor/sdk` typings
+  for an approval or tool-call callback. If one exists, Cursor's
+  `provider-configured` tier can be reconsidered (a conformance test change
+  and a live run).
+- **Grok (D8):** if `grok --help` documents a fetch-only switch, or a way to
+  remove the hosted search's `open_page` actions, run the `no-open-page` and
+  `flag-search` variants of `scripts/coordinator-probes/grok-web-tools-probe.mjs`
+  signed in (billed turns). Only if it shows search without fetch can Grok
+  coordinators get web search. The `data-dir-reads` variant answers whether
+  Grok's own reading tools ask permission
+  ([7401](../todo/coordinator-and-multi-review/7401-grok-coordinator-data-dir-reads.md)).
+
 ## Claude
 
 ### Where the SDK is used
@@ -1445,8 +1475,9 @@ move independently.
   (`OPENCODE2_CLI_PATH`), checks it with `--version` at build time and records
   it as `agents.opencode2` in the image manifest. `OPENCODE_DISABLE_AUTOUPDATE=1`
   covers both binaries.
-- Nothing launches it yet. Until the 2.x provider lands, a bump needs only the
-  artifact steps below.
+- The 2.x provider (`apps/backend/src/core/opencode2/`) launches it for
+  sessions created while the OpenCode 2 preview is on, so a bump also reruns
+  the 2.x live set (step 8).
 
 To bump it:
 
@@ -1483,9 +1514,32 @@ To bump it:
    `--version` (2.2.6 prints `opencode v2.2.6`) and activates. 2.x's
    `--version` creates its XDG directories and a log file but no database.
 7. Run `bun test ./tests/unit/version-drift.test.ts ./tests/unit/download-agent.test.ts --parallel=2`.
+8. Run the 2.x live set against the new binary. Every test starts its own
+   `opencode serve` under a temporary `HOME`/`XDG_*`/`OPENCODE_DB` with a
+   scripted local model, so it needs no credentials and makes no billed turn:
 
-Once the 2.x provider exists, a bump also follows that provider's own checks
-(the "Qualification" list in `0008-opencode-v2.md`).
+   ```bash
+   OPENCODE2_CLI_PATH=/absolute/path/to/extracted/package/bin/opencode \
+     mise run verify:opencode2:live
+   ```
+
+   It covers launch and health, the provider (dispatch, steer, activity,
+   interrupt, close), interactions, transcript and features, MCP, workflow
+   connections, the user's configuration, coordinators, routing, the container
+   plugins and package cache, the event-stream silence watchdog, and the
+   qualification checks (an exact input retry, a turn nobody reads, a server
+   restart under a live provider, archive and restore). Also follow the
+   "Qualification" list in `0008-opencode-v2.md`; its real-stack half is the
+   idle-observation spec with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+   on fake models ([agent-testing.md](agent-testing.md)), run against a
+   disposable profile by
+   `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> mise run verify:opencode2:real-stack`
+   (the profile started with `--fixture --no-agent-credentials
+   --agent-platforms opencode --headless`). If
+   `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
+   (15 s at 2.2.6) has changed: measure it again and set
+   `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode-stream-silence.ts`) to about
+   three missed heartbeats plus 5 s.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).

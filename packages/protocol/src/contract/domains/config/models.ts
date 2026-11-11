@@ -154,6 +154,7 @@ export const globalSettingsFields = {
   terminalHistoryRetentionDays: optionalNumber,
   /** Experimental gate for scheduled jobs. */
   experimentalScheduling: optionalBoolean,
+  /** Local desktop windows take the direct gateway transport unless this is `false`. */
   localWindowGatewayTransport: optionalBoolean,
   /** Experimental gate for graphs in the web UI. */
   experimentalGraphs: optionalBoolean,

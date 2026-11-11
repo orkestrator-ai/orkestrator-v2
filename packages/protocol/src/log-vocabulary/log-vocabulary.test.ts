@@ -47,6 +47,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "process rejection.unhandled",
   "process uncaught-exception",
   "renderer-errors error.recorded",
+  "review consolidation.budget-exceeded",
   "storage migration.failed",
   "storage operation.slow",
   "storage snapshot.failed",

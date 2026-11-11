@@ -24,8 +24,10 @@
  *   every read reprojects the same revision (to-do 6861);
  * - `legacy`: `getProjection` on the near-full rows (part 0210's case),
  *   encoded with `JSON.stringify` as the gateway writes that command;
- * - `legacy-spliced`: the same read encoded with `spliceEncodedJson`, which
- *   measured slower (to-do 6860), so the command is not marked.
+ * - `legacy-spliced`: the same read encoded the way the gateway writes a
+ *   marked result, which it is since to-do 7755 (retired). The first splice
+ *   measured slower (to-do 6860); the narrowed one measures faster (to-do
+ *   7553, retired), so `legacy` is now the baseline it is compared against.
  *
  * Per read it reports CPU time (user + system, `process.cpuUsage`), wall time,
  * and, from a separate instrumented pass, the characters `JSON.stringify`
@@ -35,7 +37,8 @@
  *
  * To compare two commits, run the same file on each: check the older commit
  * out and copy this file in. The script uses only APIs present before E11
- * (`39c26627f`), and splices the response through `spliceEncodedJson` only
+ * (`39c26627f`), and splices the response through `spliceEncodedJsonBytes`
+ * (or the older string `spliceEncodedJson`, before to-do 7553, retired) only
  * where that exists. Interleave rounds across the trees; on a shared host the
  * run-to-run noise is larger than the gap between back-to-back runs. The
  * method and the figures from 2026-11-05 are in the efficiency index,
@@ -48,6 +51,19 @@
  * `--scan-bound` additionally times the three linear scans to-do 6260 task 1
  * asks about, each at its worst case (no match in a 100-row window), against
  * the same predicate shapes, as an upper bound on their share of a read.
+ *
+ * `--snapshot` (to-do 7553, retired) instead times only the encoding of each
+ * progressive scenario's first snapshot, the read a tab pays on open, reload
+ * and every snapshot fallback: the gateway's unmarked path (`JSON.stringify`,
+ * then the UTF-8 bytes and their length) against its marked path (the splice,
+ * to bytes, sized), so both pay what the gateway pays before the write. Rounds
+ * alternate between the two and report the median of per-round means, which
+ * keeps a busy host's noise out of the comparison. `--gateway` adds the same
+ * comparison end to end through a real `OrkestratorGateway` on loopback, so
+ * the HTTP write is counted: the marked result against an unmarked copy of it
+ * (which the gateway serializes with `JSON.stringify`).
+ *
+ *   bun scripts/benchmark-transcript-changed-read.ts --snapshot --gateway
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -63,6 +79,7 @@ const { isNormalizedProgressiveMessage } = await import(
   path.join(core, "native-agent-projection-helpers.ts")
 );
 const encoding = (await import(path.join(core, "native-agent-projection-encoding.ts"))) as {
+  spliceEncodedJsonBytes?: (value: unknown) => Buffer | undefined;
   spliceEncodedJson?: (value: unknown) => string | undefined;
 };
 
@@ -79,6 +96,8 @@ const countedReads = Number(arg("counted", "20"));
 const onlyScenario = arg("scenario", "");
 const asJson = process.argv.includes("--json");
 const scanBound = process.argv.includes("--scan-bound");
+const snapshotMode = process.argv.includes("--snapshot");
+const throughGateway = process.argv.includes("--gateway");
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 const createdAt = "2026-11-05T00:00:00.000Z";
@@ -329,10 +348,16 @@ function interactiveProvider(source: Source, revision: () => number) {
   };
 }
 
-/** The gateway's response body for a command result. */
-function responseBody(result: unknown): string {
+/** The gateway's response body for a marked command result, as bytes, as it writes it. */
+function responseBody(result: unknown): Buffer {
+  if (encoding.spliceEncodedJsonBytes) {
+    return encoding.spliceEncodedJsonBytes({ result }) ?? Buffer.from(JSON.stringify({ result }));
+  }
+  // Before to-do 7553 (retired) the gateway built a string and sized it, then wrote it.
   const spliced = encoding.spliceEncodedJson?.(result);
-  return spliced === undefined ? JSON.stringify({ result }) : `{"result":${spliced}}`;
+  const body = spliced === undefined ? JSON.stringify({ result }) : `{"result":${spliced}}`;
+  Buffer.byteLength(body);
+  return Buffer.from(body);
 }
 
 interface Measurement {
@@ -484,7 +509,7 @@ async function progressiveScenario(
 async function legacyScenario(
   name: string,
   source: Source,
-  encode: (result: unknown) => string,
+  encode: (result: unknown) => string | Buffer,
 ): Promise<Measurement> {
   const counters: Counters = { hydrationReads: 0 };
   return withService(opencodeProvider(source), async (service) => {
@@ -617,13 +642,249 @@ const scenarios: Array<{ name: string; run: () => Promise<Measurement> }> = [
   },
   {
     name: "legacy",
-    run: () => legacyScenario("legacy", nearFullSource(), (result) => JSON.stringify({ result })),
+    run: () =>
+      legacyScenario("legacy", nearFullSource(), (result) =>
+        Buffer.from(JSON.stringify({ result })),
+      ),
   },
   {
     name: "legacy-spliced",
     run: () => legacyScenario("legacy-spliced", nearFullSource(), responseBody),
   },
 ];
+
+/** The first snapshot a tab receives, marked the way the transcript command marks it. */
+async function firstSnapshot(
+  name: string,
+  source: Source,
+  options: { agent?: "codex" | "opencode"; provider?: unknown } = {},
+): Promise<{ result: unknown; rows: number }> {
+  const counters: Counters = { hydrationReads: 0 };
+  return withService(options.provider ?? codexProvider(source, counters), async (service) => {
+    const identity = {
+      environmentId: "env-1",
+      agent: options.agent ?? ("codex" as const),
+      logicalSessionKey: `env-env-1:${name}`,
+    };
+    await service.ensureSession(identity);
+    const first = await service.getTranscriptUpdate({
+      ...identity,
+      viewVersion: 1,
+      liveWindow,
+      forceSnapshot: true,
+      patchVersion: 2,
+    });
+    if (first.status !== "snapshot") throw new Error(`${name}: expected a first snapshot`);
+    const marked = (
+      encoding as { markSpliceableResult?: <T>(value: T) => T }
+    ).markSpliceableResult?.(first);
+    return { result: marked ?? first, rows: first.value.messages.length };
+  });
+}
+
+interface SnapshotMeasurement {
+  scenario: string;
+  rows: number;
+  bodyBytes: number;
+  stringifyUs: number;
+  spliceUs: number;
+  gateway?: { stringifyUs: number; spliceUs: number };
+}
+
+function median(values: number[]): number {
+  return percentile(values, 0.5);
+}
+
+/**
+ * Median over `rounds` of the mean µs per call of each candidate, the
+ * candidates alternating round by round so drift on a shared host hits both.
+ */
+async function alternate(
+  candidates: Record<string, () => unknown | Promise<unknown>>,
+  rounds: number,
+  perRound: number,
+): Promise<Record<string, number>> {
+  const names = Object.keys(candidates);
+  const means: Record<string, number[]> = Object.fromEntries(names.map((name) => [name, []]));
+  for (const name of names) {
+    for (let index = 0; index < warmup; index += 1) await candidates[name]!();
+  }
+  let sink = 0;
+  for (let roundIndex = 0; roundIndex < rounds; roundIndex += 1) {
+    const order = roundIndex % 2 === 0 ? names : names.toReversed();
+    for (const name of order) {
+      const run = candidates[name]!;
+      const started = performance.now();
+      for (let index = 0; index < perRound; index += 1) {
+        const value = await run();
+        if (typeof value === "number") sink += value;
+      }
+      means[name]!.push(((performance.now() - started) * 1_000) / perRound);
+    }
+  }
+  if (sink === -1) console.log(sink);
+  return Object.fromEntries(names.map((name) => [name, round(median(means[name]!), 1)]));
+}
+
+/** Time the two encodings end to end through a real gateway on loopback. */
+async function gatewayTimings(result: unknown): Promise<{ stringifyUs: number; spliceUs: number }> {
+  const { OrkestratorGateway } = await import(path.join(core, "../gateway.ts"));
+  const { registryCommandAccess } = await import(
+    path.join(core, "nodes/workspace-grant-test-support.ts")
+  );
+  const { Agent, request } = await import("node:http");
+  const dataDir = mkdtempSync(path.join(tmpdir(), "ork-snapshot-gateway-bench-"));
+  const rendererRoot = path.join(dataDir, "renderer");
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(rendererRoot, { recursive: true });
+  writeFileSync(path.join(rendererRoot, "index.html"), "<!doctype html>");
+  // A fresh object holding the same rows: the gateway serializes it whole.
+  const unmarked = { ...(result as Record<string, unknown>) };
+  const token = "snapshot-bench-token-0123456789";
+  const gateway = new OrkestratorGateway({
+    backend: {
+      invoke: async (command: string) =>
+        command === "get_native_agent_transcript_update" ? result : unmarked,
+      commandAccess: registryCommandAccess,
+    },
+    dataDir,
+    rendererRoot,
+    bindAddress: "127.0.0.1",
+    port: 0,
+    env: { ORKESTRATOR_GATEWAY_TOKEN: token },
+    allowNonTailscaleBind: true,
+    legacyPreviewPortAccess: async () => "allowed" as const,
+  });
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  try {
+    const info = await gateway.start();
+    if (!info) throw new Error("Gateway did not start");
+    const url = new URL(`${info.url}__orkestrator/invoke`);
+    // Both commands are registered transcript reads; only the first answer is marked.
+    const invoke = (command: string) =>
+      new Promise<number>((resolve, reject) => {
+        const body = JSON.stringify({ command, args: {} });
+        const outgoing = request(
+          {
+            agent,
+            hostname: url.hostname,
+            port: url.port,
+            path: url.pathname,
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+              "accept-encoding": "identity",
+            },
+          },
+          (response) => {
+            let bytes = 0;
+            response.on("data", (chunk: Buffer) => {
+              bytes += chunk.byteLength;
+            });
+            response.on("error", reject);
+            response.on("end", () =>
+              response.statusCode === 200
+                ? resolve(bytes)
+                : reject(new Error(`gateway answered ${response.statusCode}`)),
+            );
+          },
+        );
+        outgoing.on("error", reject);
+        outgoing.end(body);
+      });
+    const [spliced, whole] = await Promise.all([
+      invoke("get_native_agent_transcript_update"),
+      invoke("get_native_agent_live_update"),
+    ]);
+    if (spliced !== whole) throw new Error(`gateway bodies differ: ${spliced} vs ${whole}`);
+    const timed = await alternate(
+      {
+        splice: () => invoke("get_native_agent_transcript_update"),
+        stringify: () => invoke("get_native_agent_live_update"),
+      },
+      Math.max(10, Math.round(samples / 20)),
+      20,
+    );
+    return { stringifyUs: timed.stringify!, spliceUs: timed.splice! };
+  } finally {
+    agent.destroy();
+    await gateway.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
+async function snapshotEncodings(): Promise<SnapshotMeasurement[]> {
+  const snapshotScenarios: Array<{ name: string; take: () => ReturnType<typeof firstSnapshot> }> = [
+    { name: "tool-parts", take: () => firstSnapshot("tool-parts", toolPartsSource()) },
+    { name: "revised", take: () => firstSnapshot("revised", revisedSource()) },
+    { name: "near-full", take: () => firstSnapshot("near-full", nearFullSource()) },
+    {
+      name: "short-incomplete",
+      take: () => firstSnapshot("short-incomplete", shortIncompleteSource()),
+    },
+    {
+      name: "short-incomplete-idle",
+      take: () => {
+        const source = shortIncompleteSource();
+        return firstSnapshot("short-incomplete-idle", source, {
+          agent: "opencode",
+          provider: interactiveProvider(source, () => 7),
+        });
+      },
+    },
+  ];
+  const measured: SnapshotMeasurement[] = [];
+  for (const scenario of snapshotScenarios) {
+    if (onlyScenario && scenario.name !== onlyScenario) continue;
+    const { result, rows } = await scenario.take();
+    const whole = JSON.stringify({ result });
+    if (!responseBody(result).equals(Buffer.from(whole))) {
+      throw new Error(`${scenario.name}: splice differs`);
+    }
+    const timed = await alternate(
+      {
+        stringify: () => Buffer.from(JSON.stringify({ result })).byteLength,
+        splice: () => responseBody(result).byteLength,
+      },
+      Math.max(10, Math.round(samples / 20)),
+      100,
+    );
+    measured.push({
+      scenario: scenario.name,
+      rows,
+      bodyBytes: Buffer.byteLength(whole),
+      stringifyUs: timed.stringify!,
+      spliceUs: timed.splice!,
+      ...(throughGateway ? { gateway: await gatewayTimings(result) } : {}),
+    });
+  }
+  return measured;
+}
+
+if (snapshotMode) {
+  const host = { cpu: cpus()[0]?.model ?? "unknown", bun: Bun.version, platform: process.platform };
+  const measured = await snapshotEncodings();
+  if (asJson) {
+    console.log(
+      JSON.stringify({ schema: `${BENCHMARK_SCHEMA}.snapshot`, host, measured }, null, 2),
+    );
+  } else {
+    console.log(
+      `First-snapshot encoding (${host.cpu}, Bun ${host.bun}; median of per-round means, ${warmup} warm-up calls each)\n`,
+    );
+    console.log(
+      `| Scenario | Rows | Body bytes | JSON.stringify µs | Splice µs |${throughGateway ? " Gateway stringify µs | Gateway splice µs |" : ""}`,
+    );
+    console.log(`| --- | ---: | ---: | ---: | ---: |${throughGateway ? " ---: | ---: |" : ""}`);
+    for (const entry of measured) {
+      console.log(
+        `| ${entry.scenario} | ${entry.rows} | ${entry.bodyBytes} | ${entry.stringifyUs} | ${entry.spliceUs} |${entry.gateway ? ` ${entry.gateway.stringifyUs} | ${entry.gateway.spliceUs} |` : ""}`,
+      );
+    }
+  }
+  process.exit(0);
+}
 
 const results: Measurement[] = [];
 for (const scenario of scenarios) {
@@ -633,7 +894,9 @@ for (const scenario of scenarios) {
 const bounds = scanBound ? scanBounds(nearFullSource().rows()) : undefined;
 
 const host = { cpu: cpus()[0]?.model ?? "unknown", bun: Bun.version, platform: process.platform };
-const splices = typeof encoding.spliceEncodedJson === "function";
+const splices =
+  typeof encoding.spliceEncodedJsonBytes === "function" ||
+  typeof encoding.spliceEncodedJson === "function";
 if (asJson) {
   console.log(
     JSON.stringify(

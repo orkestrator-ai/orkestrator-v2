@@ -2,8 +2,8 @@
 
 Checked against `main` at `863b5782` (2026-10-27).
 
-The worker surfaces built for
-[0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
+The worker surfaces built for to-do 0142 (retired 2026-11-11; see
+[`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces))
 (terminal, browser, tab edits, reviewer tabs, custom fix, feature plans,
 the root-changes request) acted on this node only, and feature plans did not
 wake the coordinator (task 3 since added that). (A looped review surface was also built; it was removed
@@ -12,7 +12,12 @@ left.
 
 ## Task analysis
 
-Analysed 2026-10-28 against `main` at `79f3bc97`.
+Analysed 2026-11-11 against `main` at `498b68766`: tasks 1 and 3 are on
+`main`, task 2 still waits on the user's scope call, and tasks 4 and 5 are done
+on branch `launch-override-marker-043a84998c41-r1` (task 4's billed Claude run
+is on the manual-test checklist). Earlier analyses follow.
+
+First analysed 2026-10-28 against `main` at `79f3bc97`.
 
 Merge reconciliation against `main` at `f8caffa71` (2026-10-29): Looped Review
 was removed, so tasks 1, 3 and 5 below now cover the surviving surfaces and
@@ -37,8 +42,8 @@ association kind.
 1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: done.
 2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`: build whichever option the scope call picks (a patch sent to a leaf controller command, or a clear refusal across nodes). Status: blocked (waits on 7568: 0395 task 2 scope call).
 3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: done.
-4. **Live `surfaces` scenario**: add a scenario to `mise run test:agent:coordinator` that calls each tool once on a real stack. The billed run of it moved to the manual-test checklist (7568). Status: open.
-5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (task 3, which it depended on, is done).
+4. **Live `surfaces` scenario**: add a scenario to `mise run test:agent:coordinator` that calls each tool once on a real stack. The billed run of it is on the manual-test checklist (7568). Status: done (the scenario; its billed run is 7568's).
+5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: done (yes, as recommended; proved by test).
 
 ### 1. Worker surfaces on other nodes
 
@@ -234,11 +239,21 @@ association, and re-opening it re-sends the reply notice to the adopter.
 
 **Context.** The live suite's scenarios are `read-only`, `async`, `family`,
 `status` and `peer` (`apps/desktop/scripts/dev/coordinator-live.ts:56-62`);
-the spec is `e2e/agent-testing/coordinator-live.spec.ts`. 0142's own live runs
-cover the same tools on this node.
+the spec is `e2e/agent-testing/coordinator-live.spec.ts`. The billed run of
+the same tools on this node, carried from to-do 0142 (retired), is on the
+manual-test checklist. On a loopback fake model,
+`mise run test:agent:coordinator:surfaces-fake` (passed 2026-11-11) already
+drives `request_root_changes` through the approval dialog and
+`open_worker_browser` on a container worker
+([agent-testing.md](../../development/agent-testing.md#coordinator-worker-surfaces-fake-model)).
 
-**Investigation.** No `surfaces` scenario exists. The root-changes approval
-needs a person or the spec to approve the node action request.
+**Investigation.** No `surfaces` scenario existed. The root-changes approval
+needs a person or the spec to approve the node action request. The spec runs
+in the profile's browser client, where the root-changes dialog
+(`RootChangesApprovalDialog`, test id `root-changes-request`) opens for any
+pending `apply-root-changes` request with the coordinator's files
+pre-selected, so the spec can click **Apply** as the user does, as
+`coordinator-surfaces-fake.spec.ts` already does on a fake model.
 
 **Decisions.**
 
@@ -256,6 +271,12 @@ needs a person or the spec to approve the node action request.
   - **Resolve the node action request with a direct command.**
     - Pros: quick and stable.
     - Cons: skips the dialog, which is the part the user relies on.
+
+**Status.** Done on 2026-11-11 with both recommended options; see
+[Assumptions and decisions](#assumptions-and-decisions) and
+[`agent-testing.md`, "Live coordinator suite"](../../development/agent-testing.md#live-coordinator-suite).
+The billed Claude run is on the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 
 ### 5. Adopting feature plans (open question)
 
@@ -279,6 +300,11 @@ works on the new kind unless it is filtered out.
     - Pros: none beyond less to test.
     - Cons: a closed conversation's feature plan never reports again.
 
+**Status.** Done on 2026-11-11 with the recommended option. `adopt_workflow`
+already accepted any association kind, so no code changed; two tests in
+`coordinator-status-wakes-feature-plan.test.ts` ("adopting a feature plan")
+now prove it through the `adopt_coordinator_workflow` command the tool calls.
+
 ## Current state
 
 - The tools and their backend commands are described in
@@ -299,7 +325,10 @@ works on the new kind unless it is filtered out.
   association naming its planning exchange (`featurePlan.operationId`),
   before planning starts. Status wakes report its reply ready and each
   failure (`coordinator-feature-plan-status.ts`), and `list_workflows` lists
-  it with the plan.
+  it with the plan. Another conversation can adopt it (task 5).
+- Since task 4, `mise run test:agent:coordinator --scenario surfaces` runs
+  each local worker-surface tool on a real stack (Claude only); it has not
+  had its billed run yet.
 
 ## Outstanding work
 
@@ -308,28 +337,20 @@ works on the new kind unless it is filtered out.
 1. **Root changes on other nodes.** `request_root_changes` across nodes needs
    the patch to travel from this node's checkout to a leaf worker, or a clear
    refusal. Waiting on the scope call on the manual-test checklist; see task 2.
-2. **Status wakes for feature plans.** Done (task 3).
 
 ### Qualification
 
-3. **Live coordinator suite scenario.** A `surfaces` scenario in
-   `mise run test:agent:coordinator` that calls each tool once and checks the
-   resulting tabs and the root-changes approval on a real stack. See task 4;
-   its billed Claude run is on the manual-test checklist.
-   The remote variants from task 1 have component evidence only
-   (`coordinator-surfaces-remote.test.ts`, simulated node link); a
-   two-node live check is still owed.
+2. **Billed run of the `surfaces` scenario.** Built (task 4); its billed
+   Claude run is on the manual-test checklist. The remote variants from task 1
+   have component evidence only (`coordinator-surfaces-remote.test.ts`,
+   simulated node link); the checklist's 0142 item covers the tools on real
+   providers.
 
 ## Constraints and rationale
 
 - The read-only boundary does not move: nothing here may write to the
   project checkout, and the root-changes patch still needs the user's
   approval.
-
-## Open questions
-
-- Should a feature plan started by the coordinator be
-  adoptable like other workflows (`adopt_workflow`)? See task 5.
 
 ## Assumptions and decisions
 
@@ -460,11 +481,63 @@ on this branch.
 ### Tasks 4 and 5: not started (2026-10-30)
 
 Task 4 needs real provider turns, which this work was not allowed to run.
-Task 5 depends on task 3.
+Task 5 depends on task 3. (Both done since; see below.)
+
+### Task 4: a Claude-only `surfaces` scenario, approved in the dialog (2026-11-11)
+
+I took both recommended options: one Claude run on this node, and the spec
+clicks **Apply** in the root-changes dialog. Choices the file left to me:
+
+- **The harness makes the worker.** It creates an ordinary local environment
+  with no agent, so the scenario costs one coordinator turn and its wake, not
+  a worker turn too. Acting on a worker the coordinator did not launch needs
+  the project's `coordinatorOtherEnvironments` opt-in, which the run sets and
+  restores. The harness also writes one untracked file into the checkout for
+  the request to copy, and removes it last.
+- **One turn calls every tool in order:** `launch_terminal` (a plain tab
+  running one `echo`), `open_worker_browser` (a loopback address nothing
+  serves; the tab opens anyway), `list_tabs`, `edit_worker_tab` to focus the
+  terminal and again to close the browser tab, then `request_root_changes`
+  naming the file. `move` is left out because a fresh worker has one pane.
+- **Left out:** `open_multi_review` with `reviewerId`, `custom_fix_multi_review`
+  and the feature-plan tools. They need a finished review panel or a planning
+  agent's own billed turns, and the checklist's 0142 item already runs them on
+  real providers.
+- **What passes:** every call made and without an error result; `list_tabs`
+  shows both new tabs; the terminal tab's output (`get_terminal_output_snapshot`,
+  read for up to 30 seconds after the turn) shows the run's `surfaces-<token>`
+  marker as a whole printed line, so a tab that opens without running its
+  command fails (added after Multi Review round 1); afterwards the layout keeps the terminal tab selected
+  and holds no coordinator browser tab; the request reaches `executed` after
+  the dialog's Apply; the file is in the worker byte for byte; the checkout's
+  digest (files and Git state) is unchanged; one system message and exactly
+  one coordinator turn follow the approval, watched for 30 more seconds; no
+  interaction escaped the coordinator policy.
+- **Claude only.** `surfacesApplies` skips every other platform with the
+  reason, as `goal` and `deliver-now` do, so the default all-platform run
+  costs no extra billed turns.
+- **Budget:** four step budgets (the turn, the wait for the request, and two
+  for the outcome and its wake).
+
+The prompts and verdict are in `coordinator-live-surfaces.ts`, the
+orchestration in `coordinator-live-surfaces-orchestration.ts`; both have
+credential-free tests, the second over a scripted command transport. No
+provider turn was run for this work.
+
+### Task 5: feature plans are adoptable, with no code change (2026-11-11)
+
+I took the recommended option. Adoption
+(`adoptCoordinatorWorkflowAssociation`) checks that the adopting conversation
+is open, that the association exists and that its current conversation is
+closed, never its kind, and
+status wakes route by the association's current conversation, so a feature
+plan was already adoptable. The new tests cover both orders: a reply that
+lands after adoption wakes only the adopter, and adopting after the reply was
+reported re-sends it to the adopter.
 
 ## Related
 
-- [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
+- To-do 0142 (retired 2026-11-11; see [`coordinator.md`, "Worker surfaces"](../../architecture/coordinator.md#worker-surfaces)).
 - [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md)
   for the live suite.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the scope call of task 2, the billed Claude run of task 4) moved there on 2026-11-10.

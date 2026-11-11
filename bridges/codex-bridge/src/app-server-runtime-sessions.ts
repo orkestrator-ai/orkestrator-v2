@@ -1053,7 +1053,14 @@ export class CodexRuntimeSessions {
     // accepts thread-scoped MCP inventory requests for a thread loaded in the
     // current generation, so a lazy/restored or idle-detached session uses the
     // engine-global inventory until another route attaches it.
-    return this.ctx.options.engine.getRuntimeHealth(this.loadedThreadId(sessionId));
+    const threadId = this.loadedThreadId(sessionId);
+    const health = await this.ctx.options.engine.getRuntimeHealth(threadId);
+    // Whether this session's thread is loaded in the current app-server
+    // generation: the attachment fact Claude, Cursor and Pi report as
+    // `summary.state`, beside (not instead of) the engine's own health. An
+    // idle-detached, unmaterialized or restored-but-unresumed thread reads
+    // `detached`; the next prompt or tab read re-attaches it (todo 7380).
+    return { ...health, session: { state: threadId ? "attached" : "detached" } };
   }
 
   async listMcpServers(sessionId: string): Promise<unknown | null> {

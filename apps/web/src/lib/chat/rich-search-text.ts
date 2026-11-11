@@ -81,7 +81,8 @@ export function workflowSnapshotSearchText(snapshot: WorkflowSnapshotV1): string
  * renders it in the body search root: chart labels (from the stored chart
  * JSON), workflow labels (from the stored snapshot JSON), Mermaid source (only
  * while the card shows its source view), or a static document's text (as its
- * frame reported it: artifact HTML is never parsed here). Null when the body
+ * frame reported it, or as the preview worker stored it at verification and
+ * Find read it: artifact HTML is never parsed here). Null when the body
  * does not validate — the card then shows no body search root.
  */
 export function artifactBodySearchText(

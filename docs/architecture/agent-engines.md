@@ -574,6 +574,22 @@ session unsubscribes, whereas deleting would destroy the user's rollout. Tab
 close (`POST /session/:id/close`) additionally confirms that a last-reference
 turn has actually stopped before releasing the thread.
 
+A thread is detachable after 30 minutes in which none of its sessions was
+touched (`DEFAULT_THREAD_IDLE_MS`), and the bridge sweeps for such threads
+every 5 minutes, so an idle thread is released 30 to 35 minutes after its
+last touch. Unlike Claude and Pi, whose idle clocks ignore reads, Codex's
+tab-facing reads (`GET /session/:id`, `/messages`, `/config`, …) are touches,
+so a thread stays attached for as long as a tab keeps reading it; the
+backend's activity sweep, batch activity and runtime-health reads are not.
+`/session/:id/runtime-health` reports `session.state`: `attached` while the
+session's thread is loaded in the current app-server generation, `detached`
+otherwise (idle-released, never materialized, or restored and not yet
+resumed). The backend copies it into the runtime summary's `state` while
+the engine is `ready`, the vocabulary Claude, Cursor and Pi use; a starting,
+restarting or failed engine shows its own state instead, and so does an
+older bridge without the field. The idle-observation live spec's `detach`
+case therefore waits up to 35.5 minutes for Codex, with no renderer open.
+
 Calls a sandbox refuses are the one thing the item stream leaves out. The
 models Codex serves run in code mode, so the model sends a JavaScript `exec`
 cell that calls `apply_patch` or `exec_command`. Under a `read-only` or
@@ -1021,8 +1037,14 @@ difference follows from the CLI: `network.allowLocalBinding` is macOS-only,
 and on Linux each command gets its own network namespace whose only way out
 is the proxy, which `NO_PROXY` skips for loopback. So with full network a
 sandboxed command on Linux cannot reach a service on the machine's loopback
-directly (a dev server, a local database); on macOS it can. Agent Info does
-not say so yet ([7563](../todo/agent-engines/7563-claude-linux-sandbox-loopback-under-full-network.md)).
+directly (a dev server, a local database); on macOS it can. On Linux the
+Claude bridge's reported policy for such a session keeps `networkAccess:
+"full"` (true for every host but loopback) and adds a `note` naming the
+exception, which Agent Info shows under the policy
+(`CLAUDE_LINUX_SANDBOX_LOOPBACK_NOTE` in
+`bridges/claude-bridge/src/services/claude-query-config.ts`). Orkestrator does
+not work around it: the SDK exposes no way to take loopback out of `NO_PROXY`,
+and a proxy of Orkestrator's own would take over the CLI's network filtering.
 `mise run verify:claude:sandbox-live` proves all of this on the pinned CLI on
 either system (to-do 0001 task 9).
 

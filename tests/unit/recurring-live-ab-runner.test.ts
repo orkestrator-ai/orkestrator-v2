@@ -572,6 +572,74 @@ describe("live benchmark lifecycle", () => {
     expect(existsSync(configDirs[0]!)).toBe(false);
   });
 
+  test("a soak reader is created only when asked for, handed to the soak and closed when it throws", async () => {
+    const soakResult = {
+      cyclesCompleted: 1,
+      failures: [],
+      baseline: {},
+      final: {},
+      leaks: [],
+      backendRssKiB: { baseline: null, final: null },
+    };
+    const created: Array<{ profile: string; logDir: string }> = [];
+    let closes = 0;
+    const reader = {
+      read: async () => 0,
+      close: async () => {
+        closes += 1;
+      },
+    };
+    const soakReader = mock((profile: string, _status: Status, logDir?: string) => {
+      created.push({ profile, logDir: logDir ?? "" });
+      return reader;
+    });
+
+    // Without --soak-readers the soak runs with no reader at all.
+    const plain = harness({ soakReader: soakReader as never });
+    plain.runtime.asyncCliRunner = (() => async () => ({ status: 0, stdout: "{}" })) as never;
+    const plainSoak = mock(async (..._args: unknown[]) => soakResult);
+    plain.runtime.measureSoak = plainSoak as never;
+    const without = await runArm(
+      { ...options(), soakCycles: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "no-reader",
+      plain.runtime,
+    );
+    expect(without.error).toBeUndefined();
+    expect(soakReader).not.toHaveBeenCalled();
+    expect(plainSoak.mock.calls[0]![2]).not.toHaveProperty("reader");
+
+    // With one reader, the soak gets it, and it is closed even though the soak throws.
+    const h = harness({ soakReader: soakReader as never });
+    h.runtime.asyncCliRunner = (() => async () => ({ status: 0, stdout: "{}" })) as never;
+    const failingSoak = mock(async (..._args: unknown[]) => {
+      expect(closes).toBe(0);
+      throw new Error("soak failed");
+    });
+    h.runtime.measureSoak = failingSoak as never;
+    const result = await runArm(
+      { ...options(), soakCycles: 1, soakSessions: 1, soakReaders: 1 },
+      "candidate",
+      1,
+      "/stub",
+      undefined,
+      "reader",
+      h.runtime,
+    );
+    expect(result.error).toBe("soak failed");
+    expect(created).toEqual([{ profile: result.profile, logDir: "/stub" }]);
+    expect(failingSoak.mock.calls[0]![2]).toMatchObject({ reader });
+    expect(closes).toBe(1);
+    // The profile is still stopped and reset after the failed soak.
+    expect(h.commands).toEqual([
+      ["dev:stop", "--profile", result.profile],
+      ["dev:reset", "--profile", result.profile],
+    ]);
+  });
+
   test("counts guard lines across logs and distinguishes unreadable logs", () => {
     const dir = temporary();
     mkdirSync(path.join(dir, "nested"));

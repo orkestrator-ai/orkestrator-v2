@@ -13,6 +13,9 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import {
   nativeAgentCapabilities,
+  readOnlyTurnReportedPolicy,
+  READ_ONLY_TURN_POLICY_NOTE,
+  type NativeAgentExecutionPolicy,
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -170,6 +173,41 @@ describe("AgentInfoButton Multi Review reviewer tabs", () => {
     expect(
       nativeInvokeMock.mock.calls.some(([command]) => command === "get_native_agent_projection"),
     ).toBe(false);
+  });
+
+  test("says a running reviewer turn has no sandbox, and why (to-do 0190)", async () => {
+    // What the Claude bridge reports while a read-only turn runs on a host
+    // whose command sandbox cannot run (every container).
+    const reason =
+      "Claude's command sandbox cannot run commands in this container: bubblewrap and socat are not in the container's image.";
+    const turnPolicy: NativeAgentExecutionPolicy = {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+      networkAccess: "restricted",
+    };
+    appCommandStore(multiReviewStore).getState().replaceWorkflow(multiReviewWorkflow());
+    nativeInvokeMock.mockImplementation((command: string) =>
+      command === "get_multi_review_reviewer_projection"
+        ? Promise.resolve(
+            nativeProjection("claude", "reviewer-provider-session", {
+              turn: { phase: "running" },
+              policy: readOnlyTurnReportedPolicy(turnPolicy, { commandSandboxOff: reason }),
+            }),
+          )
+        : command === "get_cursor_account_usage"
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+    );
+
+    renderInAppCommandScope(<AgentInfoButton activeTab={reviewerTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText(/^No sandbox, approvals denied/)).toBeTruthy());
+    const note = screen.getByText((text) => text.includes(READ_ONLY_TURN_POLICY_NOTE));
+    expect(note.textContent).toContain(reason);
   });
 
   test("does not reinspect an unchanged reviewer on workflow revisions", async () => {

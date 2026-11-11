@@ -118,6 +118,71 @@ describe("normalizeOpenCode2Transcript", () => {
     expect(unknown).toEqual(["hologram"]);
   });
 
+  test("a finished background shell shows the command and the output it emitted", () => {
+    const command = "sleep 20; echo a > out; echo DONE-1";
+    const result = rows([
+      {
+        id: "s1",
+        type: "synthetic",
+        description: command,
+        text: `<shell id="sh_1" state="completed" command="${command}">\nDONE-1\n\n</shell>`,
+        metadata: {
+          source: "shell",
+          shellID: "sh_1",
+          state: "completed",
+          truncated: false,
+          exit: 0,
+        },
+        time: { created: 3 },
+      },
+      {
+        id: "s2",
+        type: "synthetic",
+        description: "false",
+        text: `<shell id="sh_2" state="failed" command="false">\n</shell>`,
+        metadata: { source: "shell", state: "failed", truncated: true, exit: 1 },
+        time: { created: 4 },
+      },
+      {
+        id: "s3",
+        type: "synthetic",
+        description: "yes | head",
+        text: `<shell id="sh_3" state="completed" command="yes | head">\ny\ny\n</shell>`,
+        metadata: { source: "shell", state: "completed", truncated: true, exit: 0 },
+        time: { created: 5 },
+      },
+      // Not the 2.2.6 shell shape: the description alone, as before.
+      {
+        id: "s4",
+        type: "synthetic",
+        description: "Shell note",
+        text: "unwrapped text",
+        metadata: { source: "shell" },
+        time: { created: 6 },
+      },
+      {
+        id: "s5",
+        type: "synthetic",
+        description: "Attached a file",
+        text: `<shell id="x">\nnot a shell report\n</shell>`,
+        metadata: { source: "file" },
+        time: { created: 7 },
+      },
+    ]);
+    expect(result.map((row) => row.content)).toEqual([
+      `Background command completed: ${command}\nDONE-1`,
+      "Background command failed (exit 1): false",
+      "Background command completed: yes | head\ny\ny\n(output truncated)",
+      "Shell note",
+      "Attached a file",
+    ]);
+    expect(result.every((row) => row.role === "system")).toBe(true);
+    expect(partsOf(result[0])[0]).toMatchObject({
+      type: "status",
+      content: `Background command completed: ${command}\nDONE-1`,
+    });
+  });
+
   test("a failed run reads as one error and a stopped run as an interruption", () => {
     const result = rows([
       {

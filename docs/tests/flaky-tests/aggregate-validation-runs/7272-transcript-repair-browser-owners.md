@@ -35,6 +35,11 @@ and [4350](4350-suborks-branch-browser-validation.md). `TabLaunchOverride`
 failed both viewports in the aggregate and again in the seven-owner rerun
 (54 passed, two failed in 1.1 min); it is not classified as a flake. That
 failure is left to the verifier rather than changing unrelated launch UI.
+Its cause was found on 2026-11-11 ([9953](9953-launch-override-marker-browser-owners.md)): under the fixture's
+React StrictMode the override store was re-retained while its first read ran
+and queued a second read 500 ms later, so "the whole strip makes one
+coordinator read" saw two reads whenever the click came late. Commit
+`a600bdd5a` makes the remount share that read; the spec then passed 24 of 24.
 
 ## Auto-pipeline address validation — 2026-11-10
 
@@ -78,3 +83,17 @@ result for this validation attempt.
 Aggregate outcome: terminated at the 1,800 s deadline after starting 1,584 of
 1,810 cases, with 14 reported failures; no final pass/skip totals and no
 public-site execution. Evidence: `/tmp/orkestrator-test-run.HLOvBh/browser.log.gz`.
+
+## WebKit-scroll review round 2 recurrence — 2026-11-11
+
+Branch `webkit-scroll-fix-d230c4f38350-r1`, base
+`498b68766f5c9f357a3a86782406d1e9e0977559`, head `7fac685f4` (a scroll-hook
+change for callers that pass `viewKey`; the sidebar fixture does not use the
+hook). `ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name browser-rerun -- mise run test:browser`,
+at host load average about 30, failed `e2e/SidebarMotion.spec.ts:26` on
+desktop at line 47: three content sizes instead of at most two. The suite was
+stopped by the 30-minute group deadline at 1849 of 1852 cases with three
+failures (this one, CoordinatorActions line 383 in case 9924 and flake 1602).
+The complete owner then passed alone:
+`ORKESTRATOR_E2E_PORT=1497 mise run test:logged -- --name owner-SidebarMotion -- bunx playwright test --config e2e/playwright.config.ts e2e/SidebarMotion.spec.ts --retries=0`
+(exit 0, 30.5 s). No assertion, timeout or sidebar implementation changed.

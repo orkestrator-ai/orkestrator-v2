@@ -230,14 +230,14 @@ export function registerNativeAgentCommands(
     return session;
   });
 
-  // Not marked spliceable: splicing this whole-session projection measured
-  // slower than `JSON.stringify` ("Response encoding" in
+  // Its rows were each encoded already to hash and size the projection, so the
+  // gateway splices those encodings ("Response encoding" in
   // docs/architecture/native-transcripts.md).
   register(getNativeAgentProjectionCommand, async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    return context.nativeAgents.getProjection({
+    const projection = await context.nativeAgents.getProjection({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
@@ -250,6 +250,7 @@ export function registerNativeAgentCommands(
           ? undefined
           : asRequiredBoolean(args.refreshUsage, "refreshUsage"),
     });
+    return markSpliceableResult(projection);
   });
 
   // Whether this tab's refused prompt goes out again after a sign-in; the

@@ -86,7 +86,14 @@ const PROFILE_FLAGS = new Set([
   "--no-agent-credentials",
   "--use-dev-worktree-folder",
 ]);
-const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms", "--agent-tools-port"]);
+const PROFILE_OPTIONS = new Set([
+  "--credential-source",
+  "--agent-platforms",
+  "--agent-tools-port",
+  // A suite that needs the fixture's environments without the Docker
+  // qualification run (`docker`), for example a container worker.
+  "--fixture-environments",
+]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex
@@ -200,8 +207,10 @@ export function dockerFixtureShards(
 export function dockerProfileArguments(profileArgs: readonly string[]): string[] {
   return [
     ...profileArgs,
-    "--fixture-environments",
-    "local,container",
+    // A caller's own fixture selection wins over the Docker default.
+    ...(profileArgs.includes("--fixture-environments")
+      ? []
+      : ["--fixture-environments", "local,container"]),
     ...(agentToolsPortArgument(profileArgs) === undefined ? ["--agent-tools-port", "auto"] : []),
   ];
 }
@@ -304,6 +313,13 @@ export interface IsolatedBrowserOptions {
    * `ORKESTRATOR_AGENT_TEST_PROFILE`; the suite's own env names the others).
    */
   companionProfiles?: readonly string[];
+  /**
+   * The suite stops and starts its profiles itself (with `dev:stop` and a new
+   * `dev:test` launcher), so a launcher exiting during the suite is not a
+   * failure. Cleanup still stops and resets every profile by name, which
+   * covers a launcher the suite started.
+   */
+  suiteRestartsProfiles?: boolean;
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -559,7 +575,11 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         Promise.race([
           handle.done,
           ...launchers
-            .filter((started) => started.name === name || companions.includes(started.name))
+            .filter(
+              (started) =>
+                !options.suiteRestartsProfiles &&
+                (started.name === name || companions.includes(started.name)),
+            )
             .map((started) =>
               started.handle.done.then(() => {
                 throw new Error("Isolated profile exited during browser tests");

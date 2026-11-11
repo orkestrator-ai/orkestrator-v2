@@ -35,6 +35,11 @@
  *   the view must settle within the completion budget.
  * - `no-renderer`: the only page is closed while a turn runs. A second client
  *   signs in afterwards and must see the completed, idle conversation.
+ * - `steer`: OpenCode 2 only (`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`).
+ *   While a turn runs a shell command, a prompt queued from the composer is
+ *   steered into it from its queue strip. The turn must end on the steer's
+ *   reply, never the first prompt's, with the steer shown once, before and
+ *   after a reload. Every other platform records it `skipped`.
  * - `detach`: the session sits idle past the provider's idle detach (10 min
  *   for Claude, Cursor and Pi), recording the view's idle read cadence, then a
  *   prompt must reattach and settle.
@@ -66,7 +71,13 @@
  * provider merged into the profile's own global `opencode.json`
  * (`opencode-fake-provider.ts`, todo 0049 task 6), limited to that provider
  * so no turn or title request can reach a hosted model; it needs no
- * credential source either.
+ * credential source either. `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+ * puts the run's OpenCode sessions on the 2.x preview for the run (the
+ * profile's `openCodeProtocol`, restored afterwards); only 2.x's `shell` can
+ * background a command, so only then does `background` exercise OpenCode
+ * (todo 0049 task 8).
+ * The 2.x server mirrors the same profile-local configuration, so the fake
+ * provider reaches it too (todo 0008 task 7).
  *
  * `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
  * container environment (todo 0049 task 9) instead of a local one, from the
@@ -89,7 +100,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { CODEWORD_REPLY_PREFIX } from "./idle-observation-fake-claude";
-import { idleObservationModel, asyncQuestionPrompt } from "./idle-observation-live-support";
+import {
+  idleObservationModel,
+  asyncQuestionPrompt,
+  detachWaitClosesRenderer,
+  detachWaitMs,
+  idleDetachWindowMs,
+} from "./idle-observation-live-support";
 import {
   installContainerFakeClaude,
   readContainerFile,
@@ -98,7 +115,7 @@ import {
   type FakeModelHandle,
 } from "./idle-observation-fake-models";
 import { PI_FAKE_PROVIDER } from "./idle-observation-fake-pi";
-import { allowOpenCodeFakeProvider } from "./opencode-fake-provider";
+import { allowOpenCodeFakeProvider, useOpenCodeProtocol } from "./opencode-fake-provider";
 import {
   requireRecoveredBackoff,
   backgroundOutputEvidence,
@@ -107,6 +124,7 @@ import {
   freshToolResults,
   freshToolStates,
   gapHistogram,
+  lateOutputRowIds,
   discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
@@ -193,10 +211,22 @@ const MODELS = new Map(
     .filter((pair): pair is [string, string] => pair.length === 2 && Boolean(pair[1])),
 );
 const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_TURN_TIMEOUT_MS ?? "240000");
-/** Longer than every bridge's 10 min idle detach. */
-const DETACH_WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS ?? "630000");
+/**
+ * The detach case's idle wait. Unset, each provider waits its own idle window
+ * plus 30 s: 630 s for the 10 min bridges, 35.5 min for Codex (todo 7380).
+ */
+const DETACH_WAIT_OVERRIDE = process.env.ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS;
 const FAKE_MODELS = process.env.ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS === "1";
 const IN_CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT === "container";
+/**
+ * `v2` puts the run's OpenCode sessions on the 2.x preview (`openCodeProtocol`),
+ * whose `shell` can background a command; 1.19.5's cannot (todo 0049 task 8).
+ * It is switched on before the environment's tab is created and put back
+ * afterwards; the 2.x server mirrors the same profile-local configuration,
+ * so the fake provider reaches it too (todo 0008 task 7).
+ */
+const OPENCODE_PROTOCOL: "legacy" | "v2" =
+  process.env.ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL === "v2" ? "v2" : "legacy";
 
 // Budgets (p95) from docs/architecture/recurring-work.md#latency-budgets.
 const COMPLETION_BUDGET_MS = 3_000;
@@ -370,6 +400,12 @@ interface Client {
   context: BrowserContext;
   page: Page;
   invoke: Invoke;
+  /**
+   * Slide the browser session's idle window, as an open renderer does. An
+   * agent-test session lapses after 30 idle minutes, which a no-renderer
+   * wait (Codex's detach, 7380) outlasts. It reads no agent session.
+   */
+  keepSignedIn: () => Promise<void>;
   readTimes: number[];
   /** Reads per backend command, for the evidence record. */
   readCommands: Record<string, number>;
@@ -426,7 +462,13 @@ async function openClient(browser: Browser, status: Status, logicalSessionKey: s
     if (!reply.ok()) throw new Error(`${command}: ${await reply.text()}`);
     return ((await reply.json()) as { result: T }).result;
   };
-  return { context, page, invoke, readTimes, readCommands } satisfies Client;
+  const keepSignedIn = async () => {
+    const reply = await context.request.post(
+      new URL("/__orkestrator/session", status.browserUrl!).href,
+    );
+    if (!reply.ok()) throw new Error(`session refresh: HTTP ${reply.status()}`);
+  };
+  return { context, page, invoke, keepSignedIn, readTimes, readCommands } satisfies Client;
 }
 
 async function openEnvironment(page: Page, projectName: string, environmentName: string) {
@@ -480,6 +522,7 @@ test.describe("live idle observation", () => {
     const label = LABELS[platform];
     test(`${label}: idle observation settles every live case`, async ({ browser }, testInfo) => {
       const detachSelected = CASES.includes("detach");
+      const DETACH_WAIT_MS = detachWaitMs(platform, DETACH_WAIT_OVERRIDE);
       test.setTimeout(TURN_TIMEOUT_MS * 9 + (detachSelected ? DETACH_WAIT_MS : 0) + 300_000);
       testInfo.annotations.push({ type: "profile", description: profile });
       /** A content-free progress line; it also keeps the logged runner's watchdog fed. */
@@ -533,6 +576,8 @@ test.describe("live idle observation", () => {
       const fakeModels: FakeModelHandle[] = [];
       /** Puts the profile's OpenCode allowlist back; set only when the run changed it. */
       let restoreOpenCodeAllowlist: (() => Promise<void>) | null = null;
+      /** Puts the profile's OpenCode protocol setting back; set only when the run changed it. */
+      let restoreOpenCodeProtocol: (() => Promise<void>) | null = null;
       const logicalSessionKey = () => `env-${environmentId}:${tabId}`;
       let client = await openClient(browser, status, "__pending__");
       progress("signed in");
@@ -566,6 +611,15 @@ test.describe("live idle observation", () => {
               PI_FAKE_PROVIDER,
             );
           }
+        }
+        if (platform === "opencode" && OPENCODE_PROTOCOL === "v2") {
+          // Before the environment's first session: the line is fixed at creation.
+          restoreOpenCodeProtocol = await useOpenCodeProtocol(
+            (command, args) => client.invoke(command, args),
+            OPENCODE_PROTOCOL,
+          );
+          summary.openCodeProtocol = OPENCODE_PROTOCOL;
+          progress("OpenCode 2 preview on");
         }
         const environment = await bootstrapInvoke<Environment>("create_environment", {
           projectId: fixture!.id,
@@ -1571,6 +1625,10 @@ test.describe("live idle observation", () => {
               }
             },
           });
+          // Rows present once our turn settled: a late output row must arrive after them.
+          const presentAtSettle = new Set(
+            ((await projection())?.messages ?? []).map((message) => message.id),
+          );
           record.timings.backgroundIndicatorLagMs =
             taskShownAt !== null && taskStartedAt !== null ? taskShownAt - taskStartedAt : null;
           if (!sawRunningTask) {
@@ -1633,14 +1691,69 @@ test.describe("live idle observation", () => {
               "the exercised background task's output reached a tool result or its task output file",
             ).not.toBe("none");
           } else {
-            // No task surface (Codex): read what the transcript shows once the
-            // 20 s command has surely ended, with no further turn.
-            const endedBy = sentAt + 30_000 - Date.now();
+            // No task surface (Codex, OpenCode 2.x): read what the transcript
+            // shows once the 20 s command has surely ended, with no turn from us.
+            // OpenCode 2.x promises to resume the session with the output, so
+            // allow it 25 s for that.
+            const endedBy = sentAt + 45_000 - Date.now();
             if (endedBy > 0) await sleep(endedBy);
-            const afterEnd = freshToolStates((await projection())?.messages ?? [], before);
+            const ended = await projection();
+            const afterEnd = freshToolStates(ended?.messages ?? [], before);
             record.notes.push(
               `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
+            // Content-free: which rows arrived after our turn settled, and which
+            // of them show the marker as emitted output. The prompt we sent holds
+            // the marker too, so user rows and the echoed command never count.
+            const lateRows = (ended?.messages ?? []).filter(
+              (message) => !presentAtSettle.has(message.id),
+            );
+            const lateOutputIds = lateOutputRowIds(ended?.messages ?? [], presentAtSettle, marker);
+            record.notes.push(
+              `rows after the turn settled: ${
+                lateRows
+                  .map(
+                    (message) =>
+                      `${message.role}(marker ${textOf(message).includes(marker)}, emitted ${lateOutputIds.includes(message.id)}, parts ${Array.isArray(message.parts) ? message.parts.map((part) => (part as { type?: string }).type ?? "?").join("+") : "none"})`,
+                  )
+                  .join(",") || "none"
+              }; late output rows: ${lateOutputIds.length}; phase ${ended?.turn.phase ?? "none"}`,
+            );
+            // OpenCode 2.x promises to resume the session with the output, so on
+            // the opted-in 2.x line a backgrounded command whose output never
+            // arrives is a failure, not an unexercised case.
+            if (platform === "opencode" && OPENCODE_PROTOCOL === "v2" && evidence === "none") {
+              expect(
+                lateOutputIds.length,
+                "OpenCode 2.x resumed the idle session with the background command's output",
+              ).toBeGreaterThan(0);
+            }
+            // A foreground run (OpenCode 1.19.5, Pi) returns the output in the
+            // call's own result, which proves nothing about a late arrival.
+            if (lateOutputIds.length > 0 && evidence === "none") {
+              // The provider resumed the idle session with the output (OpenCode
+              // 2.x): an idle, backed-off page must catch up with no turn of
+              // ours, on that row itself rather than on our prompt's bubble.
+              const lateRowOnPage = page()
+                .locator(
+                  lateOutputIds
+                    .map((id) => `[data-chat-message-key=${JSON.stringify(id)}]`)
+                    .join(", "),
+                )
+                .getByText(marker)
+                .first();
+              const lookedAt = Date.now();
+              await expect(lateRowOnPage).toBeVisible({
+                timeout: LOST_ANNOUNCEMENT_BOUND_MS,
+              });
+              record.timings.lateOutputShownMs = Date.now() - lookedAt;
+              // A backgrounded command whose output reached the idle page is
+              // exercised, task surface or not.
+              record.status = "passed";
+              record.notes.push(
+                "exercised: the output arrived in a resumed turn of the idle session",
+              );
+            }
             // Nothing reports the end of a command the turn left running, so its
             // card must not keep claiming to run on an idle thread (#2064).
             expect(
@@ -1816,6 +1929,80 @@ test.describe("live idle observation", () => {
           );
         });
 
+        await runCase("steer", async (record) => {
+          // OpenCode 2 is the line whose composer steer had not been driven
+          // through the UI (todo 0008 task 7); the other fakes do not script it.
+          if (platform !== "opencode" || OPENCODE_PROTOCOL !== "v2") {
+            record.status = "skipped";
+            record.notes.push("composer steer is checked on OpenCode 2 only");
+            return;
+          }
+          const baseWord = `IDLEQA-STEER-BASE-${nonce()}`;
+          const steeredWord = `IDLEQA-STEERED-${nonce()}`;
+          const steerText = `Reply with exactly ${steeredWord} and nothing else.`;
+          const before = await messageIds();
+          await sendFromComposer(
+            `Run this shell command and wait for it: sleep 8\nThen reply with exactly ${baseWord} and nothing else.`,
+          );
+          await expect(stopButton()).toBeVisible({ timeout: 30_000 });
+          // Enter while a turn runs queues the prompt; its strip offers Steer.
+          await composer().fill(steerText);
+          await composer().press("Enter");
+          const strip = page().getByTestId("compose-queue-strip");
+          const steer = strip.getByRole("button", { name: /^Steer queued prompt 1 of \d+:/ });
+          await expect(steer).toBeVisible({ timeout: 15_000 });
+          const steeredAt = Date.now();
+          await steer.click();
+          await expect(steer).toHaveCount(0, { timeout: 15_000 });
+          record.timings.steerAcceptedMs = Date.now() - steeredAt;
+          await expect
+            .poll(
+              async () => {
+                const current = await projection();
+                return (
+                  current?.turn.phase === "idle" &&
+                  current.messages.some(
+                    (message) => !before.has(message.id) && textOf(message).includes(steeredWord),
+                  )
+                );
+              },
+              { timeout: TURN_TIMEOUT_MS },
+            )
+            .toBe(true);
+          record.timings.steeredReplyMs = Date.now() - steeredAt;
+          const check = async (when: string) => {
+            const fresh = ((await projection())?.messages ?? []).filter(
+              (message) => !before.has(message.id),
+            );
+            // Steered into the running turn: it ended on the steer's reply and
+            // never gave the reply the first prompt asked for.
+            expect(
+              fresh.some(
+                (message) => message.role === "assistant" && textOf(message).includes(baseWord),
+              ),
+              `${when}: the first prompt's own reply`,
+            ).toBe(false);
+            expect(
+              fresh.filter((message) => message.role === "user" && textOf(message) === steerText)
+                .length,
+              `${when}: the steer appears once`,
+            ).toBe(1);
+          };
+          await check("live");
+          // Rehydrate from a fresh mount, then check the same picture.
+          await goToEnvironment();
+          await expect(page().getByText(steeredWord, { exact: true }).first()).toBeVisible({
+            timeout: 30_000,
+          });
+          await expect(stopButton()).toHaveCount(0);
+          await check("after reload");
+          await expect
+            .poll(() => sidebarActivity(page(), environmentName), {
+              timeout: SIDEBAR_BOUND_MS,
+            })
+            .toBe("idle");
+        });
+
         await runCase("detach", async (record) => {
           const before = await projection();
           // The no-touch read, not the projection's cached runtime: a provider
@@ -1833,6 +2020,15 @@ test.describe("live idle observation", () => {
             stateAtStart = await runtimeState();
           }
           record.notes.push(`no-touch runtime before the wait: ${stateAtStart ?? "unknown"}`);
+          // Codex's tab reads refresh its thread's idle clock by design, so an
+          // open tab keeps the thread attached: wait with no renderer (7380).
+          const closesRenderer = detachWaitClosesRenderer(platform);
+          if (closesRenderer) {
+            await client.page.close();
+            record.notes.push(
+              "renderer closed for the wait: the provider's tab reads keep it attached",
+            );
+          }
           const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
           const commandsBefore = { ...client.readCommands };
@@ -1841,12 +2037,28 @@ test.describe("live idle observation", () => {
           const sidebarReadings = new Set<string>();
           while (Date.now() - idleStart < DETACH_WAIT_MS) {
             await sleep(15_000);
+            if (closesRenderer) {
+              // No renderer slides the browser session meanwhile.
+              await client.keepSignedIn();
+              // The no-touch read: stop as soon as the thread is released.
+              const state = await runtimeState();
+              if (state === "detached") {
+                record.timings.detachObservedAfterMs = Date.now() - idleStart;
+                break;
+              }
+              // No page reads to print during a 35 min wait: keep the logged
+              // runner's no-output watchdog fed (content-free).
+              progress(
+                `detach wait ${Math.round((Date.now() - idleStart) / 60_000)} min: runtime ${state ?? "unknown"}`,
+              );
+              continue;
+            }
             if ((await stopButton().count()) > 0) sawStop = true;
             const sidebar = await sidebarActivity(page(), environmentName);
             sidebarReadings.add(sidebar);
             if (sidebar === "working") sawWorkingSidebar = true;
           }
-          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",")}`);
+          record.notes.push(`idle sidebar readings: ${[...sidebarReadings].join(",") || "none"}`);
           const cadence = readCadence(client.readTimes, idleStart + 30_000, Date.now());
           record.timings.idleReadsPerMinute = cadence.perMinute;
           record.timings.idleMaxGapMs = cadence.maxGapMs;
@@ -1887,11 +2099,12 @@ test.describe("live idle observation", () => {
             .not.toBeUndefined();
           const detachedState = await runtimeState();
           record.notes.push(`no-touch runtime after idle wait: ${detachedState ?? "unknown"}`);
-          const cadenceOnly = DETACH_WAIT_MS < 630_000;
-          // OpenCode's server lifetime and Codex's engine health are not a
-          // session detach observation. Claude reports whether its CLI is open
-          // (attached) or released by the idle window (detached), as Cursor
-          // and Pi report their SDK sessions.
+          const cadenceOnly = DETACH_WAIT_MS < idleDetachWindowMs(platform);
+          // Claude reports whether its CLI is open (attached) or released by
+          // the idle window (detached), as Cursor and Pi report their SDK
+          // sessions and Codex reports whether its thread is loaded in the
+          // current app-server (todo 7380). Only OpenCode exposes no session
+          // detach state: its server lifetime is not a session observation.
           const reportsSessionDetach = detachedState === "attached" || detachedState === "detached";
           if (cadenceOnly || !reportsSessionDetach) {
             record.status = "not-exercised";
@@ -1907,19 +2120,40 @@ test.describe("live idle observation", () => {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
           }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
-          // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
-          expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(true);
+          if (!closesRenderer) {
+            // A probe that cannot see the row reads `unknown`, which would pass the next check blind.
+            expect(sidebarReadings.has("idle"), "the sidebar was read as idle while idle").toBe(
+              true,
+            );
+          }
           expect(sawWorkingSidebar, "the sidebar never shows working on an idle tab").toBe(false);
           const word = `IDLEQA-REATTACH-${nonce()}`;
           // Reuse the pre-wait IDs: no tab-facing read between observing
           // detachment and dispatching the turn that must reattach it.
           const ids = new Set((before?.messages ?? []).map((message) => message.id));
-          await sendFromComposer(replyPrompt(word));
-          const settled = await watchSettle(ids, word, {
-            uiBoundMs: COMPLETION_BUDGET_MS,
-          });
-          expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
-          expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          if (closesRenderer) {
+            // A turn from outside the view, then a renderer again: a reopened
+            // tab's own reads would re-attach before the turn did.
+            await sendFromBackend(replyPrompt(word));
+            const settled = await watchSettle(ids, word, {
+              uiBoundMs: COMPLETION_BUDGET_MS,
+              pageObserves: false,
+            });
+            record.timings.backendTurnSettledMs = settled.backendIdleAt - idleStart;
+            await client.context.close();
+            client = await openClient(browser, status, logicalSessionKey());
+            await goToEnvironment();
+            await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
+              timeout: 30_000,
+            });
+          } else {
+            await sendFromComposer(replyPrompt(word));
+            const settled = await watchSettle(ids, word, {
+              uiBoundMs: COMPLETION_BUDGET_MS,
+            });
+            expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
+            expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          }
           if (!cadenceOnly && reportsSessionDetach) {
             await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("attached");
             record.notes.push("observed detached then attached through no-touch runtime discovery");
@@ -1948,6 +2182,12 @@ test.describe("live idle observation", () => {
           if (restoreOpenCodeAllowlist) {
             await restoreOpenCodeAllowlist().catch((error: unknown) => {
               summary.allowlistRestoreError = String(error).slice(0, 300);
+              writeSummary();
+            });
+          }
+          if (restoreOpenCodeProtocol) {
+            await restoreOpenCodeProtocol().catch((error: unknown) => {
+              summary.protocolRestoreError = String(error).slice(0, 300);
               writeSummary();
             });
           }

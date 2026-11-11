@@ -3,13 +3,14 @@
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; task 4 re-analysed and
-run 2026-11-10 against `main` at `c98b20e6f`.
+run 2026-11-10 against `main` at `c98b20e6f`; tasks 1, 3 and 5 re-analysed
+2026-11-11 against `main` at `498b68766`.
 
 ### Tasks
 
 1. **Code items 1-3 (probe, user guidance, interactive refusal)**: the nested-namespace probe, the reason naming the remedy, and the bridge's up-front refusal. Status: done.
 2. **Paired AppArmor CI qualification**: restricted and remediated phases on an Ubuntu 26.04 runner. Status: done.
-3. **Stock AppArmor desktops, live**: Ubuntu 24.04's probe and CLI answer, with and without the profile change, from a CI job on `ubuntu-24.04` (the recommended route below). Status: open. The graphical half (the picker reason and the Agent Info tier on a stock desktop) moved to 7568 on 2026-11-10.
+3. **Stock AppArmor desktops, live**: Ubuntu 24.04's probe and CLI answer, with and without the profile change, from a CI job on `ubuntu-24.04` (the recommended route below). Status: open (waits on the first run of the `Claude AppArmor qualification` workflow, added 2026-11-11, which records the answer). The graphical half (the picker reason and the Agent Info tier on a stock desktop) moved to 7568 on 2026-11-10.
 4. **Other platforms**: Debian with AppArmor, Fedora (SELinux) and Docker containers, from "Needs verification". Status: done (Docker containers probed with `docker exec` in a real environment container on 2026-11-10: `missing-programs`, and the container's own bridge refuses a provider-sandbox prompt with 422; Debian and Fedora stay optional, best-effort entries in 0031 and do not gate this file, as decided below).
 5. **CLI nested-namespace setting**: the open question, whether a newer CLI drops the nesting or offers a setting that avoids it. Status: deferred (re-checked on every Claude bump).
 
@@ -19,11 +20,11 @@ run 2026-11-10 against `main` at `c98b20e6f`.
 
 **Context.** Recorded in "Current state" and decisions D1-D5.
 
-**Investigation.** Still accurate at HEAD.
-- `probeClaudeLinuxSandbox` and the cached `claudeLinuxSandboxStatus` are at `packages/protocol/src/node/claude-linux-sandbox.ts:152` and `:213`; the reasons are at `:164` and `:192`.
-- `claudeSandboxRefusal` is at `bridges/claude-bridge/src/services/claude-execution-sandbox.ts:74-94`. It is called from the prompt route (`bridges/claude-bridge/src/routes/session.ts:885`) and the query plan (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:103`).
-- `claudeReadOnlySandbox` turns the sandbox off for `unavailable` (`bridges/claude-bridge/src/services/read-only-policy.ts:521` and `:526`).
-- The pinned CLI is still 2.1.309 (`docker/Dockerfile:193`; SDK `0.3.309` in `bridges/claude-bridge/package.json:16`).
+**Investigation.** Still accurate at HEAD (re-checked 2026-11-11; line numbers moved).
+- `probeClaudeLinuxSandbox` and the cached `claudeLinuxSandboxStatus` are at `packages/protocol/src/node/claude-linux-sandbox.ts:160` and `:226`; the reasons start at `:167`.
+- `claudeSandboxRefusal` is at `bridges/claude-bridge/src/services/claude-execution-sandbox.ts:147`. It is called from the prompt route (`bridges/claude-bridge/src/routes/session.ts:909`) and the query plan (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:129`).
+- `claudeReadOnlySandbox` turns the sandbox off for `unavailable` (`bridges/claude-bridge/src/services/read-only-policy.ts:579` and `:584`).
+- The pinned CLI is now 2.1.319 (`docker/Dockerfile:208`; SDK `0.3.319` in `bridges/claude-bridge/package.json:16`).
 
 **Decisions.** None: done and proved by unit tests and CI. The only open choice, how to close the file, is under task 3.
 
@@ -39,11 +40,18 @@ run 2026-11-10 against `main` at `c98b20e6f`.
 
 ### 3. Stock AppArmor desktops, live
 
-**Problem.** The AppArmor branch has run only on a CI runner, never on a graphical Ubuntu desktop where a user would see the picker and Agent Info.
+**Problem.** The AppArmor branch has run only on CI's Ubuntu 26.04 runner. Ubuntu 24.04's answer has never been observed, so a probe that answers `available` there while the CLI fails (or the reverse) would go unnoticed.
 
-**Context.** `omarchy-hp` has no AppArmor and must not be changed. The run is batched in 0031 ("Stock Linux desktops with AppArmor or SELinux", `docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md:202`).
+**Context.** `omarchy-hp` has no AppArmor (`/sys/kernel/security/lsm` lists `lockdown,capability,landlock,yama,bpf,ima,evm`) and must not be changed. The run is batched in 0031 ("Stock Linux desktops with AppArmor or SELinux"). The graphical half is in 7568.
 
-**Investigation.** The CI pair already proves the backend tier the picker and Agent Info read ("This proves the authoritative backend tier"). What only a desktop adds is the rendered picker reason, the Agent Info tier, and Ubuntu 24.04's answer: it ships the same profile but has not been probed. Step 1's commands still match the files: `claude-linux-sandbox.test.ts` exists and `conformance-coordinator-sandbox-live.test.ts` is at `bridges/claude-bridge/src/`.
+**Investigation.** The CI pair already proves the backend tier the picker and Agent Info read ("This proves the authoritative backend tier"); the open question was only 24.04's probe and CLI answer. Done on 2026-11-11, short of the run itself:
+- `.github/workflows/claude-apparmor-qualification.yml` runs on `ubuntu-24.04` weekly, on demand and on pull requests that change the probe, the qualification, the coordinator table, the Claude pin or the workflow. It downloads the pinned CLI, installs `bubblewrap` and `socat`, runs `conformance-apparmor-live.test.ts` in a new phase `stock` before any policy change, applies the same remediation as CI's test shard, runs phase `remediated`, and uploads both JSON reports as `claude-apparmor-ubuntu-2404-<run>-<attempt>`.
+- Phase `stock` (`conformance-apparmor-live.test.ts`) requires no particular answer. It takes the probe's (`available`, `nested-refused` or `outer-refused`; anything else, such as missing programs, fails as a setup error) and then requires the backend tier, run in its own process, to agree with it, and the pinned CLI to behave as the probe predicts: a working sandbox writes, reads and refuses a checkout write under the coordinator policy; a refused one is `provider-configured`, rejected at `enforced`, the real CLI with its sandbox required must not run a reading command (`required-sandbox-refused`: the CLI may refuse the whole turn with "Sandbox required but unavailable" or fail the command, whatever the cause), its hook-only reads and refusals still work, and the real prompt route answers 422 without dispatch. The `apply-seccomp`/`setgroups` and read-only-host scenarios run only where the `bwrap-userns-restrict` profile is installed. The report now also records whether the profile is installed and the two AppArmor sysctls.
+- The report (`stock.json`, `remediated.json`, `restricted.json`) is written as soon as the probe answers and rewritten when the phase ends, with `outcome` (`passed` or `failed`) and `failedStage` (the step that failed, such as `scenario required-sandbox-refused`; never the assertion message, which can quote tool output). A red `stock` run therefore still uploads 24.04's answer (D9).
+- Phase `restricted` (26.04) also runs `required-sandbox-refused` now; otherwise it is unchanged in what it requires. The backend reason is now compared with the probe's stem as well as the profile name.
+- Evidence on `omarchy-hp` (2026-11-11, kernel 7.2.8, bubblewrap 0.13.1, pinned CLI 2.1.319, the local scripted endpoint with fake credentials, from a temporary copy of the test without its Ubuntu and AppArmor checks): phase `stock` passed all three branches. Unmodified host: `available`, `enforced` at both safety levels, `default-sandbox-writes`, `coordinator-sandbox-reads` and `coordinator-sandbox-refuses` as expected. A PATH shim running `bwrap --disable-userns`: `nested-refused`, `provider-configured`, 9 hook-only scenarios and the 422. A PATH shim `bwrap` that always fails: `outer-refused`, the same 9 scenarios and the 422. The phase's selection logic has deterministic tests in the same file (`AppArmor phase expectations`), and `tests/unit/ci-workflows.test.ts` pins the workflow's runner, step order and pinned-CLI path.
+- Re-run after review on `omarchy-hp` (2026-11-11, same host, CLI and method, with `required-sandbox-refused` and the new report): the three honest branches passed, and in both refused ones the CLI started the turn and failed the command (`refusal: "command"`). Two PATH shims that lie to the probe's exact argument vectors only, while the CLI's own `bwrap` runs for real, made the probe answer `outer-refused` and `nested-refused` (no profile) on a working sandbox: both runs failed at `scenario required-sandbox-refused` (the sandboxed read succeeded) and still wrote `stock.json` with `outcome: "failed"`. Before this fix those two answers ran no sandboxed CLI command at all, so the same lie would have passed.
+- Not observed: the workflow has not run yet. Its first run (the pull request carrying it touches its own path) gives 24.04's answer.
 
 **Decisions.**
 
@@ -63,6 +71,22 @@ run 2026-11-10 against `main` at `c98b20e6f`.
   - **Wait for a contributor with a stock Ubuntu desktop.**
     - Pros: a real user setup.
     - Cons: no date; the file stays open indefinitely.
+- **Which workflow carries the 24.04 job? (decided 2026-11-11, D7)**
+  - **Its own workflow, path-filtered plus weekly and on demand (chosen).**
+    - Pros: no extra job on every pull request; the weekly run catches runner-image changes; a Claude bump (`packages/toolchain/src/manifest.ts`) reruns it.
+    - Cons: not a required check, so a red run needs someone to look at it.
+  - **A second job in `ci.yml`.**
+    - Pros: every pull request proves it.
+    - Cons: one more runner per pull request on the Free plan's 20 concurrent jobs, for a secondary platform whose answer changes only with the runner image or the CLI.
+- **What does the 24.04 phase require? (decided 2026-11-11, D8)**
+  - **Agreement: whatever the probe answers, the tier and the CLI must match it (chosen).**
+    - Pros: tests the actual risk (a probe that disagrees with the CLI) without guessing 24.04's answer; a runner-image change cannot make it fail for the wrong reason.
+    - Cons: it would pass on any consistent answer, so the recorded report, not the green tick, is the evidence of what 24.04 does.
+  - **Require `nested-user-namespace`, as on 26.04.**
+    - Pros: a stronger claim.
+    - Cons: 24.04 may refuse bubblewrap's own namespace instead (`kernel.apparmor_restrict_unprivileged_userns`), which would fail the job on a correct probe.
+
+**Still to do.** When the workflow has run, record 24.04's `stock` answer here (the report's `expectation`, `probe`, `appArmorBwrapProfile` and `sysctls`), mark this task done and, with task 5 a bump-time check only, delete this file. If the run is red, read the report and the log: a disagreement between the probe and the CLI is a product bug in the probe.
 
 ### 4. Other platforms
 
@@ -107,7 +131,7 @@ So adding the packages to the image would not give containers a working Claude s
 
 **Context.** It is re-checked on every Claude bump (`docs/development/upgrade-agents.md:581`).
 
-**Investigation.** The pinned SDK 0.3.309 still offers `allowNestedUserNamespaces` (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9179`). Its doc says it "Removes code-execution isolation", so it cannot back `enforced`. Nothing new since the file was written.
+**Investigation.** The pinned SDK 0.3.309 still offers `allowNestedUserNamespaces` (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9179`). Its doc says it "Removes code-execution isolation", so it cannot back `enforced`. Re-checked 2026-11-11 against SDK 0.3.319 (`sdk.d.ts:9382`): still there, and its doc now says it lets *sandboxed commands* create user namespaces of their own ("a nested bubblewrap, and `unshare`"), which reads as unrelated to the helper's own nesting. No setting that avoids the helper's nested namespace exists.
 
 **Decisions.**
 
@@ -209,8 +233,12 @@ failed every Bash call.
 - **Verified in a real container environment (2026-11-10):** the probe
   answers `missing-programs` and the container's bridge refuses a
   provider-sandbox prompt with 422 (task 4).
-- **Not verified:** a stock Ubuntu 24.04 or 26.04 desktop, Debian with
-  AppArmor and Fedora (SELinux).
+- **Ubuntu 24.04 has a CI job (2026-11-11):** the `Claude AppArmor
+  qualification` workflow runs phase `stock` (the tier and the CLI must agree
+  with whatever the probe answers) and then `remediated` on `ubuntu-24.04`.
+  It has not run yet (task 3).
+- **Not verified:** Ubuntu 24.04's answer (until that run), a stock Ubuntu
+  24.04 or 26.04 desktop (7568), Debian with AppArmor and Fedora (SELinux).
 
 ## Outstanding work
 
@@ -271,7 +299,9 @@ the pinned CLI 2.1.309 on macOS and on `omarchy-hp`.
   bubblewrap. See task 4.
 - [ ] **Stock AppArmor Ubuntu 24.04, probe and CLI.** Run steps 1 and 3
   below in a CI job on `ubuntu-24.04`, paired like the 26.04 phases, and
-  record 24.04's probe answer here. Step 2 (the picker and Agent Info on a
+  record 24.04's probe answer here. The job exists since 2026-11-11
+  (`.github/workflows/claude-apparmor-qualification.yml`, phases `stock` and
+  `remediated`); what is left is recording its first run's report. Step 2 (the picker and Agent Info on a
   stock desktop) moved to 7568 on 2026-11-10. `omarchy-hp` has no AppArmor
   (`/sys/kernel/security/lsm` lists none) and must not be changed. How:
   1. On the stock host, from a checkout of this branch,
@@ -322,7 +352,8 @@ a graphical desktop inspection remains in the checklist above.
 
 - Do not weaken the coordinator's sandbox to make it start: a coordinator at
   `enforced` must have containment that works, and one that cannot get it
-  must say so (`provider-configured`), as todo 0026 decided for hosts missing
+  must say so (`provider-configured`), as todo 0026 (retired; D2 in
+  [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)) decided for hosts missing
   `bwrap` or `socat`.
 - The CI change is acceptable on a disposable runner only; it is not advice
   for a shared host.
@@ -447,6 +478,54 @@ a graphical desktop inspection remains in the checklist above.
   rootful run was not made. The image has to be built in the disposable
   daemon first, which is the slow part of the run.
 
+### D7. Where the Ubuntu 24.04 job runs (task 3, 2026-11-11)
+
+- **Options.** (a) A second job in `ci.yml`. (b) Its own workflow, run
+  weekly, on demand and on pull requests that change its inputs.
+- **Chosen:** (b), `.github/workflows/claude-apparmor-qualification.yml`.
+- **Why.** CI already pays for the 26.04 pair on every run; 24.04's answer
+  changes only with the runner image or the CLI, which the schedule and the
+  `packages/toolchain/src/manifest.ts` path cover. Its concurrency follows
+  `container-live-qualification.yml` (pull requests coalesce, other runs keep
+  unique groups), and `tests/unit/ci-workflows.test.ts` holds it to the same
+  draft and concurrency contracts.
+- **Pros.** No per-PR cost. **Cons.** Not a required check.
+
+### D8. What the 24.04 phase requires (task 3, 2026-11-11)
+
+- **Options.** (a) The 26.04 expectation (`nested-user-namespace` and the
+  profile). (b) Agreement: take the probe's answer and require the backend
+  tier and the pinned CLI to match it, failing only on a setup error.
+- **Chosen:** (b), as phase `stock`; `restricted` and `remediated` keep their
+  fixed answers through the same selection function.
+- **Why.** The risk task 3 names is disagreement, not a particular answer,
+  and 24.04 may refuse bubblewrap's own namespace rather than the nested
+  one. Shown on `omarchy-hp` for all three answers (task 3).
+- **Pros.** Cannot fail on a correct probe. **Cons.** A green run alone does
+  not say which answer 24.04 gave; the uploaded report does.
+
+### D9. Holding a refusal to the CLI, and reporting a red run (task 3, 2026-11-11)
+
+Two review findings on phase `stock`.
+
+- **A refusal without the profile ran no sandboxed command.** Every
+  `unavailable-*` scenario turns the CLI's sandbox off, and the 422 comes from
+  the bridge's own probe, so `outer-refused`, or `nested-refused` without the
+  profile, could pass on a probe that called a working sandbox unusable.
+  Options: (a) a generic `required-sandbox-refused` scenario run for every
+  refused answer, accepting either the CLI's turn refusal or a failed command
+  but never a successful read (recommended, chosen); (b) require the
+  `apply-seccomp` wording everywhere, which fails on a correct probe whose
+  refusal has another cause; (c) a scenario per answer, which guesses at CLI
+  wording 24.04 has not shown. (a) adds one CLI turn per restricted run.
+- **The report was written only on success.** Options: (a) write it after the
+  probe and rewrite it in a `finally` with `outcome` and `failedStage`
+  (recommended, chosen): the upload keeps `if-no-files-found: error` and the
+  report always exists once the probe has run; (b) log the probe to stdout and
+  set the upload to `warn`, which loses the structured record and hides a
+  missing report. The assertion message is not recorded because it can quote
+  tool output.
+
 ## Open questions
 
 - Does a newer Claude CLI drop the nested namespace, or offer a setting that
@@ -455,19 +534,23 @@ a graphical desktop inspection remains in the checklist above.
   isolation", and `enableWeakerNestedSandbox` only skips the fresh `/proc`
   mount, so neither can back an `enforced` coordinator. Whether
   `allowNestedUserNamespaces` even avoids the helper's own nesting is
-  unverified (no AppArmor host). Re-checked on every Claude bump
+  unverified (no AppArmor host); the 0.3.319 types (2026-11-11) describe it
+  as letting sandboxed commands create their own namespaces, which suggests
+  it does not. Re-checked on every Claude bump
   ([`upgrade-agents.md`](../../development/upgrade-agents.md)).
 
 ## Needs verification
 
-- Ubuntu 24.04 (see Qualification). Debian with AppArmor and Fedora (SELinux)
+- Ubuntu 24.04: the first run of the `Claude AppArmor qualification`
+  workflow (see Qualification). Debian with AppArmor and Fedora (SELinux)
   are optional, best-effort runs batched in 0031 (task 4). Docker containers
   were verified on 2026-11-10.
 
 ## Related
 
-- [0026-coordinator-read-only-adapters.md](../coordinator-and-multi-review/0026-coordinator-read-only-adapters.md):
-  the Claude coordinator tier and its Linux item.
+- [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md)
+  (to-do 0026, retired 2026-11-11): the Claude coordinator tier; its Linux live
+  run is on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
 - [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md):
   where this was found, the CI probe runs and the workflow change.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):

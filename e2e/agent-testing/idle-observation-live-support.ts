@@ -14,6 +14,7 @@ export const IDLE_OBSERVATION_CASES = [
   "reconnect",
   "hidden",
   "no-renderer",
+  "steer",
   "detach",
 ] as const;
 export type IdleObservationCase = (typeof IDLE_OBSERVATION_CASES)[number];
@@ -278,6 +279,42 @@ export function shellOutputContainsMarker(output: string | undefined, marker: st
   return output?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
 }
 
+/**
+ * True when `text` shows `marker` somewhere other than as the argument of an
+ * `echo`: the command line names the marker, the output it emits does not
+ * repeat the `echo` (todo 0049 task 8).
+ */
+export function textShowsEmittedMarker(text: string, marker: string): boolean {
+  if (!marker) return false;
+  for (let at = text.indexOf(marker); at !== -1; at = text.indexOf(marker, at + 1)) {
+    if (!/\becho\s+["']?$/.test(text.slice(0, at))) return true;
+  }
+  return false;
+}
+
+/**
+ * Ids of rows that can carry a backgrounded command's late output: non-user
+ * rows that were absent when the initial turn settled and whose text shows the
+ * marker as emitted output, not as the echoed command. The case's own prompt
+ * contains the marker, so a user row never counts, and a row already present
+ * at settle time arrived in the turn we started, not afterwards.
+ */
+export function lateOutputRowIds(
+  messages: readonly { id: string; role: string; content?: unknown }[],
+  presentAtSettle: ReadonlySet<string>,
+  marker: string,
+): string[] {
+  return messages
+    .filter(
+      (message) =>
+        message.role !== "user" &&
+        !presentAtSettle.has(message.id) &&
+        typeof message.content === "string" &&
+        textShowsEmittedMarker(message.content, marker),
+    )
+    .map((message) => message.id);
+}
+
 export interface BackgroundTaskEvidence {
   id: string;
   status: string;
@@ -343,4 +380,39 @@ export function asyncQuestionPrompt(title: string, word: string): string {
     `right after asking, reply with exactly ${word} and nothing else. ` +
     "After I answer, reply with exactly CODEWORD_CHOSEN=<selected option> and nothing else, replacing <selected option> with my selected option."
   );
+}
+
+/**
+ * How long a provider's bridge leaves an idle session attached before it can
+ * read `detached` on the no-touch runtime read, sweep included. Claude, Cursor
+ * and Pi release a session after 10 minutes. Codex detaches a thread only
+ * after 30 minutes without a touch (`DEFAULT_THREAD_IDLE_MS`), found by a
+ * sweep that runs every 5 minutes (`CLEANUP_INTERVAL_MS` in the bridge's
+ * `index.ts`), so up to 35 minutes (todo 7380).
+ */
+export function idleDetachWindowMs(platform: string): number {
+  return platform === "codex" ? 35 * 60_000 : 10 * 60_000;
+}
+
+/**
+ * The detach case's idle wait: an explicit override when set, otherwise the
+ * provider's window plus 30 s, which the 630 s default always was.
+ */
+export function detachWaitMs(platform: string, override: string | undefined): number {
+  const explicit = Number(override);
+  if (override !== undefined && override.trim() !== "" && Number.isFinite(explicit)) {
+    return explicit;
+  }
+  return idleDetachWindowMs(platform) + 30_000;
+}
+
+/**
+ * Whether the detach case has to close every renderer for the wait. Codex's
+ * tab-facing reads (`GET /session/:id`, `/messages`) refresh the thread's
+ * idle clock by design (`bridges/codex-bridge` and the root `AGENTS.md`), so
+ * an open tab keeps its thread attached for as long as it is open; only a
+ * wait with no renderer can observe the detach. Claude and Pi ignore reads.
+ */
+export function detachWaitClosesRenderer(platform: string): boolean {
+  return platform === "codex";
 }

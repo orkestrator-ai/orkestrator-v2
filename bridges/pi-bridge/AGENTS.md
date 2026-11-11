@@ -192,7 +192,10 @@ a cut in Pi's tree. Three rules hold it to what the reader picked:
   because Pi creates its abort controller only after `compact()`'s own
   `abort()`; they answer `cancelled: true` once the compact route settles, and
   that route answers 409 `cancelled: true`. Only an abort the route was asked
-  for counts as stopped; any other rejection is still a failure.
+  for counts as stopped; any other rejection is still a failure. Pi's two
+  fixed refusals when there is nothing to compact ("Nothing to compact
+  (session too small)", "Already compacted") answer 409 with that reason, so
+  a `/compact` on a short session tells the user why instead of a 500.
 - Auto-compaction is a per-session toggle published as the `autoCompaction`
   model parameter on every model, defaulting to Pi's own `compaction.enabled`.
   Never call `setAutoCompactionEnabled`: it writes the account-wide

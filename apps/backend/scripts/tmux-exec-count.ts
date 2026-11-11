@@ -1,5 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 
 /**
  * Counts the `docker exec`s one claude-tmux tab's poll loop costs, by kind,
@@ -55,10 +56,11 @@ export type ExecCounts = Record<ExecKind, number> & { total: number };
 
 /**
  * A recurring-work recorder (`RecurringWorkMetrics`). When given, the session
- * reports its ticks into it, and every fake exec is charged as the
- * `docker exec` the real capture boundary would charge (todo 7567).
+ * reports its ticks into it (`observe`), and every fake exec is charged as the
+ * `docker exec` the real capture boundary would charge (`work`, todo 7567).
+ * Both members are required: the session calls `observe` on every tick.
  */
-export type ExecMetrics = { work(unit: "docker-exec", count?: number): void };
+export type ExecMetrics = Pick<RecurringWorkMetrics, "observe" | "work">;
 
 type SessionModule = {
   TmuxSession: new (
@@ -98,11 +100,18 @@ function classify(args: string[]): ExecKind {
 }
 
 /** What the fake container answers; enough for every exec the loop issues. */
-function answer(args: string[], scenario: Scenario): { status: number; stdout: string } {
+/** The non-blocking hook file `hookFileAtSeconds` drops into the pending directory. */
+const HOOK_FILE = "Notification-1700000060000-exec-count.json";
+
+function answer(
+  args: string[],
+  scenario: Scenario,
+  pending: readonly string[] = [],
+): { status: number; stdout: string } {
   const transcript = `/home/node/.claude/projects/-workspace/${SESSION_ID}.jsonl`;
   const script = args[0] === "sh" && args[1] === "-c" ? (args[2] ?? "") : "";
   if (script.includes("__ork_pending__")) {
-    const lines = ["__ork_pending__", "__ork_timeout__", "__ork_size__"];
+    const lines = ["__ork_pending__", ...pending, "__ork_timeout__", "__ork_size__"];
     lines.push(script.includes("stat -c %s") && scenario.bound ? `${TRANSCRIPT_LINE.length}` : "0");
     if (script.includes("__ork_candidate__")) {
       lines.push("__ork_candidate__", scenario.bound ? `${TRANSCRIPT_LINE.length}` : "missing");
@@ -143,7 +152,15 @@ export async function measureTmuxExecs(
   backendModule: BackendModule,
   scenario: Scenario,
   seconds: number,
-  options: { metrics?: ExecMetrics } = {},
+  options: {
+    metrics?: ExecMetrics;
+    /**
+     * Simulated second at which one non-blocking hook file appears in the
+     * tab's pending directory. The first snapshot read at or after it lists
+     * the file and later reads do not, as if the drain had removed it.
+     */
+    hookFileAtSeconds?: number;
+  } = {},
 ): Promise<ExecCounts | null> {
   const counts: ExecCounts = {
     snapshot: 0,
@@ -156,6 +173,9 @@ export async function measureTmuxExecs(
   };
   const realNow = Date.now;
   let now = 1_700_000_000_000;
+  const hookFileDueAt =
+    options.hookFileAtSeconds === undefined ? undefined : now + options.hookFileAtSeconds * 1_000;
+  let hookFileListed = false;
   Date.now = () => now;
   const timers: Array<{ due: number; resolve: () => void }> = [];
   const backend = backendModule.TmuxBackend.container("c".repeat(64));
@@ -164,6 +184,11 @@ export async function measureTmuxExecs(
     options.metrics?.work("docker-exec");
     counts[kind] += 1;
     counts.total += 1;
+    const snapshot = args[0] === "sh" && (args[2] ?? "").includes("__ork_pending__");
+    if (snapshot && !hookFileListed && hookFileDueAt !== undefined && now >= hookFileDueAt) {
+      hookFileListed = true;
+      return answer(args, scenario, [HOOK_FILE]);
+    }
     return answer(args, scenario);
   };
   backend.exec = async (args: string[]) => ({ ...record(args), stderr: "" });

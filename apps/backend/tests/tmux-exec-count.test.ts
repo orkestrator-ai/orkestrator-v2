@@ -78,6 +78,39 @@ describe("tmux poll exec budget", () => {
     }
   });
 
+  test("a tick is changed only when it finds transcript lines or hook files (todo 7567)", async () => {
+    const outcomes = async (scenario: (typeof SCENARIOS)[number], hookFileAtSeconds?: number) => {
+      const metrics = new RecurringWorkMetrics({ enabled: true });
+      const counts = await measureTmuxExecs(
+        sessionModule as never,
+        backendModule as never,
+        scenario,
+        seconds,
+        { metrics, ...(hookFileAtSeconds === undefined ? {} : { hookFileAtSeconds }) },
+      );
+      if (!counts) return null;
+      const loop = metrics.snapshot().kinds["tmux-tab-loop"]!;
+      // Every settled tick reports exactly one outcome.
+      expect(loop.changed + loop.unchanged).toBe(loop.completed);
+      expect(loop.completed).toBe(loop.started);
+      return loop;
+    };
+    for (const scenario of SCENARIOS) {
+      // A bound tab reads its transcript's one line on the first tick, which
+      // is its only change; an unbound tab never finds a line.
+      const quiet = await outcomes(scenario);
+      if (!quiet) continue;
+      const transcriptChanges = scenario.bound ? 1 : 0;
+      expect(quiet.changed).toBe(transcriptChanges);
+      expect(quiet.unchanged).toBeGreaterThan(0);
+      // A hook file listed once, mid-run, is one more changed tick, and the
+      // ticks after it are unchanged again.
+      const hooked = (await outcomes(scenario, seconds / 2))!;
+      expect(hooked.changed).toBe(transcriptChanges + 1);
+      expect(hooked.unchanged).toBeGreaterThan(0);
+    }
+  });
+
   test("a busy tab costs one exec per fast tick", async () => {
     const counts = (await run("busy tab"))!;
     expect(counts.total).toBeLessThanOrEqual(seconds * 4 + 2);

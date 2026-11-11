@@ -2378,7 +2378,8 @@ agent mail run; only the model is fake.
   profiles get a checkout of one shared repository, and the coordinator runs
   the case with `nodeId` on every worker tool, so each goes through its
   node-link-only controller command on the leaf. The harness reads the
-  worker's turn and environments from the leaf's own backend.
+  worker's turn, interactions, mailbox and environments, and the fork's
+  checkout, from the leaf's own backend.
 
 The fake coordinator replays each turn's numbered steps; the fake worker runs
 the launch command through Pi's `bash` tool and parks its long turn until Pi
@@ -2819,30 +2820,52 @@ mise run test:agent:coordinator --credential-source codex --scenario gap-tools
 2. `get_worker_changes` with `diffScope: "split"` must list the file as both
    committed and uncommitted, with each line on its own side only
    (`changes-split`). `fork_worker` with no prompt must name one new
-   environment that exists, whose base is the worker's commit rather than the
-   coordinator base (`fork-from-last-commit`).
+   environment that exists, whose reported base is the worker's HEAD (read
+   from the node that owns the worker, not from the tool) rather than the
+   coordinator base, and whose checkout, read from that node too, is at that
+   HEAD with the committed line and without the uncommitted one
+   (`fork-from-last-commit`).
 3. `send_prompt_to_tab` gives the worker a long turn (`sleep 900`), and
    `stop_worker_turn` must stop it (`turn-stopped`) and wake the coordinator
    once with a notice saying it stopped the turn itself (`stop-wakes-once`).
-4. `list_worker_commands` must list `/compact`, and `run_worker_command`
-   running it must answer without an agent turn or a delegation
-   (`command-ran-without-a-turn`).
+4. `list_worker_commands` must list `/compact` (`commands-listed`), and
+   `run_worker_command` must run that row and behave as its kind says
+   (`command-ran-as-listed`). Orkestrator's own `/compact`, a session action
+   (Pi, Codex), answers without an agent turn or a delegation. A provider's
+   own `/compact` (Claude's SDK ships one, and Orkestrator defers to it)
+   starts a provider turn, so it must open exactly one delegation, which must
+   wake the coordinator once the turn ends; the harness waits for that wake.
+   Pi refuses to compact a session shorter than its
+   `compaction.keepRecentTokens`, and the worker's is a few short turns, so
+   on Pi the case sets that to 1 in the profile's own Pi `settings.json`
+   (`e2e/agent-testing/pi-profile-settings.ts`, never `~/.pi`) and restores
+   it afterwards.
 5. `create_schedule` (a self-timer six hours away), then `pause_schedule`,
-   `update_schedule`, `resume_schedule` and `cancel_schedule`: paused, then
-   active, then gone (`schedule-edits`). Scheduling is experimental and its
-   tools are offered only while it is on, so the case turns
-   `experimentalScheduling` on and restores it afterwards.
+   `update_schedule` (`+7h`), `resume_schedule` and `cancel_schedule`:
+   paused; then the same schedule, still paused, firing about an hour later
+   than created; then active; then gone (`schedule-edits`). Scheduling is
+   experimental and its tools are offered only while it is on, so the case
+   turns `experimentalScheduling` on and restores it afterwards.
 6. `resolve_conflicts` and `answer_worker_question` against a worker with no
-   pull request and no question must both be refused, and no approval
-   request may be created (`resolve-refused-without-pr`,
-   `answer-refused-without-question`). Real conflicts, PR wakes and real
+   pull request and no question must both be refused with the owning node's
+   own reason ("has no pull request, so there are no conflicts to resolve",
+   "has no pending interaction with that id"), and no approval request may
+   be created (`resolve-refused-without-pr`,
+   `answer-refused-without-question`). Any other error, such as an unknown
+   tool or a broken node route, fails. Real conflicts, PR wakes and real
    worker questions are on the manual-test checklist (7568).
 
 `each-gap-tool-called-once` requires exactly one call of each of the ten
-tools. The prompts and verdict are in `coordinator-live-gap-tools.ts`, the
-orchestration in `coordinator-live-gap-tools-orchestration.ts`; it takes
-`nodeId`, the node's own backend and its project to run the same case against a
-worker on a connected node. `mise run test:agent:coordinator:gap-tools-fake`
+tools, and `no-user-action` also fails when the worker's own session was never
+read, since an unread worker proves nothing about its approvals. The prompts
+and verdict are in `coordinator-live-gap-tools.ts`, the orchestration in
+`coordinator-live-gap-tools-orchestration.ts`, and
+`coordinator-live-gap-tools-orchestration.test.ts` runs the orchestration over
+a scripted command transport, on this node and through a scripted leaf. The
+orchestration takes `nodeId`, the node's own backend and its project to run the
+same case against a worker on a connected node: the worker's turn,
+interactions, mailbox, HEAD and the fork's checkout are then read, and its
+approvals answered, through that node's backend. `mise run test:agent:coordinator:gap-tools-fake`
 (below) runs it on a fake model, on this node and through a leaf.
 
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,

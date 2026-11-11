@@ -950,21 +950,6 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
 }
 
 /**
- * Compact the conversation on demand.
- *
- * Refused while a turn is running: Pi's manual compaction aborts the current
- * operation first, so allowing it mid-turn would silently cancel the turn the
- * user is watching in order to shrink its context.
- *
- * An optional `{ instructions }` body becomes Pi's `customInstructions` for
- * the summary. `instructions: "applied"` in the answer is how the backend
- * tells this bridge from one that predates the body and would have compacted
- * without them.
- *
- * A cancel stops it (see `handleCancel`); this route then answers 409 with
- * `cancelled: true`, a definite "not compacted" the user can retry.
- */
-/**
  * Pi's own refusals when a session has nothing to compact (a short session,
  * or one whose last entry is already a compaction). Fixed SDK strings with no
  * session content in them, so they are passed on as a definite 409 refusal
@@ -979,6 +964,21 @@ function nothingToCompact(error: unknown): HttpError | undefined {
     : undefined;
 }
 
+/**
+ * Compact the conversation on demand.
+ *
+ * Refused while a turn is running: Pi's manual compaction aborts the current
+ * operation first, so allowing it mid-turn would silently cancel the turn the
+ * user is watching in order to shrink its context.
+ *
+ * An optional `{ instructions }` body becomes Pi's `customInstructions` for
+ * the summary. `instructions: "applied"` in the answer is how the backend
+ * tells this bridge from one that predates the body and would have compacted
+ * without them.
+ *
+ * A cancel stops it (see `handleCancel`); this route then answers 409 with
+ * `cancelled: true`, a definite "not compacted" the user can retry.
+ */
 async function handleCompact(
   request: IncomingMessage,
   response: ServerResponse,

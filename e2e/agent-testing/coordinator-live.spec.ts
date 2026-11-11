@@ -118,6 +118,7 @@ import { goalApplies } from "../../apps/desktop/scripts/dev/coordinator-live-goa
 import { runRoutingScenario } from "../../apps/desktop/scripts/dev/coordinator-live-routing-orchestration";
 import { runGapToolsScenario } from "../../apps/desktop/scripts/dev/coordinator-live-gap-tools-orchestration";
 import { evaluateMailTiles } from "./coordinator-mail-tiles";
+import { keepRecentTokensForShortSessions } from "./pi-profile-settings";
 import {
   coordinatorTurn,
   deliverAsyncReport,
@@ -1254,6 +1255,15 @@ test.describe("live coordinator", () => {
             skip,
             cleanup,
           });
+          if (platform === "pi") {
+            // Pi refuses /compact on a session shorter than keepRecentTokens,
+            // and the worker's is a few short turns: keep almost nothing, in
+            // this profile's own Pi settings, so the command really compacts.
+            const dataDir = profileStatus().dataDir;
+            if (!dataDir) throw new Error("dev:status reported no data directory");
+            const restore = keepRecentTokensForShortSessions(dataDir);
+            cleanup.push(async () => restore());
+          }
           await gapToolsCase({ coordinator, summary, cleanup });
         });
       });

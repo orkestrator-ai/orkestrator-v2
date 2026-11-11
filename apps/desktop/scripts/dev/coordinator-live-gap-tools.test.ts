@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { ReadOnlyToolCall } from "./coordinator-live.js";
 import {
   changesOutcome,
+  compactRow,
+  delegationsOpenedSince,
   evaluateGapToolsScenario,
   fillGapPlaceholders,
   GAP_TOOLS,
@@ -10,6 +12,7 @@ import {
   namedEnvironments,
   parseGapSteps,
   refusalReason,
+  scheduleFiresAt,
   type GapToolsInput,
   type GapToolsProbe,
 } from "./coordinator-live-gap-tools.js";
@@ -20,6 +23,13 @@ const WORKER = "env-worker";
 const FORK = "env-fork";
 const BASE = "a".repeat(40);
 const WORKER_HEAD = "c".repeat(40);
+const CREATED_AT = Date.parse("2026-11-11T09:00:00.000Z");
+const HOUR = 3_600_000;
+const NO_PR =
+  "This worker has no pull request, so there are no conflicts to resolve; raise one with create_pr";
+const NO_QUESTION =
+  "That tab has no pending interaction with that id (it was answered, withdrawn or its turn ended). Read state.interactions from get_tab_state.";
+const once = (at: number) => `once at ${new Date(at).toISOString()}`;
 
 const ok = (name: string): ReadOnlyToolCall => ({
   name: `mcp__orkestrator__${name}`,
@@ -69,18 +79,37 @@ function passing(): GapToolsInput {
         }),
       ],
       stop_worker_turn: [JSON.stringify({ stopped: true, delegationOpen: true })],
-      list_worker_commands: [JSON.stringify({ commands: [{ id: "orkestrator:compact" }] })],
+      list_worker_commands: [
+        JSON.stringify({
+          commands: [
+            { id: "pi:/model", name: "/model", source: "builtin" },
+            { id: "orkestrator:compact", name: "/compact", source: "orkestrator" },
+          ],
+        }),
+      ],
       run_worker_command: [
-        JSON.stringify({ startsTurn: false, delegationOpened: false, outcome: "dispatched" }),
+        JSON.stringify({
+          commandId: "orkestrator:compact",
+          startsTurn: false,
+          delegationOpened: false,
+          outcome: "dispatched",
+        }),
+      ],
+      create_schedule: [
+        JSON.stringify({ scheduleId: "job-1", state: "active", when: once(CREATED_AT) }),
       ],
       pause_schedule: [JSON.stringify({ scheduleId: "job-1", state: "paused" })],
-      update_schedule: [JSON.stringify({ scheduleId: "job-1", state: "paused" })],
+      update_schedule: [
+        JSON.stringify({ scheduleId: "job-1", state: "paused", when: once(CREATED_AT + HOUR) }),
+      ],
       resume_schedule: [JSON.stringify({ scheduleId: "job-1", state: "active" })],
-      resolve_conflicts: [JSON.stringify({ isError: true })],
-      answer_worker_question: [JSON.stringify({ isError: true })],
+      resolve_conflicts: [JSON.stringify({ isError: true, error: NO_PR })],
+      answer_worker_question: [JSON.stringify({ isError: true, error: NO_QUESTION })],
     },
     baseCommit: BASE,
+    workerHead: WORKER_HEAD,
     forkExists: true,
+    forkCheckout: { head: WORKER_HEAD, uncommittedPaths: [], content: "committed-abc123\n" },
     phaseAfterStop: "idle",
     phaseAfterCommand: "idle",
     stoppedDelegation: {
@@ -90,7 +119,7 @@ function passing(): GapToolsInput {
       state: "completed",
       wokenAt: new Date(2_000).toISOString(),
     },
-    delegationsAfterStop: 0,
+    delegationsOpenedByCommand: 0,
     mail: [
       {
         id: "m1",
@@ -107,6 +136,40 @@ function passing(): GapToolsInput {
     actionRequestsCreated: 0,
     escapedInteractions: [],
     workerInteractions: [],
+    workerObserved: true,
+  };
+}
+
+/** The same run on Claude, whose own /compact starts a provider turn. */
+function claudeCompact(): GapToolsInput {
+  const input = passing();
+  return {
+    ...input,
+    probe: { ...probe, platform: "claude" },
+    outputs: {
+      ...input.outputs,
+      list_worker_commands: [
+        JSON.stringify({
+          commands: [{ id: "claude:/compact", name: "/compact", source: "builtin" }],
+        }),
+      ],
+      run_worker_command: [
+        JSON.stringify({
+          commandId: "claude:/compact",
+          startsTurn: true,
+          delegationOpened: true,
+          outcome: "dispatched",
+        }),
+      ],
+    },
+    delegationsOpenedByCommand: 1,
+    commandDelegation: {
+      environmentId: WORKER,
+      requestedAt: new Date(3_000).toISOString(),
+      workerTabId: "startup-agent",
+      state: "completed",
+      wokenAt: new Date(4_000).toISOString(),
+    },
   };
 }
 
@@ -224,6 +287,36 @@ describe("gap-tools verdict", () => {
     expect(failures({ ...input, forkExists: false })).toEqual(["fork-from-last-commit"]);
   });
 
+  test("a fork on some other commit, or whose checkout is not the worker's commit, fails", () => {
+    const input = passing();
+    const stale = "d".repeat(40);
+    // Not the coordinator base, but not the worker's HEAD either.
+    expect(
+      failures({
+        ...input,
+        outputs: {
+          ...input.outputs,
+          fork_worker: [JSON.stringify({ environmentId: FORK, baseCommit: stale })],
+        },
+      }),
+    ).toEqual(["fork-from-last-commit"]);
+    const checkout = input.forkCheckout!;
+    for (const forkCheckout of [
+      { ...checkout, head: stale },
+      { ...checkout, content: "committed-abc123\nuncommitted-abc123\n" },
+      { ...checkout, content: null },
+      { ...checkout, uncommittedPaths: ["gap-abc123.txt"] },
+    ]) {
+      expect(failures({ ...input, forkCheckout })).toEqual(["fork-from-last-commit"]);
+    }
+    const { forkCheckout: _unread, ...unread } = input;
+    expect(failures(unread)).toEqual(["fork-from-last-commit"]);
+    const { workerHead: _noHead, ...noHead } = input;
+    expect(failures(noHead)).toEqual(["fork-from-last-commit"]);
+    // A worker that never committed: its HEAD is still the coordinator base.
+    expect(failures({ ...input, workerHead: BASE })).toEqual(["fork-from-last-commit"]);
+  });
+
   test("a stop that left the turn running, or woke the coordinator without saying so, fails", () => {
     const input = passing();
     expect(failures({ ...input, phaseAfterStop: "running" })).toEqual(["turn-stopped"]);
@@ -233,18 +326,89 @@ describe("gap-tools verdict", () => {
     ]);
   });
 
-  test("a command that opened a delegation, or a turn, fails", () => {
+  test("Orkestrator's /compact that opened a delegation, or a turn, fails", () => {
     const input = passing();
     expect(
       failures({
         ...input,
         outputs: {
           ...input.outputs,
-          run_worker_command: [JSON.stringify({ startsTurn: true, delegationOpened: true })],
+          run_worker_command: [
+            JSON.stringify({
+              commandId: "orkestrator:compact",
+              startsTurn: true,
+              delegationOpened: true,
+            }),
+          ],
         },
       }),
-    ).toEqual(["command-ran-without-a-turn"]);
-    expect(failures({ ...input, delegationsAfterStop: 1 })).toEqual(["command-ran-without-a-turn"]);
+    ).toEqual(["command-ran-as-listed"]);
+    expect(failures({ ...input, delegationsOpenedByCommand: 1 })).toEqual([
+      "command-ran-as-listed",
+    ]);
+    expect(failures({ ...input, phaseAfterCommand: "working" })).toEqual(["command-ran-as-listed"]);
+  });
+
+  test("Claude's own /compact qualifies when its turn opened one delegation that woke the coordinator", () => {
+    expect(failures(claudeCompact())).toEqual([]);
+    expect(
+      evaluateGapToolsScenario(claudeCompact()).find((check) => check.name === "commands-listed")
+        ?.detail,
+    ).toBe("/compact listed as claude:/compact");
+  });
+
+  test("Claude's own /compact that opened no delegation, or was never woken, fails", () => {
+    const input = claudeCompact();
+    expect(failures({ ...input, delegationsOpenedByCommand: 0 })).toEqual([
+      "command-ran-as-listed",
+    ]);
+    expect(
+      failures({
+        ...input,
+        commandDelegation: { ...input.commandDelegation!, wokenAt: undefined },
+      }),
+    ).toEqual(["command-ran-as-listed"]);
+    expect(
+      failures({
+        ...input,
+        outputs: {
+          ...input.outputs,
+          run_worker_command: [
+            JSON.stringify({
+              commandId: "claude:/compact",
+              startsTurn: false,
+              delegationOpened: false,
+            }),
+          ],
+        },
+      }),
+    ).toEqual(["command-ran-as-listed"]);
+  });
+
+  test("a command run that is not the listed row, or no /compact row at all, fails", () => {
+    const input = passing();
+    expect(
+      failures({
+        ...input,
+        outputs: {
+          ...input.outputs,
+          run_worker_command: [
+            JSON.stringify({ commandId: "pi:/model", startsTurn: false, delegationOpened: false }),
+          ],
+        },
+      }),
+    ).toEqual(["command-ran-as-listed"]);
+    expect(
+      failures({
+        ...input,
+        outputs: {
+          ...input.outputs,
+          list_worker_commands: [
+            JSON.stringify({ commands: [{ id: "pi:/model", name: "/model" }] }),
+          ],
+        },
+      }),
+    ).toEqual(["commands-listed", "command-ran-as-listed"]);
   });
 
   test("a schedule left behind, or not paused, fails", () => {
@@ -256,6 +420,30 @@ describe("gap-tools verdict", () => {
         outputs: { ...input.outputs, pause_schedule: [JSON.stringify({ state: "active" })] },
       }),
     ).toEqual(["schedule-edits"]);
+  });
+
+  test("an update that did not retime, replaced the schedule, or unpaused it fails", () => {
+    const input = passing();
+    const updated = (answer: Record<string, unknown>) =>
+      failures({
+        ...input,
+        outputs: { ...input.outputs, update_schedule: [JSON.stringify(answer)] },
+      });
+    // Answers with the ID, but the time did not move.
+    expect(updated({ scheduleId: "job-1", state: "paused", when: once(CREATED_AT) })).toEqual([
+      "schedule-edits",
+    ]);
+    expect(
+      updated({ scheduleId: "job-2", state: "paused", when: once(CREATED_AT + HOUR) }),
+    ).toEqual(["schedule-edits"]);
+    expect(
+      updated({ scheduleId: "job-1", state: "active", when: once(CREATED_AT + HOUR) }),
+    ).toEqual(["schedule-edits"]);
+    expect(updated({ scheduleId: "job-1", state: "paused" })).toEqual(["schedule-edits"]);
+    // The seconds between the two calls do not matter.
+    expect(
+      updated({ scheduleId: "job-1", state: "paused", when: once(CREATED_AT + HOUR + 20_000) }),
+    ).toEqual([]);
   });
 
   test("conflicts or a question answer accepted for a worker with neither fails", () => {
@@ -281,6 +469,26 @@ describe("gap-tools verdict", () => {
     ]);
   });
 
+  test("a refusal for some other reason (a broken route, an unknown tool) does not count", () => {
+    const input = passing();
+    for (const error of [
+      "Unknown tool: resolve_conflicts",
+      "node-unreachable: the node did not answer",
+      "Internal bridge error",
+    ]) {
+      expect(
+        failures({
+          ...input,
+          outputs: {
+            ...input.outputs,
+            resolve_conflicts: [JSON.stringify({ isError: true, error })],
+            answer_worker_question: [JSON.stringify({ isError: true, error })],
+          },
+        }),
+      ).toEqual(["resolve-refused-without-pr", "answer-refused-without-question"]);
+    }
+  });
+
   test("a refusal's reason is one bounded line, and an answer that is not a refusal has none", () => {
     expect(
       refusalReason(
@@ -300,7 +508,7 @@ describe("gap-tools verdict", () => {
         (check) => check.name === name,
       )?.detail;
     expect(
-      detail("command-ran-without-a-turn", {
+      detail("command-ran-as-listed", {
         run_worker_command: [JSON.stringify({ isError: true, error: "Nothing to compact" })],
       }),
     ).toContain("refused: Nothing to compact");
@@ -315,5 +523,47 @@ describe("gap-tools verdict", () => {
     expect(failures({ ...passing(), workerInteractions: ["command-approval"] })).toEqual([
       "no-user-action",
     ]);
+  });
+
+  test("a worker whose session was never read fails, since nothing proves no approval escaped", () => {
+    expect(failures({ ...passing(), workerObserved: false })).toEqual(["no-user-action"]);
+  });
+});
+
+describe("gap-tools readers", () => {
+  test("a delegation counts as opened only when it is not the one seen before", () => {
+    const record = (requestedAt: string) => ({
+      environmentId: WORKER,
+      requestedAt,
+      workerTabId: "startup-agent",
+      state: "completed" as const,
+    });
+    expect(delegationsOpenedSince(record("a"), record("a"))).toBe(0);
+    expect(delegationsOpenedSince(record("a"), record("b"))).toBe(1);
+    expect(delegationsOpenedSince(undefined, record("b"))).toBe(1);
+    expect(delegationsOpenedSince(record("a"), undefined)).toBe(0);
+    expect(delegationsOpenedSince(undefined, undefined)).toBe(0);
+  });
+
+  test("the /compact row is found by name or by the session action's ID", () => {
+    expect(
+      compactRow(JSON.stringify({ commands: [{ id: "claude:/compact", name: "/compact" }] })),
+    ).toEqual({ id: "claude:/compact" });
+    expect(compactRow(JSON.stringify({ commands: [{ id: "orkestrator:compact" }] }))).toEqual({
+      id: "orkestrator:compact",
+    });
+    expect(
+      compactRow(JSON.stringify({ commands: [{ id: "x:/compactor", name: "/compactor" }] })),
+    ).toBeUndefined();
+    expect(compactRow(undefined)).toBeUndefined();
+  });
+
+  test("a schedule's fire time comes from its trigger, else from nextFireAt", () => {
+    expect(scheduleFiresAt({ when: once(CREATED_AT) })).toBe(CREATED_AT);
+    expect(
+      scheduleFiresAt({ when: 'cron "0 9 * * *" (UTC)', nextFireAt: new Date(5).toISOString() }),
+    ).toBe(5);
+    expect(scheduleFiresAt({ when: "every 1h" })).toBeUndefined();
+    expect(scheduleFiresAt(undefined)).toBeUndefined();
   });
 });

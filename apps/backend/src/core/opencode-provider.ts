@@ -45,6 +45,7 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderSessionStateSnapshot,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderSendOptions,
   type ProviderCommandCatalogue,
   type ProviderCommandRefreshResult,
@@ -1254,8 +1255,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return (await this.commands.catalogue()).commands;
   }
 
-  mcpServers() {
-    return this.capabilitiesAdapter.mcpServers();
+  mcpServers(_sessionId?: string, options: ProviderReadOptions = {}) {
+    return this.capabilitiesAdapter.mcpServers(options.signal);
   }
 
   /** MCP apply: one idle-gated `instance.dispose`; the apply scheduler owns retries. */

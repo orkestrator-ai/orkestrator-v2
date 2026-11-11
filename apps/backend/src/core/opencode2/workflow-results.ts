@@ -182,8 +182,8 @@ export class OpenCode2WorkflowTurns {
     return this.mcp.removeSession(sessionId);
   }
 
-  mcpServers() {
-    return this.mcp.userServers();
+  mcpServers(signal?: AbortSignal) {
+    return this.mcp.userServers(signal);
   }
 
   mcpServerAction(serverId: string, action: NativeAgentMcpServerAction) {

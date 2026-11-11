@@ -176,6 +176,7 @@ import { randomUUID } from "node:crypto";
 import {
   PromptRejectedError,
   type ProviderMcpConfigEvidenceRead,
+  type ProviderReadOptions,
 } from "./agent-provider-contract.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import {
@@ -4675,15 +4676,19 @@ export class NativeAgentService {
    * server lists for its worktree, resolved like
    * {@link reloadMcpConfigurationIfRunning}: never starts a process.
    * OpenCode's inventory is directory-level, so no session is named.
-   * `undefined` when nothing is running.
+   * `undefined` when nothing is running. `options.signal` ends the listing.
    */
-  async openCodeMcpServerNamesIfRunning(environmentId: string): Promise<string[] | undefined> {
+  async openCodeMcpServerNamesIfRunning(
+    environmentId: string,
+    options: ProviderReadOptions = {},
+  ): Promise<string[] | undefined> {
     const provider = await this.observeProvider({
       environmentId,
       agent: "opencode",
       logicalSessionKey: "mcp-configuration-reload",
     });
-    const servers = await provider?.mcpServers?.("");
+    options.signal?.throwIfAborted();
+    const servers = await provider?.mcpServers?.("", options);
     return servers?.map((server) => server.name);
   }
 
@@ -4696,11 +4701,13 @@ export class NativeAgentService {
    * resolves it (never starting a bridge), and the bridge route read is
    * `/runtime-health`, which touches no liveness, hydrates no transcript and
    * re-attaches nothing. The answer is never projected to a renderer.
+   * `options.signal` ends the bridge read.
    */
   async mcpConfigEvidenceIfRunning(
     environmentId: string,
     agent: BuildPipelineAgent,
     logicalSessionKey: string,
+    options: ProviderReadOptions = {},
   ): Promise<ProviderMcpConfigEvidenceRead> {
     const session = await this.storage.getNativeAgentSession(
       shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
@@ -4709,7 +4716,8 @@ export class NativeAgentService {
     const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
     if (!provider) return { state: "not-running" };
     if (!provider.mcpConfigEvidence) return { state: "none" };
-    return provider.mcpConfigEvidence(session.providerSessionId);
+    options.signal?.throwIfAborted();
+    return provider.mcpConfigEvidence(session.providerSessionId, options);
   }
 
   private trackScan(task: Promise<void>): Promise<void> {

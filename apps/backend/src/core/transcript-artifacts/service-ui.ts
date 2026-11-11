@@ -501,8 +501,10 @@ export class ArtifactUiReads {
       revision: revision.revision,
       preparedSha256: prepared.documentSha256,
       contentSecurityPolicy: prepared.contentSecurityPolicy,
-      load: async () =>
-        this.ctx.store.readAsset(environmentId, prepared.documentSha256, prepared.byteLength),
+      load: async (signal) =>
+        this.ctx.store.readAsset(environmentId, prepared.documentSha256, prepared.byteLength, {
+          signal,
+        }),
       // Re-checked on every request the content origin serves: the owner,
       // publication and exact prepared bytes must still be current, the
       // environment not deleted, live viewing still enabled, and this live

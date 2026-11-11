@@ -103,6 +103,19 @@ describe("OpenCode2Client", () => {
     await expect(client.listPermissions("ses_1")).rejects.toThrow("not a 2.x envelope");
   });
 
+  test("a caller's signal ends the MCP list request", async () => {
+    const { client, seen } = serve(() => new Promise<Response>(() => {}));
+    const controller = new AbortController();
+    const listing = client.listMcpServers(controller.signal).catch((error: unknown) => error);
+    for (let attempt = 0; attempt < 200 && seen.length === 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(seen.map((entry) => entry.path)).toEqual(["/api/mcp"]);
+    controller.abort(new Error("deadline"));
+    // Rejected by the abort, well before the client's own 2 s timeout.
+    expect(await listing).toBeInstanceOf(ProviderUnavailableError);
+  });
+
   test("204 answers resolve without a body", async () => {
     const { client, seen } = serve(() => new Response(null, { status: 204 }));
     await expect(client.withdrawInput("ses_1", "msg_x")).resolves.toBeUndefined();

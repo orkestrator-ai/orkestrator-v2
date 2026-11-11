@@ -213,6 +213,33 @@ describe("OpenCodeCapabilities.mcpServers", () => {
     expect(error).not.toContain("sk-abcdefghijklmnopqrstuvwx");
     expect(error.length).toBeLessThanOrEqual(2_000);
   });
+
+  test("the request aborts on the caller's signal as well as the provider's own", async () => {
+    const seen: AbortSignal[] = [];
+    const client = {
+      mcp: {
+        status: async (_parameters: unknown, options: { signal: AbortSignal }) => {
+          seen.push(options.signal);
+          return { data: {} };
+        },
+      },
+    } as unknown as OpencodeClient;
+    const own = new AbortController();
+    const reader = new OpenCodeCapabilities(
+      client,
+      "/workspace",
+      () => ({ signal: own.signal }),
+      async () => [],
+    );
+    const caller = new AbortController();
+    await reader.mcpServers(caller.signal);
+    await reader.mcpServers();
+    expect(seen[1]).toBe(own.signal);
+    expect(seen[0]?.aborted).toBe(false);
+    caller.abort(new Error("deadline"));
+    expect(seen[0]?.aborted).toBe(true);
+    expect(own.signal.aborted).toBe(false);
+  });
 });
 
 describe("OpenCode MCP sign-in", () => {

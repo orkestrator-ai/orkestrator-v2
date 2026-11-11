@@ -68,6 +68,7 @@ import {
   type ProviderInteractiveSnapshot,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -530,13 +531,13 @@ export class OpenCodeRoutingProvider implements NativeAgentRuntimeProvider {
     return this.legacy.slashCommands();
   }
 
-  async mcpServers(sessionId: string) {
+  async mcpServers(sessionId: string, options?: ProviderReadOptions) {
     if ((await this.lineOf(sessionId)) === "v2") {
       // A catalogue read never starts the 2.x server.
       const provider = await this.observedV2();
-      return provider ? provider.mcpServers() : [];
+      return provider ? provider.mcpServers(sessionId, options) : [];
     }
-    return this.legacy.mcpServers();
+    return this.legacy.mcpServers(sessionId, options);
   }
 
   async mcpServerAction(...args: Parameters<LegacyOpenCodeProvider["mcpServerAction"]>) {

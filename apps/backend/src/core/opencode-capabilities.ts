@@ -54,10 +54,12 @@ export class OpenCodeCapabilities {
     return readOpenCodeCommandInventory(this.client, this.directory, this.requestOptions);
   }
 
-  async mcpServers(): Promise<NativeAgentMcpServer[]> {
+  /** `signal` stops this read early; the provider's own signal always does. */
+  async mcpServers(signal?: AbortSignal): Promise<NativeAgentMcpServer[]> {
+    const own = this.requestOptions();
     const response = await this.client.mcp.status(
       { directory: this.directory },
-      this.requestOptions(),
+      signal ? { ...own, signal: AbortSignal.any([own.signal, signal]) } : own,
     );
     assertSdkResponse(response, "OpenCode MCP status");
     const statuses = asRecord(response.data) ?? {};

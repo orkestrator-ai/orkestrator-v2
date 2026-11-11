@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import { mcpScope } from "../../../../../bridges/claude-bridge/src/services/mcp-runtime-status.js";
-import { claudeConnection, codexConnection, httpProvider } from "../agent-provider-test-support.js";
+import {
+  claudeConnection,
+  codexConnection,
+  httpProvider,
+  waitUntil,
+} from "../agent-provider-test-support.js";
 
 /** The live MCP inventory relayed from every HTTP bridge to the agent panel. */
 describe("HTTP bridge MCP inventory", () => {
@@ -47,5 +52,22 @@ describe("HTTP bridge MCP inventory", () => {
     expect(server?.error).toContain("connect https://mcp.example.test/");
     expect(server?.error).not.toContain(secret);
     expect(server?.error?.length).toBeLessThanOrEqual(2_000);
+  });
+
+  test("a caller's signal ends the inventory request", async () => {
+    const { provider, requests } = httpProvider(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const read = provider.mcpServers!("session-1", { signal: controller.signal });
+    await waitUntil(() => requests.length === 1);
+    controller.abort(new Error("deadline"));
+    await expect(read).rejects.toThrow();
+    expect(requests[0]?.init.signal?.aborted).toBe(true);
   });
 });

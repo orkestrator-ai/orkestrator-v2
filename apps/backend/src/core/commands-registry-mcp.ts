@@ -160,10 +160,10 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
       void getLocalServerStatus(environmentId, context, "opencode").catch(() => undefined);
       return { outcome };
     },
-    async openCodeMcpServerNames(environmentId) {
-      return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId);
+    async openCodeMcpServerNames(environmentId, signal) {
+      return context.nativeAgents?.openCodeMcpServerNamesIfRunning(environmentId, { signal });
     },
-    async mcpConfigEvidence(environmentId, agent, logicalSessionKey) {
+    async mcpConfigEvidence(environmentId, agent, logicalSessionKey, signal) {
       const service = context.nativeAgents;
       if (!service) return { state: "not-running" };
       // Observation only: resolves an already-running bridge and reads the
@@ -173,6 +173,7 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
         environmentId,
         agent as never,
         logicalSessionKey,
+        { signal },
       );
       return read.state === "evidence"
         ? {

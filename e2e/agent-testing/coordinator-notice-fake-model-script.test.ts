@@ -6,6 +6,7 @@ import {
 import {
   accountOfToken,
   claudeLastUserText,
+  claudeSessionOf,
   claudeUsage,
   claudeUserTexts,
   fixtureClaudeToken,
@@ -16,6 +17,7 @@ import {
   noticeFacts,
   piTurn,
   runMarker,
+  turnKey,
 } from "./coordinator-notice-fake-model-script";
 
 function stop(kind: UsageLimitStop["sessionKind"], id: string): UsageLimitStop {
@@ -184,5 +186,71 @@ describe("the leaf's Pi coordinator", () => {
     expect(
       piTurn({ messages: [{ role: "user", content: launchPrompt(input) }], tools: [] }).step.kind,
     ).toBe("text");
+  });
+});
+
+describe("wakes are counted per turn", () => {
+  const notice = usageLimitStopNoticeText({
+    stops: [stop("tab", "1")],
+    coordinator: { kind: "unaffected" },
+    followUp: false,
+  }).body;
+  const firstTurn = [{ role: "user", content: [{ type: "text", text: notice }] }];
+  const claudeTurn = (messages: unknown, session = "user_x_session_one") =>
+    turnKey({ by: "claude", account: "desk-h", session, messages });
+
+  test("a resent request is the same turn, prompt-cache markers aside", () => {
+    expect(claudeTurn(firstTurn)).toBe(claudeTurn(structuredClone(firstTurn)));
+    const cached = [
+      {
+        role: "user",
+        content: [{ type: "text", text: notice, cache_control: { type: "ephemeral" } }],
+      },
+    ];
+    expect(claudeTurn(cached)).toBe(claudeTurn(firstTurn));
+  });
+
+  test("the same mail delivered again is a second turn", () => {
+    // Same final user message, but after the first delivery's answer.
+    const again = [
+      ...firstTurn,
+      { role: "assistant", content: [{ type: "text", text: "Noted." }] },
+      { role: "user", content: [{ type: "text", text: notice }] },
+    ];
+    expect(claudeLastUserText({ messages: again })).toBe(
+      claudeLastUserText({ messages: firstTurn }),
+    );
+    expect(claudeTurn(again)).not.toBe(claudeTurn(firstTurn));
+    // Or the same first message in another CLI session.
+    expect(claudeTurn(firstTurn, "user_x_session_two")).not.toBe(claudeTurn(firstTurn));
+    // Or on another account, or answered by the other platform.
+    expect(turnKey({ by: "claude", account: "desk-b", messages: firstTurn })).not.toBe(
+      turnKey({ by: "claude", account: "desk-h", messages: firstTurn }),
+    );
+    expect(turnKey({ by: "pi", messages: firstTurn })).not.toBe(
+      turnKey({ by: "claude", messages: firstTurn }),
+    );
+  });
+
+  test("a Pi tool loop's later requests belong to the turn its prompt started", () => {
+    const prompt = [{ role: "user", content: notice }];
+    const continued = [
+      ...prompt,
+      { role: "assistant", content: null, tool_calls: [{ id: "call-1" }] },
+      { role: "tool", content: "{}" },
+    ];
+    expect(turnKey({ by: "pi", messages: continued })).toBe(
+      turnKey({ by: "pi", messages: prompt }),
+    );
+  });
+
+  test("the key is a hash, and the session comes from the request's metadata", () => {
+    expect(claudeTurn(firstTurn)).toMatch(/^[0-9a-f]{64}$/);
+    expect(claudeTurn(firstTurn)).not.toContain("stopped");
+    expect(claudeSessionOf({ metadata: { user_id: "user_x_session_one" } })).toBe(
+      "user_x_session_one",
+    );
+    expect(claudeSessionOf({})).toBeUndefined();
+    expect(claudeSessionOf({ metadata: { user_id: 7 } })).toBeUndefined();
   });
 });

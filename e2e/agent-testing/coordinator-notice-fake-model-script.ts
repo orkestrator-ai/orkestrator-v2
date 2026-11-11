@@ -23,6 +23,8 @@
  *   automatic switching there stays on it until it is used up.
  */
 
+import { createHash } from "node:crypto";
+
 export type FixtureAccount = "leaf-a" | "leaf-b" | "leaf-c" | "desk-b" | "desk-h";
 
 /**
@@ -158,6 +160,43 @@ export function noticeFacts(prompt: string): NoticeFacts[] {
         followUp: body.includes("This window already woke you once"),
       };
     });
+}
+
+// --- Wakes ---
+
+/**
+ * The coordinator turn a request starts, for counting wakes exactly once per
+ * turn rather than once per distinct prompt: who answered, the account, the
+ * CLI's session (Claude's `metadata.user_id`) and the conversation up to and
+ * including its last user message. A resent request, or a CLI side request
+ * over the same messages, is the same turn. The same mail delivered again is
+ * not: it arrives after more history or in another session, so a duplicate
+ * delivery is counted twice and the spec's exactly-once checks catch it.
+ * Prompt-cache markers move between requests and are left out. Only a hash
+ * is returned; nothing of the conversation is kept.
+ */
+export function turnKey(turn: {
+  by: string;
+  account?: string;
+  session?: unknown;
+  messages: unknown;
+}): string {
+  const list = Array.isArray(turn.messages) ? (turn.messages as Array<{ role?: unknown }>) : [];
+  let lastUser = list.length - 1;
+  while (lastUser >= 0 && list[lastUser]?.role !== "user") lastUser -= 1;
+  const conversation = JSON.stringify(list.slice(0, lastUser + 1), (key, value: unknown) =>
+    key === "cache_control" ? undefined : value,
+  );
+  const session = typeof turn.session === "string" ? turn.session : "";
+  return createHash("sha256")
+    .update(`${turn.by}\0${turn.account ?? ""}\0${session}\0${conversation}`)
+    .digest("hex");
+}
+
+/** The session a Claude Messages request names (`metadata.user_id`), when it names one. */
+export function claudeSessionOf(body: { metadata?: unknown }): string | undefined {
+  const metadata = body.metadata as { user_id?: unknown } | null | undefined;
+  return typeof metadata?.user_id === "string" ? metadata.user_id : undefined;
 }
 
 // --- Pi (the leaf's main coordinator) ---

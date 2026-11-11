@@ -25,12 +25,14 @@ import {
   FIXTURE_ACCOUNTS,
   accountOfToken,
   claudeLastUserText,
+  claudeSessionOf,
   claudeUsage,
   claudeUserTexts,
   isLimited,
   markerOf,
   noticeFacts,
   piTurn,
+  turnKey,
   type FixtureAccount,
   type LaunchOutcome,
   type NoticeFacts,
@@ -150,12 +152,15 @@ function claudeRefusal(): Response {
   );
 }
 
-/** Counts a coordinator wake once, by a hash of the prompt kept only in memory. */
-function noteWake(by: Wake["by"], prompt: string, notices: NoticeFacts[], account?: Account): void {
+/**
+ * Counts a coordinator turn that carries usage-limit notices, once per turn
+ * (`turnKey`, a hash kept only in memory): a resent request is not a second
+ * wake, the same mail delivered twice is.
+ */
+function noteWake(key: string, by: Wake["by"], notices: NoticeFacts[], account?: Account): void {
   if (notices.length === 0) return;
-  const key = `${by}\0${Bun.hash(prompt)}`;
   if (seenWakes.has(key)) return;
-  seenWakes.add(key);
+  if (seenWakes.size < MAX_TRACKED) seenWakes.add(key);
   track(state.wakes, { by, ...(account ? { account } : {}), notices });
 }
 
@@ -182,7 +187,12 @@ async function claudeMessages(request: Request): Promise<Response> {
   const refuse = marker !== null && isLimited(account === "unknown" ? undefined : account);
   const stream = body.stream === true;
   const prompt = claudeLastUserText(body);
-  noteWake("claude", prompt, noticeFacts(prompt), account);
+  noteWake(
+    turnKey({ by: "claude", account, session: claudeSessionOf(body), messages: body.messages }),
+    "claude",
+    noticeFacts(prompt),
+    account,
+  );
   const call: ClaudeCall = {
     account,
     ...(marker ? { marker } : {}),
@@ -258,8 +268,7 @@ async function piCompletions(request: Request): Promise<Response> {
   }
   const turn = piTurn({ messages: body.messages, tools: body.tools });
   state.piCompletions += 1;
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  noteWake("pi", JSON.stringify(messages.at(-1) ?? null), turn.notices);
+  noteWake(turnKey({ by: "pi", messages: body.messages }), "pi", turn.notices);
   if (turn.launched) track(state.launches, turn.launched);
   if (turn.step.kind === "tool") {
     state.piToolCalls[turn.step.name] = (state.piToolCalls[turn.step.name] ?? 0) + 1;

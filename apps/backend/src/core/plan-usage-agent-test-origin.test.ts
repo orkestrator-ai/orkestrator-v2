@@ -99,13 +99,17 @@ describe("agentTestUsageOrigin", () => {
       }),
     ).toBeUndefined();
     // The default data directory is the user's own, whatever the flavor says.
-    expect(
-      agentTestUsageOrigin({
-        runtimeFlavor: "agent-test",
-        dataDir: () => defaultDataDir(),
-        env: isolatedEnv(),
-      }),
-    ).toBeUndefined();
+    // The gate resolves "default" from the env it is given, so the expected
+    // directory comes from that same env (on Linux, `XDG_CONFIG_HOME` moves it).
+    for (const env of [isolatedEnv(), { ...isolatedEnv(), XDG_CONFIG_HOME: dataDir }]) {
+      expect(
+        agentTestUsageOrigin({
+          runtimeFlavor: "agent-test",
+          dataDir: () => defaultDataDir(process.platform, env),
+          env,
+        }),
+      ).toBeUndefined();
+    }
   });
 
   test("accepts only a bare loopback origin", async () => {
@@ -173,7 +177,14 @@ describe("agentTestAnthropicOrigin", () => {
         dataDir: () => dataDir,
         env: { [AGENT_TEST_ANTHROPIC_ORIGIN_ENV]: ORIGIN },
       },
-      { runtimeFlavor: "agent-test", dataDir: () => defaultDataDir(), env: anthropicEnv(ORIGIN) },
+      ...[anthropicEnv(ORIGIN), { ...anthropicEnv(ORIGIN), XDG_CONFIG_HOME: dataDir }].map(
+        (env) => ({
+          runtimeFlavor: "agent-test",
+          // The same env the gate reads decides where the default directory is.
+          dataDir: () => defaultDataDir(process.platform, env),
+          env,
+        }),
+      ),
       {
         runtimeFlavor: "agent-test",
         dataDir: () => dataDir,

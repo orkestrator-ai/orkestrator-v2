@@ -285,6 +285,51 @@ function storedAccounts(status: Profile["status"]): StoredAccounts {
     {}) as StoredAccounts;
 }
 
+/** A usage-limit stop waiting in a leaf's durable node outbox, by identity only. */
+type QueuedStop = {
+  controllerId: string;
+  seq: unknown;
+  requestId: unknown;
+  stopId: unknown;
+  collected: boolean;
+  handedBack: boolean;
+};
+
+/**
+ * The usage-limit stops for one environment that a leaf holds in its durable
+ * node outbox (the `node-mail` store), read from the profile's database.
+ * Identities and flags only: no subject or body leaves this function.
+ */
+function queuedStops(status: Profile["status"], environmentId: string): QueuedStop[] {
+  const stored = backendStore(status.dataDir!, "node-mail.json", "read")?.value as
+    { outbox?: Record<string, { items?: unknown[] }> } | undefined;
+  const queued: QueuedStop[] = [];
+  for (const [controllerId, outbox] of Object.entries(stored?.outbox ?? {})) {
+    for (const raw of outbox?.items ?? []) {
+      const item = raw as {
+        seq?: unknown;
+        requestId?: unknown;
+        collected?: unknown;
+        handedBack?: unknown;
+        coordinatorNotice?: { kind?: unknown; stop?: { id?: unknown; environmentId?: unknown } };
+      };
+      const notice = item.coordinatorNotice;
+      if (notice?.kind !== "usage-limit-stop" || notice.stop?.environmentId !== environmentId) {
+        continue;
+      }
+      queued.push({
+        controllerId,
+        seq: item.seq,
+        requestId: item.requestId,
+        stopId: notice.stop.id,
+        collected: item.collected === true,
+        handedBack: item.handedBack === true,
+      });
+    }
+  }
+  return queued;
+}
+
 /** Claude and Pi native, Pi on the provider, Pi allowed as a coordinator. */
 async function configure(invoke: Invoke): Promise<() => Promise<void>> {
   const config = await invoke<{ global: Record<string, unknown> }>("get_config");
@@ -881,12 +926,26 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         (counts) => markerCalls(counts, run4).some((call) => call.refused),
         300_000,
       );
-      // Long enough for the stop to be raised and queued for the command node.
-      await new Promise((resolve) => setTimeout(resolve, 20_000));
+      // The stop is durably queued for the command node before the leaf
+      // restarts, so what arrives later is that notice recovered from disk,
+      // not a stop raised afresh after the restart.
+      const queuedBeforeRestart = await until(
+        "the leaf to queue the stop in its durable outbox for the command node",
+        async () => queuedStops(leaf.status, task4Environment),
+        (queued) => queued.length > 0,
+        120_000,
+      );
+      expect(queuedBeforeRestart, "the leaf queued one stop for the tab").toHaveLength(1);
+      expect(queuedBeforeRestart[0]).toMatchObject({ collected: false, handedBack: false });
       const leafWhileDown = limitNotices(await leafMailbox()).length;
       await stopProfile(leafProfile);
       await startProfile(leafProfile);
       leaf = await signIn(await newPage(), leafProfile, { fixture: false });
+      // The same item survived the restart while the command node is still down.
+      const queuedAfterRestart = queuedStops(leaf.status, task4Environment);
+      expect(queuedAfterRestart, "the queued stop changed across the leaf restart").toEqual(
+        queuedBeforeRestart,
+      );
       await startProfile(deskProfile);
       desk = await signIn(await newPage(), deskProfile, { fixture: false });
       await repointLeaf(desk, leaf, nodeId);
@@ -907,6 +966,9 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         leafCoordinatorNoticesWhileDown: leafWhileDown,
         leafCoordinatorNotices: limitNotices(await leafMailbox()).length,
         leafCoordinatorWakes: wakesOf(fake, "pi").length,
+        queuedBeforeRestart: queuedBeforeRestart.length,
+        // Collected and acknowledged: the delivered notice left the outbox.
+        queuedAfterDelivery: queuedStops(leaf.status, task4Environment).length,
       };
       summary.task4 = task4;
       expect(task4.leafCalls.every((call) => call.account === "leaf-c" && call.refused)).toBe(true);
@@ -927,6 +989,7 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
           ],
         },
       ]);
+      expect(task4.queuedAfterDelivery).toBe(0);
       expect(task4.deskNotices).toBe(3);
       expect(task4.leafCoordinatorNoticesWhileDown).toBe(0);
       expect(task4.leafCoordinatorNotices).toBe(0);

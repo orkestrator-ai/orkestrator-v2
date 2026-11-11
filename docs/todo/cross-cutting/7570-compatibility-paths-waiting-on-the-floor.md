@@ -21,7 +21,7 @@ removable; every one of them serves a release the window still covers.
 ### Tasks
 
 1. **Register the unregistered paths**: add a Register row (and a usage counter where the backend can see the path) for every path in tasks 2 to 7 that has none. Status: done (2026-11-11).
-2. **Backend paths, removable 2027-01-02**: older bridges and nodes served by v2.21.0 to v2.35.x. Status: open (blocked until 2027-01-02).
+2. **Backend paths, removable 2027-01-02**: older bridges and nodes served by v2.21.0 to v2.35.x. Status: open (blocked until 2027-01-02; the real-install counter reads wait on 7568: 7570 task 2).
 3. **Bridge paths, removable 2027-01-02**: Claude pid-only owner records and Codex per-login state adoption. Status: open (blocked until 2027-01-02).
 4. **Protocol and CLI paths, removable 2027-01-02**: the no-hello backend path and the CLI capability gates; `extendedDeny` was decided not to be a compatibility path. Status: open (blocked until 2027-01-02).
 5. **Renderer paths, removable 2027-01-02**: fallbacks for backends from v2.21.0 to v2.35.x. Status: open (blocked until 2027-01-02).
@@ -89,9 +89,12 @@ row and a counter (task 1):
 - `read_file_at_branch` and `read_local_file_at_branch` (`commands-registry-terminal.ts`): the diff viewer of v2.21.0 to v2.23.0 calls them. Unused renderer wrappers stayed in `lib/backend/files-sessions.ts` until v2.37.4-beta, but nothing called them after v2.23.0.
 - `get_coordinator_upstream_auto_merge` and `set_coordinator_upstream_auto_merge` (`commands-registry-client-state.ts`): v2.35.5-beta is the last renderer that calls them; v2.36.0 does not.
 
-**Investigation.** Before removing, read each counter on the machines you
-can reach, and recheck with `git grep <symbol> v2.36.0` that v2.36.0 has the
-newer behaviour.
+**Investigation.** Before removing, recheck with `git grep <symbol> v2.36.0`
+that v2.36.0 has the newer behaviour, and read each counter. An agent can
+read the counters only on a throwaway profile, which proves nothing about
+the user's peers; the reads on the user's real installs are a human-only
+item on the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)
+("7570 task 2 (user part)"). Record those results here.
 
 **Decisions.**
 
@@ -325,6 +328,13 @@ Decided from #1674 and the current validator, as recorded under task 4.
 
 Its introducing change (#1836) is first in v2.36.4-beta, not v2.36.0, so it
 waits on the next Stable release like the rest of task 6.
+
+### Task 2: the real-install counter reads are on the checklist
+
+Reading the eight counters on the user's own machines needs their real
+installs, which an agent must not touch, so that part of task 2 is an item
+on [7568](../manual-test/7568-manual-test-checklist.md) naming this to-do and
+task. The removal itself stays here, blocked until 2027-01-02.
 
 ### Task 7: keep the task open with a date
 

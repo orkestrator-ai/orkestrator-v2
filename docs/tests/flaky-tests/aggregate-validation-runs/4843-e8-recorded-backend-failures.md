@@ -109,6 +109,20 @@ handling are the same as before (the lost-exit watcher now also records an exit
 after a timeout, which `settleOnExit` ignores because `timedOut` is set). No
 assertion, timeout, skip or implementation changed.
 
+## Watcher review round 1 — 2026-11-11
+
+Base `498b68766`; branch `macos-watch-churn-47b622d64a81-r1` at `ea553276d`,
+which changes the worktree watcher and neither `preview-listener-ownership.ts`
+nor its test. In `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+default-tests-skip-guards -- mise run test` on macOS, with other worktrees'
+aggregate runs holding the host, `LoopbackListenerOwnership on this host >
+attributes a real :: listener and refuses another environment` expected
+`this-environment` and received `unattributed` (142.67 ms). The complete owner
+passed alone with `--parallel=1` in a five-owner rerun
+(`orkestrator-test-run.WIUK3M`, whose only failure was flake 9936). Evidence:
+`orkestrator-test-run.tOQhj5` under the host temporary directory. No
+assertion, timeout, skip or implementation changed.
+
 ## Recurrence — 2026-11-11 (SQLite activity metrics branch)
 
 Base `498b68766f5c9f357a3a86782406d1e9e0977559`, head `9530616a0`

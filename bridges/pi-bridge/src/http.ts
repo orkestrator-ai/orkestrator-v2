@@ -950,6 +950,21 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
 }
 
 /**
+ * Pi's own refusals when a session has nothing to compact (a short session,
+ * or one whose last entry is already a compaction). Fixed SDK strings with no
+ * session content in them, so they are passed on as a definite 409 refusal
+ * rather than the opaque 500 an unexpected failure gets: nothing ran, and the
+ * user should read why. Pinned SDK 1.5.0 (`AgentSession.compact`).
+ */
+const NOTHING_TO_COMPACT = /^(Nothing to compact \(session too small\)|Already compacted)$/;
+
+function nothingToCompact(error: unknown): HttpError | undefined {
+  return error instanceof Error && NOTHING_TO_COMPACT.test(error.message)
+    ? new HttpError(409, error.message)
+    : undefined;
+}
+
+/**
  * Compact the conversation on demand.
  *
  * Refused while a turn is running: Pi's manual compaction aborts the current
@@ -1014,7 +1029,7 @@ async function handleCompact(
         // Pi rejects an aborted compaction ("Compaction cancelled"). Only an
         // abort this route was asked for is a cancellation; anything else,
         // including an extension refusing to compact, is still a failure.
-        if (!compaction.cancelRequested) throw error;
+        if (!compaction.cancelRequested) throw nothingToCompact(error) ?? error;
         stopped = true;
       }
     }

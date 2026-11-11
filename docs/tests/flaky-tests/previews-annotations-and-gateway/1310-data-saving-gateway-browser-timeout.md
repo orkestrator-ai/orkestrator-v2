@@ -273,3 +273,19 @@ The owning spec and its implementation were unchanged. No assertion, deadline,
 retry or skip was changed. This establishes intermittency, not its cause.
 The full run and remaining undetermined failures are recorded in
 [9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).
+
+## Renderer error ring review — 2026-11-11
+
+Branch `renderer-error-ring-e3a48fce2746-r1` (to-dos 6300 and 6301), base
+`498b68766`; `mise run flaky:recurrence -- 1310 --base 498b68766` reported `open`.
+The owning spec and its implementation are unchanged on the branch.
+
+Review preparation's nine-worker `mise run test:browser` repeated the mobile
+deadline (60 s, during context cleanup). The unchanged owner passed both
+viewports with one worker in the two-owner rerun:
+
+```sh
+NODE_ENV= ORKESTRATOR_E2E_PORT=14722 mise run test:logged -- --name browser-flake-owners -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/TranscriptPaging.spec.ts e2e/DataSavingGateway.spec.ts
+```
+
+Status stays open. No assertion, deadline, retry or skip changed.

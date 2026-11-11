@@ -229,3 +229,44 @@ test("backend-unavailable still reports debug without importing the app or uploa
     applyRendererLogLevel();
   }
 });
+
+test("tells the iOS shell its debug state at start, before the app loads or the backend answers", async () => {
+  document.body.innerHTML = '<div id="root"></div>';
+  const originalShell = window.orkestratorNativeShell;
+  const order: string[] = [];
+  const setWebInspectable = mock(async (enabled: boolean) => {
+    order.push(`inspectable:${enabled}`);
+  });
+  window.orkestratorNativeShell = { setWebInspectable } as never;
+  localStorage.setItem("orkestrator:debug", "1");
+  applyRendererLogLevel();
+  const loadRenderer = mock(async () => ({ startRenderer: async () => {} }));
+  try {
+    // A failed connection check is exactly when inspection is wanted.
+    await bootstrapRenderer({
+      target: { addEventListener: () => {} } as never,
+      startDiagnostics: () => undefined,
+      startDesktop: async () => {
+        order.push("desktop:start");
+      },
+      loadRenderer,
+    });
+    expect(order).toEqual(["inspectable:true", "desktop:start"]);
+    expect(setWebInspectable).toHaveBeenCalledTimes(1);
+
+    // Off is reported too, so a page that starts without debug turns it off.
+    localStorage.removeItem("orkestrator:debug");
+    applyRendererLogLevel();
+    await bootstrapRenderer({
+      target: { addEventListener: () => {} } as never,
+      startDiagnostics: () => undefined,
+      startDesktop: async () => {},
+      loadRenderer,
+    });
+    expect(setWebInspectable.mock.calls.at(-1)).toEqual([false]);
+  } finally {
+    window.orkestratorNativeShell = originalShell;
+    localStorage.removeItem("orkestrator:debug");
+    applyRendererLogLevel();
+  }
+});

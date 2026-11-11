@@ -13,6 +13,7 @@ import {
   type RuntimeProfile,
   type RuntimeProfileRoots,
 } from "../../electron/runtime-profile.js";
+import { agentToolsPortClaimsDir, claimAgentToolsPort } from "./agent-tools-port-claims.js";
 import { parsePruneArguments } from "./arguments.js";
 import {
   dockerBuildCacheWarning,
@@ -151,6 +152,23 @@ describe("removeProfile", () => {
       ["network", "rm", "network-one"],
     ]);
     expect(await isRemovedProfileSkeleton(profile.profileRoot)).toBe(true);
+  });
+
+  test("releases the profile's agent tools port claims and only those", async () => {
+    const profile = await createProfile("claims");
+    const claim = (name: string, port: number) =>
+      claimAgentToolsPort({
+        developmentRoot: roots.developmentRoot,
+        owner: { profile: name, pid: 1, startTime: 1 },
+        port,
+        checkFree: async () => {},
+        isLive: () => false,
+      });
+    await claim("claims", 31500);
+    await claim("claims", 40001);
+    await claim("someone-else", 31501);
+    await removeProfile(profile, { keepToolchains: false, roots, run });
+    expect(await readdir(agentToolsPortClaimsDir(roots.developmentRoot))).toEqual(["31501.json"]);
   });
 
   test("keeps profile state when an owned volume cannot be removed", async () => {

@@ -4,6 +4,7 @@ import {
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 /**
  * The wiring between a projection and the usage store: the backend records
@@ -59,6 +60,96 @@ test("a projection records the session's turns once", async () => {
       await service.getProjection(identity);
       await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 2);
       expect(storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(107);
+    },
+  );
+});
+
+/**
+ * A session driven only through the CLI: `session start --wait`
+ * then reads, never a full projection. The provider's full snapshot reports no
+ * turns here, so only the reads under test can record the one the status
+ * route reports.
+ */
+function cliOnlyStub(agent: "claude" | "pi") {
+  let finished = false;
+  const usage = {
+    usedTokens: 168,
+    turns: [{ turnId: "turn-1", inputTokens: 123, outputTokens: 45, modelId: "fake" }],
+  };
+  const stub = createProviderStub(agent, {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    sessionStateSnapshot: async () =>
+      finished ? { status: "idle", contextUsage: usage } : { status: "running" },
+  });
+  return {
+    stub,
+    finish() {
+      finished = true;
+    },
+  };
+}
+
+test("the session-state view records a turn no projection read has seen", async () => {
+  const { stub, finish } = cliOnlyStub("pi");
+  await withService(
+    { prefix: "orkestrator-native-usage-state-view-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "pi" as const,
+        logicalSessionKey: "env-env-1:cli-state",
+      };
+      await service.ensureSession(identity);
+      finish();
+      const update = await service.getSessionStateUpdate({
+        ...identity,
+        viewVersion: 1,
+        forceSnapshot: true,
+      });
+      expect(update.status).toBe("snapshot");
+      await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 1);
+      const report = storage.getAgentUsageHistory({ days: 1 });
+      expect(report.totals.inputTokens).toBe(123);
+      expect(report.totals.outputTokens).toBe(45);
+
+      // Another state read republishes the same turn and adds nothing.
+      await service.getSessionStateUpdate({ ...identity, viewVersion: 1, forceSnapshot: true });
+      expect(storage.getAgentUsageHistory({ days: 1 }).totals.turns).toBe(1);
+    },
+  );
+});
+
+test("settling a turn's outcome records its usage without any view read", async () => {
+  const { stub, finish } = cliOnlyStub("claude");
+  await withService(
+    { prefix: "orkestrator-native-usage-settled-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:cli-start",
+      };
+      const session = await service.dispatchPrompt({
+        ...identity,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      launchInternals(service).observedSessionActivity.set(session.key, {
+        providerSessionId: session.providerSessionId,
+        state: "idle",
+      });
+      finish();
+      const reads = stub.sessionStateSnapshot!.mock.calls.length;
+      expect(await service.sessionTurnOutcome({ ...identity, requestId: "r-1" })).toEqual({
+        outcome: "completed",
+      });
+      await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 1);
+      expect(storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(123);
+      // One usage read for the settled turn; the recorded outcome answers
+      // later calls from storage and reads nothing more.
+      expect(stub.sessionStateSnapshot!.mock.calls.length).toBe(reads + 1);
+      await service.sessionTurnOutcome({ ...identity, requestId: "r-1" });
+      expect(stub.sessionStateSnapshot!.mock.calls.length).toBe(reads + 1);
     },
   );
 });

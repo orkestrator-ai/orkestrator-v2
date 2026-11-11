@@ -107,6 +107,7 @@ import {
   type NativeAgentTranscriptView,
   type NativeAgentViewIdentity,
   type NativeAgentAsyncQuestionResponse,
+  type NativeAgentContextUsage,
   nativeAgentApprovalModes,
   normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
@@ -556,6 +557,30 @@ export class NativeAgentTranscriptProjection {
           })
         : 0,
   });
+  /**
+   * Hands a usage report read outside a full projection to the recorder: the
+   * session-state view and a settled turn's outcome read see usage a session
+   * driven only through the CLI would otherwise never record.
+   */
+  observeSessionUsage(
+    session: Pick<
+      PersistedNativeAgentSession,
+      "environmentId" | "agent" | "logicalSessionKey" | "providerSessionId"
+    >,
+    usage: NativeAgentContextUsage | undefined,
+  ): void {
+    this.usageRecorder.observe({
+      sessionKey: nativeAgentSessionStorageKey(
+        session.environmentId,
+        session.agent,
+        session.logicalSessionKey,
+      ),
+      environmentId: session.environmentId,
+      platform: session.agent,
+      ...(session.providerSessionId ? { providerSessionId: session.providerSessionId } : {}),
+      usage,
+    });
+  }
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** When the last exact recovery read started, per key; spaces those reads out. */
@@ -3594,6 +3619,10 @@ export class NativeAgentTranscriptProjection {
       selectedModel?.contextWindow,
       storedContextUsage,
     );
+    // The provider's own report only: the stored fallback came from a full
+    // projection, which already recorded it. A CLI-driven session may never
+    // get one, so this read is what counts its turns.
+    this.observeSessionUsage(resolved.session, stateSnapshot.contextUsage);
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
     const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const sourceGeneration = providerGeneration;

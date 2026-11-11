@@ -222,6 +222,7 @@ import {
   promptWithPendingAgentHandoff,
 } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
+import { SettledTurnUsage } from "./native-agent-settled-turn-usage.js";
 import {
   beginArtifactDispatchTurn,
   settleArtifactDispatchTurn,
@@ -371,6 +372,10 @@ export class NativeAgentService {
   private readonly catalogs: NativeAgentCatalogCache;
   /** Renderer views of provider sessions and every cache behind them. */
   private readonly projections: NativeAgentTranscriptProjection;
+  /** Records a turn's usage when its outcome is first recorded. */
+  private readonly settledTurnUsage = new SettledTurnUsage({
+    observe: (session, usage) => this.projections.observeSessionUsage(session, usage),
+  });
   /** Orkestrator's permission rules (todo 0723); absent with a narrow storage double. */
   private readonly permissionRules: PermissionRuleEnforcer | undefined;
   /** Pending approvals and questions: observation records and the monitor sweep. */
@@ -3208,6 +3213,8 @@ export class NativeAgentService {
           )
         : undefined;
     this.settleArtifactTurn(session, input.requestId);
+    // A turn awaited only through the CLI may never get a projection read.
+    void this.settledTurnUsage.record(session, provider, observation.contextUsage);
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
@@ -3289,7 +3296,10 @@ export class NativeAgentService {
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
-    provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    provider?: Pick<
+      NativeAgentRuntimeProvider,
+      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage"
+    >,
     reportedFailureKind?: TurnFailureKind,
   ): Promise<number | void> {
     const requestId = session.dispatchedRequestIds?.at(-1);
@@ -3319,6 +3329,7 @@ export class NativeAgentService {
     }
     this.settleArtifactTurn(session, requestId);
     this.signInResends.noteTurnEnded(session);
+    void this.settledTurnUsage.record(session, provider);
     const failed = status === "error" || failure !== undefined;
     const failureKind = failed
       ? turnOutcomeFailureKind(

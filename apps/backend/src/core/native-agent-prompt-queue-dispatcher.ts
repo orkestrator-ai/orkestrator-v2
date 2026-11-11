@@ -81,7 +81,10 @@ export interface NativeAgentPromptQueueDispatcherHost {
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
-    provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
+    provider?: Pick<
+      NativeAgentRuntimeProvider,
+      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage"
+    >,
     /** The bridge's structured kind for an `error` status, when it sent one. */
     failureKind?: TurnFailureKind,
   ): Promise<number | void>;

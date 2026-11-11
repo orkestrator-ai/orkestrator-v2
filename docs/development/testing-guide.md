@@ -907,9 +907,9 @@ The run manifest (IDs, exit codes, stages and, for a live turn, the pinned and
 reported model; for a live scenario also the token counts and priced spend its
 backend recorded, in `results[].usage` — no prompts, credentials or
 environment names) is written to `output/cli-scenarios/<run>/manifest.json`.
-Usage is counted only for turns the backend has read back; a run whose last
-turn is a `session start` under-reports it
-([7815](../todo/cli-and-slash-commands/7815-cli-session-start-usage-unrecorded.md)). Record live results in the
+The backend records a turn's usage when it records how the turn ended and on
+every session-state read, so a run whose last turn is a `session start` counts
+it too (to-do 7815, retired). Record live results in the
 [evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).

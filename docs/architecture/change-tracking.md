@@ -317,7 +317,12 @@ then captures the end and publishes `turn-net` and `thread-net`. If the
 provider's terminal turn report still says `may-write`, or one of the turn's
 background tasks is still running, writers have not settled: the turn is
 published `interrupted` with a running-observation end, never silently final. While a turn runs, watcher hints drive provisional captures at
-most once per second locally (five remotely). A provisional capture whose tree
+most once per second locally (five remotely). A hint inside that spacing
+starts nothing; the next hint, or the turn's end, captures. The spacing was
+kept on 2026-11-11 (todo 4962, retired) after a measurement showed captures
+follow the agent's writing tool calls rather than a timer, so a longer spacing
+would delay the live diff as often as it saved an unchanged capture
+([Provisional capture churn](#provisional-capture-churn-2026-11-11)). A provisional capture whose tree
 and consistency match both the turn's and thread's latest published provisional
 measurements publishes nothing:
 every capture has a new snapshot id, so a publish would store the whole file
@@ -526,15 +531,20 @@ was todo 7555 task 2, answered under [Batched apply](#batched-apply).
 At a load of 1 to 10 the apply still cost 11 to 14 ms per file, so most of
 the busy-host 30 to 40 ms is the per-file helper process, not only load.
 
-A client that reads `changes_get_history` the moment a bulk turn's lifecycle
-turns `finalized` can still be given the turn's provisional measurement: the
-final one and its selection are written by the publication that follows the
-end capture, 0.9 to 1.4 s later at 10,000 and 20,000 files on the quiet host.
-A preview of the provisional measurement answers
-`changes.restore.no-retained-endpoints`; re-reading the history gives the
-final one, which restores. The restore dialog is gated by the projection's
-`restore` action instead. [Todo 7556](../todo/cross-cutting/7556-history-names-provisional-measurement-after-finalize.md)
-owns the gap.
+A turn's terminal lifecycle is committed with its end capture, and the final
+measurement and its selection are written by the publication that follows,
+0.9 to 1.4 s later at 10,000 and 20,000 files on the quiet host. In that
+window the selection still names the provisional measurement, whose preview
+answers `changes.restore.no-retained-endpoints`. Until todo 7556 (retired
+2026-11-11) `changes_get_history` paired the terminal lifecycle with that
+provisional id. It now reports `measurementId: null` for a terminal turn whose
+selected measurement is still provisional (`getHistory` in `service.ts`), and
+the final id once it is selected, so a client re-reads as it does while a turn
+runs; a running turn still names its provisional measurement. A terminal turn
+whose end publication never ran (the backend died between the two writes)
+keeps `null` in the history; its projection still shows the provisional
+measurement. The restore dialog was never affected: it is gated by the
+projection's `restore` action.
 
 Those apply times are from before the batched apply below.
 
@@ -678,6 +688,21 @@ full list, so a change past the cap makes a new measurement. Rows an earlier
 build stored stay readable as complete and go when they are superseded, so no
 migration exists. Provider-reported lists (payloads, observations, legacy
 summaries) carry their own bound and are not capped here.
+
+There are no directory rows: a capped list of one bulk directory shows up to
+2,000 of its files, after every file with a text change, and the Changes view
+says how many are not listed. Todo 4961 (retired 2026-11-11) weighed one row
+per bulk directory against that after the busy soak
+([below](#busy-live-soak-of-the-row-cap-2026-11-10)) and kept file rows. The
+storage a directory row would save is bounded: about 2,000 rows, 0.5 MiB, per
+bulk turn for the 30-day window, inside the per-owner bound. A directory row
+would be a new row kind: a row's `path_id` names one file to the diff-body
+lookup (`resolveLiveDetail`), to restore's path filter and to the renderer's
+row ids, so every reader and older client would need a case for it, and its
+line totals would be approximate. Whether a capped list reads well enough is
+a judgement on the Changes view, item 4961 in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md);
+a "no" reopens directory rows as a new to-do.
 
 Measurements are pruned too. Every re-measurement stores its file list again,
 so superseded ones would otherwise grow `change_measurement_files` without bound.
@@ -931,11 +956,13 @@ files were removed and so measured 2,500 deletions).
   15 minutes (above); in the soak that pass removed 232,540 rows and the file
   shrank by 59 MiB.
 
-What it unblocks: [4961](../todo/cross-cutting/4961-measurement-directory-rows.md)
-now has its measurement (capped lists are common under bulk work, and they
-dominate the ledger's size), and
-[4962](../todo/cross-cutting/4962-provisional-capture-spacing.md) task 1 no
-longer waits on it and has a first count from this run.
+What it decided: capped lists are common under bulk work and dominate the
+ledger's size, but each owner stays inside the bound, so todo 4961 (retired
+2026-11-11) kept one row per file rather than adding one row per bulk
+directory (see [Retention and backup](#retention-and-backup)). Its first count
+of unchanged provisional captures was not usable for todo 4962 (retired
+2026-11-11), whose measurement is
+[below](#provisional-capture-churn-2026-11-11).
 
 The soak also found, outside the cap: Multi Review launches refused after the
 ninth round because each review left its tab open (a driver fault, fixed: the
@@ -1014,6 +1041,45 @@ of two passes in a row unless stated:
 The first pass after a start parses every manifest, as before. Before ST-20 the
 parsed-manifest cache served only the manifests live views had open, so every
 other one was parsed on every pass.
+
+### Provisional capture churn (2026-11-11)
+
+Todo 4962 (retired 2026-11-11) asked how often a provisional capture finds the
+tree it already published, before deciding the capture spacing. The busy soak
+above could not say: its driver writes each bulk directory in one burst while
+the turn is held, and its hourly pass freed the snapshots the count relied on.
+`bun scripts/benchmark-change-tracking.ts --only=capture-churn` measures it
+instead: one turn through the whole service on a temporary database, at the
+real spacing, with the real worktree watcher's hints forwarded to the service
+as the environment scan forwards them. A scripted agent makes one tool call
+per step on a 200-file repository, cycling through reading a file, editing a
+tracked file, `git status`, a test run that writes only Git-ignored output
+(`dist/`, `coverage/`, `node_modules/.cache/`) and `git diff`. Captures are
+counted from `change_capture_attempts`, moving ones from the provisional
+turn-net measurements written. One run each on beelink2 (Linux, 16 cores,
+load average 4 to 7) at `14df96544`:
+
+| Measure | 40 calls, 1.5 s apart | 60 calls, 0.5 s apart |
+| --- | --- | --- |
+| Hints | 17 | 25 |
+| Provisional passes | 17 | 25 |
+| Captures (all published) | 17 | 24 |
+| Moved the tree | 8 | 12 |
+| Found it unchanged | 9 | 12 |
+| Passes inside the spacing | 0 | 1 |
+
+By tool call, in both runs: every edit hinted and moved the tree; every test
+run hinted and found it unchanged; `git status` hinted once in each run (an
+index refresh), whose capture found the tree unchanged in the first run and
+fell inside the spacing in the second; reads and `git diff` never hinted. So about half the captures were wasted, and all of the waste
+came from writes Git ignores, not from an idle turn or from the spacing: the
+spacing dropped one pass in 25 even with a tool call every half second. A
+longer spacing would drop moving and unchanged captures alike, delaying the
+live diff during exactly the writing a user watches, so it was left at 1 s
+locally and 5 s remotely. Filtering hints whose paths are all Git-ignored is
+[7840](../todo/cross-cutting/7840-provisional-captures-for-ignored-writes.md).
+The workload is synthetic: a real agent's mix of tool calls, and a real
+repository's build output, set the actual ratio.
 
 ## Known limitations
 

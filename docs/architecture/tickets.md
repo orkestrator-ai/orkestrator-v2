@@ -261,7 +261,62 @@ stage instead of guessing. A build
 from a Linear or GitHub ticket has only this copy: the launch dialog's choice
 stays with that pipeline, and its completion comment says how it was delivered.
 
-## Merged pull requests close the ticket
+## Build lifecycle
+
+A ticket linked to a build pipeline moves through the board on its own. The
+events and their columns are one table,
+`apps/backend/src/core/build-pipeline-kanban-lifecycle.ts`, read by the
+pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
+`update-ticket` node (`graph-system-ticket.ts`):
+
+| Event | Column | Writer |
+| --- | --- | --- |
+| Build starts, including a restart | In progress | `startStage("build")`; the supervisor's reactivation after a restart |
+| A rework (fix) round | unchanged (In progress) | none |
+| Ship finds the pull request open | Review, PR linked | `persistPullRequest` (`pr-raised`) |
+| Ship finds the pull request already merged | Done | `persistPullRequest` closes it (below) instead of `pr-raised`'s Review |
+| The build completes with Notes (open PR, `commit-only` or `push-no-pr`) | Review | `reconcileTerminalState` (`complete`) |
+| The build fails or is cancelled | Backlog | `reconcileTerminalState` (`failed`) |
+| The pull request merges | Done | PR monitor, a build ending, startup sweep (below) |
+| The pull request closes without merging | Backlog, unless moved by hand since the build | PR monitor (below) |
+| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline-kanban-environment-deleted.ts` |
+| The build's environment is deleted after its PR merged | Done | the same |
+
+A ticket in Done is never moved by any lifecycle event, a new build or a
+restart included: every lifecycle write passes `preserveDoneStatus` (storage
+option `lifecycle`), checked under the same mutation lease as the write, so a
+writer that read before the monitor closed the ticket cannot reopen it. A move
+by the user is kept until the next lifecycle event, which moves the ticket
+again. Each lifecycle move records its column on the ticket
+(`lifecycleStatus`, local to the machine that wrote it); a status that differs
+from it means someone moved the ticket by hand since, which is what a closed
+pull request respects. A ticket's PR state, checks and conflicts are not
+columns: they are shown on the ticket's Notes tab.
+
+**On another machine.** A build started on a leaf from the command node's
+board (`start_build_pipeline` with `nodeId`) runs this same code on the leaf,
+against its copy of the ticket. Every column change, comment and pull request
+link queues in the leaf's ticket outbox and reaches the command node's board,
+and from there every other copy ([Sync across machines](#sync-across-machines)).
+The pull request monitor also runs on the leaf, where the environment is, so
+merge and close events reach the board the same way. A command node's ticket
+built elsewhere links no pull request itself; the leaf reports it as the
+ticket's work location (`sync.work`), which the startup sweep reads too.
+
+**Why tickets stuck (2026-11).** Three causes, fixed together:
+
+- Ship or conflict resolution that found the pull request again after it
+  merged applied `pr-raised`'s Review without the done check, moving a ticket
+  the monitor had just closed back to Review. Its merge was already recorded
+  (`prMergeDoneUrl`), so nothing closed it again.
+- Deleting an environment removed its pipelines without a terminal event, so
+  an unfinished build's ticket stayed In progress, and one whose pull request
+  merged later was never closed (the monitor stops with the environment).
+- Builds made before ticket sync (2026-11-03), or launched without the ticket
+  (prompt environments, a leaf-local ticket), updated no ticket on the command
+  node's board at all. The fix cannot reach those; they were moved by hand.
+
+### Merged pull requests close the ticket
 
 A ticket whose linked pull request merged moves to done, from whichever column
 it is in. The rule is in `apps/backend/src/core/kanban-merge-closure.ts`, and
@@ -272,14 +327,17 @@ every writer applies it through one storage method,
 | --- | --- |
 | PR monitor (`pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
 | Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
+| Build pipeline (`persistPullRequest`) | Ship or conflict resolution finds the pull request already merged. |
+| Environment deletion (`build-pipeline-kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
 | Startup sweep (`pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
 
-A merge is recorded when the ticket links a pull request in state `merged`, or,
-for a ticket with no linked pull request, when its latest pull-request comment
-is the monitor's `🎉 PR merged: <url>`. A later `🔗 PR raised` or `❌ PR closed`
-comment means other work followed. The sweep leaves in-progress tickets alone,
-because a ticket being built again keeps its earlier pull request until the new
-build raises one.
+A merge is recorded when the ticket links a pull request in state `merged`;
+for a ticket with no linked pull request, when its work location on another
+machine (`sync.work`) names one in state `merged`; or, with neither, when its
+latest pull-request comment is the monitor's `🎉 PR merged: <url>`. A later
+`🔗 PR raised` or `❌ PR closed` comment means other work followed. The sweep
+leaves in-progress tickets alone, because a ticket being built again keeps its
+earlier pull request until the new build raises one.
 
 The closure happens once per pull request. The ticket records the merged pull
 request that closed it (`prMergeDoneUrl`), even if it was already done when the
@@ -287,10 +345,16 @@ merge was observed. Recording that merge leaves a done ticket’s order alone.
 The marker travels with status in sync snapshots and outbox changes, sharing
 its revision and conflict rules. A ticket the user moves back out of
 done afterwards stays where they put it, until a different pull request merges.
-Separately, a build or graph run ending (`complete`, `failed`) never moves a
-ticket that is already done: storage checks this under the same mutation lease
-as the write, so a terminal writer cannot race the monitor and reopen it.
-A new build starting still moves it to in progress.
+
+### Closed pull requests return the ticket
+
+When the PR monitor sees the build's pull request close without merging, it
+asks `KanbanRepository.returnKanbanTaskForClosedPullRequest` once, before it
+links the closed pull request on the ticket (so a restart does not ask again).
+The ticket goes back to the backlog only when it is not done, that pull
+request never merged it, and its column is still the one the lifecycle set
+(`kanbanTaskReturnsForClosedPullRequest`). A ticket the user moved by hand
+since, or one no build ever moved, keeps its place.
 
 ## Views
 

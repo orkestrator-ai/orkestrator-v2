@@ -193,6 +193,14 @@ export type KanbanTask = {
    */
   prMergeDoneUrl?: string;
   /**
+   * The column the build lifecycle last moved this ticket to
+   * (`build-pipeline-kanban-lifecycle.ts`). A status different from it means
+   * someone moved the ticket by hand since, which a closed pull request
+   * respects. Local to this machine: it is where the build and its pull
+   * request monitor run that reads it.
+   */
+  lifecycleStatus?: KanbanStatus;
+  /**
    * Sync with other machines: this node's change sequence and field
    * revisions, and on a leaf's copy of a command node's ticket, that ticket's
    * (`@orkestrator/protocol/ticket-sync`). Absent on rows never changed since.

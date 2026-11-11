@@ -38,6 +38,7 @@ export { normalizeKanbanTask } from "./storage-kanban-board.js";
 
 import {
   kanbanTaskAwaitsMergeClosure,
+  kanbanTaskReturnsForClosedPullRequest,
   pendingMergeClosures,
   type KanbanMergeClosure,
 } from "./kanban-merge-closure.js";
@@ -274,8 +275,18 @@ export class KanbanRepository {
     updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis" | "sync">> &
       KanbanTaskContentInput,
     expectedProjectId?: string,
-    options: { notifyDeliveryPolicyChange?: boolean; preserveDoneStatus?: boolean } = {},
+    options: {
+      notifyDeliveryPolicyChange?: boolean;
+      /**
+       * A build lifecycle write (`build-pipeline-kanban-lifecycle.ts`): it
+       * never moves a done ticket, and a status it writes is recorded as the
+       * ticket's `lifecycleStatus`. `preserveDoneStatus` is its older name.
+       */
+      lifecycle?: boolean;
+      preserveDoneStatus?: boolean;
+    } = {},
   ): Promise<KanbanTask> {
+    const lifecycle = options.lifecycle === true || options.preserveDoneStatus === true;
     if (
       updates.status !== undefined &&
       !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
@@ -294,10 +305,15 @@ export class KanbanRepository {
 
       // Terminal writers may have read before the monitor closed this ticket.
       // Check under the same lease as the write; user edits remain unconditional.
-      if (options.preserveDoneStatus && task.status === "done") {
+      if (lifecycle && task.status === "done") {
         const { status: _status, ...remaining } = updates;
         updates = remaining;
       }
+      // The marker is the lifecycle's alone, whatever a caller sends.
+      const { lifecycleStatus: _marker, ...withoutMarker } = updates as typeof updates & {
+        lifecycleStatus?: unknown;
+      };
+      updates = withoutMarker;
       const before = normalizeKanbanTask(structuredClone(task));
       const oldStatus = task.status;
       const oldDeliveryPolicy = before.sections?.delivery?.policy;
@@ -342,6 +358,7 @@ export class KanbanRepository {
               .map((candidate) => candidate.order),
           ) + 1;
       }
+      if (lifecycle && updates.status) task.lifecycleStatus = updates.status;
       await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
       const updated = normalizeKanbanTask(task);
@@ -423,6 +440,7 @@ export class KanbanRepository {
                 .map((candidate) => candidate.order),
             ) + 1;
           task.status = "done";
+          task.lifecycleStatus = "done";
         }
         task.prMergeDoneUrl = prUrl;
         changes.push({ before, stored: task });
@@ -433,6 +451,38 @@ export class KanbanRepository {
         this.context.changes.announce("kanban", projectId);
       }
       return moved;
+    });
+  }
+
+  /**
+   * A ticket whose build's pull request closed without merging goes back to
+   * the backlog (`kanbanTaskReturnsForClosedPullRequest`), unless the user
+   * moved it by hand since the build last moved it, it is done, or that pull
+   * request merged once already. Returns whether it moved.
+   */
+  async returnKanbanTaskForClosedPullRequest(taskId: string, prUrl: string): Promise<boolean> {
+    return this.board.enqueue(async () => {
+      const tasks = await this.board.loadTasks();
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || !kanbanTaskReturnsForClosedPullRequest(task, prUrl)) return false;
+      const before = normalizeKanbanTask(structuredClone(task));
+      task.order =
+        Math.max(
+          -1,
+          ...tasks
+            .filter(
+              (candidate) =>
+                candidate.projectId === task.projectId &&
+                candidate.status === "backlog" &&
+                candidate.id !== taskId,
+            )
+            .map((candidate) => candidate.order),
+        ) + 1;
+      task.status = "backlog";
+      task.lifecycleStatus = "backlog";
+      await this.board.commit(tasks, [{ before, stored: task }]);
+      this.context.changes.announce("kanban", task.projectId);
+      return true;
     });
   }
 
@@ -1201,6 +1251,7 @@ export type KanbanStorage = Pick<
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
   | "closeKanbanTasksForMergedPullRequests"
+  | "returnKanbanTaskForClosedPullRequest"
   | "setKanbanTaskLabel"
   | "getKanbanLabels"
   | "createKanbanLabel"

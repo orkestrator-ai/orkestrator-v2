@@ -509,10 +509,18 @@ export class BuildPipelineRecovery {
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
     });
+    // Re-detected after a merge (a conflict resolution or a Ship retry that
+    // finishes once the pull request merged): the merge closes the ticket,
+    // and the raised event must not move it back to review.
+    const update = buildPipelineKanbanUpdate("pr-raised", {
+      url: detection.url,
+      state: detection.state,
+    });
     await this.updateKanbanLifecycle(
       pipeline,
-      buildPipelineKanbanUpdate("pr-raised", { url: detection.url, state: detection.state }),
+      detection.state === "open" ? update : { ...update, status: undefined },
     );
+    if (detection.state === "merged") await this.closeTicketForMerge(pipeline, detection.url);
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
@@ -719,7 +727,9 @@ export class BuildPipelineRecovery {
     ) {
       await this.ctx.invoke("update_kanban_task", {
         taskId: task.id,
-        ...(options.terminal ? { preserveDoneStatus: true } : {}),
+        // Every lifecycle move: a done ticket is never reopened by a build,
+        // and storage records the column it set (`lifecycleStatus`).
+        ...(updates.status ? { preserveDoneStatus: true } : {}),
         ...(updates.status ? { status: updates.status } : {}),
         ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
         ...(updates.prState ? { prState: updates.prState } : {}),
@@ -731,6 +741,13 @@ export class BuildPipelineRecovery {
         text: updates.comment,
       });
     }
+  }
+
+  /** Closes the pipeline's ticket for its merged pull request (`kanban-merge-closure.ts`). */
+  private async closeTicketForMerge(pipeline: BuildPipeline, prUrl: string): Promise<void> {
+    const taskId = pipeline.source?.type === "kanban" ? pipeline.source.taskId : undefined;
+    if (!taskId) return;
+    await this.ctx.invoke("close_kanban_task_for_merged_pr", { taskId, prUrl });
   }
 
   /**

@@ -117,6 +117,7 @@ import {
   freshToolResults,
   freshToolStates,
   gapHistogram,
+  lateOutputRowIds,
   discoveryRenewalDelta,
   invalidationCauseDelta,
   readCadence,
@@ -1612,6 +1613,10 @@ test.describe("live idle observation", () => {
               }
             },
           });
+          // Rows present once our turn settled: a late output row must arrive after them.
+          const presentAtSettle = new Set(
+            ((await projection())?.messages ?? []).map((message) => message.id),
+          );
           record.timings.backgroundIndicatorLagMs =
             taskShownAt !== null && taskStartedAt !== null ? taskShownAt - taskStartedAt : null;
           if (!sawRunningTask) {
@@ -1685,19 +1690,41 @@ test.describe("live idle observation", () => {
             record.notes.push(
               `tool calls after the command ended: ${afterEnd.join(", ") || "none"}`,
             );
-            // Content-free: which rows arrived, and whether any shows the marker.
-            const freshRows = (ended?.messages ?? []).filter((message) => !before.has(message.id));
-            const markerInRow = freshRows.some((message) => textOf(message).includes(marker));
-            record.notes.push(
-              `fresh rows after the command ended: ${freshRows.map((message) => message.role).join(",") || "none"}; marker in a row's text: ${markerInRow}; phase ${ended?.turn.phase ?? "none"}`,
+            // Content-free: which rows arrived after our turn settled, and which
+            // of them show the marker as emitted output. The prompt we sent holds
+            // the marker too, so user rows and the echoed command never count.
+            const lateRows = (ended?.messages ?? []).filter(
+              (message) => !presentAtSettle.has(message.id),
             );
+            const lateOutputIds = lateOutputRowIds(ended?.messages ?? [], presentAtSettle, marker);
+            record.notes.push(
+              `rows after the turn settled: ${lateRows.map((message) => message.role).join(",") || "none"}; late output rows: ${lateOutputIds.length}; phase ${ended?.turn.phase ?? "none"}`,
+            );
+            // OpenCode 2.x promises to resume the session with the output, so on
+            // the opted-in 2.x line a backgrounded command whose output never
+            // arrives is a failure, not an unexercised case.
+            if (platform === "opencode" && OPENCODE_PROTOCOL === "v2" && evidence === "none") {
+              expect(
+                lateOutputIds.length,
+                "OpenCode 2.x resumed the idle session with the background command's output",
+              ).toBeGreaterThan(0);
+            }
             // A foreground run (OpenCode 1.19.5, Pi) returns the output in the
             // call's own result, which proves nothing about a late arrival.
-            if (markerInRow && evidence === "none") {
+            if (lateOutputIds.length > 0 && evidence === "none") {
               // The provider resumed the idle session with the output (OpenCode
-              // 2.x): an idle, backed-off page must catch up with no turn of ours.
+              // 2.x): an idle, backed-off page must catch up with no turn of
+              // ours, on that row itself rather than on our prompt's bubble.
+              const lateRowOnPage = page()
+                .locator(
+                  lateOutputIds
+                    .map((id) => `[data-chat-message-key=${JSON.stringify(id)}]`)
+                    .join(", "),
+                )
+                .getByText(marker)
+                .first();
               const lookedAt = Date.now();
-              await expect(page().getByText(marker).first()).toBeVisible({
+              await expect(lateRowOnPage).toBeVisible({
                 timeout: LOST_ANNOUNCEMENT_BOUND_MS,
               });
               record.timings.lateOutputShownMs = Date.now() - lookedAt;
@@ -1980,10 +2007,11 @@ test.describe("live idle observation", () => {
           const detachedState = await runtimeState();
           record.notes.push(`no-touch runtime after idle wait: ${detachedState ?? "unknown"}`);
           const cadenceOnly = DETACH_WAIT_MS < idleDetachWindowMs(platform);
-          // OpenCode's server lifetime and Codex's engine health are not a
-          // session detach observation. Claude reports whether its CLI is open
-          // (attached) or released by the idle window (detached), as Cursor
-          // and Pi report their SDK sessions.
+          // Claude reports whether its CLI is open (attached) or released by
+          // the idle window (detached), as Cursor and Pi report their SDK
+          // sessions and Codex reports whether its thread is loaded in the
+          // current app-server (todo 7380). Only OpenCode exposes no session
+          // detach state: its server lifetime is not a session observation.
           const reportsSessionDetach = detachedState === "attached" || detachedState === "detached";
           if (cadenceOnly || !reportsSessionDetach) {
             record.status = "not-exercised";

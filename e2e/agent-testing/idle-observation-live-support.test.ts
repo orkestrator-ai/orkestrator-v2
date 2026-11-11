@@ -11,6 +11,8 @@ import {
   freshToolResults,
   freshToolStates,
   shellOutputContainsMarker,
+  lateOutputRowIds,
+  textShowsEmittedMarker,
   gapHistogram,
   discoveryRenewalDelta,
   invalidationCauseDelta,
@@ -207,6 +209,40 @@ describe("idle observation live support", () => {
     ).toBe(true);
     expect(shellOutputContainsMarker(`echo ${marker}`, marker)).toBe(false);
     expect(shellOutputContainsMarker(prompt, marker)).toBe(false);
+  });
+
+  test("late output never counts the case's own prompt or the echoed command", () => {
+    const marker = "IDLEQA-BGOUT-123456";
+    const prompt = `Start this shell command as a background task: sleep 20; echo ${marker}`;
+    // Fresh since the case started, but present when the initial turn settled.
+    const atSettle = new Set(["prompt", "reply"]);
+    const settledOnly = [
+      { id: "prompt", role: "user", content: prompt },
+      { id: "reply", role: "assistant", content: "IDLEQA-BG-1" },
+    ];
+    // The negative regression: a fresh user prompt holds the marker, nothing emitted it.
+    expect(lateOutputRowIds(settledOnly, new Set(), marker)).toEqual([]);
+    expect(lateOutputRowIds(settledOnly, atSettle, marker)).toEqual([]);
+    const quoted = [
+      ...settledOnly,
+      { id: "quote", role: "assistant", content: `I ran: sleep 20; echo ${marker}` },
+      { id: "quote-single", role: "assistant", content: `echo '${marker}'` },
+      { id: "late-user", role: "user", content: marker },
+      { id: "parts-only", role: "assistant", content: [{ type: "text", content: marker }] },
+    ];
+    expect(lateOutputRowIds(quoted, atSettle, marker)).toEqual([]);
+    const resumed = [
+      ...quoted,
+      { id: "status", role: "system", content: `Background command finished:\n${marker}` },
+      { id: "echoed-then-emitted", role: "assistant", content: `echo ${marker} printed ${marker}` },
+    ];
+    expect(lateOutputRowIds(resumed, atSettle, marker)).toEqual(["status", "echoed-then-emitted"]);
+    // A row that already carried the output when the turn settled is not late.
+    expect(lateOutputRowIds(resumed, new Set([...atSettle, "status"]), marker)).toEqual([
+      "echoed-then-emitted",
+    ]);
+    expect(textShowsEmittedMarker(`echo  "${marker}"`, marker)).toBe(false);
+    expect(textShowsEmittedMarker(marker, "")).toBe(false);
   });
 
   test("only failed cases fail a provider", () => {

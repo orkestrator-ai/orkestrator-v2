@@ -278,6 +278,42 @@ export function shellOutputContainsMarker(output: string | undefined, marker: st
   return output?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
 }
 
+/**
+ * True when `text` shows `marker` somewhere other than as the argument of an
+ * `echo`: the command line names the marker, the output it emits does not
+ * repeat the `echo` (todo 0049 task 8).
+ */
+export function textShowsEmittedMarker(text: string, marker: string): boolean {
+  if (!marker) return false;
+  for (let at = text.indexOf(marker); at !== -1; at = text.indexOf(marker, at + 1)) {
+    if (!/\becho\s+["']?$/.test(text.slice(0, at))) return true;
+  }
+  return false;
+}
+
+/**
+ * Ids of rows that can carry a backgrounded command's late output: non-user
+ * rows that were absent when the initial turn settled and whose text shows the
+ * marker as emitted output, not as the echoed command. The case's own prompt
+ * contains the marker, so a user row never counts, and a row already present
+ * at settle time arrived in the turn we started, not afterwards.
+ */
+export function lateOutputRowIds(
+  messages: readonly { id: string; role: string; content?: unknown }[],
+  presentAtSettle: ReadonlySet<string>,
+  marker: string,
+): string[] {
+  return messages
+    .filter(
+      (message) =>
+        message.role !== "user" &&
+        !presentAtSettle.has(message.id) &&
+        typeof message.content === "string" &&
+        textShowsEmittedMarker(message.content, marker),
+    )
+    .map((message) => message.id);
+}
+
 export interface BackgroundTaskEvidence {
   id: string;
   status: string;

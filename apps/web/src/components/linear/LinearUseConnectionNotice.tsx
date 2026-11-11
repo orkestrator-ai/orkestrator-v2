@@ -1,6 +1,6 @@
 /**
  * "Linear is connected on <machine>": shown on a command node that is not
- * connected while one of its machines is (docs/todo/cross-cutting/7766-
+ * connected while one of its machines is (docs/todo/cross-cutting/7767-
  * linear-boards-per-project-and-coordinator-tools.md, task 2). Use it here
  * asks the command node to copy that machine's key once, over the node link;
  * the key never reaches the window.

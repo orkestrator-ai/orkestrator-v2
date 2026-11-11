@@ -1,6 +1,6 @@
 /**
  * The machines the Linear connect dialog offers (docs/todo/cross-cutting/
- * 7766-linear-boards-per-project-and-coordinator-tools.md, task 1): the one
+ * 7767-linear-boards-per-project-and-coordinator-tools.md, task 1): the one
  * this tab is on, plus every other machine the window knows of that has a
  * project for the same repository (matched by `repositoryHint`, as ticket
  * sync pairs projects). Without a Git remote there is nothing to match on, so

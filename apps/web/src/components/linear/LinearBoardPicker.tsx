@@ -1,6 +1,6 @@
 /**
  * Links a project to one Linear board: a team, optionally narrowed to one
- * Linear project in it (docs/todo/cross-cutting/7766-linear-boards-per-
+ * Linear project in it (docs/todo/cross-cutting/7767-linear-boards-per-
  * project-and-coordinator-tools.md, task 4). The link is keyed by the
  * project's repository, so backend sync takes it to the same repository's
  * project on every machine.

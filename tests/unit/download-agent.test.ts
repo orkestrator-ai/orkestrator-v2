@@ -197,7 +197,7 @@ describe("download-agent", () => {
     }
   });
 
-  test("installs a zip entry, which every darwin OpenCode artifact uses", async () => {
+  test("installs a zip entry", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
     try {
       const contents = "#!/bin/sh\nprintf 'opencode\\n'\n";
@@ -206,14 +206,14 @@ describe("download-agent", () => {
       const destination = path.join(root, "out");
 
       const installed = await downloadAgent({
-        agent: "opencode",
+        agent: "opencode2",
         platform: "linux",
         architecture: "x64",
         directory: destination,
         log: () => undefined,
         artifacts: [
           {
-            name: "opencode",
+            name: "opencode2",
             version: "9.9.9",
             platform: "linux",
             architecture: "x64",
@@ -224,7 +224,7 @@ describe("download-agent", () => {
               allowedHosts: ["downloads.example.test"],
               ...digestBytes(archive),
             },
-            executable: { fileName: "opencode", ...digestOf(contents) },
+            executable: { fileName: "opencode2", ...digestOf(contents) },
           },
         ],
         fetchImpl: async () => new Response(new Uint8Array(archive)),

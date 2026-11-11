@@ -41,11 +41,7 @@ import {
 } from "../../../desktop/scripts/dev/coordinator-live.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
-import {
-  effectiveOpenCodePolicy,
-  openCodeCoordinatorAgent,
-  openCodePermissionRules,
-} from "./opencode-provider-helpers.js";
+import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode2/policy-rules.js";
 
 /**
  * The contract behind the tier a platform is advertised at.
@@ -259,7 +255,8 @@ describe("coordinator read-only conformance", () => {
       pattern: "*",
       action: "deny",
     });
-    expect(openCodeCoordinatorAgent(effective)).toBe("plan");
+    // The coordinator's server runs OpenCode's read-only `plan` agent
+    // (`OPENCODE2_COORDINATOR_AGENT`, `environment-provider.test.ts`).
   });
 
   test("an advisory platform is not offered at the default safety level", () => {

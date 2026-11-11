@@ -118,8 +118,11 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     `TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER`, and no `DELETE` is sent. The
     renderer then shows the restart notice
     (`apps/web/src/lib/tab-teardown-notice.ts`).
-  - OpenCode closes through `apps/backend/src/core/opencode-session-close.ts`
-    and `OpenCodeProvider.closeSession`, never `session.delete`.
+  - OpenCode closes through `OpenCode2Provider.closeSession`
+    (`apps/backend/src/core/opencode2/provider.ts`), which interrupts and
+    forgets the session and never deletes the conversation. The 1.x close
+    (`opencode-session-close.ts`) was removed with OpenCode 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-session-close.ts`).
   - Since #964 the ACP bridge sends `session/close` when the agent advertises
     it (`bridges/acp-bridge/src/acp-session-close.ts`). Grok CLI 1.0.52 keeps
     the conversation afterwards (verified 2026-10-13, see the `session/close`
@@ -247,12 +250,17 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     name, instead of `Session acp-sess` or the start of a path
     (`shortResumeSessionId`, `NativeResumeSessionDialog.tsx`). The row's
     detail (Pi's first message, a message count) stays beside it.
-  - **OpenCode servers start one at a time.** `opencode-host-start.ts` holds
-    every host OpenCode start (environment servers, catalogue and sign-in
+  - **OpenCode servers start one at a time.** `opencode-host-start.ts` held
+    every host OpenCode 1.x start (environment servers, catalogue and sign-in
     servers) from spawn until healthy or exited. A local start whose server
-    exits saying `database is locked` is retried twice (0.5 s, 2 s) and then
-    refused with that reason (`opencode-host-start.test.ts`, which also proves
-    two environments starting together launch one server at a time). The
+    exits saying `database is locked` was retried twice (0.5 s, 2 s) and then
+    refused with that reason (`opencode-host-start.test.ts`, which also proved
+    two environments starting together launch one server at a time). Both
+    were removed with OpenCode 1.x on 2026-11-11
+    (`git show 5f4e27b1c:apps/backend/src/core/opencode-host-start.ts`); host
+    OpenCode 2 starts are serialised host-wide by
+    `OpenCode2HostServerState.startGate`
+    (`apps/backend/src/core/opencode2/host-server-state.ts`). The
     2026-10-21 "silent wait" was the live spec, not the product: the dispatch
     had been refused with the startup error, and
     `paused-interactions-live.spec.ts` ignored the outcome and polled for five

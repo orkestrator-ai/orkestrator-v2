@@ -311,7 +311,6 @@ describe("StorageService store writers", () => {
       "kanban",
       "linear",
       "nodes",
-      "openCode2Sessions",
       "previewServices",
       "publicOperations",
       "setupApprovals",

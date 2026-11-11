@@ -145,6 +145,10 @@ export type GatewayMetricsSnapshot = {
       droppedClients: number;
     }
   >;
+  base64FileReads: Record<
+    string,
+    { count: number; maxBytes: number; buckets: Record<string, number> }
+  >;
   stream: {
     open: number;
     connecting: number;

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
   PINNED_TOOLCHAIN_VERSIONS,
-  agentPlatformForToolchain,
+  agentToolchainsForPlatform,
 } from "@orkestrator/toolchain/manifest";
 import {
   OPENCODE2_DB_PATH,
@@ -13,7 +13,6 @@ import {
   OPENCODE_DB_PATH,
   PROVIDER_PRESERVATION,
   PROVIDER_STATE_LAYOUT,
-  PROVIDER_STATE_TRACED_TOOLCHAINS,
   PROVIDER_STATE_TRACED_VERSIONS,
   persistentStateExports,
 } from "../src/core/container-state-layout";
@@ -33,22 +32,19 @@ describe("provider state layout re-trace", () => {
   // docs/development/upgrade-agents.md, then record the new version.
   test("was traced against every pinned provider version", () => {
     expect(Object.keys(PROVIDER_STATE_TRACED_VERSIONS).sort()).toEqual([...AGENT_PLATFORMS].sort());
-    const platformPins: Record<string, string> = Object.fromEntries(
-      Object.entries(PINNED_TOOLCHAIN_VERSIONS).filter(
-        ([name]) => agentPlatformForToolchain(name) === name,
-      ),
-    );
+    // Each platform's one pinned CLI (OpenCode's is the toolchain's `opencode2`).
+    const platformPins: Record<string, string> = {};
+    for (const platform of AGENT_PLATFORMS) {
+      const tools = agentToolchainsForPlatform(platform);
+      if (tools.length === 0) continue;
+      expect(tools).toHaveLength(1);
+      platformPins[platform] = PINNED_TOOLCHAIN_VERSIONS[tools[0]!];
+    }
+    expect(platformPins.opencode).toBe(PINNED_TOOLCHAIN_VERSIONS.opencode2);
     expect<Record<string, string>>(PROVIDER_STATE_TRACED_VERSIONS).toEqual({
       ...platformPins,
       cursor: cursorSdkPin(),
     });
-    // A platform's second binary (OpenCode 2.x, `opencode2`) is traced on its own.
-    const otherPins: Record<string, string> = Object.fromEntries(
-      Object.entries(PINNED_TOOLCHAIN_VERSIONS).filter(
-        ([name]) => agentPlatformForToolchain(name) !== name,
-      ),
-    );
-    expect(PROVIDER_STATE_TRACED_TOOLCHAINS).toEqual(otherPins);
   });
 
   test("OpenCode 2.x never opens 1.x's database, with or without the persistent mount", () => {

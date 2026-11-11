@@ -33,7 +33,7 @@ function harness(
       if (judgement instanceof Error) throw judgement;
       return judgement;
     },
-    "opencode",
+    "opencode2",
     () => clock,
   );
   return {

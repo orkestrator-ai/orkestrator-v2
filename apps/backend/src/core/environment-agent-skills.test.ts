@@ -569,32 +569,34 @@ describe("environment agent skills scanner", () => {
     expect(scan.skills.some((skill) => skill.name.includes("unknown"))).toBe(false);
   });
 
-  test("uses OpenCode's resolved catalogue for custom and URL-backed skill locations", async () => {
+  test("lists OpenCode project skills from .opencode/skills and .opencode/skill", async () => {
+    // OpenCode 2 has no read-only catalogue command, so its directories are
+    // scanned like every other provider's.
     const worktree = await createWorktree();
-    const customRoot = await createTemporaryDirectory("ork-opencode-catalogue-");
-    const skillPath = path.join(customRoot, "remote-review", "SKILL.md");
-    await fs.mkdir(path.dirname(skillPath), { recursive: true });
-    await fs.writeFile(skillPath, "# Resolved remote skill\n");
-    const stdin = JSON.stringify([
-      {
-        name: "remote-review",
-        description: "Resolved by OpenCode",
-        location: skillPath,
-      },
-    ]);
+    const plural = path.join(worktree, ".opencode", "skills", "review", "SKILL.md");
+    const singular = path.join(worktree, ".opencode", "skill", "deploy", "SKILL.md");
+    for (const [file, name] of [
+      [plural, "review"],
+      [singular, "deploy"],
+    ] as const) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, `---\nname: ${name}\n---\n\n# ${name}\n`);
+    }
 
-    const listed = runScanner(worktree, "opencode", "list", "", { stdin });
+    const listed = runScanner(worktree, "opencode", "list");
     expect(listed.exitCode).toBe(0);
-    expect(JSON.parse(listed.stdout.toString()).skills).toContainEqual(
-      expect.objectContaining({
-        name: "remote-review",
-        filePath: skillPath,
-      }),
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string; scope: string }>;
+    };
+    expect(scan.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "review", filePath: plural, scope: "project" }),
+        expect.objectContaining({ name: "deploy", filePath: singular, scope: "project" }),
+      ]),
     );
-
-    const read = runScanner(worktree, "opencode", "read", skillPath, { stdin });
+    const read = runScanner(worktree, "opencode", "read", plural);
     expect(read.exitCode).toBe(0);
-    expect(JSON.parse(read.stdout.toString()).content).toContain("Resolved remote skill");
+    expect(JSON.parse(read.stdout.toString()).content).toContain("# review");
   });
 
   test("bounds root traversal and skill file reads", async () => {

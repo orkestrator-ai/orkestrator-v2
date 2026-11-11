@@ -16,6 +16,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
 | `orkestrator-git-credential.sh` | Git credential helper that reads the GitHub token file |
+| `opencode-cli.sh`       | A terminal's `opencode`: the image's OpenCode 2.x with the server's database |
 | `verify-playwright.cjs` | Launches Chromium; run at build time and on demand       |
 | `verify-root-boundary.sh` | Build-time check that root uses nothing `node` can write |
 | `tests/root-boundary-smoke.sh` | Plants files as `node` in a built image; root must run none |
@@ -33,24 +34,27 @@ Runtimes:
 - Node.js 24 LTS, installed over the base image and verified against the
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
-Agent CLIs, one per supported platform (two for OpenCode while it moves to 2.x):
-- Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), and Pi
+Agent CLIs, one per supported platform:
+- Claude Code (`claude`), Codex (`codex`), OpenCode 2.x (`opencode2`), and Pi
   (`pi`), whose runtime paths the backend reads from `CLAUDE_CLI_PATH`,
-  `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
+  `CODEX_CLI_PATH`, `OPENCODE2_CLI_PATH`, and `PI_CLI_PATH`.
 - Grok Build (`grok`) is downloaded as a hash-verified pinned artifact. Pi is
   downloaded the same way, as a bundle rather than a single file.
-- OpenCode 1.x is root-owned in `/opt/opencode/bin`; `OPENCODE_CLI_PATH`
-  (`/home/node/.opencode/bin/opencode`) is a symlink to it. The container's
-  server runs it through the launcher (`opencode-launch=1`), so it must stay
+- OpenCode is 2.x only, from its hash-verified npm platform tarball
+  (`ARG OPENCODE2_CLI_VERSION`, the toolchain's `opencode2` pin). The binary is
+  root-owned at `/opt/opencode/bin/opencode2`; `OPENCODE2_CLI_PATH`
+  (`/home/node/.opencode/bin/opencode2`) is a symlink to it. The container's
+  server runs it through the launcher (`opencode2-launch=1`) on port 4102
+  (`apps/backend/src/core/opencode2-container-server.ts`), so it must stay
   root-owned: a binary node could replace would run beside the password.
-- OpenCode 2.x is installed beside 1.x as `opencode2`
-  (`OPENCODE2_CLI_PATH`, `/home/node/.opencode/bin/opencode2`) from its
-  hash-verified npm platform tarball, for the 2.x provider being built
-  (`docs/todo/agent-engines/0008-opencode-v2.md`). The backend starts it on
-  container port 4102 for OpenCode sessions on the 2.x line
-  (`apps/backend/src/core/opencode2-container-server.ts`), with its own
-  `OPENCODE_DB` (`opencode2.db`) and an `OPENCODE_CONFIG_DIR` holding only
-  Orkestrator's plugins.
+- A terminal's `opencode` is `docker/opencode-cli.sh`, installed root-owned as
+  `/opt/opencode/bin/opencode` and linked from node's `~/.opencode/bin`: it
+  runs the 2.x binary with `OPENCODE_DB` defaulting to the server's
+  `opencode2.db` (never 1.x's `opencode.db`, which 2.x would migrate). The
+  backend rewrites a container OpenCode tab's launch to the 2.x TUI itself
+  (`apps/backend/src/core/opencode2/container-terminal-launch.ts`). OpenCode
+  1.x, its `OPENCODE_CLI_VERSION` and `OPENCODE_CLI_PATH`, its port 4096 and
+  its `opencode-launch=1` launcher kind are retired.
 - The image build fails immediately if any managed CLI is not runnable, and if
   Codex did not vendor `codex-code-mode-host` beside its binary.
 
@@ -71,16 +75,16 @@ Prebuilt bridge servers, so a container never builds them at runtime:
   (dash reads no startup file; bash would read `$BASH_ENV`), and call every
   program by a root-owned path. Never make it source anything `node` can write
   ([agent-approvals.md](../docs/architecture/agent-approvals.md#fixed-launch-bridge-launch1)).
-  With `opencode-launch=1` it also starts OpenCode 1.x, from `/workspace`, with
-  its configuration in root-owned `/run/orkestrator-opencode`. OpenCode takes a
-  plain password, so that branch must never put a backend value in any argv
-  (every argv is readable by `node`) nor leave a long-lived wrapper holding
-  one in its environment
-  ([agent-approvals.md](../docs/architecture/agent-approvals.md#opencode-under-the-launcher-opencode-launch1)).
+  With `opencode2-launch=1` it also starts the OpenCode server, from
+  `/workspace`, with its configuration in root-owned `/run/orkestrator-opencode2`.
+  OpenCode takes a plain password, so that branch must never put a backend
+  value in any argv (every argv is readable by `node`) nor leave a long-lived
+  wrapper holding one in its environment
+  ([agent-approvals.md](../docs/architecture/agent-approvals.md#opencode-2x-the-package-cache-and-project-configuration-opencode2-launch1)).
 
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the
-filtered workspaces do not install OpenCode themselves.
+filtered workspaces do not install the patched packages themselves.
 
 Layer order is by how often a layer changes, rarest first, because a changed
 layer re-pulls every layer after it: agent CLIs and the browser, then starship

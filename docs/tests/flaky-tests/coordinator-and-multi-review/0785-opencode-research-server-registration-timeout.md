@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `OpenCode coordinator research servers > registers a research server and allows exactly its tools`
-- **Owning file:** `apps/backend/src/core/opencode-coordinator-research-live.test.ts`
+- **Owning file:** `apps/backend/src/core/opencode-coordinator-research-live.test.ts` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:apps/backend/src/core/opencode-coordinator-research-live.test.ts`)
 - **Parents:** feature `2e7edbc161b60cb188437783168f8bc8135f5953` and main `95c9cb46ae0a2b12fbc10ff73fa7c0614b254a0d`.
 - **Original command:** `ORKESTRATOR_TEST_AREA_BASE=0014505caeed69395b3cc996dd541fcc6df12c23 mise run test:logged -- --name refresh-0043-suite -- mise run test`.
 - **Worker configuration:** default 4/1/2/1 workspace/root/bridge/protocol reservations; two backend Bun workers, alongside browser and Electron checks.
@@ -152,3 +152,8 @@ registration test or relying on added diagnostic logging.
 The subsequent full `mise run test` also passed all four groups (380.2 s),
 including this owner in the normal parallel backend suite. Evidence:
 `/tmp/orkestrator-test-run.1JOfGg/summary.json`.
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

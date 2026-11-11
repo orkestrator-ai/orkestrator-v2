@@ -41,8 +41,7 @@ export interface ResumableSession {
   archived?: boolean;
   /**
    * `false` hides this row's remove/restore control even where the dialog has
-   * `onArchive`: an OpenCode list mixes 1.x conversations, which cannot be
-   * archived, with 2.x ones, which can.
+   * `onArchive`: a row its provider cannot archive.
    */
   archivable?: boolean;
 }

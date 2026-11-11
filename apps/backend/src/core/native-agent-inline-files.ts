@@ -1,7 +1,7 @@
 /**
  * How the native projection treats a file or image part's inline data URL.
  *
- * A leaf module on purpose: OpenCode's window estimate (`opencode-snapshots.ts`)
+ * A leaf module on purpose: OpenCode's window estimate (`opencode2/transcript-snapshot.ts`)
  * has to predict a row's projected size with the very rule `projectionPart`
  * applies, and the projection's shared module sits above the providers.
  */

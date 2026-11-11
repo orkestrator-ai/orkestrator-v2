@@ -1,6 +1,6 @@
 /**
  * Connect Linear on this machine and, optionally, on every other machine
- * with the same repository (docs/todo/cross-cutting/7766-linear-boards-per-
+ * with the same repository (docs/todo/cross-cutting/7767-linear-boards-per-
  * project-and-coordinator-tools.md, task 1). The window sends the pasted key
  * to each ticked machine's own backend, which verifies and stores it; no
  * backend sends it to another. The key lives only in this dialog's state: it

@@ -18,10 +18,9 @@
  * launch path and the health summary all import it.
  */
 
-/** Every provider a bridge can be started for. `opencode2` is the host OpenCode 2 server. */
+/** Every provider a bridge can be started for; `opencode` is the OpenCode server. */
 export const BRIDGE_RESTART_PROVIDERS = [
   "opencode",
-  "opencode2",
   "claude",
   "codex",
   "cursor",

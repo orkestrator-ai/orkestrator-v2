@@ -10,7 +10,6 @@ export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
-export type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 export type { LinearStorage } from "./storage-linear.js";
@@ -47,7 +46,6 @@ import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
-import type { OpenCode2SessionsStorage } from "./storage-opencode2-sessions.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { TicketSyncStorage } from "./storage-kanban-sync-repository.js";
 import type { LinearStorage } from "./storage-linear.js";
@@ -183,7 +181,6 @@ export class StorageService {
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
-  readonly openCode2Sessions: OpenCode2SessionsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -207,7 +204,6 @@ export class StorageService {
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
     this.watchedPullRequests = this.repos.watchedPullRequests;
-    this.openCode2Sessions = this.repos.openCode2Sessions;
   }
 
   async init(): Promise<void> {
@@ -1085,7 +1081,6 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
           | "modelSubstitutionNotice"
         >
       >,
@@ -1124,7 +1119,6 @@ export class StorageService {
           | "executionPolicy"
           | "policy"
           | "initialPromptPresentation"
-          | "openCodeProtocol"
         >
       > & {
         expectedProviderSessionId?: string;

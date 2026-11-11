@@ -3,8 +3,7 @@
  * dispatch (`POST /api/session/:id/command`), following
  * docs/architecture/native-agent-commands.md (build plan phase 5).
  *
- * The 1.x rules carry over unchanged, so the 1.x registry and resolver are
- * reused rather than copied (`opencode-commands.ts`):
+ * The registry and resolver live in `command-catalogue.ts`:
  *
  * - **Nothing is seeded.** The rows are exactly what the server lists for the
  *   session's directory; an empty list stays empty and a failed read is an
@@ -37,7 +36,7 @@ import {
   resolveOpenCodeCommandDispatch,
   type OpenCodeCommandDispatch,
   type OpenCodeCommandInventory,
-} from "../opencode-commands.js";
+} from "./command-catalogue.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import type { OpenCode2FileInput } from "./types.js";
 
@@ -73,9 +72,9 @@ export function resolveOpenCode2CommandDispatch(
   prompt: string,
   options: Pick<ProviderSendOptions, "command" | "allowProviderCommands" | "schema" | "readOnly">,
 ): Promise<OpenCodeCommandDispatch | null> {
-  // No coordinator agent here: a coordinator's 2.x provider refuses every
-  // selected command before this runs (`coordinator.ts`).
-  return resolveOpenCodeCommandDispatch(registry, prompt, options, undefined);
+  // A coordinator's 2.x provider refuses every selected command before this
+  // runs (`coordinator.ts`), so no agent check is needed here.
+  return resolveOpenCodeCommandDispatch(registry, prompt, options);
 }
 
 /**

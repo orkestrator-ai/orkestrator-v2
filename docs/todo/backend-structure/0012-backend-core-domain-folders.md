@@ -370,7 +370,8 @@ left open on purpose: they move many files that other work in flight touches.
   folder: 7 production files in `apps/backend/src/core/`
   (`bridge-session-close.ts`, `host-model-catalog-refresh.ts`,
   `log-policy-service.ts`, `native-agent-provider.ts`,
-  `opencode-provider-login.ts`, `opencode-sdk-client.ts`,
+  `opencode-provider-login.ts`, `opencode-sdk-client.ts` (removed with
+  OpenCode 1.x on 2026-11-11),
   `session-held-model.ts`) using six symbols; 10 co-located tests at the
   root, plus one test that lists file names (`agent-provider-boundaries.test.ts`);
   3 `apps/backend/tests` files and `apps/backend/scripts/conditional-reads-baseline.ts`

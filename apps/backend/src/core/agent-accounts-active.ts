@@ -161,13 +161,9 @@ export async function localBridgeIsOnActiveAccount(
   context: CommandContext,
 ): Promise<boolean> {
   const localServers = context.runtime.localServers;
-  if (kind === "opencode") {
-    // OpenCode has no accounts, but a server keeps the provider credentials it
-    // loaded until restarted, so a provider signed in from the app since
-    // launch moves it over once idle.
-    if (!localServers.hasStaleLogin(key)) return true;
-    return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
-  }
+  // OpenCode has no accounts, and its server reads provider credentials from
+  // its database per use, so a sign-in reaches a running server without a
+  // restart.
   if (kind !== "claude" && kind !== "codex") return true;
   const launchedWith = localServers.launchedAccountId(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);

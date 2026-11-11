@@ -20,7 +20,10 @@
  */
 import { createLogger } from "@orkestrator/protocol/logger";
 import { ProviderUnavailableError } from "./agent-provider-contract.js";
-import type { OpenCodeListenerJudgement } from "./opencode-listener-identity.js";
+import type {
+  OpenCodeListenerJudgement,
+  OpenCodeServerKind,
+} from "./opencode-listener-identity.js";
 
 const log = createLogger("docker");
 
@@ -73,7 +76,7 @@ export const OPENCODE_LISTENER_RECHECK_INTERVAL_MS = 5_000;
 export function openCodeListenerRecheckFetch(
   inner: typeof fetch,
   recheck: OpenCodeListenerRecheck,
-  provider: "opencode" | "opencode2",
+  provider: OpenCodeServerKind,
   now: () => number = Date.now,
 ): OpenCodeListenerRecheckFetch {
   let replaced = false;

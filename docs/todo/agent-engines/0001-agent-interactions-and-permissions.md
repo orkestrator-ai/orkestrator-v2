@@ -452,8 +452,10 @@ or a person.
    `providerReportedInteractions`, `PROVIDER_REPORTED_INTERACTION_GRACE_MS`).
    The interaction monitor now sees only what its sweep reads. Tests that
    drove the branch were deleted; "leaves OpenCode permissions and questions
-   pending for the journaled path" (`opencode-provider-lifecycle.test.ts`)
-   checks that even an unattended registration gets no provider-side reply.
+   pending for the journaled path" (`opencode-provider-lifecycle.test.ts`,
+   removed with OpenCode 1.x on 2026-11-11:
+   `git show 5f4e27b1c:apps/backend/src/core/opencode-provider-lifecycle.test.ts`)
+   checked that even an unattended registration gets no provider-side reply.
    A future owner that wants provider-side answering should follow
    `agentInteractionPolicyAction` instead of always rejecting.
 6. **Codex project resources.** Done 2026-10-22. With project resources off,

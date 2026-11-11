@@ -19,6 +19,8 @@ import {
   instrumentSqliteConnection,
   MAX_SLOW_STORAGE_SERIES,
   SlowStorageOperations,
+  STORAGE_CALL_BUCKET_MS,
+  STORAGE_CALL_BUCKETS,
   type SlowStorageSample,
 } from "./storage-slow-operations.js";
 
@@ -289,6 +291,27 @@ describe("instrumentSqliteConnection with a virtual clock", () => {
     expect(JSON.stringify(logs().records())).not.toContain("PRIVATE-VALUE");
   });
 
+  test("every outermost call is counted once, slow or not", () => {
+    const { db, recorder, advance } = connection();
+    logs();
+    advance(1_000);
+    // Two statements outside a transaction, each far under the threshold.
+    db.query("SELECT timed_value(?)").get(40);
+    db.query("SELECT timed_value(?)").get(60);
+    // A transaction is one call however many statements it runs.
+    db.transaction(() => {
+      db.query("INSERT INTO stores (name) VALUES (timed_value(?))").run(30);
+      db.query("SELECT timed_value(?) FROM stores").get(20);
+    })();
+    expect(recorder.snapshot().recent).toEqual([]);
+    expect(recorder.stallContext({ fromMs: 1_000, toMs: 1_150 })).toEqual({
+      storageCalls: 3,
+      storageCallMs: 150,
+      storageMainCallMs: 150,
+      storageLedgerCallMs: 0,
+    });
+  });
+
   for (const throws of [false, true]) {
     test(`transaction phases include begin, multiple statements and ${throws ? "rollback" : "commit"}`, () => {
       let clock = 0;
@@ -453,6 +476,49 @@ describe("SlowStorageOperations", () => {
       storageBusy: false,
     });
     expect(recorder.stallContext({ fromMs: 6_000, toMs: 7_000 })).toBeUndefined();
+  });
+
+  test("a stall also counts every call under the threshold, by database", () => {
+    const recorder = new SlowStorageOperations();
+    logs();
+    recorder.recordCall("main", 40, 10_010);
+    recorder.recordCall("ledger", 120, 10_300);
+    recorder.recordCall("ledger", 90, 11_900);
+    recorder.recordCall("other", 5, 11_950);
+    // Outside the window, beyond the bucket at either edge.
+    recorder.recordCall("main", 500, 9_600);
+    recorder.recordCall("main", 500, 12_400);
+    expect(recorder.stallContext({ fromMs: 10_000, toMs: 12_000 })).toEqual({
+      storageCalls: 4,
+      storageCallMs: 255,
+      storageMainCallMs: 40,
+      storageLedgerCallMs: 210,
+    });
+    // A slow operation in the window adds its own fields beside the counts.
+    recorder.record(sample({ endedAtMs: 11_000, durationMs: 300 }));
+    expect(recorder.stallContext({ fromMs: 10_000, toMs: 12_000 })).toMatchObject({
+      storageCalls: 4,
+      storageMs: 300,
+      storageLongestMs: 300,
+    });
+    expect(recorder.stallContext({ fromMs: 20_000, toMs: 21_000 })).toBeUndefined();
+  });
+
+  test("call buckets from an older lap of the ring read as empty", () => {
+    const recorder = new SlowStorageOperations();
+    const lap = STORAGE_CALL_BUCKET_MS * STORAGE_CALL_BUCKETS;
+    recorder.recordCall("main", 70, 1_000);
+    // The same slot one lap later: the old total is not carried into it.
+    recorder.recordCall("main", 30, 1_000 + lap);
+    expect(recorder.stallContext({ fromMs: 1_000, toMs: 1_100 })).toBeUndefined();
+    expect(recorder.stallContext({ fromMs: 1_000 + lap, toMs: 1_100 + lap })).toMatchObject({
+      storageCalls: 1,
+      storageCallMs: 30,
+    });
+    // A window longer than the ring sums only its newest lap.
+    expect(recorder.stallContext({ fromMs: 0, toMs: 1_100 + lap })).toMatchObject({
+      storageCalls: 1,
+    });
   });
 
   test("a stall counts only storage time inside either edge of its window", () => {

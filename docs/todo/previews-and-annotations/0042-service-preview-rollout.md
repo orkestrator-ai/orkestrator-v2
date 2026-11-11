@@ -69,7 +69,7 @@ data with a hostile worker, tunnel liveness (D2) and gated runs (D3).
 Desktop for macOS, not Windows. It gates the relay default.
 
 **Context.** Also tracked in
-[0019](../containers-and-environments/0019-container-platform-qualification.md).
+0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md)).
 
 **Investigation.** The suite is `mise run test:preview:docker`; nothing in it
 is Windows-specific. On 2026-11-04 the maintainer said Windows support is not
@@ -2211,7 +2211,7 @@ adoption now rejects a renderer write-back.
   (the gateway security spec's cases, run in the same Safari pass as task 3).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for batching the macOS, Electron, two-machine and Safari runs;
-  [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
+  0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop.
 - [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md):
   egress policy must keep published loopback ports and relay stdio working.

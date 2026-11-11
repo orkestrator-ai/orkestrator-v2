@@ -580,7 +580,7 @@ probe now sends one every 100 ms.
 
 ## Related
 
-- [0019-container-platform-qualification.md](0019-container-platform-qualification.md)
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   (Desktop and arm64 runs, registry pull time),
   [0020-container-state-observation.md](0020-container-state-observation.md) (per-container
   `docker exec` polling), [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md).

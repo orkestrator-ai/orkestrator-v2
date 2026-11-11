@@ -8,8 +8,12 @@ Unit and integration tests run the container lifecycle against a fake
 permissions, name conflicts or signal delivery, so lifecycle, storage, network
 and image changes are also qualified against a real daemon. How the lifecycle
 works is in [container-lifecycle.md](../architecture/container-lifecycle.md);
-the platforms and providers still waiting for evidence are in
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+the platforms and providers still waiting for evidence are in the
+[containers to-do folder](../todo/containers-and-environments/0000-index.md)
+and, for runs that need the user, the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+To-do 0019, which tracked the qualification until 2026-11-11, is retired;
+its evidence record is in Git history (`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Rules
 
@@ -291,6 +295,134 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Linux Engine CI results and Docker daemon restarts (2026-11-11)
+
+The last two tasks of to-do 0019 (retired 2026-11-11; its earlier evidence
+record is in Git history,
+`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`):
+recording the Linux Engine CI results (task 1) and a daemon-wide Docker
+restart during a launch and during a rebuild copy (task 5). Run in worktree
+`orkestrator-v2-20261111-021056-7529cd0810ee` at `main` `498b68766` plus
+this change, on beelink.
+
+### Linux Engine CI (task 1)
+
+Read on 2026-11-11 from the public GitHub Actions API without signing in
+(run, job and step results and the check-run annotations). Step logs and
+artefact downloads need a signed-in client, so these runs' image digests,
+Engine version and benchmark reports were not read; the 2026-10-26 runs
+reported Engine 28.0.4, and the benchmark numbers through run 40746551838
+are in [Benchmarks on Linux Engine CI](#benchmarks-on-linux-engine-ci-and-the-call-and-start-time-misses-2026-10-28).
+Every run below covers `ubuntu-24.04` (linux-x64) and `ubuntu-24.04-arm`
+(linux-arm64), with the same result on both.
+
+| Run | Event, commit | Date | Result |
+| --- | --- | --- | --- |
+| 40304582303 | weekly, `main` `f1223e0bb` | 2026-10-26 | Only "Live lifecycle" failed: C20 found no `~/.codex/auth.json` because the runner's uid is not 1000; fixed by the staged-input relay (to-do 0109, retired) |
+| 41443896856 | weekly, `main` `7f094c21a` | 2026-11-02 | Only "Live staged mount consumers" failed: `staged-input-relay-docker.test.ts:64`, the test's own mount list lacked `agents-skills`, which the entrypoint had declared since #1589. The list was updated in `6ae99a3ed` (#1670, 2026-11-03) |
+| 42620164217 | weekly, `main` `448e9fffb` | 2026-11-09 | Every step passed except "Live build pipeline code rewind": `build-pipeline-code-rewind-docker.test.ts:514` expected the backlog move without `preserveDoneStatus: true`, which the pipeline had started sending. The expectation was updated in `1e491c075` (#2004), merged the same day after this run |
+| 42914911207 | pull request #2105, a merge of `main` (merged as `85732c93e`) | 2026-11-10 | **Every step passed**, all 30 live steps and the benchmarks, on both architectures |
+
+- **C14 on any host uid.** "Live replacement (C14-C19)" passed on both
+  architectures in 42620164217 and 42914911207, the green CI run to-do 0728
+  waited for (retired 2026-11-11; its fix is recorded in
+  [C14 staged inputs on any host uid](#c14-staged-inputs-on-any-host-uid-linux-engine-2026-10-28)).
+- **C22 host-level reachability verdict: pass.** macOS reports host-level
+  reachability as not applicable; on Linux Engine it is a real result.
+  "Live network (C22, C24, C26)" passed on both architectures in
+  42620164217 and 42914911207. The C22 case asserts that the backend's own
+  host discovery reports `reachable`, that exactly the agent-tools service
+  port leaves a restricted runtime for `host.docker.internal`, and that
+  another host port and a sibling's published port are refused (curl exit 7).
+  "Live rootful host reach without a host firewall" passed in the same runs.
+- Neither red weekly run was a product failure: both were test
+  expectations that had fallen behind a change made elsewhere, and both are
+  fixed on `main`.
+
+### Docker daemon restart during launch and rebuild copy (task 5)
+
+Two scenarios, each run only when `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND`
+names a command that restarts the suite's daemon (never point it at a
+shared daemon):
+
+- `container-live-readiness.test.ts`, "C09/readiness: a Docker daemon
+  restart during launch never releases the previous boot": a launch is held
+  before `ready` (the held-boot image), the whole daemon restarts, and the
+  launch must either wait for the boot that survived or be refused, typed and
+  retryable, with nothing dispatched; an explicit retry then reaches
+  `ready` on a new boot.
+- `container-live-rebuild-faults.test.ts`, "C15 Docker daemon restart
+  during the rebuild copy": a preserving rebuild of a volume-backed
+  environment with a 3 GiB workspace file
+  (`ORKESTRATOR_LIVE_RESTART_COPY_MIB` lowers it) restarts the daemon the
+  moment a copy helper is running. Nothing may commit, the failure must name
+  the outage, the original stays authoritative with its files, Git state and
+  provider databases intact, the `--rm` helper must not outlive the restart,
+  a kept candidate set is listed, not restorable and discards cleanly, and a
+  second rebuild once Docker is back must succeed with the same files.
+
+```bash
+mise run docker:disposable -- start --mode rootful --name q19r --image <image>   # also --live-restore, and the rootless default
+eval "$(mise run docker:disposable -- env --name q19r)"
+export TMPDIR=$ORKESTRATOR_DISPOSABLE_DOCKER_SHARED_DIR/tmp   # rootless: a directory without nosuid/nodev
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> ORKESTRATOR_QUALIFICATION_EVIDENCE=<file> \
+  mise run test:logged -- --name daemon-restart -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1 \
+  --test-name-pattern 'Docker daemon restart'
+# the same with ./tests/container-live-rebuild-faults.test.ts
+mise run docker:disposable -- stop --name q19r
+```
+
+Image `orkestrator-v2:qual-0019-498b6876` (`sha256:cf14de85…`, built with
+`docker/build.sh` from this worktree). Daemons: `docker:disposable`'s nested
+rootful daemon (`docker:29.9.3-dind`) with `live-restore` off and, as a
+second instance, on; and its rootless daemon (Docker 29.9.2 under
+RootlessKit, slirp4netns, `live-restore` off), all on beelink (Linux
+7.1.8, x86_64). Observations come from each scenario's evidence line.
+
+| Daemon | Launch restart | Rebuild-copy restart |
+| --- | --- | --- |
+| Rootful, `live-restore` off | Pass (three times; the restart took 2.8, 3.7 and, in the whole-file run with earlier scenarios' containers still running, 12.9 s). The restart stopped the held container; the launch was refused `not-ready` `failed:container-exited`, nothing launched, and the retry reached `ready` on a new boot | Pass (three times). The restart (1.8–3.4 s) landed 0.3–0.4 s into a copy that took 14.5–18.9 s undisturbed, with `copy-volume /source /storage/workspace` running; the rebuild failed `daemon-unavailable` before `verified`, the helper was gone after the restart, one failed-candidate set was kept and discarded, and the retry rebuilt with identical files |
+| Rootful, `live-restore` on | Pass. Before the fix below the launch was refused as `container-exited` although the container and its boot kept running; after it, the launch waited through the restart (3.1 s) and became ready on the boot that survived, with exactly one agent launch | Pass. The restart (7.7 s) landed 0.6 s into a 14.6 s copy; `daemon-unavailable`, nothing committed; the helper kept running past the restart and was gone shortly after; failed candidate discarded, retry identical |
+| Rootless | Pass. Restart 3.7 s; refused `failed:container-exited`, retry ready on a new boot | Pass on the second attempt. The restart (2.8 s) landed 0.4 s into a 5.9 s copy; `daemon-unavailable`, nothing committed, helper gone, failed candidate discarded, retry identical. The first attempt never reached the restart: the setup's legacy migration hung in a `copy-stream` helper whose input never ended, 46 s after the launch scenario had restarted this daemon twice; recorded in [7705](../todo/containers-and-environments/7705-rootless-copy-stream-stdin-never-closes.md) |
+
+**Found and fixed: a daemon outage read as an exited container.** The
+readiness wait asks `docker inspect` whether a container it cannot reach is
+still running, and it took a failed `inspect` to mean "not running". During
+a daemon restart that turned an unreachable daemon into a `container-exited`
+refusal even when the container never stopped (`live-restore`), so a launch
+that would have become ready a few seconds later had to be retried by hand.
+`containerRunState` (`container-readiness.ts`) now reports an unanswered
+daemon (the CLI's "cannot connect" wording, or a timeout) as unknown, and the
+wait keeps polling until its deadline; a failed `inspect` for any other
+reason (a container that no longer exists) still reads as exited. Unit
+tests in `container-readiness.test.ts` cover a daemon that returns and one
+that never does (a `timed-out` refusal, never `container-exited`); the first
+fails without the fix.
+
+**CI.** `container-live-qualification.yml` gains a last step, "Live Docker
+daemon restart (C09, C15)", that runs both scenarios with
+`ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND="sudo systemctl restart docker"`
+(the runner's own daemon, `live-restore` off) and a 1 GiB copy, so the
+restart is qualified weekly on both architectures. It runs after every other
+step so no other suite shares a restarted daemon. Its first run is this
+change's pull request; it had not run when this was written.
+
+**Also run.** The whole readiness file on the rootful daemon: 9/10, the
+tenth being the C22 host-service reply, which reports itself INCOMPLETE
+because beelink's host firewall closes the agent-tools path from the nested
+daemon's containers (see the disposable daemon's "Not covered by it" above
+and [7080](../todo/containers-and-environments/7080-linux-host-firewall-blocks-profile-signals.md)).
+The whole rebuild-fault file on the rootful daemon: 6/6.
+
+**Not covered.** A Docker Desktop quit (the macOS VM going away) during a
+launch and a rebuild copy: it needs a Mac whose Desktop nothing else is
+using, and is an item in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)
+("0019 (retired) task 5"). The gateway's own daemon-restart case is the
+[live egress conditions](#suites) suite's, which CI still runs without a
+restart command.
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -419,7 +551,7 @@ Linux daemon, through the launcher's [nested rootful mode](#nested-rootful-mode)
 
 ## Rootless budget read-back without `cpu` delegation (2026-11-10)
 
-To-do [0019](../todo/containers-and-environments/0019-container-platform-qualification.md)
+To-do 0019 (retired 2026-11-11)
 task 2: on a rootless daemon whose user is delegated `memory pids` but not
 `cpu`, does Docker's reported capacity match what the cgroup enforces, and
 does the budget read-back stay truthful?
@@ -1993,7 +2125,7 @@ the boot's readiness step, and it is quantised:
 
 ## C14 staged inputs on any host uid, Linux Engine (2026-10-28)
 
-Todo [0728](../todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md),
+Todo 0728 (retired 2026-11-11, once CI passed; `git show 498b68766:docs/todo/containers-and-environments/0728-container-ci-c14-assumes-uid-1000.md`),
 on omarchy-hp (rootful Docker Engine 29.9.1, x86_64, cgroup v2), with the
 workspace image `orkestrator-v2:qual-0728-2ddc39c4` (`sha256:d2a42ea4…`,
 `docker build $(bun scripts/docker-image-build-args.ts)`). This host's user
@@ -2422,8 +2554,8 @@ read-only mode (delete and allowlist edits ignored a newer writer's marker).
 C13 now passes for Codex, OpenCode, Cursor and Pi; the full-network fixture
 and root terminal passed `test:agent:docker`; and every benchmark target was
 met at load 18. Rootless was exercised in a nested `docker:dind-rootless`
-only. Evidence, decisions and what remains are in
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md#results-2026-10-23).
+only. Evidence and decisions are in to-do 0019's "Results, 2026-10-23" (retired;
+`git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 
@@ -2462,7 +2594,7 @@ This run caught two problems. Three of the opt-in Docker suites (lifecycle,
 network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
-in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+in to-do 0019 (retired; `git show 498b68766:docs/todo/containers-and-environments/0019-container-platform-qualification.md`).
 
 ## Build-pipeline rewind review evidence (2026-11-01)
 

@@ -3,8 +3,8 @@
 Living guide to how the backend owns environment containers. Qualifying a
 change against a real daemon is in
 [container-qualification.md](../development/container-qualification.md);
-outstanding work is in `docs/todo/containers-and-environments/`, starting with
-[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+outstanding work is in `docs/todo/containers-and-environments/`
+([index](../todo/containers-and-environments/0000-index.md)).
 
 ## Authority
 

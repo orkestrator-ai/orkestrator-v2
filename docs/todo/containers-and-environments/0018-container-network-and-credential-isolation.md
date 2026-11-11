@@ -159,7 +159,7 @@ secondary settings.
 
 **Problem.** Three gateway conditions have not been run on any engine: a daemon with IPv6 enabled, a Docker daemon restart with stopped runtimes and gateways, and real DNS rotation. Each could leave a runtime unrestricted, or unable to start, in a way the current suites would not catch.
 
-**Context.** The file lists all three as owed for the gateway. 0019 owes DNS rotation and IPv6 for its packet matrix too. The constraints require IPv6 to stay dropped unless it is enforced.
+**Context.** The file lists all three as owed for the gateway. 0019 (retired 2026-11-11) listed DNS rotation and IPv6 for its packet matrix too. The constraints require IPv6 to stay dropped unless it is enforced.
 
 **Investigation.** IPv6 is closed twice. The gateway is created with `net.ipv6.conf.all.disable_ipv6=1` (`egress-gateway.ts:157`) and in-container runtimes get the same sysctl (`commands-containers.ts:627`). On top of that, `docker/init-firewall.sh:84`-`:97` sets `ip6tables` DROP, or fails if IPv6 is configured with no `ip6tables`. C22 asserts that IPv6 is `blocked` or `disabled` (`apps/backend/tests/container-live-network.test.ts:210`). No live test restarts the Docker daemon: nothing under `apps/backend/tests` does, and runtimes have no restart policy by design. DNS re-resolution is covered only by the C23 refresh test and the forged-DNS tuple test (`container-live-firewall.test.ts:579`-`:592`), not by a domain whose real addresses rotate.
 
@@ -885,7 +885,7 @@ moved to the manual-test checklist (7568).
   Codex half of the same property passed live that day (next item). The
   live Grok run moved to the manual-test checklist (7568) on 2026-11-10.
 - Codex past expiry, run on 2026-10-21 (details in
-  [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
+  0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md)),
   "Results, 2026-10-21"). With the container's own access token past its
   `exp`, Codex 0.162.1 tried a refresh with the blank refresh token, OpenAI
   answered 400 `empty_string`, and turns failed. The container held no
@@ -920,12 +920,14 @@ moved to the manual-test checklist (7568).
   - Skipped: a real Grok call, because the host is signed out of Grok (see
     above).
 - The Desktop and arm64 packet matrix and live credential rotation are
-  tracked in [0019-container-platform-qualification.md](0019-container-platform-qualification.md).
+  tracked in to-do 0019 (retired 2026-11-11; the evidence is in
+  [container qualification](../../development/container-qualification.md)).
   Allowed provider access, blocked destinations, host callbacks, sibling
   isolation and firewall initialisation failure passed live on Docker Desktop
   on 2026-10-25, behind the egress gateway (above). For the gateway, DNS
   rotation and IPv6 passed on a disposable Linux Engine on 2026-10-31
-  (task 3); 0019's own packet matrix tracks its remaining platforms.
+  (task 3); 0019's packet matrix closed on 2026-11-11 with Linux Engine CI
+  passing C22 on both architectures ([container qualification](../../development/container-qualification.md#linux-engine-ci-task-1)).
 - Policy 3 port tuples ran live on Docker Desktop (Engine 29.9.2, arm64) on
   2026-10-25, through the egress gateway and with the in-container
   firewall. C22 showed that an allowed domain answers on 443, another port on
@@ -1243,7 +1245,7 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
 
 ## Related
 
-- [0019-container-platform-qualification.md](0019-container-platform-qualification.md),
+- 0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md)),
   [7548-rootless-gvisor-tap-vsock-host-loopback.md](7548-rootless-gvisor-tap-vsock-host-loopback.md)
   and [7549-rootless-docker-cp-refusals.md](7549-rootless-docker-cp-refusals.md)
   (rootless gaps left after 0109, retired on 2026-11-10; staged inputs and

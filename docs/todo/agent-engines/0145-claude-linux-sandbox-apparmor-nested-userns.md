@@ -46,9 +46,11 @@ run 2026-11-10 against `main` at `c98b20e6f`; tasks 1, 3 and 5 re-analysed
 
 **Investigation.** The CI pair already proves the backend tier the picker and Agent Info read ("This proves the authoritative backend tier"); the open question was only 24.04's probe and CLI answer. Done on 2026-11-11, short of the run itself:
 - `.github/workflows/claude-apparmor-qualification.yml` runs on `ubuntu-24.04` weekly, on demand and on pull requests that change the probe, the qualification, the coordinator table, the Claude pin or the workflow. It downloads the pinned CLI, installs `bubblewrap` and `socat`, runs `conformance-apparmor-live.test.ts` in a new phase `stock` before any policy change, applies the same remediation as CI's test shard, runs phase `remediated`, and uploads both JSON reports as `claude-apparmor-ubuntu-2404-<run>-<attempt>`.
-- Phase `stock` (`conformance-apparmor-live.test.ts`) requires no particular answer. It takes the probe's (`available`, `nested-refused` or `outer-refused`; anything else, such as missing programs, fails as a setup error) and then requires the backend tier, run in its own process, to agree with it, and the pinned CLI to behave as the probe predicts: a working sandbox writes, reads and refuses a checkout write under the coordinator policy; a refused one is `provider-configured`, rejected at `enforced`, its hook-only reads and refusals still work, and the real prompt route answers 422 without dispatch. The `apply-seccomp`/`setgroups` and read-only-host scenarios run only where the `bwrap-userns-restrict` profile is installed. The report now also records whether the profile is installed and the two AppArmor sysctls.
-- Phase `restricted` (26.04) is unchanged in what it requires; the backend reason is now compared with the probe's stem as well as the profile name.
+- Phase `stock` (`conformance-apparmor-live.test.ts`) requires no particular answer. It takes the probe's (`available`, `nested-refused` or `outer-refused`; anything else, such as missing programs, fails as a setup error) and then requires the backend tier, run in its own process, to agree with it, and the pinned CLI to behave as the probe predicts: a working sandbox writes, reads and refuses a checkout write under the coordinator policy; a refused one is `provider-configured`, rejected at `enforced`, the real CLI with its sandbox required must not run a reading command (`required-sandbox-refused`: the CLI may refuse the whole turn with "Sandbox required but unavailable" or fail the command, whatever the cause), its hook-only reads and refusals still work, and the real prompt route answers 422 without dispatch. The `apply-seccomp`/`setgroups` and read-only-host scenarios run only where the `bwrap-userns-restrict` profile is installed. The report now also records whether the profile is installed and the two AppArmor sysctls.
+- The report (`stock.json`, `remediated.json`, `restricted.json`) is written as soon as the probe answers and rewritten when the phase ends, with `outcome` (`passed` or `failed`) and `failedStage` (the step that failed, such as `scenario required-sandbox-refused`; never the assertion message, which can quote tool output). A red `stock` run therefore still uploads 24.04's answer (D9).
+- Phase `restricted` (26.04) also runs `required-sandbox-refused` now; otherwise it is unchanged in what it requires. The backend reason is now compared with the probe's stem as well as the profile name.
 - Evidence on `omarchy-hp` (2026-11-11, kernel 7.2.8, bubblewrap 0.13.1, pinned CLI 2.1.319, the local scripted endpoint with fake credentials, from a temporary copy of the test without its Ubuntu and AppArmor checks): phase `stock` passed all three branches. Unmodified host: `available`, `enforced` at both safety levels, `default-sandbox-writes`, `coordinator-sandbox-reads` and `coordinator-sandbox-refuses` as expected. A PATH shim running `bwrap --disable-userns`: `nested-refused`, `provider-configured`, 9 hook-only scenarios and the 422. A PATH shim `bwrap` that always fails: `outer-refused`, the same 9 scenarios and the 422. The phase's selection logic has deterministic tests in the same file (`AppArmor phase expectations`), and `tests/unit/ci-workflows.test.ts` pins the workflow's runner, step order and pinned-CLI path.
+- Re-run after review on `omarchy-hp` (2026-11-11, same host, CLI and method, with `required-sandbox-refused` and the new report): the three honest branches passed, and in both refused ones the CLI started the turn and failed the command (`refusal: "command"`). Two PATH shims that lie to the probe's exact argument vectors only, while the CLI's own `bwrap` runs for real, made the probe answer `outer-refused` and `nested-refused` (no profile) on a working sandbox: both runs failed at `scenario required-sandbox-refused` (the sandboxed read succeeded) and still wrote `stock.json` with `outcome: "failed"`. Before this fix those two answers ran no sandboxed CLI command at all, so the same lie would have passed.
 - Not observed: the workflow has not run yet. Its first run (the pull request carrying it touches its own path) gives 24.04's answer.
 
 **Decisions.**
@@ -500,6 +502,28 @@ a graphical desktop inspection remains in the checklist above.
   one. Shown on `omarchy-hp` for all three answers (task 3).
 - **Pros.** Cannot fail on a correct probe. **Cons.** A green run alone does
   not say which answer 24.04 gave; the uploaded report does.
+
+### D9. Holding a refusal to the CLI, and reporting a red run (task 3, 2026-11-11)
+
+Two review findings on phase `stock`.
+
+- **A refusal without the profile ran no sandboxed command.** Every
+  `unavailable-*` scenario turns the CLI's sandbox off, and the 422 comes from
+  the bridge's own probe, so `outer-refused`, or `nested-refused` without the
+  profile, could pass on a probe that called a working sandbox unusable.
+  Options: (a) a generic `required-sandbox-refused` scenario run for every
+  refused answer, accepting either the CLI's turn refusal or a failed command
+  but never a successful read (recommended, chosen); (b) require the
+  `apply-seccomp` wording everywhere, which fails on a correct probe whose
+  refusal has another cause; (c) a scenario per answer, which guesses at CLI
+  wording 24.04 has not shown. (a) adds one CLI turn per restricted run.
+- **The report was written only on success.** Options: (a) write it after the
+  probe and rewrite it in a `finally` with `outcome` and `failedStage`
+  (recommended, chosen): the upload keeps `if-no-files-found: error` and the
+  report always exists once the probe has run; (b) log the probe to stdout and
+  set the upload to `warn`, which loses the structured record and hides a
+  missing report. The assertion message is not recorded because it can quote
+  tool output.
 
 ## Open questions
 

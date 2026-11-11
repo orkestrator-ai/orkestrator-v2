@@ -7,7 +7,8 @@
  * - `stock`: whatever the host's stock policy answers, the backend tier and
  *   the pinned CLI must agree with the probe (Ubuntu 24.04, whose answer was
  *   unknown; to-do 0145 task 3). A probe that says `available` while the CLI
- *   fails, or the reverse, fails the phase.
+ *   fails, or the reverse, fails the phase: every refused answer runs the
+ *   real CLI with its sandbox required, which must not read the checkout.
  * - `remediated`: after the runner's profile removal the sandbox must work.
  */
 import { afterEach, describe, expect, test } from "bun:test";
@@ -130,142 +131,181 @@ test.skipIf(!phase)(
     // Never use the test preload's optimistic pin or accept either outcome.
     setClaudeLinuxSandboxStatusForTests(undefined);
     const probe = probeClaudeLinuxSandbox();
-    const expectation = apparmorPhaseExpectation(phase, probe);
-    const restricted = expectation !== "available";
-    // The CLI fails with apply-seccomp's setgroups error only under Ubuntu's
-    // bwrap profile; scenarios that assert that error or name the profile
-    // run only there.
-    const profileRefusal = expectation === "nested-refused" && appArmorBwrapProfile;
-    if (profileRefusal && !probe.available) {
-      expect(probe.reason).toContain("bwrap-userns-restrict");
-    }
 
-    // The backend runs in its own Bun process, with no test preload or bridge mocks.
-    const providers = fileURLToPath(
-      new URL("../../../apps/backend/src/core/coordinator-providers.ts", import.meta.url),
-    );
-    const backend = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `import { coordinatorProviderQualification } from ${JSON.stringify(providers)};
-        console.log(JSON.stringify({
-          normal: coordinatorProviderQualification("claude"),
-          strict: coordinatorProviderQualification("claude", { tierSetting: "enforced" })
-        }));`,
-      ],
-      { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
-    );
-    expect(backend.error).toBeUndefined();
-    expect(backend.status).toBe(0);
-    const tiers = JSON.parse(backend.stdout);
-    expect(tiers.normal).toMatchObject({
-      tier: restricted ? "provider-configured" : "enforced",
-      available: true,
-    });
-    expect(tiers.strict.available).toBe(!restricted);
-    // The backend's own probe ran in another process and must name the same
-    // cause. Only the stem is compared: the parenthesised stderr detail is the
-    // kernel's wording, not Orkestrator's.
-    if (!probe.available) expect(tiers.normal.reason).toContain(probe.reason.split(" (")[0]!);
-    if (profileRefusal) expect(tiers.normal.reason).toContain("bwrap-userns-restrict");
-
-    // Force every query to the very binary whose pinned version we check.
-    const cli = process.env.ORKESTRATOR_POLICY_CLAUDE_PATH;
-    expect(cli).toBeTruthy();
-    const version = spawnSync(cli!, ["--version"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      maxBuffer: 64 * 1024,
-    });
-    expect(version.status).toBe(0);
-    expect(version.stdout.trim()).toBe(`${PINNED_TOOLCHAIN_VERSIONS.claude} (Claude Code)`);
-    const results = [];
-    if (restricted) {
-      if (profileRefusal) {
-        // Bypass the bridge refusal once to demonstrate the CLI's actual failure.
-        results.push(await qualifyCoordinatorSandbox("apparmor-sandbox-reads", cli));
-      }
-      results.push(await qualifyCoordinatorSandbox("unavailable-hook-reads", cli));
-      results.push(await qualifyCoordinatorSandbox("unavailable-hook-refuses-quoted", cli));
-      if (profileRefusal) {
-        // Review turns use the ordinary bridge resolver on this same restricted
-        // host, and the new attacks must be denied with the sandbox disabled.
-        results.push(await qualifyCoordinatorSandbox("read-only-host-reads", cli));
-        results.push(await qualifyCoordinatorSandbox("read-only-host-hook-refuses", cli));
-      }
-      for (const scenario of HOOK_ONLY_ADVERSARIAL_SCENARIOS) {
-        results.push(await qualifyCoordinatorSandbox(scenario, cli));
-      }
-
-      // Exercise the real HTTP prompt route and real session, without SDK mocks.
-      await withPolicyCliFixture(async (fixture) => {
-        const { setClaudeHomeForTesting } = await import("./services/claude-home.js");
-        const { createSession, sessions } = await import("./services/session-manager-core.js");
-        const { default: routes } = await import("./routes/session.js");
-        setClaudeHomeForTesting(fixture.root);
-        const session = createSession("AppArmor provider refusal");
-        try {
-          session.executionPolicy = {
-            id: "interactive-host",
-            sandbox: "provider",
-            approvals: "auto-approve",
-            projectResources: true,
-            networkAccess: "full",
-          };
-          const response = await routes.request(`/${session.id}/prompt`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: "List files", requestId: "apparmor-provider" }),
-          });
-          expect(response.status).toBe(422);
-          expect(await response.json()).toEqual({
-            kind: "sandbox-unavailable",
-            error: probe.available ? "" : probe.reason,
-          });
-          expect(session.dispatchedRequestIds?.has("apparmor-provider") ?? false).toBe(false);
-          expect(session.claudeRuntime).toBeUndefined();
-          expect(session.messages).toHaveLength(0);
-        } finally {
-          sessions.delete(session.id);
-          setClaudeHomeForTesting(null);
-        }
+    // The report is written as soon as the probe has answered and rewritten
+    // when the phase ends, pass or fail, so a red run still uploads the
+    // host's answer. Only the stage that failed is recorded, never the
+    // assertion's message: that can quote tool output.
+    const evidence: Record<string, unknown> = {
+      phase,
+      outcome: "running",
+      failedStage: null,
+      expectation: null,
+      kernel: release(),
+      os,
+      appArmorBwrapProfile,
+      sysctls,
+      cliVersion: null,
+      probe,
+      tiers: null,
+      results: [],
+      providerPromptRefused: null,
+      revision: process.env.GITHUB_SHA ?? null,
+      runId: process.env.GITHUB_RUN_ID ?? null,
+    };
+    let stage = "phase expectation";
+    await writeEvidence(evidence);
+    try {
+      await qualifyPhase(probe, appArmorBwrapProfile, evidence, (next) => {
+        stage = next;
       });
-    } else {
-      results.push(await qualifyCoordinatorSandbox("default-sandbox-writes", cli));
-      results.push(await qualifyCoordinatorSandbox("coordinator-sandbox-reads", cli));
-      results.push(await qualifyCoordinatorSandbox("coordinator-sandbox-refuses", cli));
-    }
-
-    // Successful phase evidence survives test:logged's deletion of passing logs.
-    // No prompts, tool output, user files or credentials are recorded.
-    const directory = process.env.ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE;
-    if (directory) {
-      const path = join(directory, `${phase}.json`);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(
-        path,
-        JSON.stringify(
-          {
-            phase,
-            expectation,
-            kernel: release(),
-            os,
-            appArmorBwrapProfile,
-            sysctls,
-            cliVersion: version.stdout.trim(),
-            probe,
-            tiers,
-            results,
-            providerPromptRefused: restricted,
-            revision: process.env.GITHUB_SHA ?? null,
-            runId: process.env.GITHUB_RUN_ID ?? null,
-          },
-          null,
-          2,
-        ) + "\n",
-      );
+      evidence.outcome = "passed";
+    } catch (error) {
+      evidence.outcome = "failed";
+      evidence.failedStage = stage;
+      throw error;
+    } finally {
+      await writeEvidence(evidence);
     }
   },
   180_000,
 );
+
+/** Writes the phase report where the workflow uploads it; no prompts, tool output or credentials. */
+async function writeEvidence(evidence: Record<string, unknown>): Promise<void> {
+  const directory = process.env.ORKESTRATOR_CLAUDE_APPARMOR_EVIDENCE;
+  if (!directory) return;
+  const path = join(directory, `${phase}.json`);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(evidence, null, 2) + "\n");
+}
+
+async function qualifyPhase(
+  probe: ClaudeLinuxSandboxStatus,
+  appArmorBwrapProfile: boolean,
+  evidence: Record<string, unknown>,
+  enter: (stage: string) => void,
+): Promise<void> {
+  const expectation = apparmorPhaseExpectation(phase, probe);
+  evidence.expectation = expectation;
+  const restricted = expectation !== "available";
+  // The CLI fails with apply-seccomp's setgroups error only under Ubuntu's
+  // bwrap profile; scenarios that assert that error or name the profile
+  // run only there.
+  const profileRefusal = expectation === "nested-refused" && appArmorBwrapProfile;
+  if (profileRefusal && !probe.available) {
+    expect(probe.reason).toContain("bwrap-userns-restrict");
+  }
+
+  enter("backend tier");
+  // The backend runs in its own Bun process, with no test preload or bridge mocks.
+  const providers = fileURLToPath(
+    new URL("../../../apps/backend/src/core/coordinator-providers.ts", import.meta.url),
+  );
+  const backend = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `import { coordinatorProviderQualification } from ${JSON.stringify(providers)};
+        console.log(JSON.stringify({
+          normal: coordinatorProviderQualification("claude"),
+          strict: coordinatorProviderQualification("claude", { tierSetting: "enforced" })
+        }));`,
+    ],
+    { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
+  );
+  expect(backend.error).toBeUndefined();
+  expect(backend.status).toBe(0);
+  const tiers = JSON.parse(backend.stdout);
+  evidence.tiers = tiers;
+  expect(tiers.normal).toMatchObject({
+    tier: restricted ? "provider-configured" : "enforced",
+    available: true,
+  });
+  expect(tiers.strict.available).toBe(!restricted);
+  // The backend's own probe ran in another process and must name the same
+  // cause. Only the stem is compared: the parenthesised stderr detail is the
+  // kernel's wording, not Orkestrator's.
+  if (!probe.available) expect(tiers.normal.reason).toContain(probe.reason.split(" (")[0]!);
+  if (profileRefusal) expect(tiers.normal.reason).toContain("bwrap-userns-restrict");
+
+  enter("pinned CLI version");
+  // Force every query to the very binary whose pinned version we check.
+  const cli = process.env.ORKESTRATOR_POLICY_CLAUDE_PATH;
+  expect(cli).toBeTruthy();
+  const version = spawnSync(cli!, ["--version"], {
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 64 * 1024,
+  });
+  expect(version.status).toBe(0);
+  evidence.cliVersion = version.stdout.trim();
+  expect(version.stdout.trim()).toBe(`${PINNED_TOOLCHAIN_VERSIONS.claude} (Claude Code)`);
+  const results: unknown[] = [];
+  evidence.results = results;
+  const run = async (scenario: Parameters<typeof qualifyCoordinatorSandbox>[0]) => {
+    enter(`scenario ${scenario}`);
+    results.push(await qualifyCoordinatorSandbox(scenario, cli));
+  };
+  if (restricted) {
+    // Every refusal the probe reports, whatever its cause, must hold against
+    // the real CLI with its sandbox required: otherwise the probe could call
+    // a working sandbox unusable and every scenario below would still pass,
+    // since they all turn the CLI's sandbox off.
+    await run("required-sandbox-refused");
+    if (profileRefusal) {
+      // Bypass the bridge refusal once to demonstrate the CLI's actual failure.
+      await run("apparmor-sandbox-reads");
+    }
+    await run("unavailable-hook-reads");
+    await run("unavailable-hook-refuses-quoted");
+    if (profileRefusal) {
+      // Review turns use the ordinary bridge resolver on this same restricted
+      // host, and the new attacks must be denied with the sandbox disabled.
+      await run("read-only-host-reads");
+      await run("read-only-host-hook-refuses");
+    }
+    for (const scenario of HOOK_ONLY_ADVERSARIAL_SCENARIOS) await run(scenario);
+
+    enter("provider prompt refusal");
+    // Exercise the real HTTP prompt route and real session, without SDK mocks.
+    await withPolicyCliFixture(async (fixture) => {
+      const { setClaudeHomeForTesting } = await import("./services/claude-home.js");
+      const { createSession, sessions } = await import("./services/session-manager-core.js");
+      const { default: routes } = await import("./routes/session.js");
+      setClaudeHomeForTesting(fixture.root);
+      const session = createSession("AppArmor provider refusal");
+      try {
+        session.executionPolicy = {
+          id: "interactive-host",
+          sandbox: "provider",
+          approvals: "auto-approve",
+          projectResources: true,
+          networkAccess: "full",
+        };
+        const response = await routes.request(`/${session.id}/prompt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: "List files", requestId: "apparmor-provider" }),
+        });
+        expect(response.status).toBe(422);
+        expect(await response.json()).toEqual({
+          kind: "sandbox-unavailable",
+          error: probe.available ? "" : probe.reason,
+        });
+        expect(session.dispatchedRequestIds?.has("apparmor-provider") ?? false).toBe(false);
+        expect(session.claudeRuntime).toBeUndefined();
+        expect(session.messages).toHaveLength(0);
+      } finally {
+        sessions.delete(session.id);
+        setClaudeHomeForTesting(null);
+      }
+    });
+  } else {
+    await run("default-sandbox-writes");
+    await run("coordinator-sandbox-reads");
+    await run("coordinator-sandbox-refuses");
+  }
+
+  evidence.providerPromptRefused = restricted;
+}

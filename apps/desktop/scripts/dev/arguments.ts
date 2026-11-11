@@ -24,6 +24,15 @@ export type DevArguments = {
    */
   useDevWorktreeFolder?: boolean;
   /**
+   * `dev:test` only (`--no-host-seed`): start without reading the host
+   * installation. A start otherwise copies pinned toolchains and model
+   * catalogues from the production data directory, and model caches from
+   * `~/.codex` and `~/.grok`, before Electron (`seedAgentTestProfileState`).
+   * With it the profile downloads its toolchains and starts with no cached
+   * model metadata. Credential seeding is separate (`--no-agent-credentials`).
+   */
+  hostSeedDisabled?: boolean;
+  /**
    * `dev:test` only: `true` (`--headless`) runs Electron on Chromium's headless
    * Ozone platform with no display variables on Linux, and with every window
    * hidden and no Dock icon on macOS, so the profile opens no window in the
@@ -94,6 +103,11 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
       }
       result.useDevWorktreeFolder = true;
+    } else if (argument === "--no-host-seed") {
+      if (!options.agentTest) {
+        throw new Error("--no-host-seed is only supported by mise run dev:test");
+      }
+      result.hostSeedDisabled = true;
     } else if (
       argument === "--headless" ||
       argument === "--headless-electron" ||

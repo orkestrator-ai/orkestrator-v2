@@ -121,6 +121,14 @@ describe("development CLI arguments", () => {
     );
   });
 
+  test("only dev:test can start without reading the host installation", () => {
+    expect(parseAgentTestArguments(["--fixture"]).hostSeedDisabled).toBeUndefined();
+    expect(parseAgentTestArguments(["--no-host-seed"]).hostSeedDisabled).toBe(true);
+    expect(() => parseDevArguments(["--no-host-seed"])).toThrow(
+      "only supported by mise run dev:test",
+    );
+  });
+
   test("only dev:test runs Electron headless", () => {
     expect(parseAgentTestArguments(["--fixture"]).headless).toBeUndefined();
     expect(parseAgentTestArguments(["--headless"]).headless).toBe(true);

@@ -544,6 +544,24 @@ five:
 mise run dev:test --profile cursor-qa --fixture --agent-platforms cursor,grok
 ```
 
+The seed is a read of the host installation: pinned toolchains and the model
+catalogues come from the production data directory, and the Codex and Grok
+model caches from `~/.codex` and `~/.grok`. A run that must not read those
+(a pipeline ticket that forbids the real data directory) adds `--no-host-seed`.
+The launcher then logs `Host seeding is off (--no-host-seed)`, downloads every
+selected toolchain before Electron (Electron fetches the support tools such
+as `gh`), and the profile starts with no cached model metadata. It needs
+network access. Credentials are a separate switch (`--no-agent-credentials`).
+The one-shot isolated runners (`mise run test:agent:browser:isolated` and the
+suites built on `isolatedProfileArguments`) add `--no-host-seed` to every
+credential-free run, so review preparation never reads the production
+directory; pass `--host-seed` to keep the faster local copy. A run that names
+`--credential-source` reads the host anyway and keeps the copy.
+
+```bash
+mise run dev:test --profile qa-clean --fixture --no-agent-credentials --no-host-seed --agent-platforms codex
+```
+
 `--agent-platforms` belongs to `dev:test` only; `mise run dev` rejects it rather
 than accept a value it would ignore, because ordinary development keeps its
 durable per-installation selection.
@@ -1637,7 +1655,7 @@ Each case starts a replacement if no backend is listening, so the spec can run
 again on the same profile.
 
 ```bash
-mise run dev:test --profile qa-outage --fixture --no-agent-credentials --agent-platforms codex
+mise run dev:test --profile qa-outage --fixture --no-agent-credentials --no-host-seed --agent-platforms codex
 # In a second terminal (about 13 minutes):
 ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 \
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-outage ORKESTRATOR_AGENT_TEST_LIVE_OUTAGE=1 \
@@ -1738,6 +1756,18 @@ failed at load average 28 to 34 (8 of 20 under the delay, backend down 1.7 to
 [9965](../tests/flaky-tests/previews-annotations-and-gateway/9965-client-outage-quick-restart-ratio-under-load.md).
 In that run the lapsed tab reached the login page 6.0 s after the backend
 listened.
+
+Those runs started their profile without `--no-host-seed`, which did not exist
+yet, so each start copied `codex@0.167.0` and `gh@2.102.0` and the model
+catalogues from the production data directory (read-only; nothing was written
+there or run from it). The four restart cases were rerun on a fresh
+`--no-agent-credentials --no-host-seed --agent-platforms codex --headless`
+profile, with Docker from `mise run docker:disposable`, at the fix commit plus
+the flag. The launcher logged `Host seeding is off` and downloaded
+`codex@0.167.0`. All four passed in 321.1 s at load averages 0.8 to 2.8:
+backend down 0.88 to 1.02 s, the login page 0.9 s after the backend listened,
+the banner 4011 ms after the stop, and 20 of 20 quick-restart first reconnects
+inside the 4 s delay (1054 to 2005 ms).
 
 ### Live cold restart
 

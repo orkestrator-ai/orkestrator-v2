@@ -494,6 +494,13 @@ export type ProfileSeedDependencies = {
   seedProviderCredentials?: typeof seedAgentTestProviderCredentials;
   seedAgentToolchains?: typeof seedInstalledAgentToolchains;
   prefetchAgentToolchains?: typeof prefetchAgentToolchains;
+  /**
+   * `false` (`dev:test --no-host-seed`) skips the two seeders that read the
+   * host installation: toolchains and model catalogues. Every selected
+   * toolchain is then downloaded. Credentials follow the profile's own
+   * credential sources either way.
+   */
+  hostSeed?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -515,11 +522,21 @@ export async function seedAgentTestProfileState(
   if (flavor !== "agent-test") return;
   const log = dependencies.log ?? ((message: string) => console.log(message));
   const warn = dependencies.warn ?? ((message: string) => console.warn(message));
+  const hostSeed = dependencies.hostSeed !== false;
   const [, , toolchains] = await Promise.all([
-    (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile),
+    hostSeed
+      ? (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile)
+      : [],
     (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile, { warn }),
-    (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile),
+    hostSeed
+      ? (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile)
+      : { seeded: [], failed: [] },
   ]);
+  if (!hostSeed) {
+    log(
+      "Host seeding is off (--no-host-seed): toolchains are downloaded, model caches start empty.",
+    );
+  }
   if (toolchains.seeded.length > 0) {
     log(`Seeded toolchains from the host install: ${toolchains.seeded.join(", ")}`);
   }
@@ -926,7 +943,7 @@ export async function startDevelopment(
     )),
   });
   const profilePath = await initializeProfile(profile);
-  await seedAgentTestProfileState(profile, flavor);
+  await seedAgentTestProfileState(profile, flavor, { hostSeed: args.hostSeedDisabled !== true });
   const statusPath = statusManifestPath(profile);
   let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();

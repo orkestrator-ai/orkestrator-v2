@@ -1520,6 +1520,39 @@ describe("development profile lifecycle primitives", () => {
     ]);
   });
 
+  test("--no-host-seed reads nothing from the host installation", async () => {
+    const { profile } = await toolchainFixture(["pi", "grok"]);
+    const logs: string[] = [];
+    const credentialProfiles: unknown[] = [];
+
+    await seedAgentTestProfileState(profile, "agent-test", {
+      hostSeed: false,
+      seedModelCatalogCaches: async () => {
+        throw new Error("model catalogues must not be read from the host");
+      },
+      seedProviderCredentials: async (receivedProfile) => {
+        // Credentials follow the profile's own sources, not this switch.
+        credentialProfiles.push(receivedProfile);
+        return [];
+      },
+      seedAgentToolchains: async () => {
+        throw new Error("toolchains must not be copied from the host");
+      },
+      prefetchAgentToolchains: async (_profile, platforms) => {
+        expect(platforms).toEqual(profile.agentPlatforms);
+        return { downloaded: ["pi@0.84.3", "grok@1.0.3"] };
+      },
+      log: (message) => logs.push(message),
+      warn: (message) => logs.push(`warn: ${message}`),
+    });
+
+    expect(credentialProfiles).toEqual([profile]);
+    expect(logs).toEqual([
+      "Host seeding is off (--no-host-seed): toolchains are downloaded, model caches start empty.",
+      "Downloaded managed toolchains before Electron: pi@0.84.3, grok@1.0.3",
+    ]);
+  });
+
   test("downloads what the host could not seed before Electron starts", async () => {
     const { profile } = await toolchainFixture(["pi", "grok", "cursor"]);
     const logs: string[] = [];

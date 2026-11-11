@@ -184,6 +184,7 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "--fixture",
     "--headless",
     "--no-agent-credentials",
+    "--no-host-seed",
     "--agent-platforms",
     "codex",
   ]);
@@ -229,9 +230,45 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "--fixture",
     "--headless",
     "--no-agent-credentials",
+    "--no-host-seed",
     "--agent-platforms",
     "opencode",
   ]);
+});
+
+test("a credential-free run reads nothing from the host installation unless asked", () => {
+  // A ticket can forbid reading the production data directory; review
+  // preparation runs these suites with no extra flags (to-do 7835's pipeline).
+  expect(isolatedProfileArguments(["--no-agent-credentials"])).toEqual([
+    "--fixture",
+    "--headless",
+    "--no-host-seed",
+    "--agent-platforms",
+    "codex",
+    "--no-agent-credentials",
+  ]);
+  // Passing the flag the runner already adds is harmless.
+  expect(
+    isolatedProfileArguments(["--no-host-seed"]).filter((a) => a === "--no-host-seed"),
+  ).toEqual(["--no-host-seed"]);
+  expect(parseAgentTestArguments(isolatedProfileArguments()).hostSeedDisabled).toBe(true);
+  // `--host-seed` keeps the local copy and is never forwarded to dev:test.
+  const seeded = isolatedProfileArguments(["--host-seed"]);
+  expect(seeded).toEqual([
+    "--fixture",
+    "--headless",
+    "--no-agent-credentials",
+    "--agent-platforms",
+    "codex",
+  ]);
+  expect(parseAgentTestArguments(seeded).hostSeedDisabled).toBeUndefined();
+  expect(() => isolatedProfileArguments(["--host-seed", "--no-host-seed"])).toThrow(
+    "cannot be combined",
+  );
+  // A run that names credential sources reads the host anyway and keeps the copy.
+  expect(isolatedProfileArguments(["--credential-source", "claude"])).not.toContain(
+    "--no-host-seed",
+  );
 });
 
 test("a one-shot run cannot opt out of headless", async () => {
@@ -330,6 +367,7 @@ test("companion profiles start after the main one, stay up for the suite, and ar
       JSON.stringify([
         "--fixture",
         "--headless",
+        "--no-host-seed",
         "--no-agent-credentials",
         "--agent-platforms",
         "pi",

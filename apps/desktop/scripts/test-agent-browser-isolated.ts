@@ -16,7 +16,7 @@ try {
   isolatedProfileArguments(profileArgs);
 } catch (error) {
   throw new Error(
-    `Usage: test-agent-browser-isolated.ts [--design | --docker] [--credential-source <name>]… [--agent-platforms <list>] [--no-agent-credentials] [--use-dev-worktree-folder] [--headless]\n${error instanceof Error ? error.message : error}`,
+    `Usage: test-agent-browser-isolated.ts [--design | --docker] [--credential-source <name>]… [--agent-platforms <list>] [--no-agent-credentials] [--no-host-seed | --host-seed] [--use-dev-worktree-folder] [--headless]\n${error instanceof Error ? error.message : error}`,
   );
 }
 

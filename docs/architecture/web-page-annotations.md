@@ -247,7 +247,7 @@ shallow freeze of the copied containers. Copying keeps an older manifest
 intact for readers that hold it across an `await`, and for a commit that rolls
 back. Each commit reports `storage_commit_rows_serialized` and
 `storage_commit_collections_copied` (gauges, per scope);
-`web-annotation-payloads.bench.test.ts` asserts that a create at 1,900 notes
+`web-annotations/payloads.bench.test.ts` asserts that a create at 1,900 notes
 serializes and copies exactly as much as one at 1 note.
 `bun scripts/web-annotation-commit-profile.ts` measures median CPU per create
 as the environment fills. Two before/after runs, each the same script on a
@@ -265,7 +265,7 @@ figures:
 The 2026-11-11 ranges are four interleaved runs per side (25 creates per
 level, `main` at `498b68766`). Every after run serialized 6 rows and copied 5
 collections at every size. The payload bench's growth case
-(`web-annotation-payloads.bench.test.ts`, three batches of 60 creates) took
+(`web-annotations/payloads.bench.test.ts`, three batches of 60 creates) took
 29 / 71 / 110 ms before and 20 / 21 / 25 ms after on 2026-11-11 (47 / 73 /
 111 and 26 / 28 / 30 ms on 2026-10-26), with 9 rows and 4,174–4,496 bytes
 written per create on both sides. At 1,900 notes the largest remaining share

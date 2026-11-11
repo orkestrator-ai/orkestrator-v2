@@ -113,7 +113,7 @@ type Calls = {
   wakes: Wake[];
   piCompletions: number;
   piToolCalls: Record<string, number>;
-  launches: Array<{ status?: string; environmentId: boolean; error?: string }>;
+  launches: Array<{ status?: string; environmentId: boolean; error?: string; message?: unknown }>;
   usageReads: Record<string, number>;
   refused: number;
   hold: boolean;
@@ -651,6 +651,7 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
         agent: "pi",
         logicalSessionKey: leafCoordinator.logicalSessionKey,
         prompt: launchPrompt({
+          requestId: `notice-qa-worker-${run2}`,
           projectId: leafProject.id,
           environmentType: "local",
           name: `notice-worker-${run2}`,

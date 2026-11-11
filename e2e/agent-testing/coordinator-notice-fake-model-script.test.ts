@@ -134,7 +134,11 @@ describe("the leaf's Pi coordinator", () => {
       tools,
     });
     expect(after.step.kind).toBe("text");
-    expect(after.launched).toEqual({ environmentId: false, shape: [] });
+    expect(after.launched).toEqual({
+      environmentId: false,
+      shape: [],
+      message: { keys: ["role", "content"], content: "string", excerpt: "{}" },
+    });
     const accepted = piTurn({
       messages: [
         { role: "user", content: launchPrompt(input) },

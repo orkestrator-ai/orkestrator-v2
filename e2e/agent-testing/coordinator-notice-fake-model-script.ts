@@ -227,6 +227,19 @@ export interface LaunchOutcome {
   error?: string;
   /** The result's top-level keys, when it named no environment: how to read it next time. */
   shape?: string[];
+  /** The tool message's structure and the result's opening, when it named no environment. */
+  message?: { keys: string[]; content: string; excerpt: string };
+}
+
+function messageStructure(message: ChatMessage | undefined, text: string) {
+  const content = message?.content;
+  return {
+    keys: message ? Object.keys(message).slice(0, 20) : [],
+    content: Array.isArray(content)
+      ? `array:${content.map((part) => (part as { type?: unknown })?.type ?? typeof part).join(",")}`
+      : typeof content,
+    excerpt: text.slice(0, 300),
+  };
 }
 
 /**
@@ -287,7 +300,13 @@ export function piTurn(request: { messages: unknown; tools?: unknown }): PiTurn 
     return {
       step: { kind: "text", text: PI_LAUNCHED_REPLY },
       notices,
-      launched: launchOutcome(chatText(toolResults.at(-1))),
+      launched: (() => {
+        const text = chatText(toolResults.at(-1));
+        const outcome = launchOutcome(text);
+        return outcome.environmentId
+          ? outcome
+          : { ...outcome, message: messageStructure(toolResults.at(-1), text) };
+      })(),
     };
   }
   const name = offeredName(offeredTools(request.tools), "launch_environment");

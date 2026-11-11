@@ -202,7 +202,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 - Done (to-do 7800, retired 2026-11-11, against `main` at `963ffa6ab`):
   `core/permission-rules/`, `core/self-improvement/` and `core/opencode2/`
   each have an `index.ts` and both lint patterns, and production importers
-  outside each folder go through it (11, 4 and 18 of 20 files; the other two
+  outside each folder go through it (10, 4 and 18 of 20 files; the other two
   are the exception below). The four root
   `opencode2-*.ts` files import `opencode2/index.js` like any other caller.
   One leaf module is a named exception in the `apps/backend/src/**` pattern:
@@ -488,7 +488,7 @@ left open on purpose: they move many files that other work in flight touches.
   touched `opencode2/`, and each rewrite is a one-statement path change that
   rebases easily. The four root `opencode2-*.ts` files stay where they are
   (7800's recommendation) and go through `opencode2/index.js`.
-- Measured: production importers outside each folder were 11 files for
+- Measured: production importers outside each folder were 10 files for
   `permission-rules/` (9 symbols from 5 modules), 4 for `self-improvement/`
   (3 symbols; one is an `import("…")` type expression in
   `commands-context.ts`) and 20 for `opencode2/` (49 symbols from 15

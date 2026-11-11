@@ -142,7 +142,8 @@ describe("compact consolidation evidence", () => {
       expect(overflow[0]!.level).toBe("warn");
       expect(overflow[0]!.fields).toEqual({
         reviewers: 2,
-        sourceFindings: 4,
+        // Each synthetic report carries two issues and one coverage gap.
+        sourceFindings: 6,
         compactBytes: expect.any(Number),
         maxBytes: 4_096,
       });

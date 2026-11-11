@@ -170,7 +170,7 @@ import {
   NativeAgentTranscriptProjection,
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
-import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/enforcer.js";
+import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/index.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -183,7 +183,7 @@ import {
   openCodeEnvironmentDependencies,
   sessionTakesAgentTools,
 } from "./native-agent-opencode-server.js";
-import type { OpenCodeEnvironmentDependencies } from "./opencode2/environment-provider.js";
+import type { OpenCodeEnvironmentDependencies } from "./opencode2/index.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";

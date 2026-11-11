@@ -9,7 +9,7 @@ resolution, carrier, delivery body),
 (the branch host),
 [`agent-tools-suborks.ts`](../../apps/backend/src/core/agent-tools-suborks.ts)
 (the tool on native tabs),
-[`control-mcp-coordinator-suborks.ts`](../../apps/backend/src/core/control-mcp-coordinator-suborks.ts)
+[`control-mcp/coordinator-suborks.ts`](../../apps/backend/src/core/control-mcp/coordinator-suborks.ts)
 and [`coordinator-subork-actions.ts`](../../apps/backend/src/core/coordinator-subork-actions.ts)
 (the same tool in coordinator conversations) and
 [`storage-suborks.ts`](../../apps/backend/src/core/storage-suborks.ts) (the store).

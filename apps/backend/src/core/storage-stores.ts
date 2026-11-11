@@ -26,7 +26,7 @@ import {
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
 import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
-import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/layout.js";
+import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/index.js";
 import {
   TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
   TRANSCRIPT_ARTIFACT_STORE_LAYOUT,

@@ -838,7 +838,7 @@ token exists. This covers sign-ins Orkestrator is never told about, such as
 ## Coordinator switching
 
 A main coordinator can list and switch accounts (Control MCP capability
-`accounts`; `control-mcp-account-tools.ts`), so "switch to an account with
+`accounts`; `control-mcp/account-tools.ts`), so "switch to an account with
 usage left when the workers hit their limit" needs no one at the keyboard
 when the user said so in advance.
 

@@ -133,7 +133,7 @@ Analysed 2026-11-11 against `main` at `14df96544`.
 
 ### 7. Give the coordinator full Linear tools
 
-**Problem.** No coordinator tool touches Linear. The Kanban tools (`control-mcp-ticket-tools.ts`) are the only ticket tools, so a coordinator cannot use Linear as a source of truth.
+**Problem.** No coordinator tool touches Linear. The Kanban tools (`control-mcp/ticket-tools.ts`) are the only ticket tools, so a coordinator cannot use Linear as a source of truth.
 
 **Context.** The Kanban tools take `projectId`, an optional `nodeId` and a `requestKey` on writes. They reach another node through `coordinator_node_ticket` and `portal.invokeOnNode`, reporting a lost answer as `outcome-unknown`.
 
@@ -141,7 +141,7 @@ Analysed 2026-11-11 against `main` at `14df96544`.
 
 **Decisions.**
 
-- **Which tools?** `list_linear_issues` (state, assignee, label, text, cursor), `get_linear_issue` (id or identifier like `ENG-123`, with comments), `create_linear_issue`, `update_linear_issue` (title, description, state, priority, assignee, estimate, labels added or removed), `add_linear_comment` and `list_linear_board_options` (states, labels, members). They go in a new `control-mcp-linear-tools.ts` (recommended).
+- **Which tools?** `list_linear_issues` (state, assignee, label, text, cursor), `get_linear_issue` (id or identifier like `ENG-123`, with comments), `create_linear_issue`, `update_linear_issue` (title, description, state, priority, assignee, estimate, labels added or removed), `add_linear_comment` and `list_linear_board_options` (states, labels, members). They go in a new `control-mcp/linear-tools.ts` (recommended).
 - **Scope.** Every call names a project and is refused when the issue is not on that project's linked board (recommended). Otherwise a coordinator could change any team the key can see.
 - **Where do calls run?**
   - **On the coordinator's own node with its own key; `nodeId` only for a project that exists only on a leaf, through `invoke_on_node` (recommended).**
@@ -238,5 +238,5 @@ Each Linear tool's description says Kanban (`list_tickets`) stays the default bo
 
 ## Related
 
-- `apps/backend/src/core/linear.ts`, `commands-registry-linear.ts`, `control-mcp-ticket-tools.ts`, `nodes/node-ticket-sync.ts`.
+- `apps/backend/src/core/linear.ts`, `commands-registry-linear.ts`, `control-mcp/ticket-tools.ts`, `nodes/node-ticket-sync.ts`.
 - `docs/architecture/tickets.md` (ticket sync), `docs/architecture/command-nodes.md` ("Settings").

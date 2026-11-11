@@ -2,7 +2,7 @@ import { readStoredValue, seedStore } from "./storage-test-support.js";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { ControlMcpServer } from "./control-mcp-server.js";
+import { ControlMcpServer } from "./control-mcp/server.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";

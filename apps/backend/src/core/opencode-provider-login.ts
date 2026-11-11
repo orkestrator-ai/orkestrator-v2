@@ -21,13 +21,14 @@ import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import { pushedLoginHostFile } from "./agent-accounts-containers.js";
 import type { CommandContext } from "./commands-context.js";
 import type { OpenCodeLoginOperation } from "./opencode-provider-login-slot.js";
-import { OpenCode2RequestError, type OpenCode2Client } from "./opencode2/client.js";
 import {
+  OpenCode2RequestError,
+  type OpenCode2Client,
   exportOpenCode2Logins,
   openCode2RefreshLineageFile,
   keepActiveOpenCode2Credential,
   removeOpenCode2Credentials,
-} from "./opencode2/credentials.js";
+} from "./opencode2/index.js";
 import {
   withOpenCode2HostDatabaseServer,
   type WithOpenCode2HostDatabaseServer,

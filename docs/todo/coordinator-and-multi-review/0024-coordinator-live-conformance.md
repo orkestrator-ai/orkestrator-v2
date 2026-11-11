@@ -134,7 +134,7 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
   - `native-agent-service-reconciliation.test.ts` (presence and the turn-end
     edge), `coordinator-service.test.ts` (one wake per delegation, crash
     recovery), `agent-mail-service.test.ts` (one carrier per drain),
-    `control-mcp-server.test.ts` (tool contract and poll guard);
+    `control-mcp/server.test.ts` (tool contract and poll guard);
   - `agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts`:
     multi-actor, in-process scenarios for two workers reporting, a silent
     worker, a follow-up by environment id, a ten-message peer conversation, a
@@ -144,7 +144,7 @@ Cursor/Grok identity runs) moved to the manual-test checklist (7568) on
     `resolved: "credential"`, not `"unique"`;
   - per-bridge policy and activity tests.
 - Facts the live scenarios depend on:
-  - `launch_environment` returns `delivery: "async"` (`control-mcp-server.ts`).
+  - `launch_environment` returns `delivery: "async"` (`control-mcp/server.ts`).
   - The poll guard (`coordinatorPollGuard`) allows `COORDINATOR_POLL_BUDGET`
     (3) unchanged reads of `read_messages` or `get_message_status` per
     `COORDINATOR_POLL_WINDOW_MS` (120 s). The fourth identical read returns

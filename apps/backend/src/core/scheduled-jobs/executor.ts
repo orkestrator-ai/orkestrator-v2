@@ -34,8 +34,8 @@ import type {
   GraphLaunchResult,
 } from "@orkestrator/protocol/graphs/launch";
 import type { GraphTemplateRef } from "@orkestrator/protocol/graphs/library";
-import type { CoordinatorControlScope } from "../control-mcp-tools.js";
-import { coordinatorRoleCapabilities } from "../control-mcp-tools.js";
+import type { CoordinatorControlScope } from "../control-mcp/index.js";
+import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";
 import type { InProcessToolInfo, InProcessToolResult } from "../mcp-in-process.js";
 import { withPublicAuthority } from "../public-api/dispatch.js";
 import { controlMcpAuthority, type PublicAuthority } from "../public-api/operation-ledger.js";

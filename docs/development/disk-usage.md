@@ -231,6 +231,16 @@ These belong to other tools. Orkestrator reports them and never deletes them.
   `~/.claude/settings.json`; lower it to keep less. Codex keeps sessions under
   `~/.codex/sessions/<year>/<month>`.
 - **Superseded tool versions installed by mise:** `mise prune`.
+- **Disposable Docker daemons** for the live container suites, under
+  `${XDG_STATE_HOME:-~/.local/state}/orkestrator-disposable-docker/`, one
+  directory per checkout (instances started before 2026-11-11 are under the
+  checkout's `output/disposable-docker/`). A run that does not reach `stop`
+  leaves a full container runtime there, often over 10 GB. The report's row
+  counts the roots whose checkout is gone. Their files belong to RootlessKit's
+  mapped users, so remove an instance with
+  `bun scripts/disposable-docker-daemon.ts stop --name <n> --root <dir>`
+  rather than `rm`; see
+  [container qualification](container-qualification.md#disposable-docker-daemon).
 - **Legacy Turbo artifacts** at the top of `.turbo/` from an older layout:
   `mise run disk:report -- --fix legacy-turbo`.
 - **Leaked host-reachability probe networks**, `ork-<owner>-reach-probe-net`.

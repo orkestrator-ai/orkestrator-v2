@@ -63,7 +63,11 @@ checkout. The first failure stops the others. Each profile then runs its shard o
 as `test:agent:docker`, one spec at a time, while the other shards run in their
 own profiles; the shards are balanced by measured run time, and
 `isolated-browser.test.ts` fails when a spec with a `Docker fixture` test is in
-no shard or in two. A fixed `--agent-tools-port` can be bound by only one
+no shard or in two. Each shard profile is started with
+`--agent-tools-port auto`, so it takes its own free port from the documented
+range and one host firewall rule admits every concurrent run's containers
+(see [Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
+A fixed `--agent-tools-port <n>` passed by the caller can be bound by only one
 backend, so that run keeps every spec in one profile. Results are written per
 profile under `output/agent-testing/<profile>/browser/`. Every started profile
 is stopped and reset afterwards. The worktree's shared development image is kept
@@ -91,7 +95,7 @@ sequentially.
 To work around a host-specific problem without hand-assembling a profile, pass
 `dev:test` profile flags through: `--credential-source <name>` (repeatable),
 `--agent-platforms <list>`, `--no-agent-credentials`,
-`--use-dev-worktree-folder` and `--agent-tools-port <n>` (see
+`--use-dev-worktree-folder` and `--agent-tools-port <n|auto>` (see
 [Containers behind a host firewall](#containers-behind-a-host-firewall---agent-tools-port)).
 A credential or platform flag replaces the
 matching default, for example:
@@ -764,6 +768,31 @@ mise run dev:test --profile container-qa --fixture --fixture-environments local,
   host), as is anything below 1024.
 - The flag belongs to `dev:test`; `mise run dev` rejects it.
 
+`--agent-tools-port auto` chooses the port instead: the first port of the
+range below that no other running profile has claimed and nothing listens on,
+recorded in the profile like an exact one. Concurrent profiles started by
+agents that cannot see one another (the one-shot Docker runner's shard
+profiles above all, which use it by default) each get a different port
+without passing numbers around.
+
+- Every launcher given a port, exact or `auto`, records a claim naming its
+  profile and its own PID and start time in
+  `<development root>/agent-tools-port-claims/<port>.json`, before Electron
+  and the bridges compile. Another profile's start therefore sees the port as
+  taken during the minute or so before the first backend binds it, which a
+  bind check alone would not. A claim holds only while its launcher runs: a
+  later start replaces a stopped launcher's claim, and `dev:reset` removes the
+  profile's own.
+- An exact port another running profile claimed is refused, naming that
+  profile, as a port something already listens on is.
+- A restart with `auto` tries the profile's recorded port first.
+- When every port of the range is claimed or in use, `auto` refuses and names
+  each port's reason rather than taking a port outside the range, which the
+  firewall rule would not admit.
+- Two launchers replacing the same stopped launcher's claim at the same
+  instant can still both proceed; the second backend's bind then fails its
+  start, which a retry clears.
+
 Use the range **31500–31509**: ten profiles, one firewall rule. It is below
 Linux's ephemeral range (32768–60999) and macOS's (49152–65535), so the OS
 never hands one of those ports to another socket.
@@ -1185,6 +1214,16 @@ Help from Electron's `Menu`, opens DevTools through the item, turns the switch o
 and separately waits for the running backend's one-minute check to revert raised
 log detail. `.github/workflows/native-application-menu.yml` runs it on Linux and
 macOS. Headless on Linux means the native menu bar itself is not drawn or read.
+
+`packaged-native-shortcuts-electron.spec.ts` is in the same config but skips
+unless `ORKESTRATOR_NATIVE_SHORTCUT_INPUT=1`. It is the one packaged spec that
+is not headless: it opens the packaged Linux app as an X11 window and presses
+real keys with `xdotool` (Ctrl+Shift+/, Escape, Ctrl+K, the menu bar from the
+keyboard, typing) on the composer, a browser preview, an interactive artifact
+view and a design frame. Run it only on a disposable X display such as Xvfb:
+the keys go to whichever window has X focus. Prerequisites, the run command and
+recorded results are in
+[keyboard-shortcuts.md](../architecture/keyboard-shortcuts.md#packaged-native-qualification).
 
 ### Electron specs and their display
 

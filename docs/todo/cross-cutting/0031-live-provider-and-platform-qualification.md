@@ -348,7 +348,7 @@ Platform runs, and the todo files with items for each:
 | Live GitHub (`gh` against a real repository) | [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md) |
 | Stock Linux desktops with AppArmor or SELinux (Ubuntu 24.04 and 26.04; Debian and Fedora optional, best effort); Docker containers done 2026-11-10 (0145 task 4) | [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md), [`coordinator-read-only-decisions.md`](../../architecture/coordinator-read-only-decisions.md) (to-do 0026, retired), [0190-claude-read-only-turns-without-working-sandbox.md](../agent-engines/0190-claude-read-only-turns-without-working-sandbox.md) |
 
-Provider runs (credentials needed). Every provider also has items in [0049-native-agent-idle-observation.md](../transcripts-and-observation/0049-native-agent-idle-observation.md), [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md), [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md); the table lists the rest:
+Provider runs (credentials needed). Every provider also has items in [0015-slash-command-qualification.md](../cli-and-slash-commands/0015-slash-command-qualification.md), [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md), [0044-web-annotation-qualification.md](../previews-and-annotations/0044-web-annotation-qualification.md); the table lists the rest:
 
 | Provider | Items in |
 | --- | --- |

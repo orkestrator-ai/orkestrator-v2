@@ -1,6 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
-import { act, cleanup, createEvent, fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
@@ -404,6 +412,23 @@ function confirmMerge() {
 function confirmMergeAndCleanup() {
   fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
   fireEvent.click(screen.getByRole("button", { name: "Merge & Cleanup" }));
+}
+
+/** The toolbar's single Merge PR button; its dialog repeats the name, so take the first. */
+function mergePrButton(): HTMLButtonElement {
+  return screen.getAllByRole("button", {
+    name: /^(Merge PR|Merging\.\.\.)$/,
+  })[0] as HTMLButtonElement;
+}
+
+function mergeOptions(): HTMLElement | null {
+  return screen.queryByRole("group", { name: "Merge options" });
+}
+
+/** The Merge PR dialog's Resolve option, opening the dialog first when it is closed. */
+function resolveOption(): HTMLButtonElement {
+  if (!mergeOptions()) fireEvent.click(mergePrButton());
+  return within(mergeOptions()!).getByRole("button", { name: "Resolve" }) as HTMLButtonElement;
 }
 
 const MockContextMenuState = createContext<{
@@ -3200,7 +3225,7 @@ describe("ActionBar workflow tabs", () => {
     };
     rerender(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(resolveOption());
 
     await waitFor(() => {
       expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
@@ -3377,16 +3402,16 @@ describe("ActionBar workflow tabs", () => {
     });
     renderInAppCommandScope(<ActionBar />);
 
-    const resolveButton = screen.getByRole("button", { name: "Resolve" });
-    fireEvent.click(resolveButton);
-    fireEvent.click(resolveButton);
+    fireEvent.click(resolveOption());
+    // Choosing Resolve closes the dialog; reopening it shows the option busy.
+    fireEvent.click(resolveOption());
 
     expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
-    expect((resolveButton as HTMLButtonElement).disabled).toBe(true);
+    expect(resolveOption().disabled).toBe(true);
 
     finishLaunch();
 
-    await waitFor(() => expect((resolveButton as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(resolveOption().disabled).toBe(false));
     expect(events).toEqual(["backend"]);
   });
 
@@ -3413,8 +3438,7 @@ describe("ActionBar workflow tabs", () => {
     );
     renderInAppCommandScope(<ActionBar />);
 
-    const resolveButton = screen.getByRole("button", { name: "Resolve" });
-    fireEvent.contextMenu(resolveButton);
+    fireEvent.contextMenu(mergePrButton());
     const confirm = screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement;
     fireEvent.click(confirm);
 
@@ -3460,7 +3484,7 @@ describe("ActionBar workflow tabs", () => {
     );
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
 
     const dialog = screen.getByRole("dialog", { name: "Configure conflict resolution" });
@@ -3500,7 +3524,7 @@ describe("ActionBar workflow tabs", () => {
     });
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
 
     await waitFor(() =>
@@ -3531,7 +3555,7 @@ describe("ActionBar workflow tabs", () => {
     launchNativeAgentJobMock.mockRejectedValueOnce(new Error("backend offline"));
     renderInAppCommandScope(<ActionBar />);
 
-    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    const resolveButton = resolveOption();
     fireEvent.click(resolveButton);
 
     await waitFor(() =>
@@ -3560,7 +3584,7 @@ describe("ActionBar workflow tabs", () => {
     });
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(resolveOption());
 
     await waitFor(() =>
       expect(toastInfoMock).toHaveBeenCalledWith(
@@ -3590,7 +3614,7 @@ describe("ActionBar workflow tabs", () => {
     });
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(resolveOption());
 
     await waitFor(() =>
       expect(toastWarningMock).toHaveBeenCalledWith("Automatic PR refresh was not scheduled", {
@@ -3657,7 +3681,7 @@ describe("ActionBar workflow tabs", () => {
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
       renderInAppCommandScope(<ActionBar />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+      fireEvent.click(resolveOption());
 
       await waitFor(() =>
         expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve"),
@@ -3676,7 +3700,7 @@ describe("ActionBar workflow tabs", () => {
       launchNativeAgentJobMock.mockResolvedValueOnce(launched(true));
       renderInAppCommandScope(<ActionBar />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+      fireEvent.click(resolveOption());
 
       await waitFor(() =>
         expect(toastInfoMock).toHaveBeenCalledWith(
@@ -3693,7 +3717,7 @@ describe("ActionBar workflow tabs", () => {
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
       renderInAppCommandScope(<ActionBar />);
 
-      const button = screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement;
+      const button = resolveOption() as HTMLButtonElement;
       expect(button.disabled).toBe(false);
       fireEvent.click(button);
 
@@ -3704,9 +3728,7 @@ describe("ActionBar workflow tabs", () => {
       currentTabCount = 10;
       renderInAppCommandScope(<ActionBar />);
 
-      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
-        true,
-      );
+      expect((resolveOption() as HTMLButtonElement).disabled).toBe(true);
     });
 
     test("a tab that only carries the Resolve title does not lift the tab limit", () => {
@@ -3714,9 +3736,7 @@ describe("ActionBar workflow tabs", () => {
       currentTabCount = 10;
       renderInAppCommandScope(<ActionBar />);
 
-      expect((screen.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
-        true,
-      );
+      expect((resolveOption() as HTMLButtonElement).disabled).toBe(true);
     });
 
     test("the dialog stays available on a full tab bar and honours its own selection", async () => {
@@ -3725,7 +3745,7 @@ describe("ActionBar workflow tabs", () => {
       launchNativeAgentJobMock.mockResolvedValueOnce(launched());
       renderInAppCommandScope(<ActionBar />);
 
-      fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+      fireEvent.contextMenu(mergePrButton());
       expect(screen.queryByRole("alert") === null).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
 
@@ -3754,7 +3774,7 @@ describe("ActionBar workflow tabs", () => {
       );
       renderInAppCommandScope(<ActionBar />);
 
-      fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+      fireEvent.click(resolveOption());
 
       await waitFor(() =>
         expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
@@ -3786,7 +3806,7 @@ describe("ActionBar workflow tabs", () => {
     });
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(resolveOption());
     currentSelectedEnvironmentId = "env-2";
     currentOtherEnvironments = [
       {
@@ -3855,7 +3875,7 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     rerender(<ActionBar />);
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -3985,13 +4005,12 @@ describe("ActionBar workflow tabs", () => {
         prBaseBranch: "release/2.0",
       };
       view = renderInAppCommandScope(<ActionBar />);
-      const resolve = screen.getByRole("button", { name: "Resolve" });
       if (configured) {
-        fireEvent.contextMenu(resolve);
+        fireEvent.contextMenu(mergePrButton());
         expect(screen.getByText(/against release\/2\.0/)).toBeTruthy();
         fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
       } else {
-        fireEvent.click(resolve);
+        fireEvent.click(resolveOption());
       }
       await waitFor(() =>
         expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
@@ -4406,7 +4425,7 @@ describe("ActionBar workflow tabs", () => {
     };
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Resolve with Claude" }) === null).toBe(true);
     expect(screen.getByRole("combobox", { name: "Agent, model and reasoning" })).toBeTruthy();
@@ -4423,7 +4442,7 @@ describe("ActionBar workflow tabs", () => {
     };
     renderInAppCommandScope(<ActionBar presentation="grid" />);
 
-    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    const resolveButton = mergePrButton();
     fireEvent.pointerDown(resolveButton, {
       pointerId: 1,
       pointerType: "touch",
@@ -4443,8 +4462,9 @@ describe("ActionBar workflow tabs", () => {
     ).toBeTruthy();
 
     // The click mobile browsers synthesize after the gesture must be consumed,
-    // or the long press would also launch an unconfigured default-agent resolve.
+    // or the long press would also open the merge options over the modal.
     fireEvent.click(resolveButton);
+    expect(mergeOptions() === null).toBe(true);
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -4464,7 +4484,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     expect(screen.getByText(/against release/)).toBeTruthy();
 
     // Repository settings can be saved while the modal is open. The launch must
@@ -4489,7 +4509,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     // Another agent, or a push, can clear the conflicts while the modal is open.
     currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
     view.rerender(<ActionBar />);
@@ -4509,7 +4529,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     currentEnvironment = { ...currentEnvironment, status: "stopped" };
     view.rerender(<ActionBar />);
 
@@ -4528,7 +4548,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     currentTabCount = 10;
     view.rerender(<ActionBar />);
 
@@ -4547,7 +4567,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     // The backend owns the job, so a missing renderer tab factory is irrelevant.
     currentCreateTabRegistered = false;
     view.rerender(<ActionBar />);
@@ -4568,7 +4588,7 @@ describe("ActionBar workflow tabs", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.contextMenu(mergePrButton());
     currentSelectedEnvironmentId = "env-2";
     currentOtherEnvironments = [
       {
@@ -5557,7 +5577,7 @@ describe("ActionBar configured action defaults", () => {
     currentClaudeFastMode = false;
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(resolveOption());
 
     await waitFor(() =>
       expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
@@ -5691,8 +5711,7 @@ describe("ActionBar configured action defaults", () => {
     };
 
     renderInAppCommandScope(<ActionBar />);
-    const resolveButton = screen.getByRole("button", { name: "Resolve" });
-    fireEvent.contextMenu(resolveButton);
+    fireEvent.contextMenu(mergePrButton());
 
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy(),
@@ -5702,7 +5721,7 @@ describe("ActionBar configured action defaults", () => {
     expect(picker.textContent).toContain("High");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    fireEvent.click(resolveButton);
+    fireEvent.click(resolveOption());
     await waitFor(() =>
       expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -6304,7 +6323,7 @@ describe("ActionBar pull request actions", () => {
     expect(viewPRMock).toHaveBeenCalledTimes(1);
   });
 
-  test("shows a disabled pending affordance while GitHub computes mergeability", () => {
+  test("keeps Merge PR clickable with a spinner while GitHub computes mergeability", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -6312,17 +6331,307 @@ describe("ActionBar pull request actions", () => {
     };
     renderInAppCommandScope(<ActionBar />);
 
-    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
-    expect(checking.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.queryByRole("button", { name: "Merge PR" }) === null).toBe(true);
+    const merge = mergePrButton();
+    expect(merge.disabled).toBe(false);
+    expect(merge.getAttribute("data-mergeability")).toBe("checking");
+    expect(merge.getAttribute("aria-description")).toBe("Checking mergeability");
+    expect(merge.className).toContain("bg-green-600");
+    expect(merge.querySelector('[data-testid="merge-pr-checking"]')).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Resolve" }) === null).toBe(true);
 
-    fireEvent.click(checking);
-    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null).toBe(
+    fireEvent.click(merge);
+    const options = within(mergeOptions()!);
+    // Merging needs GitHub's answer; resolving and auto-merge do not.
+    expect((options.getByRole("button", { name: "Merge PR" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+    expect(
+      (options.getByRole("button", { name: "Merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(options.getAllByText(/Available once GitHub finishes checking/)).toHaveLength(2);
+    expect((options.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(
+      (options.getByRole("button", { name: "Auto-merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+    expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
   });
+
+  test("turns Merge PR red for conflicts and offers Resolve instead of merging", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "accepted",
+      completionActionArmed: true,
+    });
+    renderInAppCommandScope(<ActionBar />);
+
+    const merge = mergePrButton();
+    expect(merge.textContent).toBe("Merge PR");
+    expect(merge.getAttribute("data-mergeability")).toBe("conflicts");
+    expect(merge.getAttribute("aria-description")).toBe("Merge conflicts to resolve");
+    expect(merge.className).toContain("bg-destructive");
+    expect(merge.className).not.toContain("bg-green-600");
+
+    fireEvent.click(merge);
+    const options = within(mergeOptions()!);
+    expect((options.getByRole("button", { name: "Merge PR" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(options.getAllByText("Resolve the merge conflicts before merging.")).toHaveLength(2);
+    expect(options.getByRole("button", { name: "Auto-merge & Cleanup" })).toBeTruthy();
+
+    fireEvent.click(options.getByRole("button", { name: "Resolve" }));
+    expect(mergeOptions() === null).toBe(true);
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Resolve" }),
+      ),
+    );
+  });
+
+  test("a mergeable PR's options allow merging but not resolving", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    const merge = mergePrButton();
+    expect(merge.getAttribute("data-mergeability")).toBe("mergeable");
+    expect(merge.className).toContain("bg-green-600");
+    expect(merge.querySelector('[data-testid="merge-pr-checking"]') === null).toBe(true);
+
+    fireEvent.click(merge);
+    const options = within(mergeOptions()!);
+    expect((options.getByRole("button", { name: "Merge PR" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect((options.getByRole("button", { name: "Resolve" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(options.getByText("GitHub reports no merge conflicts to resolve.")).toBeTruthy();
+    expect(options.queryByRole("button", { name: "Choose agent…" }) === null).toBe(true);
+  });
+
+  test("Choose agent… opens the Resolve configuration from the merge options", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    fireEvent.click(within(mergeOptions()!).getByRole("button", { name: "Choose agent…" }));
+    expect(mergeOptions() === null).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  test("Auto-merge & Cleanup arms auto-merge with cleanup from the merge options", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    await act(async () => {
+      fireEvent.click(
+        within(mergeOptions()!).getByRole("button", { name: "Auto-merge & Cleanup" }),
+      );
+    });
+    expect(mergeOptions() === null).toBe(true);
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true),
+    );
+    expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+  });
+
+  test("an armed Auto-merge & Cleanup is shown as already on", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+      autoMerge: true,
+      autoMergeCleanup: true,
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    const options = within(mergeOptions()!);
+    expect(
+      (options.getByRole("button", { name: "Auto-merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(options.getByText(/^Already on:/)).toBeTruthy();
+  });
+
+  test("a rejected Auto-merge & Cleanup save reports the error without a success toast", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    await act(async () => {
+      fireEvent.click(
+        within(mergeOptions()!).getByRole("button", { name: "Auto-merge & Cleanup" }),
+      );
+    });
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not turn on auto-merge", {
+        description: "backend unavailable",
+      }),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+  });
+
+  test("a backend that drops the cleanup choice gets no success toast", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => ({
+      ...currentEnvironment,
+      autoMerge: true,
+      autoMergeCleanup: false,
+    }));
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    await act(async () => {
+      fireEvent.click(
+        within(mergeOptions()!).getByRole("button", { name: "Auto-merge & Cleanup" }),
+      );
+    });
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Auto-merge options were not saved"),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+  });
+
+  test("an armed Auto-merge & Cleanup that waits on someone to act warns instead of confirming", async () => {
+    // GitHub reports the PR cannot merge yet (a draft), on a confirmed reading.
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "unavailable",
+    };
+    appCommandStore(prMonitorStore).setState({
+      syncStatus: "current",
+      states: new Map([
+        [
+          currentEnvironment.id,
+          {
+            environmentId: currentEnvironment.id,
+            mode: "normal",
+            checkInProgress: false,
+            checkSummary: { passed: 3, total: 3, pending: 0 },
+            consecutiveErrors: 0,
+            lastCheckAt: "2026-01-01T00:00:00.000Z",
+            lastSuccessfulCheckAt: "2026-01-01T00:00:00.000Z",
+            prUrl: currentEnvironment.prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+          } as never,
+        ],
+      ]),
+    });
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => ({
+      ...currentEnvironment,
+      autoMerge: true,
+      autoMergeCleanup: true,
+    }));
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    const options = within(mergeOptions()!);
+    expect(options.getByRole("note").textContent).toBe(
+      "Auto-merge will wait: The pull request is a draft.",
+    );
+    await act(async () => {
+      fireEvent.click(options.getByRole("button", { name: "Auto-merge & Cleanup" }));
+    });
+    await waitFor(() =>
+      expect(toastWarningMock).toHaveBeenCalledWith("Auto-merge & Cleanup is on", {
+        description: "Waiting: The pull request is a draft.",
+        id: "auto-merge-cleanup-env-1",
+      }),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("a stopped environment's Merge PR opens the options with merging and Resolve disabled", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      status: "stopped",
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    const merge = mergePrButton();
+    expect(merge.disabled).toBe(false);
+    fireEvent.click(merge);
+    const options = within(mergeOptions()!);
+    for (const name of ["Merge PR", "Merge & Cleanup", "Resolve"]) {
+      expect((options.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(options.getAllByText("The container must be running to merge.")).toHaveLength(2);
+    expect(options.getByText("The container must be running to resolve conflicts.")).toBeTruthy();
+    expect(
+      (options.getByRole("button", { name: "Auto-merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  // The merge options close themselves when an option starts something else;
+  // a merge failure shown before must not come back when they are reopened.
+  for (const option of ["Resolve", "Choose agent…", "Auto-merge & Cleanup"] as const) {
+    test(`closing the merge options through ${option} clears an earlier merge error`, async () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+      mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("merge failed"));
+      const view = renderInAppCommandScope(<ActionBar />);
+
+      confirmMerge();
+      await waitFor(() => findErrorAlert("Failed to merge PR:"));
+
+      if (option !== "Auto-merge & Cleanup") {
+        // Resolve and its agent picker are offered once GitHub reports conflicts.
+        currentEnvironment = { ...currentEnvironment, hasMergeConflicts: true };
+        view.rerender(<ActionBar />);
+      }
+      await act(async () => {
+        fireEvent.click(within(mergeOptions()!).getByRole("button", { name: option }));
+      });
+      expect(mergeOptions() === null).toBe(true);
+      // Close whatever the option opened, then reopen the merge options.
+      if (option === "Choose agent…") {
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      }
+      await waitFor(() => expect(mergeOptions() === null).toBe(true));
+      fireEvent.click(mergePrButton());
+      expect(mergeOptions() !== null).toBe(true);
+      expect(
+        screen.queryByText(
+          (_content, element) => element?.textContent?.startsWith("Failed to merge PR:") ?? false,
+        ) === null,
+      ).toBe(true);
+    });
+  }
 
   test("opens the Resolve modal from a right-click while mergeability is pending", async () => {
     currentEnvironment = {
@@ -6341,7 +6650,7 @@ describe("ActionBar pull request actions", () => {
     });
     renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
+    fireEvent.contextMenu(mergePrButton());
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     expect(screen.queryByRole("alert") === null).toBe(true);
 
@@ -6367,7 +6676,7 @@ describe("ActionBar pull request actions", () => {
     };
     renderInAppCommandScope(<ActionBar presentation="grid" />);
 
-    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
+    const checking = mergePrButton();
     fireEvent.pointerDown(checking, {
       pointerId: 1,
       pointerType: "touch",
@@ -6386,10 +6695,11 @@ describe("ActionBar pull request actions", () => {
       await screen.findByRole("dialog", { name: "Configure conflict resolution" }),
     ).toBeTruthy();
     fireEvent.click(checking);
+    expect(mergeOptions() === null).toBe(true);
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
   }, 20_000);
 
-  test("suppresses a pending long press's trailing click after Merge PR replaces the control", async () => {
+  test("suppresses a pending long press's trailing click after the PR proves mergeable", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -6397,7 +6707,7 @@ describe("ActionBar pull request actions", () => {
     };
     const view = renderInAppCommandScope(<ActionBar presentation="grid" />);
 
-    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
+    const checking = mergePrButton();
     fireEvent.pointerDown(checking, {
       pointerId: 1,
       pointerType: "touch",
@@ -6435,7 +6745,7 @@ describe("ActionBar pull request actions", () => {
     };
     const view = renderInAppCommandScope(<ActionBar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
+    fireEvent.contextMenu(mergePrButton());
     currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
     view.rerender(<ActionBar />);
 
@@ -8877,7 +9187,8 @@ describe("ActionBar error dialogs", () => {
     expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(dialogContent.className).toContain("max-h-[calc(100vh-2rem)]");
-    expect(dialogContent.className).toContain("overflow-hidden");
+    // The merge options can outgrow a short window, so the dialog scrolls.
+    expect(dialogContent.className).toContain("overflow-y-auto");
     expect(errorAlert.className).toContain("max-h-[min(16rem,40vh)]");
     expect(errorAlert.className).toContain("overflow-y-auto");
     expect(errorAlert.className).toContain("overflow-x-hidden");

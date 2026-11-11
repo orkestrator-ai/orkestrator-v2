@@ -6,6 +6,7 @@ import {
   mergeOpenCodeFakeProvider,
   openCodeModelRef,
   profileOpenCodeConfigFile,
+  useOpenCodeProtocol,
 } from "./opencode-fake-provider";
 
 const fake = {
@@ -128,5 +129,36 @@ describe("OpenCode provider allowlist", () => {
       await allowOpenCodeFakeProvider(invoke, "fixture-fake")
     )();
     expect(commands).toEqual(["get_config"]);
+  });
+
+  test("puts new sessions on OpenCode 2.x for the run and restores the setting (0049 task 8)", async () => {
+    for (const earlier of [undefined, "legacy"] as const) {
+      const calls: Array<[string, unknown]> = [];
+      const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        calls.push([command, args]);
+        return (
+          command === "get_config" ? { global: earlier ? { openCodeProtocol: earlier } : {} } : {}
+        ) as T;
+      };
+      const restore = await useOpenCodeProtocol(invoke, "v2");
+      expect(calls[1]).toEqual(["patch_global_config", { patch: { openCodeProtocol: "v2" } }]);
+      await restore();
+      // An unset would not stick (the backend keeps a stored protocol), and
+      // absent already means legacy, so the undo writes legacy back.
+      expect(calls[2]).toEqual(["patch_global_config", { patch: { openCodeProtocol: "legacy" } }]);
+    }
+    // Already on 2.x, or asked for the default line: nothing to change or undo.
+    const commands: string[] = [];
+    const quiet = async <T>(command: string): Promise<T> => {
+      commands.push(command);
+      return { global: { openCodeProtocol: "v2" } } as T;
+    };
+    await (
+      await useOpenCodeProtocol(quiet, "v2")
+    )();
+    await (
+      await useOpenCodeProtocol(quiet, "legacy")
+    )();
+    expect(commands).toEqual(["get_config", "get_config"]);
   });
 });

@@ -2723,6 +2723,16 @@ lock).
   coordinator as usual. The result says whether a follow exists and tells
   the coordinator to finish its turn. A step that fails again at once comes
   back in the result as `phase: "failed"` with the error.
+- **Live qualification.** `mise run test:agent:coordinator:restart-fake`
+  runs the incident's shape on two real backends joined by a real node link,
+  with real Pi bridges and a loopback model that refuses every build worker
+  with a usage limit (see
+  [agent-testing.md](../development/agent-testing.md#coordinator-pipeline-step-restart-after-a-usage-limit-fake-model)).
+  On this node and on a leaf, the coordinator is woken with the build
+  failed and the restart offered, restarts with `stepId` omitted, is woken
+  again when the restarted step stops, and a same-`requestId` retry replays
+  without restarting twice. A real provider's limit text and a real model
+  choosing to restart are on the manual-test checklist (4680 task 2).
 
 `resume_build_pipeline` resumes a paused pipeline only. On any other phase
 it refuses, naming the phase. Failed pipelines get restart guidance; active
@@ -3324,10 +3334,20 @@ own, and a tab that cannot be a worker (a terminal, a file) never asks. Against 
 backend without the command nothing is shown. A delegation that retention has
 removed takes its marker with it.
 
-A worker on another node has no marker on its tab. Its delegation is kept on the
-command node, while its tab renders in that node's workspace, on its node scope,
-and reads that node's backend, which holds no such record. The gap is
-[6580](../todo/coordinator-and-multi-review/6580-launch-override-marker-on-another-node.md).
+A worker a command node's coordinator launched on another node is marked too.
+Its delegation is kept on the command node, while its tab renders in the same
+window on that node's scope, whose backend holds no such record. So the command
+node's answer lists those workers apart, in `remoteOverrides`, each with the
+`nodeId` of the node that holds it; `overrides` keeps only the answering node's
+own tabs, because a renderer from before this keys a row by environment and tab
+alone and would mark whichever of its own tabs had the same ids. A tab on
+another node's scope reads its own node's answer (that node's own coordinators'
+workers) and looks itself up by node in the window's command scope's answer
+(`useCoordinatorLaunchOverride`). The command node is read once for every tab
+in the window, so a leaf tab adds no read of its own. Nothing is stored on the
+leaf. While the command node is unreachable its last answer stays; a leaf
+opened directly, as its own command node, has no other scope to ask and shows
+only its own workers' markers.
 
 ## Complete application actions
 
@@ -3913,7 +3933,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
   refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
-  (`coordinator-pipeline-step-actions.test.ts`)
+  (`coordinator-pipeline-step-actions.test.ts`); the fake model's script
+  (`e2e/agent-testing/coordinator-restart-fake-model.test.ts`) and, on demand,
+  the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a

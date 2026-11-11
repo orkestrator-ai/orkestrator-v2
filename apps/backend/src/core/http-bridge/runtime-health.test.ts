@@ -60,6 +60,25 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]).toMatchObject({ severity: "warning", source: "provider" });
   });
 
+  test("reports a Codex session's attachment while its engine is ready (todo 7380)", () => {
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "attached" } })?.state,
+    ).toBe("attached");
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "detached" } })?.state,
+    ).toBe("detached");
+    // An engine that is not ready is the more useful fact to show.
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "restarting" }, session: { state: "detached" } })
+        ?.state,
+    ).toBe("restarting");
+    // An older bridge sends no session field, and an unknown value is ignored.
+    expect(bridgeRuntimeSummary({ engine: { state: "ready" } })?.state).toBe("ready");
+    expect(
+      bridgeRuntimeSummary({ engine: { state: "ready" }, session: { state: "weird" } })?.state,
+    ).toBe("ready");
+  });
+
   test("groups repeated Codex notices, which arrive one occurrence at a time", () => {
     const summary = bridgeRuntimeSummary({
       engine: {},

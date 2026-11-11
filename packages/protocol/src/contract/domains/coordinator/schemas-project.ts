@@ -109,7 +109,7 @@ export const CoordinatorActivitySnapshotSchema = Schema.Struct({
   projects: Schema.Record(Schema.String, Schema.String),
 });
 
-/** `CoordinatorLaunchOverridesSnapshot`. */
+/** `CoordinatorLaunchOverridesSnapshot`; `remoteOverrides` rows name their node. */
 export const CoordinatorLaunchOverridesSnapshotSchema = Schema.Struct({
   overrides: Schema.Array(
     openRecord({
@@ -118,6 +118,17 @@ export const CoordinatorLaunchOverridesSnapshotSchema = Schema.Struct({
       model: optionalString,
       reasoning: optionalString,
     }),
+  ),
+  remoteOverrides: Schema.optionalKey(
+    Schema.Array(
+      openRecord({
+        nodeId: Schema.String,
+        environmentId: Schema.String,
+        tabId: Schema.String,
+        model: optionalString,
+        reasoning: optionalString,
+      }),
+    ),
   ),
 });
 

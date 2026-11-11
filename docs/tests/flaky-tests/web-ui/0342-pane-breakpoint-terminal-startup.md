@@ -45,3 +45,13 @@ The aggregate recurrence passed in the complete unchanged owning-file rerun. Exa
 The mobile pane-tree/moveBefore case found no terminal at the five-second startup deadline in the five-worker component run. All unchanged owner cases passed in the sequential one-worker rerun.
 
 The original component run reported 734 passed, 102 skipped and six failed. The six complete owning files ran sequentially with one worker: 80 passed, one skipped and three failed (307.4 s). Exact commands, per-owner results and artifact paths are in [0822](../aggregate-validation-runs/0822-resume-cleanup-coverage-validation.md). No owning implementation, assertion, deadline or skip changed.
+
+## Launch-override marker review repair — 2026-11-11
+
+On `launch-override-marker-043a84998c41-r1` (base `498b68766`), a multi-worker
+rerun of four failed owners at load average about 30 found no mobile terminal
+in the pane-tree/moveBefore case at the five-second deadline
+(`PaneBreakpoint.spec.ts:126`). The complete unchanged owner then passed with
+one worker (with `DataSavingGateway.spec.ts`, 61.3 s). `flaky:recurrence 0342`
+reported `open`. The branch does not change the owner or the pane layout it
+drives. Full run: [9953](../aggregate-validation-runs/9953-launch-override-marker-browser-owners.md).

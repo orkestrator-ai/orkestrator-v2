@@ -3,8 +3,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * Auto-merge: lucide's `GitMerge` with a small "A" in its top-right corner.
- * Shared by the action bar's auto-merge switch and the pipeline's Integrate
- * button, which turns the same switch on. Decorative, like lucide icons.
+ * Shared by the auto-merge toggles (action bar, ticket view) and the Merge PR
+ * dialog's Auto-merge & Cleanup option. Decorative, like lucide icons.
  */
 export function AutoMergeIcon({
   className,

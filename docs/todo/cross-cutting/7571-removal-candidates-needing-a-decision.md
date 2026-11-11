@@ -140,7 +140,7 @@ inside that opt-in mode. Nothing sets either variable except a test.
 
 **Context.** Read at `apps/backend/src/core/index.ts`, allowlisted in
 `apps/desktop/electron/backend-process.ts`, implemented in
-`native-agent-interaction-tracker.ts` (several hundred lines). 0049 decision
+`native-agent-interaction-tracker.ts` (several hundred lines). 0049 (retired 2026-11-11) decision
 D8 left B08 to
 [agent-engines 0001](../agent-engines/0001-agent-interactions-and-permissions.md).
 

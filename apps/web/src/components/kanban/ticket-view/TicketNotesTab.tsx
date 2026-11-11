@@ -4,27 +4,22 @@ import { toast } from "sonner";
 import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 
 import { KeyInformationDocument } from "@/components/build-pipeline/PipelineKeyInformationTab";
-import { PipelineIntegrateButton } from "@/components/build-pipeline/PipelineIntegrateButton";
 import { PipelineNeedsALook } from "@/components/build-pipeline/PipelineNeedsALook";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { AutoMergeToggleButton } from "@/components/layout/AutoMergeToggleButton";
+import { MergePrDialog, prMergeability } from "@/components/layout/MergePrDialog";
+import { armAutoMergeCleanup } from "@/components/layout/auto-merge-cleanup";
+import { useAutoMergeToggle } from "@/components/layout/useAutoMergeToggle";
 import { Button } from "@/components/ui/button";
 import { useAutoMergeHold, useShimmerRequiresChecks } from "@/hooks/useEnvironmentNameSignal";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { localEnvironmentPrMergeReadiness } from "@/lib/pr-merge-readiness";
 import { openPullRequestUrl, usePullRequestOpener } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
-import { useEnvironmentStore } from "@/stores";
+import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";
+import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { TicketActionBar } from "./TicketActionBar";
@@ -44,10 +39,12 @@ const TONE: Record<TicketPrTone, string> = {
  * The ticket view's Notes tab: its build's Notes (the key information, led by
  * what needs a look), laid out as the full-tab Notes page lays them out but in
  * one column, under a bar that stays put while they scroll. The bar says
- * where the pull request stands and offers Merge, enabled only when GitHub
- * reports it ready, and Integrate (the pipeline's own button: auto-merge,
- * launching Resolve when conflicts or the base need it). Nothing merges
- * without a click.
+ * where the pull request stands and offers Merge, which opens the action
+ * bar's Merge PR options (merge now, enabled only when GitHub reports it
+ * ready, and Auto-merge & Cleanup, offered while checks are still pending),
+ * and the auto-merge toggle (the same switch as the action bar's: merges when
+ * ready, launching Resolve when conflicts need it). Nothing merges without a
+ * click.
  */
 export function TicketNotesTab({ pipeline }: { pipeline: BuildPipeline }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -80,7 +77,11 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
   const monitor = usePrMonitorStore((state) => state.states.get(environmentId) ?? null);
   const syncStatus = usePrMonitorStore((state) => state.syncStatus);
   const hold = useAutoMergeHold(environmentId, environment);
-  const [confirming, setConfirming] = useState(false);
+  const autoMerge = useAutoMergeToggle(environment ?? null);
+  const prBaseBranch = useConfigStore((state) =>
+    environment ? state.config.repositories[environment.projectId]?.prBaseBranch : undefined,
+  );
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [merging, setMerging] = useState(false);
 
   const readiness =
@@ -104,9 +105,19 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
       : !pr.mergeable
         ? (pr.detail ?? `Not ready to merge: ${pr.label.toLowerCase()}`)
         : null;
+  // The button opens the options, so it stays usable while checks run: the
+  // options say why merging now is not possible and still offer Auto-merge &
+  // Cleanup.
+  const optionsDisabledReason = !environment
+    ? "The build's environment is not on this machine"
+    : merging
+      ? "Merge in progress…"
+      : !environment.prUrl || environment.prState !== "open"
+        ? (pr.detail ?? `Not ready to merge: ${pr.label.toLowerCase()}`)
+        : null;
 
   const merge = async () => {
-    setConfirming(false);
+    setOptionsOpen(false);
     if (!environment) return;
     setMerging(true);
     try {
@@ -173,14 +184,14 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
           </span>
         ) : null}
       </div>
-      <span className="inline-flex shrink-0" title={mergeDisabledReason ?? "Squash and merge"}>
+      <span className="inline-flex shrink-0" title={optionsDisabledReason ?? "Merge options"}>
         <Button
           type="button"
           size="sm"
           className="h-7 gap-1.5 px-2.5"
-          disabled={mergeDisabledReason !== null}
-          aria-description={mergeDisabledReason ?? undefined}
-          onClick={() => setConfirming(true)}
+          disabled={optionsDisabledReason !== null}
+          aria-description={optionsDisabledReason ?? undefined}
+          onClick={() => setOptionsOpen(true)}
         >
           {merging ? (
             <Loader2 aria-hidden className="size-3.5 animate-spin" />
@@ -190,27 +201,36 @@ function PullRequestBar({ environmentId }: { environmentId: string }) {
           Merge
         </Button>
       </span>
-      <PipelineIntegrateButton environmentId={environmentId} />
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Merge pull request</AlertDialogTitle>
-            <AlertDialogDescription>
-              Squash and merge {prNumber ? `#${prNumber}` : "this pull request"} now. The branch is
-              deleted on GitHub once it merges; the environment stays.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-green-600 text-white hover:bg-green-700"
-              onClick={() => void merge()}
-            >
-              Merge
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <AutoMergeToggleButton environmentId={environmentId} />
+      <MergePrDialog
+        open={optionsOpen}
+        onOpenChange={setOptionsOpen}
+        mergeability={prMergeability(environment?.hasMergeConflicts)}
+        sourceBranch={prNumber ? `#${prNumber}` : "this pull request"}
+        targetBranch={defaultPrTargetBranch(prBaseBranch)}
+        deletesBranch={Boolean(
+          environment && isEnvironmentOwnedBranch(environment.id, environment.branch),
+        )}
+        mergeError={null}
+        merge={{
+          disabledReason: mergeDisabledReason,
+          onMerge: () => void merge(),
+          offerCleanup: false,
+        }}
+        resolve={null}
+        autoMergeCleanup={{
+          disabledReason: environment?.projectHome
+            ? "The project's home environment is never deleted; use the auto-merge toggle instead."
+            : null,
+          active: autoMerge.cleanup,
+          saving: autoMerge.saving,
+          hold,
+          onArm: () => {
+            setOptionsOpen(false);
+            if (environment) void armAutoMergeCleanup(environment.id, autoMerge.set, hold);
+          },
+        }}
+      />
     </>
   );
 }

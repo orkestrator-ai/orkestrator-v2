@@ -958,6 +958,11 @@ export async function measureSoak(
       const gap = options.soakCycleGapMs ?? 0;
       if (gap > 0 && cycle < options.soakCycles) await runtime.sleep(gap, signal);
     }
+    // The reader's page holds an event stream of its own, which the baseline
+    // (taken before its first read) did not; close it before the final
+    // footprint so it is not reported as a leaked subscriber. Its owner closes
+    // it again, which is a no-op.
+    await reader?.close();
     await runtime.sleep(options.settleMs, signal);
     result.final = combineFootprints(await footprints(), "min");
     result.backendRssKiB.final = backendRssKiB();

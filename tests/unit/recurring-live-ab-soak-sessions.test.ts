@@ -252,15 +252,25 @@ describe("soak sessions and trends", () => {
 
   test("a reader opens each cycle's session tab, then the long-lived ones, every cycle", async () => {
     const h = sessionHarness({ cycleRows: () => 1 });
+    // The reader's page holds an event stream of its own while it is open.
+    let readerOpen = false;
+    h.gateway.metrics = mock(async () => {
+      const sample = metrics(1, 1);
+      sample.stream.open += readerOpen ? 1 : 0;
+      return sample;
+    });
     const reads: string[] = [];
     const reader = {
       read: mock(async (name: string) => {
+        readerOpen = true;
         reads.push(name);
         // The fixture's tabs are the two long-lived sessions.
         if (name === "soak-local-2") throw new Error("tab never showed the reply");
         return name === "fixture" ? 2 : 1;
       }),
-      close: mock(async () => undefined),
+      close: mock(async () => {
+        readerOpen = false;
+      }),
     };
     const result = await measureSoak(
       h.gateway,
@@ -289,8 +299,9 @@ describe("soak sessions and trends", () => {
     expect(result.failures).toEqual([{ cycle: 2, kind: "local", step: "read" }]);
     expect(result.cyclesCompleted).toBe(3);
     expect(result.reader).toEqual({ reads: 5, tabs: 8 });
-    // The reader is the caller's to close.
-    expect(reader.close).not.toHaveBeenCalled();
+    // Closed before the final footprint, so its own event stream is not a leak.
+    expect(reader.close).toHaveBeenCalledTimes(1);
+    expect(result.leaks).toEqual([]);
   });
 
   test("a soak without a reader reports none", async () => {

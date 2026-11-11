@@ -8,7 +8,7 @@
  * shows as two calls carrying it. A prompt containing `[hold:<id>]` is parked
  * until `release(<id>)`, which places a turn at "provider is working" for as
  * long as a scenario needs (a restart, a disconnect). A parked call whose
- * client goes away is recorded as `aborted`. A prompt containing
+ * client goes away is recorded as `aborted`, as is a stream it leaves. A prompt containing
  * `[stream:<n>]` is answered as `n` further fixture lines, one text delta
  * every `STREAM_DELTA_INTERVAL_MS`, so a turn streams for a while and the
  * transcript is patched many times (`remote-bandwidth-live.spec.ts` measures
@@ -42,8 +42,9 @@ export interface FakeModelCall {
   context: string[];
   receivedAt: number;
   answeredAt?: number;
-  /** When a `[stream:<n>]` answer wrote its last frame. */
+  /** When a `[stream:<n>]` answer wrote its last frame; absent when it never did. */
   streamedAt?: number;
+  /** The client went away while the call was held or still streaming. */
   aborted?: boolean;
 }
 
@@ -242,7 +243,8 @@ const MESSAGE_END_EVENTS: Array<{ type: string } & Record<string, unknown>> = [
 
 /**
  * Writes one assistant text message as paced SSE frames, one text delta per
- * `intervalMs`. Stops early, without throwing, when the client goes away.
+ * `intervalMs`. Stops early, without throwing, when the client goes away, and
+ * answers whether the whole message was written.
  */
 async function writePacedStream(
   response: ServerResponse,
@@ -250,21 +252,28 @@ async function writePacedStream(
   model: string,
   deltas: readonly string[],
   intervalMs: number,
-): Promise<void> {
+): Promise<boolean> {
+  let gone = false;
+  response.once("close", () => {
+    if (!response.writableFinished) gone = true;
+  });
+  const left = () => gone || response.destroyed;
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   response.write(frame(messageStart(id, model)));
   response.write(
     frame({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
   );
   for (const [index, text] of deltas.entries()) {
-    if (response.destroyed) return;
+    if (left()) return false;
     if (index > 0) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    if (left()) return false;
     response.write(
       frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }),
     );
   }
-  if (response.destroyed) return;
+  if (left()) return false;
   response.end(MESSAGE_END_EVENTS.map(frame).join(""));
+  return true;
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
@@ -359,14 +368,16 @@ export async function startFakeAnthropicModel(port = 0): Promise<FakeAnthropicMo
         return;
       }
       if ((body as { stream?: unknown }).stream === true && streamDeltas > 0) {
-        await writePacedStream(
+        const whole = await writePacedStream(
           response,
           `msg_fake_${counter}`,
           model,
           streamedAnswerDeltas(prompt, streamDeltas),
           STREAM_DELTA_INTERVAL_MS,
         );
-        call.streamedAt = Date.now();
+        // A stream the client left early never ended: it has no stream end.
+        if (whole) call.streamedAt = Date.now();
+        else call.aborted = true;
         return;
       }
       if ((body as { stream?: unknown }).stream === true) {

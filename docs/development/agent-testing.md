@@ -1695,8 +1695,9 @@ an "ask" policy parks a real approval. Nothing logs in and nothing is billed.
 
 Each client reaches the gateway through its own loopback link
 (`remote-bandwidth-meter.ts`), which counts exact wire bytes per request class
-(event streams, invokes, WebSocket, other) and shapes the slow-link cells.
-The spec also diffs the gateway's `/metrics` per cell; its gzip counters cover
+(event streams, invokes, WebSocket, other) and shapes the slow-link cells in
+both directions. Setup invokes and `/metrics` reads go straight to the
+gateway URL, so they are neither counted nor shaped. The spec also diffs the gateway's `/metrics` per cell; its gzip counters cover
 browser listeners only, while its stream totals include the profile's own
 headless Electron window. It restarts the profile once per mode with
 `ORKESTRATOR_GATEWAY_COMPRESSION`, which agent-test backends accept for this.
@@ -1722,7 +1723,12 @@ client), terminal bursts of redundant build output in the visible and in a
 background terminal tab and of random printable output, and, in `on` mode,
 data saving off and on side by side (a running turn, an idle view, the Files
 panel, completion and approval latency). Evidence lands in `evidence-remote-bandwidth-*.json`
-beside the run: numbers and cell labels only.
+beside the run: numbers and cell labels only. Each cell carries an `outcome`
+(`qualified`, `incomplete` or `over-budget`) and its `problems`
+(`remote-bandwidth-qualification.ts`): a timed-out or missing sample, an
+unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
+2 s approval budget. The test fails at the end of its run unless every cell
+qualified; the evidence file is written either way.
 
 ### Live second node scope (two profiles)
 

@@ -885,6 +885,7 @@ const ROOT_TEST_PATHS = [
   "./e2e/agent-testing/electron-startup-dialogs.test.ts",
   "./e2e/agent-testing/fake-anthropic-model.test.ts",
   "./e2e/agent-testing/remote-bandwidth-meter.test.ts",
+  "./e2e/agent-testing/remote-bandwidth-qualification.test.ts",
   "./e2e/agent-testing/auto-pipeline-fake-model.test.ts",
   "./e2e/agent-testing/profile-restart-args.test.ts",
   "./e2e/agent-testing/coordinator-routing-fake-model.test.ts",

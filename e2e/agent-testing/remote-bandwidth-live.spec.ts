@@ -4,7 +4,8 @@
  * several real browser clients on one Claude session and one environment's
  * terminals, against a real `dev:test` gateway, per compression mode
  * (`body`, `on`), terminal transport (shared SSE stream, opt-in WebSocket)
- * and link (loopback, and Chromium-throttled to a slow link).
+ * and link (loopback, and a slow link shaped in each client's loopback
+ * relay).
  *
  * The provider is the profile's real Claude CLI and bridge sent to a loopback
  * Anthropic endpoint (`fake-anthropic-model.ts`) through the profile's own
@@ -27,11 +28,20 @@
  * Each client reaches the gateway through its own loopback link
  * (`remote-bandwidth-meter.ts`), which counts the exact wire bytes per request
  * class and, for the slow-link cells, shapes the link (rate and one-way
- * latency). Gateway `/metrics` deltas over each cell are recorded too; its
+ * latency) in both directions. Setup invokes and `/metrics` reads go straight
+ * to the gateway URL, so they bypass every relay and are never counted or
+ * slowed. Gateway `/metrics` deltas over each cell are recorded too; its
  * gzip figures cover browser listeners only, while its stream totals also
  * include the profile's own headless Electron window (control listener,
- * always identity). Latency is a wall-clock interval in this process. Evidence holds only numbers and cell labels,
- * never prompts, terminal output, tokens or URLs.
+ * always identity). Latency is a wall-clock interval in this process.
+ * Evidence holds only numbers and cell labels, never prompts, terminal
+ * output, tokens or URLs.
+ *
+ * Each cell is checked as it is recorded (`remote-bandwidth-qualification.ts`):
+ * it needs every sample it was meant to take, every terminal burst finished
+ * and settled, and each budgeted p95 inside its budget. A cell that falls
+ * short is still recorded, with its outcome and reasons, and the test fails
+ * once its run is over.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -49,11 +59,19 @@ import { devTestRestartArgs, type StoredProfileSelection } from "./profile-resta
 import {
   linkDelta,
   numericDelta,
-  percentile,
   startCountingLink,
   type CountingLink,
   type LinkTotals,
 } from "./remote-bandwidth-meter";
+import {
+  completionAfterLastDelta,
+  lastStreamByteMs,
+  latencyProblems,
+  outcomeOf,
+  summary,
+  terminalProblems,
+  type Problem,
+} from "./remote-bandwidth-qualification";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
@@ -90,7 +108,12 @@ const ROUNDS = Math.max(1, Number(process.env.ORKESTRATOR_AGENT_TEST_BANDWIDTH_R
 const IDLE_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_BANDWIDTH_IDLE_MS ?? "20000");
 /** Lines per streamed answer: 25 ms apart, so a turn streams for about five seconds. */
 const STREAM_LINES = 200;
-/** The slow link, as the in-process baseline's constrained run (512 kbit/s, 40 ms). */
+/**
+ * The slow link: the in-process baseline's constrained run (512 kbit/s of
+ * 1,000 bits, as `remote-bandwidth-throttle.ts` counts them, and 40 ms each
+ * way). The relay shapes both directions; the baseline shapes only the
+ * downstream rate.
+ */
 const LINKS: Link[] = [{ label: "loopback" }, { label: "throttled", kbps: 512, latencyMs: 40 }];
 const TRANSPORTS: Transport[] = ["sse", "websocket"];
 const AGENT_TAB = "rbw-claude";
@@ -263,6 +286,7 @@ function applyLink(client: Client, link: Link): void {
   client.link.shape({ kbps: link.kbps, latencyMs: link.latencyMs });
 }
 
+/** Invokes straight on the gateway URL: not through any client's relay, so never counted or shaped. */
 function invokeThrough(page: Page, gatewayUrl: string): Invoke {
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const response = await page.request.post(new URL("/__orkestrator/invoke", gatewayUrl).href, {
@@ -281,7 +305,8 @@ type GatewayMetrics = {
 };
 
 async function gatewayMetrics(page: Page, gatewayUrl: string): Promise<GatewayMetrics> {
-  // Read through Playwright's request context, which Chromium's throttling does not slow.
+  // Straight to the gateway URL through Playwright's request context, so the
+  // read bypasses every client's relay: it is neither counted nor shaped.
   const response = await page.request.get(new URL("/__orkestrator/metrics", gatewayUrl).href);
   expect(response.ok(), `metrics: HTTP ${response.status()}`).toBe(true);
   return (await response.json()) as GatewayMetrics;
@@ -450,6 +475,8 @@ const evidence: { run: Record<string, unknown>; cells: Cell[] } = {
   run: {},
   cells: [],
 };
+/** What the current test's cells fell short on; the test fails on any at its end. */
+let shortfalls: string[] = [];
 
 /**
  * One line per step, so a logged runner's no-output watchdog sees a long case
@@ -459,12 +486,17 @@ function progress(step: string): void {
   console.log(`[remote-bandwidth] ${new Date().toISOString()} ${step}`);
 }
 
-function record(cell: Cell): void {
-  evidence.cells.push(cell);
-  progress(
-    `recorded ${String(cell.cell)} ${String(cell.mode)}/${String(cell.transport)}/${String(cell.link)}`,
-  );
-  test.info().annotations.push({ type: String(cell.cell), description: JSON.stringify(cell) });
+function record(cell: Cell, problems: Problem[] = []): void {
+  const label = `${String(cell.cell)} ${String(cell.mode)}/${String(cell.transport)}/${String(cell.link)}`;
+  const checked = {
+    ...cell,
+    outcome: outcomeOf(problems),
+    problems: problems.map((problem) => problem.detail),
+  };
+  evidence.cells.push(checked);
+  for (const problem of problems) shortfalls.push(`${label}: ${problem.detail}`);
+  progress(`recorded ${label} (${checked.outcome})`);
+  test.info().annotations.push({ type: String(cell.cell), description: JSON.stringify(checked) });
 }
 
 function snapshots(clients: Client[]): LinkTotals[] {
@@ -507,14 +539,20 @@ async function msUntil(since: number, done: () => Promise<boolean>, timeoutMs = 
   }
 }
 
-async function transcriptHas(page: Page, needle: string): Promise<boolean> {
+/**
+ * Whether one transcript row holds every needle: one message, so a needle an
+ * earlier answer also carries (a streamed answer's invariant last line) never
+ * completes the current one.
+ */
+async function transcriptHas(page: Page, ...needles: string[]): Promise<boolean> {
   return page
     .evaluate((wanted) => {
       for (const row of Array.from(document.querySelectorAll("[data-chat-message-index]"))) {
-        if ((row.textContent ?? "").includes(wanted)) return true;
+        const text = row.textContent ?? "";
+        if (wanted.every((needle) => text.includes(needle))) return true;
       }
       return false;
-    }, needle)
+    }, needles)
     .catch(() => false);
 }
 
@@ -533,17 +571,6 @@ async function send(page: Page, prompt: string): Promise<number> {
 
 function tag(prefix: string): string {
   return `${prefix}${randomBytes(3).toString("hex").toUpperCase()}`;
-}
-
-function summary(values: Array<number | null>) {
-  const numbers = values.filter((value): value is number => value !== null);
-  return {
-    n: numbers.length,
-    missing: values.length - numbers.length,
-    p50: percentile(numbers, 0.5),
-    p95: percentile(numbers, 0.95),
-    max: numbers.length ? Math.max(...numbers) : null,
-  };
 }
 
 /** Commands whose output is fixture text only: a redundant build log and random printable bytes. */
@@ -636,6 +663,7 @@ async function profileIn(browser: Browser, mode: Mode): Promise<Status> {
 for (const mode of MODES) {
   test(`matrix in ${mode} mode`, async ({ browser }) => {
     test.setTimeout(45 * 60_000);
+    shortfalls = [];
     const status = await profileIn(browser, mode);
     const clients: Client[] = [];
     let invoke: Invoke | undefined;
@@ -709,44 +737,54 @@ for (const mode of MODES) {
                 })
                 .toBe(true);
               const answeredAt = model.callsWith(word).find((call) => call.answeredAt)!.answeredAt!;
+              // The current answer's own row: its first line names this
+              // round's word, and its last line is the same in every round.
+              const answer = `Answer to: ${word}`;
               const lastLine = `step ${STREAM_LINES} of ${STREAM_LINES}`;
               const results = await Promise.all(
                 clients.map(async (client) => {
-                  const first = await msUntil(answeredAt, () =>
-                    transcriptHas(client.page, `Answer to: ${word}`),
-                  );
+                  const first = await msUntil(answeredAt, () => transcriptHas(client.page, answer));
                   const done = await msUntil(answeredAt, () =>
-                    transcriptHas(client.page, `${word}`).then(async (has) =>
-                      has ? transcriptHas(client.page, lastLine) : false,
-                    ),
+                    transcriptHas(client.page, answer, lastLine),
                   );
-                  return { first, done };
+                  return { first, doneAt: done === null ? null : answeredAt + done };
                 }),
               );
-              const streamedAt =
-                model.callsWith(word).find((call) => call.streamedAt)?.streamedAt ?? answeredAt;
+              // This round's own stream end; a stream that never ended leaves completion unknown.
+              await msUntil(
+                Date.now(),
+                async () => model.callsWith(word).some((call) => call.streamedAt),
+                10_000,
+              );
+              const streamedAt = model.callsWith(word).find((call) => call.streamedAt)?.streamedAt;
               for (const result of results) {
                 firstUpdate.push(result.first);
-                completion.push(
-                  result.done === null ? null : answeredAt + result.done - streamedAt,
-                );
+                completion.push(completionAfterLastDelta(result.doneAt, streamedAt));
               }
               await expect(composer(clients[0]!.page)).toBeEditable({ timeout: 60_000 });
             }
             const elapsed = Date.now() - startedAt;
-            record({
-              cell: "agent-turn",
-              ...base,
-              rounds: ROUNDS,
-              elapsedMs: elapsed,
-              firstUpdateMs: summary(firstUpdate),
-              completionAfterLastDeltaMs: {
-                ...summary(completion),
-                budgetMs: COMPLETION_BUDGET_MS,
+            const firstUpdateMs = summary(firstUpdate);
+            const completionMs = summary(completion);
+            record(
+              {
+                cell: "agent-turn",
+                ...base,
+                rounds: ROUNDS,
+                elapsedMs: elapsed,
+                firstUpdateMs,
+                completionAfterLastDeltaMs: { ...completionMs, budgetMs: COMPLETION_BUDGET_MS },
+                perClient: perClient(clients, before, elapsed),
+                gateway: gatewayDelta(server, await metrics()),
               },
-              perClient: perClient(clients, before, elapsed),
-              gateway: gatewayDelta(server, await metrics()),
-            });
+              [
+                ...latencyProblems("first update", firstUpdateMs, { samples: ROUNDS * CLIENTS }),
+                ...latencyProblems("completion", completionMs, {
+                  samples: ROUNDS * CLIENTS,
+                  budgetMs: COMPLETION_BUDGET_MS,
+                }),
+              ],
+            );
           }
 
           // Terminal bursts: visible and background tab, redundant and random output.
@@ -776,21 +814,28 @@ for (const mode of MODES) {
               120_000,
             );
             const quiet = await streamsQuiet(clients, 1_500, 120_000);
-            const lastDeliveries = clients.map((client) => {
-              const at = client.link.snapshot().lastStreamDelivery;
-              return at > startedAt ? at - startedAt : null;
-            });
+            const lastDeliveries = clients.map((client) =>
+              lastStreamByteMs(startedAt, client.link.snapshot().lastStreamDelivery),
+            );
             const elapsed = Date.now() - startedAt;
-            record({
-              cell: `terminal-${burst}`,
-              ...base,
-              backendDoneMs,
-              settled: quiet.quiet,
-              elapsedMs: elapsed,
-              lastStreamByteMs: summary(lastDeliveries),
-              perClient: perClient(clients, before, elapsed),
-              gateway: gatewayDelta(server, await metrics()),
-            });
+            const lastByte = summary(lastDeliveries);
+            record(
+              {
+                cell: `terminal-${burst}`,
+                ...base,
+                backendDoneMs,
+                settled: quiet.quiet,
+                elapsedMs: elapsed,
+                lastStreamByteMs: lastByte,
+                perClient: perClient(clients, before, elapsed),
+                gateway: gatewayDelta(server, await metrics()),
+              },
+              terminalProblems(
+                `terminal-${burst}`,
+                { backendDoneMs, settled: quiet.quiet, lastStreamByteMs: lastByte },
+                CLIENTS,
+              ),
+            );
           }
         }
       }
@@ -889,7 +934,8 @@ for (const mode of MODES) {
         // Completion latency with and without data saving.
         {
           const latency: Record<"off" | "on", Array<number | null>> = { off: [], on: [] };
-          for (let round = 0; round < Math.max(ROUNDS, 5); round += 1) {
+          const rounds = Math.max(ROUNDS, 5);
+          for (let round = 0; round < rounds; round += 1) {
             const word = tag("RBWEND");
             const hold = word.toLowerCase();
             await send(normal.page, `${word} [hold:${hold}]`);
@@ -902,17 +948,26 @@ for (const mode of MODES) {
                 msUntil(releasedAt, () => transcriptHas(client.page, `Answer to: ${word}`)),
               ),
             );
-            latency.off.push(off!);
-            latency.on.push(on!);
+            latency.off.push(off ?? null);
+            latency.on.push(on ?? null);
             await expect(composer(normal.page)).toBeEditable({ timeout: 60_000 });
           }
-          record({
-            cell: "data-saving-completion",
-            ...base,
-            budgetMs: COMPLETION_BUDGET_MS,
-            dataSavingOff: summary(latency.off),
-            dataSavingOn: summary(latency.on),
-          });
+          const offMs = summary(latency.off);
+          const onMs = summary(latency.on);
+          const expectation = { samples: rounds, budgetMs: COMPLETION_BUDGET_MS };
+          record(
+            {
+              cell: "data-saving-completion",
+              ...base,
+              budgetMs: COMPLETION_BUDGET_MS,
+              dataSavingOff: offMs,
+              dataSavingOn: onMs,
+            },
+            [
+              ...latencyProblems("completion, data saving off", offMs, expectation),
+              ...latencyProblems("completion, data saving on", onMs, expectation),
+            ],
+          );
         }
         // Approval visibility with and without data saving: a tool call parks
         // an approval (the composer's "ask" mode, on an "ask" environment);
@@ -950,7 +1005,8 @@ for (const mode of MODES) {
           const latency: Record<"off" | "on", Array<number | null>> = { off: [], on: [] };
           const parkedAfterAnswerMs: number[] = [];
           let notes = askMode ? `composer ask mode ${askMode.id}` : "no ask composer mode";
-          for (let round = 0; round < Math.max(ROUNDS, 5); round += 1) {
+          const rounds = Math.max(ROUNDS, 5);
+          for (let round = 0; round < rounds; round += 1) {
             const word = tag("RBWASK");
             await send(normal.page, `${word} [bash:${word.toLowerCase()}]`);
             let parked: Interaction | undefined;
@@ -988,17 +1044,28 @@ for (const mode of MODES) {
             await confirm(normal.page).click();
             await expect(composer(normal.page)).toBeEditable({ timeout: 60_000 });
           }
-          record({
-            cell: "data-saving-approval",
-            ...base,
-            budgetMs: APPROVAL_BUDGET_MS,
-            notes,
-            parkedAfterModelAnswerMs: summary(parkedAfterAnswerMs),
-            dataSavingOff: summary(latency.off),
-            dataSavingOn: summary(latency.on),
-          });
+          const offMs = summary(latency.off);
+          const onMs = summary(latency.on);
+          // A round that parked no approval took no sample, so the cell is incomplete.
+          const expectation = { samples: rounds, budgetMs: APPROVAL_BUDGET_MS };
+          record(
+            {
+              cell: "data-saving-approval",
+              ...base,
+              budgetMs: APPROVAL_BUDGET_MS,
+              notes,
+              parkedAfterModelAnswerMs: summary(parkedAfterAnswerMs),
+              dataSavingOff: offMs,
+              dataSavingOn: onMs,
+            },
+            [
+              ...latencyProblems("approval, data saving off", offMs, expectation),
+              ...latencyProblems("approval, data saving on", onMs, expectation),
+            ],
+          );
         }
       }
+      expect(shortfalls, "every cell qualified (evidence keeps the rest)").toEqual([]);
     } finally {
       for (const created of [environment, askEnvironment]) {
         if (!invoke || !created) continue;

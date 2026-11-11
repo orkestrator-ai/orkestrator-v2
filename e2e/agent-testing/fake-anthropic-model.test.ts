@@ -178,6 +178,38 @@ describe("endpoint", () => {
     expect(await whole.json()).toMatchObject({ content: [{ text: answerFor(prompt) }] });
   });
 
+  test("a stream the client leaves stops early, is aborted and has no stream end", async () => {
+    model = await startFakeAnthropicModel();
+    // node:http, not fetch: the test preload's AbortController is happy-dom's.
+    const client = http.request(`${model.origin}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    client.on("error", () => undefined);
+    let received = 0;
+    const firstBytes = new Promise<void>((resolve) => {
+      client.on("response", (response) => {
+        response.on("error", () => undefined);
+        response.on("data", (chunk: Buffer) => {
+          received += chunk.byteLength;
+          resolve();
+        });
+      });
+    });
+    // 200 deltas 25 ms apart: about five seconds, far longer than this test waits.
+    client.end(JSON.stringify(request(["gone [stream:200]"])));
+    await firstBytes;
+    client.destroy();
+    for (let attempt = 0; attempt < 200 && !model.calls()[0]?.aborted; attempt += 1) {
+      await Bun.sleep(10);
+    }
+    const call = model.calls()[0]!;
+    expect(call.aborted).toBe(true);
+    expect(call.answeredAt).toBeGreaterThan(0);
+    expect(call.streamedAt).toBeUndefined();
+    expect(received).toBeGreaterThan(0);
+  });
+
   test("a bash prompt calls the Bash tool once; its follow-up is answered as text", async () => {
     model = await startFakeAnthropicModel();
     const prompt = "check [bash:Word-1]";

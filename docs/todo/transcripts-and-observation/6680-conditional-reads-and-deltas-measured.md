@@ -6,11 +6,11 @@ Analysed 2026-11-06 against `main` at `cbe0f9a5b`. The E10 batch file (efficienc
 
 ### Tasks
 
-1. **Take the E10 baseline on a real stack**: from the baseline tasks of parts 0160, 0180 and 0190. Status: done for Claude on an isolated `dev:test` profile (2026-11-06). Codex, Pi, a lagging viewer and windows near the 512 KiB bound remain open; see the task.
-3. **Composer catalogue keyed by a revision**: from part 0180 task 3. Status: open (not built on the baseline; depends on 1 for a real Pi catalogue).
-4. **A v2 `delta` answer from bridges**: from part 0190 task 2. Status: open (not built on the baseline; depends on 1 for large windows).
-5. **The steer qualification probe runs on every state poll**: found while measuring. Status: open.
-6. **Two bridge health probes on every poll**: found on the profile. Status: open.
+1. **Take the E10 baseline on a real stack**: from the baseline tasks of parts 0160, 0180 and 0190. Status: done (2026-11-11): Claude and Codex on isolated credential-free `dev:test` profiles with loopback models, including windows near the 512 KiB bound. A lagging viewer stays measured with the fake bridge (the renderer sets its own cadence), and a real Pi catalogue moved to the manual-test checklist (7568: 6680 task 1).
+3. **Composer catalogue keyed by a revision**: from part 0180 task 3. Status: done (2026-11-11): closed without building it (the hash is under 0.3 ms a poll). The 130 KB Pi `/status` question is decided with the bridge state revision on the manual-test checklist (7568: 6680 task 2).
+4. **A v2 `delta` answer from bridges**: from part 0190 task 2. Status: done (2026-11-11): closed without building it. Near the bound the bridge spends 3.7–4.2 ms a read on both bridges, which is not the "well above 4 ms" that would reopen it.
+5. **The steer qualification probe runs on every state poll**: found while measuring. Status: done (2026-11-11): a positive answer is cached per session and bridge generation; 1 probe in 20 s where there were 39.
+6. **Two bridge health probes on every poll**: found on the profile. Status: done (2026-11-11): traced to the bridge start command each read resolves its provider through; a passed check now stands for 2 s, so 9 probes in 20 s where there were 78 (one viewer) and 160 (two).
 
 ### 1. Take the E10 baseline on a real stack
 
@@ -152,7 +152,7 @@ On the profile, each viewer poll made one bridge transcript read. A snapshot was
 
 **Context.** The local bridge health check is `checkHttpHealth` (`apps/backend/src/core/commands-server-health.ts`). It is used where the backend decides whether a local bridge is running and can be reused (`commands-servers.ts`, `commands-registry-servers.ts`). Each probe took the bridge under 0.15 ms and returned 33 bytes.
 
-**Investigation.** Counted only. The caller that probes on every read was not traced, so whether both probes are needed is not known.
+**Investigation.** Counted only until 2026-11-11. Traced then: every native-agent read resolves its provider through `ProviderRegistry.resolve`, which re-reads the bridge's coordinates by invoking `start_local_<agent>_server_cmd` so that a bridge replaced behind its back is noticed. For a running bridge that command reuses it after `confirmRunningServerHealth`, one `GET /global/health`. A live update makes a transcript read and a state read, so two probes per poll per viewer. The activity sweep's `peek_local_agent_bridge` probes separately, about once per 2 s sweep.
 
 **Decisions.**
 
@@ -184,9 +184,44 @@ The round 2 repair timestamps each bridge response completion and filters those 
 
 The second viewer uses an explicitly created and routed browser context, which satisfies the browser-suite guard without weakening it. Bun resolution precedes profile mutation; cleanup starts immediately after model acquisition, tracks owned files, and runs file removal and model shutdown even if setup or artifact writing fails.
 
+### Task 1: Codex and windows near the bound on the real stack (2026-11-11)
+
+Measured on beelink2 (Linux) with the backend at `91cd5308e` (tasks 5 and 6 built) and the spec as committed in `7cf11b9da`, on profile `e10-6680-measure` started with `--no-agent-credentials --headless --agent-platforms claude` (then `claude,codex`) and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`; stopped and reset afterwards. No billed turn, no real login. New scenarios: `E10_SCENARIO=large-window` (26 rounds of 30 KB, measured once ten rounds had streamed) and `E10_PLATFORM=codex` (the profile's pinned Codex against `conditional-reads-codex-model.ts`, a loopback Responses WebSocket, with a made-up API key written into the profile's own Codex home). Raw results are in `output/agent-testing/e10-6680-*/` (git-ignored). The Codex baseline turn's run wrote its results and then failed its evidence check, which only knew Claude's state route (`GET /session/:id`); the check now accepts Codex's `GET /session/:id/status`, and the near-bound Codex run passed with it.
+
+| Measure (20 s windows) | Claude, near the bound | Codex, near the bound | Codex, baseline turn |
+| --- | --- | --- | --- |
+| Bridge transcript reads, one viewer; two | 40; 80 | 40; 80 | 40; 80 |
+| Decoded bytes per snapshot | 495 KB; 495 KB | 495 KB; 494 KB | 37 KB; 133 KB |
+| Mean bridge time per transcript read | 3.85 ms; 4.24 ms | 3.69 ms; 4.17 ms | 1.24 ms; 1.46 ms |
+| What a delta would carry | 13.1×; 14.6× less | 13.9×; 14.4× less | 4.7×; 15.9× less |
+| Renderer round trip p50 (p90) | 28 (43) ms; 23 (37–39) ms | 24 (34) ms; 26 (33–39) ms | 33 (43) ms; 27–28 (40–47) ms |
+| State bodies repeated | 36 of 40; 76 of 80 | 0 of 40; 0 of 80 | 0 of 40; 11 of 80 |
+| Steer qualification probes | 1; 0 | 1; 0 | 0; 1 |
+| `GET /global/health` | 9; 9 | 9; 9 | 9; 9 |
+
+Every renderer answer while streaming was a transcript `delta`. A Codex state poll is now four bridge requests (`/status`, `/config`, `/approvals`, `/interactions`; `/config` is the costliest at 2.0–2.5 ms), and a Claude one is four (`/session/:id`, `/questions`, `/plan-approvals`, `/interactions`). The Codex `/status` body changes on nearly every streaming poll, as the fake bridge assumed; Claude's repeats, as the 2026-11-06 profile run found. Idle, both answered 3 polls in 30 s, all `unchanged`. A whole large-window turn (132 s Claude, 134 s Codex) averaged 3.71 ms per transcript read on both.
+
+A lagging viewer was not produced on the profile, for the reason in task 1: the renderer sets its own cadence. The fake bridge's figures stand. A real Pi catalogue needs the user's provider logins, so its size is the checklist's item.
+
+### Task 3: closed without building the catalogue revision
+
+Nothing new changed the decision: the hash is at most 0.3 ms a poll. The larger cost, Pi's `/status` resending the composer, belongs with the bridge state revision decision the user holds on the checklist, which now also asks for real Pi catalogue sizes.
+
+### Task 4: closed without building bridge deltas
+
+The reopening condition was a real-stack run near the bound with reads well above 4 ms. The run above measured 3.7–4.2 ms on both bridges, with whole snapshots of about 495 KB that a delta would cut 13–15 times. The bytes stay on loopback and the backend's parse is inside a renderer round trip whose p50 rose from 8–11 ms on small windows to 23–28 ms near the bound. That is a cost worth knowing, not one that justifies five bridges' wire change, a backend copy of raw windows and a compatibility entry. Task 4's other triggers (many streaming sessions on one backend, many viewers on one session) were not measured and would reopen it.
+
+### Task 5: cache a positive steer answer, never a refusal
+
+`HttpBridgeSteerQualification` keeps a positive answer per session for the connection's current base URL and token, and for at most 60 s (`STEER_QUALIFICATION_POSITIVE_TTL_MS`), bounded to 256 sessions with the oldest dropped. The generation is read on every call because a workflow provider adopts a refreshed connection in place. A 404 to a steer, and closing the session, drop the entry. A refusal is not cached at all, which is simpler than the re-probe timer the recommendation named and keeps a failing bridge logged on every poll (`steer.qualification-failed`, to-do 4700's diagnostic). The 60 s bound is for a bridge that loses steer support without restarting, which then shows a Steer control for up to a minute; a steer sent meanwhile is refused by the bridge as before. Tests: "steer qualification cache" in `provider-steer-qualification.test.ts`.
+
+### Task 6: reuse a passed bridge health check for 2 s
+
+A passed reuse probe in `startLocalServerAttempt` is recorded per bridge process, port and token (`LocalServerRuntime.recordHealthy`), and a start within `LOCAL_SERVER_HEALTHY_REUSE_MS` (2 s) for the same three skips the probe. A reused answer never renews the window, and marking the bridge unresponsive or releasing it drops the record. Only the start path reuses: the activity sweep's peek still probes, because it is what notices a stalled bridge. Two seconds was chosen over a provider-generation cache because a bridge that stops answering is then seen by the next start within 2 s, and by the read that follows it before that. Tests: "reused health answers" in `local-server-runtime.test.ts` and "a passed health check stands for the next starts inside its window" in `commands-local-bridge-reuse.test.ts`, which fails on the old code (6 probes where 2 are expected).
+
 ## Current state
 
-E10's baseline is taken on an isolated `dev:test` profile for Claude, and with a fake bridge for Codex, Pi, a lagging viewer and large windows. 0160's ring (TX-1) was already built, and both baselines confirm that every viewer gets deltas. None of 0180 task 2, 0180 task 3 or 0190 task 2 was built, because the measured cost was small. The profile run also found two health probes per poll (task 6).
+As of 2026-11-11 every task an agent can do is done: the real-stack baseline covers Claude and Codex at small and near-bound windows, tasks 3 and 4 are closed without building, and the steer and health probes are cached. Before that: E10's baseline is taken on an isolated `dev:test` profile for Claude, and with a fake bridge for Codex, Pi, a lagging viewer and large windows. 0160's ring (TX-1) was already built, and both baselines confirm that every viewer gets deltas. None of 0180 task 2, 0180 task 3 or 0190 task 2 was built, because the measured cost was small. The profile run also found two health probes per poll (task 6).
 
 ## Constraints and rationale
 
@@ -197,7 +232,8 @@ E10's baseline is taken on an isolated `dev:test` profile for Claude, and with a
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the maintainer's decision on a bridge state revision sent as `knownToken`) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, the maintainer's decision on a bridge state revision sent as `knownToken`) moved there on 2026-11-10, and task 1's real Pi catalogue on 2026-11-11.
+- [7845](7845-trimmed-head-snapshots-and-stalled-view.md): found with this spec's `trimmed-head` scenario (6260 task 3).
 - Efficiency outcome, closing check of E10 (`git show 413bd6219:docs/reports/2026-11-06-efficiency-logging-database-outcome.md`)
 - to-do 1202 efficiency follow-ups, tasks 1, 4 and 5 (retired 2026-11-10)
 - [5340](5340-transcript-reads-live-evidence.md) and [6260](6260-projection-hashing-measurements.md): the other transcript measurements; the loopback-model spec here can take theirs without a billed turn

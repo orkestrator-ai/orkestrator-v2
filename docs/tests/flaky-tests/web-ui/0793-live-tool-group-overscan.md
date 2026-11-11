@@ -26,3 +26,7 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Transcript history efficiency review repair — 2026-11-11
+
+Branch `transcript-history-efficiency-60750035e24d-r1` (base `498b68766f5c`, validated at `b0dc43135`): this case failed in the completed rerun of `mise run test:logged -- --name browser -- mise run test:browser` (11 failed, 1,681 passed; full list in [0382](0382-component-browser-parallel-load.md)). The branch changes `TranscriptScrollController.holdPlaceAcrossReflow`, which this owner runs. The complete ToolGroupFold, TranscriptPaging and MailTiles owners then passed together with one worker, with that change in place (exit 0, 337.3 s). `mise run flaky:recurrence -- 0793 --base 498b68766f5c` reported a recurrence. Status stays open. No assertion, timeout or skip changed.

@@ -1,6 +1,6 @@
 /**
- * Proof that gzip SSE streams incrementally in `--compression on` (todo 0052,
- * task 3), on the routes a remote client can take: straight to the gateway, and
+ * Proof that gzip SSE streams incrementally in `--compression on` (to-do 0052
+ * (retired), task 3; docs/development/remote-bandwidth.md), on the routes a remote client can take: straight to the gateway, and
  * through a pass-through proxy over HTTP/1.1 and over HTTP/2, the two shapes of
  * Tailscale Serve's browser hop. No Tailscale is involved here;
  * `scripts/sse-route-probe.ts` measures the real route.

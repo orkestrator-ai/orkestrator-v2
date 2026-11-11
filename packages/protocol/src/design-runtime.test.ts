@@ -195,6 +195,35 @@ describe("design runtime editing", () => {
   });
 });
 
+test("a frame regaining focus with nothing focused returns it to the field it last had", () => {
+  const frame = new Window();
+  frame.eval(`(${installDesignRuntime.toString()})()`);
+  frame.document.body.innerHTML = '<input id="field"><input id="other">';
+  const field = frame.document.querySelector("#field") as unknown as HTMLInputElement;
+  const other = frame.document.querySelector("#other") as unknown as HTMLInputElement;
+  const regainFocus = () => frame.dispatchEvent(new frame.Event("focus"));
+
+  field.focus();
+  // An app dialog in the editor took focus and left the frame with none.
+  field.blur();
+  expect(frame.document.activeElement).toBe(frame.document.body as never);
+  regainFocus();
+  expect(frame.document.activeElement).toBe(field as never);
+
+  // Something already focused (a click or Tab landed first) is left alone.
+  other.focus();
+  field.focus();
+  other.focus();
+  regainFocus();
+  expect(frame.document.activeElement).toBe(other as never);
+
+  // A field the frame no longer contains (a re-render replaced it) is not revived.
+  other.blur();
+  other.remove();
+  regainFocus();
+  expect(frame.document.activeElement).toBe(frame.document.body as never);
+});
+
 test("serialized design runtime forwards each app shortcut once and consumes auto-repeat", () => {
   const frame = new Window();
   frame.eval(

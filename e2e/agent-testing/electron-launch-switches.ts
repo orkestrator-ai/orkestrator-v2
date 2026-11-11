@@ -63,6 +63,9 @@ export function headlessElectronRequested(
 export const HEADLESS_CAPABLE_ELECTRON_SPECS: readonly string[] = [
   "design-canvas-electron.spec.ts",
   "web-annotations-electron.spec.ts",
+  // Launches through `service-preview-electron-launch.ts`, which honours the
+  // opt-in. Its Linux runs (through `ss` and `lsof`) are in 0042's evidence log.
+  "service-preview-seeded-electron.spec.ts",
 ];
 
 /**

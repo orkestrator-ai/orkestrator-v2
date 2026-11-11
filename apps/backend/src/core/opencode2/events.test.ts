@@ -124,3 +124,42 @@ describe("OpenCode2SequenceTracker", () => {
     expect(tracker.note("ses_a", 2)).toBe("first");
   });
 });
+
+describe("readOpenCode2Events liveness", () => {
+  async function lifeOf(...chunks: string[]) {
+    const life: boolean[] = [];
+    const signals: OpenCode2StreamSignal[] = [];
+    await readOpenCode2Events(
+      streamOf(...chunks),
+      (signal) => signals.push(signal),
+      undefined,
+      (heartbeat) => life.push(heartbeat),
+    );
+    return { life, signals };
+  }
+
+  test("reports every chunk and every heartbeat comment, never as an event", async () => {
+    const connected = frame({ type: "server.connected", data: {} });
+    const { life, signals } = await lifeOf(
+      connected + ": heartbeat\n\n",
+      ": heart",
+      "beat\r\n\r\n",
+    );
+    // Three chunks, two heartbeats (one split across chunks, CRLF-framed).
+    expect(life).toEqual([false, true, false, false, true]);
+    expect(signals).toEqual([{ kind: "event", event: { type: "server.connected", data: {} } }]);
+  });
+
+  test("other comments and a heartbeat beside data are bytes, not heartbeats", async () => {
+    const { life, signals } = await lifeOf(": ping\n\n", `: heartbeat\n${frame({ type: "x" })}`);
+    expect(life).toEqual([false, false]);
+    expect(signals).toEqual([{ kind: "event", event: { type: "x", data: undefined } }]);
+  });
+
+  test("bytes inside an oversized frame still count as life", async () => {
+    const huge = "x".repeat(OPENCODE2_MAX_EVENT_FRAME_BYTES + 1);
+    const { life, signals } = await lifeOf(`data: ${huge}`, `${huge}\n\n`, ": heartbeat\n\n");
+    expect(life).toEqual([false, false, false, true]);
+    expect(signals).toEqual([{ kind: "desync", reason: "oversized-frame" }]);
+  });
+});

@@ -22,7 +22,8 @@ export function backendMetricsSnapshot(database: DatabaseStats | null) {
     eventLoop: eventLoopDiagnostics(),
     consoleOutput: boundedConsoleStats(),
     // Additive: size, free pages, backups and retention of both databases, from
-    // a summary cached for a minute, and lease waits per family.
+    // a summary cached for a minute, lease waits per family, and commits and
+    // reads per database file (`activity`).
     database,
   };
 }

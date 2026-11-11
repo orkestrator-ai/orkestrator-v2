@@ -19,6 +19,7 @@ const helpers = [
   "forget_unchanged_agent_login",
   "remember_agent_login",
   "copy_agent_file",
+  "agent_input_directory_walk",
   "copy_agent_directory",
   "copy_agent_directory_entries",
   "restrict_imported_login",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 0019 qualification: backend upgrade and rollback with real releases.
+ * To-do 0019 (retired) qualification: backend upgrade and rollback with real releases.
  *
  *   bun scripts/qualify-backend-upgrade-rollback.ts [options]
  *

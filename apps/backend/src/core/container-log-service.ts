@@ -17,7 +17,7 @@ import { spawnParentBoundCommand } from "./shell.js";
  *
  * Each follower is parent-bound (`spawnParentBoundCommand`): a SIGKILLed
  * backend runs no shutdown, and `docker logs -f` on a quiet container would
- * otherwise wait for its next line before noticing (0019 task 6 saw one
+ * otherwise wait for its next line before noticing (to-do 0019 (retired) task 6 saw one
  * outlive its backend under systemd).
  *
  * Owned by `BackendRuntime` as `containerLogs`, so two backends in one process

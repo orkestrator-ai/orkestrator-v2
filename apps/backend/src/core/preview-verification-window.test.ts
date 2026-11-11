@@ -8,7 +8,8 @@ const PORT = 3000;
 
 /**
  * A new upstream connection inside the registry's verification window
- * (task 3 of docs/todo/previews-and-annotations/0045-preview-service-discovery.md).
+ * (docs/architecture/browser-previews.md, "Local environments"; the Linux `ss`
+ * and `lsof` runs are in 0042's evidence log).
  * The clock never advances unless a test says so, so every acquisition below is
  * inside the window; the host's `lsof` and `ps` are scripted and counted.
  */

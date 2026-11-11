@@ -2163,6 +2163,34 @@ describe("compaction", () => {
     expect(state.dispatching).toBe(false);
   });
 
+  test("a session with nothing to compact is a definite 409 with Pi's reason, and frees the session", async () => {
+    for (const reason of ["Nothing to compact (session too small)", "Already compacted"]) {
+      const state = seedSession();
+      state.session = {
+        compact: async () => {
+          throw new Error(reason);
+        },
+      } as unknown as AgentSession;
+      const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: reason });
+      expect(state.compacting).toBe(false);
+      expect(state.dispatching).toBe(false);
+    }
+  });
+
+  test("any other compaction failure stays an opaque 500", async () => {
+    const state = seedSession();
+    state.session = {
+      compact: async () => {
+        throw new Error("Nothing to compact (session too small) at /private/path");
+      },
+    } as unknown as AgentSession;
+    const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Internal bridge error" });
+  });
+
   test("a plain compaction sends Pi no instructions, as older backends expect", async () => {
     const state = seedSession();
     const calls = compactingSession(state);

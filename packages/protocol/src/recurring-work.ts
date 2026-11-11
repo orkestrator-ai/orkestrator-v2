@@ -46,6 +46,7 @@ export const RECURRING_JOB_KINDS = [
   "native-interaction-observe",
   "claude-state-reconcile",
   "tmux-poll",
+  "tmux-tab-loop",
   "tmux-interactive-capture",
   "tmux-queue-drain",
   "mail-presence",
@@ -262,6 +263,11 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // Per tracked container, every second, trailing rerun on overlap. With the
   // `claude-state-signal` doorbell: a read per ring plus a 30 s safety read.
   "tmux-poll": backend("B18", "interval", "progress", 1_000, "trailing-rerun", "next-tick"),
+  // One loop per open claude-tmux tab (todo 7567): a tick every 250 ms while
+  // busy, 1 s idle, 2.5 s idle with a confirmed hook doorbell. Each tick is
+  // one snapshot (`docker exec` in a container, tmux spawns locally) plus,
+  // before the transcript binds, its backed-off search. Serial per tab.
+  "tmux-tab-loop": backend("B30", "interval", "progress", 250, "per-key-serial", "next-tick"),
   "tmux-interactive-capture": backend(
     "B19",
     "completion",

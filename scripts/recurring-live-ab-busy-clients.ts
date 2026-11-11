@@ -433,3 +433,86 @@ export function pageClient(
     },
   };
 }
+
+/**
+ * A browser reader for the soak (todo 7100 task 4): one signed-in headless
+ * page that opens every Pi tab of an environment in turn, as a user glancing
+ * at each session, so the projection's progressive-read caches fill and can
+ * be watched over the soak. It only reads; it answers nothing.
+ */
+export interface SoakReader {
+  /** Opens each Pi tab of the environment until it shows the fake reply; the tabs read. */
+  read(environmentName: string): Promise<number>;
+  close(): Promise<void>;
+}
+
+/** Visible transcript rows holding the fake model's reply (runs in the page). */
+function visibleReplyCountIn(reply: string): number {
+  let count = 0;
+  for (const row of Array.from(document.querySelectorAll("[data-chat-message-index]"))) {
+    const visible =
+      typeof row.checkVisibility === "function"
+        ? row.checkVisibility()
+        : (row as HTMLElement).offsetParent !== null;
+    if (visible && (row.textContent ?? "").includes(reply)) count += 1;
+  }
+  return count;
+}
+
+const SOAK_READ_TIMEOUT_MS = 60_000;
+
+export function playwrightSoakReader(
+  profile: string,
+  status: BusyClientStatus,
+  artifactDir?: string,
+): SoakReader {
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  let failures = 0;
+  const open = async (): Promise<Page> => {
+    if (page) return page;
+    if (!status.browserUrl) throw new Error("The profile reports no browser URL");
+    browser ??= await (await import("playwright")).chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const opened = await context.newPage();
+    opened.setDefaultTimeout(30_000);
+    const response = await opened.goto(new URL(loginPath(profile), status.browserUrl).href, {
+      waitUntil: "domcontentloaded",
+    });
+    if (!response?.ok()) throw new Error("soak reader: sign-in failed");
+    page = opened;
+    return opened;
+  };
+  return {
+    async read(environmentName) {
+      const view = await open();
+      try {
+        await selectEnvironment(view, environmentName);
+        const tabs = view.getByRole("tab", { name: /^Pi \d/ });
+        await tabs.first().waitFor({ state: "visible", timeout: SOAK_READ_TIMEOUT_MS });
+        const count = await tabs.count();
+        for (let index = 0; index < count; index += 1) {
+          await tabs.nth(index).click({ timeout: 30_000 });
+          await view.waitForFunction(visibleReplyCountIn, FAKE_REPLY, {
+            timeout: SOAK_READ_TIMEOUT_MS,
+            polling: 200,
+          });
+        }
+        return count;
+      } catch (error) {
+        if (artifactDir)
+          await view
+            .screenshot({
+              path: path.join(artifactDir, `${profile}-soak-reader-failure-${++failures}.png`),
+            })
+            .catch(() => undefined);
+        throw error;
+      }
+    },
+    async close() {
+      await browser?.close().catch(() => undefined);
+      browser = undefined;
+      page = undefined;
+    },
+  };
+}

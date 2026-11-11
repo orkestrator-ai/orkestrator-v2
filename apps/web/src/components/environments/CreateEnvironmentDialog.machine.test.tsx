@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
@@ -111,5 +111,28 @@ describe("CreateEnvironmentDialog target machine", () => {
     expect(screen.queryByText("Isolated Docker environment") !== null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Local" }));
     expect(screen.queryByText("Git worktree on the host") !== null).toBe(true);
+  });
+});
+
+describe("CreateEnvironmentDialog root setup steps on another machine", () => {
+  test("the warning comes from the target machine's own reading", async () => {
+    federated();
+    const leaf = new FakeNodeClient({ nodeId: LEAF }).respond("get_project_setup_requirements", {
+      rootSteps: 2,
+    });
+    const view = renderInNodeScope(<></>, { role: "leaf", client: leaf });
+    view.scope
+      .store(configStore)
+      .setState({ config: appCommandStore(configStore).getState().config });
+    view.rerender(dialog());
+    fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
+    await waitFor(() =>
+      expect(screen.queryByText(/orkestrator-ai\.json has root setup steps/) !== null).toBe(true),
+    );
+    const reads = leaf.invocations.filter(
+      (call) => call.command === "get_project_setup_requirements",
+    );
+    expect(reads.length > 0).toBe(true);
+    expect(reads.every((call) => call.args.projectId === "project-1")).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import type { CommandContext } from "./commands-context.js";
 import type { PtyProcess } from "./pty.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
 import {
+  describeImageStatus,
   imageOlderThanBackend,
   readRestartImpact,
   readToolStatus,
@@ -209,4 +210,107 @@ test("an image whose version is unknown is never called older", () => {
   expect(imageOlderThanBackend(null, "2.37.6-beta")).toBe(false);
   expect(imageOlderThanBackend("unknown", "2.37.6-beta")).toBe(false);
   expect(imageOlderThanBackend("2.34.4-beta", "dev")).toBe(false);
+});
+
+function manifest(appVersion: string) {
+  return { appVersion, sourceRevision: null, capabilities: {}, agents: {}, runtimes: {} };
+}
+
+test("a compatible image from an older release says what built it and how to update", () => {
+  const described = describeImageStatus(
+    { state: "compatible", manifest: manifest("2.34.4-beta"), remediation: null },
+    "2.37.6-beta",
+  );
+  expect(described).toEqual({
+    present: true,
+    compatible: true,
+    builtForVersion: "2.34.4-beta",
+    olderThanBackend: true,
+    reason:
+      "Built for Orkestrator 2.34.4-beta; this is 2.37.6-beta. New containers miss the setup and container fixes since then; pull the release image to update it.",
+  });
+});
+
+test("a compatible image from this release needs no attention", () => {
+  expect(
+    describeImageStatus(
+      { state: "compatible", manifest: manifest("2.37.6-beta"), remediation: null },
+      "2.37.6-beta",
+    ),
+  ).toEqual({
+    present: true,
+    compatible: true,
+    builtForVersion: "2.37.6-beta",
+    olderThanBackend: false,
+    reason: null,
+  });
+});
+
+test("an incompatible older image keeps its remediation and is not called older", () => {
+  const described = describeImageStatus(
+    {
+      state: "incompatible",
+      manifest: manifest("2.10.0"),
+      remediation: "Rebuild or pull the image.",
+    },
+    "2.37.6-beta",
+  );
+  expect(described).toEqual({
+    present: true,
+    compatible: false,
+    builtForVersion: "2.10.0",
+    olderThanBackend: false,
+    reason: "Rebuild or pull the image.",
+  });
+});
+
+test("a missing or legacy image keeps its remediation and has no version", () => {
+  expect(
+    describeImageStatus(
+      { state: "missing", manifest: null, remediation: "The image is missing." },
+      "2.37.6-beta",
+    ),
+  ).toEqual({
+    present: false,
+    compatible: null,
+    builtForVersion: null,
+    olderThanBackend: false,
+    reason: "The image is missing.",
+  });
+  expect(
+    describeImageStatus(
+      { state: "legacy", manifest: null, remediation: "The image has no manifest." },
+      "2.37.6-beta",
+    ),
+  ).toEqual({
+    present: true,
+    compatible: false,
+    builtForVersion: null,
+    olderThanBackend: false,
+    reason: "The image has no manifest.",
+  });
+});
+
+test("a compatible image whose version is not a release is never called older", () => {
+  expect(
+    describeImageStatus(
+      { state: "compatible", manifest: manifest("unknown"), remediation: null },
+      "2.37.6-beta",
+    ),
+  ).toEqual({
+    present: true,
+    compatible: true,
+    builtForVersion: "unknown",
+    olderThanBackend: false,
+    reason: null,
+  });
+});
+
+test("a remediation always wins over the older-release reason", () => {
+  expect(
+    describeImageStatus(
+      { state: "compatible", manifest: manifest("2.34.4-beta"), remediation: "Fixed text." },
+      "2.37.6-beta",
+    ).reason,
+  ).toBe("Fixed text.");
 });

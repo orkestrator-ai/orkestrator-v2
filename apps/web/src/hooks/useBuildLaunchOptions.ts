@@ -190,11 +190,18 @@ export function useReviewModelCatalog(projectId: string, enabled: boolean) {
  */
 export function useProjectRootSetupSteps(projectId: string, enabled: boolean): number | null {
   const nodeBackend = useScopeBackend();
-  const [loaded, setLoaded] = useState<{ projectId: string; rootSteps: number | null } | null>(
-    null,
-  );
+  // Keyed by project and machine, so an answer for one never shows for another.
+  const [loaded, setLoaded] = useState<{
+    projectId: string;
+    backend: typeof nodeBackend;
+    rootSteps: number | null;
+  } | null>(null);
   useEffect(() => {
     let cancelled = false;
+    // Drops the last answer so a reopened launcher, another project or another
+    // machine shows nothing until its own read lands.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setLoaded(null);
     if (!enabled || !projectId)
       return () => {
         cancelled = true;
@@ -203,17 +210,19 @@ export function useProjectRootSetupSteps(projectId: string, enabled: boolean): n
     void Promise.resolve()
       .then(() => nodeBackend.getProjectSetupRequirements(projectId))
       .then(({ rootSteps }) => {
-        if (!cancelled) setLoaded({ projectId, rootSteps });
+        if (!cancelled) setLoaded({ projectId, backend: nodeBackend, rootSteps });
       })
       .catch((error: unknown) => {
         log.debug("setup-requirements.load-failed", { projectId, error: formatLogError(error) });
-        if (!cancelled) setLoaded({ projectId, rootSteps: null });
+        if (!cancelled) setLoaded({ projectId, backend: nodeBackend, rootSteps: null });
       });
     return () => {
       cancelled = true;
     };
   }, [enabled, projectId, nodeBackend]);
-  return enabled && loaded?.projectId === projectId ? loaded.rootSteps : null;
+  return enabled && loaded?.projectId === projectId && loaded.backend === nodeBackend
+    ? loaded.rootSteps
+    : null;
 }
 
 /** Shared defaults and repository-scoped model catalog for every build launcher. */

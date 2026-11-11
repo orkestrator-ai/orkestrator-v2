@@ -12,6 +12,7 @@ import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { appCommandStore } from "@/test/app-command-store";
 
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
 afterEach(cleanupNodeScopes);
@@ -32,7 +33,7 @@ mock.module("@/lib/backend", () => ({
   getProjectSetupRequirements: getProjectSetupRequirementsMock,
 }));
 
-const { useBuildLaunchOptions } = await import("./useBuildLaunchOptions");
+const { useBuildLaunchOptions, useProjectRootSetupSteps } = await import("./useBuildLaunchOptions");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -386,3 +387,183 @@ for (const fails of [false, true]) {
     unmount();
   });
 }
+
+type SetupAnswer = { rootSteps: number | null };
+
+function deferred() {
+  let resolve: (value: SetupAnswer) => void = () => undefined;
+  const promise = new Promise<SetupAnswer>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+describe("useProjectRootSetupSteps", () => {
+  beforeEach(() => {
+    cleanup();
+    getProjectSetupRequirementsMock.mockReset();
+  });
+
+  test("a read for the previous project never overwrites the current one", async () => {
+    const first = deferred();
+    getProjectSetupRequirementsMock.mockImplementation((projectId) =>
+      projectId === "project-1" ? first.promise : Promise.resolve({ rootSteps: 0 }),
+    );
+    const { result, rerender } = renderHookInAppCommandScope(
+      (props: { projectId: string }) => useProjectRootSetupSteps(props.projectId, true),
+      { initialProps: { projectId: "project-1" } },
+    );
+    await flushPromises();
+    rerender({ projectId: "project-2" });
+    await flushPromises();
+    expect(result.current).toBe(0);
+
+    await act(async () => {
+      first.resolve({ rootSteps: 5 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBe(0);
+  });
+
+  test("another project shows nothing until its own read lands", async () => {
+    const second = deferred();
+    getProjectSetupRequirementsMock.mockImplementation((projectId) =>
+      projectId === "project-1" ? Promise.resolve({ rootSteps: 3 }) : second.promise,
+    );
+    const { result, rerender } = renderHookInAppCommandScope(
+      (props: { projectId: string }) => useProjectRootSetupSteps(props.projectId, true),
+      { initialProps: { projectId: "project-1" } },
+    );
+    await flushPromises();
+    expect(result.current).toBe(3);
+
+    rerender({ projectId: "project-2" });
+    await flushPromises();
+    expect(result.current).toBeNull();
+    await act(async () => {
+      second.resolve({ rootSteps: 1 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBe(1);
+  });
+
+  test("a read from the previous machine never overwrites the current machine's", async () => {
+    const slow = deferred();
+    const command = new FakeNodeClient({ nodeId: "bk_command-setup" as BackendId });
+    const { windowScope } = renderInNodeScope(<div />, { client: command });
+    const studio = new FakeNodeClient({
+      nodeId: "bk_studio-setup" as BackendId,
+      invoke: { get_project_setup_requirements: () => slow.promise },
+    });
+    const build = new FakeNodeClient({
+      nodeId: "bk_build-setup" as BackendId,
+      invoke: { get_project_setup_requirements: { rootSteps: 0 } },
+    });
+    const studioScope = windowScope.open({ role: "leaf", client: studio });
+    const buildScope = windowScope.open({ role: "leaf", client: build });
+    let current: NodeScope = studioScope;
+    const { result, rerender } = renderHook(() => useProjectRootSetupSteps("project-1", true), {
+      wrapper: ({ children }) => (
+        <WindowScopeProvider windowScope={windowScope}>
+          <NodeScopeProvider scope={current}>{children}</NodeScopeProvider>
+        </WindowScopeProvider>
+      ),
+    });
+    await flushPromises();
+    expect(studio.calls("get_project_setup_requirements")).toHaveLength(1);
+
+    current = buildScope;
+    rerender();
+    await flushPromises();
+    expect(build.calls("get_project_setup_requirements")).toHaveLength(1);
+    expect(result.current).toBe(0);
+
+    await act(async () => {
+      slow.resolve({ rootSteps: 4 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBe(0);
+  });
+
+  test("another machine does not inherit this machine's answer while its read is pending", async () => {
+    const slow = deferred();
+    const command = new FakeNodeClient({ nodeId: "bk_command-setup-2" as BackendId });
+    const { windowScope } = renderInNodeScope(<div />, { client: command });
+    const studio = new FakeNodeClient({
+      nodeId: "bk_studio-setup-2" as BackendId,
+      invoke: { get_project_setup_requirements: { rootSteps: 2 } },
+    });
+    const build = new FakeNodeClient({
+      nodeId: "bk_build-setup-2" as BackendId,
+      invoke: { get_project_setup_requirements: () => slow.promise },
+    });
+    const studioScope = windowScope.open({ role: "leaf", client: studio });
+    const buildScope = windowScope.open({ role: "leaf", client: build });
+    let current: NodeScope = studioScope;
+    const { result, rerender } = renderHook(() => useProjectRootSetupSteps("project-1", true), {
+      wrapper: ({ children }) => (
+        <WindowScopeProvider windowScope={windowScope}>
+          <NodeScopeProvider scope={current}>{children}</NodeScopeProvider>
+        </WindowScopeProvider>
+      ),
+    });
+    await flushPromises();
+    expect(result.current).toBe(2);
+
+    current = buildScope;
+    rerender();
+    expect(result.current).toBeNull();
+    await act(async () => {
+      slow.resolve({ rootSteps: 0 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBe(0);
+  });
+
+  test("closing hides the count and reopening reads it again", async () => {
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 1 }));
+    const { result, rerender } = renderHookInAppCommandScope(
+      (props: { open: boolean }) => useProjectRootSetupSteps("project-1", props.open),
+      { initialProps: { open: true } },
+    );
+    await flushPromises();
+    expect(result.current).toBe(1);
+
+    rerender({ open: false });
+    expect(result.current).toBeNull();
+
+    const reopened = deferred();
+    getProjectSetupRequirementsMock.mockImplementation(() => reopened.promise);
+    rerender({ open: true });
+    await flushPromises();
+    // The closed launcher's answer is not shown again while the fresh read runs.
+    expect(result.current).toBeNull();
+    await act(async () => {
+      reopened.resolve({ rootSteps: 3 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBe(3);
+    expect(getProjectSetupRequirementsMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("a read that settles after closing is dropped", async () => {
+    const pending = deferred();
+    getProjectSetupRequirementsMock.mockImplementation(() => pending.promise);
+    const { result, rerender } = renderHookInAppCommandScope(
+      (props: { open: boolean }) => useProjectRootSetupSteps("project-1", props.open),
+      { initialProps: { open: true } },
+    );
+    await flushPromises();
+    rerender({ open: false });
+    await act(async () => {
+      pending.resolve({ rootSteps: 2 });
+      await Promise.resolve();
+    });
+    expect(result.current).toBeNull();
+
+    getProjectSetupRequirementsMock.mockImplementation(async () => ({ rootSteps: 0 }));
+    rerender({ open: true });
+    await flushPromises();
+    expect(result.current).toBe(0);
+  });
+});

@@ -33,4 +33,4 @@ any row's status.
 | [Service previews and web annotations](previews-and-annotations/0000-index.md) | 2 | 3 | 0 | 0 | 5 | Service previews (desktop tunnel, private origins, relay, embedded and discovered services) and web-page annotations (qualification, known limitations, extensions). |
 | [Transcripts, observation and bandwidth](transcripts-and-observation/0000-index.md) | 12 | 4 | 0 | 0 | 16 | How sessions are read and kept fresh: rich transcripts, history efficiency, idle observation, recurring work, reconnects and remote bandwidth. |
 | [Manual test](manual-test/0000-index.md) | 0 | 0 | 1 | 0 | 1 | One checklist of everything that needs you: manual tests and live checks first, then decisions, approvals and outward actions, each naming its source to-do and task. |
-| **Total** | 82 | 59 | 1 | 0 | 142 | |
+| **Total** | 81 | 60 | 1 | 0 | 142 | |

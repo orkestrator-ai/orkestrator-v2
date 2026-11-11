@@ -465,29 +465,58 @@ export function playwrightSoakReader(
   profile: string,
   status: BusyClientStatus,
   artifactDir?: string,
+  dependencies?: {
+    launch(): Promise<Browser>;
+    loginPath(profile: string): string;
+    selectEnvironment?(page: Page, environment: string): Promise<void>;
+  },
 ): SoakReader {
   let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
   let page: Page | undefined;
   let failures = 0;
+  const screenshot = async (target: Page | undefined) => {
+    if (!artifactDir || !target) return;
+    await target
+      .screenshot({
+        path: path.join(artifactDir, `${profile}-soak-reader-failure-${++failures}.png`),
+      })
+      .catch(() => undefined);
+  };
   const open = async (): Promise<Page> => {
     if (page) return page;
     if (!status.browserUrl) throw new Error("The profile reports no browser URL");
-    browser ??= await (await import("playwright")).chromium.launch({ headless: true });
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const opened = await context.newPage();
-    opened.setDefaultTimeout(30_000);
-    const response = await opened.goto(new URL(loginPath(profile), status.browserUrl).href, {
-      waitUntil: "domcontentloaded",
-    });
-    if (!response?.ok()) throw new Error("soak reader: sign-in failed");
+    browser ??= dependencies
+      ? await dependencies.launch()
+      : await (await import("playwright")).chromium.launch({ headless: true });
+    const fresh = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    let opened: Page | undefined;
+    try {
+      opened = await fresh.newPage();
+      opened.setDefaultTimeout(30_000);
+      const response = await opened.goto(
+        new URL((dependencies?.loginPath ?? loginPath)(profile), status.browserUrl).href,
+        { waitUntil: "domcontentloaded" },
+      );
+      if (!response?.ok()) throw new Error("soak reader: sign-in failed");
+    } catch (error) {
+      // A failed sign-in must not leave its context behind: the next read
+      // opens another, and a half-loaded page keeps its own connection to
+      // the backend, which is exactly what the soak's footprint watches.
+      await screenshot(opened);
+      await fresh.close().catch(() => undefined);
+      throw error;
+    }
+    context = fresh;
     page = opened;
     return opened;
   };
   return {
     async read(environmentName) {
-      const view = await open();
+      let view: Page | undefined;
       try {
-        await selectEnvironment(view, environmentName);
+        view = await open();
+        await (dependencies?.selectEnvironment ?? selectEnvironment)(view, environmentName);
         const tabs = view.getByRole("tab", { name: /^Pi \d/ });
         await tabs.first().waitFor({ state: "visible", timeout: SOAK_READ_TIMEOUT_MS });
         const count = await tabs.count();
@@ -500,19 +529,17 @@ export function playwrightSoakReader(
         }
         return count;
       } catch (error) {
-        if (artifactDir)
-          await view
-            .screenshot({
-              path: path.join(artifactDir, `${profile}-soak-reader-failure-${++failures}.png`),
-            })
-            .catch(() => undefined);
+        // A sign-in failure took its own screenshot before closing its page.
+        await screenshot(view);
         throw error;
       }
     },
     async close() {
+      await context?.close().catch(() => undefined);
+      context = undefined;
+      page = undefined;
       await browser?.close().catch(() => undefined);
       browser = undefined;
-      page = undefined;
     },
   };
 }

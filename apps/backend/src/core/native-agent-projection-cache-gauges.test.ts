@@ -5,7 +5,11 @@
  */
 import { expect, test } from "bun:test";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
-import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import {
+  createProviderStub,
+  waitForCondition,
+  withService,
+} from "./native-agent-service-projection-test-support.js";
 
 const identity = {
   environmentId: "env-1",
@@ -287,6 +291,123 @@ test("an evicted transcript takes its source token with it", async () => {
       expect(held.progressiveTranscripts).toBe(128);
       expect(held.progressiveSourceTokens).toBe(128);
       expect(held.progressiveReadEpochs).toBe(0);
+    },
+  );
+});
+
+test("an evicted transcript cancels its pending recovery, and a late one cannot restore it", async () => {
+  // provider-session-1 recovers through a read held in flight, -2 through a
+  // timer still waiting; every other session is a complete filler.
+  const inFlight = "provider-session-1";
+  const waiting = "provider-session-2";
+  const revisions = new Map<string, number>();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let recoveryEntered!: () => void;
+  const recoveryStarted = new Promise<void>((resolve) => {
+    recoveryEntered = resolve;
+  });
+  const recovered: string[] = [];
+  const messages = async (sessionId: string) => {
+    recovered.push(sessionId);
+    if (sessionId === inFlight) {
+      recoveryEntered();
+      await gate;
+    }
+    return [row("m0"), row("m1"), row("m2")];
+  };
+  const stub = createProviderStub("codex", {
+    messages,
+    transcriptSnapshot: async (sessionId) =>
+      sessionId === inFlight || sessionId === waiting
+        ? {
+            messages: [row("m2")],
+            complete: false,
+            // A cached summary always asks for exact recovery.
+            freshness: "cached" as const,
+            representation: "summary" as const,
+            sourceToken: `cached-${sessionId}-${revisions.get(sessionId) ?? 0}`,
+          }
+        : {
+            messages: [row(`reply for ${sessionId}`)],
+            complete: true,
+            sourceToken: `source-${sessionId}`,
+            historyEpoch: "1:1",
+            freshness: "current" as const,
+          },
+  });
+  let created = 0;
+  stub.createSession.mockImplementation(async () => `provider-session-${(created += 1)}`);
+  const gauges = () =>
+    recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!.gauges;
+  await withService(
+    {
+      prefix: "orkestrator-native-evict-recovery-",
+      provider: async () => stub.provider,
+      // Long enough that no waiting timer fires during the test.
+      progressiveHydrationSettleMs: 60_000,
+    },
+    async ({ service }) => {
+      const session = (index: number) => ({
+        ...identity,
+        logicalSessionKey: `env-env-1:tab-recovery-${index}`,
+      });
+      const read = async (index: number) => {
+        const update = await service.getTranscriptUpdate({
+          ...session(index),
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        return update.value.messages;
+      };
+      // Shutdown waits for a recovery in flight, so a failed assertion must
+      // still release the held read.
+      try {
+        await service.ensureSession(session(0));
+        await service.ensureSession(session(1));
+
+        // Session 0: the first recovery of a quiet view starts at once and is held.
+        await read(0);
+        await recoveryStarted;
+        // Session 1: its first recovery runs; a newer revision then waits out
+        // the settle interval behind a timer.
+        await read(1);
+        await waitForCondition(() => recovered.includes(waiting));
+        revisions.set(waiting, 1);
+        await read(1);
+        expect(gauges()).toMatchObject({ progressiveHydrations: 2, progressiveHydrationTimers: 1 });
+
+        // 128 newer views evict both (the progressive transcript cache keeps 128).
+        for (let index = 2; index < 130; index += 1) {
+          await service.ensureSession(session(index));
+          await read(index);
+        }
+        expect(gauges()).toMatchObject({
+          progressiveTranscripts: 128,
+          progressiveSourceTokens: 128,
+          progressiveHydrations: 0,
+          progressiveHydrationTimers: 0,
+        });
+
+        // A replacement view of session 0 schedules its own recovery behind the
+        // settle interval; the old read then lands and must be dropped.
+        expect(await read(0)).toHaveLength(1);
+        expect(gauges()).toMatchObject({ progressiveHydrations: 1, progressiveHydrationTimers: 1 });
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(await read(0)).toHaveLength(1);
+        expect(gauges()).toMatchObject({
+          progressiveTranscripts: 128,
+          progressiveHydrations: 1,
+          progressiveHydrationTimers: 1,
+        });
+      } finally {
+        release();
+      }
     },
   );
 });

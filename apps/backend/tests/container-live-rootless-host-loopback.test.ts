@@ -1,6 +1,7 @@
 /**
  * Real-Docker check of a rootless daemon whose RootlessKit lets containers
- * reach the host's loopback (to-do 5510 tasks 2 and 3).
+ * reach the host's loopback (to-do 5510 tasks 2 and 3, retired 2026-11-11;
+ * results in docs/development/container-qualification.md).
  *
  * Three loopback-bound host listeners are the targets:
  * - the named service port, the agent tools port that a restricted runtime's

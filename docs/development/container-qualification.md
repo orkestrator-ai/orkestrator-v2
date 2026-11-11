@@ -291,6 +291,99 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Pre-gateway images under the current backend on rootless Linux Engine (2026-11-11)
+
+The historical-image part of retired to-do 5510's task 3: a restricted
+runtime from an image actually built before the egress gateway existed, so
+its own older firewall scripts and entrypoint run, created and started by the
+current backend. Run in worktree `orkestrator-v2-20261111-021326-54502c8baf98`
+(branch at `498b68766` plus this change). The 2026-11-09 run below used a
+variant of the current image instead.
+
+- **Host:** beelink2 (Omarchy, Arch Linux, kernel 7.2.15, x86_64, 16 cores,
+  load average 3–6). The host's rootful Docker socket is not usable by the
+  build user (no sudo) and ufw is active; neither was touched.
+- **Daemon:** `mise run docker:disposable -- start --name q5510h --host-loopback`:
+  the host's rootless Engine 29.9.2 under RootlessKit with host loopback
+  enabled, systemd cgroup driver on cgroup v2, overlayfs.
+- **Images**, all amd64 and built inside that daemon from `git archive` of the
+  named commit, with the capability list that commit's own
+  `docker/image-manifest.ts capabilities` printed:
+
+  | Image | Source | Version | Network policy | Capabilities |
+  | --- | --- | --- | --- | --- |
+  | Current (gateway and full runtimes) | `498b68766` | 2.37.5-beta | 3 | includes `egress-gateway=1`, `egress-filter=1`; id `sha256:7508eef01f08…` |
+  | Last before the gateway | `f47398fdc` (parent of `c55807f96`, #1279) | 2.30.0-beta | 3 | `boot-status`, `bounded-logs`, `claude-state-signal=2`, `container-worktree-signal`, `graceful-shutdown`, `network-refresh`, `persistent-workspace`, `staged-inputs=2`, `workspace-prepare`; id `sha256:8278a61df2af…` |
+  | Last on policy 2 | `a31e2c0a2` (parent of `3337b1522`, #1010) | 2.20.1 | 2 | `boot-status`, `bounded-logs`, `graceful-shutdown`, `network-refresh`, `persistent-workspace`, `staged-inputs=1`, `workspace-prepare`; id `sha256:2b1fa9a61074…` |
+
+  Both older images declare what the backend requires of a new container
+  (`BACKEND_REQUIRED_IMAGE_CAPABILITIES`: `workspace-prepare` and
+  `staged-inputs`), so they are images a user could still be running. Their
+  firewall scripts (`init-firewall.sh`, `firewall-domains.sh`,
+  `network-policy-entrypoint.sh`, `update-firewall.sh`) differ from the
+  current ones by 498+/38− and 668+/143− lines. A policy 1 image (default
+  bridge network) was not built: network policy 2 and `staged-inputs` arrived
+  in the same commit (`1cdba8e0c`), so no policy 1 image declares
+  `staged-inputs` and the current backend refuses one for new containers.
+
+```bash
+eval "$(mise run docker:disposable -- env --name q5510h)"
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-current-498b68766 \
+  ORKESTRATOR_LIVE_WORKLOAD_FIREWALL_IMAGE=<pre-gateway image> \
+  ORKESTRATOR_LIVE_REPORT=<file> ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file> \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/container-live-rootless-host-loopback.test.ts --parallel=1
+```
+
+`ORKESTRATOR_LIVE_WORKLOAD_FIREWALL_IMAGE`, added with this run, puts the named
+image in the suite's workload-firewall slot instead of the derived variant;
+the suite checks that it declares no `egress-gateway` and leaves it in place.
+The report now also records each firewall's own status file (`policy`,
+`state`). The GitHub ranges seed was one unauthenticated fetch of
+`api.github.com/meta` per run, in the backend's seed format.
+
+- **Results:** passed 1/1 on each run.
+
+  | Workload-firewall image | Runs | Firewall status file | REJECT counter | Matrix |
+  | --- | --- | --- | --- | --- |
+  | `f47398fdc` (policy 3, pre-gateway) | 2 (12.7 s, 11.7 s) | `policy 3`, `applied` | 2 → 11 | identical to the gateway runtime |
+  | `a31e2c0a2` (policy 2) | 1 (13.0 s) | `policy 2`, `applied` | 2 → 11 | identical to the gateway runtime |
+  | Variant of the current image (control) | 1 (13.2 s) | `policy 3`, `applied` | 2 → 11 | identical to the gateway runtime |
+
+  In every run the backend placed the older image's firewall in the workload
+  (the runtime owns its network namespace and has `NET_ADMIN` in `CapAdd`), and
+  the probe matrix matched the 2026-11-09 table: from each restricted runtime,
+  the named service port answered 200 by `host.docker.internal` and by
+  `10.0.2.2` (the positive control), and every other probe (the unnamed
+  loopback port, the real gateway's status and login routes by alias, by
+  address and with `Host: 127.0.0.1:<port>`, and the login-code mint) got curl
+  exit 7 with nothing reaching a listener. The full runtime reached every
+  loopback listener as `127.0.0.1` (gateway 421 by alias, 401 otherwise).
+- **Runtime root.** `docker exec -u orkroot … iptables -I OUTPUT 1 -j ACCEPT`
+  succeeded in each older image's runtime, which then got the gateway's 401;
+  in the gateway runtime it failed and the probe still got exit 7.
+- **What this means:** an image built before the gateway, on policy 3 or
+  policy 2 scripts, holds a restricted runtime to the named service port
+  under today's backend exactly as the current image's gateway does, against
+  the `node` user. It does not hold against runtime root, which can rewrite
+  it; only a rebuild onto a gateway image closes that, as
+  [container lifecycle](../architecture/container-lifecycle.md) ("Current
+  runtime with an in-container firewall … kept until rebuilt") already says.
+- **Not covered:** the nested rootful daemon of 2026-11-09 was not repeated
+  with these images, because its suite has no workload-firewall slot. The
+  older images were run on this rootless daemon only, where host loopback
+  makes every loopback-bound host service a target. The bare-metal
+  rootful host without a firewall, arm64 and a real gateway on a Tailscale
+  address are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
+- **Cleanup:** each run removed its labelled containers, networks and volumes
+  (the suite asserts none are left) and the variant tag;
+  `docker:disposable -- stop --name q5510h` then removed the daemon with its
+  data root, images included, in 7.7 s, and `status` listed no daemon. The
+  downloaded tools cache, the instance root and the source extracts were
+  deleted by hand.
+
 ## Egress name checks on rootless Docker (2026-11-10)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -730,7 +823,7 @@ Findings, all new and all in
 
 ## Host loopback, rootful reach and workload firewalls on Linux Engine (2026-11-09)
 
-To-do [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md)
+To-do 5510 (retired 2026-11-11)
 tasks 2 and 3, run in worktree `orkestrator-v2-20261109-224629-a4b698fad8f5`
 (branch at `c6de4733c` plus this change).
 
@@ -811,8 +904,8 @@ RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6d
   - A workload firewall holds against `node`, but not against runtime root.
     The gateway boundary holds against both.
 - **Variant, not a historical image.** The workload-firewall runtime used the
-  current firewall scripts. An image actually built before the gateway was
-  not run.
+  current firewall scripts. Images actually built before the gateway ran on
+  2026-11-11 ([record](#pre-gateway-images-under-the-current-backend-on-rootless-linux-engine-2026-11-11)).
 
 ### Rootful daemon with no host firewall (task 3)
 
@@ -909,9 +1002,9 @@ DOCKER_HOST=unix:///tmp/ork-q5510-dind.sock docker run --rm --network host -u ro
   Both suites now accept `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`: a seed
   fetched once from `api.github.com/meta`, in the backend's own format.
 - **Not covered:** a bare-metal rootful host with no firewall, an image built
-  before the gateway, arm64 (beelink2 is x86_64), and a real gateway on a
-  Tailscale address (task 1). These stay open in
-  [5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md).
+  before the gateway (run on 2026-11-11, above), arm64 (beelink2 is x86_64),
+  and a real gateway on a Tailscale address (task 1). The three still unrun
+  are in the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Exhausted Docker pools and historical probe-network trace (2026-11-06)
 
@@ -2216,10 +2309,11 @@ hold when the host user maps to container root?
   does not depend on it, since the firewall rejects before any listener); a
   rootless daemon with host loopback enabled, including a reachable named-port
   positive control; a rootful `full` container with no host firewall; a runtime
-  with the firewall inside it (an older image's); arm64. These remaining checks
-  are tracked in [todo 5510](../todo/previews-and-annotations/5510-linux-gateway-qualification-gaps.md);
-  host loopback, a firewall-less rootful daemon and a workload firewall were
-  run on 2026-11-09 (above).
+  with the firewall inside it (an older image's); arm64. These were tracked in
+  to-do 5510 (retired 2026-11-11): host loopback, a firewall-less rootful
+  daemon and a workload firewall were run on 2026-11-09 and pre-gateway
+  images on 2026-11-11 (above); the rest are in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 ## Rootless Linux host (2026-10-25)
 

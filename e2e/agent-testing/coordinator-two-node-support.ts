@@ -3,7 +3,7 @@
  * leaf: sign-in, a checkout of one shared repository on each, the node link,
  * and a profile's isolated Pi provider. Shared by
  * `coordinator-node-mail-fake.spec.ts` (to-do 2900) and
- * `coordinator-notice-live.spec.ts` (to-do 7542).
+ * `coordinator-notice-live.spec.ts` (to-do 7542 (retired)).
  */
 import { expect, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";

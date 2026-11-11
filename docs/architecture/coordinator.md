@@ -488,11 +488,14 @@ move, and the provider's error in its transcript is what the user sees. A side a
 stop reaches its main. So a wake that fails on a limit ends there rather than raising
 another wake: a notice cannot trigger another notice about the same stop.
 
-To check this live, with real accounts and two machines: attach a leaf to a command node
-that has the same repository, run a tab on the leaf until the provider refuses it, and
-look for one wake on the command node's coordinator and none on the leaf's. Repeat with
-the link down across a leaf restart, and with the command node's coordinator on the same
-email as the stopped tab, with and without another included account.
+`mise run test:agent:coordinator:notice-live` checks this on two real backends, on
+fixture Claude accounts and a loopback provider
+([agent-testing.md](../development/agent-testing.md#coordinator-usage-limit-notices-between-two-profiles-fixture-accounts)):
+a leaf's tab, delegated worker and pipeline session stopping on one account reach the
+command node's coordinator as one wake and the leaf's as none; a coordinator on its own
+entry of the limited login is moved, unpinned, before its wake; and a stop raised while
+the command node is down arrives once after a leaf restart. With real accounts and two
+machines, the same check is on the manual-test checklist.
 
 ## Coordinators on two nodes
 

@@ -1631,9 +1631,7 @@ would otherwise read as "every host credential".
 ### Loopback plan-usage origin
 
 A spec that scripts Claude or Codex account usage on a separate-process
-profile (to-do
-[7542](../todo/coordinator-and-multi-review/7542-coordinator-notice-hierarchy-live-checks.md)
-task 1) starts the profile with
+profile (to-do 7542 (retired), task 1) starts the profile with
 `ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>`. The launcher
 passes it to the isolated backend, which then reads `/api/oauth/usage`
 (Claude) and `/backend-api/codex/usage` (Codex) from that origin instead of
@@ -2378,9 +2376,8 @@ notice suite below is in `coordinator-two-node-support.ts`.
 ### Coordinator usage-limit notices between two profiles (fixture accounts)
 
 `mise run test:agent:coordinator:notice-live` runs the coordinator notice
-hierarchy's live checks (to-do
-[7542](../todo/coordinator-and-multi-review/7542-coordinator-notice-hierarchy-live-checks.md))
-on two real backends with no login and nothing billed. The runner
+hierarchy's live checks (to-do 7542 (retired), tasks 2 to 4) on two real
+backends with no login and nothing billed. The runner
 (`apps/desktop/scripts/test-agent-coordinator-notice-live.ts`) first starts
 `e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
 disposable `dev:test --fixture --headless --no-agent-credentials

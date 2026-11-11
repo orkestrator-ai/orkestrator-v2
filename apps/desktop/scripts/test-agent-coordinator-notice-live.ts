@@ -10,7 +10,7 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
  * `mise run test:agent:coordinator:notice-live`
  *
  * The coordinator notice hierarchy between two disposable `dev:test
- * --fixture` profiles on this host, on fixture Claude accounts (to-do 7542
+ * --fixture` profiles on this host, on fixture Claude accounts (to-do 7542 (retired)
  * tasks 2 to 4): the main profile is the command node, the companion its
  * leaf, both with no agent credentials and only Claude and Pi enabled. It
  * first starts `coordinator-notice-fake-model.ts` on loopback and starts both

@@ -133,13 +133,13 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "NO_COLOR",
   "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH",
   "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
-  // A loopback origin for Claude and Codex plan-usage reads (to-do 7542), so a
+  // A loopback origin for Claude and Codex plan-usage reads (to-do 7542 (retired)), so a
   // two-backend spec can script fixture accounts' usage. The backend honours it
   // only in an isolated agent-test profile, for a loopback origin
   // (`agentTestUsageOrigin`). An address, never a credential.
   "ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN",
   // A loopback Anthropic origin every Claude bridge of the isolated backend
-  // is pointed at (to-do 7542), under the same gate (`agentTestAnthropicOrigin`).
+  // is pointed at (to-do 7542 (retired)), under the same gate (`agentTestAnthropicOrigin`).
   "ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",

@@ -1,5 +1,5 @@
 /**
- * A loopback provider for `coordinator-notice-live.spec.ts` (to-do 7542):
+ * A loopback provider for `coordinator-notice-live.spec.ts` (to-do 7542 (retired)):
  * the Claude CLIs of two linked `dev:test` profiles run on fixture accounts
  * against it, the leaf's Pi main coordinator is scripted by it, and both
  * backends read Claude plan usage from it

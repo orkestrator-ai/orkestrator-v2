@@ -1,6 +1,6 @@
 /**
  * The coordinator notice hierarchy between two real `dev:test` profiles on
- * one host, on fixture Claude accounts and a loopback provider (to-do 7542
+ * one host, on fixture Claude accounts and a loopback provider (to-do 7542 (retired)
  * tasks 2 to 4). Run it with `mise run test:agent:coordinator:notice-live`,
  * which starts the provider, then two disposable credential-free profiles
  * that offer Claude and Pi, runs this file and resets both.

@@ -34,7 +34,7 @@ export function agentTestTerminalSurvival(
 
 /**
  * The loopback origin an agent-test profile's backend reads Claude and Codex
- * plan usage from instead of the providers' hosts (to-do 7542 task 1), so a
+ * plan usage from instead of the providers' hosts (to-do 7542 (retired), task 1), so a
  * two-backend spec can script usage readings for fixture accounts without
  * sending their tokens to Anthropic or OpenAI.
  *
@@ -90,7 +90,7 @@ export function agentTestUsageOrigin(options: AgentTestOriginOptions): string | 
  * The loopback Anthropic Messages origin every Claude bridge an isolated
  * agent-test backend starts is pointed at (`ANTHROPIC_BASE_URL`), so a
  * coordinator's Claude, whose private configuration directory never holds the
- * user's `settings.json`, runs on a scripted model too (to-do 7542). Set by
+ * user's `settings.json`, runs on a scripted model too (to-do 7542 (retired)). Set by
  * the spec as `ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate as
  * `agentTestUsageOrigin`.
  */

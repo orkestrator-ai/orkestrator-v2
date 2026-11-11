@@ -1,6 +1,6 @@
 /**
  * The script of the coordinator notice fake model
- * (`coordinator-notice-fake-model.ts`, to-do 7542): fixture Claude accounts,
+ * (`coordinator-notice-fake-model.ts`, to-do 7542 (retired)): fixture Claude accounts,
  * which of them is out of usage, what their usage reads, and what the leaf's
  * Pi coordinator does. Pure, so the rules have unit tests that need no
  * provider.

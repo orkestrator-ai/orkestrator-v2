@@ -6,7 +6,7 @@ process.once("exit", enterPrivateTestTmpdir());
 
 /**
  * The coordinator notice hierarchy suite
- * (`mise run test:agent:coordinator:notice-live`, to-do 7542).
+ * (`mise run test:agent:coordinator:notice-live`, to-do 7542 (retired)).
  * Separate from the coordinator config so it runs only on the two profiles
  * set up for it (the command node is `ORKESTRATOR_AGENT_TEST_PROFILE`, the
  * leaf `ORKESTRATOR_AGENT_TEST_NOTICE_LEAF_PROFILE`): Claude and Pi, no

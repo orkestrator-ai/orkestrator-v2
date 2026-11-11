@@ -444,16 +444,65 @@ On every OpenCode or Pi bump, re-read each OAuth provider's refresh function:
 - Pi: `dist/auth/oauth/*.js` in `@earendil-works/pi-ai`. A provider whose
   refresh returns the token it was given (`refresh: refreshToken`) is
   non-rotating; one that stores the response's `refresh_token` rotates.
-- OpenCode: the built-in auth plugins under `packages/opencode/src/plugin/` at
-  the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
-  and any new plugin `internalPlugins` loads.
+- OpenCode 1.x: the built-in auth plugins under `packages/opencode/src/plugin/`
+  at the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
+  any new plugin `internalPlugins` loads, and the npm auth plugins pinned in
+  the `package.json` of OpenCode's `packages/opencode/` (`opencode-gitlab-auth`,
+  `opencode-poe-auth`).
+- OpenCode 2.x: the provider plugins under `packages/core/src/plugin/provider/`
+  at the release tag. A container's 2.x server is handed the same restricted
+  1.x entries (`openCode2ContainerCredentialPayload`), so one list serves both.
 
 A new rotating provider needs no change (anything unlisted is access-only). A
 new non-rotating one, such as a token exchange like Copilot's, needs adding to
 both lists, or its container copy signs out when its short access token
 expires. Also check that `expires` is still in milliseconds and the refresh
-window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
-`PROVIDER_AUTH_MIN_VALIDITY_MS`.
+window (Pi and OpenCode 2.x refresh five minutes early, OpenCode 1.x's xAI
+two) still fits inside `PROVIDER_AUTH_MIN_VALIDITY_MS`.
+
+Last checked 2026-11-11 (to-do 0018 (retired) task 8) against Pi 1.5.0 (`pi-ai` 1.5.0),
+OpenCode 1.19.5 and OpenCode 2.2.6, by diffing against the versions the list
+was first made from (Pi 1.2.0, OpenCode 1.19.0):
+
+- Pi: the same nine OAuth providers in 1.2.0 and 1.5.0 (Anthropic, OpenAI
+  `openai` and `openai-codex`, GitHub Copilot, OpenRouter, Kimi, Meta, xAI,
+  Radius). The refresh code changed only in URL validation of device-code and
+  discovery responses. Copilot keeps its GitHub token (`refresh:
+  refreshToken`), Meta re-mints from its identity token, OpenRouter stores an
+  empty `refresh` that never expires; every other one stores the response's
+  `refresh_token` (xAI keeps the old one only when the response omits it).
+- OpenCode 1.19.0 to 1.19.5: no change under `src/plugin/`, and the same
+  `opencode-gitlab-auth` 2.1.0 and `opencode-poe-auth` 0.0.1. GitLab stores
+  the new refresh token on every refresh, so it rotates. Poe's OAuth login
+  stores its API key as both `access` and `refresh` and never refreshes, so
+  blanking `refresh` changes nothing. The built-in Snowflake Cortex plugin
+  stores the response's refresh token and keeps the old one only when the
+  response omits it, so it is treated as rotating.
+- OpenCode 2.2.6: GitHub Copilot still stores `refresh: access` with
+  `expires` 0 and registers no refresh; OpenAI, ChatGPT, GitLab and
+  OpenCode's own login store the response's refresh token, and xAI and
+  Snowflake Cortex keep the old one only when the response omits it. Poe now
+  stores an empty `refresh`. It refreshes a login with five minutes or less
+  left (`integration.ts` in OpenCode's `packages/core/src/`).
+
+No provider moved between the two lists, so `NON_ROTATING_OAUTH_PROVIDERS`
+was left as it was.
+
+On every Claude Code bump, run `bun scripts/claude-host-refresh-trigger-probe.ts
+--claude <pinned binary>`, ideally inside a network namespace with only
+loopback (`unshare -rn sh -c 'ip link set lo up && bun …'`). It gives the
+pinned CLI fake logins in a temporary `CLAUDE_CONFIG_DIR` and `HOME`, runs the
+exact command `refreshHostClaudeLogin` runs (`CLAUDE_HOST_REFRESH_ARGS`)
+through a proxy that records and refuses every connection, and checks the nine
+cases the keeper relies on: a refreshable login inside its last five minutes,
+or expired, contacts the token host before any API request; one with two
+hours left does not unless the API answers 401; an access-only login never
+does; with the API answering, the run sends a `POST /v1/messages` carrying the
+fake login's access token and exits 1; and the credential file is never
+rewritten. A run that could not start or died on a signal counts as a
+mismatch, and an unknown or empty `--cases` selection is refused before
+anything runs. It exits non-zero on any mismatch, which means
+`refreshHostClaudeLogin` and `TOKEN_REPLACEMENT_LEAD_MS` need re-reading.
 
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex
 <pinned binary>`. It hands the pinned Codex the access-only `auth.json` a
@@ -762,7 +811,7 @@ typecheck and the full bridge suite. The only SDK union change was a new
 `claudeStartupFailureMessage`. Not rerun at 2.1.314: the Linux sandbox probe
 (needs a Linux host) and the billed coordinator-skills probe.
 `claude-host-login-refresh.ts`'s trigger was re-checked with a fake login in
-a container on 2.1.314 on 2026-11-06 (0018 task 5): still refreshes in the
+a container on 2.1.314 on 2026-11-06 (0018 (retired) task 5): still refreshes in the
 last five minutes, still exits 1 on the API's error, but the CLI now sends
 the unknown model to the API instead of refusing it itself.
 
@@ -780,8 +829,17 @@ members, `initialize_not_first` and `config_file_invalid`, now mapped in
 `claudeStartupFailureMessage`. A startup failure now also carries the CLI's own
 `errors` text after the guidance (`withStartupFailureDetail`), because
 `config_file_invalid` and `worktree_resume_refused` put the specifics there.
-Not rerun at 2.1.319: the macOS sandbox live test, the Linux sandbox probe,
-the billed coordinator-skills probe and `claude-host-login-refresh.ts`.
+Not rerun at 2.1.319: the macOS sandbox live test, the Linux sandbox probe
+and the billed coordinator-skills probe. `claude-host-login-refresh.ts`'s
+trigger was re-checked on 2.1.319 on 2026-11-11 with
+`scripts/claude-host-refresh-trigger-probe.ts`, on Linux in a network
+namespace with only loopback (`unshare -rn`), the nine cases run together:
+all nine matched 2.1.314. The token host is still `platform.claude.com`;
+with a fake Messages API the run exited 1 in 2.1-2.3 s (3.2 s after a 401),
+and with the API unreachable it was still retrying when the refresher's 60 s
+budget ran out, the refresh having been attempted in its first second. With `ANTHROPIC_BASE_URL` set, the CLI
+also asked `api.anthropic.com` for the OAuth profile (refused by the probe's
+proxy).
 
 The compatibility test's deterministic CLI fixture does not authenticate or
 spend credits, but it is not a full real-CLI smoke test. Before release, start a

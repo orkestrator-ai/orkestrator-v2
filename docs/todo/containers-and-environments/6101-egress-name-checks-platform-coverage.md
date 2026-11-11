@@ -184,7 +184,7 @@ accept CI's), and rootless with pasta (task 4).
 ## Related
 
 - [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
-- [0018](0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
+- To-do 0018 (retired 2026-11-11): the egress gateway, described in [container lifecycle](../../architecture/container-lifecycle.md#egress-gateway-egress-gateway1), and its qualification, summarised in [container qualification](../../development/container-qualification.md#egress-gateway-on-linux-engine-qualification-closed-2026-11-11)
 - [7000](7000-name-checks-hold-newline-less-first-writes.md): a newline-less first write is held, found by task 1
 - 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`

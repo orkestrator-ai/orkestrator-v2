@@ -26,6 +26,7 @@ import {
   launchSelectionReport,
   launchSettingsTiers,
   type ControlMcpInvoker,
+  type InvokeOptions,
 } from "./control-shared-actions.js";
 
 /**
@@ -147,12 +148,16 @@ export async function operatorNode(
       `${node.name}: ${node.reason ?? "unsupported"}`,
     );
   }
-  const routed: ControlMcpInvoker = async <T>(command: string, args: JsonRecord = {}) => {
-    const answer = await local.invoke<{ outcome: string; result?: T }>("invoke_on_node", {
-      nodeId,
-      command,
-      args,
-    });
+  const routed: ControlMcpInvoker = async <T>(
+    command: string,
+    args: JsonRecord = {},
+    options?: InvokeOptions,
+  ) => {
+    const answer = await local.invoke<{ outcome: string; result?: T }>(
+      "invoke_on_node",
+      { nodeId, command, args },
+      options,
+    );
     if (answer.outcome !== "ok") {
       throw new ControlMcpNodeError(
         "node-outcome-unknown",

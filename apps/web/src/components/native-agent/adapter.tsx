@@ -32,6 +32,8 @@ export interface AgentNativeTabProps {
   refreshRequestId?: number;
   executionPolicy?: "coordinator-read-only";
   coordinatorProjectId?: string;
+  /** The coordinator conversation this tab shows; keys its Actions panel's manual marks. */
+  coordinatorConversationId?: string;
   coordinatorWorkspacePath?: string;
   /**
    * Binds an unassigned tab to a platform through backend authority.

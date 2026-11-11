@@ -644,21 +644,28 @@ export class OrkestratorBackend {
       : undefined;
     this.controlMcp =
       options.controlMcp ??
-      new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
-        // Fixed for the installed app's default data directory; ephemeral for
-        // tests, agent-test backends and every other data directory.
-        port: controlMcpPortOverride(
-          options.runtimeFlavor,
-          process.env,
-          isDefaultDataDir(options.dataDir),
-        ),
-        agentVoiceChatReply: (input) => {
-          if (!this.agentVoiceChatReplier) {
-            return Promise.reject(new Error("Agent voice chat replies are unavailable"));
-          }
-          return this.agentVoiceChatReplier.reply(input);
+      new ControlMcpServer(
+        options.dataDir,
+        (command, args, invokeOptions) =>
+          invokeOptions?.signal
+            ? this.invoke(command, args, { signal: invokeOptions.signal })
+            : this.invoke(command, args),
+        {
+          // Fixed for the installed app's default data directory; ephemeral for
+          // tests, agent-test backends and every other data directory.
+          port: controlMcpPortOverride(
+            options.runtimeFlavor,
+            process.env,
+            isDefaultDataDir(options.dataDir),
+          ),
+          agentVoiceChatReply: (input) => {
+            if (!this.agentVoiceChatReplier) {
+              return Promise.reject(new Error("Agent voice chat replies are unavailable"));
+            }
+            return this.agentVoiceChatReplier.reply(input);
+          },
         },
-      });
+      );
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.applicationLogging = options.applicationLogging ?? null;

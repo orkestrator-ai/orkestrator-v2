@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ListTodo, Minus, Search } from "lucide-react";
+import { Check, ListTodo, Minus, RotateCcw, Search } from "lucide-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   FloatingNoticeSlot,
   useClaimFloatingNoticeColumnShift,
@@ -17,11 +23,14 @@ export function CoordinatorActionsPanel({
   cards,
   searchCards,
   onNavigate,
+  onMarkDone,
 }: {
   cards: readonly CoordinatorActionCard[];
   /** Every action in the conversation, for search; defaults to `cards`. */
   searchCards?: readonly CoordinatorActionCard[];
   onNavigate: (anchorId: string) => void;
+  /** Marks a card done by hand or clears that mark; without it cards have no menu. */
+  onMarkDone?: (card: CoordinatorActionCard, done: boolean) => void;
 }) {
   return (
     <FloatingNoticeSlot>
@@ -34,6 +43,7 @@ export function CoordinatorActionsPanel({
             cards={cards}
             searchCards={searchCards}
             onNavigate={onNavigate}
+            onMarkDone={onMarkDone}
             docked={layout.placement === "beside" || shift !== null}
             shiftsColumn={shift !== null}
             width={shift?.cardRem ?? layout.cardRem}
@@ -49,6 +59,7 @@ export function ActionsPanel({
   cards,
   searchCards = cards,
   onNavigate,
+  onMarkDone,
   docked,
   shiftsColumn = false,
   width = 18,
@@ -61,6 +72,13 @@ export function ActionsPanel({
    */
   searchCards?: readonly CoordinatorActionCard[];
   onNavigate: (anchorId: string) => void;
+  /**
+   * Marks a card done by hand (`true`) or clears that mark (`false`). When
+   * present, every card opens a context menu (right-click, the context-menu
+   * key or Shift+F10) offering "Mark done", or "Mark not done" on a card only
+   * the user marked.
+   */
+  onMarkDone?: (card: CoordinatorActionCard, done: boolean) => void;
   /** Room to dock beside the column: the panel stays open until its header folds it. */
   docked: boolean;
   /**
@@ -120,6 +138,8 @@ export function ActionsPanel({
   const icon = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLOListElement>(null);
   const pointer = useRef(false);
+  /** A card's context menu is open: it renders outside the panel, which must stay open. */
+  const menuOpen = useRef(false);
   const suppressed = useRef(false);
   const touch = useRef(false);
   // The header and the icon replace each other as the control, so focus
@@ -143,7 +163,8 @@ export function ActionsPanel({
   const leave = () => {
     cancel();
     timer.current = setTimeout(() => {
-      if (!pointer.current && !root.current?.contains(document.activeElement)) setExpanded(false);
+      if (!pointer.current && !menuOpen.current && !root.current?.contains(document.activeElement))
+        setExpanded(false);
     }, 160);
   };
   const collapse = () => {
@@ -166,13 +187,19 @@ export function ActionsPanel({
   useEffect(() => {
     if (docked || !expanded || searching) return;
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || menuEscapes.has(event)) return;
       suppressed.current = true;
       setExpanded(false);
     };
     // A click or tap anywhere but the overlay and its icon folds it at once.
     const outside = (event: PointerEvent) => {
       if (root.current?.contains(event.target as Node | null)) return;
+      // A card's menu is portalled outside the panel; choosing from it is not leaving.
+      if (
+        menuOpen.current ||
+        (event.target instanceof Element && event.target.closest(ACTION_MENU_SELECTOR))
+      )
+        return;
       cancel();
       setExpanded(false);
     };
@@ -330,7 +357,8 @@ export function ActionsPanel({
           }
         }}
         onKeyDown={(event) => {
-          if (docked || event.key !== "Escape") return;
+          // Escape that closed a card's menu closes only the menu.
+          if (docked || event.key !== "Escape" || menuEscapes.has(event.nativeEvent)) return;
           event.stopPropagation();
           cancel();
           suppressed.current = true;
@@ -427,24 +455,17 @@ export function ActionsPanel({
                       )}
                     >
                       <div className="min-h-0 overflow-hidden">
-                        <button
-                          type="button"
-                          tabIndex={shown && !leaving ? 0 : -1}
-                          onClick={() => onNavigate(card.anchorId)}
-                          className={cn(
-                            "flex w-full gap-2 rounded-lg border border-border p-2 text-left text-xs hover:bg-elevated focus-hairline",
-                            card.done && "text-muted-foreground opacity-60",
-                          )}
-                          aria-label={`${card.done ? "Done: " : ""}${card.title}`}
-                        >
-                          <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                          <span className="min-w-0">
-                            <span className="line-clamp-2">{card.title}</span>
-                            <span className="mt-0.5 block text-[10px] text-muted-foreground">
-                              {coordinatorActionStatus(card)}
-                            </span>
-                          </span>
-                        </button>
+                        <ActionCardButton
+                          card={card}
+                          Icon={Icon}
+                          focusable={shown && !leaving}
+                          onNavigate={onNavigate}
+                          onMarkDone={leaving ? undefined : onMarkDone}
+                          onMenuOpenChange={(open) => {
+                            menuOpen.current = open;
+                            if (!open) leave();
+                          }}
+                        />
                       </div>
                     </li>
                   );
@@ -470,6 +491,110 @@ export function ActionsPanel({
         }}
       />
     </>
+  );
+}
+
+const ACTION_MENU_SELECTOR = "[data-coordinator-action-menu]";
+
+/**
+ * Escape key presses a card's context menu used to close itself. The menu
+ * listens on the document in the capture phase, so the same event still
+ * reaches the narrow overlay's own Escape handlers afterwards; they skip it.
+ */
+const menuEscapes = new WeakSet<Event>();
+
+/**
+ * One action card. With `onMarkDone` it carries the card's context menu: "Mark
+ * done" on an open card, "Mark not done" on a card only the user marked, and a
+ * disabled note on a card the conversation itself finished (a manual mark
+ * cannot reopen it). The menu opens from the pointer, the context-menu key or
+ * Shift+F10, and gives focus back to the card when it closes.
+ */
+function ActionCardButton({
+  card,
+  Icon,
+  focusable,
+  onNavigate,
+  onMarkDone,
+  onMenuOpenChange,
+}: {
+  card: CoordinatorActionCard;
+  Icon: ReturnType<typeof coordinatorActionIcon>;
+  focusable: boolean;
+  onNavigate: (anchorId: string) => void;
+  onMarkDone?: (card: CoordinatorActionCard, done: boolean) => void;
+  onMenuOpenChange: (open: boolean) => void;
+}) {
+  const button = useRef<HTMLButtonElement>(null);
+  const element = (
+    <button
+      ref={button}
+      type="button"
+      tabIndex={focusable ? 0 : -1}
+      onClick={() => onNavigate(card.anchorId)}
+      onKeyDown={
+        onMarkDone
+          ? (event) => {
+              if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+              event.preventDefault();
+              const { left, bottom } = event.currentTarget.getBoundingClientRect();
+              event.currentTarget.dispatchEvent(
+                new MouseEvent("contextmenu", {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: left,
+                  clientY: bottom,
+                }),
+              );
+            }
+          : undefined
+      }
+      aria-keyshortcuts={onMarkDone ? "Shift+F10" : undefined}
+      className={cn(
+        "flex w-full gap-2 rounded-lg border border-border p-2 text-left text-xs hover:bg-elevated focus-hairline",
+        card.done && "text-muted-foreground opacity-60",
+      )}
+      aria-label={`${card.done ? "Done: " : ""}${card.title}`}
+    >
+      <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0">
+        <span className="line-clamp-2">{card.title}</span>
+        <span className="mt-0.5 block text-[10px] text-muted-foreground">
+          {coordinatorActionStatus(card)}
+        </span>
+      </span>
+    </button>
+  );
+  if (!onMarkDone) return element;
+  return (
+    <ContextMenu onOpenChange={onMenuOpenChange}>
+      <ContextMenuTrigger asChild>{element}</ContextMenuTrigger>
+      <ContextMenuContent
+        data-coordinator-action-menu=""
+        aria-label={`Actions for ${card.title}`}
+        onEscapeKeyDown={(event) => {
+          menuEscapes.add(event);
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (button.current?.isConnected) button.current.focus({ preventScroll: true });
+        }}
+      >
+        {!card.done ? (
+          <ContextMenuItem onSelect={() => onMarkDone(card, true)}>
+            <Check aria-hidden="true" />
+            Mark done
+          </ContextMenuItem>
+        ) : card.markedDone ? (
+          <ContextMenuItem onSelect={() => onMarkDone(card, false)}>
+            <RotateCcw aria-hidden="true" />
+            Mark not done
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem disabled>Done in the conversation</ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

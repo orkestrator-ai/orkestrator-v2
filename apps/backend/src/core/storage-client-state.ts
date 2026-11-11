@@ -11,6 +11,12 @@ import {
   type DeclinedUpstreamMerge,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
 import {
+  COORDINATOR_ACTION_MARK_LIMITS,
+  isCoordinatorActionCardId,
+  normalizeCoordinatorActionCardIds,
+  type CoordinatorActionMarks,
+} from "@orkestrator/protocol/coordinator-action-marks";
+import {
   NOTICE_DISMISSAL_LIMITS,
   normalizeNoticeDismissalSessions,
   type NoticeDismissalSession,
@@ -49,6 +55,40 @@ function readNoticeDismissals(value: unknown): StoredNoticeDismissals {
   };
 }
 
+interface StoredActionMarks extends CoordinatorActionMarks {
+  updatedAt: string;
+}
+
+/** One conversation's row key; JSON keeps the pair unambiguous whatever the ids hold. */
+function actionMarksKey(projectId: string, conversationId: string): string {
+  return JSON.stringify([projectId, conversationId]);
+}
+
+function readActionMarks(
+  value: unknown,
+  projectId: string,
+  conversationId: string,
+): CoordinatorActionMarks {
+  if (
+    !isRecord(value) ||
+    value.projectId !== projectId ||
+    value.conversationId !== conversationId
+  ) {
+    return { projectId, conversationId, revision: 0, cardIds: [] };
+  }
+  const revision = Number.isSafeInteger(value.revision) ? (value.revision as number) : 0;
+  return {
+    projectId,
+    conversationId,
+    revision: Math.max(0, revision),
+    cardIds: normalizeCoordinatorActionCardIds(value.cardIds),
+  };
+}
+
+/** Thrown when a conversation already holds as many marks as it may. */
+export const COORDINATOR_ACTION_MARKS_FULL_ERROR =
+  "This conversation has too many actions marked done; mark one not done first";
+
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
@@ -68,6 +108,11 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  *   to always merge upstream commits. Retired in the same way; not announced.
  * - `notice-dismissals`: one document, notices dismissed per session identity,
  *   bounded in both dimensions; announces `notice-dismissal`.
+ * - `coordinator-action-marks`: one row per coordinator conversation, owned by
+ *   its project: the action cards the user marked done by hand, at most
+ *   `COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation` (a further mark is
+ *   refused, never evicted); announces `coordinator-action-marks` with the
+ *   conversation id and its project.
  *
  * Every write is one `updateStoreRow`/`updateStore` transaction. A project's
  * rows are deleted with the project.
@@ -89,6 +134,10 @@ export class ClientStateRepository {
 
   private dismissalsFile(): string {
     return this.context.file("notice-dismissals.json");
+  }
+
+  private actionMarksFile(): string {
+    return this.context.file("coordinator-action-marks.json");
   }
 
   getCoordinatorPaneLayout(projectId: string): CoordinatorPaneLayoutRecord | null {
@@ -192,7 +241,63 @@ export class ClientStateRepository {
     });
   }
 
-  /** Deletes a project's layout, decline and auto-merge setting (project removal). */
+  /** A coordinator conversation's manual action marks; revision 0 when none are stored. */
+  getCoordinatorActionMarks(projectId: string, conversationId: string): CoordinatorActionMarks {
+    return readActionMarks(
+      this.context.loadStoreRow(this.actionMarksFile(), actionMarksKey(projectId, conversationId)),
+      projectId,
+      conversationId,
+    );
+  }
+
+  /**
+   * Marks a card done by hand (`done`), or clears its mark. A change that
+   * leaves the marks as they were writes nothing and keeps the revision.
+   * The row stays once written, even empty, so its revision only moves
+   * forward; it goes with the project.
+   */
+  setCoordinatorActionMark(
+    projectId: string,
+    conversationId: string,
+    cardId: string,
+    done: boolean,
+  ): CoordinatorActionMarks {
+    if (!isCoordinatorActionCardId(cardId)) throw new Error("cardId is not a valid action id");
+    const { marks, changed } = this.context.updateStoreRow<{
+      marks: CoordinatorActionMarks;
+      changed: boolean;
+    }>(this.actionMarksFile(), actionMarksKey(projectId, conversationId), (current) => {
+      const stored = readActionMarks(current, projectId, conversationId);
+      const has = stored.cardIds.includes(cardId);
+      if (has === done) return { result: { marks: stored, changed: false } };
+      if (done && stored.cardIds.length >= COORDINATOR_ACTION_MARK_LIMITS.marksPerConversation) {
+        throw new Error(COORDINATOR_ACTION_MARKS_FULL_ERROR);
+      }
+      const next: StoredActionMarks = {
+        projectId,
+        conversationId,
+        revision: stored.revision + 1,
+        cardIds: done ? [...stored.cardIds, cardId] : stored.cardIds.filter((id) => id !== cardId),
+        updatedAt: nowIso(),
+      };
+      const marks: CoordinatorActionMarks = {
+        projectId,
+        conversationId,
+        revision: next.revision,
+        cardIds: next.cardIds,
+      };
+      return { result: { marks, changed: true }, value: next };
+    });
+    if (changed) {
+      this.context.changes.announce("coordinator-action-marks", conversationId, projectId);
+    }
+    return marks;
+  }
+
+  /**
+   * Deletes a project's layout, decline and auto-merge setting, and its
+   * conversations' action marks (project removal).
+   */
   deleteProjectClientState(projectId: string): void {
     const deleted = this.context.updateStoreRow<boolean>(
       this.layoutsFile(),
@@ -205,6 +310,7 @@ export class ClientStateRepository {
     this.context.updateStoreRow<boolean>(this.autoMergeFile(), projectId, (current) =>
       current === undefined ? { result: false } : { result: true, delete: true },
     );
+    this.deleteProjectActionMarks(projectId);
     if (deleted) {
       this.context.changes.announce(
         "coordinator-pane-layout",
@@ -213,6 +319,47 @@ export class ClientStateRepository {
         undefined,
         true,
       );
+    }
+  }
+
+  /**
+   * Every conversation's marks in a removed project, found by the rows' owner.
+   * `listStoreRowKeysByOwner` answers nothing only inside an atomic scope that
+   * writes this store, which project removal never opens.
+   */
+  private deleteProjectActionMarks(projectId: string): void {
+    const file = this.actionMarksFile();
+    const rows = this.context.listStoreRowKeysByOwner(file, projectId);
+    const keys = new Set(rows?.owned ?? []);
+    for (const row of rows?.unowned ?? []) {
+      try {
+        const value = JSON.parse(row.value) as unknown;
+        if (isRecord(value) && value.projectId === projectId) keys.add(row.key);
+      } catch {
+        // Unreadable: not this project's to delete.
+      }
+    }
+    for (const key of keys) {
+      const conversationId = this.context.updateStoreRow<string | null>(file, key, (current) =>
+        current === undefined
+          ? { result: null }
+          : {
+              result:
+                isRecord(current) && typeof current.conversationId === "string"
+                  ? current.conversationId
+                  : null,
+              delete: true,
+            },
+      );
+      if (conversationId) {
+        this.context.changes.announce(
+          "coordinator-action-marks",
+          conversationId,
+          projectId,
+          undefined,
+          true,
+        );
+      }
     }
   }
 
@@ -312,4 +459,6 @@ export type ClientStateStorage = Pick<
   | "listNoticeDismissals"
   | "dismissNotices"
   | "reconcileNoticeDismissals"
+  | "getCoordinatorActionMarks"
+  | "setCoordinatorActionMark"
 >;

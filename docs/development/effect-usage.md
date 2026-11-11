@@ -22,7 +22,7 @@ Effect somewhere new or proposing to remove it.
 | Shutdown steps | `shutdownStep` in `apps/backend/src/core/shutdown-steps.ts`, used by `OrkestratorBackend.shutdown()` | Every close step runs even if an earlier one fails, so `storage.close()` (WAL checkpoint, clean-exit marker) is always reached. Caps use `Effect.timeout`, which clears its timer. This is a sequential program rather than `Scope` finalizers, because the order is fixed and branches on pending lifecycle tasks. |
 | Fiber with `acquireRelease` | `ContainerHostReachabilityService` (`container-host-reachability.ts`) | The probe network and containers are scoped resources. An uninterruptible acquire means a resource is never removed before its create settles. `dispose()` interrupts the fiber. Both earlier fixes here (#1419, #1903) were leaks of these resources. |
 | `Result` | Result decoding in `decodeCommandResult` and domain clients | A typed decode outcome without exceptions. |
-| Sleep, timeout and retry | `apps/backend/src/core/abortable-timing.ts` (`abortableSleep`, `runWithTimeout`, `retryWithBackoff`) | One abort convention (a sleep resolves `false` on abort), a timeout that aborts the work's signal, and a jittered, capped retry with a `retryable` predicate, all tested on `TestClock`. Use these rather than a new inline `Promise.race` or sleep in the backend. |
+| Sleep, timeout and retry | `apps/backend/src/core/abortable-timing.ts` (`abortableSleep`, `runWithTimeout`, `retryWithBackoff`) | One abort convention (a sleep resolves `false` on abort), a timeout that aborts the work's signal, and a jittered, capped retry with a `retryable` predicate, all tested on `TestClock`. Use these rather than a new inline `Promise.race` or sleep in the backend. A provider read bounded this way takes its signal through `ProviderReadOptions`, and a backend command through its invoker's `options.signal` (`CommandInvocation.signal`, which the gateway also aborts when the client goes away; a routed command forwards it to the node only for reads); a mutation (a prompt send, an MCP reload) keeps a plain bounded wait, because an abort cannot undo work the bridge already started. |
 
 ## Where it is deliberately not used
 
@@ -57,6 +57,6 @@ Effect somewhere new or proposing to remove it.
   memoised promise on rejection instead, as `build-pipeline-transcript-store.ts`
   does.
 
-Follow-ups that may extend this (a Cursor parked-cancel pilot, and giving the
-remaining backend timeouts a signal to cancel) are in
+Follow-ups that may extend this (a Cursor parked-cancel pilot, and a
+cancellation path for timed-out backend commands) are in
 [to-do 7543](../todo/backend-structure/7543-effect-adoption-follow-ups.md).

@@ -151,6 +151,7 @@
     "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
     "./coordinator-activity": "./src/coordinator-activity.ts",
+    "./coordinator-action-marks": "./src/coordinator-action-marks.ts",
     "./coordinator-launch-overrides": "./src/coordinator-launch-overrides.ts",
     "./coordinator-context": "./src/coordinator-context.ts",
     "./coordinator-pane-layout": "./src/coordinator-pane-layout.ts",

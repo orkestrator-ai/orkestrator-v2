@@ -2,7 +2,7 @@
  * Runtime evidence: a planned `pending-next-turn` / `restart-required` runtime
  * becomes `applied` only when its bridge proves it loaded the saved bytes.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -12,6 +12,7 @@ import type { StoredOperation } from "./operations-store.js";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import {
+  EVIDENCE_READ_TIMEOUT_MS,
   EVIDENCE_READS_PER_TICK,
   EVIDENCE_RECHECK_MS,
   EVIDENCE_WINDOW_MS,
@@ -179,6 +180,48 @@ describe("Claude evidence", () => {
     ]);
     expect(after.apply.state).toBe("pending-next-turn");
     expect(JSON.stringify(after)).not.toContain("bridge down");
+  });
+
+  test("a read past its deadline is aborted and leaves the plan untouched", async () => {
+    session("claude");
+    const operation = await saveAndApply("claude", "claude:user");
+    await fixture.service.tick();
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    let readSignal: AbortSignal | undefined;
+    let readStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    fixture.probe.mcpConfigEvidence = (_environmentId, _agent, _key, signal) => {
+      readSignal = signal;
+      queueMicrotask(readStarted);
+      return new Promise(() => {});
+    };
+    let expire: (() => void) | undefined;
+    const original = globalThis.setTimeout;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: () => void,
+      ms: number,
+      ...args: unknown[]
+    ) => {
+      if (readSignal && !expire && ms === EVIDENCE_READ_TIMEOUT_MS) expire = callback;
+      return original(callback, ms, ...args);
+    }) as typeof setTimeout);
+    try {
+      const ticking = fixture.service.tick();
+      await started;
+      for (let attempt = 0; attempt < 50 && !expire; attempt++) {
+        await new Promise((resolve) => original(resolve, 1));
+      }
+      expect(expire).toBeDefined();
+      expire!();
+      await ticking;
+      // The deadline ends the bridge request, not only the wait for it.
+      expect(readSignal?.aborted).toBe(true);
+      expect(await stateOf(operation.operationId)).toEqual(["pending-next-turn"]);
+    } finally {
+      timer.mockRestore();
+    }
   });
 
   test("absent and excluded reports are not evidence", async () => {

@@ -279,3 +279,25 @@ test("a typed incompatibility keeps its code and details through the link (plan 
   expect(incompatibility(unknown, "not_registered")?.command).toBe("not_registered");
   link.stop();
 });
+
+test("a request whose signal is already aborted is not sent, and rejects with its reason", async () => {
+  const { leaf, link } = await setup();
+  let dispatches = 0;
+  leaf.commands.set("read_thing", async () => {
+    dispatches++;
+    return { ok: true };
+  });
+  await link.start();
+  const caller = new AbortController();
+  caller.abort(new Error("caller left"));
+  await expect(link.invoke("read_thing", {}, { signal: caller.signal })).rejects.toThrow(
+    "caller left",
+  );
+  expect(dispatches).toBe(0);
+  // A live signal still reaches the node.
+  expect(await link.invoke("read_thing", {}, { signal: new AbortController().signal })).toEqual({
+    ok: true,
+  });
+  expect(dispatches).toBe(1);
+  link.stop();
+});

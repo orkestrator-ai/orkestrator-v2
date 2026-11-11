@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
-import { httpProvider } from "../agent-provider-test-support.js";
+import { httpProvider, waitUntil } from "../agent-provider-test-support.js";
 import {
   bridgeMcpConfigEvidence,
   bridgeReportsMcpConfig,
@@ -154,6 +154,23 @@ describe("renderer-facing health never carries the digests", () => {
   test("a bridge that predates the route is older than the report", async () => {
     const { provider } = httpProvider(() => new Response("not found", { status: 404 }));
     expect(await provider.mcpConfigEvidence!("s-1")).toEqual({ state: "unsupported" });
+  });
+
+  test("the scheduler's signal ends the evidence request", async () => {
+    const { provider, requests } = httpProvider(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const read = provider.mcpConfigEvidence!("s-1", { signal: controller.signal });
+    await waitUntil(() => requests.length === 1);
+    controller.abort(new Error("deadline"));
+    await expect(read).rejects.toThrow();
+    expect(requests[0]?.init.signal?.aborted).toBe(true);
   });
 });
 

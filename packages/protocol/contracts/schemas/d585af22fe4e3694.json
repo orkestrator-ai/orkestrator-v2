@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:d585af22fe4e369406a3b609f2167d7399ac0f04d6bcfa1a50eac08104963d74",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "cardId": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": ["cardId", "conversationId", "done", "projectId"],
+      "type": "object"
+    }
+  }
+}

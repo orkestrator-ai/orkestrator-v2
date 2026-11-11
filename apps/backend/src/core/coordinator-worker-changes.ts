@@ -17,6 +17,7 @@ import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { coordinatorNodeTarget, withRetryAdvice } from "./commands-registry-coordinator-nodes.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { coordinatorCaller } from "./coordinator-action-scope.js";
 import { diffBaseGitForEnvironment, type DiffBaseGit } from "./diff-base-override.js";
 import { isImmutableCommitRef } from "./commands-files.js";
@@ -691,6 +692,22 @@ export function olderNodeIgnoredDiffScope(
   return !("committedDiffs" in answer) && !("uncommittedDiffs" in answer);
 }
 
+/**
+ * What a command node adds to a remote answer that ignored `diffScope`, and
+ * counts it: the node predates v2.35.0-beta (to-do 7570 task 2).
+ */
+export function olderNodeDiffScopeNote(
+  options: WorkerChangesOptions,
+  answer: JsonRecord,
+): { diffScopeUnsupported?: string } {
+  if (!olderNodeIgnoredDiffScope(options, answer)) return {};
+  compatibilityPathUsage.record("worker-changes.diff-scope-older-node");
+  return {
+    diffScopeUnsupported:
+      "That node's backend predates diffScope, so this answer has only the combined sinceBase diff; sinceBase files marked uncommitted: true also have uncommitted changes.",
+  };
+}
+
 function gitFor(environment: Environment): DiffBaseGit | null {
   try {
     return diffBaseGitForEnvironment(environment);
@@ -737,12 +754,7 @@ export function registerCoordinatorWorkerChanges(
       );
       return {
         ...answer,
-        ...(olderNodeIgnoredDiffScope(options, answer)
-          ? {
-              diffScopeUnsupported:
-                "That node's backend predates diffScope, so this answer has only the combined sinceBase diff; sinceBase files marked uncommitted: true also have uncommitted changes.",
-            }
-          : {}),
+        ...olderNodeDiffScopeNote(options, answer),
         nodeId: remote.nodeId,
       };
     }

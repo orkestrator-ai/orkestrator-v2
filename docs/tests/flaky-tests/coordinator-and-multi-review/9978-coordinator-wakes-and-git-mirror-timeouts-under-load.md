@@ -123,3 +123,32 @@ Status stays open; no assertion, timeout or skip changed.
   `bun test --preload ../../tests/setup-node.ts` run of the four files from
   `apps/backend` (`--parallel=2`) passed (7.9 s) at a load average of about 35
   and falling.
+
+## Recurrence — 2026-11-11 (Effect adoption follow-ups review repairs)
+
+Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `da475cb5e`,
+base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9978 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes only `apps/backend` MCP
+evidence, provider-read and transcript-artifact code, their tests and docs;
+it does not touch the coordinator wake or git-mirror code.
+
+- **Command:** `mise run test:logged -- --name address-default-tests -- mise run test`
+  (default suite at its default worker counts) on Linux x86_64, 16 cores, host
+  load average about 60.
+- **Suite counts:** backend 18,578 passed and 3 failed (flakes 9963 and 9978);
+  web 14,572 passed and 7 failed (flake 9932); protocol, desktop, web-public,
+  toolchain, CLI, root, bridge and lockfile groups passed.
+- **Failure:** two cases timed out at the 5 s default:
+  `pull request status wakes > a PR wakes once per state change until merge (hidden: %s)`
+  (5,002 ms, `coordinator-status-wakes-pr.test.ts`) and
+  `mirror mount respects policy 2 port semantics` (5,001 ms,
+  `tests/project-git-mirror-create.test.ts`).
+- **Isolated rerun:** the aggregate runner's rerun of
+  `coordinator-status-wakes-pr.test.ts` waited for host capacity and ended
+  INCOMPLETE at its 600 s budget with no verdict; `project-git-mirror-create`
+  was not rerun. A manual
+  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator-status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
+  passed both owners (19.4 s).
+
+Status stays open; no assertion, timeout or skip changed.

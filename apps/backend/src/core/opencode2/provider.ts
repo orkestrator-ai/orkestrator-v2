@@ -59,6 +59,7 @@ import {
   type ProviderDispatchStatus,
   type ProviderNativeAgentSessionAction,
   type ProviderPrepareDispatchOptions,
+  type ProviderReadOptions,
   type ProviderRuntimeHealth,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -442,8 +443,11 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
   }
 
   /** The user's MCP servers on this location; Orkestrator's own are not listed. */
-  mcpServers(): Promise<NativeAgentMcpServer[]> {
-    return this.workflow.mcpServers();
+  mcpServers(
+    _sessionId?: string,
+    options: ProviderReadOptions = {},
+  ): Promise<NativeAgentMcpServer[]> {
+    return this.workflow.mcpServers(options.signal);
   }
 
   mcpServerAction(_sessionId: string, serverId: string, action: NativeAgentMcpServerAction) {

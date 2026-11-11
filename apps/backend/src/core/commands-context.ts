@@ -154,17 +154,24 @@ export type CommandContext = {
  * domain?, version?, critical? }`, docs/reports/unified-federation.md §11.2
  * "Must-understand"), as a transport decoded them. Absent for an older client
  * that sends only `command` and `args`, and for in-process calls.
+ *
+ * `signal` is not an envelope field: it is the call's own cancellation, set by
+ * the gateway when the client that sent the call goes away and by in-process
+ * callers that bound their wait (`ControlMcpInvoker`'s `options.signal`). A
+ * handler may honour it; most do not, and a call without one runs as before.
  */
 export type CommandInvocation = {
   readonly domain?: string;
   readonly version?: number;
   readonly critical?: readonly string[];
+  readonly signal?: AbortSignal;
 };
 
 /**
- * A registered command's handler. `invocation` reaches only the registry's own
+ * A registered command's handler. `invocation` reaches the registry's own
  * wrapper (which checks the version range and the critical fields); handlers
- * and wrapping registrars may ignore it.
+ * and wrapping registrars may ignore it, or read its `signal` to stop work the
+ * caller no longer waits for. A wrapper must pass it on unchanged.
  */
 export type CommandHandler = (
   args: JsonRecord,

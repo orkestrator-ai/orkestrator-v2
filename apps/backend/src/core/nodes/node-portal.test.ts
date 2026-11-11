@@ -8,6 +8,7 @@ import {
 } from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService } from "./client-grants.js";
+import { NodeOutcomeUnknownError } from "./node-link.js";
 import {
   settle,
   stopTestNodeNetworks,
@@ -281,6 +282,31 @@ describe("PT-02/PT-05 node-qualified routing", () => {
       command: "stop_environment",
       controller: "bk_command",
     });
+  });
+
+  test("the caller's signal aborts a routed read on the node, without an outcome record", async () => {
+    const { command, leaf } = await commandWithLeaf();
+    let leafSignal: AbortSignal | undefined;
+    const reached = Promise.withResolvers<void>();
+    leaf.commands.set("get_machine_load", (_args, signal) => {
+      leafSignal = signal;
+      reached.resolve();
+      return new Promise((resolve) =>
+        signal?.addEventListener("abort", () => resolve({ late: true }), { once: true }),
+      );
+    });
+    const caller = new AbortController();
+    const routed = command.portal.invokeOnNode(
+      { nodeId: "bk_leaf", command: "get_machine_load", args: {} },
+      { signal: caller.signal },
+    );
+    await reached.promise;
+    expect(leafSignal?.aborted).toBe(false);
+    caller.abort();
+    await expect(routed).rejects.toBeInstanceOf(NodeOutcomeUnknownError);
+    expect(leafSignal?.aborted).toBe(true);
+    // A read is never recorded as an unknown write.
+    expect(await command.portal.outcomes.list()).toEqual([]);
   });
 
   test("a write whose answer is lost is recorded as outcome-unknown and never resent", async () => {

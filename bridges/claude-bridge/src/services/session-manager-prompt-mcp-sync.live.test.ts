@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { RESULT_SENTINEL } from "./session-manager-prompt-mcp-sync.live-probe.js";
+import {
+  REPLACE_LINGER_SENTINEL,
+  type ReplaceLingerResult,
+} from "./claude-mcp-replace-linger.live-probe.js";
 
 // Runs the pinned Claude CLI for real (no credentials, a loopback model) and
 // proves what `session-manager-prompt-mcp-sync.ts` relies on. Run it with
@@ -109,4 +113,58 @@ test("a running Claude CLI unloads removed and renamed MCP servers", async () =>
     started: ["keep"],
     initialized: ["keep"],
   });
+}, 120_000);
+
+// The standalone repro for the upstream report (0039 task 1). Kept beside the
+// canary so the file a maintainer attaches still reproduces on the pin. When
+// upstream stops a replaced server, this fails together with the `replace`
+// expectation above: flip both, and close the item.
+test("the standalone repro still shows a replaced launch server lingering", async () => {
+  const repro = Bun.spawn(
+    [process.execPath, join(import.meta.dir, "claude-mcp-replace-linger.live-probe.ts")],
+    { cwd: join(import.meta.dir, "..", ".."), env: process.env, stdout: "pipe", stderr: "pipe" },
+  );
+  const deadline = setTimeout(() => repro.kill(), 90_000);
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number;
+  try {
+    [stdout, stderr, exitCode] = await Promise.all([
+      new Response(repro.stdout).text(),
+      new Response(repro.stderr).text(),
+      repro.exited,
+    ]);
+  } finally {
+    clearTimeout(deadline);
+    if (repro.exitCode === null) repro.kill();
+  }
+  // 1 is "reproduced"; 2 is an error.
+  expect(exitCode, stderr).toBe(1);
+  const line = stdout
+    .split("\n")
+    .find((candidate) => candidate.startsWith(REPLACE_LINGER_SENTINEL));
+  if (!line) throw new Error(`Repro stdout had no ${REPLACE_LINGER_SENTINEL} line:\n${stdout}`);
+  const result = JSON.parse(line.slice(REPLACE_LINGER_SENTINEL.length)) as ReplaceLingerResult;
+  const byScenario = Object.fromEntries(result.scenarios.map((entry) => [entry.scenario, entry]));
+  // A server loaded at launch (SDK options or `.claude.json`) lingers when
+  // replaced; one first added through `setMcpServers` is stopped. Every
+  // scenario ends with only the new configuration connected, and nothing
+  // outlives the CLI.
+  for (const [scenario, lingering] of [
+    ["options", true],
+    ["dynamic", false],
+    ["settings", true],
+  ] as const) {
+    expect(byScenario[scenario]).toEqual({
+      scenario,
+      connected: ["2"],
+      processes: [
+        { version: "1", alive: lingering },
+        { version: "2", alive: true },
+      ],
+      aliveAfterExit: 0,
+      lingering,
+    });
+  }
+  expect(result.reproduced).toBe(true);
 }, 120_000);

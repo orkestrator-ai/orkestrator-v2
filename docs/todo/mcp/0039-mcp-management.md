@@ -30,10 +30,13 @@ no login and no billed turn (see
 OpenCode cells worked on 2026-11-10 against `main` at `c98b20e6f`, again on
 the loopback model only, reached through a custom OpenCode provider (see
 [OpenCode on the loopback model](#opencode-on-the-loopback-model-2026-11-10)).
+Task 1's agent part (the standalone repro) done on 2026-11-11 against `main`
+at `14df96544` (pins: Claude 2.1.319, Agent SDK 0.3.319), credential-free;
+only the canary flip, which waits on an upstream fix, is left.
 
 ### Tasks
 
-1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (the standalone repro can be written now; the canary flip waits on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix).
+1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (depends on 7568: 0039 task 1, the report filing, and an upstream Claude Code fix). The repro is done (2026-11-11: `claude-mcp-replace-linger.live-probe.ts`, run beside the canary; at 2.1.319 a server loaded at launch lingers when replaced, one added through `setMcpServers` does not); only the canary flip is left.
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
 5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed).
@@ -77,6 +80,43 @@ report can carry (the drafted one points at the internal
 `session-manager-prompt-mcp-sync.live-probe.ts`, scenario `replace`), and,
 once an upstream release stops the old process, changing the canary to
 `alive: ["alpha"]` and closing code item 8.
+
+**Outcome (2026-11-11): standalone repro written; canary unchanged.**
+
+- `bridges/claude-bridge/src/services/claude-mcp-replace-linger.live-probe.ts`
+  is one file that imports only `@anthropic-ai/claude-agent-sdk` and Node
+  built-ins and is its own fixture MCP server (`--server`), so it can be
+  attached to the issue as is (`bun add @anthropic-ai/claude-agent-sdk`, then
+  `bun claude-mcp-replace-linger.live-probe.ts`; `CLAUDE_CLI_PATH` picks the
+  executable). It runs each CLI in a temporary `HOME` and `CLAUDE_CONFIG_DIR`
+  and sends no prompt, so no login and no model request. It loads `alpha` in
+  one of three ways, replaces it through `setMcpServers` under the same name
+  with another argument and env value, waits until the new version is
+  connected, and reports which processes are still alive. Exit 1 means
+  reproduced, 0 not reproduced, 2 an error; the last line is
+  `REPLACE_LINGER_RESULT <json>`.
+- Result on CLI 2.1.319 (pinned toolchain installed into a throwaway data
+  directory; three runs, identical):
+
+  | Scenario | How `alpha` v1 was loaded | After the replacement | After the CLI exits |
+  | --- | --- | --- | --- |
+  | `options` | the SDK's `mcpServers` option at launch | v2 connected; v1 and v2 running | none running |
+  | `dynamic` | an earlier `setMcpServers` call | v2 connected; v1 stopped | none running |
+  | `settings` | `mcpServers` in `.claude.json` | v2 connected; v1 and v2 running | none running |
+
+  So the leak is narrower than the draft said: only a server the CLI loaded
+  at launch (from the SDK options or a settings file) outlives its
+  replacement; a server first added through `setMcpServers` is stopped. The
+  bridge passes servers at launch, so its sessions are in the leaking case.
+  The draft in code item 8 and the 7568 item are updated to match.
+- `session-manager-prompt-mcp-sync.live.test.ts` gained a second test that
+  runs the repro and pins this table, so the file a maintainer attaches keeps
+  reproducing on the pin. Both it and the canary fail when upstream fixes the
+  leak: flip both then. `mise run verify:claude:mcp-live` with
+  `CLAUDE_CLI_PATH` at 2.1.319: 2 pass, 13 expects, 25.9 s. The canary alone
+  also still passes there (`alive: ["alpha", "alpha"]`), so the bug is not
+  fixed upstream at 2.1.319.
+- Left: filing the report (7568) and, after an upstream fix, the canary flip.
 
 ### 2. Re-derive Grok rules at 1.0.70
 
@@ -865,22 +905,26 @@ collects the live evidence the shipped behaviour has never had.
    `--profile`), so they stay unmodelled and the live join names such rows as
    coming from a layer this editor does not read. Claude plugins do have one
    (`installed_plugins.json` and each plugin's `.mcp.json`), but mirroring
-   them needs the CLI's enablement rules; that is
-   [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md).
+   them needs the CLI's enablement rules; that was 0121 (retired 2026-11-11;
+   see "Claude plugins" in
+   [`mcp-management.md`](../../architecture/mcp-management.md#recorded-discrepancies-and-provider-rules)).
 8. **Replaced Claude server processes linger (blocked upstream).** Still true
-   on CLI 2.1.309: the live probe's new "replace" scenario edits a server under
+   on CLI 2.1.319 (2026-11-11; first seen on 2.1.309): the live probe's new "replace" scenario edits a server under
    the same name and finds both processes alive, while only the new one is
    connected and offered. `session-manager-prompt-mcp-sync.live.test.ts` now
    asserts that, so it fails when the CLI starts stopping the old process;
    then expect one `alpha` and close this item. Not yet reported to
    Anthropic: filing moved to the manual-test checklist (7568) on
-   2026-11-10; a standalone repro for it is task 1's agent part. Draft:
-   "Claude Code 2.1.309, Agent SDK `Query.setMcpServers`: replacing a stdio
-   server's configuration under the same name connects a new process but
-   never stops the old one; the old process keeps its environment until the
-   CLI exits. Same for a server first loaded from `.claude.json` and then
-   replaced. Repro: `bridges/claude-bridge/src/services/session-manager-prompt-mcp-sync.live-probe.ts`,
-   scenario `replace`."
+   2026-11-10; the standalone repro is written (task 1, 2026-11-11). Draft:
+   "Claude Code 2.1.319, Agent SDK 0.3.319 `Query.setMcpServers`: replacing
+   a stdio server's configuration under the same name connects a new process
+   but never stops the old one when the old one was loaded at launch (the
+   SDK's `mcpServers` option, or `mcpServers` in `.claude.json`); the old
+   process keeps its environment until the CLI exits. A server first added
+   through `setMcpServers` is stopped correctly when replaced. Repro:
+   `bridges/claude-bridge/src/services/claude-mcp-replace-linger.live-probe.ts`
+   (self-contained; `bun add @anthropic-ai/claude-agent-sdk`, then run it with
+   `bun`; it exits 1 and prints the scenarios when it reproduces)."
 12. ~~**OpenCode rename probe calls the new name.**~~ Done 2026-10-25 in the
     harness: a probe that must fail, where the model called another probe
     server instead, passes only when the session's own MCP inventory (read
@@ -1592,6 +1636,38 @@ directory and were deleted with it.
 
 ## Assumptions and decisions
 
+### 2026-11-11: task 1, the standalone repro
+
+Made without stopping to ask. No login, no model request and no outward
+action: the report itself stays with the maintainer (7568).
+
+#### Task 1: one self-contained file, kept in the bridge
+
+Chose a single TypeScript file that imports only the Agent SDK and Node
+built-ins and serves as its own fixture MCP server, placed beside the
+existing probe and run by the existing live test. The alternatives were a
+script outside the source tree (not typechecked or run, so it could silently
+stop reproducing) or pointing the report at the internal probe (it imports
+bridge modules, so an outside reader cannot run it). Keeping it under
+`src/services/` with the `.live-probe.ts` suffix gets it typechecked and
+lint-exempt for `console`, and the second live test fails when it stops
+reproducing.
+
+#### Task 1: three load paths instead of one
+
+The internal probe's `replace` scenario loads the server both inline and
+from `.claude.json` at once, so it could not say which path leaks. The repro
+loads it each way separately, which showed that a server added through
+`setMcpServers` is stopped correctly. That narrows the report and keeps the
+upstream fix easy to verify; the canary itself is left as it was.
+
+#### Task 1: the toolchain came from a throwaway data directory
+
+This shell's `CLAUDE_CLI_PATH` points into the real data directory's
+toolchains. The runs instead used the pinned 2.1.319 installed with
+`mise run toolchain:install --data-dir <worktree>/output/p0039/toolchain-data
+--tool claude`, removed afterwards.
+
 ### 2026-11-10: task 6, OpenCode on a loopback model
 
 Made without stopping to ask. No login and no billed turn: the one live run
@@ -1795,7 +1871,7 @@ Made on 2026-10-25 while closing the code items, without stopping to ask.
 | Codex `applied` (item 3) | (a) a bridge field on `/runtime-health` (per-thread last `turn/start`); (b) the backend's own `dispatchedRequestIds` | (b): Codex's session routes can cold-start app-server, so a bridge read is not no-touch; the backend already records every accepted dispatch | No bridge or protocol change; works across bridge restarts and for "not running" | Proves a turn was dispatched after the reload, not what the thread loaded; a dispatch open at reload completion is excluded, so that turn alone never proves it |
 | Strategy name | (a) new `McpApplyStrategy` value for OpenCode; (b) keep `directory-restart`, change the description | (b): older renderers label the existing value | No compatibility path | The name says less than it does |
 | Grok per-session apply (item 4) | (a) pass user servers in `session/new`; (b) keep restart-based apply | (b): Grok already loads the files at process start; a session copy would run beside it with undocumented collision rules and merge with it in a name-keyed inventory | No duplicate servers; nothing new to qualify without a login | A Grok change still needs a restart |
-| Unmodelled layers (item 7) | (a) model every layer; (b) model only layers with a passive reader | (b): only Claude plugins qualify, and they need the CLI's enablement rules, so they moved to their own file (0121) | No guessed sources; the live join already labels such rows | Plugin servers stay visible only in the live panel for now |
+| Unmodelled layers (item 7) | (a) model every layer; (b) model only layers with a passive reader | (b): only Claude plugins qualify, and they need the CLI's enablement rules, so they moved to their own file (0121, retired 2026-11-11) | No guessed sources; the live join already labels such rows | Plugin servers stay visible only in the live panel for now |
 | Live row join (item 5) | (a) name only (as before); (b) name, scope and target; (c) also by runtime | (c): exact name and target, live scope picks the source, then effective status and precedence; the session's apply outcome by `runtimeId` | One highlighted row; explains injected, plugin and unknown rows | Pi's sanitized names are matched by rule, which must track the bridge |
 | Count-only MCP tiles (item 6) | (a) delete; (b) show only when no list is reported | (b): an older bridge that reports only the count still shows something | No duplicate number beside the list | Two code paths |
 | Rename probe (item 12) | (a) a tool name the model cannot substitute; (b) pin another model; (c) accept a substitution when the runtime's inventory proves the old name gone | (c): a renamed process keeps its label and tool, so (a) cannot work; (b) breaks when the model changes | Absence is proven by the runtime, not by the model's choice | Needs the session to report an inventory (OpenCode does) |
@@ -2060,15 +2136,17 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1's upstream report filing, task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10, and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).
 - [After an MCP server action](../../architecture/native-transcripts.md#after-an-mcp-server-action)
   in `native-transcripts.md`: the fix for the stale live panel found under
   task 14 (todo 7221, closed 2026-11-09); task 8's reconnect case passes again.
-- [0121-claude-plugin-mcp-servers.md](0121-claude-plugin-mcp-servers.md) for a
-  read-only Claude plugin source (split from item 7).
+- 0121 (retired 2026-11-11), the read-only Claude plugin source split from
+  item 7: its rules and evidence are under "Claude plugins" in
+  [`mcp-management.md`](../../architecture/mcp-management.md#verification-status),
+  and its container session half is a 7568 item.
 - [0040-mcp-environment-delivery.md](0040-mcp-environment-delivery.md) for containers,
   remote backends and environment-private configuration.
 - [0003-agent-accounts-and-sign-in.md](../agent-engines/0003-agent-accounts-and-sign-in.md) and

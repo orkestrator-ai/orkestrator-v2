@@ -96,3 +96,13 @@ at `:119`. That is close to the 4 of 57 rate recorded above on detached
 `TranscriptPaging`, `StreamingTranscript`, three workers) failed only the
 mobile byte-bounded index case, 79 passed. No assertion, skip or timeout
 changed; root cause remains unconfirmed.
+
+## Launch-override marker review repair — 2026-11-11
+
+On `launch-override-marker-043a84998c41-r1` (base `498b68766`), the desktop
+case failed in a multi-worker run of the desktop specs the deadline-killed
+component suite had not reached (686 passed, 30 skipped, two failed):
+`expect(received).toBeGreaterThan(1)` received 1. The complete unchanged owner
+passed with one worker (with `DataSavingGateway.spec.ts`, 129.4 s).
+`flaky:recurrence 0483` reported `open`. The branch does not change the
+transcript. Full run: [9937](../aggregate-validation-runs/9937-launch-override-marker-browser-owners.md).

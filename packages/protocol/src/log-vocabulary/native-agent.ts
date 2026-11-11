@@ -117,6 +117,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
     events: {
       "events.dropped":
         "The 2.x event stream ended or failed, so reads go to the server until it reconnects. Error class only.",
+      "monitor.silent":
+        "The 2.x event stream sent a heartbeat and then went quiet, so it is replaced. `silenceMs` only.",
       "steer.unconfirmed":
         "A 2.x steer got no definite answer, so its delivery is reconciled from history. Error class only.",
       "provider.dispose-failed":

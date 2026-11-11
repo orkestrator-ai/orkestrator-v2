@@ -8,16 +8,16 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2026-11-06 against `main` at `ee2cc8423` (2.2.5); see "Assumptions and decisions" and [1031](1031-provider-upgrade-2026-11-06.md) task 7. Upstream rechecked again on 2026-11-08 against `main` at `8598abfe4` (2.2.6), and task 9 added; see "Upstream recheck at 2.2.6".
+Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2026-11-06 against `main` at `ee2cc8423` (2.2.5); see "Assumptions and decisions" and [1031](1031-provider-upgrade-2026-11-06.md) task 7. Upstream rechecked again on 2026-11-08 against `main` at `8598abfe4` (2.2.6), and task 9 added; see "Upstream recheck at 2.2.6". Tasks 5, 7 and 8 rechecked and worked on 2026-11-11 against `main` at `498b68766`; see "Task 7: qualification on Linux (2026-11-11)" and "Task 8: Session V2 dispositions (2026-11-11)".
 
 1. **Upstream recheck**: rerun the recheck procedure against the current 1.x and 2.x releases (the "Needs verification" item). Status: done (2026-10-30, against 2.2.2 and the 1.19.4 pin; see "Upstream recheck at 2.2.2").
 2. **Readiness gate and start decision**: decide when the 2.x work may start, using the gate's open conditions. Status: done for the start, rechecked 2026-11-10 against `main` at `04639b12b`; making 2.x the default is task 7 (trigger decided; still blocked at 2.2.2 by storage policy, per-prompt model/agent/tools and structured output, runtime-context gaps, stale-turn guard, bounded inbox and experimental MCP endpoints; rechecked at the 1.19.5 upgrade on 2026-10-30, still 2.2.2 and unchanged, see [1020](1020-provider-upgrade-2026-10-30.md) task 8; rechecked 2026-11-06 against 2.2.5, still closed, see [1031](1031-provider-upgrade-2026-11-06.md) task 7; rechecked 2026-11-08 against 2.2.6, unchanged. On 2026-11-08 the owner asked to move: steering is required and undo may be dropped. The 2.x provider was then built with the mitigations under "Task 2: owner decision" and merged as an opt-in preview in #2009 on 2026-11-09, so the start decision is settled; no explicit owner acceptance of those mitigations is recorded, and it belongs to the decision to make 2.x the default (task 7, phase 6)).
 3. **Legacy 1.x session policy**: keep, migrate or retire existing 1.x sessions when 2.x arrives (open question 1, code item 5). Status: done for the opt-in preview (keep existing sessions on a pinned 1.x binary with its own database; the persisted marker and per-session routing are built under task 5, phase 3). Qualification and the default switch remain task 7.
 4. **Losses to decide**: rebuild, capability-gate or drop each of the eight listed losses (code item 3, open question 2). Status: done for the opt-in preview (share dropped with 1.19.1; the remaining rebuilds and capability gates are recorded under task 5, phases 4 and 5, including session features). Live qualification remains task 7.
-5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; on 2026-11-10 archive from the resume picker for 2.x conversations, see "Task 5: archive from the resume picker (2026-11-10)"; open: phase 6 (qualification and default, task 7); the live-model run of the coordinator suite on 2.x moved to the manual-test checklist (7568, 0008 task 5) on 2026-11-10; see "Task 5: phase 3 routing and preview setting").
+5. **`opencode2` provider**: a second provider with its own binary pin, `OPENCODE_DB`, `@opencode/client`, persisted protocol marker, snapshot-plus-hints projection and native steer/queue (code items 1, 2 and 4). Status: in progress (phase 1 of the "Build plan" done 2026-11-08; phase 2's toolchain half, the `opencode2` 2.2.6 pin, done 2026-11-08; phase 3 done for host environments on 2026-11-08: the opt-in setting, the session marker, the host 2.x server and per-session routing, with steer on for 2.x sessions; containers done on 2026-11-09 for images that carry `opencode2` (see "Task 5 and 6: container server and GitHub-token plugin"); phase 4 (interaction cards, full transcript, paging, usage) done on 2026-11-09, see "Task 5: phase 4 interactions, transcript and usage"; on 2026-11-09 phase 5's MCP, workflow results, structured output, read-only turns and the move of build pipelines, Multi Review and graph agent nodes under the same switch, see "Task 5: phase 5 MCP, results, read-only turns and workflows"; and on 2026-11-09 phase 5's session features (sign-in on both lines, the 2.x catalogue and effort, attachments, slash commands, Plan/Build, compact, undo/redo, fork, resume, titles, to-dos), see "Task 5: phase 5 session features"; on 2026-11-09 workflows in containers, graph describe/goal verifier/subork sessions, and artifact grants, the design connection and worker mail on 2.x turns, see "Task 5: phase 5 workflows in containers, describe/verifier/subork sessions and per-turn connections"; on 2026-11-09 the user's global OpenCode configuration (MCP servers above all) on host and container 2.x servers, see "Task 5: phase 5 the user's global configuration"; on 2026-11-09 coordinators under the same switch, on their own 2.x server with the read-only policy as process authority, tier left `provider-configured`, see "Task 5: coordinators on 2.x"; on 2026-11-10 archive from the resume picker for 2.x conversations, see "Task 5: archive from the resume picker (2026-11-10)"; open: phase 6's default switch (task 7; its qualification was done for host environments on 2026-11-11); the live-model run of the coordinator suite on 2.x moved to the manual-test checklist (7568, 0008 task 5) on 2026-11-10; see "Task 5: phase 3 routing and preview setting").
 6. **Changes that must ship with the first 2.x pin**: health probe on `/api/info` rejecting HTML, isolated `OPENCODE_DB` on host and container, GitHub-token plugin ported to `@opencode/plugin`, provider sign-in moved to `/api/credential`, live tests off `serve --pure`. Status: done (`checkHttpHealth` refuses HTML since 2026-10-30; the compatibility probe no longer uses `--pure`; since 2026-11-08 the 1.x host falls back to its own `OPENCODE_DB` when the shared database has no `session` table; the 2.x binary is pinned from the npm platform tarballs and launched with its own `OPENCODE_DB`, `/api/info` health and a 2.x credential plugin for opted-in host sessions since 2026-11-08; since 2026-11-09 the container 2.x server, with its own `opencode2.db` on the persistent mount, the GitHub-token plugin ported to the 2.x shape, and sign-in mirrored into 2.x's credential store; moving the live tests off `--pure` moved to task 7).
-7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification", on scripted models, then making 2.x the default for new sessions once the owner has accepted the recorded mitigations (that acceptance is in the manual-test checklist, 7568, 0008 task 7). Status: open.
-8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 5).
+7. **Qualification of the first 2.x pin**: the live probe, background, replay and capability checks listed under "Qualification", on scripted models, then making 2.x the default for new sessions once the owner has accepted the recorded mitigations (that acceptance is in the manual-test checklist, 7568, 0008 task 7). Status: open. The host qualification is done (2026-11-11, Linux x64, 2.2.6, scripted models; see "Task 7: qualification on Linux (2026-11-11)"). Left: the container half (a 2.x turn in a container on Linux amd64, its inactive path and a preserving rebuild carrying `opencode2.db`), which needs a container fake-model path for OpenCode that the idle-observation spec has only for Claude; then the default switch, which waits on the owner's acceptance in 7568.
+8. **Session V2 features after the move**: steer/queue, `switchAgent`/`switchModel`, context, log replay, staged revert, saved rules, credential/integration sign-in, `reference.list`. Status: open (depends on 7). Every feature now has a disposition (2026-11-11; see "Task 8: Session V2 dispositions (2026-11-11)"). The one left is moving sign-in to `/api/integration`, needed only once the 1.x line is retired after the default switch: until then 2.x sessions use credentials mirrored from 1.x's sign-in.
 9. **Transport for the 2.x provider: `opencode acp` behind the ACP bridge, or the `/api/*` HTTP server**: the existing plan assumed the HTTP API; 2.x also ships a full ACP agent. Status: done (2026-11-08): ACP is ruled out because it cannot steer and the owner requires steering; the provider uses the HTTP API.
 10. **Steer spike on 2.2.6**: prove the backend-held steer guard (task 5) against the real binary before the provider is built. Status: done (2026-11-08, `scripts/opencode2-steer-probe.ts`; see "Spike results").
 
@@ -179,7 +179,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 
 **Context.** The "Qualification" list; live runs are batched in `cross-cutting/0031-live-provider-and-platform-qualification.md`. Making 2.x the default needs the owner's acceptance of the mitigations under "Task 2: owner decision (2026-11-08)", which is in the manual-test checklist (7568, 0008 task 7); the qualification checks themselves need no decision.
 
-**Investigation.** Nothing exists yet: no 2.x tests, fixtures or mise task. The current live task is `mise run verify:opencode:live` (1.x only).
+**Investigation.** Rechecked 2026-11-11: the 2.x live set is `mise run verify:opencode2:live` (fifteen `opencode2/opencode2-*.live.test.ts` files, `RUN_LIVE_OPENCODE2=1`, scripted loopback model, isolated `HOME`/`XDG_*`/`OPENCODE_DB`), beside the 1.x `verify:opencode:live`. The real-stack half is `idle-observation-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` on fake models. Item-by-item evidence is under "Qualification" and "Task 7: qualification on Linux (2026-11-11)".
 
 **Decisions.**
 
@@ -197,7 +197,7 @@ Status rechecked 2026-10-30 against `main` at `cd7bbe3e5`, and task 2 again on 2
 
 **Context.** The repository deliberately does not call `client.v2.*` on 1.x. Related: 0005 (steer), 0001 (saved rules), 0006 (staged revert), 0003 (sign-in), and 0175 (whose `session.next.revert.*` events are not consumed).
 
-**Investigation.** `session.next.*` events are known but unhandled (`apps/backend/src/core/opencode-events.ts:34-38` onward, map at `:22`). No `client.v2.*` call sites.
+**Investigation.** `session.next.*` events are known but unhandled (`apps/backend/src/core/opencode-events.ts:34-38` onward, map at `:22`). No `client.v2.*` call sites. On the 2.x provider (rechecked 2026-11-11 against the routes in `opencode2/*.ts` and the 2.2.6 `/openapi.json`): steer and queue (`/prompt` `delivery`), `/agent`, `/model`, staged revert (`/revert/stage`, `/revert`) and `/api/credential` are used; `/api/session/:id/context`, `/api/experimental/session/:id/log`, `/api/permission/saved`, `/api/integration*` and `/api/reference` are not.
 
 **Decisions.**
 
@@ -887,6 +887,11 @@ Before any 2.x pin reaches production:
 - Capability flags match 2.x (share, todos and LSP off).
 - Native `/steer` tested for idle and end-of-turn races.
 
+Status on 2026-11-11 (host environments, Linux x64, 2.2.6): every item is met
+or has a recorded replacement; the evidence per item is in "Task 7:
+qualification on Linux (2026-11-11)". Containers are not yet qualified the
+same way (task 7).
+
 ### Recheck procedure
 
 1. Compare both lines' pins:
@@ -978,16 +983,19 @@ Before any 2.x pin reaches production:
 - Upstream state since 2026-11-08 (2.2.6): a storage compatibility policy, a
   steer precondition, a bounded inbox, MCP endpoints leaving experimental, or a
   dated 1.x end-of-life. Run the recheck procedure above before picking this
-  up, and at each new 2.x minor.
-- Task 10 was run against 2.2.6 on macOS arm64 only, with a scripted model and
-  one session. Untested: Linux binaries, concurrent sessions, a steer racing a
-  permission or form prompt, interrupts, and real providers. The task 9 ACP
-  findings were read, not run; they matter only if steering stops being
-  required.
-- Phase 3 on the real stack: a steer sent from a 2.x tab's composer while a
-  turn runs, and the inactive-environment path (start a 2.x turn, switch
-  away, return, reload). Both go through code with unit and live provider
-  coverage, but neither was driven through the UI.
+  up, and at each new 2.x minor. On 2026-11-11 npm's `latest` for
+  `@opencode/cli` was 2.2.7 (published 2026-11-10, a patch release; not read
+  or run here) and `@opencode-ai/sdk` was still 1.19.5. The pin stays 2.2.6;
+  a bump follows upgrade-agents.md, including `verify:opencode2:live`.
+- Task 10 was run against 2.2.6 on macOS arm64 with a scripted model and one
+  session; on 2026-11-11 the whole 2.x live set, the steer tests included,
+  passed on Linux x64 too. Still untested: concurrent sessions, a steer racing
+  a permission or form prompt, and real providers. The task 9 ACP findings
+  were read, not run; they matter only if steering stops being required.
+- Phase 3 on the real stack: done 2026-11-11 for host environments with a
+  scripted model (composer steer, a turn finishing with no renderer, a hidden
+  document, a cut event stream, missed events and an approval card; see "Task
+  7: qualification on Linux (2026-11-11)"). Not driven: a real provider.
 - Containers (2026-11-09): a preserving rebuild carrying `opencode2.db`, a
   runtime without an egress gateway, Linux amd64, and the
   inactive-environment path for a running 2.x turn in a container. See
@@ -2542,6 +2550,141 @@ Decisions:
 Not done: no live run of the picker against a real 2.x server; the fake
 server (`fake-server.test-support.ts`) models the archive the 2.2.6 records
 above describe. It belongs with task 7's qualification.
+
+### Task 7: qualification on Linux (2026-11-11)
+
+Worked against `main` at `498b68766` on beelink2 (Linux x64), with the pinned
+2.2.6 binary copied to a throwaway directory, loopback scripted models only,
+no credentials and no billed turn. Two layers:
+
+- **The 2.x live set** (`mise run verify:opencode2:live`, every test under its
+  own `opencode serve` with a temporary `HOME`/`XDG_*`/`OPENCODE_DB`): all
+  fifteen files pass. A new file, `opencode2-qualification.live.test.ts`,
+  adds what the others did not prove: an exact retry of an input id answers
+  the original record and runs once; a turn nobody reads is complete on the
+  next read; a server restart (same port, password and database) under a live
+  provider is followed by a reconnect, identical history and a working next
+  turn; and the resume picker's archive is refused while a tab holds the
+  conversation, then archives, hides, refuses resume, and restores. That last
+  check was the open item of "Task 5: archive from the resume picker".
+- **The real stack** (`idle-observation-live.spec.ts`, a disposable headless
+  `dev:test` profile with `--no-agent-credentials --agent-platforms opencode`,
+  the scripted model reached through the profile's own custom OpenCode
+  provider, and the new `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`,
+  which turns the preview on for the run and back after). The backend log
+  showed a 2.x server per environment (`native-agent.opencode2
+  host-server.ready`). Final run, all passed: `missed-final`, `approval` (an
+  "ask" policy parked a permission card in 104 ms, and approving it finished
+  the turn), `reconnect`, `hidden`, `no-renderer` (the turn finished with no
+  page open; a new client rehydrated it, the prompt shown once) and the new
+  `steer` case (a prompt queued from the composer during a running shell
+  call was steered in 343 ms; the turn ended on the steer's reply and never
+  the first prompt's, and the steer showed once, live and after a reload).
+
+The qualification list, item by item:
+
+| Item | Evidence or replacement |
+| --- | --- |
+| One exact 2.x pin from the npm platform packages | `opencode2` 2.2.6 in the toolchain manifest and Dockerfile, enforced by `version-drift.test.ts`. |
+| `/api/info` health that rejects HTML | `OpenCode2Client.info`; `opencode2-server.live.test.ts`, `opencode2-launch.live.test.ts`. |
+| Create, prompt | `opencode2-provider.live.test.ts`. |
+| Exact retry | `opencode2-qualification.live.test.ts` (new). |
+| Conflict | `opencode2-steer.live.test.ts` (a reused id with other text). |
+| Message list | `opencode2-interactions.live.test.ts` (history pages back to the start). |
+| Log replay and tail hand-off | Replaced by design: the provider never reads the experimental session log. The snapshot is authoritative and live events are only hints, with per-session `durable.seq` gap detection (`opencode2-steer.live.test.ts`, `events.test.ts`). |
+| Interrupt, permissions and forms | `opencode2-interactions.live.test.ts`; the real-stack `approval` case. |
+| Restart | `opencode2-qualification.live.test.ts` (new). |
+| Teardown | `opencode2-routing.live.test.ts` (the 2.x server stops with OpenCode); close never deletes (`opencode2-provider.live.test.ts`). |
+| A 2.x disposition for every `client.session` use | The 2.x provider is a separate implementation over its own client (`opencode2/client.ts`), so no 1.x `client.session` call reaches a 2.x session; the routing provider sends each session to one line by its persisted marker (`routing-provider.test.ts`). |
+| `legacy`/`v2` marker and an isolated database | `openCodeProtocol: "v2"` on the session record; 2.x runs on its own `OPENCODE_DB` (phase 3, containers on 2026-11-09). |
+| GitHub-token plugin | Ported to 2.x's plain `{ id, setup }` plugin shape, which needs no `@opencode/plugin` package (`opencode2-container-plugins.live.test.ts`). |
+| Background test | The real-stack `no-renderer`, `hidden`, `missed-final` and `reconnect` cases on 2.x, and the backend-side unobserved turn in `opencode2-qualification.live.test.ts`. |
+| Replay: subscribe-before-snapshot | Each new `/api/event` connection invalidates every cached window before the next read (`provider.ts` `watchEvents`; `reads.test.ts`, `transcript-snapshot.test.ts`). |
+| Replay: SSE overflow | Whatever ends a subscriber's stream, the provider re-reads everything and reconnects (`provider-silence.test.ts`, new case); a stream that stays open but goes silent is replaced by the 7559 watchdog. |
+| Replay: bounded memory | 1 MiB frame bound with a desync signal (`events.test.ts`), a 1,024-session sequence tracker, byte-bounded message pages. |
+| Capability flags | Share (and message rewind) are withheld from a 2.x tab (`OPENCODE2_CAPABILITY_LIMITS`, asserted in `routing-provider.test.ts`, "a 2.x snapshot narrows capabilities"). A 2.x session's state comes from the 2.x provider alone, which reports no LSP servers, so Agent Info's LSP count reads 0 for it rather than being hidden. To-dos are on, because the 2.x server runs with the to-do tool flag on (phase 5, session features). |
+| Native `/steer` idle and end-of-turn races | `opencode2-provider.live.test.ts` (a steer aimed at a settled run is not sent), `opencode2-steer.live.test.ts` (a late steer starts a new run), and the real-stack `steer` case. |
+| Live tests off `--pure` | 2.x removed `--pure`; no 2.x test uses it. The 1.x live tests keep it, as decided under "Task 6: live tests keep `--pure` for now". |
+
+Found and fixed on the way:
+
+- **The fake model never ran a command on 2.x.** The shared loopback fake
+  (`idle-observation-fake-pi.ts`) called only a tool named `bash`, which 2.x
+  renamed `shell`, so on 2.x it answered in text at once: the no-renderer
+  case never saw a running turn, and the approval case could not be
+  exercised. It now calls whichever of the two the request offers. Test-only;
+  the 1.x runs were unaffected.
+- **Flake 9974.** `opencode2-launch.live.test.ts` (and the package-cache test)
+  picked a random port in a fixed range and failed roughly one run in five when
+  it was taken (`Failed to start server. Is port 39886 in use?`), then waited
+  out 30 s. Both now start the server through `live-server.test-support.ts`:
+  an OS-chosen port per attempt under `retryOnAddressInUse`, and no waiting
+  once the server has exited; 8 of 8 runs passed after the fix.
+
+Observed, not changed: in `missed-final`, where the page drops every event for
+the environment, the view found the finished turn 14.1 to 14.4 s late against
+a 3 s p95 budget. 1.x gave the same reading on the same profile (13.3 and
+13.5 s): it is the view's own idle read gap (about 15 s) under quiet backoff,
+not a 2.x difference.
+
+Decisions:
+
+- **Where the real-stack half runs.**
+  - **The existing idle-observation spec with a protocol switch (implemented).**
+    Pros: reuses a harness that already reaches OpenCode on a scripted model
+    with no credentials, and its inactive-path cases; the same cases compare
+    1.x and 2.x on one profile. Cons: the spec grows another option and a
+    case that runs on one platform only.
+  - **A new 2.x-only spec.** Pros: self-contained. Cons: duplicates the
+    profile, fake-model and fault-seam setup.
+  - Recommendation: the switch.
+- **How the background test is proved without a person switching tabs.**
+  - **The spec's no-renderer, hidden, missed-final and reconnect cases plus a
+    backend-only unobserved turn (implemented).** Pros: they remove the
+    renderer, its visibility and its events, which is what switching away
+    does to a tab; deterministic. Cons: no literal sidebar click to another
+    environment.
+  - **Drive a second environment in the sidebar.** Pros: literal. Cons: an
+    unmounted tab is the same state the no-renderer case already creates,
+    with more steps that can fail for unrelated reasons.
+  - Recommendation: the existing cases.
+- **The container half.**
+  - **Leave it open in task 7 (chosen).** Pros: the host result stands on its
+    own; the container path needs a fake model reachable inside the
+    container, which the spec builds for Claude only. Cons: 2.x in containers
+    stays qualified by unit and live-plugin tests only.
+  - **Build the OpenCode container fake now.** Pros: one pass. Cons: a
+    development image build and new harness code beyond this to-do's
+    qualification list, which names no container check.
+  - Recommendation: leave it open, done with the next container qualification
+    pass.
+
+### Task 8: Session V2 dispositions (2026-11-11)
+
+Each Session V2 feature against the 2.x provider at `498b68766` and the 2.2.6
+OpenAPI:
+
+| Feature | Disposition |
+| --- | --- |
+| Steer and queue | Adopted: prompts are queued (`delivery: "queue"`), steers delivered with the backend-held guard (task 10). |
+| `switchAgent` / `switchModel` | Adopted: `/agent` (Plan/Build) and `/model` under the dispatch lock. |
+| `session.context` (`GET /api/session/:id/context`) | Not adopted. It lists the messages after the last compaction; the transcript already shows the whole history and the compaction marker, and no view needs the in-context subset. |
+| Durable replay through the session log | Not adopted (`/api/experimental/session/:id/log` is experimental). The snapshot plus hints, with sequence gaps forcing a re-read, gives the same guarantee (task 7). |
+| Staged revert | Adopted: undo/redo (`/revert/stage`, `/revert`). |
+| Saved "always allow" rules (`/api/permission/saved`) | Dropped by the owner's decision of 2026-11-09: cards offer Allow once or deny, never `always`. |
+| `credential` / `integration` sign-in | `credential` adopted: each 1.x sign-in change is mirrored into the 2.x store. `integration` (OAuth and command sign-in on 2.x itself) is left until the 1.x line, which runs those flows today, is retired. |
+| `reference.list` (`GET /api/reference`) | Not adopted. It lists named references a project configures; the composer's `@` mentions are Orkestrator's own worktree file mentions, the same on every platform. |
+
+Decision:
+
+- **Adopt `context` and `reference.list` now?**
+  - **No; record them as not adopted (chosen).** Pros: no consumer exists,
+    so code for them would be untested surface; both are one read each if a
+    view ever needs them. Cons: OpenCode-configured references do not appear
+    in the `@` picker.
+  - **Adopt both.** Pros: closer to OpenCode's own client. Cons: a new
+    picker source used by one platform, with no request for it.
+  - Recommendation: no.
 
 ## Related
 

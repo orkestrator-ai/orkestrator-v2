@@ -1387,8 +1387,9 @@ move independently.
   (`OPENCODE2_CLI_PATH`), checks it with `--version` at build time and records
   it as `agents.opencode2` in the image manifest. `OPENCODE_DISABLE_AUTOUPDATE=1`
   covers both binaries.
-- Nothing launches it yet. Until the 2.x provider lands, a bump needs only the
-  artifact steps below.
+- The 2.x provider (`apps/backend/src/core/opencode2/`) launches it for
+  sessions created while the OpenCode 2 preview is on, so a bump also reruns
+  the 2.x live set (step 8).
 
 To bump it:
 
@@ -1425,9 +1426,28 @@ To bump it:
    `--version` (2.2.6 prints `opencode v2.2.6`) and activates. 2.x's
    `--version` creates its XDG directories and a log file but no database.
 7. Run `bun test ./tests/unit/version-drift.test.ts ./tests/unit/download-agent.test.ts --parallel=2`.
+8. Run the 2.x live set against the new binary. Every test starts its own
+   `opencode serve` under a temporary `HOME`/`XDG_*`/`OPENCODE_DB` with a
+   scripted local model, so it needs no credentials and makes no billed turn:
 
-Once the 2.x provider exists, a bump also follows that provider's own checks
-(the "Qualification" list in `0008-opencode-v2.md`).
+   ```bash
+   OPENCODE2_CLI_PATH=/absolute/path/to/extracted/package/bin/opencode \
+     mise run verify:opencode2:live
+   ```
+
+   It covers launch and health, the provider (dispatch, steer, activity,
+   interrupt, close), interactions, transcript and features, MCP, workflow
+   connections, the user's configuration, coordinators, routing, the container
+   plugins and package cache, the event-stream silence watchdog, and the
+   qualification checks (an exact input retry, a turn nobody reads, a server
+   restart under a live provider, archive and restore). Also follow the
+   "Qualification" list in `0008-opencode-v2.md`; its real-stack half is the
+   idle-observation spec with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
+   on fake models ([agent-testing.md](agent-testing.md)). If
+   `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
+   (15 s at 2.2.6) has changed: measure it again and set
+   `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode-stream-silence.ts`) to about
+   three missed heartbeats plus 5 s.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).

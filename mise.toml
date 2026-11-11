@@ -466,6 +466,14 @@ run = [
   "bun test --cwd apps/backend src/core/native-agent-suborks-opencode.live.test.ts",
 ]
 
+[tasks."verify:opencode2:live"]
+description = "Run the OpenCode 2.x live set against the pinned 2.x binary (OPENCODE2_CLI_PATH; isolated HOME, scripted local model, no credentials)"
+env = { RUN_LIVE_OPENCODE2 = "1" }
+run = [
+  'test -x "${OPENCODE2_CLI_PATH:-}" || { echo "verify:opencode2:live: set OPENCODE2_CLI_PATH to the pinned 2.x binary" >&2; exit 2; }',
+  "bun test --cwd apps/backend src/core/opencode2/opencode2- --parallel=1",
+]
+
 [tasks."verify:accounts:resend-live"]
 description = "Prove automatic switching's resend across a real bridge replacement (real bridges and pinned CLIs, scripted provider, no billed turn)"
 run = "bun test --cwd apps/backend ./tests/account-switch-resend-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"

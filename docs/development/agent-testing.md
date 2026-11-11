@@ -988,7 +988,12 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
-(the profile setup is in the spec's header), and
+(the profile setup is in the spec's header).
+`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
+OpenCode 2: it turns the profile's preview setting on for the run and back off
+afterwards, and adds a `steer` case (a prompt queued from the composer while a
+turn runs is steered into it from its queue strip, then checked again after a
+reload) that every other platform records as skipped.
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,

@@ -120,5 +120,5 @@ targeted ten-spec browser run beside another checkout's browser suite (load
 average about 30 to 36, default workers) failed mobile `paging before prose in a byte-bounded view` and mobile `a same-minute page growing row zero` (prepend index at `:138`). The complete unchanged
 owner then passed alone with two workers. `mise run flaky:recurrence -- <case>
 --base 498b68766` reported the case open. Details and commands:
-[9937](../aggregate-validation-runs/9937-find-review-targeted-browser-run-under-host-load.md).
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
 No assertion, skip or timeout changed; root cause remains unconfirmed.

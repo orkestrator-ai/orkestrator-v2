@@ -1,12 +1,12 @@
 /**
  * Which native-agent command results the gateway splices from memoised row
  * encodings (`markSpliceableResult`). The legacy `get_native_agent_projection`
- * is deliberately left out: measured on 2026-11-10, splicing its
- * whole-session projection was slower than `JSON.stringify` on every row shape
- * the changed-read benchmark has, because the walk over its many non-row
- * fields runs in JavaScript and the joined body is copied again when the
- * gateway sizes it. Re-measure with `scripts/benchmark-transcript-changed-read.ts`
- * (`legacy-spliced` against `legacy`) before marking it; the figures are in
+ * is still left out. On 2026-11-10 the first splice was slower than
+ * `JSON.stringify` on its whole-session projection; the narrowed splice
+ * (to-do 7553, retired 2026-11-11) measures cheaper there, and marking it,
+ * which also sets its contract `encoded` flag, is to-do 7755. Re-measure with
+ * `scripts/benchmark-transcript-changed-read.ts` (`legacy-spliced` against
+ * `legacy`) before marking it; the figures are in
  * docs/architecture/native-transcripts.md, "Response encoding".
  */
 import { describe, expect, test } from "bun:test";

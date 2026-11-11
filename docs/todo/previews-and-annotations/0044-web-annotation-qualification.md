@@ -325,7 +325,9 @@ that names what was actually tested.
     must sit on its host at app zoom 0.8, 1 and 1.25 and never cover the
     column, its resize handle or a focus ring (within the one DIP that integer
     view bounds allow). A modal dialog hides the view; since #2110 a menu
-    hides it only where the two overlap (the spec checks both). At 150% app zoom,
+    hides it only where the two overlap. The spec checks both: the server
+    menu opens beside the view and leaves it showing, and the same open menu,
+    moved over the preview host, hides it. At 150% app zoom,
     and in a 900 px window, the narrow Preview/Notes switch takes over.
   - Create and send by keyboard alone.
   - Capture pixels and the selection highlight stay on the target at preview
@@ -628,6 +630,8 @@ the loopback-only namespace from
 | --- | --- |
 | `web-annotations-electron.spec.ts --grep 'open shadow root are saved\|real Notes column shrinks'` | Pass: 2 passed |
 | `--grep 'real Notes column shrinks'` with the spec as on `main` (negative control) | Fail: `expect.poll(...visible).toBe(false)` timed out with the menu open; since #2110 the view stays visible beside a menu that does not overlap it |
+| `--grep 'real Notes column shrinks'` after review added the covered-menu step | Pass: 1 passed |
+| The same, with `overlayCoversHost` temporarily answering "not covered" for every menu (negative control, reverted) | Fail: the covered step timed out on `view over the menu` |
 | Whole `web-annotations-electron.spec.ts` | Pass: 17 passed, 2 skipped (container opt-ins), 90 s |
 | `bun scripts/web-annotation-commit-profile.ts --json`, four interleaved rounds on `93018933` and on this branch | Recorded in [web-page-annotations.md](../../architecture/web-page-annotations.md#commit-cost): at 1,900 notes 26.3–32.8 ms before, 3.8–4.1 ms after; 6 rows serialized and 5 collections copied at every size |
 | `web-annotation-payloads.bench.test.ts` on both checkouts | Pass both (6 tests). Growth batches 29 / 71 / 110 ms before, 20 / 21 / 25 ms after |
@@ -644,8 +648,11 @@ Shadow root (2580 task 4), from the desktop's preview view:
 
 Native window, menu and dialog (the changed assertion): the server menu opened
 at (12, 81, 288 × 124) DIP and the native view at (381, 162, 695 × 774) stayed
-visible beside it (`covered: false`); the "New connection" dialog hid the
-view, and after Escape it was back on its host.
+visible beside it (`covered: false`, recorded as `menu-beside-view`). Moved by
+a CSS `translate` to (405, 186) DIP, over the preview host, the same open menu
+hid the view (`covered: true`, `menu-over-view`); moved back, the view showed
+again. The "New connection" dialog hid the view, and after Escape it was back
+on its host.
 
 Baselines: under task 6.
 
@@ -655,7 +662,7 @@ Findings:
   any menu to hide the preview; #2110 hides the view only under an overlay
   that covers it. The case now requires the view hidden when the menu overlaps
   it and visible when it does not, and records the geometry
-  (`menu-and-view`). The dialog step is unchanged.
+  (`menu-beside-view`, `menu-over-view`). The dialog step is unchanged.
 
 ### Runs on 2026-11-06 (Linux, beelink)
 
@@ -1362,6 +1369,19 @@ beside the view no longer blanks it) and the invariant that matters is that
 the view never paints over a menu or dialog. The step checks both branches
 of the overlap rule from the measured geometry, so it still fails if a
 covering menu leaves the view visible.
+
+No menu in the browser tab opens over the view at the case's window size: the
+server menu opens in the sidebar. Review found the covered branch therefore
+never ran on the real stack. Options: rely on the unit tests in
+`browser-tab-hooks.test.tsx` and reword the claim; resize or zoom the window
+until a real menu happens to overlap; move the open server menu over the
+preview host with a CSS `translate`. Chose the last: it keeps the real menu,
+the renderer's overlay watcher (which rechecks geometry on a style change, as
+when Floating UI moves a menu), the IPC and main's `setVisible`, and does not
+depend on a layout that may change. Radix positions the menu through its
+popper wrapper's `transform`, so the `translate` on the menu itself is not
+overwritten. The positioning is synthetic; a real menu that opens over the
+view is still worth adding if one appears.
 
 ### Task 5: run the Electron spec headless, in a loopback-only namespace (2026-11-06)
 

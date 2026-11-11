@@ -89,7 +89,6 @@ with the same ENOENT, from that file's own template
 (`ork-review-fingerprint-template-*`, built with `git commit` and copied with
 `fs.cp`); the aggregate runner's rerun of the unchanged file passed alone in
 7.5 s. That template now sets the same two keys before committing, and the
-file passed three consecutive solo runs afterwards. Other backend tests that
-copy a committed template of their own (`environment-move.test.ts`,
-`coordinator-service.test.ts`) have not been observed failing this way and
-were not changed.
+file passed three consecutive solo runs afterwards.
+`environment-move.test.ts` also commits in a template it then copies with
+`fs.cp`; it has not been observed failing this way and was not changed.

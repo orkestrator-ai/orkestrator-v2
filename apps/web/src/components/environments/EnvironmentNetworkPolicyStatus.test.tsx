@@ -240,4 +240,125 @@ describe("environment network policy status", () => {
     expect(screen.queryByText(/name checks/i) === null).toBe(true);
     expect(screen.queryByText(/Names are checked/) === null).toBe(true);
   });
+
+  describe("refusal counts while the section stays open", () => {
+    const counted = (connections: number, queries: number): EnvironmentNetworkPolicy => ({
+      ...base,
+      policyVersion: 3,
+      enforcement: "gateway",
+      effective: {
+        ...base.effective!,
+        egressFilter: "enforced",
+        refusals: { connections, queries },
+      },
+    });
+    const reads = () =>
+      invokeMock.mock.calls.filter((call) => call[0] === "get_environment_network_policy").length;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    afterEach(() => {
+      delete (document as unknown as { visibilityState?: string }).visibilityState;
+    });
+
+    test("re-reads the policy on an interval and shows the new counts", async () => {
+      install(counted(1, 0));
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />);
+      await screen.findByText(/refused 1 connection and 0 DNS queries/);
+      install(counted(4, 2));
+      await screen.findByText(/refused 4 connections and 2 DNS queries/);
+      expect(reads()).toBeGreaterThan(0);
+    });
+
+    test("does not read while the window is hidden, and reads once it is visible again", async () => {
+      install(counted(1, 0));
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />);
+      await screen.findByText(/refused 1 connection/);
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      install(counted(5, 5));
+      await wait(120);
+      expect(reads()).toBe(0);
+      expect(screen.getByText(/refused 1 connection and 0 DNS queries/)).toBeTruthy();
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await screen.findByText(/refused 5 connections and 5 DNS queries/);
+    });
+
+    test("keeps the last counts when a refresh fails", async () => {
+      install(counted(2, 1));
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />);
+      await screen.findByText(/refused 2 connections and 1 DNS query\./);
+      invokeMock.mockClear();
+      invokeMock.mockImplementation(async () => {
+        throw new Error("gateway unreachable");
+      });
+      await wait(120);
+      expect(reads()).toBeGreaterThan(0);
+      expect(screen.getByText(/refused 2 connections and 1 DNS query\./)).toBeTruthy();
+    });
+
+    test("polls only while counts are shown, and stops when the section closes", async () => {
+      // A gateway without the counts (or without name checks) is read once.
+      install({
+        ...base,
+        policyVersion: 3,
+        enforcement: "gateway",
+        effective: { ...base.effective!, egressFilter: null },
+      });
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />);
+      await screen.findByText(/image predates name checks/);
+      await wait(120);
+      expect(reads()).toBe(1);
+      cleanup();
+
+      install(counted(1, 1));
+      const view = render(
+        <EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />,
+      );
+      await screen.findByText(/refused 1 connection and 1 DNS query/);
+      view.unmount();
+      invokeMock.mockClear();
+      await wait(120);
+      expect(reads()).toBe(0);
+    });
+
+    test("an apply's result is not overwritten by a refresh that was in flight", async () => {
+      const pending: EnvironmentNetworkPolicy = {
+        ...counted(1, 0),
+        domains: "pending",
+        configured: { ...base.configured, domainsRevision: "bbbbbbbbbbbbbbbb" },
+      };
+      let releaseRead: (() => void) | null = null;
+      let first = true;
+      invokeMock.mockClear();
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === "get_environment_network_policy") {
+          if (first) {
+            first = false;
+            return pending;
+          }
+          // A slow refresh that answers with the state from before the apply.
+          await new Promise<void>((resolve) => {
+            releaseRead = resolve;
+          });
+          return pending;
+        }
+        if (command === "apply_environment_allowed_domains") {
+          return {
+            kind: "applied",
+            policy: { ...pending, domains: "applied" },
+          };
+        }
+        return undefined;
+      });
+      render(<EnvironmentNetworkPolicyStatus environmentId="env-net" refreshIntervalMs={20} />);
+      const button = await screen.findByRole("button", { name: "Apply now" });
+      await wait(60);
+      expect(releaseRead).not.toBeNull();
+      fireEvent.click(button);
+      await screen.findByText(/saved allowlist is the one this container enforces/);
+      releaseRead!();
+      await wait(20);
+      expect(screen.getByText(/saved allowlist is the one this container enforces/)).toBeTruthy();
+    });
+  });
 });

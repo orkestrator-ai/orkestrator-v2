@@ -65,8 +65,9 @@ Took the recommended option: the resolver runs as `/usr/local/bin/node`, so
 the gateway keeps H2's fixed root PATH. The probes' first writes in this case
 and in the firewall tuple case now end in `\n`. The alternative was to change
 the daemon to relay a bare word sooner, which would loosen a security
-check for a test's sake; that question is recorded as
-[7000](7000-name-checks-hold-newline-less-first-writes.md). Result: DNS rotation
+check for a test's sake; that question was to-do 7000 (retired 2026-11-11),
+which kept the hold and documented it in
+[container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1). Result: DNS rotation
 passed (with the IPv6 and daemon-restart cases, 3/3), and the tuple case
 passed where its unfixed copy failed. Task 1 (C22 on Docker Desktop) was not
 touched.
@@ -74,5 +75,5 @@ touched.
 ## Related
 
 - [6101](6101-egress-name-checks-platform-coverage.md)
-- [7000](7000-name-checks-hold-newline-less-first-writes.md)
+- 7000 (retired 2026-11-11): the newline-less first write the name checks hold, documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - [Container qualification](../../development/container-qualification.md#egress-name-checks-on-docker-desktop-2026-11-05)

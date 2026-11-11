@@ -1222,6 +1222,50 @@ gateway, network and volumes (`dev:stop`, then `dev:reset`), and the image
 tag `orkestrator-v2:dev-57301bd868fa`. The fake API, its settings merge, the
 pid walker and the comparison bundle lived only in that container.
 
+## Egress refusal counts on rootful Linux Engine (2026-11-06)
+
+To-do 6102 (retired 2026-11-11) task 4: the name-check daemon's counts of
+refused connections and DNS queries since the gateway booted, shown in the
+Network section. How they are counted and kept content-free is in
+[container lifecycle](../architecture/container-lifecycle.md#name-checks-egress-filter1).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64), host Docker Engine
+  29.9.2 rootful. Docker, its networks and the host firewall were not
+  restarted, reconfigured or pruned. The host's address pools were full, so
+  both runs used the test-only Docker shim
+  ([exhausted pools](#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06):
+  `ORKESTRATOR_QUALIFICATION_DOCKER` with
+  `apps/desktop/scripts/dev/docker-qualification-bin` on PATH), with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. No profile, provider turn or
+  credential was used.
+- **Image:** `orkestrator-v2:qual-6102-a891cd1a`, built from commit
+  `a891cd1a2` with the capability arguments from
+  `scripts/docker-image-build-args.ts` and the label
+  `orkestrator-test-run=todo-6102-refusals`.
+- **Result:** the case "the firewall report counts refused connections and
+  queries since boot, and keeps no name" in
+  `apps/backend/tests/container-live-egress-filter.test.ts` passed alone
+  (1 pass, 21 expectations, 13 s) and in the whole file (5 pass, 1 skip — the
+  older-image case, which needs `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` —
+  0 fail, 109 expectations, 69 s). In a restricted runtime behind its gateway:
+  - After boot `effective.refusals` was `{ connections: 0, queries: 0 }`:
+    the firewall's own boot checks were not counted.
+  - An allowed HTTPS request and an allowed lookup left it at zero.
+  - Two foreign SNIs at an allowed address (TLS `access_denied`), one foreign
+    Host in plain HTTP on 443 (the gateway's 403) and three refused queries
+    (UDP, TCP, and one sent straight to `192.0.2.53`) gave
+    `{ connections: 3, queries: 3 }`, and the file held exactly
+    `{"refusedConnections":3,"refusedQueries":3}`.
+  - The refused label was in none of the gateway's `/run`, `/etc`, `/tmp`,
+    `/var/log` or `/root`, nor in its Docker log.
+  - Killing the daemon's worker: the supervisor started a new one, the counts
+    stayed at 3 and 3, and one more refused query made them 3 and 4.
+  - Restarting the runtime and its gateway (a new boot) gave
+    `{ connections: 0, queries: 0 }`.
+
+Created and removed: each run's owner-labelled runtimes, gateways, fixtures
+and networks (`afterAll` found none left), and the image tag.
+
 ## Egress name checks on rootful Linux Engine (2026-11-06)
 
 To-do [6101](../todo/containers-and-environments/6101-egress-name-checks-platform-coverage.md)
@@ -1329,8 +1373,9 @@ on rootful Linux Engine, x64.
   `ubuntu-24.04` and `ubuntu-24.04-arm`) failed both cases in the same way on
   both runners. Its other relevant steps passed: M12 4 pass (the older-image
   case skipped, as the workflow supplies none), network 4/4 and readiness
-  9/9. The product behaviour behind them is recorded in
-  [7000](../todo/containers-and-environments/7000-name-checks-hold-newline-less-first-writes.md).
+  9/9. The product behaviour behind them is documented in
+  [container lifecycle](../architecture/container-lifecycle.md#name-checks-egress-filter1)
+  (to-do 7000, retired 2026-11-11, which kept the hold).
 - **Not run:** arm64 on a self-managed host (only CI's hosted arm64 runner
   above), rootless Docker (6101 task 2), C23 (see above), and C22 behind a
   real host daemon on this machine (its pools are full). No provider turns,

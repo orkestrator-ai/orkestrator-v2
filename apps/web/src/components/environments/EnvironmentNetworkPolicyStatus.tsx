@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
@@ -158,26 +158,47 @@ function NameChecks({ policy }: { policy: EnvironmentNetworkPolicy }) {
 }
 
 /**
+ * How often the section re-reads the policy while it shows refusal counts.
+ * Each read is one `docker exec` in the gateway, and the daemon rewrites its
+ * counts at most once a second, so a slow interval is enough.
+ */
+export const REFUSAL_COUNTS_REFRESH_MS = 15_000;
+
+/**
  * What the container's firewall actually applied, next to what is configured.
  * A difference (a stale container, a failed application, the legacy shared
  * network) is stated rather than implied.
  */
-export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentId: string }) {
+export function EnvironmentNetworkPolicyStatus({
+  environmentId,
+  refreshIntervalMs = REFUSAL_COUNTS_REFRESH_MS,
+}: {
+  environmentId: string;
+  /** Tests shorten it; the section uses the default. */
+  refreshIntervalMs?: number;
+}) {
   const nodeBackend = useScopeBackend();
   const [policy, setPolicy] = useState<EnvironmentNetworkPolicy | null>(null);
   const [applying, setApplying] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
+  // Every read or apply takes the next number; only the latest may set the
+  // policy, so a refresh that was in flight cannot undo an apply's result.
+  const generation = useRef(0);
+  const applyingNow = useRef(false);
 
   const apply = async () => {
     setApplying(true);
     setOutcome(null);
+    applyingNow.current = true;
+    const current = ++generation.current;
     try {
       const result = await nodeBackend.applyEnvironmentAllowedDomains(environmentId);
-      setPolicy(result.policy);
+      if (generation.current === current) setPolicy(result.policy);
       setOutcome(APPLY_OUTCOME[result.kind] ?? null);
     } catch {
       setOutcome(APPLY_OUTCOME.failed ?? null);
     } finally {
+      applyingNow.current = false;
       setApplying(false);
     }
   };
@@ -197,6 +218,42 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
       cancelled = true;
     };
   }, [environmentId, nodeBackend]);
+
+  // The refusal counts change while the section is open (an agent failing on
+  // a host off the list), and nothing pushes them. Re-read the policy on a
+  // slow interval while the counts are shown and the window is visible, and
+  // once when it becomes visible again. Unmounting stops it.
+  const showsRefusals =
+    policy?.effective?.egressFilter === "enforced" && Boolean(policy.effective.refusals);
+  useEffect(() => {
+    if (!showsRefusals) return;
+    let cancelled = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight || applyingNow.current || document.visibilityState === "hidden") return;
+      inFlight = true;
+      const current = ++generation.current;
+      try {
+        const next = await nodeBackend.getEnvironmentNetworkPolicy(environmentId);
+        if (!cancelled && generation.current === current) setPolicy(next);
+      } catch {
+        // Keep the last answer: one failed read is not a reason to hide the
+        // section, and the next interval tries again.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const timer = setInterval(() => void refresh(), refreshIntervalMs);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [showsRefusals, environmentId, nodeBackend, refreshIntervalMs]);
 
   if (!policy || policy.policyVersion === null) return null;
   const effective = policy.effective;

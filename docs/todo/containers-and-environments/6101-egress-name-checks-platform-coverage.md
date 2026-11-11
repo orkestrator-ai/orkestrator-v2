@@ -2,11 +2,13 @@
 
 Analysed 2026-11-05 against `main` at `704809a20`. Task 1 re-checked 2026-11-06
 against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
-`04639b12b`, which added task 4.
+`04639b12b`, which added task 4. Re-checked 2026-11-11 against `main` at
+`498b68766`: tasks 1 and 4 cannot be finished on beelink (x86_64, no `pasta`
+on PATH), so the file is blocked.
 
 ### Tasks
 
-1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: partly done (x64 passed on beelink 2026-11-06, host daemon and a disposable rootful daemon, and two test defects fixed; arm64 has only CI's hosted-runner run and stays open).
+1. **Run the live suite on rootful Linux Engine**: CI's container workflow on x64 and arm64. Status: open (depends on a green Container live qualification CI run on linux-arm64; x64 passed on beelink 2026-11-06, host daemon and a disposable rootful daemon, and two test defects fixed; arm64 has only CI's hosted-runner run 42128741746, from before those fixes).
 2. **Run the live suite on rootless Docker**: a real rootless host. Status: done (2026-11-10, beelink, disposable rootless daemons from 4730: slirp4netns 6/6 and gvisor-tap-vsock 5/5; pasta is task 4).
 3. **Exercise the path where Docker names its upstreams by address**: controlled addressed upstreams, forged UDP replies and TCP failover. Status: done (Docker Desktop, 2026-11-05; on rootful Linux x64 2026-11-06, where the host daemon itself names its upstream by address).
 4. **Run the name checks on rootless Docker with the pasta driver**: the other RootlessKit network driver the task 2 problem names. Status: blocked (waits on 7568: 6101 task 4).
@@ -26,7 +28,7 @@ against `main` at `e6c3da899`. Task 2 acted on 2026-11-10 against `main` at
 - Gateway suites: the firewall suite's policy 3 tuple case passed after its fix; network passed C24 and C26; readiness passed 8 of 9. C22 cannot pass on a nested daemon, because the backend's service port is on the outer host. C23 was not run, because it connects to `example.com`, which is off the default allowlist.
 - The five cases the ticket named were also run by hand through `createDockerContainer` on the host daemon itself, with each environment network pre-created on an explicit subnet. All five passed: an allowed name answered 200; a foreign SNI on its address got `access denied`; a name off the list got `REFUSED` with EDE 18 over UDP, over TCP and to `192.0.2.53`; with the daemon killed, the allowed address was refused (curl 7) and DNS reached no server, until a refresh brought it back; and a full-mode runtime had no daemon and no record, and was not filtered. That gateway's `resolv.conf` read `# ExtServers: [172.17.0.1]`, the addressed-upstream path of task 3.
 - No Linux-only defect was found. Two test defects showed on every `egress-filter=1` image, Linux included. CI run 42128741746 (Engine 28.0.4) failed both on x64 and on arm64:
-  - The firewall tuple case and the DNS-rotation case sent a bare word as their first TCP write, which the name checks hold for up to 30 s. Both now send whole lines; the product behaviour is in [7000](7000-name-checks-hold-newline-less-first-writes.md).
+  - The firewall tuple case and the DNS-rotation case sent a bare word as their first TCP write, which the name checks hold for up to 30 s. Both now send whole lines; the product behaviour is documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1) (to-do 7000, retired 2026-11-11, kept the hold).
   - The DNS-rotation case also called `node` on the gateway's root PATH ([6103](6103-live-suite-failures-seen-during-s0100.md) task 2).
 - In that CI run M12 passed 4 (older image skipped), network 4/4 and readiness 9/9, on both architectures.
 
@@ -126,7 +128,20 @@ request, and relaying it early would let a request sent a byte at a time
 past the Host check. Changed the tests to send whole lines, as real
 line protocols do. Loosening the classifier would weaken the security
 check for the sake of a test. Whether to document the behaviour, or relay
-text that cannot be a method token sooner, is [7000](7000-name-checks-hold-newline-less-first-writes.md).
+text that cannot be a method token sooner, was to-do 7000 (retired
+2026-11-11): it kept the hold and documented it in the daemon's header,
+`docker/AGENTS.md`, the allowlist help and
+[container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1).
+
+### Task 1: arm64 waits on CI (2026-11-11)
+
+Re-checked on beelink, an x86_64 host: arm64 cannot run here, and running
+the arm64 image under QEMU user emulation would still use this host's x86_64
+kernel and iptables, which is what the qualification is about. Following
+the recommended decision (CI's hosted runners count), the task now waits on
+the next Container live qualification run on `ubuntu-24.04-arm` after the
+2026-11-06 probe fixes, with the M12, firewall and conditions steps green.
+No new run was looked up from this host.
 
 ### Task 1: arm64 stays open
 
@@ -178,14 +193,16 @@ x64 and arm64. Its firewall and conditions steps were red after S-0100 because o
 the two probe defects fixed on 2026-11-06. On rootless Docker x64 (beelink,
 2026-11-10) the name-check suite passed on slirp4netns and gvisor-tap-vsock
 daemons, and the conditions suite, with two rootless daemon restarts, on
-slirp4netns. Remaining: arm64 on a self-managed host (or the decision to
-accept CI's), and rootless with pasta (task 4).
+slirp4netns. Remaining: a green CI run on linux-arm64 after the probe fixes
+(task 1, by the recommended decision that CI's run counts), and rootless with
+pasta (task 4, waits on a host with `passt`, 7568).
 
 ## Related
 
-- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6102](6102-egress-name-check-residual-channels.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
+- [7420](7420-telemetry-hosts-grok-and-cursor-turns.md), [6103](6103-live-suite-failures-seen-during-s0100.md)
+- 6102 (retired 2026-11-11): what the name checks cannot see, now in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1); its refusal-count live run is in [container qualification](../../development/container-qualification.md#egress-refusal-counts-on-rootful-linux-engine-2026-11-06)
 - [0018](0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
-- [7000](7000-name-checks-hold-newline-less-first-writes.md): a newline-less first write is held, found by task 1
+- 7000 (retired 2026-11-11): a newline-less first write is held, found by task 1; documented in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - 4730 (retired 2026-11-10; the launcher is in [container qualification](../../development/container-qualification.md#disposable-docker-daemon)): the disposable daemon task 1 had to build by hand, and task 2 used
 - [7549](7549-rootless-docker-cp-refusals.md): rootless `docker cp` refusals, why task 2 kept `TMPDIR` off `/tmp`
 - [7390](7390-rootless-restart-remaining-settings.md): rootless daemon restarts on the other drivers (VPNKit, pasta, gvisor-tap-vsock) and with `live-restore`

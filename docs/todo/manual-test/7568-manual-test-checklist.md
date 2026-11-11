@@ -36,9 +36,10 @@ later say so where they are cited: 1021 was retired on 2026-11-11, once its
 fake-model qualification passed, and 0018 and 4680 were retired the same
 day; all three are in Git history at `498b68766`. 0016 and 0017 were also
 retired on 2026-11-11, once their agent work was done; both are in Git
-history at `14df96544`. 6260 and 6680 were retired on 2026-11-11, once
-their loopback-model measurements were done; both are in Git history at
-`1fd391e3a`.
+history at `14df96544`. 4961 was retired on 2026-11-11 once its storage
+half was decided; it is in Git history at `14df96544`. 6260 and 6680 were
+retired on 2026-11-11, once their loopback-model measurements were done;
+both are in Git history at `1fd391e3a`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -81,12 +82,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 2 |
 | Containers and environments | 24 | 9 |
 | Coordinator and Multi Review | 80 | 6 |
-| Cross-cutting | 73 | 20 |
+| Cross-cutting | 74 | 20 |
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
 | Transcripts, observation and bandwidth | 25 | 3 |
-| **Total** | 300 | 53 |
+| **Total** | 301 | 53 |
 
 ## Outstanding work
 
@@ -554,6 +555,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **6301 (retired) task 1 (user part): look at the drawn Help menu.** (Background: [Application logging, the renderer](../../architecture/logging.md#the-renderer); the to-do is in Git history at `498b68766`.) The workflow results are recorded: `native-application-menu.yml` passed the menu spec on real Electron on Linux, macOS and Windows and the packaged log controls on Linux and macOS (run 42914911189, 2026-11-10). On a real Mac running the packaged app, and on a Linux desktop with a drawn menu bar, turn on debug logging in Settings. Check that Help → Open Developer Tools appears and opens DevTools, and that it disappears when debug logging is off. Record: on each platform, whether the item appears and works, and how the otherwise empty macOS Help menu is drawn. Reply to the coordinator.
 - [ ] **[6300](../cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md) task 3 (user part): Safari's Web Inspector on a real iPhone.** On an iPhone with a development build of the iOS app (2026-11-11 or later) connected to an isolated `dev:test` profile, and a Mac with Safari's Develop menu on (Web Inspector enabled on the phone in Settings → Safari → Advanced): with Renderer Debug Logging off, check that the app's page is not listed under the phone in Safari's Develop menu. Turn it on in Settings (the page reloads) and check that the page is listed and Web Inspector opens it and shows debug lines. Turn it off again and check that the page leaves the list. Keep the gateway token out of screenshots and notes. Record: iOS, Safari and app versions and each step's result in 6300 task 3's Investigation.
 - [ ] **[6760](../cross-cutting/6760-agent-mail-store-split-thresholds.md) task 1: a real host's agent-mail store size and write rate.** On a real host, read the `agent-mail` store's size from the diagnostics per-store sizes once a day for a week. A one-off read-only `SUM(length(value))` over the `agent-mail` rows also works. Also look for event-loop stall log lines attributed to mail writes. Record in 6760 task 2's Investigation: the store size over the week, and any mail-write stall over 50 ms. Tasks 2 and 3 go ahead only past 8 MB or such stalls.
+- [ ] **4961 (retired) task 1: judge how a capped bulk list reads in the Changes view.** (Background: [Change tracking: retention and backup](../../architecture/change-tracking.md#retention-and-backup); the to-do is in Git history at `14df96544`.) On 2026-11-11 an agent kept one row per file rather than adding one row per bulk directory: the storage a directory row would save stays inside the per-owner bound (about 0.5 MiB per bulk turn for 30 days), and a directory row would be a new row kind for diff bodies, restore and every client. Whether a capped list reads poorly is the part only you can judge. In a disposable `dev:test` profile started with `--fixture --no-agent-credentials`, in a fixture environment, edit two tracked source files and add 2,500 small files under one new directory, then open the Changes view. Record: whether the two source files are easy to find above the bulk directory, whether the "not listed. The totals count them all." notice is clear, and whether you want one row per bulk directory instead. Reply to the coordinator; a "yes" to directory rows becomes a new to-do, starting from the option analysis in 4961.
 
 #### Design canvas
 

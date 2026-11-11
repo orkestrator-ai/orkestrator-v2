@@ -459,7 +459,12 @@ refuses admission instead of being treated as empty. Each namespace is the
 logical SQLite store `public-operations/<namespace>` (with the index in
 `public-operations/index`) in the backend database: WAL with
 `synchronous = FULL`, so a committed admission survives a process crash; see
-[storage.md](storage.md). "Never delete `public-operations/`" below means those
+[storage.md](storage.md). A namespace holds one row per record, keyed by its
+operation id in admission order, so an admission or a state change writes and
+syncs that one row, and a read re-parses and re-checks only the rows that
+changed since the last one (schema version 9; to-do 7562 found the whole
+namespace rewritten on every update, 16 to 20 MiB of WAL a minute on a busy
+run). "Never delete `public-operations/`" below means those
 logical stores.
 
 ### After a restart

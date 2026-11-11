@@ -182,6 +182,53 @@ describe("StorageService store writers", () => {
     ).toBe(true);
   });
 
+  describe("public operation namespace writers", () => {
+    const namespaceSites = () =>
+      analyzeStorageService().sites.filter((site) => site.store === "publicOperationNamespaceFile");
+
+    test("records are written one row each under the store lock, namespaces deleted whole", () => {
+      const sites = namespaceSites();
+      expect(sites.map((site) => `${site.member} ${site.call} ${site.kind}`).sort()).toEqual([
+        "PublicOperationsRepository.collectPublicOperations context.deleteStore whole",
+        "PublicOperationsRepository.saveNamespaceRecord context.updateSensitiveStoreRow transactional",
+      ]);
+      expect(analyzeStorageService().stores.get("publicOperationNamespaceFile")).toMatchObject({
+        kind: "mixed",
+        leases: ['path.join(this.publicOperationsDir(), "store")'],
+      });
+    });
+
+    test("a whole-value save brought back beside the row writes is refused", () => {
+      const sources = readStorageSources().map((source) => ({
+        ...source,
+        source: source.source.replace(
+          "this.saveNamespaceRecord(record);",
+          "await this.context.saveSensitiveJson(this.publicOperationNamespaceFile(record.namespace), {});",
+        ),
+      }));
+      expect(sources.some((source) => source.source.includes("record.namespace), {});"))).toBe(
+        true,
+      );
+      const { violations } = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+      expect(violations.join("\n")).toContain("publicOperationNamespaceFile: written both whole");
+    });
+
+    test("a record row write outside the store lock is refused", () => {
+      const sources = readStorageSources().map((source) => ({
+        ...source,
+        source: source.source.replace(
+          "async getPublicOperation(operationId: string): Promise<PublicOperationLookup> {",
+          `async getPublicOperation(operationId: string): Promise<PublicOperationLookup> {
+    this.saveNamespaceRecord(null!);`,
+        ),
+      }));
+      const { violations } = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+      expect(violations.join("\n")).toContain(
+        "no store-wide lease reaches this write from PublicOperationsRepository.getPublicOperation",
+      );
+    });
+  });
+
   describe("prompt queue writers", () => {
     const queueSites = () =>
       analyzeStorageService().sites.filter((site) => site.store === "promptQueuesFile");

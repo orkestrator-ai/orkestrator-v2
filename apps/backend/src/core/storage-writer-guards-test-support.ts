@@ -18,7 +18,10 @@ import { parseSync, visitorKeys, type CallExpression, type Node } from "oxc-pars
  *    (`StorageContext.serialize` or a wrapper that hands it its `operation`),
  *    directly or through helpers whose every caller does;
  * 2. all whole-value writers of one store share at least one lease;
- * 3. no store has both whole-value and transactional writers;
+ * 3. no store has both whole-value and transactional writers, except that a
+ *    store in {@link LEASED_ROW_STORES} may be deleted whole (`deleteStore`):
+ *    rule 4 makes the deletion and every row write share a lease, and a
+ *    deletion carries no stale copy of rows a writer committed;
  * 4. every row write of a store in {@link LEASED_ROW_STORES} holds a store-wide
  *    lease too, exactly as a whole-value write must.
  *
@@ -60,7 +63,14 @@ type WriteKind = "whole" | "transactional";
  * each other and against deletion. A row transaction alone would not serialize
  * that read.
  */
-const LEASED_ROW_STORES = new Set(["environmentsFile", "projectsFile", "promptQueuesFile"]);
+const LEASED_ROW_STORES = new Set([
+  "environmentsFile",
+  "projectsFile",
+  "promptQueuesFile",
+  // Admission writes one record row under the public operation store lock,
+  // and retirement deletes whole namespaces under the same lock (rule 3).
+  "publicOperationNamespaceFile",
+]);
 
 /**
  * What a call of a member of a class the analysis does not read means. These
@@ -1217,7 +1227,9 @@ export function analyzeStorageWriters(
         .join("; ");
       violations.push(`${store}: whole-value writers share no lease (${detail})`);
     }
-    if (whole.length > 0 && transactional.length > 0) {
+    const leasedDeletesOnly =
+      LEASED_ROW_STORES.has(store) && whole.every((site) => /(^|\.)deleteStore$/.test(site.call));
+    if (whole.length > 0 && transactional.length > 0 && !leasedDeletesOnly) {
       violations.push(
         `${store}: written both whole (${whole.map((site) => site.location).join(", ")}) and by unleased transactions (${transactional.map((site) => site.location).join(", ")}); the whole-value write overwrites rows the transactions commit`,
       );
@@ -1428,6 +1440,7 @@ const RAW_WRITER_EXEMPTIONS = new Map([
   ],
   ["storage-record-upgrades.ts", "a one-shot upgrade inside a migration at open"],
   ["storage-retired-features.ts", "a one-shot retirement inside a migration at open"],
+  ["storage-public-operation-rows.ts", "a one-shot layout upgrade inside a migration at open"],
 ]);
 
 export type RawWrite = { location: string; call: string; store: string | null };

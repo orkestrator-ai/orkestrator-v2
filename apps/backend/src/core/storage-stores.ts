@@ -24,6 +24,11 @@ import {
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotations/store-layout.js";
 import { USAGE_HISTORY_STORE_LAYOUTS } from "./usage-history-layout.js";
+import {
+  PUBLIC_OPERATION_NAMESPACE_LAYOUT,
+  PUBLIC_OPERATION_NAMESPACE_STORE,
+  publicOperationRowsMigration,
+} from "./storage-public-operation-rows.js";
 import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
 import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/layout.js";
@@ -163,11 +168,12 @@ const PREFIX_STORE_LAYOUTS: ReadonlyArray<readonly [string, StoreLayout]> = [
   [TRANSCRIPT_ARTIFACT_STORE_PREFIX, TRANSCRIPT_ARTIFACT_STORE_LAYOUT],
 ];
 
-const PUBLIC_OPERATION_NAMESPACE = /^public-operations\/ns-[0-9]{13}-[a-f0-9]{8}$/;
+const PUBLIC_OPERATION_NAMESPACE = PUBLIC_OPERATION_NAMESPACE_STORE;
 
 export function storeLayout(store: string): StoreLayout {
   const exact = STORE_LAYOUTS[store] ?? ENGINE_STORE_LAYOUTS[store];
   if (exact) return exact;
+  if (PUBLIC_OPERATION_NAMESPACE.test(store)) return PUBLIC_OPERATION_NAMESPACE_LAYOUT;
   for (const [prefix, layout] of PREFIX_STORE_LAYOUTS) {
     if (store.startsWith(prefix)) return layout;
   }
@@ -275,6 +281,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   buildPipelineReviewReportUpgradeMigration,
   moveChangeLedgerMigration,
   retireOpenCode2SessionsMigration,
+  publicOperationRowsMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

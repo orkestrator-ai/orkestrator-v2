@@ -650,8 +650,9 @@ ring below do.
 
 A renderer failure used to leave nothing behind: its console stays in the browser
 (see [What stays out of the persistent log](#what-stays-out-of-the-persistent-log)).
-Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`), and a
-desktop window sends its new counts to the backend it drives, which writes them here as
+Each renderer now keeps an error ring (`apps/web/src/lib/renderer-error-ring.ts`). A
+desktop window sends its new counts to the backend it drives, and a browser tab (the iOS
+app's web view included) to the backend it is signed in to, which writes them here as
 `renderer-errors` `error.recorded`.
 
 An entry is five fields and nothing else, defined in
@@ -661,7 +662,7 @@ An entry is five fields and nothing else, defined in
 | --- | --- |
 | `errorClass` | A built-in error class, `ChunkLoadError`, or `NonErrorThrow`. A custom class name is application text, so it becomes `Error`. |
 | `boundary` | Where it was caught: `lazy-view`, `message-row` or `rich-block` (the boundaries that name themselves), `boundary` (any other), `root` (no boundary caught it), `recoverable` (React recovered), `window` or `rejection` (the window's own error and unhandled-rejection events). |
-| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client). The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
+| `route` | Which renderer: `window` (a desktop window's) or `browser` (the web client, in a browser tab or the iOS app). A page with no desktop API, served over HTTP to something other than Electron, counts as `browser` even before its gateway is installed. The app has no URL router, so the surface stands in for a route pattern. `realm` named the separate per-node workspace documents of earlier releases; this client never sends it, and the list keeps it so older renderers' reports still parse. |
 | `fingerprint` | Eight hex digits of FNV-1a over the class, stack and component stack, the same one the boundaries already log. It tells failures apart without keeping what it was computed from. |
 | `count` | Occurrences since the last report, capped at 1,000,000. |
 
@@ -672,8 +673,8 @@ stack** is kept, in the ring or anywhere after it.
 flowchart LR
   B["React root onCaughtError / onUncaughtError / onRecoverableError"] --> R[(ring, 100 entries)]
   W["window error / unhandledrejection"] --> R
-  R -->|"new counts, ≤ 20 per write, every 10 s"| C["record_renderer_errors"]
-  C -->|"parsed again, 30 entries a minute"| E[(logs/essential)]
+  R -->|"new counts, ≤ 20 per write, every 10 s, with client id"| C["record_renderer_errors"]
+  C -->|"parsed again, 30 entries a minute, 10 per client"| E[(logs/essential)]
 ```
 
 Pending metadata (including in-flight counts) is bounded to 100 entries in per-window
@@ -686,21 +687,34 @@ can cause a duplicate count after reload; this is best-effort diagnostic deliver
   static `diagnosticBoundary`. Nothing is added to each boundary's `componentDidCatch`.
 - **Bounded in the renderer.** At most 100 distinct entries, the least recently seen
   dropped first. A repeat only raises a count.
-- **Sent by a desktop window only.** Its own renderer starts the upload
-  (`renderer-error-upload.ts`) once the app starts: promptly for the first failure, then every 10 seconds, up to 20
-  entries a write. A failed send puts the counts back and waits twice as long, up to five
-  minutes. A backend that predates the command answers "Unknown backend command", which
-  stops the upload for that load. Errors in another node's workspace shown in the
-  window are the window renderer's, so they go to the window's own backend. A browser
-  tab keeps its ring in memory: whose log its entries belong in is open
-  ([6300](../todo/cross-cutting/6300-renderer-error-ring-for-realms-and-web-clients.md)).
+- **Sent by every renderer, to its own backend.** A desktop window's renderer and a
+  browser tab both start the upload (`renderer-error-upload.ts`, started by
+  `renderer-diagnostics.ts`): promptly for the first failure, then every 10 seconds, up
+  to 20 entries a write. A failed send puts the counts back and waits twice as long, up
+  to five minutes. A backend that predates the command answers "Unknown backend
+  command", which stops the upload for that load. Errors in another node's workspace
+  shown in the window are the window renderer's, so they go to the window's own
+  backend. A browser tab sends to the backend it is signed in to (its command node).
+  Its gateway is installed only once the application modules load, so a failure before
+  then is retried on the next send, and one the tab never recovers from (its own
+  application chunk failing to load) is kept in session storage for the tab's next
+  load. A tab that is closed first loses it.
+- **Each renderer names itself.** Every write carries `client`, a random id the
+  renderer keeps in its session storage (`renderer-error-client.ts`), so a reload keeps
+  the same share. It identifies no user, device or session and is never logged. A
+  backend from v2.36.5-beta or v2.36.6-beta, whose handler refused any argument but
+  `entries`, gets the batch again without it.
 - **Validated and rate-bound in the backend.** `record_renderer_errors`
   (`renderer-error-recorder.ts`) parses every entry against the fixed lists again: any
   other key (a `message`, a `stack`) or any value outside its list refuses the whole
-  write. Across every client it writes at most 30 entries a minute and counts the rest
-  in one `report.rate-limited` line per minute. The essential log's own per-event budget
-  applies after that. A workspace client may not call it
-  (`workspace-grant-scope.ts`): this machine's log is its own.
+  write, as does a `client` that is not 8 to 64 letters, digits, `-` or `_`. Across
+  every client it writes at most 30 entries a minute, and at most 10 of them from one
+  `client`, so one noisy tab cannot use the minute a desktop window needs. The first 64
+  client ids in a minute get a share each; later ones share one more, so minting ids
+  buys nothing. A write without `client` (an older renderer) is bounded by the total
+  alone. The rest are counted in one `report.rate-limited` line per minute. The
+  essential log's own per-event budget applies after that. A workspace client may not
+  call it (`workspace-grant-scope.ts`): this machine's log is its own.
 - **Not the startup markers.** The ring never writes to the console and never uses the
   `desktop.startup` area, so the [exact-marker rule](#what-stays-out-of-the-persistent-log)
   is unchanged. It is also separate from `recentRendererErrors`, the bug report's
@@ -1460,7 +1474,15 @@ with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
   shows what the renderer holds in memory, tokens included, which is why it is opt-in
   and the switch says so. The artifact host and browser previews keep their own rules
   (`artifact-host-session.ts`, `browser-preview-manager.ts`); the menu never targets
-  them.
+  them. `native-application-menu.yml` qualifies the item on real Electron on Linux,
+  macOS and Windows and in the packaged app on Linux and macOS.
+- **Safari's Web Inspector in the iOS app.** The app's web view is inspectable from a
+  connected Mac only while this switch is on in the page: the renderer reports its state
+  at start (`reportWebInspectable`, `debug-log.ts`) through the shell's bridge
+  (`orkestratorNativeShell.setWebInspectable`, the `set-inspectable` action in
+  `RemoteWebView.swift`), and the shell sets `isInspectable` back to false on every new
+  document. The shell has no native log of its own; its renderer's failures reach the
+  backend through the error ring above.
 - **What a line now looks like.** One text line, not a console object: `error.name`,
   `error.message` and up to 8 relative frames, with no expandable object or
   source-mapped links in DevTools. Where a site logged an entity or a name, it now

@@ -364,6 +364,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setExperimentalGraphs,
     experimentalSelfImprovement,
     setExperimentalSelfImprovement,
+    experimentalTmux,
+    setExperimentalTmux,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,
@@ -713,6 +715,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         canInherit={false}
         catalog={catalog}
         disabled={isSaving}
+        tmuxModeEnabled={experimentalTmux}
         onRefreshModels={() => void refreshModelCatalog(platform)}
         refreshingModels={refreshingModelCatalog === platform}
         refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
@@ -2539,6 +2542,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               checked={experimentalSelfImprovement}
               onCheckedChange={setExperimentalSelfImprovement}
               aria-label="Enable self-improvement"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label="Tmux mode"
+            htmlFor="experimental-tmux"
+            description={
+              <>
+                Runs Claude&apos;s native chat by driving the Claude CLI under tmux instead of the
+                Agent SDK. Turning this on adds the Native backend choice to Settings → Claude and
+                Claude Tmux Tab to the new-agent-tab menu. While it is off every new Claude session
+                uses the Agent SDK; tmux tabs that are already open keep running.
+              </>
+            }
+          >
+            <Switch
+              id="experimental-tmux"
+              checked={experimentalTmux}
+              onCheckedChange={setExperimentalTmux}
+              aria-label="Enable tmux mode"
             />
           </SettingsRow>
           {isLocalDesktopWindow && (

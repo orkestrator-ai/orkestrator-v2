@@ -160,6 +160,12 @@ export const globalSettingsFields = {
   experimentalGraphs: optionalBoolean,
   /** Experimental gate for self-improvement (`self-improvement.ts`). Off when absent. */
   experimentalSelfImprovement: optionalBoolean,
+  /**
+   * Experimental gate for Claude's tmux mode (`claudeNativeBackend: "tmux"`).
+   * Off when absent: every launch resolves to the Agent SDK backend, and no
+   * control offers a new tmux tab. See `effectiveClaudeNativeBackend`.
+   */
+  experimentalTmux: optionalBoolean,
   /** Self-improvement settings; see `resolveSelfImprovementSettings`. */
   selfImprovement: Schema.optional(ownedObject<SelfImprovementSettings>()),
   /** "Save logs to disk". */

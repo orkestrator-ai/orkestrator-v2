@@ -67,7 +67,11 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createFilesSessionsApi } from "@/lib/backend/files-sessions";
 import { agentSettingsTiers } from "@/lib/agent-settings";
-import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import {
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
+  resolveAgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import { hydratePaneLayoutDependencies } from "@/lib/pane-layout-authoritative";
 import {
@@ -245,7 +249,13 @@ export function TerminalContainer({
   const piMode = resolveAgentPlatformSettings(tiers, "pi").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
-  const claudeNativeBackend = claude.claudeNativeBackend;
+  // Tmux mode is experimental: while it is off a stored `tmux` launches on the
+  // Agent SDK, and an explicit tmux request below does the same.
+  const tmuxModeEnabled = isTmuxModeEnabled(config.global);
+  const claudeNativeBackend = effectiveClaudeNativeBackend(
+    claude.claudeNativeBackend,
+    tmuxModeEnabled,
+  );
   const backendSetupRunning = setupPhase === "running";
   const isStartupLaunchPending = pendingAgentLaunch;
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
@@ -1568,7 +1578,7 @@ export function TerminalContainer({
           launchModeOverride === "native"
             ? "sdk"
             : launchModeOverride === "tmux"
-              ? "tmux"
+              ? effectiveClaudeNativeBackend("tmux", tmuxModeEnabled)
               : claudeNativeBackend;
 
         const newTab = createClaudeNativeLikeTab({
@@ -1695,6 +1705,7 @@ export function TerminalContainer({
       opencodeMode,
       claudeMode,
       claudeNativeBackend,
+      tmuxModeEnabled,
       claude.fastMode,
       codex.fastMode,
       codexMode,

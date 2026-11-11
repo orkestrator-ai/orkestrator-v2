@@ -159,6 +159,12 @@ export async function runDeliverNowScenario(input: {
 
     if (deliverNowTerminalApplies(platform)) {
       terminal = { correctionResults: [], mailReads: [] };
+      // `claude-tmux` tabs are experimental and refused until the profile turns them on.
+      const config = await invoke<{ global: Record<string, unknown> }>("get_config");
+      if (config.global.experimentalTmux !== true)
+        await invoke("update_global_config", {
+          global: { ...config.global, experimentalTmux: true },
+        });
       const launch = await coordinatorTurn(
         watch,
         coordinator,

@@ -336,6 +336,7 @@ let currentActionDefaults: ActionDefaults | undefined;
 let currentMultiReviewSettings: AgentSettingsTier["multiReview"];
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
 let currentExperimentalGraphs: boolean | undefined;
+let currentExperimentalTmux: boolean | undefined;
 let currentRepositoryConfig: Record<
   string,
   { prBaseBranch?: string; agentSettings?: AgentSettingsTier }
@@ -562,6 +563,7 @@ mock.module("@/stores", () => ({
         global: {
           preferredEditor?: "vscode" | "cursor";
           experimentalGraphs?: boolean;
+          experimentalTmux?: boolean;
           reviewInstruction?: string;
           enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
           agentSettings?: AgentSettingsTier;
@@ -576,6 +578,7 @@ mock.module("@/stores", () => ({
           global: {
             preferredEditor: currentPreferredEditor,
             experimentalGraphs: currentExperimentalGraphs,
+            experimentalTmux: currentExperimentalTmux,
             reviewInstruction: currentReviewPrompt,
             enabledAgentPlatforms: currentEnabledAgentPlatforms,
             agentSettings: {
@@ -1065,6 +1068,7 @@ beforeEach(() => {
   currentOpenCodeModel = "opencode/default-model";
   currentPreferredEditor = "vscode";
   currentExperimentalGraphs = undefined;
+  currentExperimentalTmux = undefined;
   currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
@@ -2338,6 +2342,7 @@ describe("ActionBar toolbar interactions", () => {
   });
 
   test("suppresses native menus while preserving custom menus and non-HTML targets", () => {
+    currentExperimentalTmux = true;
     const { container } = renderInAppCommandScope(<ActionBar presentation="grid" />);
     const rootTerminal = screen.getByRole("button", { name: "New root terminal" });
     const rootTerminalIcon = rootTerminal.querySelector("svg")!;
@@ -2719,6 +2724,7 @@ describe("ActionBar workflow tabs", () => {
   });
 
   test("native and terminal context menus route neutral, tmux, and CLI tabs", () => {
+    currentExperimentalTmux = true;
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -2741,6 +2747,14 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
     fireEvent.click(screen.getByRole("button", { name: "OpenCode CLI" }));
     expect(createTabMock).toHaveBeenLastCalledWith("opencode", { agentLaunchMode: "cli" });
+  });
+
+  test("hides Claude Tmux Tab while experimental tmux mode is off", () => {
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New native agent tab" }));
+    expect(screen.getByRole("button", { name: "Native Tab" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Claude Tmux Tab" }) === null).toBe(true);
   });
 
   test("shows enabled CLI providers on the terminal control and removes legacy provider buttons", () => {
@@ -2771,6 +2785,7 @@ describe("ActionBar workflow tabs", () => {
   });
 
   test("filters terminal CLI and Claude Tmux options using enabled providers", () => {
+    currentExperimentalTmux = true;
     currentEnabledAgentPlatforms = ["codex"];
     renderInAppCommandScope(<ActionBar />);
 

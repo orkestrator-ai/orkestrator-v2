@@ -89,7 +89,10 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
-import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
+import {
+  DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
+  isTmuxModeEnabled,
+} from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_MIN_REVIEWERS,
@@ -417,6 +420,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   // Graphs are experimental: their buttons show only while they are on.
   const graphsEnabled = config.global.experimentalGraphs === true;
+  // Tmux mode is experimental: "Claude Tmux Tab" shows only while it is on.
+  const tmuxModeEnabled = isTmuxModeEnabled(config.global);
   const multiReviewResolvedDefaults = useMultiReviewLaunchDefaults(
     multiReviewDialogOpen,
     selectedEnvironmentId,
@@ -828,7 +833,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <Plus className="mr-2 h-4 w-4" />
                         Native Tab
                       </ContextMenuItem>
-                      {enabledAgents.has("claude") && (
+                      {tmuxModeEnabled && enabledAgents.has("claude") && (
                         <ContextMenuItem
                           onClick={() => handleCreateAgentTab("claude", "tmux")}
                           disabled={!canCreateTab}

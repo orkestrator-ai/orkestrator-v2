@@ -1,4 +1,8 @@
-import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import {
+  effectiveClaudeNativeBackend,
+  isTmuxModeEnabled,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
@@ -131,10 +135,11 @@ export function usesNativeStartupAgentTab(
   const launch = resolveStartupLaunchFromSettings(
     agentSettingsTiers(config, projectId, { agentSettings }),
   );
-  return (
-    launch.mode === "native" &&
-    !(launch.agent === "claude" && launch.claudeNativeBackend === "tmux")
+  const backend = effectiveClaudeNativeBackend(
+    launch.claudeNativeBackend,
+    isTmuxModeEnabled(config.global),
   );
+  return launch.mode === "native" && !(launch.agent === "claude" && backend === "tmux");
 }
 
 /**

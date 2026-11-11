@@ -3,7 +3,9 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "./agent-platforms.js";
 import {
   claudeNativeParameterValues,
   DEFAULT_CLAUDE_NATIVE_BACKEND,
+  effectiveClaudeNativeBackend,
   isEmptyAgentSettings,
+  isTmuxModeEnabled,
   normalizeAgentSettings,
   resolveActionDefaults,
   resolveMultiReviewSettings,
@@ -35,6 +37,23 @@ describe("resolveDefaultAgent", () => {
     ).toBe("opencode");
     expect(resolveDefaultAgent({ global: { defaultAgent: "grok" } })).toBe("grok");
     expect(resolveDefaultAgent({})).toBe("claude");
+  });
+});
+
+describe("tmux mode gate", () => {
+  test("is off unless global.experimentalTmux is exactly true", () => {
+    expect(isTmuxModeEnabled(undefined)).toBe(false);
+    expect(isTmuxModeEnabled(null)).toBe(false);
+    expect(isTmuxModeEnabled({})).toBe(false);
+    expect(isTmuxModeEnabled({ experimentalTmux: false })).toBe(false);
+    expect(isTmuxModeEnabled({ experimentalTmux: true })).toBe(true);
+  });
+
+  test("a stored tmux backend launches on the Agent SDK while the gate is off", () => {
+    expect(effectiveClaudeNativeBackend("tmux", false)).toBe("sdk");
+    expect(effectiveClaudeNativeBackend("tmux", true)).toBe("tmux");
+    expect(effectiveClaudeNativeBackend("sdk", false)).toBe("sdk");
+    expect(effectiveClaudeNativeBackend("sdk", true)).toBe("sdk");
   });
 });
 

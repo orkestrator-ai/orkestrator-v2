@@ -9,7 +9,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | --- | --- | --- | --- |
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.319`, Anthropic SDK `1.6.0`, CLI `2.1.319` (npm `latest`, verified 2026-11-06) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.167.0` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.5` |
+| OpenCode | No SDK: the backend's own 2.x client (`apps/backend/src/core/opencode2/`) | The pinned `opencode2` executable (OpenCode 2.x) runs `opencode serve` | CLI `2.2.6` (`opencode2`; OpenCode 1.x is retired) |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.3.1` (npm `latest`, verified 2026-11-06) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.77` (stable channel; verified 2026-11-06), ACP SDK `2.4.0` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.5.0` |
@@ -45,8 +45,8 @@ bound, so a hand-edited `GROK_SHA` would have shipped a container running a
 different build from the local worktree, silently. The SDK-only Cursor pin has
 its own exact-pin assertion.
 
-The `tracksCli` flag in that table is the one piece of real judgement. Pi and
-OpenCode publish the SDK and the binary as the same program two ways, so a split
+The `tracksCli` flag in that table is the one piece of real judgement. Pi
+publishes the SDK and the binary as the same program two ways, so a split
 gives the user two different agents behind one platform name and the test
 demands they match. Claude's Agent SDK has its own release train and deliberately
 does **not** track its CLI.
@@ -94,10 +94,10 @@ path has been updated.
 
 `packages/toolchain/src/manifest.ts` is the authoritative artifact
 manifest for the five CLI-backed agents — Claude, Codex, OpenCode, Grok, and
-Pi. OpenCode has two binaries while it moves to 2.x: `opencode` (1.x) and
-`opencode2` (2.x, see [OpenCode 2.x](#opencode-2x-opencode2)). Enabling a
-platform installs every tool `agentPlatformForToolchain` assigns to it, so
-`opencode` brings both. Every pinned tool contains one entry per supported
+Pi. OpenCode's binary is OpenCode 2.x under the toolchain name `opencode2`
+(see [OpenCode 2.x](#opencode-2x-opencode2)); the 1.x `opencode` pin is
+retired. Enabling a platform installs every tool `agentPlatformForToolchain`
+assigns to it, so `opencode` brings `opencode2`. Every pinned tool contains one entry per supported
 platform and architecture:
 
 - macOS arm64 and x64
@@ -105,7 +105,7 @@ platform and architecture:
 
 Each entry pins the archive URL, allowed hosts, archive size and SHA-256, archive
 member to extract, and extracted executable size and SHA-256. The macOS entries
-for OpenCode and Pi additionally set `repairInvalidMacSignature`; the manager
+for Pi additionally set `repairInvalidMacSignature`; the manager
 retains the verified upstream bytes and creates a locally ad-hoc-signed
 executable.
 
@@ -279,13 +279,15 @@ installs them from the registry before a publish.
 ### Container environments
 
 `docker/Dockerfile` has one exact build argument per pinned agent binary —
-`CLAUDE_CLI_VERSION`, `CODEX_CLI_VERSION`, `OPENCODE_CLI_VERSION`,
-`OPENCODE2_CLI_VERSION`, `GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
+`CLAUDE_CLI_VERSION`, `CODEX_CLI_VERSION`, `OPENCODE2_CLI_VERSION`,
+`GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
 
 - `@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`
 - `@openai/codex@${CODEX_CLI_VERSION}`
-- OpenCode 1.x, OpenCode 2.x (as `/home/node/.opencode/bin/opencode2`,
-  `OPENCODE2_CLI_PATH`), Grok Build and Pi as pinned archives, each verified against a
+- OpenCode 2.x (root-owned `/opt/opencode/bin/opencode2`, reached as
+  `/home/node/.opencode/bin/opencode2`, `OPENCODE2_CLI_PATH`; a terminal's
+  `opencode` is the wrapper `docker/opencode-cli.sh` around it), Grok Build
+  and Pi as pinned archives, each verified against a
   literal SHA-256 in the same `RUN` block. Those digests are a **second,
   independent** set from the manifest's — the image does not read the manifest —
   so a version bumped in only one place fails the build rather than shipping an
@@ -314,7 +316,7 @@ zip entry, a bare `raw` binary, a bundle whose whole tree is kept intact, and
 Codex's companion helper.
 
 ```bash
-mise run download:claude    # or download:codex | :opencode | :grok | :pi
+mise run download:claude    # or download:codex | :opencode (fetches opencode2) | :grok | :pi
 mise run download:agent grok --dir /tmp/probe
 ```
 
@@ -334,7 +336,7 @@ below.
 2. Change the provider's version in
    `packages/toolchain/src/manifest.ts` and `docker/Dockerfile`.
    The shared downloader reads the manifest and has no version mirror. Codex
-   has an additional source of truth described below. OpenCode also has SDK pins that must match its CLI.
+   has an additional source of truth described below.
 3. Refresh all four artifact records with the live verifier:
 
    ```bash
@@ -403,7 +405,7 @@ Update the traced version only after doing the steps below.
    | --- | --- | --- |
    | Claude | The "Application data" table in the Claude Code docs (`claude-directory`); `strings` on the binary for the directory names | Transcripts are under `~/.claude/projects` and rewind snapshots under `~/.claude/file-history`. Anything new the docs list as needed for "resume, continue, and rewind" must be preserved |
    | Codex | `strings "$BIN" \| grep -E '_[0-9]+\.sqlite\|session_index\|archived_sessions\|CODEX_SQLITE_HOME'` | Rollouts are under `sessions/` and `archived_sessions/`. `CODEX_SQLITE_HOME` is still honoured, and every runtime database it relocates matches the `.codex/*.sqlite*` selection in `replacementCopyPlan`. Note any new versioned database name; `thread_history_1` and `goals_1` are examples |
-   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'`, then `scripts/qualify-opencode-seeded-data.sh <dev image>` once the image is built | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state. The script must still pass: a turn, diff and revert work with nothing seeded from the host data directory but `auth.json`, and nothing opens a host's `snapshot/` or `account.json` |
+   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'` on the `opencode2` binary | `OPENCODE_DB` is still a full database path (`OPENCODE2_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state. (The 1.x seeded-data qualifier was retired with 1.x: `git show 5f4e27b1c:scripts/qualify-opencode-seeded-data.sh`.) |
    | Pi | The pinned bundle's own docs: `sessions.md` and `environment-variables.md` under its `docs` directory | Sessions default to `~/.pi/agent/sessions`. The bridge passes `PI_SESSION_DIR` to `SessionManager` itself |
    | Cursor | `JsonlLocalAgentStore` and `getDefaultSdkStateRoot` in the bundled SDK | The store writes only under the root `cursor-bridge/src/sdk-runtime.ts` passes it, which sits under `CURSOR_BRIDGE_STATE_DIR` |
    | Grok | The help docs the CLI writes to `~/.grok/docs` (sessions and storage chapters), `CHANGELOG.md`, and `strings` for `GROK_HOME` | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
@@ -1339,133 +1341,18 @@ safety constraints behind this process. Upstream release source:
 
 ## OpenCode
 
-### Where the SDK is used
-
-OpenCode's SDK and CLI are intentionally kept at the same exact version.
-`tests/unit/version-drift.test.ts` enforces agreement across:
-
-- `@opencode-ai/sdk` in `apps/backend/package.json`, the only workspace that
-  depends on the SDK
-- `PINNED_TOOLCHAIN_VERSIONS.opencode` in
-  `packages/toolchain/src/manifest.ts`
-- `OPENCODE_CLI_VERSION` in `docker/Dockerfile`
-
-Every import uses `@opencode-ai/sdk/v2/client`; do not change one to the v1
-package root. The renderer does not talk to `opencode serve` or normalize
-OpenCode messages, and `apps/web` does not depend on the SDK (the drift test
-asserts that). `scripts/opencode-live-compatibility-probe.ts` resolves the SDK
-through the backend workspace.
-
-- `apps/backend/src/core/opencode-provider.ts` is the only backend file that
-  calls `createOpencodeClient`. It uses sessions, async prompts,
-  status/messages, event subscriptions, aborts, questions, and permissions, and
-  serves both interactive native chat and durable build pipelines.
-  `native-agent-provider.ts` selects it for the `opencode` platform, and
-  `build-pipeline-provider.ts` re-exports a smaller slice of that contract for
-  pipeline code — neither of those two constructs a client itself, so a v2
-  signature change lands in `opencode-provider.ts`. The remaining backend
-  `opencode-*.ts` files import v2 *types* only.
-
-OpenCode 1.19.1 discontinued session sharing upstream. OpenCode no longer
-advertises the `share` capability, the provider never calls
-`session.share`/`unshare` or reports a session's old `share.url` (those links
-are dead), and Agent Info shows Undo, Redo and Share from
-`capabilities.actions` rather than from the platform. A typed `/share` or
-`/unshare` is still refused as a terminal-only command so it never reaches the
-model as a prompt. If a release brings sharing back, re-add the capability and
-the two calls together.
-
-### How to upgrade OpenCode
-
-1. Pick a release for which both the CLI assets and `@opencode-ai/sdk` package
-   exist.
-2. Set that exact version in the backend manifest and all three CLI mirrors
-   listed above.
-3. Refresh the root lockfile:
-
-   ```bash
-   bun install
-   ```
-
-   Rebase the Bun SSE patch against the new upstream package as required by
-   `AGENTS.md`. Both `dist/gen/core/serverSentEvents.gen.js` and
-   `dist/v2/gen/core/serverSentEvents.gen.js` must catch a rejected
-   `reader.cancel()`. Use a fresh isolated temporary package/cache for
-   `bun patch` if the workspace uses symlinks: edit the directory Bun prepared,
-   not a workspace symlink into its shared cache, and inspect the generated
-   patch before copying it back. Update the root `patchedDependencies` key,
-   patch path and filename, and `bun.lock` together; remove the old patch.
-   Confirm the backend resolution in `bun.lock` uses the intended version and
-   inspect the installed client after `bun install`.
-4. Refresh and verify all four OpenCode artifact records using the shared
-   binary procedure. Preserve the macOS `repairInvalidMacSignature` behavior and
-   do not add reproducible installed hashes for a locally re-signed file. Copy
-   the two `linux` archive digests into the Dockerfile's `OPENCODE_SHA`
-   branches; `version-drift.test.ts` holds them to the manifest.
-5. Review the generated v2 types and compile the backend. Flat v2 request
-   parameters such as `{ sessionID, parts }` must remain flat; do not migrate to
-   the old nested `{ path, body }` API shape.
-6. Run:
-
-   ```bash
-   bun run --cwd apps/backend typecheck
-   bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel
-   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-     src/core/opencode-provider-dispatch.test.ts \
-     src/core/opencode-provider-lifecycle.test.ts \
-     src/core/opencode-provider-runtime.test.ts \
-     src/core/opencode-provider-dispose.test.ts \
-     --parallel
-   OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
-     mise run verify:opencode:live
-   ```
-
-   The live compatibility test
-   (`apps/backend/src/core/opencode-live-compatibility.live.test.ts`) runs the
-   probe as a clean Bun child process, which starts `opencode serve` with
-   isolated XDG directories, verifies that CLI health reports the same version as the SDK
-   pin, constructs the real v2 client, and lists sessions. It does not call a
-   model or spend credits.
-
-   Then re-prove what MCP apply relies on, also without credentials:
-
-   ```bash
-   OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
-     mise run verify:opencode:mcp-live
-   ```
-
-   It checks that `instance.dispose` rebuilds a worktree's MCP servers from
-   its project file, stops the old server processes, drops runtime-added
-   entries and keeps sessions, and that the user files in
-   `$XDG_CONFIG_HOME/opencode` stay cached until the server restarts. If the
-   second test fails because the user file is reloaded, plan `opencode:user-*`
-   sources for the in-place reload too (`apply.ts`); if the first fails, MCP
-   apply's OpenCode reload no longer works. See
-   [`mcp-management.md`](../architecture/mcp-management.md) ("OpenCode reload").
-7. Smoke-test both UI native chat and a build-pipeline OpenCode phase. Exercise
-   streaming, question and permission rehydration, abort, resume, and session
-   status because those use different portions of the v2 client.
-8. Confirm the pinned binary still honours `OPENCODE_DISABLE_AUTOUPDATE`
-   (`grep -a -c -F OPENCODE_DISABLE_AUTOUPDATE <binary>`, and the release's
-   upstream `cli/upgrade.ts`). Since 1.19 the TUI checks for
-   updates and its `/update` dialog installs over the running binary,
-   including OpenCode 2 through `opencode upgrade --major`; the container's
-   `~/.opencode/bin` reads as a curl install, so the in-place upgrade would
-   succeed and break every native session (2.x has no legacy HTTP API). The
-   variable is set by `OPENCODE_PINNED_RUNTIME_ENV`
-   (`packages/protocol/src/terminal-agent-launch.ts`) on the terminal-tab
-   command and the local `opencode serve` spawn, and by an `ENV` in
-   `docker/Dockerfile`. It suppresses the check and the notice; `/update`
-   stays reachable from the command palette as a deliberate user action.
-   1.x now ships from upstream's `v1` branch; see `docs/todo/agent-engines/0008-opencode-v2.md`.
+OpenCode is 2.x only: its one pin is the toolchain's `opencode2`, upgraded as
+described below. The OpenCode 1.x pin (`PINNED_TOOLCHAIN_VERSIONS.opencode`,
+`OPENCODE_CLI_VERSION`), its `@opencode-ai/sdk` mirror and their upgrade steps
+were retired with 1.x; the last version of this section is in
+`git show 5f4e27b1c:docs/development/upgrade-agents.md`.
 
 ### OpenCode 2.x (`opencode2`)
 
-OpenCode 2.x is pinned beside 1.x as a second binary of the `opencode`
-platform, for the 2.x provider being built in
-`docs/todo/agent-engines/0008-opencode-v2.md`. It is a separate pin, not a bump
-of the 1.x one: the 1.x pin, its SDK and its patch are unaffected, and the two
-move independently.
+OpenCode 2.x is the `opencode` platform's only binary, pinned under the
+toolchain name `opencode2`, the name it had while it was pinned beside 1.x
+(`docs/todo/agent-engines/0008-opencode-v2.md`), so installed toolchain
+directories stay where they are.
 
 - `PINNED_TOOLCHAIN_VERSIONS.opencode2` in `packages/toolchain/src/manifest.ts`
   and `OPENCODE2_CLI_VERSION` in `docker/Dockerfile`. There is no SDK pin: the
@@ -1475,18 +1362,21 @@ move independently.
   (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`; the optional
   dependencies of `@opencode/cli`), fetched from `registry.npmjs.org`. The
   executable is `package/bin/opencode` in each tarball and is installed as
-  `opencode2`, so it never takes the 1.x binary's `opencode` name in the shared
-  activation directory. Use the glibc builds; the `-musl` and `-baseline`
+  `opencode2`, never as `opencode`: that name on `PATH` is the user's own
+  install. Use the glibc builds; the `-musl` and `-baseline`
   variants are not used. The darwin binaries are published validly signed, so
   `repairInvalidMacSignature` is not set and the installed bytes are the
   upstream bytes.
-- The container installs it at `/home/node/.opencode/bin/opencode2`
-  (`OPENCODE2_CLI_PATH`), checks it with `--version` at build time and records
-  it as `agents.opencode2` in the image manifest. `OPENCODE_DISABLE_AUTOUPDATE=1`
-  covers both binaries.
-- The 2.x provider (`apps/backend/src/core/opencode2/`) launches it for
-  sessions created while the OpenCode 2 preview is on, so a bump also reruns
-  the 2.x live set (step 8).
+- The container installs it root-owned at `/opt/opencode/bin/opencode2`,
+  reached as `/home/node/.opencode/bin/opencode2` (`OPENCODE2_CLI_PATH`),
+  checks it with `--version` at build time and records it as
+  `agents.opencode2` in the image manifest. A terminal's `opencode` is the
+  wrapper `docker/opencode-cli.sh`, which defaults `OPENCODE_DB` to the
+  server's database; the build checks it reports the same version.
+  `OPENCODE_DISABLE_AUTOUPDATE=1` is set image-wide.
+- The 2.x provider (`apps/backend/src/core/opencode2/`) launches it for every
+  OpenCode session, local and in containers, so a bump also reruns the 2.x
+  live set (step 8).
 
 To bump it:
 
@@ -1539,15 +1429,14 @@ To bump it:
    qualification checks (an exact input retry, a turn nobody reads, a server
    restart under a live provider, archive and restore). Also follow the
    "Qualification" list in `0008-opencode-v2.md`; its real-stack half is the
-   idle-observation spec with `ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2`
-   on fake models ([agent-testing.md](agent-testing.md)), run against a
+   idle-observation spec's OpenCode cases on fake models ([agent-testing.md](agent-testing.md)), run against a
    disposable profile by
    `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> mise run verify:opencode2:real-stack`
    (the profile started with `--fixture --no-agent-credentials
    --agent-platforms opencode --headless`). If
    `opencode2-silence.live.test.ts` fails, the server's `: heartbeat` interval
    (15 s at 2.2.6) has changed: measure it again and set
-   `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode-stream-silence.ts`) to about
+   `OPENCODE2_EVENT_STREAM_SILENCE_MS` (`opencode2/stream-silence.ts`) to about
    three missed heartbeats plus 5 s.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)

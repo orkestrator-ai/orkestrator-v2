@@ -739,7 +739,9 @@ model).
   - Full suite, `mise run check` and `mise run smoke:cli`: pass.
   - Found and fixed during the run: OpenCode reported success for a failed or
     not yet answered turn (now `turnTerminalError`, reading
-    `readOpenCodeTurnTerminalError` in `opencode-turn-outcome.ts`); `run wait`
+    `readOpenCodeTurnTerminalError` in `opencode-turn-outcome.ts`, removed
+    with OpenCode 1.x on 2026-11-11; OpenCode 2's is
+    `openCode2TurnTerminalError` in `opencode2/environment-provider.ts`); `run wait`
     exited 6 for up to ten seconds after a question was answered.
   - Not run: Pi, Cursor, Grok (bridges not packaged); macOS; Docker Desktop.
   - Durations: live local runs 31 to 45 s; live container runs 35 to 90 s

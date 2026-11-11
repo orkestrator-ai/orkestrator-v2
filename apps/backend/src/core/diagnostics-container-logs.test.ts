@@ -181,7 +181,7 @@ describe("reading the chosen environments' server logs", () => {
 
   test("every server's current and previous log is a candidate", () => {
     const files = containerServerLogFiles().map((server) => server.file);
-    expect(files).toContain("/tmp/opencode-serve.log");
+    expect(files).toContain("/tmp/opencode2-serve.log");
     expect(files).toContain("/tmp/grok-acp-bridge.prev.log");
     expect(files).toHaveLength(12);
   });

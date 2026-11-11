@@ -333,7 +333,6 @@ export function resolveManagedBinary(
 const PATH_FALLBACK_AGENT_LABELS = {
   claude: "Claude Code",
   codex: "Codex",
-  opencode: "OpenCode",
   pi: "Pi",
 } as const;
 
@@ -364,26 +363,19 @@ export function resolveCodexBinary(context: ManagedBinaryContext): string {
   return resolvePathFallbackAgentBinary(context, "codex");
 }
 
-export function resolveOpenCodeBinary(context: CommandContext): string {
-  return resolvePathFallbackAgentBinary(context, "opencode");
-}
-
 /**
- * The managed OpenCode 2.x binary (`opencode2`, installed beside `opencode`
- * whenever OpenCode is enabled; `agentPlatformForToolchain`).
+ * The managed OpenCode binary (`opencode2`, installed whenever OpenCode is
+ * enabled; `agentPlatformForToolchain`).
  *
  * There is deliberately no PATH fallback, in or out of an agent-test profile:
- * `opencode` on PATH is usually a 1.x install, and running a 1.x server for a
- * session marked 2.x — or a 2.x one the toolchain never pinned — would let it
- * migrate the user's database. A missing binary is reported plainly instead.
+ * `opencode` on PATH is whatever the user installed (often 1.x), and a server
+ * the toolchain never pinned could migrate the user's database. A missing
+ * binary is reported plainly instead.
  */
 export function resolveOpenCode2Binary(context: ManagedBinaryContext): string {
   const managed = resolveManagedBinary(context, "opencode2");
   if (managed) return managed;
-  throw new Error(
-    "OpenCode 2 is not installed yet. Restart Orkestrator to finish downloading it, " +
-      "or turn off “Use OpenCode 2 for new sessions” in Settings.",
-  );
+  throw new Error("OpenCode is not installed yet. Restart Orkestrator to finish downloading it.");
 }
 
 export function resolveClaudeBinary(context: CommandContext): string {
@@ -437,7 +429,7 @@ export function resolveAgentBinary(context: CommandContext, agent: AgentExtensio
     }
     return managed;
   }
-  return resolveOpenCodeBinary(context);
+  return resolveOpenCode2Binary(context);
 }
 
 export const EXTENSION_DISCOVERY_TIMEOUT_MS = 20_000;
@@ -513,66 +505,6 @@ export function createExtensionCommandRunner(
 }
 
 export const ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS = 20_000;
-export const MAX_ENVIRONMENT_SKILLS = 2_000;
-export const MAX_ENVIRONMENT_SKILL_PATH_CHARS = 4_096;
-export const MAX_ENVIRONMENT_SKILL_METADATA_CHARS = 512;
-
-export type OpenCodeEnvironmentSkill = {
-  name: string;
-  description?: string;
-  location: string;
-};
-
-export function parseOpenCodeEnvironmentSkills(output: string): OpenCodeEnvironmentSkill[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    throw new Error("OpenCode returned an invalid skills catalogue");
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error("OpenCode returned an invalid skills catalogue");
-  }
-  if (parsed.length > MAX_ENVIRONMENT_SKILLS) {
-    throw new Error(`OpenCode returned more than ${MAX_ENVIRONMENT_SKILLS} skills`);
-  }
-
-  const result: OpenCodeEnvironmentSkill[] = [];
-  for (const value of parsed) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("OpenCode returned an invalid skill entry");
-    }
-    const record = value as Record<string, unknown>;
-    // OpenCode's bundled configuration skill has no file on disk. The file
-    // browser cannot read or reveal it, so this surface lists filesystem-backed
-    // skills only.
-    if (record.location === "<built-in>") continue;
-    if (
-      typeof record.name !== "string" ||
-      typeof record.location !== "string" ||
-      (record.description !== undefined && typeof record.description !== "string") ||
-      record.name.trim().length === 0 ||
-      !path.isAbsolute(record.location) ||
-      path.basename(path.normalize(record.location)) !== "SKILL.md" ||
-      record.location.length > MAX_ENVIRONMENT_SKILL_PATH_CHARS
-    ) {
-      throw new Error("OpenCode returned an invalid skill entry");
-    }
-    result.push({
-      name: Array.from(record.name.trim()).slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS).join(""),
-      ...(typeof record.description === "string"
-        ? {
-            description: Array.from(record.description)
-              .slice(0, MAX_ENVIRONMENT_SKILL_METADATA_CHARS)
-              .join(""),
-          }
-        : {}),
-      location: path.normalize(record.location),
-    });
-  }
-  return result;
-}
-
 export async function runEnvironmentAgentSkills(
   environment: Environment,
   context: CommandContext,
@@ -581,18 +513,6 @@ export async function runEnvironmentAgentSkills(
   filePath = "",
   run: typeof runCommand = runCommand,
 ): Promise<unknown> {
-  const scannerInput =
-    provider === "opencode"
-      ? JSON.stringify(
-          parseOpenCodeEnvironmentSkills(
-            await createExtensionCommandRunner(
-              environment,
-              context,
-              run,
-            )("opencode", ["debug", "skill"]),
-          ),
-        )
-      : undefined;
   let stdout: string;
   if (environment.environmentType === "local" && environment.worktreePath) {
     ({ stdout } = await run(
@@ -601,7 +521,6 @@ export async function runEnvironmentAgentSkills(
       {
         cwd: environment.worktreePath,
         env: envWithManagedBinaries(context),
-        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
         timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
       },
     ));
@@ -610,7 +529,6 @@ export async function runEnvironmentAgentSkills(
       "docker",
       [
         "exec",
-        ...(scannerInput === undefined ? [] : ["-i"]),
         "-w",
         "/workspace",
         environment.containerId,
@@ -621,10 +539,7 @@ export async function runEnvironmentAgentSkills(
         operation,
         filePath,
       ],
-      {
-        ...(scannerInput === undefined ? {} : { stdin: scannerInput }),
-        timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS,
-      },
+      { timeoutMs: ENVIRONMENT_SKILL_DISCOVERY_TIMEOUT_MS },
     ));
   } else {
     throw new Error("The environment is not available");

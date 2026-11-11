@@ -30,16 +30,12 @@ import {
   type ProviderStatus,
 } from "../agent-provider-contract.js";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
-import {
-  collectNormalizedOpenCodeSubagentIds,
-  hydrateNormalizedOpenCodeSubagents,
-} from "../opencode-messages.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import { normalizeOpenCode2Transcript } from "./transcript.js";
 import type { OpenCode2Message, OpenCode2Session } from "./types.js";
 import { openCode2ContextUsage } from "./usage.js";
 
-/** Children hydrated into sub-agent cards, and rows read per child (the 1.x bounds' shape). */
+/** Children hydrated into sub-agent cards, and rows read per child. */
 const MAX_SUBAGENT_SESSIONS = 8;
 const SUBAGENT_MESSAGE_LIMIT = 50;
 const SUBAGENT_FETCH_CONCURRENCY = 4;
@@ -149,9 +145,84 @@ export async function openCode2SessionState(
   };
 }
 
+/** Child session ids of the normalized sub-agent cards, nested ones included. */
+function collectNormalizedOpenCodeSubagentIds(
+  messages: readonly Record<string, unknown>[],
+): string[] {
+  const ids = new Set<string>();
+  const visit = (parts: unknown, depth: number) => {
+    if (!Array.isArray(parts) || depth > 8) return;
+    for (const candidate of parts) {
+      const part = asRecord(candidate);
+      if (!part) continue;
+      const id = nonEmptyString(part.subagentId);
+      if (part.type === "subagent" && id) ids.add(id);
+      visit(part.subagentActions, depth + 1);
+    }
+  };
+  for (const message of messages) visit(message.parts, 0);
+  return [...ids];
+}
+
+/**
+ * Copies of `messages` whose sub-agent cards carry their child's assistant
+ * actions (`subagentActions`, with their tool count), nested children
+ * included. A card whose child is unknown, or already an ancestor, stays bare.
+ */
+function hydrateNormalizedOpenCodeSubagents(
+  messages: readonly Record<string, unknown>[],
+  childMessages: ReadonlyMap<string, readonly Record<string, unknown>[]>,
+): Record<string, unknown>[] {
+  const countTools = (parts: readonly Record<string, unknown>[]): number =>
+    parts.reduce(
+      (count, part) =>
+        count +
+        (part.type === "tool-invocation" ? 1 : 0) +
+        (Array.isArray(part.subagentActions)
+          ? countTools(
+              part.subagentActions.flatMap((entry) => {
+                const record = asRecord(entry);
+                return record ? [record] : [];
+              }),
+            )
+          : 0),
+      0,
+    );
+  const hydrateParts = (
+    rawParts: unknown,
+    ancestry: ReadonlySet<string>,
+  ): Record<string, unknown>[] => {
+    if (!Array.isArray(rawParts)) return [];
+    return rawParts.flatMap((candidate) => {
+      const part = asRecord(candidate);
+      if (!part) return [];
+      const id = part.type === "subagent" ? nonEmptyString(part.subagentId) : null;
+      if (!id || ancestry.has(id)) return [{ ...part }];
+      const transcript = childMessages.get(id);
+      if (!transcript) return [{ ...part }];
+      const nextAncestry = new Set(ancestry);
+      nextAncestry.add(id);
+      const actions = transcript.flatMap((message) =>
+        message.role === "assistant" ? hydrateParts(message.parts, nextAncestry) : [],
+      );
+      return [
+        {
+          ...part,
+          subagentActions: actions,
+          subagentActionCount: countTools(actions),
+        },
+      ];
+    });
+  };
+  return messages.map((message) => ({
+    ...message,
+    parts: hydrateParts(message.parts, new Set()),
+  }));
+}
+
 /**
  * Normalized rows with each sub-agent card filled from its child session,
- * breadth first and bounded like 1.x (eight children, fifty rows each). A
+ * breadth first and bounded (eight children, fifty rows each). A
  * child that cannot be read keeps its bare card.
  */
 export async function hydrateOpenCode2Subagents(

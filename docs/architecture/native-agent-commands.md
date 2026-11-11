@@ -188,7 +188,7 @@ The backend merges runtime actions into the provider list
   `session.compact(customInstructions)`). There the row's argument policy is
   `optional` with hint `[instructions]`; on every other platform it stays
   `none`, so the text is refused rather than dropped. Codex
-  `thread/compact/start` and OpenCode `session.summarize` take no
+  `thread/compact/start` and OpenCode's `/api/session/:id/compact` take no
   instructions, and Grok's `/compact` input is unverified. Instructions reach
   the bridge as `POST /session/:id/compact` with `{ "instructions": "…" }`
   (bounded by `COMPACT_INSTRUCTIONS_MAX_LENGTH`), and a bridge that used them
@@ -244,7 +244,7 @@ providers, at these pins:
 | --- | --- | --- |
 | Claude | Agent SDK 0.3.296 / CLI 2.1.296 | 2026-10-17: discovery, templates, local output, `/compact`, refusals, restart; browser scenario on a host worktree. 2026-10-23: browser scenario on a host worktree and in a container |
 | Codex | app-server 0.162.1 | 2026-10-17: skills, templates, built-ins, refusals, restart; browser scenario on a host worktree. 2026-10-23: disabled skills; browser scenario on a host worktree and in a container |
-| OpenCode | SDK and server 1.19.0 | 2026-10-17: discovery, `session.command`, refusals, reload |
+| OpenCode | SDK and server 1.19.0 (1.x, retired 2026-11-11; 2.x observed on 2.2.6, see the provider notes) | 2026-10-17: discovery, `session.command`, refusals, reload |
 | Grok | 1.0.52 / ACP SDK 1.8.0 | 2026-10-17: user skills, push updates, re-send after `session/load`; project skills after the folder-trust fix |
 | Pi | SDK 1.2.0; pre-attach list on 1.4.0 | 2026-10-23: discovery, extension-before-template precedence, headless extensions, templates, literal opt-out, mid-turn refresh. 2026-10-25: templates listed before the first turn (todo 0069) |
 | Cursor | SDK 1.0.37 | 2026-10-17: still `unsupported` |
@@ -276,7 +276,7 @@ unavailable with a reason. Re-qualify on every pin change
 | Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale; a child's list is `stale` until the second or later settling re-read agrees, or five rounds are spent |
 | Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
 | Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
-| OpenCode | One `command.list({directory})`; refresh reloads the directory instance when idle | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty; `stale` while a requested reload waits for idle |
+| OpenCode | One `GET /api/command` for the session's directory; refresh re-reads it | Exact server key, case-sensitive, no aliases | `provider-command` via `POST /api/session/:id/command` | List errors fail the read; an empty list stays empty |
 | Pi | One builder over templates, skills and extensions (`sourceInfo` origin); before attach, the same builder over a resource-only read (templates and skills) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | Before attach: `stale` with `attachPending` when the policy loads extensions, otherwise `ready`; a persisted list is `stale` after restart |
 | Grok | ACP `available_commands_update` (push only) | Name as sent; `input.hint` as argument hint | `provider-prompt` via `session/prompt` | `ready` once this process received a list, even an empty one; restored rows are `stale` and not executable |
 | Cursor | None | — | — | `unsupported` |
@@ -308,7 +308,7 @@ catalogue read cannot let `/clear` reach the CLI.
 | --- | --- | --- |
 | Claude, Grok | None in the SDK or ACP | The backend refuses a literal prompt whose leading token names a known command |
 | Codex | Bridge resolver bypassed | app-server does not interpret `/` text |
-| OpenCode | `promptAsync` instead of `session.command` | — |
+| OpenCode | A plain prompt instead of the command route | — |
 | Pi | `expandPromptTemplates: false` (covers extension commands, skills and templates) | Extension `input` handlers still run on every prompt. Pi always expands follow-ups, so a literal prompt Pi would read as a command is refused (409) while a turn runs instead of being queued |
 | Cursor | No commands | — |
 
@@ -361,36 +361,20 @@ catalogue read cannot let `/clear` reach the CLI.
   the first read past the TTL heals, never a guessed row
   (`codex-command-catalogue.test.ts`, "plugins that load after the list
   settled appear at the next TTL read").
-- **OpenCode**: one directory-scoped `command.list`; `session.command` with
-  the exact server key. The command response arrives only after the whole
-  turn, and every failure maps to HTTP 400, so the provider does not abort it
-  on the prompt timeout: acceptance is proven from the reserved `messageID`,
-  and a missing answer is ambiguous, never a fallback prompt. OpenCode
-  substitutes `$ARGUMENTS` before running a template's `` !`cmd` `` spans
-  (observed in the 1.18.31 server, again in 1.19.0). That is OpenCode's own
-  template semantics on its own server, so a user's arguments to such a
-  command can reach a shell there; Orkestrator adds no shell surface of its
-  own. The server reads command files once per directory instance, so a
-  refresh disposes that instance (`instance.dispose`) to make it read them
-  again. Disposal aborts running work, so it happens only when no session in
-  the directory is busy or retrying and no dispatch from this provider is
-  open; dispatches wait while it runs. Otherwise the refresh answers
-  `deferred`, the catalogue reads `stale`, and the reload is retried at the
-  next idle edge on the event stream, after stream reconciliation, and when
-  the provider's last synchronous command dispatch ends. A plain
-  `promptAsync` acknowledgement is not an idle edge: it can precede the
-  server's busy status. Idle edges received during a status check cause
-  another whole-directory check. A disposal failure keeps the catalogue
-  `stale` and suppresses automatic retries until the next explicit refresh
-  (`opencode-command-reload.ts`).
-- **OpenCode 2.x sessions** (the preview line): `GET /api/command` lists
-  `{ name, description }` only, through the same registry and resolver as
-  1.x (`opencode2/commands.ts`). A selection runs as `POST
+- **OpenCode**: `GET /api/command` lists `{ name, description }` only for
+  the session's directory (`opencode2/commands.ts`, with the registry and
+  resolver in `opencode2/command-catalogue.ts`). A selection runs as `POST
   /api/session/:id/command { name, text, delivery: "queue" }`, which answers
   204 once the command's prompt is admitted (not when its turn ends); an
   unknown name is 404 `CommandNotFoundError`, a refusal. The expanded prompt
   carries no metadata, so an ambiguous command reads `unknown` afterwards and
   is never re-sent. Refresh re-reads the list (`reread`). Observed on 2.2.6.
+  OpenCode expands templates on its own server, so a user's arguments to a
+  template with `` !`cmd` `` spans can reach a shell there (observed on 1.x);
+  Orkestrator adds no shell surface of its own. Until 2026-11-11 OpenCode 1.x
+  listed commands through the SDK's `command.list` and reloaded a directory
+  instance to pick up new command files (`git show
+  5f4e27b1c:apps/backend/src/core/opencode-command-reload.ts`).
 - **Pi**: extensions win over skills and templates, as in the SDK, and only
   the effective winner is listed. Before a session attaches, the bridge lists
   its templates and skills from Pi's own `DefaultResourceLoader` with

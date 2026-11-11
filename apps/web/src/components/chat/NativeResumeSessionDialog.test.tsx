@@ -113,8 +113,7 @@ describe("NativeResumeSessionDialog", () => {
   });
 
   test("offers remove only on rows that can be archived in a mixed list", async () => {
-    // An OpenCode list holds 1.x conversations, which cannot be archived,
-    // beside 2.x ones, which can.
+    // A list can hold rows its provider cannot archive beside ones it can.
     const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
     renderDialog(
       [

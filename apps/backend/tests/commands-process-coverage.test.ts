@@ -26,6 +26,7 @@ import { ContainerHostReachabilityService } from "../src/core/container-host-rea
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
 import { AUTH_SECRET_CANARIES } from "../../../tests/helpers/auth-secret-canaries.js";
+import { OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT } from "../src/core/opencode2/container-server.js";
 
 const { createCommandRegistry, __testing } = await import("../src/core/commands");
 
@@ -54,7 +55,6 @@ const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
 const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
 const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
-const originalOpenCodeGitHubPluginFingerprint = process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
 const originalClaudeGitHubEnvironmentFingerprint = process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
 const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
 const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
@@ -188,9 +188,9 @@ if [ "$1" = "exec" ]; then
     *claude-github-env-fingerprint*) printf '%s' "\${FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT:-}" ;;
     *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
     *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
-    *opencode-github-env-plugin-fingerprint*) printf '%s' "\${FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT:-}" ;;
-    *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
-    *opencode-serve.prev.log*) printf 'previous opencode log\n' ;;
+    *opencode2-token*) printf '%s\n' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
+    *opencode2-plugins*|*opencode2-launch*|*fingerprint*opencode2*) printf '%s' "\${FAKE_OPENCODE2_FINGERPRINT:-}" ;;
+    *opencode2-serve.prev.log*) printf 'previous opencode log\n' ;;
     *claude-bridge.prev.log*) printf 'previous claude log\nmcp auth failed: %s\n' '${AUTH_SECRET_CANARIES.anthropicApiKey}' ;;
     *codex-bridge.prev.log*) printf 'previous codex log\n' ;;
     *cursor-bridge.prev.log*) printf 'previous cursor log\n' ;;
@@ -199,7 +199,7 @@ if [ "$1" = "exec" ]; then
     *cursor-bridge.log*) printf 'cursor log\n' ;;
     *grok-acp-bridge.log*) printf 'grok log\n' ;;
     *pi-bridge.log*) printf 'pi log\n' ;;
-    *opencode-serve.log*) printf 'opencode log\n' ;;
+    *opencode2-serve.log*) printf 'opencode log\n' ;;
     *claude-bridge.log*) printf 'claude log\nmcp auth failed: %s\n' '${AUTH_SECRET_CANARIES.anthropicApiKey}' ;;
     *codex-bridge.log*) printf 'codex log\n' ;;
   esac
@@ -403,53 +403,31 @@ async function startHealthServer(
 
 const startHealthyServer = () => startHealthServer(200);
 
-async function startOpenCodeServer(): Promise<{
-  port: number;
-  close: () => Promise<void>;
-  configurations: Array<Record<string, unknown>>;
-}> {
-  const configurations: Array<Record<string, unknown>> = [];
-  const server = http.createServer(async (request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (request.method === "OPTIONS") {
-      response.writeHead(204, {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET, POST, OPTIONS",
-        "access-control-allow-headers": "authorization, content-type",
-      });
+/** Answers `/api/info` as OpenCode 2 behind Basic `opencode:<password>`. */
+async function startOpenCode2InfoServer(
+  password: string,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+  const server = http.createServer((request, response) => {
+    if (request.headers.authorization !== expected) {
+      response.writeHead(401);
       response.end();
       return;
     }
-    if (request.method === "GET" && pathname === "/global/health") {
-      response.writeHead(200, { "access-control-allow-origin": "*" });
-      response.end("ok");
-      return;
-    }
-    if (request.method === "POST" && pathname === "/mcp") {
-      let body = "";
-      for await (const chunk of request) body += chunk;
-      configurations.push(JSON.parse(body) as Record<string, unknown>);
-      response.writeHead(200, {
-        "content-type": "application/json",
-        "access-control-allow-origin": "*",
-      });
-      response.end(JSON.stringify({ orkestrator: { status: "connected" } }));
-      return;
-    }
-    response.writeHead(404);
-    response.end();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ version: "2.2.6", pid: 1 }));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  const port = (server.address() as AddressInfo).port;
   return {
-    port: (server.address() as AddressInfo).port,
+    port,
     close: () =>
       new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       ),
-    configurations,
   };
 }
 
@@ -507,8 +485,6 @@ beforeEach(async () => {
   delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
   delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
   delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
-  process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
-    __testing.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
   process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT = __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
   delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
@@ -566,11 +542,6 @@ afterAll(async () => {
   if (originalOpenCodeServerPassword === undefined)
     delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
-  if (originalOpenCodeGitHubPluginFingerprint === undefined) {
-    delete process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
-  } else {
-    process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT = originalOpenCodeGitHubPluginFingerprint;
-  }
   if (originalClaudeGitHubEnvironmentFingerprint === undefined) {
     delete process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
   } else {
@@ -869,14 +840,27 @@ describe("process and platform command behavior", () => {
     });
     delete process.env.FAKE_DOCKER_NO_PORT;
 
-    const healthyStatus = await startHealthServer(200);
-    process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
-    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
+    const password = `okb_${"o".repeat(43)}`;
+    const openCode = await startOpenCode2InfoServer(password);
+    process.env.FAKE_DOCKER_PORT = String(openCode.port);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = password;
     try {
       expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
         running: true,
+        hostPort: openCode.port,
+        authToken: password,
+      });
+    } finally {
+      await openCode.close();
+    }
+
+    const healthyStatus = await startHealthServer(200);
+    process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
+    try {
+      // A server that is not OpenCode 2's does not count as running.
+      expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
+        running: false,
         hostPort: healthyStatus.port,
-        authToken: "o".repeat(43),
       });
       for (const agent of ["claude", "codex"]) {
         expect(await invoke(`get_${agent}_server_status`, { containerId: "container-a" })).toEqual({
@@ -922,18 +906,27 @@ describe("process and platform command behavior", () => {
       variant: { "provider/model": "fast" },
     });
 
+    // A running OpenCode 2 server started with the current plugins is reused.
+    const running = await startOpenCode2InfoServer(password);
+    process.env.FAKE_DOCKER_PORT = String(running.port);
+    process.env.FAKE_OPENCODE2_FINGERPRINT = OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT;
+    try {
+      expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
+        hostPort: running.port,
+        wasRunning: true,
+        authToken: password,
+      });
+    } finally {
+      delete process.env.FAKE_OPENCODE2_FINGERPRINT;
+      await running.close();
+    }
+
     const healthy = await startHealthyServer();
     process.env.FAKE_DOCKER_PORT = String(healthy.port);
     process.env.FAKE_CODEX_BRIDGE_TOKEN = "a".repeat(43);
     process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "b".repeat(43);
-    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
       credentialModeSpy.mockRejectedValue(new Error("manifest unavailable"));
-      expect(await invoke("start_opencode_server", { containerId: "container-a" })).toEqual({
-        hostPort: healthy.port,
-        wasRunning: true,
-        authToken: "o".repeat(43),
-      });
       expect(await invoke("start_codex_server", { containerId: "container-a" })).toEqual({
         hostPort: healthy.port,
         wasRunning: true,
@@ -946,77 +939,6 @@ describe("process and platform command behavior", () => {
       });
     } finally {
       await healthy.close();
-    }
-  });
-
-  test("rehydrates OpenCode agent tools from status and repairs legacy container host resolution", async () => {
-    const openCode = await startOpenCodeServer();
-    process.env.FAKE_DOCKER_PORT = String(openCode.port);
-    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
-    const connection = {
-      url: "http://host.docker.internal:45678/mcp",
-      token: "project-scoped-secret-token",
-    };
-    const agentTools = {
-      connection: mock(() => connection),
-      revokeEnvironment: mock(() => undefined),
-    };
-    const context = {
-      ...fixture.context,
-      agentTools,
-    } as CommandContext;
-    try {
-      await expect(
-        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
-      ).resolves.toEqual({
-        running: true,
-        hostPort: openCode.port,
-        authToken: "o".repeat(43),
-        // Reconciliation is backgrounded, so the first observer sees it in
-        // flight rather than an unqualified "everything is wired up".
-        agentTools: "pending",
-      });
-      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
-      await waitFor(
-        () => openCode.configurations.length === 1,
-        "background OpenCode agent-tool reconciliation",
-      );
-      expect(openCode.configurations).toEqual([
-        expect.objectContaining({
-          name: "orkestrator",
-          config: expect.objectContaining({
-            url: connection.url,
-            headers: { Authorization: `Bearer ${connection.token}` },
-          }),
-        }),
-      ]);
-
-      // Once the POST lands, the same observer reports usable ticket tools.
-      await waitFor(
-        () =>
-          context.runtime.localServers.openCodeAgentTools.state("container:container-existing") ===
-          "connected",
-        "the recorded connected outcome",
-      );
-      await expect(
-        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
-      ).resolves.toMatchObject({ running: true, agentTools: "connected" });
-      // The memo means the second status read did no further MCP I/O.
-      expect(openCode.configurations).toHaveLength(1);
-
-      const log = await readCommandLog();
-      expect(log).toContain(
-        "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
-      );
-      expect(log).toContain(
-        "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-existing",
-      );
-      expect(log).not.toContain(connection.token);
-    } finally {
-      // Retire the memo so a later test against this container reconciles
-      // rather than inheriting this generation's recorded outcome.
-      context.runtime.localServers.openCodeAgentTools.cancel("container:container-existing");
-      await openCode.close();
     }
   });
 

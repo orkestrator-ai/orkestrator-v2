@@ -4,7 +4,7 @@
 - **Status:** resolved
 ## Observation — 2026-10-17 (device-login main merge)
 
-- **Test:** `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`, in `apps/backend/src/core/commands-agent-tools.test.ts:174`.
+- **Test:** `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`, in `apps/backend/src/core/commands-agent-tools.test.ts:174` (removed with OpenCode 1.x on 2026-11-11; `git show 5f4e27b1c:apps/backend/src/core/commands-agent-tools.test.ts`).
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with system Python and the testing guide's GNU utilities preferred in PATH (Bun 1.4.3, macOS arm64).
 - **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host. Backend used two isolated Bun workers.
 - **Failure:** after the fixed 150 ms wait, `openCodeAgentToolsConfigurationCount()` was 1 instead of 0. The case took 166.45 ms.
@@ -39,3 +39,8 @@ The exact default-suite command subsequently passed (exit 0, 160.5 s):
 - **Fix:** `commands-agent-tools.test.ts` now awaits the outcome, then asserts zero configurations, one outcome and one request. The memoized second `schedule()` also awaits its returned promise instead of a 25 ms sleep, and it now also asserts that no reconcile was started. No assertion was removed and no product code changed.
 - **Verification:** with the 400 ms delay (temporary), the fixed test passed. `mise run test:logged -- --name n0320-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --rerun-each=20` passed 420 tests with 0 failures.
 - Same test and cause as [0320](0320-opencode-agent-tools-background-reconcile.md).
+
+## Test removed (2026-11-11)
+
+Test removed with OpenCode 1.x (2026-11-11). No surviving test runs this case;
+the resolution above stays as history.

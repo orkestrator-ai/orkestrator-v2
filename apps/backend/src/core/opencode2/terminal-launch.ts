@@ -1,32 +1,30 @@
 /**
- * OpenCode terminal tabs on OpenCode 2 (docs/todo/agent-engines/0008-opencode-v2.md).
+ * OpenCode terminal tabs (OpenCode 2's TUI).
  *
- * A terminal tab's launch line is built for 1.x
+ * A terminal tab's launch line is built by the renderer
  * (`buildTerminalAgentLaunchCommand`): a bare `opencode`, found on the login
- * shell's PATH, with `--model` and `--prompt`. With "Use OpenCode 2 for new
- * sessions" on, a local environment's new OpenCode tab instead runs the
- * managed `opencode2`, rewritten here when the tab is bootstrapped:
+ * shell's PATH, with `--model` and `--prompt`. A local environment's OpenCode
+ * tab instead runs the managed `opencode2`, rewritten here when the tab is
+ * bootstrapped:
  *
  * - **The managed binary by its full path.** macOS's login shell reorders
  *   PATH (`path_helper`) and puts the managed toolchain behind Homebrew and
  *   version-manager shims, so a bare name reaches whatever the user installed.
- *   That is how a user's own 2.x `opencode` received 1.x's `--model` and
- *   printed its usage instead of starting.
- * - **`--standalone`.** Without it the 2.x TUI starts or joins a background
+ * - **`--standalone`.** Without it the TUI starts or joins a background
  *   service that outlives the tab and keeps whatever environment it was first
  *   started with.
- * - **The model through `OPENCODE_CONFIG_CONTENT`.** The 2.x TUI has no
- *   `--model` (only `opencode run` does); a `model` in inline config selects it
- *   (verified on 2.2.6). The reasoning level stays out, as it does for 1.x.
- * - **The host 2.x server's storage and configuration** (`server.ts`): the
- *   same private database (so sign-ins Orkestrator mirrors into it reach the
- *   tab, and the user's `opencode.db` is never migrated), config directory,
- *   flags and autoupdate guard. Server credentials a shell may export are
- *   unset, and a user `OPENCODE_CONFIG` reaches 2.x only as its mirror.
+ * - **The model through `OPENCODE_CONFIG_CONTENT`.** The TUI has no `--model`
+ *   (only `opencode run` does); a `model` in inline config selects it
+ *   (verified on 2.2.6). The reasoning level stays out.
+ * - **The host server's storage and configuration** (`server.ts`): the same
+ *   private database (so sign-ins Orkestrator makes reach the tab, and the
+ *   user's own `opencode.db` is never migrated), config directory, flags and
+ *   autoupdate and file-watcher guards. Server credentials a shell may export
+ *   are unset, and a user `OPENCODE_CONFIG` reaches OpenCode only as its
+ *   mirror.
  */
-import { resolveOpenCodeProtocol } from "@orkestrator/protocol/opencode-protocol";
 import { quoteShell } from "../commands-agent-support.js";
-import { OPENCODE2_FLAGS, openCode2HostPaths } from "./server.js";
+import { OPENCODE2_DISABLE_FILEWATCHER, OPENCODE2_FLAGS, openCode2HostPaths } from "./server.js";
 
 /** Shell variables that must not reach a 2.x terminal TUI or its private server. */
 const UNSET_IN_TERMINAL = [
@@ -55,6 +53,7 @@ export function buildOpenCode2TerminalCommand(input: OpenCode2TerminalLaunchInpu
     ["OPENCODE_FLAGS", OPENCODE2_FLAGS],
     ["OPENCODE_DB", paths.database],
     ["OPENCODE_CONFIG_DIR", input.configDir],
+    ...Object.entries(OPENCODE2_DISABLE_FILEWATCHER),
   ];
   if (input.mirroredUserConfig) assignments.push(["OPENCODE_CONFIG", paths.customConfig]);
   const model = input.model && input.model !== "default" ? input.model : undefined;
@@ -84,7 +83,7 @@ export function buildOpenCode2TerminalCommand(input: OpenCode2TerminalLaunchInpu
   return `( OPENCODE_CONFIG_CONTENT="${merged}" && export OPENCODE_CONFIG_CONTENT && ${command} )`;
 }
 
-/** Shown in the tab, instead of a launch, when the setting asks for 2.x and none is installed. */
+/** Shown in the tab, instead of a launch, when the managed binary is not installed. */
 export function openCode2TerminalUnavailableCommand(message: string): string {
   return `printf '%s\\n' ${quoteShell(message)}`;
 }
@@ -93,7 +92,6 @@ export interface OpenCode2TerminalContext {
   storage: {
     getDataDir(): string;
     getEnvironment(id: string): Promise<{ environmentType?: string } | null>;
-    loadConfig(): Promise<{ global: { openCodeProtocol?: unknown } }>;
   };
   /** The managed `opencode2`, or undefined when the toolchain has none. */
   resolveCliPath(): string | undefined;
@@ -104,36 +102,26 @@ export interface OpenCode2TerminalContext {
 }
 
 /**
- * The line a new OpenCode tab of this local environment runs instead of the
- * 1.x launch, or undefined to keep 1.x: the setting is off, the environment is
- * not a local one, or either could not be read (the same default
- * `selectNewOpenCodeSessionProtocol` keeps). With the setting on and no
- * managed 2.x binary, the tab says so rather than running a 1.x it was not
- * asked for.
+ * The line a new OpenCode tab of this local environment runs, or undefined
+ * for a tab that is not a local environment's (or whose environment could not
+ * be read), which keeps the renderer's line. With no managed binary the tab
+ * says so rather than running whatever `opencode` the user installed.
  */
 export async function resolveOpenCode2TerminalCommand(
   context: OpenCode2TerminalContext,
   environmentId: string,
   launch: { model?: string; initialPrompt?: string },
 ): Promise<string | undefined> {
-  let wantsV2: boolean;
   try {
-    const [environment, config] = await Promise.all([
-      context.storage.getEnvironment(environmentId),
-      context.storage.loadConfig(),
-    ]);
-    wantsV2 =
-      environment?.environmentType === "local" &&
-      resolveOpenCodeProtocol(config.global.openCodeProtocol) === "v2";
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (environment?.environmentType !== "local") return undefined;
   } catch {
     return undefined;
   }
-  if (!wantsV2) return undefined;
   const cliPath = context.resolveCliPath();
   if (!cliPath) {
     return openCode2TerminalUnavailableCommand(
-      "OpenCode 2 is not installed yet. Restart Orkestrator to finish downloading it, " +
-        "or turn off “Use OpenCode 2 for new sessions” in Settings.",
+      "OpenCode is not installed yet. Restart Orkestrator to finish downloading it.",
     );
   }
   const env = context.env ?? process.env;

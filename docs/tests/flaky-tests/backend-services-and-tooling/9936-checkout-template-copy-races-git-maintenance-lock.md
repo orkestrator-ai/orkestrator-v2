@@ -35,6 +35,32 @@ the aggregate runner reran it alone (0.6 to 2.2 s). A second complete
 `mise run test` on the same tree passed (exit 0, 265.4 s) with no
 `maintenance.lock` error.
 
+## Recurrence 2026-11-11
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; observed on branch
+  `macos-watch-churn-47b622d64a81-r1` at `ea553276d`, which changes the
+  worktree watcher and touches neither the fixture nor the failing tests.
+  `mise run flaky:recurrence -- 9936 --base 498b68766`: open, record it.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+  default-tests-skip-guards -- mise run test` on macOS, git 2.56.0, while
+  other worktrees' aggregate runs held the host (the groups queued 1,250 s).
+  Backend group: 18,340 pass, 200 skip, 5 fail. Four of the five failed with
+  this `maintenance.lock` error, at 290 to 400 ms:
+  `real scoped credentials prompt and launch jobs in leaf-only environments
+  with durable delegations` (`control-mcp-node-auth.test.ts`), `one failing
+  delegation > does not stop the wakes behind it`
+  (`coordinator-delegation-wakes.test.ts`), `a command node's coordinator
+  sending to a leaf > an agent tab there can open the image from the path its
+  own node wrote` (`coordinator-mail-attachments-nodes.test.ts`) and `backend
+  init resumes persisted AGENTS.md approval once and mails the result`
+  (`index-agents-md-recovery.test.ts`). The fifth was flake 4843's loopback
+  listener.
+- **Rerun alone:** the five owning files with `--parallel=1`: 85 pass, 1 fail.
+  `control-mcp-node-auth.test.ts` failed again with the same error (419 ms),
+  so a single file on a loaded host is enough; the other three passed.
+- **Evidence:** `orkestrator-test-run.tOQhj5` and `orkestrator-test-run.WIUK3M`
+  under the host temporary directory.
+
 ## Hypothesis
 
 `committedCheckoutTemplate` runs `git commit` in the template. Git then

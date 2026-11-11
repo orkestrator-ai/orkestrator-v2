@@ -63,11 +63,28 @@ beforeAll(async () => {
   owner = dockerOwnerNamespace(dataDir);
 });
 
+/**
+ * Container processes recorded before a rootless live-restore daemon restart
+ * that the restart case has not reaped yet. The new daemon does not know them,
+ * so removing the labelled resources would leave them running; afterAll reaps
+ * them first when the case failed between the restart and its own reap.
+ */
+const unreapedOrphans: ContainerProcess[][] = [];
+
 afterAll(async () => {
   if (!ENABLED) return;
+  // A reap failure is reported after the resources are removed, so it neither
+  // skips that cleanup nor replaces the case's own failure.
+  let reapError: unknown = null;
+  for (const recorded of unreapedOrphans.splice(0)) {
+    await reapOrphanedContainers(recorded).catch((error: unknown) => {
+      reapError ??= error;
+    });
+  }
   const leftovers = await removeLabelledResources(docker, [`label=orkestrator-owner=${owner}`]);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
   expect(leftovers).toEqual([]);
+  if (reapError) throw reapError;
 }, 180_000);
 
 function conditionsContext(environments: Environment[]) {
@@ -738,6 +755,9 @@ describe("Docker daemon restart", () => {
       // 2. Running when the daemon restarts.
       const gatewayStarted = await docker(["inspect", "-f", "{{.State.StartedAt}}", gateway]);
       const before = await containerProcesses([gateway, containerId]);
+      // Registered before the restart: a rootless restart can orphan these
+      // processes even when the restart command itself then fails.
+      if (liveRestore && rootless) unreapedOrphans.push(before);
       await restartDaemon();
       if (liveRestore && rootless) {
         // A rootless restart replaces RootlessKit, its user and network
@@ -763,6 +783,7 @@ describe("Docker daemon restart", () => {
           });
         }
         const orphaned = await reapOrphanedContainers(before);
+        unreapedOrphans.splice(unreapedOrphans.indexOf(before), 1);
         await evidence("rootless-live-restore-restart", {
           containers: before.length,
           orphaned: orphaned.length,

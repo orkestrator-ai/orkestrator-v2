@@ -345,7 +345,10 @@ Steps:
 - Task 2: reproduce `device or resource busy` on a host that fails
   (beelink2), on both image stores, then build the delivery fix and its
   live case.
-- Task 4: measure what each retry draws, then pick the fix.
+- Task 4: build the fix (recommended: on a rootless daemon the backend
+  chooses each automatic host port itself), its unit test, and a
+  qualification on a disposable rootless daemon with host listeners holding
+  the next automatic ports.
 
 ## Assumptions and decisions
 

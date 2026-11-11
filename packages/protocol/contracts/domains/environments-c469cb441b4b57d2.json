@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 1,
+  "domain": "environments",
+  "version": 2,
+  "min": 1,
+  "commands": {
+    "acknowledge_startup_agent_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:13b505854c13b8ea36caf530d0ca10c20f84ce3b7e962bef05fed2f0d076d676",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "apply_environment_allowed_domains": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:3278a466d8326d281a8faeaab2216231c5dd1881139fbefa26026d82f8148962"
+    },
+    "approve_environment_setup": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d452c8b699a94a6d62ab80a143b4db9aacc86afaf6f67cbd959dabae81662723",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "approve_project_setup_commands": {
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ef6ab6d500830c76d3e782b28892e06191f4ecea109c7797e17d0e75f1380d20",
+      "resultDigest": "sha256:569716d87285d5f3b7ab931bcc19b8e32c9ebfa79a75e4ae13b173c4e486ce27"
+    },
+    "await_environment_setup_session": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:51354a1bc1b59be82c0189bf4413e5fe03c0091129dfba51b7a73a284ddef82c",
+      "resultDigest": "sha256:fd8abf1a20769639f35720dd02e27a881cc81b6f2202f3d862836c60cd8abaab"
+    },
+    "cancel_container_operation": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d57d18115cb2311d9cc6a7a75bbdebab6d7ac2d44291d2a354ca4342feacb7fa",
+      "resultDigest": "sha256:4b93a637d0c8d659cbcc56985700775d988195cbcb50357b803138b3c40e0395"
+    },
+    "cleanup_logs": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
+    },
+    "clear_environment_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "create_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [
+        "controlRequestFingerprint",
+        "controlRequestId",
+        "delegationBaseBranch",
+        "delegationBaseCommit"
+      ],
+      "argsDigest": "sha256:bee6bbcf452d3750491fb0fcd6e458ecf6ab094a8a65fed30ee334d09c914017",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "delete_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "discard_recovery_copy": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:d4e9cdfebfee60a3d007d27a8137f3054227f69feacb24d051bcea955db73093",
+      "resultDigest": "sha256:f2ee1e323f9821c2cf4b25433133cdc022d3cb759742b69789fe3e96d1356c3f"
+    },
+    "ensure_environment_setup": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:8196bf1ffa83746e662c051d5554ba6d59464f056572716e6ddff25e183271c4"
+    },
+    "ensure_project_home_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "fork_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:90f451dcf4d1e367aee589a140729726159b5bdfe446ddfa26415b2d97bf0524",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "get_claude_terminal_state": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
+      "resultDigest": "sha256:26b675706c0e4a025fc126b4e797a21d9e22b3af725759f3bff38dfb7b9ad807"
+    },
+    "get_container_lifecycle_snapshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:a599e1521dde9622563aafd4b4faf854cb511d40e184f159a35b57d08d5b6c96"
+    },
+    "get_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1ad6150828a7c4a44fe35814ac78ca5f80c7c9ccb19a27fa22631d0422f4a87e",
+      "resultDigest": "sha256:f5d9c14f10ba0397cbc7ec9514b64e7da19d169257d68e86b69b73ba52755778"
+    },
+    "get_environment_extensions": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:3e64d00aedb82129d3e7fdf2240874636ab137d11d8b4ca7f551a05f43d8e60b",
+      "resultDigest": "sha256:5532e4c6ba9e5795344dbb1e1aa4ff5c4378c84bfed1cb4f1d67d7a817273961"
+    },
+    "get_environment_inputs": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:6bc946eff20c8a4a63539cadda8be0903b4fada440cbc57ef785bfe379e89088"
+    },
+    "get_environment_network_policy": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:d58778e36e76e168602ed3de75b5c588c7f964f994827d355467cdff1eb20e2e"
+    },
+    "get_environment_pr_health": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:36cfd797af18c768a69b89c1e011d433eabf458eac2163429ac2f50bd90555a7",
+      "resultDigest": "sha256:4ccc69d65476e951e82796efb39f9d1a5466dc97db489d206dd5040d9f670514"
+    },
+    "get_environment_pr_url": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
+    },
+    "get_environment_resources": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:16a1862c2928ddcd7a3cb713169a05cc3b5216a5e38962e4a4377c05e1dbea18"
+    },
+    "get_environment_setup_approval": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:9cdfca57fd85adcf05634e16c271675113049b3968df624531ec58f3bb6cf8b7"
+    },
+    "get_environment_snapshot": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:ca1273747992fad02a97eb86bc24c5a002b695e68c757068262be47667cd1900"
+    },
+    "get_environment_snapshots": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:45bf7fed68034907c8a12fe893cf997ff2cb5002d22e11ea6952da5b7bb33578",
+      "resultDigest": "sha256:ffcf3d3b887dedf7fdb283ab7f78f1db701dd9d8d4344cc1a1036950a45318fa"
+    },
+    "get_environment_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:a5febf33ba73a92a8452ccdba1fdb6863b869de29de2e89a072ba969cd16fe9f"
+    },
+    "get_environments": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a73d95bae8254dd5cd7f28963c13c672a25901c6b45aaf4d4592ad09f6cecbe1",
+      "resultDigest": "sha256:d8afb3f7a3d6d9d468391b9b5df0e4df6da4f954f9bb5852a6630cfc2e0ed0f2"
+    },
+    "get_log_directory": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "get_log_storage_stats": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
+    },
+    "get_rebuild_preview": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:4411dc610e46d0955fd9d14c733caa59fe5126131c9ea87d885a2eae70bffcd2"
+    },
+    "list_recovery_copies": {
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:c46b25fdd632416a6468ba8d538b6636275615c3276615e08bbbe672599786f2",
+      "resultDigest": "sha256:061d7106f23a0b0aa97bbf0a70037da1533c9a0ce3d2d8416c61c460e05afc55"
+    },
+    "move_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:23c5786232d7494ec42234ee1fcddd373c357df6fb7cc6107bdce2d3655d7b55",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "override_environment_setup": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "prepare_environment_first_prompt": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8793b09b351fecd31ff0172e3619b69b97d6b75712261eeb9bb8af265c69914a",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "reconcile_orphaned_tab_resources": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:45d23b30717db46cf5a184ef0fe6452b35167a07b3af2e10e9b6a643377f3507"
+    },
+    "reconcile_pending_environment_renames": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:39d14c382eecb1e5158c2cf7321a1f3fca16a94d99c842393eefda08ae177697"
+    },
+    "reconcile_tab_teardowns": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:4f7e71f328c2925c82e754a4ba71b769190415cf84744f50715ef0dae9184956"
+    },
+    "recreate_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedContainerId", "expectedRevision", "keepRecoveryCopy", "operationId"],
+      "argsDigest": "sha256:cac0e9d25111f53afb60b84295c961937f0c05fc91fa6e23aeac95fe72d3733d",
+      "resultDigest": "sha256:d53181f71d5554335901e0fe8ba8af7322369b097aefbe939525abd6489d3c8c"
+    },
+    "remove_environment_domains": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
+    "rename_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:d8a8a29c2ff9ad94fd73232c83ef5acf5deb76890f273ebae0a63328588ced6b",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "rename_environment_from_prompt": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8793b09b351fecd31ff0172e3619b69b97d6b75712261eeb9bb8af265c69914a",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "reorder_environments": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:36cfd797af18c768a69b89c1e011d433eabf458eac2163429ac2f50bd90555a7",
+      "resultDigest": "sha256:d8afb3f7a3d6d9d468391b9b5df0e4df6da4f954f9bb5852a6630cfc2e0ed0f2"
+    },
+    "resolve_container_operation": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2fd2cb88b090dd7e9d9835d43eb890327b0e1b2e9086c55df8deff76a5e6770d",
+      "resultDigest": "sha256:ca1273747992fad02a97eb86bc24c5a002b695e68c757068262be47667cd1900"
+    },
+    "restore_provider_credentials": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:639572650478a4ec4806573643f680bade61f70b8762911854717559a5276a32",
+      "resultDigest": "sha256:a00f8c19b928a8dc2f1cc672af387e2117a2dc96e73cf730a382301e6d4e187f"
+    },
+    "restore_recovery_copy": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedContainerId", "expectedRevision", "operationId"],
+      "argsDigest": "sha256:ff759f4765ddb88913c9d4437552c1b13dce42c757229dbb64a20e7aaf4f8117",
+      "resultDigest": "sha256:d53181f71d5554335901e0fe8ba8af7322369b097aefbe939525abd6489d3c8c"
+    },
+    "revoke_provider_credentials": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:639572650478a4ec4806573643f680bade61f70b8762911854717559a5276a32",
+      "resultDigest": "sha256:eab9418f42f9f284fc250460c3d2166a2e08438aef668067bbe5007f914e1742"
+    },
+    "run_environment_setup": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "set_container_resource_limits": {
+      "since": 1,
+      "access": "admin",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:2b7014995cd4efb0513548f45c2bf2c543d4fe5cbc57ae1ebe3d8bada3706657",
+      "resultDigest": "sha256:f1abc139eb826ffd2ea528bb0cf6357f6253196f53c28a8faed9ea0473f3d6ff"
+    },
+    "set_environment_pr": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:db4d50ea051f2c51d71fb7c3beacfe5bc0f045481e74415d8af04644080b5bba",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "start_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:8196bf1ffa83746e662c051d5554ba6d59464f056572716e6ddff25e183271c4"
+    },
+    "start_environment_background": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "stop_environment": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "operationId"],
+      "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
+      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "sync_all_environments_with_docker": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
+    },
+    "sync_environment_status": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "teardown_tab": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:9a7f3a085e3fe339f65aa0e438a743872f2d5a86184d90cdb504890c8e5154bf",
+      "resultDigest": "sha256:41694c195a4503903c46e6d7f016964f8520cbfe23a0c0d22a23a5610f624b17"
+    },
+    "update_environment_agent_settings": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b25ea5ec6f99407a81468dea51b95d301e2c133c8130a1ea84dcd213102bb519",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "update_environment_allowed_domains": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:4dab0ec70a34d22f586073493d4f555ccc4736438424c4da668bdcd612eb33de",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    },
+    "update_environment_resources": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6cce88b3b64975aed9f6e580cac0fdba81569a16bc48dd4a6b0687c948a54205",
+      "resultDigest": "sha256:16a1862c2928ddcd7a3cb713169a05cc3b5216a5e38962e4a4377c05e1dbea18"
+    },
+    "update_port_mappings": {
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:b48af2564b9f6228e3907d6a0327f89d6216d96e18fc02b4d43b5c89a10e4d01",
+      "resultDigest": "sha256:d78603c03cbd4b1e1eed20068d0b12ebcdc72f39574c05432c0da441da955eb1"
+    }
+  }
+}

@@ -344,8 +344,9 @@ the spec sets two test-only timings (from to-do 7569, retired 2026-11-11):
 - **Backend periods.** `<data dir>/agent-test-fixtures/timing.json`, with
   `containerTreeMaxAgeMs` (500–10 000 ms), `webAnnotationGcEveryTicks`
   (1–100 reconcile ticks of 3 s) and `coordinatorRepairIntervalMs`
-  (1 000–60 000 ms, the delay before the next pass that closes a stopped
-  worker's delegation; the pass already scheduled keeps its delay), read by
+  (1 000–60 000 ms, the period between the passes that close a stopped
+  worker's delegation; the job checks it every second, so a new value applies
+  within a second rather than after the pass already scheduled), read by
   `apps/backend/src/core/agent-test-timing.ts`. It exists only where the
   dispatch hold does (a source-run backend of flavor `agent-test` with
   `ORKESTRATOR_AGENT_TEST_ISOLATED=1` and a non-default data directory), is
@@ -658,12 +659,13 @@ On Linux an agent-test profile's Electron, and everything it starts, also runs
 with a core file size limit of 0, set by the launcher for that process tree
 only. A host whose `kernel.core_pattern` is a relative name such as `core`
 writes a crashing process's dump into its working directory, which for a
-profile is the checkout: untracked, one `git add -A` from a commit. A crash
+profile is the checkout: about a gigabyte of disk per crash (`.gitignore`
+ignores `core.<pid>`, so it cannot be committed by accident). A crash
 still shows in `electron.log` (Chromium's `FATAL` line, and
 `.../electron exited with signal SIGTRAP`), and systemd-coredump still records
 it in the journal. To keep the dumps for a diagnosis, start the profile with
 `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1`; they then land in the checkout root as
-`core.<pid>`, so move them out before any `git add`. `headless-profile.spec.ts`
+`core.<pid>`; delete them when you are done. `headless-profile.spec.ts`
 checks the limit on each run. `mise run dev` and macOS keep their usual limit.
 
 Do not use a headless profile for native-window, menu or clipboard QA:

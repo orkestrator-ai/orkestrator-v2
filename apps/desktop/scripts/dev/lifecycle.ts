@@ -649,8 +649,8 @@ const NO_CORE_DUMPS_SCRIPT = 'ulimit -c 0 && exec "$0" "$@"';
  * runs with a core file size limit of 0, inherited by everything it starts.
  * When the host's `kernel.core_pattern` is a relative name such as `core`, a
  * crash writes its dump (about 1 GB for Electron) into the crashing process's
- * working directory, which for a profile is the checkout: untracked, one
- * `git add -A` from a commit, and a gigabyte of disk per crash. The limit is
+ * working directory, which for a profile is the checkout: a gigabyte of disk
+ * per crash (`.gitignore` keeps `core.<pid>` out of commits). The limit is
  * per process and changes nothing on the host. With systemd-coredump the
  * journal still records the crash, and Chromium's own `FATAL` line still
  * reaches `electron.log`. `ORKESTRATOR_AGENT_TEST_CORE_DUMPS=1` keeps the

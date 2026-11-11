@@ -17,13 +17,16 @@ import {
 import { coordinatorTurn } from "./coordinator-live-orchestration.js";
 import {
   evaluateSurfacesScenario,
+  launchedTabId,
   rootChangesRequestId,
   SURFACES_TOOLS,
   surfacesPrompt,
   surfacesRootFile,
+  surfacesTerminalSessionId,
   surfacesWorkerInput,
   surfacesWorkerName,
   type SurfacesProbe,
+  terminalShowsMarker,
 } from "./coordinator-live-surfaces.js";
 
 /** One `list_node_action_requests` row, as far as the harness reads it. */
@@ -60,6 +63,8 @@ export async function runSurfacesScenario(input: {
   pollIntervalMs?: number;
   /** How long the harness watches for a second wake after the first (default 30 s). */
   quietMs?: number;
+  /** How long the harness waits for the terminal's echoed marker after the turn (default 30 s). */
+  terminalWaitMs?: number;
 }) {
   const { coordinator, summary, cleanup, checkout } = input;
   const { invoke, identity, projectId } = coordinator;
@@ -126,6 +131,7 @@ export async function runSurfacesScenario(input: {
   let rowsBefore = watch.projection()?.messages.length ?? 0;
   let outputs: Partial<Record<(typeof SURFACES_TOOLS)[number], string[]>> = {};
   let layoutAfter: unknown = null;
+  let terminalOutput: string | null = null;
   let request: ActionRequestRow | undefined;
   let approved = false;
   let approvedAt: number | undefined;
@@ -142,6 +148,25 @@ export async function runSurfacesScenario(input: {
         ),
       ),
     );
+    // The tab opening is not the command running: read the tab's output
+    // until the line its `echo` prints shows, or the wait ends. A failed read
+    // leaves the last answer (null if none), which the verdict reports.
+    const terminalTab = (outputs.launch_terminal ?? []).map(launchedTabId).find(Boolean);
+    if (terminalTab) {
+      const sessionId = surfacesTerminalSessionId(worker.id, terminalTab);
+      const terminalDeadline = Date.now() + (input.terminalWaitMs ?? 30_000);
+      for (;;) {
+        const snapshot = await invoke<{ output?: unknown }>("get_terminal_output_snapshot", {
+          sessionId,
+        }).catch(() => null);
+        if (typeof snapshot?.output === "string") terminalOutput = snapshot.output;
+        if (terminalOutput !== null && terminalShowsMarker(terminalOutput, token)) break;
+        if (Date.now() >= terminalDeadline) break;
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(pollMs, Math.max(0, terminalDeadline - Date.now()))),
+        );
+      }
+    }
     layoutAfter = await invoke<unknown>("get_pane_layout", { environmentId: worker.id });
 
     const requestId = (outputs.request_root_changes ?? []).map(rootChangesRequestId).find(Boolean);
@@ -200,6 +225,8 @@ export async function runSurfacesScenario(input: {
       coordinatorEnvironmentId,
       calls: transcriptToolCalls(messages),
       outputs,
+      token,
+      terminalOutput,
       layoutAfter,
       ...(request ? { request } : {}),
       approved,

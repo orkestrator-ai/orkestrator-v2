@@ -13,7 +13,10 @@ import {
   surfacesApplies,
   surfacesPrompt,
   surfacesRootFile,
+  surfacesTerminalMarker,
+  surfacesTerminalSessionId,
   surfacesWorkerInput,
+  terminalShowsMarker,
   toolOutputFailed,
   type SurfacesInput,
 } from "./coordinator-live-surfaces.js";
@@ -70,6 +73,8 @@ function passing(): SurfacesInput {
       edit_worker_tab: ['{"ok":true}', '{"ok":true}'],
       request_root_changes: [JSON.stringify({ approvalRequestId: "request-1" })],
     },
+    token: "t0k3n",
+    terminalOutput: "$ echo surfaces-t0k3n\r\nsurfaces-t0k3n\r\n$ ",
     layoutAfter: {
       root: {
         kind: "leaf",
@@ -119,6 +124,20 @@ describe("evaluateSurfacesScenario", () => {
     expect(checks.find((item) => item.name === "each-tool-called")).toMatchObject({
       passed: false,
       detail: expect.stringContaining("edit_worker_tab 1/2"),
+    });
+  });
+
+  test("a terminal whose echoed marker never printed fails, as does unreadable output", () => {
+    const input = passing();
+    expect(failed({ ...input, terminalOutput: "$ echo surfaces-t0k3n\r\n$ " })).toEqual([
+      "terminal-ran-command",
+    ]);
+    expect(failed({ ...input, terminalOutput: "" })).toEqual(["terminal-ran-command"]);
+    const unread = evaluateSurfacesScenario({ ...input, terminalOutput: null });
+    expect(unread.find((item) => item.name === "terminal-ran-command")).toEqual({
+      name: "terminal-ran-command",
+      passed: false,
+      detail: "no terminal output could be read",
     });
   });
 
@@ -286,5 +305,33 @@ describe("surfaces helpers", () => {
       { id: "y", paneId: "b", selected: false },
     ]);
     expect(layoutTabs(null)).toEqual([]);
+  });
+});
+
+describe("terminal marker", () => {
+  test("only the printed line counts, not the typed command", () => {
+    expect(surfacesTerminalMarker("t0k3n")).toBe("surfaces-t0k3n");
+    expect(terminalShowsMarker("$ echo surfaces-t0k3n", "t0k3n")).toBe(false);
+    expect(terminalShowsMarker("$ echo surfaces-t0k3n\r\nsurfaces-t0k3n\r\n", "t0k3n")).toBe(true);
+    // Another run's marker, or one with extra text, is not this run's.
+    expect(terminalShowsMarker("surfaces-other\r\n", "t0k3n")).toBe(false);
+    expect(terminalShowsMarker("surfaces-t0k3n-extra\r\n", "t0k3n")).toBe(false);
+  });
+
+  test("colour codes and redraws around the line do not hide it", () => {
+    expect(
+      terminalShowsMarker("\x1b[1m$\x1b[0m echo x\r\n\x1b[32msurfaces-t0k3n\x1b[0m\r\n", "t0k3n"),
+    ).toBe(true);
+    expect(terminalShowsMarker("partial\rsurfaces-t0k3n\n", "t0k3n")).toBe(true);
+  });
+
+  test("the session id is the backend's id for a local worker's tab", () => {
+    expect(surfacesTerminalSessionId("worker", "terminal-1")).toBe("local-worker:terminal-1");
+  });
+
+  test("the prompt asks for the marker's echo", () => {
+    expect(
+      surfacesPrompt({ platform: "claude", token: "t0k3n", workerEnvironmentId: "worker" }),
+    ).toContain('command "echo surfaces-t0k3n"');
   });
 });

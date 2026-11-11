@@ -118,6 +118,75 @@ describe("TabLaunchOverrideMarker on another node's tab", () => {
     expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
   });
 
+  test("a command scope opened after the leaf tab mounted marks it", async () => {
+    const windowScope = new WindowScope();
+    const leaf = new FakeNodeClient({
+      nodeId: LEAF,
+      invoke: { [COORDINATOR_LAUNCH_OVERRIDES_COMMAND]: { overrides: [] } },
+    });
+    renderOnLeaf(windowScope, leaf);
+    await waitFor(() => expect(leaf.calls(COORDINATOR_LAUNCH_OVERRIDES_COMMAND)).toHaveLength(1));
+    expect(screen.queryByTestId("tab-launch-override") === null).toBe(true);
+
+    const command = new FakeNodeClient({
+      nodeId: COMMAND,
+      invoke: {
+        [COORDINATOR_LAUNCH_OVERRIDES_COMMAND]: answer([
+          { nodeId: LEAF, environmentId: "worker", tabId: "startup-agent", model: "opus" },
+        ]),
+      },
+    });
+    act(() => {
+      windowScope.open({ role: "command", client: command });
+    });
+    const marker = await screen.findByTestId("tab-launch-override");
+    expect(marker.getAttribute("title")).toContain("opus");
+    expect(command.calls(COORDINATOR_LAUNCH_OVERRIDES_COMMAND)).toHaveLength(1);
+  });
+
+  test("disposing the command scope drops its row; the leaf's own answer stays", async () => {
+    const { windowScope, command, leaf } = scopes(
+      [{ nodeId: LEAF, environmentId: "worker", tabId: "a", model: "opus" }],
+      [{ environmentId: "worker", tabId: "b", reasoning: "max" }],
+    );
+    renderOnLeaf(windowScope, leaf, "a");
+    renderOnLeaf(windowScope, leaf, "b");
+    await waitFor(() => expect(screen.queryAllByTestId("tab-launch-override")).toHaveLength(2));
+
+    act(() => {
+      windowScope.commandScope().dispose();
+    });
+    await waitFor(() => expect(screen.queryAllByTestId("tab-launch-override")).toHaveLength(1));
+    expect(screen.getByTestId("tab-launch-override").getAttribute("title")).toContain("max");
+    expect(command.disposed).toBe(true);
+  });
+
+  test("a replacement command scope's answer replaces the old one's row", async () => {
+    const { windowScope, leaf } = scopes([
+      { nodeId: LEAF, environmentId: "worker", tabId: "startup-agent", model: "opus" },
+    ]);
+    renderOnLeaf(windowScope, leaf);
+    const first = await screen.findByTestId("tab-launch-override");
+    expect(first.getAttribute("title")).toContain("opus");
+
+    const replacement = new FakeNodeClient({
+      nodeId: "bk_command-2" as BackendId,
+      invoke: {
+        [COORDINATOR_LAUNCH_OVERRIDES_COMMAND]: answer([
+          { nodeId: LEAF, environmentId: "worker", tabId: "startup-agent", model: "sonnet" },
+        ]),
+      },
+    });
+    act(() => {
+      windowScope.commandScope().dispose();
+      windowScope.open({ role: "command", client: replacement });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("tab-launch-override").getAttribute("title")).toContain("sonnet"),
+    );
+    expect(replacement.calls(COORDINATOR_LAUNCH_OVERRIDES_COMMAND)).toHaveLength(1);
+  });
+
   test("a lone leaf scope with no command scope reads only its own node", async () => {
     const windowScope = new WindowScope();
     const leaf = new FakeNodeClient({

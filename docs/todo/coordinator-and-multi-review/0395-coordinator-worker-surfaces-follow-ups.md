@@ -498,7 +498,10 @@ clicks **Apply** in the root-changes dialog. Choices the file left to me:
   agent's own billed turns, and the checklist's 0142 item already runs them on
   real providers.
 - **What passes:** every call made and without an error result; `list_tabs`
-  shows both new tabs; afterwards the layout keeps the terminal tab selected
+  shows both new tabs; the terminal tab's output (`get_terminal_output_snapshot`,
+  read for up to 30 seconds after the turn) shows the run's `surfaces-<token>`
+  marker as a whole printed line, so a tab that opens without running its
+  command fails (added after Multi Review round 1); afterwards the layout keeps the terminal tab selected
   and holds no coordinator browser tab; the request reaches `executed` after
   the dialog's Apply; the file is in the worker byte for byte; the checkout's
   digest (files and Git state) is unchanged; one system message and exactly

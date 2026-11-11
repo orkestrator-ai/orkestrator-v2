@@ -81,6 +81,10 @@ type Script = {
   touchesCheckout?: boolean;
   /** The coordinator never calls `request_root_changes`. */
   noRequest?: boolean;
+  /** The terminal tab opens but its command never runs: only the prompt and the typed line show. */
+  commandNeverRan?: boolean;
+  /** No terminal output can be read at all. */
+  terminalUnreadable?: boolean;
 };
 
 function fixture(script: Script = {}) {
@@ -169,6 +173,16 @@ function fixture(script: Script = {}) {
       }
       case "list_node_action_requests":
         value = requests.map((request) => ({ ...request }));
+        break;
+      case "get_terminal_output_snapshot":
+        if (script.terminalUnreadable || args.sessionId !== `local-worker:${terminalTab}`) {
+          throw new Error("no such terminal session");
+        }
+        value = {
+          output: script.commandNeverRan
+            ? `\x1b[1m$\x1b[0m echo surfaces-${token}`
+            : `\x1b[1m$\x1b[0m echo surfaces-${token}\r\n\x1b[32msurfaces-${token}\x1b[0m\r\n\x1b[1m$\x1b[0m `,
+        };
         break;
       case "get_pane_layout":
         value = {
@@ -286,6 +300,7 @@ async function run(script: Script = {}) {
       token,
       pollIntervalMs: 1,
       quietMs: 25,
+      terminalWaitMs: 25,
     });
     return { ...result, world };
   } finally {
@@ -333,6 +348,25 @@ test("a second wake in the quiet window fails", async () => {
 test("a browser tab left open fails", async () => {
   const { checks } = await run({ browserLeftOpen: true });
   expect(names(checks)).toEqual(["browser-closed"]);
+});
+
+test("a terminal tab whose command never ran fails, though the tab exists and is focused", async () => {
+  const { checks, world } = await run({ commandNeverRan: true });
+  expect(names(checks)).toEqual(["terminal-ran-command"]);
+  expect(checks.find((item) => item.name === "terminal-ran-command")?.detail).toBe(
+    "the echoed marker never appeared",
+  );
+  expect(
+    world.commands.filter((command) => command === "get_terminal_output_snapshot").length,
+  ).toBeGreaterThan(1);
+});
+
+test("terminal output that cannot be read fails rather than passing", async () => {
+  const { checks } = await run({ terminalUnreadable: true });
+  expect(names(checks)).toEqual(["terminal-ran-command"]);
+  expect(checks.find((item) => item.name === "terminal-ran-command")?.detail).toBe(
+    "no terminal output could be read",
+  );
 });
 
 test("an approval that also changed the checkout fails", async () => {

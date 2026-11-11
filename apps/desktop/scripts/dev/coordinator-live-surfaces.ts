@@ -1,5 +1,6 @@
 import type { AgentInteractionKind } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { normalizeTerminalText } from "@orkestrator/protocol/human-prompts";
 import {
   escapedInteractionFailures,
   type CoordinatorLiveCheck,
@@ -26,8 +27,9 @@ import {
  * with the outcome.
  *
  * Passing means: every call returned without error; `list_tabs` listed both
- * tabs the turn opened; afterwards the worker's layout holds the terminal tab,
- * selected, and no longer the browser tab; the request was approved and ran;
+ * tabs the turn opened; the terminal tab's output shows the line its `echo`
+ * printed (so the command ran, not only the tab opened); afterwards the
+ * worker's layout holds the terminal tab, selected, and no longer the browser tab; the request was approved and ran;
  * the file landed in the worker byte for byte; the checkout is unchanged; one
  * wake followed the approval; nothing escaped the coordinator policy.
  *
@@ -86,6 +88,31 @@ export function surfacesTerminalTitle(token: string): string {
   return `surfaces-terminal-${token}`;
 }
 
+/** The line the terminal's `echo` prints; the command line itself also carries `echo`. */
+export function surfacesTerminalMarker(token: string): string {
+  return `surfaces-${token}`;
+}
+
+/**
+ * The terminal session of a tab in the surfaces worker, which is always local
+ * (`surfacesWorkerInput`); the same id `terminalSessionId` gives the backend.
+ */
+export function surfacesTerminalSessionId(workerEnvironmentId: string, tabId: string): string {
+  return `local-${workerEnvironmentId}:${tabId}`;
+}
+
+/**
+ * Whether raw terminal output shows `token`'s marker as a whole line of what a
+ * person would see. A whole line, so the echoed command (`$ echo surfaces-…`)
+ * does not count: only the line the command printed does.
+ */
+export function terminalShowsMarker(output: string, token: string): boolean {
+  const marker = surfacesTerminalMarker(token);
+  return normalizeTerminalText(output)
+    .split("\n")
+    .some((line) => line.trim() === marker);
+}
+
 /** `create_environment` arguments for the worker: ordinary, local, no agent. */
 export function surfacesWorkerInput(input: {
   projectId: string;
@@ -109,7 +136,7 @@ export function surfacesPrompt(probe: SurfacesProbe): string {
     HARNESS_PREAMBLE,
     "",
     "Call these Orkestrator tools once each, in this order, and nothing else. Use a fresh requestId wherever a tool takes one.",
-    `1. launch_terminal with ${worker}, tabType "plain", title "${surfacesTerminalTitle(probe.token)}" and command "echo surfaces-${probe.token}". Note the tabId it returns.`,
+    `1. launch_terminal with ${worker}, tabType "plain", title "${surfacesTerminalTitle(probe.token)}" and command "echo ${surfacesTerminalMarker(probe.token)}". Note the tabId it returns.`,
     `2. open_worker_browser with ${worker} and url "${SURFACES_BROWSER_URL}". Nothing serves that address; the tab opens anyway.`,
     `3. list_tabs with ${worker}. Note the id of the browser tab step 2 opened.`,
     `4. edit_worker_tab with ${worker}, the terminal tab's tabId from step 1 and operation "focus".`,
@@ -193,6 +220,13 @@ export interface SurfacesInput {
   calls: readonly ReadOnlyToolCall[];
   /** Each tool's results in the surfaces turn, fetched behind their detail references. */
   outputs: Partial<Record<(typeof SURFACES_TOOLS)[number], string[]>>;
+  /** The run's token, which the terminal's echoed marker carries. */
+  token: string;
+  /**
+   * The terminal tab's raw output, read after the turn until the marker showed
+   * or the wait ended; null when no read answered. Never logged or reported.
+   */
+  terminalOutput: string | null;
   /** The worker's layout once the surfaces turn ended. */
   layoutAfter: unknown;
   /** The approval request as the backend reads it once settled. */
@@ -281,6 +315,20 @@ export function evaluateSurfacesScenario(input: SurfacesInput): CoordinatorLiveC
       "list-tabs-shows-opened",
       terminalTab !== null && listed.includes(`"${terminalTab}"`) && listedBrowser.length > 0,
       `terminal ${terminalTab ? (listed.includes(`"${terminalTab}"`) ? "listed" : "not listed") : "unknown"}, ${listedBrowser.length} coordinator browser tabs listed`,
+    ),
+  );
+
+  const ranCommand =
+    input.terminalOutput !== null && terminalShowsMarker(input.terminalOutput, input.token);
+  checks.push(
+    check(
+      "terminal-ran-command",
+      ranCommand,
+      input.terminalOutput === null
+        ? "no terminal output could be read"
+        : ranCommand
+          ? undefined
+          : "the echoed marker never appeared",
     ),
   );
 

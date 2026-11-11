@@ -2583,6 +2583,10 @@ no credentials and no billed turn. Two layers:
   `steer` case (a prompt queued from the composer during a running shell
   call was steered in 343 ms; the turn ended on the steer's reply and never
   the first prompt's, and the steer showed once, live and after a reload).
+  Rerun the same day through the new `mise run verify:opencode2:real-stack`
+  (profile `oc2-rs-a3166`, stopped and reset afterwards): all six cases
+  passed on `v2`, and the backend log showed two `host-server.ready` lines
+  from `native-agent.opencode2`.
 
 The qualification list, item by item:
 

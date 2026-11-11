@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
+import {
+  ARTIFACT_TOOL_POLICY,
+  STATIC_PRESENTATION_POLICY,
+} from "@orkestrator/protocol/rich-content-policy";
 import { ARTIFACT_VERSIONS, type ArtifactKind } from "@orkestrator/protocol/transcript-artifacts";
 import { referencedAssets } from "./gc.js";
 import { conversationKeyForTab } from "./owner.js";
@@ -285,6 +288,32 @@ describe("artifact lifecycle per kind", () => {
     } finally {
       store.writeAsset = writeAsset;
     }
+  });
+
+  test("a static document its card cannot display stores no document text (5780 review)", async () => {
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const searchTextOf = (publicationId: string) =>
+      h.service.readRepresentation({ ...scope, publicationId, representation: "search-text" });
+    h.runner.staticSearchText = "Text a card shows only as its saved preview";
+    // Inlined offline assets can take the effective document past the inline budget.
+    h.runner.staticEffectiveHtml = `<p>${"x".repeat(STATIC_PRESENTATION_POLICY.maxDocumentBytes)}</p>`;
+    const overBudget = await createPreviewPublish("html-static");
+    await expect(searchTextOf(overBudget.published.publicationId)).rejects.toMatchObject({
+      error: { code: "invalid_input" },
+    });
+    h.runner.staticEffectiveHtml = null;
+    h.runner.staticElementCount = STATIC_PRESENTATION_POLICY.maxElements + 1;
+    const overElements = await createPreviewPublish("html-static");
+    await expect(searchTextOf(overElements.published.publicationId)).rejects.toMatchObject({
+      error: { code: "invalid_input" },
+    });
+    // At the limits the card displays the document, so its text is kept.
+    h.runner.staticElementCount = STATIC_PRESENTATION_POLICY.maxElements;
+    const atLimit = await createPreviewPublish("html-static");
+    expect((await searchTextOf(atLimit.published.publicationId)).data).toBe(
+      "Text a card shows only as its saved preview",
+    );
+    expect(h.service.metrics.total("search_text_unstored")).toBe(0);
   });
 
   test("interactive HTML records the prepared document, probes and a live session", async () => {

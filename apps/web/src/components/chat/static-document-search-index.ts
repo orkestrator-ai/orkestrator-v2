@@ -6,6 +6,7 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import {
   artifactRequestEpoch,
+  artifactSearchBodyWithheld,
   cachedArtifactSearchBody,
   isCurrentArtifactScopeGeneration,
   noteArtifactScopeGeneration,
@@ -44,9 +45,11 @@ import { staticHtmlPresentationSupported } from "./rich/static-html-frame-source
  * its text counts once its card has shown it.
  *
  * Only a document whose card would show it is indexed. A card switched to
- * Saved preview or Source renders no body search root, so its text would be a
- * match Find cannot highlight; such a card is skipped, at offer and again
- * before a read lands (`showsDocument`).
+ * Saved preview or Source renders no body search root, and a card whose read
+ * or frame failed shows its saved preview, so its text would be a match Find
+ * cannot highlight; such a document is skipped, at offer and again before a
+ * read lands (`showsDocument`). The verification stores no text for a
+ * document over the inline budget or element limit, which no card displays.
  */
 export const STATIC_DOCUMENT_INDEX_POLICY = {
   maxDocumentsPerSession: 64,
@@ -66,7 +69,8 @@ const ALWAYS_SHOWS: ShowsDocument = () => true;
 
 /**
  * Whether every remembered card for `ref` in this conversation still shows the
- * document. A card's view choice is kept per occurrence
+ * document: none failed to display it (`withholdArtifactSearchBody`) and none
+ * left the document view. A card's view choice is kept per occurrence
  * (`richArtifactOccurrenceKey`: `["artifact", ...scope, message, publication,
  * artifact, revision]`); a card with no remembered choice shows the document,
  * its default. Any occurrence on Saved preview or Source withdraws the body
@@ -76,6 +80,7 @@ export function cardsShowDocument(
   transcriptScope: RichTranscriptScope | null,
   ref: DocumentRef,
 ): boolean {
+  if (artifactSearchBodyWithheld(ref)) return false;
   const prefix = richScopeKey(transcriptScope);
   for (const [key, state] of useRichContentViewStore.getState().entries) {
     if (state.view === undefined || state.view === "document") continue;

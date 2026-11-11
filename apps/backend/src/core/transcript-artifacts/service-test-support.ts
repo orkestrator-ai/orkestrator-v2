@@ -64,6 +64,10 @@ export class FakePreviewRunner implements PreviewRunner {
   respond: ((job: PreviewJob) => PreviewJobResult | null) | null = null;
   /** The document text a static verification reports, as a worker that reads it would. */
   staticSearchText: string | null = null;
+  /** Overrides a static verification's effective document (e.g. one inlined past the display budget). */
+  staticEffectiveHtml: string | null = null;
+  /** The element count a static verification reports. */
+  staticElementCount = 3;
   /** Current renderer bundle identity per kind (reported in status). */
   bundleHashes: NonNullable<PreviewRunnerStatus["rendererBundleHashes"]> = {
     "html-static": "bundle-1",
@@ -155,7 +159,8 @@ export class FakePreviewRunner implements PreviewRunner {
           ...base,
           kind: "html-static",
           ok: true,
-          effectiveHtml: job.html.replace(/<script[\s\S]*?<\/script>/gi, ""),
+          effectiveHtml:
+            this.staticEffectiveHtml ?? job.html.replace(/<script[\s\S]*?<\/script>/gi, ""),
           captures: [
             {
               png: fakePng(job.html.length),
@@ -171,7 +176,7 @@ export class FakePreviewRunner implements PreviewRunner {
             forbiddenElements: 0,
             executableUrls: 0,
           },
-          elementCount: 3,
+          elementCount: this.staticElementCount,
           ...(this.staticSearchText !== null ? { searchText: this.staticSearchText } : {}),
         };
       case "html-interactive":

@@ -14,6 +14,7 @@ import {
   MERMAID_POLICY,
   PREVIEW_CAPTURE_POLICY,
   STATIC_HTML_POLICY,
+  STATIC_PRESENTATION_POLICY,
   utf8ByteLength,
 } from "@orkestrator/protocol/rich-content-policy";
 import {
@@ -287,8 +288,14 @@ export class ArtifactPreviewJobs {
             effective,
           ]);
         }
+        // Only a document its card can display gets text: a card shows the
+        // saved preview instead of one over the inline budget or element
+        // limit, so Find could count a match in it but never highlight it.
+        const displayable =
+          effective.byteLength <= STATIC_PRESENTATION_POLICY.maxDocumentBytes &&
+          result.elementCount <= STATIC_PRESENTATION_POLICY.maxElements;
         const searchText =
-          typeof result.searchText === "string" && result.searchText.length > 0
+          displayable && typeof result.searchText === "string" && result.searchText.length > 0
             ? await this.storeSearchText(store, result.searchText)
             : undefined;
         return {

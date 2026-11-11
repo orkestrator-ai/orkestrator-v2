@@ -104,6 +104,8 @@ const counters: PerfCounters = {
   streamChars: 0,
   storedTextReads: 0,
 };
+/** `search-text` reads answered, per report. */
+const storedTextReadsByReport = new Map<number, number>();
 
 // Count module workers (the highlighter) without changing their behaviour.
 const NativeWorker = window.Worker;
@@ -674,6 +676,7 @@ function representationFor(publicationId: string, representation: string) {
     });
     const bytes = new TextEncoder().encode(text).byteLength;
     counters.storedTextReads += 1;
+    storedTextReadsByReport.set(k, (storedTextReadsByReport.get(k) ?? 0) + 1);
     return {
       artifactId: ref.artifactId,
       revision: ref.revision,
@@ -692,6 +695,9 @@ function representationFor(publicationId: string, representation: string) {
   if (ref.kind === "html-static") {
     const html = staticReport(k);
     const bytes = new TextEncoder().encode(html).byteLength;
+    // `?overBudget=<k>`: that report's effective document is past the inline
+    // display budget, so its card shows the saved preview.
+    const overBudget = new URLSearchParams(window.location.search).get("overBudget") === String(k);
     return {
       artifactId: ref.artifactId,
       revision: ref.revision,
@@ -702,7 +708,7 @@ function representationFor(publicationId: string, representation: string) {
       data: html,
       sha256: sha256Hex(html),
       byteLength: bytes,
-      totalBytes: bytes,
+      totalBytes: overBudget ? STATIC_PRESENTATION_POLICY.maxDocumentBytes + 1 : bytes,
       nextOffsetBytes: null,
       executableOutsideOrkestrator: true,
     };
@@ -825,6 +831,10 @@ interface PerfApi {
   scrollToIndex: (index: number) => void;
   scrollToBottom: () => void;
   richIndices: () => number[];
+  /** Find's cached body text for report `k`, or null (none, or an older bundle). */
+  searchBody: (k: number) => string | null;
+  /** How many times report `k`'s stored text was read. */
+  storedTextReadsOf: (k: number) => number;
 }
 
 declare global {
@@ -962,6 +972,9 @@ function PerfConversation({ onRemount }: { onRemount: () => void }) {
       },
       scrollToBottom: () => scrollToBottom(),
       richIndices: () => richMessageIndices,
+      searchBody: (k: number) =>
+        artifactRequestsModule?.cachedArtifactSearchBody(artifactRef(k)) ?? null,
+      storedTextReadsOf: (k: number) => storedTextReadsByReport.get(k) ?? 0,
     };
   }, [
     messages.length,

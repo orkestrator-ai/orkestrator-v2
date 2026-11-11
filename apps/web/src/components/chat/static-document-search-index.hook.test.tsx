@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { STATIC_PRESENTATION_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import {
   TRANSCRIPT_ARTIFACT_COMMANDS,
   type ArtifactPublicationView,
@@ -13,9 +14,13 @@ import {
 import { invoke } from "@/lib/native/backend";
 import { resetTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
 import {
+  artifactSearchBodyWithheld,
   cachedArtifactSearchBody,
   clearArtifactRequestCache,
+  clearArtifactRequestsForConversation,
   noteArtifactScopeGeneration,
+  releaseArtifactSearchBody,
+  withholdArtifactSearchBody,
 } from "@/lib/chat/artifact-requests";
 import {
   RichMessageContext,
@@ -37,7 +42,7 @@ import {
 /*
  * The React wiring of Find's static-document index (5780 task 2): when it
  * reads, which generation it reads for, and which cards it leaves alone
- * because they show something other than the document.
+ * because they show something other than the document or could not display it.
  */
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -137,6 +142,8 @@ function partOf(ref: TranscriptArtifactRef): NativeArtifactPart {
 
 /** Stored-text reads by publication, answered by `answer`. */
 let answer: (ref: TranscriptArtifactRef) => Promise<unknown> = async () => undefined;
+/** Effective-document reads by a mounted card; refused unless a test answers them. */
+let answerEffective: ((ref: TranscriptArtifactRef) => Promise<unknown>) | null = null;
 let reads: string[] = [];
 const refsById = new Map<string, TranscriptArtifactRef>();
 
@@ -148,6 +155,7 @@ beforeEach(() => {
   reads = [];
   refsById.clear();
   answer = async (ref) => textOf(ref, `Stored text of ${ref.publicationId}`);
+  answerEffective = null;
   invokeMock.mockReset();
   invokeMock.mockImplementation((command: string, args: Record<string, unknown> = {}) => {
     if (command === TRANSCRIPT_ARTIFACT_COMMANDS.capabilities) return Promise.resolve(capabilities);
@@ -159,6 +167,7 @@ beforeEach(() => {
         reads.push(ref.publicationId);
         return answer(ref);
       }
+      if (args.representation === "effective-html" && answerEffective) return answerEffective(ref);
       if (args.representation === "source")
         return Promise.resolve({
           ...textOf(ref, "<p>source</p>"),
@@ -411,6 +420,118 @@ describe("cards that are not showing the document", () => {
     );
     await flush();
     expect(reads).toEqual([]);
+    expect(cachedArtifactSearchBody(ref)).toBeNull();
+  });
+});
+
+describe("cards that could not display the document", () => {
+  const CONVERSATION = {
+    backendId: BACKEND,
+    environmentId: SCOPE_A.environmentId,
+    logicalSessionKey: SCOPE_A.logicalSessionKey,
+  };
+
+  test("a document a card failed to display is not read, and displaying it again re-enables the index", async () => {
+    const failed = refOf(1);
+    const shown = refOf(2);
+    const items = [register(failed, shown)];
+    withholdArtifactSearchBody(failed, occurrenceKey(SCOPE_A, "m1", failed), CONVERSATION);
+    expect(cardsShowDocument(SCOPE_A, failed)).toBe(false);
+    const { rerender } = renderHook(
+      ({ active }) => useStaticDocumentSearchIndex(items, identity, active),
+      { wrapper: scoped(SCOPE_A), initialProps: { active: true } },
+    );
+    await flush();
+    expect(reads).toEqual([shown.publicationId]);
+    expect(cachedArtifactSearchBody(failed)).toBeNull();
+
+    // A successful Retry renders the frame, which releases the document.
+    releaseArtifactSearchBody(failed, occurrenceKey(SCOPE_A, "m1", failed));
+    expect(cardsShowDocument(SCOPE_A, failed)).toBe(true);
+    rerender({ active: false });
+    rerender({ active: true });
+    await flush();
+    expect(reads).toEqual([shown.publicationId, failed.publicationId]);
+    expect(cachedArtifactSearchBody(failed)).toBe(`Stored text of ${failed.publicationId}`);
+  });
+
+  test("a card that fails while the stored-text read is in flight keeps the text out", async () => {
+    const ref = refOf(1);
+    let release: () => void = () => {};
+    answer = (target) =>
+      new Promise((resolve) => {
+        release = () => resolve(textOf(target, "stored"));
+      });
+    const items = [register(ref)];
+    renderHook(() => useStaticDocumentSearchIndex(items, identity, true), {
+      wrapper: scoped(SCOPE_A),
+    });
+    await flush();
+    expect(reads).toEqual([ref.publicationId]);
+    withholdArtifactSearchBody(ref, occurrenceKey(SCOPE_A, "m1", ref), CONVERSATION);
+    release();
+    await flush();
+    expect(cachedArtifactSearchBody(ref)).toBeNull();
+  });
+
+  test("every failed occurrence has to display again, and clearing the conversation forgets them", () => {
+    const ref = refOf(1);
+    const first = occurrenceKey(SCOPE_A, "m1", ref);
+    const second = occurrenceKey(SCOPE_A, "m2", ref);
+    withholdArtifactSearchBody(ref, first, CONVERSATION);
+    withholdArtifactSearchBody(ref, second, CONVERSATION);
+    releaseArtifactSearchBody(ref, first);
+    expect(artifactSearchBodyWithheld(ref)).toBe(true);
+    // Another revision of the publication is a different document.
+    expect(artifactSearchBodyWithheld({ ...ref, revision: 2 })).toBe(false);
+    clearArtifactRequestsForConversation({ ...CONVERSATION, logicalSessionKey: "other" });
+    expect(artifactSearchBodyWithheld(ref)).toBe(true);
+    clearArtifactRequestsForConversation(CONVERSATION);
+    expect(artifactSearchBodyWithheld(ref)).toBe(false);
+  });
+
+  test("a mounted card over the inline budget keeps Find's index from writing its text, then and after a remount", async () => {
+    const ref = refOf(1);
+    register(ref);
+    let release: () => void = () => {};
+    answer = (target) =>
+      new Promise((resolve) => {
+        release = () => resolve(textOf(target, "stored text past the budget"));
+      });
+    const tooLarge = STATIC_PRESENTATION_POLICY.maxDocumentBytes + 1;
+    answerEffective = async (target) => ({
+      ...textOf(target, "<p>partial</p>"),
+      representation: "effective-html",
+      mimeType: "text/html; charset=utf-8",
+      totalBytes: tooLarge,
+      nextOffsetBytes: null,
+    });
+    function Transcript() {
+      useStaticDocumentSearchIndex([[ref]], identity, true);
+      return <ArtifactPart part={partOf(ref)} />;
+    }
+    const tree = () => (
+      <RichTranscriptScopeContext.Provider value={SCOPE_A}>
+        <RichMessageContext.Provider value={{ messageId: "m1", role: "assistant" }}>
+          <Transcript />
+        </RichMessageContext.Provider>
+      </RichTranscriptScopeContext.Provider>
+    );
+    const { container, unmount } = render(tree());
+    await flush();
+    // The index asked before the card knew; the card's failure lands first.
+    expect(reads).toEqual([ref.publicationId]);
+    expect(container.querySelector('[data-artifact-static-state="unavailable"]')).not.toBeNull();
+    expect(artifactSearchBodyWithheld(ref)).toBe(true);
+    release();
+    await flush();
+    expect(cachedArtifactSearchBody(ref)).toBeNull();
+
+    // Scrolled away and back with Find still open: nothing is read or counted.
+    unmount();
+    render(tree());
+    await flush();
+    expect(reads).toEqual([ref.publicationId]);
     expect(cachedArtifactSearchBody(ref)).toBeNull();
   });
 });

@@ -359,6 +359,43 @@ test.describe("static documents in the virtualized transcript", () => {
     expect(stats.mounted).toBeLessThanOrEqual(stats.granted);
   });
 
+  test("Find reads no stored text for a report whose card could not display it", async ({
+    page,
+  }) => {
+    // Find indexes all 3,000 messages of the fixture each time its bar opens.
+    test.slow();
+    const failed = 1_000 + 4;
+    const shown = 1_000 + 5;
+    const reads = (k: number) =>
+      page.evaluate((report) => window.__richPerf!.storedTextReadsOf(report), k);
+    const body = (k: number) => page.evaluate((report) => window.__richPerf!.searchBody(report), k);
+    await open(page, `?storedText=1&overBudget=${failed}`);
+    await page.evaluate((index) => window.__richPerf!.scrollToIndex(index), staticRow(4));
+    await expect(
+      page.locator(`${staticCard(4)} [data-artifact-static-state="unavailable"]`),
+    ).toBeVisible({ timeout: 30_000 });
+    // Scrolled away: no mounted card is left to withdraw a body written for it.
+    await page.evaluate(() => window.__richPerf!.scrollToBottom());
+    await expect(page.locator(staticCard(4))).toHaveCount(0);
+
+    const input = page.getByRole("textbox", { name: "Find in chat" });
+    const result = page.getByRole("search", { name: "Find in agent chat" });
+    await page.keyboard.press("ControlOrMeta+f");
+    // A report its card displays is counted from its stored text. Reads go in
+    // transcript order, so the failed report's turn has come and gone.
+    await input.fill(`Synthetic session ${shown}-7`);
+    await expect(result).toContainText("1 of 1", { timeout: 30_000 });
+    expect(await reads(shown)).toBe(1);
+    expect(await body(shown)).not.toBeNull();
+    // The failed card shows its saved preview: Find never fetched a body for
+    // it, so it has no count it could not highlight.
+    expect(await reads(failed)).toBe(0);
+    expect(await body(failed)).toBeNull();
+    await input.fill(`Synthetic session ${failed}-7`);
+    await expect(result).toContainText("No results");
+    expect(await reads(failed)).toBe(0);
+  });
+
   test("a selection survives scrolling the frame out of view while its row is mounted", async ({
     page,
   }) => {

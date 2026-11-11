@@ -950,7 +950,12 @@ one, and the backend keeps it as a UTF-8 asset referenced from the revision's
 `derived` row (`searchTexts`, keyed by the receipt's effective hash, kept by the
 collector) and serves it as the `search-text` representation. A failed read, or a
 failed write of the text asset, loses only the stored text, never the verification
-(a failed write counts `search_text_unstored`). The walk is a copy of the frame's,
+(a failed write counts `search_text_unstored`). A document no card can display
+gets no stored text: when the effective HTML is over the inline budget
+(`STATIC_PRESENTATION_POLICY.maxDocumentBytes`, which inlined offline assets can
+exceed) or the worker counted more elements than `maxElements`, the card shows its
+saved preview, so the backend skips the text and `search-text` answers
+`invalid_input`. The walk is a copy of the frame's,
 not a shared function, because each is serialized into a page on its own;
 `static-html-document-text.test.ts` runs the design runtime's serializer, the copy
 and the real presentation runtime over the reference, hostile and edge-case
@@ -971,8 +976,13 @@ discarded. A session records its generation when it starts
 offscreen still accepts its own reads and fences the previous generation's. A card
 the reader switched to Saved preview or Source renders no body search root, so its
 document is not indexed (`cardsShowDocument` reads the occurrence's remembered view
-choice, checked when the document is offered and again before its text is stored):
-Find never counts a match it cannot highlight. The hosted client and the `staticPresentation` switch read nothing,
+choice, checked when the document is offered and again before its text is stored).
+Nor is a document a card failed to display: a failed read, a frame over its budget
+and a frame that gave up all leave the card on its saved preview, and the card
+withholds the document (`withholdArtifactSearchBody`, per occurrence, kept when the
+card scrolls away) so a read in flight or a later Find session cannot write the text
+back. A frame that renders the document again, after Retry or on a remount,
+releases it. Find never counts a match it cannot highlight. The hosted client and the `staticPresentation` switch read nothing,
 because their cards never show the text. A publication verified before the text
 was stored, and an older backend, answer `invalid_input`; such a document counts
 once its card has shown it, as before. There is no backfill: one would launch a

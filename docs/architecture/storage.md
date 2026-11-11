@@ -474,6 +474,15 @@ primitives above serialize their writes.
   write survives a crash, and a torn write is impossible. `StorageDatabase`
   defaults to FULL; only the separate [change ledger](change-tracking.md#age-based-retention)
   explicitly selects NORMAL, trading power-loss durability for fewer commit syncs.
+  The one exception inside the main file is the `leases` table: a lease
+  claim, heartbeat or release commits at NORMAL (`leaseCommit`), so it appends
+  to the WAL without syncing and the next FULL commit's sync covers it. A lease
+  is coordination between live processes, so a power loss that drops one
+  loses nothing (no holder survives it, and a lost release is a stale row the
+  next waiter reclaims). Before, every leased store write cost three FULL
+  syncs, claim, write and release; on btrfs on beelink2 that was 8 ms and
+  255 KB of disk writes against 2.5 ms and 95 KB with the lease at NORMAL
+  (to-do 7562).
 - "Survives a crash" means an application or operating-system crash. Whether a
   commit also survives sudden power loss depends on the platform's sync call.
   On macOS, Bun links the system SQLite (`/usr/lib/libsqlite3.dylib`, 3.54.0

@@ -374,6 +374,8 @@ export class StorageDatabase {
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private readonly observeFetch: ((length: number) => void) | undefined;
   private readonly busyTimeoutMs: number;
+  /** The connection's `synchronous` setting, restored after a lease commit. */
+  private readonly synchronous: "NORMAL" | "FULL";
   /** Times this connection's calls (`storage-slow-operations.ts`). */
   private readonly timing: SqliteConnectionTiming;
   /** The timer of a deferred scrub, while one is pending. */
@@ -419,11 +421,8 @@ export class StorageDatabase {
       this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
       this.db.exec("PRAGMA journal_mode = WAL");
       // Preserve full durability unless this database explicitly opts into NORMAL.
-      this.db.exec(
-        options.synchronous === "normal"
-          ? "PRAGMA synchronous = NORMAL"
-          : "PRAGMA synchronous = FULL",
-      );
+      this.synchronous = options.synchronous === "normal" ? "NORMAL" : "FULL";
+      this.db.exec(`PRAGMA synchronous = ${this.synchronous}`);
       // A checkpoint copies WAL frames into the database file and then resets
       // the WAL, so it must sync in order. On macOS Bun links the system
       // SQLite, which syncs a checkpoint with F_BARRIERFSYNC only because
@@ -1869,13 +1868,15 @@ export class StorageDatabase {
     while (true) {
       if (this.closed) throw new Error(`Storage closed while waiting for ${description} lock`);
       const now = Date.now();
-      this.timing.nameCall(caller);
-      const claimed = this.transaction(() => {
-        claim.run(name, owner, now, now - staleMs);
-        const row = this.db.query("SELECT owner FROM leases WHERE name = ?").get(name) as {
-          owner: string;
-        } | null;
-        return row?.owner === owner;
+      const claimed = this.leaseCommit(() => {
+        this.timing.nameCall(caller);
+        return this.transaction(() => {
+          claim.run(name, owner, now, now - staleMs);
+          const row = this.db.query("SELECT owner FROM leases WHERE name = ?").get(name) as {
+            owner: string;
+          } | null;
+          return row?.owner === owner;
+        });
       });
       if (claimed) {
         leaseWaitMetrics.acquired(name, Date.now() - waitStartedAt);
@@ -1890,10 +1891,12 @@ export class StorageDatabase {
     const heartbeat = setInterval(() => {
       if (this.closed) return;
       try {
-        this.timing.nameCall(caller);
-        const renewed = this.db
-          .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
-          .run(Date.now(), name, owner);
+        const renewed = this.leaseCommit(() => {
+          this.timing.nameCall(caller);
+          return this.db
+            .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
+            .run(Date.now(), name, owner);
+        });
         if (renewed.changes > 0) log.recovered("lease.heartbeat-failed", name);
       } catch (error) {
         // A missed heartbeat only shortens the lease; the next one retries.
@@ -1911,9 +1914,32 @@ export class StorageDatabase {
       released = true;
       clearInterval(heartbeat);
       if (this.closed) return;
-      this.timing.nameCall(caller);
-      this.db.query("DELETE FROM leases WHERE name = ? AND owner = ?").run(name, owner);
+      this.leaseCommit(() => {
+        this.timing.nameCall(caller);
+        this.db.query("DELETE FROM leases WHERE name = ? AND owner = ?").run(name, owner);
+      });
     };
+  }
+
+  /**
+   * Runs one lease claim, heartbeat or release with `synchronous = NORMAL`.
+   * A lease row is coordination between live processes, not data: after a
+   * power loss nothing that held a lease is alive, and a lost release is a
+   * stale row the next waiter reclaims after `staleMs`. In WAL mode a NORMAL
+   * commit is still atomic and ordered, and the next FULL commit's sync covers
+   * its frames, so the stores the lease guards keep full durability. Each
+   * claim and release used to be its own FULL-synced commit: two of the three
+   * WAL syncs of every leased store write (to-do 7562). Inside a transaction
+   * the setting cannot apply to one statement, so it is left alone.
+   */
+  private leaseCommit<T>(commit: () => T): T {
+    if (this.synchronous === "NORMAL" || this.db.inTransaction) return commit();
+    this.db.exec("PRAGMA synchronous = NORMAL");
+    try {
+      return commit();
+    } finally {
+      this.db.exec(`PRAGMA synchronous = ${this.synchronous}`);
+    }
   }
 
   /**

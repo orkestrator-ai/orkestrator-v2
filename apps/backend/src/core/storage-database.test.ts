@@ -521,6 +521,68 @@ describe("StorageDatabase", () => {
       ).rejects.toThrow("Timed out");
       await releaseFresh();
     });
+
+    test("claims and releases commit at NORMAL; store writes stay FULL", async () => {
+      const directory = await dataDir();
+      const db = database(directory);
+      const synchronous = () =>
+        (db.db.query("PRAGMA synchronous").get() as { synchronous: number }).synchronous;
+      // The setting in force for each statement that changes a row, by
+      // replaying the PRAGMAs this connection ran before it.
+      const raw = db.db as unknown as Record<string, (...args: unknown[]) => unknown>;
+      const setting = { current: "FULL" };
+      const seen: Array<{ sql: string; synchronous: string }> = [];
+      const exec = raw.exec!;
+      raw.exec = (sql: unknown, ...rest: unknown[]) => {
+        const match = /^PRAGMA synchronous = (\w+)$/.exec(String(sql));
+        if (match) setting.current = match[1]!;
+        return exec.call(db.db, sql, ...rest);
+      };
+      const query = raw.query!;
+      raw.query = (sql: unknown, ...rest: unknown[]) => {
+        const text = String(sql).trim();
+        const statement = query.call(db.db, sql, ...rest) as {
+          run: (...args: unknown[]) => unknown;
+        };
+        if (!/^(INSERT|UPDATE|DELETE)/.test(text)) return statement;
+        const run = statement.run.bind(statement);
+        // Recorded when it runs: a statement may be prepared well before.
+        return Object.assign(Object.create(statement), {
+          run: (...args: unknown[]) => {
+            seen.push({
+              sql: text.split(/\s+/).slice(0, 3).join(" "),
+              synchronous: setting.current,
+            });
+            return run(...args);
+          },
+        });
+      };
+      const release = await db.acquireLease("store", "test", { staleMs: 3_000 });
+      db.writeStore("records", { a: { value: 1 } });
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await release();
+      const lease = seen.filter((entry) => /leases/.test(entry.sql));
+      expect(lease.map((entry) => entry.sql)).toEqual([
+        "INSERT INTO leases",
+        "UPDATE leases SET",
+        "DELETE FROM leases",
+      ]);
+      expect(lease.every((entry) => entry.synchronous === "NORMAL")).toBe(true);
+      const store = seen.filter((entry) => !/leases/.test(entry.sql));
+      expect(store.length).toBeGreaterThan(0);
+      expect(store.every((entry) => entry.synchronous === "FULL")).toBe(true);
+      expect(synchronous()).toBe(2);
+    });
+
+    test("a database opened at NORMAL keeps NORMAL around leases", async () => {
+      const directory = await dataDir();
+      const db = database(directory, { synchronous: "normal" });
+      const release = await db.acquireLease("store", "test");
+      await release();
+      expect((db.db.query("PRAGMA synchronous").get() as { synchronous: number }).synchronous).toBe(
+        1,
+      );
+    });
   });
 });
 

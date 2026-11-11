@@ -14,7 +14,7 @@ Analysed 2026-11-05 against `main` at `ecff91f74`. From E15 part `0880` task 3.
 
 **Context.** The logging report's M4 counts five stores, and two more exist now: `NativeSessionInvalidationMetrics` and the lease waits `LeaseWaitMetrics` added by E15. All are reached through their own commands or the gateway, and all are also in the diagnostics bundle's `metrics.json`.
 
-**Investigation.** `WebAnnotationMetrics` writes cumulative buckets (`web-annotation-metrics.ts`, the loop in `observe`), `RecurringWorkMetrics` and `LeaseWaitMetrics` per-bucket counts, and `PreviewMetrics` sampled values, which since E15 sit in a fixed ring. `GatewayMetricsStore` is in `gateway-support-core.ts`. No reader compares two of them today, and nothing suffers from the difference.
+**Investigation.** `WebAnnotationMetrics` writes cumulative buckets (`web-annotations/metrics.ts`, the loop in `observe`), `RecurringWorkMetrics` and `LeaseWaitMetrics` per-bucket counts, and `PreviewMetrics` sampled values, which since E15 sit in a fixed ring. `GatewayMetricsStore` is in `gateway-support-core.ts`. No reader compares two of them today, and nothing suffers from the difference.
 
 **Decisions.**
 

@@ -17,7 +17,7 @@ import {
 import { DesignService } from "./design/service.js";
 import { createTestRenderer } from "./design/test-support.js";
 import { StorageService } from "./storage.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import type { WebAnnotationToolHost } from "./web-annotations/contracts.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 
 /**

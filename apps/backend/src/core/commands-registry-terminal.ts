@@ -93,12 +93,10 @@ import {
   CONTAINER_EVIDENCE_REMOVER,
   CONTAINER_EVIDENCE_WRITER,
   isAnnotationEvidencePath,
-  runContainerEvidenceScript,
-} from "./web-annotation-evidence-files.js";
-import {
   MAX_WORKSPACE_PATH_CHECKS,
+  runContainerEvidenceScript,
   runContainerPathCheck,
-} from "./web-annotation-source-checks.js";
+} from "./web-annotations/index.js";
 import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
 import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import {

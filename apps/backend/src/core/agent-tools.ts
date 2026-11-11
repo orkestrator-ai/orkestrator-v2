@@ -48,7 +48,6 @@ import {
   registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
-import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
 import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
@@ -62,7 +61,8 @@ import {
   authenticatePipelineWorkerMailCapability,
   pipelineWorkerTabForResultKey,
 } from "./pipeline-worker-identity.js";
-import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
+import type { WebAnnotationToolHost } from "./web-annotations/index.js";
+import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotations/tools.js";
 import {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
   ARTIFACT_TOOL_INSTRUCTIONS,

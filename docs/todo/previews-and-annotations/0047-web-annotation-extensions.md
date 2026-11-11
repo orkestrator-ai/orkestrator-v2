@@ -136,9 +136,9 @@ framework internals.
 `packages/protocol/src/web-annotations-validation.ts:252-263` (at most four).
 Nothing in `apps/` produces hints. Newly found: validation accepts any boolean
 `verified`, the capture write stores `input.evidence` unchanged
-(`apps/backend/src/core/web-annotation-service-threads.ts:415`), and the brief
+(`apps/backend/src/core/web-annotations/service-threads.ts:415`), and the brief
 spreads each hint (`...hint`) into the agent's evidence
-(`apps/backend/src/core/web-annotation-brief.ts:365-370`). So a client can
+(`apps/backend/src/core/web-annotations/brief.ts:365-370`). So a client can
 submit `verified: true` and the agent sees it, albeit with the "candidate
 location only" note. The file's claim "the backend never sets `verified: true`"
 holds, but the backend does not reset a client's `true` either.

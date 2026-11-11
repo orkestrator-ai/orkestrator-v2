@@ -1369,8 +1369,9 @@ headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
 `design-canvas-electron.spec.ts`, `electron-cleanup.spec.ts`,
-`web-annotations-electron.spec.ts` and `service-preview-seeded-electron.spec.ts`
-can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`web-annotations-electron.spec.ts`, `service-preview-seeded-electron.spec.ts`,
+`terminal-input-resume-electron.spec.ts` and
+`local-gateway-transport-electron.spec.ts` can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
 when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
@@ -1381,6 +1382,12 @@ env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 \
   bunx playwright test --config e2e/agent-testing/playwright.electron-headless.config.ts \
   web-annotations-electron.spec.ts --workers=1
 ```
+
+The gateway case of `local-gateway-transport-electron.spec.ts` relaunches
+Electron from the production bundles, so build them first
+(`bun run --cwd apps/backend build`, and `bunx vite build` then
+`bun run scripts/precompress.ts` in `apps/web`); without them the relaunched
+window closes at start because `backend/main.js` is missing.
 
 On a host where other work creates and removes Docker networks, the
 Vite-served renderer of these specs loses its modules to
@@ -1640,7 +1647,10 @@ mise run dev:stop --profile qa-outage
 mise run dev:reset --profile qa-outage
 ```
 
-Each case records content-free timings as an annotation in `results.json`. The
+Each case records content-free timings as an annotation in `results.json`.
+On beelink2 on 2026-11-11 the four backend-restart cases failed in two runs
+while the other seven passed; that is
+[7835](../todo/cross-cutting/7835-client-outage-restart-cases-fail-on-beelink2.md). The
 Electron half (a remote backend really restarted, then a silent link) is
 `connection-outage-electron.spec.ts`, in `mise run test:agent:electron`. The Codex
 breaker against a real binary is gated separately, and needs only the pinned

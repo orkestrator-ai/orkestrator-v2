@@ -11,7 +11,12 @@ import { stopProcessGroup } from "../process-cleanup";
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { recordElectronDiagnostics } from "./electron-diagnostics";
 import { expect, test } from "./electron-fixtures";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import {
   countsDir,
@@ -346,11 +351,18 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     const stack = await startTransportStack(mode, root, `electron-transport-${mode}`);
     vite = stack.vite;
     const { profile, profilePath, projectPath, rendererUrl } = stack;
+    const headless = headlessElectronRequested();
     app = await electron.launch({
       executablePath: electronExecutable,
-      args: [...ELECTRON_TEST_SWITCHES, electronMain],
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+        electronMain,
+      ],
       cwd: repositoryRoot,
-      env: electronSpecEnvironment(stack.electronEnv),
+      env: electronSpecEnvironment(
+        headless ? withoutDisplay(stack.electronEnv) : stack.electronEnv,
+      ),
     });
     recordElectronDiagnostics(app);
     const electronApp = app;
@@ -875,11 +887,16 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         bootstrap,
         `Object.defineProperty(process, "resourcesPath", {value: ${JSON.stringify(resources)}}); import(${JSON.stringify(path.join(packageRoot, "dist", "electron", "main.js"))});`,
       );
+      const headless = headlessElectronRequested();
       app = await electron.launch({
         executablePath: electronExecutable,
-        args: [...ELECTRON_TEST_SWITCHES, bootstrap],
+        args: [
+          ...ELECTRON_TEST_SWITCHES,
+          ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+          bootstrap,
+        ],
         cwd: repositoryRoot,
-        env: electronSpecEnvironment(process.env, {
+        env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
           ELECTRON_DEV: "0",
           ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
         }),

@@ -99,7 +99,7 @@ no templates without them, and the public CLI has no setting for it).
   projection". Each turn ended `unknown` (exit 7), because Pi is not qualified
   for completion (0014 task 1). The catalogue also listed the operator's own
   `~/.agents/skills`, which is to-do
-  [7816](7816-cli-scenario-host-shared-skills.md).
+  7816 (retired; scenario backends now run with a disposable `HOME`).
 - **Current backend, v2.21.0 Pi bridge, local (cannot run).** Session
   creation answered HTTP 401. A current backend gives a bridge it launches
   only the token's SHA-256 (`PI_BRIDGE_TOKEN_SHA256`,
@@ -1266,9 +1266,9 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md),
   [`agent-testing.md`](../../development/agent-testing.md),
   [`testing-guide.md`](../../development/testing-guide.md).
-- [7816-cli-scenario-host-shared-skills.md](7816-cli-scenario-host-shared-skills.md):
-  scenario sessions read the operator's own `~/.agents/skills`, found by the
-  2026-11-11 task 1 run.
+- 7816 (retired): scenario sessions read the operator's own
+  `~/.agents/skills`, found by the 2026-11-11 task 1 run and fixed the same
+  day by giving scenario backends a disposable `HOME`.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Claude and Codex live pairings of task 1, the logged-in Grok and Cursor picker check of task 4) moved there on 2026-11-10.
 
 ## Replaces

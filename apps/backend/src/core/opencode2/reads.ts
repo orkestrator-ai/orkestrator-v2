@@ -37,7 +37,7 @@ import {
 } from "./transcript-snapshot.js";
 import { openCode2RevertMarker } from "./revert.js";
 import type { OpenCode2Message } from "./types.js";
-import { openCode2ContextUsage } from "./usage.js";
+import { OPENCODE2_USAGE_TURN_LIMIT, openCode2ContextUsage } from "./usage.js";
 
 const log = createLogger("native-agent.opencode2");
 /** Distinct unknown row kinds reported per provider, so a newer server is noticed once. */
@@ -121,6 +121,28 @@ export class OpenCode2SessionReads {
         this.client.listMessages(sessionId, { limit: 1, order: "desc", type: "assistant" }),
       ]);
       return openCode2ContextUsage(session, page.messages);
+    } catch (error) {
+      if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
+      throw new ProviderUnavailableError("OpenCode 2 usage is unavailable", { cause: error });
+    }
+  }
+
+  /**
+   * {@link usage} with a per-response entry for each of the newest assistant
+   * rows (up to the report's turn bound), so a settled prompt that made
+   * several model calls is counted whole rather than by its last response.
+   */
+  async recentUsage(sessionId: string): Promise<NativeAgentContextUsage | undefined> {
+    try {
+      const [session, page] = await Promise.all([
+        this.client.getSession(sessionId),
+        this.client.listMessages(sessionId, {
+          limit: OPENCODE2_USAGE_TURN_LIMIT,
+          order: "desc",
+          type: "assistant",
+        }),
+      ]);
+      return openCode2ContextUsage(session, [...page.messages].reverse());
     } catch (error) {
       if (error instanceof OpenCode2RequestError && error.status === 404) return undefined;
       throw new ProviderUnavailableError("OpenCode 2 usage is unavailable", { cause: error });

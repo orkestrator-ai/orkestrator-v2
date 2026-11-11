@@ -1038,10 +1038,16 @@ Claude's original custom config directory or host Keychain is read before
 isolation, and only its access token is staged in the disposable Claude home;
 its refresh token is never copied. Inherited credential-source and agent-test
 host-directory controls are cleared; only the runner's explicit live provider
-selection authorizes credentials. Git (including both global config files),
-gh and mise retain their host settings through explicit tool-specific overrides
-while provider XDG homes remain disposable. The same disposable provider homes
-are staged into containers.
+selection authorizes credentials. `HOME` itself is the disposable home, so a
+reader of any other `~/.<tool>` path, such as the shared `~/.agents/skills`
+that Codex, Cursor, Grok, OpenCode and Pi list, finds nothing of the
+operator's. Git (including both global config files), gh, mise, Docker
+(`DOCKER_CONFIG`), GnuPG (`GNUPGHOME`), Bun (`BUN_INSTALL` and its cache) and
+`XDG_CACHE_HOME` retain their host settings through explicit tool-specific
+overrides while provider homes remain disposable; SSH finds its keys through
+the password database, not `HOME`. A host Git config that names a `~/` path
+resolves it under the disposable home. The same disposable provider homes are
+staged into containers.
 
 A backend never passes on an agent tool connection it inherited
 (`ORKESTRATOR_AGENT_MCP_URL` and `_TOKEN`, dropped by

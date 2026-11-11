@@ -25,7 +25,9 @@ import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
 import type { OpenCode2Message, OpenCode2Session } from "./types.js";
 
 /** Recent per-response entries kept on a usage value, as every provider does. */
-const MAX_TURNS = 20;
+/** Per-response entries a usage report carries, matching every other provider. */
+export const OPENCODE2_USAGE_TURN_LIMIT = 20;
+const MAX_TURNS = OPENCODE2_USAGE_TURN_LIMIT;
 
 function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;

@@ -860,6 +860,15 @@ export interface AgentSessionProvider {
    */
   refreshUsage?(sessionId: string): Promise<NativeAgentContextUsage | undefined>;
   /**
+   * Usage with a per-response entry for each of the session's recent
+   * responses (the same bounded window a full projection reports), read
+   * without the transcript. For a provider whose lightweight state reads
+   * carry only the newest response (OpenCode), so a settled turn that made
+   * several model calls is counted whole. Providers whose state snapshot
+   * already lists recent turns leave it out.
+   */
+  recentTurnUsage?(sessionId: string): Promise<NativeAgentContextUsage | undefined>;
+  /**
    * Authoritative activity including input parked at the provider. Optional so
    * narrow test providers and non-interactive integrations can fall back to
    * the coarser status contract.

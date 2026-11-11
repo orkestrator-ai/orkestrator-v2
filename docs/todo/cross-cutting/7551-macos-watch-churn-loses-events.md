@@ -74,17 +74,22 @@ Done on 2026-11-11 with the recommended option:
   listener closed the watch. An older helper's three-element batch reads as no
   flag.
 - `WorktreeWatcher` turns a flag on the root or a split child into a hint with
-  unknown paths (`fileList` and `tree`) that keeps the `node_modules`
-  exclusions and asks Git nothing; a flag on a Git metadata watch rescans the
-  file list only and keeps the paths already gathered. The settle window folds
-  every flag of one worktree into one hint.
+  unknown paths (`fileList` and `tree`); a flag on a Git metadata watch rescans
+  the file list only and keeps the paths already gathered. While a
+  `node_modules` proof is in force, any flag stops events being dropped by it
+  until Git has been asked again when the burst settles. The settle window
+  folds every flag of one worktree into one hint and one Git read.
+- The helper's close after a watch's asynchronous error flags the other watches
+  too, like any other close.
 - The graph project templates watch (`graph-project-templates.ts`) reloads on
   a flag, as it does for any event.
 - Tests: `watch-host-program.test.ts` (who is flagged, once per flush, never on
   a refused start or a repeated close), `watch-host.test.ts` (the flag reaches
   only that watch, after its events; an older helper's batch; a watch closed by
-  its own listener), `worktree-watcher-lost-events.test.ts` (root, burst and
-  metadata cases, Git asked no second time).
+  its own listener, the close after an error), `worktree-watcher-lost-events.test.ts`
+  (root, burst and metadata cases, one Git read per burst, a proof the lost
+  events invalidated, none when nothing is left out), and
+  `graph-project-templates.test.ts` (the default watch reloads on a flag).
 - `scripts/benchmark-recursive-watch-stall.ts --host` runs every watch through
   the helper and adds `steadyLostFlags` and `steadyUncovered`: lost writes no
   flag arrived for within a second. Its reading on a healthy `fseventsd` is
@@ -93,7 +98,7 @@ Done on 2026-11-11 with the recommended option:
 **Decisions.**
 
 - **How should an owner learn of a rebuild?**
-  - **After each open or close, the helper flags every other live watch, and the backend turns that into a pathless scan hint that keeps exclusions (recommended; chosen).**
+  - **After each open or close, the helper flags every other live watch, and the backend turns that into a pathless scan hint (recommended; chosen).**
     - Pros: turns a silent loss into one scan per affected worktree, delivered
       within the helper's 50 ms flush; no new process; a dedicated signal
       avoids the Git re-read an unnamed event costs today.
@@ -259,6 +264,24 @@ element rather than as a new message, so an older backend reading a newer
 helper ignores it and a newer backend reading an older helper sees none; the
 helper is started by the same backend build in practice, but the batch shape
 costs nothing to keep compatible.
+
+### Task 1: a flag re-reads the `node_modules` proof (review round 1)
+
+The first version kept the proof, to spare Git a read per rebuild. Review showed
+the lost events can be the very `.gitignore` edit, ancestor rename or staged file
+that invalidates it, after which edits under the formerly excluded tree were
+dropped until something else replanned. A flag now marks the proof unverified,
+which stops events being dropped by it, and asks for a replan at the end of the
+settle window, so a burst of flags costs one Git read per worktree and only a
+worktree with something left out pays it. A read that began before the flag does
+not count as verifying it.
+
+### Task 1: an errored watch's close flags the others (review round 1)
+
+The helper closes a watch whose `fs.watch` reported an error, and that close
+rebuilds the stream like any other; it flagged nothing at first. It now flags the
+other live watches, while a start whose `fs.watch` threw (nothing opened) and a
+repeated close still flag nothing.
 
 ### Task 1: metadata watches rescan the file list only
 

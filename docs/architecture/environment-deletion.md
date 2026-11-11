@@ -269,8 +269,8 @@ rebuild.
 
 Each rebuild also starts the stream from "now", so whatever happens under every
 other watch while it is rebuilt, about 30 ms, is lost rather than delayed. The
-helper therefore flags every other live watch after each start or close, and their
-owners rescan
+helper therefore flags every other live watch after each start or close, the
+close it makes itself after a watch's error included, and their owners rescan
 ([git-scan-caches.md](git-scan-caches.md#lost-events-on-macos)).
 
 The helper takes the blocking out of the backend; it does not make `fseventsd`

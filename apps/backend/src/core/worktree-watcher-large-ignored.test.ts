@@ -5,7 +5,12 @@ import {
   type IgnoredTrees,
   type WorktreeWatchPlanIo,
 } from "./worktree-watch-plan.js";
-import { startWorktreeWatcher, type StartWatch, type WorktreeWatcher } from "./worktree-watcher.js";
+import {
+  startWorktreeWatcher,
+  WATCH_IGNORED_REMEASURE_MS,
+  type StartWatch,
+  type WorktreeWatcher,
+} from "./worktree-watcher.js";
 
 /**
  * On Linux Bun walks a recursive watch's whole tree on the event loop, so a large
@@ -15,7 +20,7 @@ import { startWorktreeWatcher, type StartWatch, type WorktreeWatcher } from "./w
 
 const ROOT = "/wt";
 
-function fixture(options: { others: string[]; large: string[] }) {
+function fixture(options: { others: string[]; large: string[]; withoutOutput?: boolean }) {
   const directories = new Map<string, string[]>([
     ["", ["dist", "node_modules", "output", "src"]],
     ["dist", []],
@@ -23,16 +28,24 @@ function fixture(options: { others: string[]; large: string[] }) {
     ["output", ["disposable-docker"]],
     ["src", []],
   ]);
+  if (options.withoutOutput) {
+    directories.set("", ["dist", "node_modules", "src"]);
+    directories.delete("output");
+  }
   const identities = new Map<string, number>();
   const state = {
     trees: { dependencies: ["node_modules"], others: options.others } as IgnoredTrees | undefined,
     large: new Set(options.large),
     measured: [] as string[],
     listExcludedCalls: 0,
+    rootListings: 0,
   };
   const live = new Map<string, { emit: (type: string, name: string | null) => void }>();
+  // Every watch ever started, in order: a recursive start is a walk on Linux.
+  const started: string[] = [];
   const start: StartWatch = (target, listener, { recursive }) => {
     const key = `${recursive ? "recursive" : "direct"} ${target}`;
+    started.push(key);
     live.set(key, { emit: listener });
     const handle: WatchHandle = {
       on: () => handle,
@@ -52,6 +65,7 @@ function fixture(options: { others: string[]; large: string[] }) {
       return state.large.has(relative);
     },
     childDirectories: async (_root, relative) => {
+      if (relative === "") state.rootListings += 1;
       const children = directories.get(relative);
       if (!children) throw Object.assign(new Error("gone"), { code: "ENOENT" });
       return children;
@@ -62,7 +76,12 @@ function fixture(options: { others: string[]; large: string[] }) {
   const watches = () => [...live.keys()].sort();
   const replace = (relative: string) =>
     identities.set(relative, (identities.get(relative) ?? 0) + 1);
-  return { state, start, io, watches, live, replace };
+  /** A prepopulated directory appears at the root, as `mv` or `docker` would make it. */
+  const arrive = (relative: string) => {
+    directories.set(relative, ["nested"]);
+    directories.set("", [...directories.get("")!, relative]);
+  };
+  return { state, start, io, watches, live, replace, arrive, started };
 }
 
 const opened: WorktreeWatcher[] = [];
@@ -78,12 +97,17 @@ async function until(condition: () => boolean): Promise<void> {
   throw new Error("condition not reached");
 }
 
-function open(context: ReturnType<typeof fixture>, perDirectoryWatches = true) {
+function open(
+  context: ReturnType<typeof fixture>,
+  perDirectoryWatches = true,
+  now: () => number = Date.now,
+) {
   let coverage = 0;
   let settled = 0;
   const watcher = startWorktreeWatcher({
     worktreePath: ROOT,
     settleMs: 1,
+    now,
     startWatch: context.start,
     plan: context.io,
     perDirectoryWatches,
@@ -173,4 +197,72 @@ test("macOS keeps one recursive root and measures nothing", async () => {
   await until(() => watcher.qualified === true);
   expect(context.watches()).toEqual(["recursive /wt"]);
   expect(context.state.measured).toEqual([]);
+});
+
+test("a large ignored tree that appears later is measured before anything watches it", async () => {
+  const context = fixture({ others: ["dist"], large: [], withoutOutput: true });
+  const { watcher, coverage } = open(context);
+  await until(() => watcher.qualified === true);
+  expect(coverage()).toBe(1);
+
+  // Only the root's own watch says it came: no `.gitignore` edit, no Git event.
+  context.arrive("output");
+  context.state.trees = { dependencies: ["node_modules"], others: ["dist", "output"] };
+  context.state.large.add("output");
+  context.live.get("direct /wt")!.emit("rename", "output");
+  await until(() => watcher.qualified === false);
+  expect(context.state.measured).toContain("output");
+  expect(coverage()).toBe(2);
+  expect(context.started).not.toContain("recursive /wt/output");
+  expect(context.watches()).toEqual(["direct /wt", "recursive /wt/dist", "recursive /wt/src"]);
+});
+
+test("a small directory that appears later is watched once Git has been asked", async () => {
+  const context = fixture({ others: ["dist"], large: [], withoutOutput: true });
+  const { watcher } = open(context);
+  await until(() => watcher.qualified === true);
+
+  context.arrive("output");
+  context.live.get("direct /wt")!.emit("rename", "output");
+  await until(() => context.watches().includes("recursive /wt/output"));
+  expect(watcher.qualified).toBe(true);
+});
+
+test("an ignored tree that grows in place is counted again once its result expires", async () => {
+  let clock = 1_000_000;
+  const context = fixture({ others: ["dist", "output"], large: [] });
+  const { watcher, replan } = open(context, true, () => clock);
+  await until(() => watcher.qualified === true);
+  expect(context.watches()).toContain("recursive /wt/output");
+
+  // Same directory, same identity, but now past the bound.
+  context.state.large.add("output");
+  const listings = context.state.rootListings;
+  replan();
+  // The replan measures before it lists the root to apply the plan.
+  await until(() => context.state.rootListings > listings);
+  // A fresh under result is reused.
+  expect(context.state.measured.filter((entry) => entry === "output")).toHaveLength(1);
+  expect(watcher.qualified).toBe(true);
+
+  clock += WATCH_IGNORED_REMEASURE_MS;
+  replan();
+  await until(() => watcher.qualified === false);
+  expect(context.state.measured.filter((entry) => entry === "output")).toHaveLength(2);
+  await until(() => !context.watches().includes("recursive /wt/output"));
+});
+
+test("a tree replaced under the same identity is counted again before it is watched", async () => {
+  const context = fixture({ others: ["dist", "output"], large: [] });
+  const { watcher } = open(context);
+  await until(() => watcher.qualified === true);
+  const starts = context.started.filter((key) => key === "recursive /wt/output").length;
+
+  // Removed and made again, large this time; Linux handed it the same inode.
+  context.state.large.add("output");
+  context.live.get("direct /wt")!.emit("rename", "output");
+  await until(() => watcher.qualified === false);
+  expect(context.state.measured.filter((entry) => entry === "output")).toHaveLength(2);
+  expect(context.started.filter((key) => key === "recursive /wt/output")).toHaveLength(starts);
+  expect(context.watches()).not.toContain("recursive /wt/output");
 });

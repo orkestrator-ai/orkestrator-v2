@@ -130,6 +130,9 @@ const fail = (id, error) => {
   const handle = watches.get(id);
   if (handle) { watches.delete(id); pending.delete(id); try { handle.close(); } catch {} }
   write({ type: "error", id, code: typeof error?.code === "string" ? error.code : "EWATCH" });
+  // Closing an established watch rebuilt the stream like any other close; a
+  // start that never opened one rebuilt nothing.
+  if (handle) rebuilt(id);
 };
 const handle = (message) => {
   if (message.op === "close") {

@@ -8,6 +8,7 @@ function program() {
   const stdin = Object.assign(new EventEmitter(), { setEncoding: () => undefined });
   const stdout = new EventEmitter();
   const listeners = new Map<number, (type: string, name: string) => void>();
+  const opened = new Map<number, EventEmitter>();
   const frames: any[] = [];
   const writes: Array<() => void> = [];
   const timers: Array<() => void> = [];
@@ -22,7 +23,9 @@ function program() {
         }
         const id = ++next;
         listeners.set(id, listener);
-        return Object.assign(new EventEmitter(), { close: () => listeners.delete(id) });
+        const handle = Object.assign(new EventEmitter(), { close: () => listeners.delete(id) });
+        opened.set(id, handle);
+        return handle;
       },
     }),
     process: {
@@ -45,7 +48,7 @@ function program() {
   const refuseNext = () => {
     refuse = true;
   };
-  return { send, frames, writes, timers, listeners, refuseNext };
+  return { send, frames, writes, timers, listeners, opened, refuseNext };
 }
 
 test("the helper deduplicates, bounds overflow and flushes after a slow reader resumes", () => {
@@ -139,3 +142,25 @@ function runFailingStart(p: ReturnType<typeof program>) {
   expect(p.frames.at(-1)).toEqual({ type: "error", id: 2, code: "ENOENT" });
   return p;
 }
+
+test("an asynchronous error that closes an established watch flags the survivors once", () => {
+  const p = program();
+  p.send({ op: "watch", id: 1, path: "/a", recursive: true });
+  p.send({ op: "watch", id: 2, path: "/b", recursive: true });
+  p.timers.shift()!();
+  p.writes.shift()!();
+  expect(p.timers).toHaveLength(0);
+
+  p.opened.get(2)!.emit("error", Object.assign(new Error("gone"), { code: "ENOENT" }));
+  expect(p.frames.at(-1)).toEqual({ type: "error", id: 2, code: "ENOENT" });
+  // The helper closed the failed watch itself, which rebuilt the stream under watch 1.
+  expect(p.listeners.has(2)).toBe(false);
+  expect(p.timers).toHaveLength(1);
+  p.timers.shift()!();
+  expect(p.frames.at(-1)).toEqual({ type: "events", batches: [[1, [], false, true]] });
+  p.writes.shift()!();
+
+  // The backend's own close of the id it saw fail rebuilds nothing more.
+  p.send({ op: "close", id: 2 });
+  expect(p.timers).toHaveLength(0);
+});

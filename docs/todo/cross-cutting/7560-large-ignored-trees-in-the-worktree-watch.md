@@ -64,12 +64,18 @@ Done on 2026-11-11 with the recommended option
   any `node_modules` inside it, and withdraws qualified coverage while any is
   left out, as for an unreadable directory. Unlike that case the tree is put
   back, and coverage reported again, when Git stops listing it or it is
-  replaced and measures under the bound. A tree is measured again only when its
-  directory identity changes; without Git's answer the last measurement stands.
+  replaced and measures under the bound. A result over the bound stands until
+  the directory identity changes; one under it is reused for at most 60 s
+  (`WATCH_IGNORED_REMEASURE_MS`), so a tree growing in place is caught at the
+  next plan after that. A directory that appears or is replaced where recursive
+  watches go waits for a plan that asked Git and measured it before it is
+  watched. Without Git's answer the last measurement stands.
   macOS (one recursive root) measures nothing.
 - Tests: `worktree-watch-plan.test.ts` (the count, its early stop, symlinks),
   `worktree-watcher-large-ignored.test.ts` (left out, coverage withdrawn and
-  restored, one count per identity, no Git answer, macOS), and in
+  restored, one count per identity, no Git answer, macOS, a large tree arriving
+  through only its parent's rename, a small one arriving, growth in place, a
+  tree replaced under a reused inode), and in
   `worktree-watcher-real.test.ts` the real Git split and a real watcher over
   2,001 ignored directories with the Linux strategy forced. The same real file
   ran under Linux (Bun 1.4.4, aarch64, Docker Desktop on mini, fixtures on a
@@ -208,6 +214,24 @@ Counting up to 2,001 directories on every replan would add I/O on exactly the
 loaded hosts the change protects. The cost is that a tree which shrinks in
 place stays left out (polling, not a wrong count) until it is replaced, Git
 stops listing it, or the watcher restarts.
+
+Review round 1 showed the reverse case: a tree measured under the bound kept that
+result while it grew. An under result is now reused for at most 60 s, and a
+watched tree retired by its parent's rename event loses its measurement, so it is
+counted again before it is watched again.
+
+### Task 1: vet new directories before watching them (review round 1)
+
+The first version measured only at plan time, so a large ignored directory that
+appeared later (moved in, or a daemon creating its root) was attached on the
+parent's rename event alone and walked. Applying a plan now attaches a recursive
+watch only for a target the last Git-and-measure pass saw with the same identity;
+any other target queues that pass first, in the same serialized reconcile loop,
+so it can never be attached under stale exclusions. That costs one Git read per
+arrival at the root or a `node_modules` ancestor, coalesced while a pass runs, and
+the watcher's first coverage report waits for any deferred target. A worktree watched
+whole (nothing left out) has no such parent watch, and new directories there are
+still Bun's to place, as before.
 
 ### Task 2: name roots by checkout name and path hash
 

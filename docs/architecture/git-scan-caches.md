@@ -132,8 +132,18 @@ other than `node_modules` once its subtree holds more than
   (`WATCH_PLAN_MAX_IGNORED_CANDIDATES`) none are measured, and all stay watched.
 - `exceedsDirectories` counts each candidate breadth first with asynchronous
   `readdir`, off the event loop, and stops at the bound; it follows no symlink and
-  counts a directory it may not read, since Bun's walk would try it too. A tree is
-  counted again only when its directory identity (device and inode) changes.
+  counts a directory it may not read, since Bun's walk would try it too. A result
+  over the bound stands until the directory identity (device and inode) changes.
+  One under it is reused for at most `WATCH_IGNORED_REMEASURE_MS` (60 s), so a
+  watched tree that grows in place past the bound is left out at the first plan
+  after that, rather than at the next restart.
+- A directory that appears, or is replaced, where the plan places recursive watches
+  (the root, or an ancestor of a `node_modules` left out) is not watched until a
+  plan has asked Git and measured it: the plan names each recursive target it vetted
+  with its identity, and applying a plan defers any other one and plans again. A
+  parent's rename event for a watched tree also discards its vetting and
+  measurement, because Linux hands a removed directory's inode to the next one made.
+  The cost is one Git read per such arrival, coalesced while a plan is running.
 - The tree view shows such a directory, so while one is left out the watcher is
   open but not `qualified`, exactly as for an unreadable directory: its owner polls
   and serves the tree on the unwatched age bound. Unlike an unreadable directory, a
@@ -234,12 +244,17 @@ because Bun 1.4.4 rebuilds its one stream from `kFSEventStreamEventIdSinceNow`
 (`schedule()` in `src/runtime/node/fs_events.rs`). So after each start or close it
 performs, the helper sets a `lost` flag on every other live watch, one boolean per
 watch per 50 ms flush like `overflow`, and the backend calls that watch's
-`onEventsLost` listeners. `WorktreeWatcher` turns the flag into a scan hint with
-unknown paths that keeps its `node_modules` exclusions (an unnamed event drops
-them and asks Git again, because it may mean a renamed ancestor; a rebuild says
-nothing of the kind). A flag on a Git metadata watch rescans the file list only.
-The settle window folds a worktree's flags into one hint, so an environment's start
-of up to four watches costs every other watched worktree one scan. The graph
+`onEventsLost` listeners. The close the helper makes itself after a watch's
+asynchronous error rebuilds the stream too, so it flags the other watches the same
+way. `WorktreeWatcher` turns the flag into a scan hint with unknown paths. The lost
+events may have been the `.gitignore` edit, ancestor rename or staged file that
+invalidates its `node_modules` proof, so while one is in force the watcher stops
+dropping events by it and reads it again from Git when the burst settles; a proof
+that shrank reports the subtree put back, as any replan does. A flag on a Git
+metadata watch rescans the file list only. The settle window folds a worktree's
+flags into one hint and one Git read, so an environment's start of up to four
+watches costs every other watched worktree one scan and, if it leaves anything out,
+two git processes; a worktree that leaves nothing out asks Git nothing. The graph
 project templates watch reloads on the flag too. An older helper sends no flag and
 is read as none. The upstream request to rebuild from the last delivered event id
 is to-do [7551](../todo/cross-cutting/7551-macos-watch-churn-loses-events.md) task 2.

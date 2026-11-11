@@ -1418,8 +1418,12 @@ Otherwise Claude still works as a `provider-configured` coordinator, with the
 hook as its boundary, and an interactive session can run without the provider
 sandbox.
 
-Not yet run: stock Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor,
-Fedora (SELinux) and Docker containers
+A real container environment was probed on 2026-11-10: `missing-programs`,
+and the container's bridge refuses a provider-sandbox prompt. Ubuntu 24.04's
+runner has its own workflow (`claude-apparmor-qualification.yml`), whose
+`stock` phase requires the tier and the pinned CLI to agree with whatever the
+probe answers there. Not yet run: that workflow's first 24.04 report, stock
+Ubuntu 24.04 and 26.04 desktops, Debian with AppArmor and Fedora (SELinux)
 ([0145](../todo/agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md)).
 
 ### Changing qualification

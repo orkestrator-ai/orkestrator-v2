@@ -39,6 +39,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "A checkout's opencode.json or opencode.jsonc was larger than the limit, so a launched OpenCode server does not read it. File name only.",
       "opencode.project-config-filtered":
         "Values were left out of a checkout's OpenCode configuration before a launched server reads it: counts of plugin keys, `{env:}` and `{file:}` references and dropped instructions (including separate instructionGlob and instructionUrl counts), and the names of files that were not a JSONC object. Never values.",
+      "daemon.rootless-live-restore":
+        "The Docker daemon is rootless and has live-restore on, which a rootless restart cannot honour: the new daemon reports every container exited while the old containers' processes keep running with no network, so turn live-restore off in its daemon.json. Written once per backend.",
       "log-driver.unbounded":
         "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":
@@ -63,7 +65,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "availability.probe-failed":
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
-        "An automatic host port collided on start, so it is retried once with fresh ports.",
+        "An automatic host port collided on start, so it is retried (up to three times) with fresh ports.",
       "writer-lease.lost": {
         description:
           "This backend lost the registry writer lease, for the fixed `reason` given. Schedules stop and container changes are refused until it restarts.",

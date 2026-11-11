@@ -51,7 +51,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
-| Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
+| Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
 | Live agent CLIs without telemetry hosts | same command, `./tests/container-live-telemetry-hosts.test.ts`; set `ORKESTRATOR_TELEMETRY_HOSTS_TRACE=<file>` to record each turn's lookups and connections | With `sentry.io`, `statsig.anthropic.com`, `statsig.com` and the CLIs' Sentry ingest hosts refused, Claude Code (print, Agent SDK stream-json, a provider error), Codex (a turn and a provider error), OpenCode and Pi each finish a turn against a fake provider on the runtime's loopback within 90 s. No credentials and no provider turns; outside traffic only to registry.npmjs.org (OpenCode installs its provider package) and GitHub (to-do 6100) |
 | Live rootless loopback | same command, `./tests/container-live-rootless-loopback.test.ts`, plus `ORKESTRATOR_LIVE_ROOTLESS_HOST_LOOPBACK=disabled` (printed by the [disposable daemon](#disposable-docker-daemon)); skips unless `docker info` also reports rootless, so the Linux Engine workflow lists it but it skips on the rootful runners | On a rootless daemon refusing host loopback (RootlessKit's default): host discovery reports `blocked` with the rootless remediation, and a restricted runtime behind its gateway cannot reach a host listener |
@@ -162,7 +162,9 @@ off), in either mode, to compare a daemon behaviour across image stores.
 
 The rootless mode rejects `--live-restore`: restarting its whole RootlessKit
 tree cannot preserve shim and network state safely (the rootful mode accepts
-it). Restart accepts no daemon
+it). On 2026-11-11 a rootless daemon with `live-restore` on reported every
+container exited after a restart while their processes kept running with no
+network ([evidence](#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)). Restart accepts no daemon
 settings overrides; choose settings at start. Lifecycle and tool publication
 use separate interprocess `flock` locks (a host prerequisite). Exported suite
 variables clear Docker context and TLS selection so the private socket wins.
@@ -290,6 +292,110 @@ against a fake Docker CLI: the run arguments and inner configuration, outer
 daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
+
+## Rootless daemon restart with `live-restore` and on gvisor-tap-vsock, and the 7549 re-checks (2026-11-11)
+
+To-dos [7390](../todo/containers-and-environments/7390-rootless-restart-remaining-settings.md)
+tasks 1 and 2 and [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
+tasks 1 to 3, run in worktree `orkestrator-v2-20261111-021109-288b6a679fea`
+(branch `rootless-docker-fixes-288b6a679fea-r1`, from `main` at `498b68766`).
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8-arch1-3, x86_64), `/tmp` a
+  tmpfs (`rw,nosuid,nodev`). Neither `pasta`, `passt`, `vpnkit` nor
+  `slirp4netns` is on the host's `PATH`. The host's rootful daemon was only
+  read. Other pipelines were running tests on the host at the same time
+  (about 1,650 TCP sockets in `TIME-WAIT`, most of them loopback).
+- **Daemons:** two disposable host rootless daemons, both Engine 29.9.2 on
+  the containerd image store, systemd cgroup driver on cgroup v2, pool
+  `172.30.0.0/16` as /24s, host loopback refused:
+  - `l7390`: `mise run docker:disposable -- start --name l7390` (slirp4netns
+    1.3.3). The launcher refuses `--live-restore` in the rootless mode, so
+    the instance's `daemon.json` was set to `"live-restore": true` before a
+    `restart` (the record keeps `liveRestore: false`, which is what lets
+    `restart` run); `docker info` then reported `LiveRestoreEnabled: true`.
+  - `g7390`: `mise run docker:disposable -- start --name g7390 --net
+    gvisor-tap-vsock`, `live-restore` off.
+- **Image:** `orkestrator-v2:dev-3cfac2b2466a`
+  (`sha256:1986798475fb45cbac53b468746e88f7b702565ffe0d007a0670d2a823149de4`,
+  built 2026-11-10 12:52, capabilities including `egress-gateway=1`,
+  `egress-filter=1`, `network-policy=3`), copied in with `--image`. Its
+  `docker/` sources differ from `498b68766` in `Dockerfile`,
+  `workspace-setup.sh`, `orkestrator-bridge-launch.sh`,
+  `verify-root-boundary.sh`, `image-manifest.ts` and the artifact preview
+  worker; the firewall, gateway and entrypoint scripts are identical.
+
+Each suite ran with the variables from `docker:disposable -- env`,
+`RUN_LIVE_DOCKER_TESTS=1`, the image above, `TMPDIR` on the worktree's
+btrfs, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, the
+`docker-qualification-bin` shim first on `PATH` and
+`ORKESTRATOR_QUALIFICATION_EVIDENCE` naming a local JSON-lines file:
+
+```bash
+mise run test:logged -- --name l7390-restart -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-egress-conditions.test.ts -t "Docker daemon restart"
+```
+
+- **gvisor-tap-vsock, `live-restore` off: passed 1/1** (44.6 s), on the
+  `stopped` branch: after each restart Docker started neither container,
+  refused a bare start of the runtime while its gateway was stopped, and
+  the backend's start path brought both up with the policy enforced
+  (`CapEff` 0, report `applied`, `-P OUTPUT DROP` and the final REJECT, IPv6
+  off, `registry.npmjs.org` reachable, `example.com` refused). This is
+  7390 task 2's gvisor-tap-vsock run.
+- **slirp4netns, `live-restore` on: passed 1/1 on the second run** (30.7 s),
+  on the case's new rootless branch. The case's rootful `live-restore`
+  branch expects the gateway to keep running, which the first observation
+  below rules out (that branch was not run unchanged in this session).
+  What a rootless restart does to running containers with `live-restore`
+  on, from the evidence line:
+  - the new daemon reports both the gateway and the runtime exited
+    (containerd finds no shim: the launcher's restart, like a systemd
+    unit's stop, ends the shims with RootlessKit);
+  - both containers' processes keep running: 7 processes in the gateway's
+    pid namespace and 3 in the runtime's, in the old user and network
+    namespaces, which no daemon knows any more;
+  - the orphaned gateway's network reaches nothing: `curl` to the allowed
+    registry's address from inside its namespace (entered with `nsenter`
+    through the user namespace the user owns) exited 7, connection
+    refused or unreachable, because slirp4netns went with the old
+    RootlessKit;
+  - after the test killed the orphans (each pid checked against its
+    recorded start time and its cgroup naming the container id), the
+    backend's start path brought both up again with the policy enforced,
+    as with `live-restore` off.
+
+  So `live-restore` gains nothing on a rootless daemon and leaves the old
+  containers' processes running, on the same volumes the restarted
+  containers mount, until something kills them. The backend now warns once
+  per process (`docker` `daemon.rootless-live-restore`) when a rootless
+  daemon reports `live-restore` on.
+- **The first `live-restore` run failed on a port collision, not the
+  restart.** After the first daemon restart the gateway's start collided
+  on automatic host ports four times in a row (32772, 32776, 32777, after
+  32776 once on the earlier start), past the start path's three retries,
+  and failed with `port-conflict`. The holders were short-lived loopback
+  connections in `TIME-WAIT` on even ports from 32772 upward (Linux
+  prefers even ports for outbound connections), and a restarted rootless
+  daemon hands out automatic ports again from the bottom of the range. The
+  rerun a minute later passed. Recorded as 7549 task 4.
+- **What a retry draws.** On `l7390`, with host listeners holding the 14
+  ports after the daemon's next automatic port, a container publishing
+  three automatic ports on a labelled test network failed 14 starts in a
+  row, the network reconnected before each, each on the next held port
+  (32778 to 32789, then 32791 and 32793). Each failed start moves the
+  daemon's cursor on by one port. Without the reconnect, the second start
+  succeeded with no published ports.
+- **7549 task 1, the classification on current `main`:**
+  `docker-copy-refusal-docker.test.ts` passed 1/1 (7 assertions) on `l7390`
+  with the read-only bind from `/tmp`.
+- **7549 task 2, still not reproduced:** on `l7390` (containerd store)
+  `docker create` of the environment image and `docker cp` of a file into
+  it worked three times in a row, as a tar stream, after a start and stop,
+  and on a created container with a read-only bind from the worktree.
+- **Cleanup.** The test's labelled containers and network were removed by
+  its own `afterAll`; the probe containers and network were removed by id
+  and name; no container scope of either daemon was left under the user's
+  systemd manager; both daemons were stopped with `docker:disposable --
+  stop` (under 5 s each) and their tools cache and scratch files removed.
 
 ## Egress name checks on rootless Docker (2026-11-10)
 

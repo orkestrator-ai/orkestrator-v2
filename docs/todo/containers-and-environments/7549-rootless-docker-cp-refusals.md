@@ -4,16 +4,20 @@
 
 Analysed 2026-11-09 against `main` at `c6de4733c`; tasks 1 and 3 acted on
 2026-11-10 against `main` at `04639b12b`
-([evidence](../../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10)).
+([evidence](../../development/container-qualification.md#rootless-host-loopback-and-docker-cp-refusals-on-beelink-2026-11-10));
+tasks 1 and 2 re-checked and task 4 found on 2026-11-11 against `main` at
+`498b68766`
+([evidence](../../development/container-qualification.md#rootless-daemon-restart-with-live-restore-and-on-gvisor-tap-vsock-and-the-7549-re-checks-2026-11-11)).
 Found by the retired to-do 0109's task 5, the rootless re-run on a
 freshly built image
 ([evidence](../../development/container-qualification.md#rootless-re-run-on-a-freshly-built-image-2026-11-09)).
 
 ### Tasks
 
-1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
-2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10); the delivery change waits for a host that fails.
+1. **`docker cp` refused when a read-only bind's source is `nosuid`/`nodev`**: classify the refusal and decide whether to avoid it. Status: done (2026-11-10, the classification; still passing on 2026-11-11); the upstream report to Moby moved to the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+2. **`docker cp` into a container that is not running fails with `device or resource busy`**: establish where it happens, then stop project seed files, configured project files and the GitHub ranges seed depending on it there. Status: open. Not reproduced on beelink (kernel 7.1.8) on either image store (2026-11-10, again on the containerd store 2026-11-11); the next step is the probe on beelink2 (kernel 7.2.15), the one host that failed, and the delivery change waits for its result.
 3. **An automatic port can collide twice in a row**: decide whether the start path's single retry should become a bounded few. Status: done 2026-11-10 (three retries).
+4. **Automatic ports still collide past three retries right after a rootless daemon restart**: decide how the start path should stop drawing ports that loopback churn holds. Status: open (measured 2026-11-11; the recommended fix changes how containers are created and is not built yet).
 
 ### 1. `docker cp` refused when a read-only bind's source is `nosuid`/`nodev`
 
@@ -258,6 +262,67 @@ with its fault injection raised past the retries.
     - Cons: the range has to be chosen per host and kept free; fixed ranges
       collide between environments instead.
 
+### 4. Automatic ports still collide past three retries right after a rootless daemon restart
+
+**Problem.** On 2026-11-11 an egress gateway's start, the first after a
+disposable rootless daemon's restart, collided on automatic host ports four
+times in a row (`start.port-collision-retrying` for 32772, 32776 and 32777,
+then the fourth attempt), so the start failed with `port-conflict`. The
+start before the restart had collided once (32776) and then succeeded. The
+same case passed a minute later.
+
+**Context.** Task 3's three retries assumed each retry draws a fresh port
+away from short-lived holders. A rootless daemon allocates automatic ports
+inside RootlessKit's namespace from the bottom of that namespace's
+`ip_local_port_range` (32768–60999), and a restarted daemon starts there
+again. The host's own outbound connections take their local ports from the
+same range, and Linux gives `connect()` even ports by preference.
+
+**Investigation.** Right after the failure no socket listened on any of
+those ports; the host held about 1,650 TCP sockets in `TIME-WAIT`, mostly
+loopback, among them `127.0.0.1:32772`, `:32776`, `:32792` and `:32798` to
+one short-lived local server on port 34037 (other pipelines' tests were
+running). A `TIME-WAIT` socket on a port makes RootlessKit's bind of that
+port fail for up to 60 s. Docker drew 32776 twice across the attempts, so a
+retry does not always move away from a held port.
+
+Measured the same day on that daemon (`l7390`): with host listeners on the
+14 ports after the daemon's next automatic port, a container publishing
+three automatic ports failed 14 starts in a row (the network reconnected
+before each, as `startDockerContainer` does), each on the next held port
+in turn: 32778, 32779, … 32789, then 32791 and 32793, skipping only the
+free ports. So each failed start moves the daemon's cursor on by one port,
+and a run of held ports longer than the retry budget defeats any retry
+count. Without the reconnect the second start "succeeded" with no published
+ports, the Docker 29.9 behaviour the start path already handles.
+
+Steps:
+
+1. Done 2026-11-11: what each retry draws (above).
+2. Build the chosen fix and a unit test for it; qualify it on a disposable
+   rootless daemon with host listeners holding the next automatic ports.
+
+**Decisions.**
+
+- **How should a start avoid ports that loopback churn holds?**
+  - **On a rootless daemon, have the backend choose each automatic host port itself (a host `bind` to port 0) and publish it explicitly, marked as backend-chosen (recommended).**
+    - Pros: the host kernel hands out only a port nothing holds, and it
+      prefers odd ports for `bind`, away from outbound sockets; no walk
+      through a held run.
+    - Cons: ports are fixed at create time, so a later start reuses the
+      same port and a collision then needs a new port, which means
+      recreating the container or a label telling backend-chosen ports from
+      ports the user fixed (which the start path never retries).
+  - **Raise the retry count (for example to eight).**
+    - Pros: one constant; enough for a few isolated holders.
+    - Cons: measured to advance one port per attempt, so it only adds
+      Docker calls before the same failure when a run of ports is held.
+  - **Keep three retries and accept the failure.**
+    - Pros: no change; the hold lasts at most the 60 s of `TIME-WAIT`, and
+      the next start usually succeeds.
+    - Cons: a start fails with a `port-conflict` that names no port the
+      user can free, most often right after a daemon restart.
+
 ## Current state
 
 - Start, `exec`, copies into a running container and copies out of any
@@ -270,13 +335,17 @@ with its fault injection raised past the retries.
   firewall-failure cases now report `boot-record-copy-refused` instead of
   `container-exited` (task 1).
 - Copies into a created container work on beelink (kernel 7.1.8) on both
-  image stores; beelink2 (kernel 7.2.15, containerd store) refused them
-  (task 2).
+  image stores (again on 2026-11-11 on the containerd store); beelink2
+  (kernel 7.2.15, containerd store) refused them (task 2).
+- Right after a rootless daemon restart on a busy host, an automatic-port
+  start can still fail with `port-conflict` after three retries (task 4).
 
 ## Outstanding work
 
-- Task 2: reproduce `device or resource busy` on a host that fails, on both
-  image stores, then build the delivery fix and its live case.
+- Task 2: reproduce `device or resource busy` on a host that fails
+  (beelink2), on both image stores, then build the delivery fix and its
+  live case.
+- Task 4: measure what each retry draws, then pick the fix.
 
 ## Assumptions and decisions
 
@@ -319,6 +388,12 @@ creation time and architecture match. Why: step 1 needs the comparison
 daemon, and overlay2's image id is the config digest while the containerd
 store's is the manifest digest, so the old id check refused every image
 copied into an overlay2 instance.
+
+### Task 4 kept in this to-do (task 4)
+
+Chose: record the collision past the retries as task 4 here rather than a
+new to-do. Why: it is task 3's retry path failing under a condition task 3
+did not see, and this file already holds that evidence and decision.
 
 ## Related
 

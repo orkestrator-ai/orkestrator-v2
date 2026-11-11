@@ -61,6 +61,24 @@ export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 /** How long an orphaned agent CLI gets to leave on SIGTERM after its bridge died. */
 export const LOCAL_SERVER_ORPHAN_GRACE_MS = 2_000;
 
+/**
+ * How long a passed reuse health check stands for the same bridge process,
+ * port and token. Every native-agent read resolves its provider through the
+ * start command, and a live update makes two reads, so without this a viewer
+ * cost the bridge two `/global/health` requests per poll (to-do 6680, retired, task 6).
+ * A bridge that stops answering inside the window fails the read that follows
+ * it, and the next start after the window probes again.
+ */
+export const LOCAL_SERVER_HEALTHY_REUSE_MS = 2_000;
+
+/** A passed reuse health check (see {@link LOCAL_SERVER_HEALTHY_REUSE_MS}). */
+export type LocalServerHealthyAnswer = {
+  child: ChildProcessWithoutNullStreams;
+  port: number;
+  authToken: string;
+  at: number;
+};
+
 /** When an owned bridge process was first seen failing its reuse health check. */
 export type LocalServerUnresponsiveMarker = {
   child: ChildProcessWithoutNullStreams;
@@ -142,6 +160,8 @@ export class LocalServerRuntime {
   /** Credential generation used by each live local Cursor bridge. */
   private readonly cursorCredentialFingerprints = new Map<string, string>();
   private readonly unresponsiveMarkers = new Map<string, LocalServerUnresponsiveMarker>();
+  /** At most one per owned process key; dropped with the process or a failed probe. */
+  private readonly healthyAnswers = new Map<string, LocalServerHealthyAnswer>();
   private readonly accountIds = new Map<string, string>();
   private readonly tokenExpiry = new Map<string, number>();
   private readonly loginlessBridges = new Set<string>();
@@ -233,6 +253,7 @@ export class LocalServerRuntime {
     this.processes.delete(key);
     this.workingDirectories.delete(key);
     this.unresponsiveMarkers.delete(key);
+    this.healthyAnswers.delete(key);
     this.accountIds.delete(key);
     this.tokenExpiry.delete(key);
     this.loginlessBridges.delete(key);
@@ -368,6 +389,36 @@ export class LocalServerRuntime {
 
   markUnresponsive(key: string, marker: LocalServerUnresponsiveMarker): void {
     this.unresponsiveMarkers.set(key, marker);
+    this.healthyAnswers.delete(key);
+  }
+
+  /** Record a passed reuse health check for the process that owns `key`. */
+  recordHealthy(key: string, answer: LocalServerHealthyAnswer): void {
+    if (this.processes.get(key) !== answer.child) return;
+    this.healthyAnswers.set(key, answer);
+  }
+
+  /** Whether `child` passed a reuse health check on this port and token within the window. */
+  recentlyHealthy(
+    key: string,
+    child: ChildProcessWithoutNullStreams,
+    port: number,
+    authToken: string,
+    now = Date.now(),
+  ): boolean {
+    const answer = this.healthyAnswers.get(key);
+    if (!answer) return false;
+    if (
+      answer.child === child &&
+      answer.port === port &&
+      answer.authToken === authToken &&
+      now >= answer.at &&
+      now - answer.at < LOCAL_SERVER_HEALTHY_REUSE_MS
+    ) {
+      return true;
+    }
+    this.healthyAnswers.delete(key);
+    return false;
   }
 
   /** Clears the marker; with `child`, only when that process is the one it describes. */

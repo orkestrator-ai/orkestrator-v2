@@ -1094,7 +1094,8 @@ On the backend each read is still one `get_native_agent_transcript_update`
 with `forceSnapshot` (the conditional read saves the wire, not the window
 read). An open native tab polls the same read about twice a second while a
 turn streams (39 to 40 answers in 20 s in
-[to-do 6680](../todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md)),
+to-do 6680 (retired;
+`git show 1fd391e3a:docs/todo/transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md`)),
 so one follower costs about a quarter of one open tab. `attention --follow`
 has the same schedule; its page sizes are in
 [control-mcp-voice.md](control-mcp-voice.md#hearing-about-work-without-asking).

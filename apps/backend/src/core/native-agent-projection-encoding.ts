@@ -169,7 +169,7 @@ export function encodedBytesWithMessages<
  * message enters as its memoized fingerprint, so a read that changed one row
  * hashes that row's JSON once and a short string for every other row. Feeding
  * every row's JSON instead made the legacy commit's changed read slower than
- * the whole-projection `JSON.stringify` comparison it replaced (to-do 6260).
+ * the whole-projection `JSON.stringify` comparison it replaced (to-do 6260, retired).
  */
 export function digestWithMessages<T extends { messages: readonly unknown[] }>(
   prefix: string,

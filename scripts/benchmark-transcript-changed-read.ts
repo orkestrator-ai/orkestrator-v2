@@ -1,5 +1,5 @@
 /**
- * Changed transcript read benchmark (to-do 6260, efficiency batch E11).
+ * Changed transcript read benchmark (to-do 6260, retired, efficiency batch E11).
  *
  * Times what the backend does for one changed progressive transcript read: the
  * provider fake's tail row moves, the view asks with the token it holds and
@@ -42,13 +42,13 @@
  * where that exists. Interleave rounds across the trees; on a shared host the
  * run-to-run noise is larger than the gap between back-to-back runs. The
  * method and the figures from 2026-11-05 are in the efficiency index,
- * "Measurement of E11 (to-do 6260)".
+ * "Measurement of E11 (to-do 6260, retired)".
  *
  *   bun scripts/benchmark-transcript-changed-read.ts                # Markdown
  *   bun scripts/benchmark-transcript-changed-read.ts --json         # JSON
  *   bun scripts/benchmark-transcript-changed-read.ts --samples=400 --scenario=revised
  *
- * `--scan-bound` additionally times the three linear scans to-do 6260 task 1
+ * `--scan-bound` additionally times the three linear scans to-do 6260 (retired) task 1
  * asks about, each at its worst case (no match in a 100-row window), against
  * the same predicate shapes, as an upper bound on their share of a read.
  *
@@ -582,7 +582,7 @@ async function measure(
 }
 
 /**
- * Worst-case cost of each scan to-do 6260 task 1 names: a full pass over a
+ * Worst-case cost of each scan to-do 6260 (retired) task 1 names: a full pass over a
  * 100-row window with no match, using the same predicates as
  * `projectionMessages` (`firstUserMessageIndex`) and the two head lookups
  * (`recoveredHead`, `displayedHead`).

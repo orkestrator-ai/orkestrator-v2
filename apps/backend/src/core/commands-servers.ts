@@ -745,10 +745,17 @@ async function startLocalServerAttempt(
         localServers.process(key) === existing &&
         existing.exitCode === null &&
         existing.signalCode === null;
-      const health = await confirmRunningServerHealth(port, healthHeaders, isAlive, {
-        path: localServerHealthPath(kind),
-      });
+      // A reused answer is not renewed: only a real probe restarts the window.
+      const reused = isAlive() && localServers.recentlyHealthy(key, existing, port, authToken);
+      const health = reused
+        ? { healthy: true, failedProbes: 0 }
+        : await confirmRunningServerHealth(port, healthHeaders, isAlive, {
+            path: localServerHealthPath(kind),
+          });
       if (health.healthy) {
+        if (!reused) {
+          localServers.recordHealthy(key, { child: existing, port, authToken, at: Date.now() });
+        }
         localServers.clearUnresponsive(key);
         log.recovered("bridge.not-answering", key);
         return {

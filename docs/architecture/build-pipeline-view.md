@@ -1007,8 +1007,13 @@ user reviews its draft.
 
 The toolbar's **To pipeline** button acts on the active tab, when that is an
 open interactive native agent tab in a prompt environment. A running turn
-disables it with an explanation. Existing pipeline environments and coordinator
-or pipeline review launchers do not offer promotion.
+disables it with an explanation. The button re-reads eligibility
+(`auto_pipeline_sources`) every two seconds while the window is visible; that
+read uses only storage, the persisted dispatch flags and the backend's observed
+turn activity, and never starts or contacts a bridge. Drafting itself asks the
+provider for the tab's status and refuses a busy or unreachable tab. Existing
+pipeline environments and coordinator or pipeline review launchers do not offer
+promotion.
 
 The tab's own agent writes the draft. The button sends the tab an ordinary
 message (`autoPipelineDraftPrompt`, `packages/protocol/src/auto-pipeline.ts`)
@@ -1027,7 +1032,11 @@ fingerprint and the tab's newest dispatched request when the tool is called, and
 refuses a changed checkout or a newer message in the tab at confirmation. A
 second call replaces an unconfirmed draft. Asking again when neither has changed
 returns the existing draft without another message. Cancelling a request stops
-the tab's turn. A turn that ends without the tool being called fails the
+the drafting turn, and only that turn: the stop is request-scoped
+(`NativeAgentService.stopRequest`) and leaves the tab alone once a newer turn
+the user started has replaced it or the drafting turn has ended. A cancel that
+arrives before the tab accepted the drafting message only stops preparation and
+never stops the tab. A turn that ends without the tool being called fails the
 request with that reason; the wait itself ends after 30 minutes. A draft the
 agent submits after a failed or timed-out wait still reaches the tab.
 

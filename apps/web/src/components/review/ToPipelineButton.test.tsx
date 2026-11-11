@@ -149,3 +149,24 @@ test("stops polling when it unmounts", async () => {
   await new Promise((resolve) => setTimeout(resolve, 2300));
   expect(node.calls("auto_pipeline_sources")).toHaveLength(calls);
 });
+
+test("reads nothing while the window is hidden and reads again once it is shown", async () => {
+  const visibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+  const setVisibility = (value: DocumentVisibilityState) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  try {
+    setVisibility("hidden");
+    const node = client();
+    render(node, () => true);
+    await new Promise((resolve) => setTimeout(resolve, 2300));
+    expect(node.calls("auto_pipeline_sources")).toHaveLength(0);
+    act(() => setVisibility("visible"));
+    expect(await screen.findByRole("button", { name: "To pipeline" })).toBeTruthy();
+    expect(node.calls("auto_pipeline_sources")).toHaveLength(1);
+  } finally {
+    if (visibility) Object.defineProperty(document, "visibilityState", visibility);
+    else delete (document as { visibilityState?: unknown }).visibilityState;
+  }
+});

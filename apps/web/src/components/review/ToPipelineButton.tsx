@@ -7,7 +7,11 @@ import { useScopeBackend } from "@/hooks/useScopeBackend";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores";
 
-/** How often the active tab's eligibility is re-read, as the old launcher did. */
+/**
+ * How often the active tab's eligibility is re-read while the window is
+ * visible. The read is backend storage and in-memory activity only: it never
+ * starts or contacts a bridge (`AutoPipelineService.sources`).
+ */
 const POLL_MS = 2000;
 
 /** The id of the active tab of the environment's active pane, or null. */
@@ -25,7 +29,8 @@ function useActiveTabId(environmentId: string): string | null {
 /**
  * The source the backend offers for `tabId`, or null while the tab is not an
  * open interactive agent tab of a prompt environment. Polls only while a tab is
- * active and stops when unmounted.
+ * active and the window is visible, reads again when it becomes visible, and
+ * stops when unmounted.
  */
 function useAutoPipelineSource(environmentId: string, tabId: string | null) {
   const backend = useScopeBackend();
@@ -39,7 +44,7 @@ function useAutoPipelineSource(environmentId: string, tabId: string | null) {
     let disposed = false;
     let refreshing = false;
     const refresh = () => {
-      if (refreshing) return;
+      if (refreshing || disposed) return;
       refreshing = true;
       void backend
         .autoPipelineSources(environmentId)
@@ -60,11 +65,17 @@ function useAutoPipelineSource(environmentId: string, tabId: string | null) {
           refreshing = false;
         });
     };
-    refresh();
-    const timer = setInterval(refresh, POLL_MS);
+    // A hidden window shows no button, so it reads nothing until it is shown.
+    const poll = () => {
+      if (document.visibilityState !== "hidden") refresh();
+    };
+    poll();
+    const timer = setInterval(poll, POLL_MS);
+    document.addEventListener("visibilitychange", poll);
     return () => {
       disposed = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
     };
   }, [backend, environmentId, tabId]);
   return tabId && found?.tabId === tabId ? found.source : null;

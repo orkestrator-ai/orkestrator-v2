@@ -211,40 +211,39 @@ export class AutoPipelineService {
   private async session(environmentId: string, tabId: string) {
     return (await this.sessions(environmentId)).find((entry) => entry.tabId === tabId)?.session;
   }
+  /**
+   * The tabs that may be drafted from, for the toolbar button that polls it.
+   * Cheap on purpose: it reads the shared session snapshot, the persisted
+   * dispatch flags and the backend's last observed turn activity, and never
+   * starts, contacts or holds a bridge or provider, so an idle environment
+   * left on screen causes no bridge traffic. Drafting reads the provider's
+   * status itself and refuses a busy or unreachable tab, recording why.
+   */
   async sources(id: string): Promise<AutoPipelineSources> {
-    let environment: Environment;
     try {
-      environment = await this.environment(id);
+      await this.environment(id);
     } catch {
       return { available: false, sources: [] };
     }
-    const ports = this.ports();
-    try {
-      const sources = [];
-      for (const { tabId, session } of await this.sessions(id)) {
-        try {
-          const provider = await ports.provider(environment, session.agent);
-          const idle =
-            !session.pendingDispatch &&
-            !session.pendingSteer &&
-            (await provider.status(session.providerSessionId)) === "idle";
-          sources.push({
-            tabId,
-            label: session.backendTitle?.title ?? session.agent,
-            ...(!idle ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
-          });
-        } catch {
-          sources.push({
-            tabId,
-            label: session.backendTitle?.title ?? session.agent,
-            disabledReason: "This tab is unavailable. Retry when its provider reconnects",
-          });
-        }
-      }
-      return { available: true, sources };
-    } finally {
-      ports.release();
-    }
+    const nativeAgents = this.context.nativeAgents;
+    const sources = (await this.sessions(id, true)).map(({ tabId, session }) => {
+      const activity = nativeAgents?.sessionTurnActivitySnapshot(
+        id,
+        session.agent,
+        session.logicalSessionKey,
+      );
+      const busy =
+        !!session.pendingDispatch ||
+        !!session.pendingSteer ||
+        activity === "working" ||
+        activity === "waiting";
+      return {
+        tabId,
+        label: session.backendTitle?.title ?? session.agent,
+        ...(busy ? { disabledReason: "Wait for this tab's turn to finish" } : {}),
+      };
+    });
+    return { available: true, sources };
   }
   private async fingerprint(ports: AutoPipelinePorts, environment: Environment) {
     const id = environment.id;
@@ -326,10 +325,16 @@ export class AutoPipelineService {
     const source = await this.session(environmentId, tabId);
     if (!source) throw new Error("Choose an open interactive agent tab");
     const ports = this.ports();
-    let provider: BuildPipelineProvider | undefined;
+    const identity = {
+      environmentId,
+      agent: source.agent,
+      logicalSessionKey: source.logicalSessionKey,
+    };
+    /** Set once the tab accepted the drafting message; only that turn may be stopped. */
+    let accepted: string | undefined;
     try {
       signal.throwIfAborted();
-      provider = await ports.provider(environment, source.agent);
+      const provider = await ports.provider(environment, source.agent);
       if (
         source.pendingDispatch ||
         source.pendingSteer ||
@@ -350,11 +355,6 @@ export class AutoPipelineService {
       const startedAt = Date.now();
       const deadline = startedAt + this.draftTimeoutMs;
       const requestId = `auto-pipeline:${randomUUID()}`;
-      const identity = {
-        environmentId,
-        agent: source.agent,
-        logicalSessionKey: source.logicalSessionKey,
-      };
       const outcome = await nativeAgents.dispatchIntent({
         ...identity,
         origin: "interactive-native",
@@ -365,6 +365,7 @@ export class AutoPipelineService {
         throw new Error(
           ("error" in outcome && outcome.error) || "The tab did not accept the drafting request",
         );
+      accepted = requestId;
       const submitted = () => {
         const record = this.context.storage.latestAutoPipelineDraft(environmentId, tabId);
         return record && Date.parse(record.attempt.completedAt) >= startedAt ? record.draft : null;
@@ -391,10 +392,13 @@ export class AutoPipelineService {
       }
       throw new Error("Drafting timed out waiting for the agent");
     } catch (error) {
-      // Stopping the wait stops the agent's turn: it would otherwise carry on
-      // drafting something nobody is waiting for.
-      if (signal.aborted && provider)
-        await provider.abort(source.providerSessionId).catch(() => undefined);
+      // Stopping the wait stops the agent's drafting turn: it would otherwise
+      // carry on drafting something nobody is waiting for. The tab is the
+      // user's own, so only that turn is stopped, and only while it is still
+      // the one running. A cancel before the tab accepted the message only
+      // stops the preparation: whatever the tab runs then is the user's.
+      if (signal.aborted && accepted)
+        await nativeAgents.stopRequest({ ...identity, requestId: accepted }).catch(() => undefined);
       throw error;
     } finally {
       ports.release();

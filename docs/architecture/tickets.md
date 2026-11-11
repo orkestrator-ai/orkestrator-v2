@@ -390,10 +390,13 @@ side.
   led by what needs a look), with the Notes headings as its index. The bar
   shows the pull request's state (open, draft, checks running or failed,
   conflicts, ready to merge, merged, closed) from the same readiness rule as
-  the environment name and auto-merge, a Merge button enabled only when that
-  rule says ready (and confirmed before it merges), and the auto-merge
-  toggle (the action bar's switch), which merges when ready and launches
-  Resolve for conflicts.
+  the environment name and auto-merge, a Merge button that opens the action
+  bar's Merge PR dialog (`MergePrDialog`) with two options, Merge PR (enabled
+  only when that rule says ready) and Auto-merge & Cleanup (offered while
+  checks are still pending), and the auto-merge toggle (the action bar's
+  switch), which merges when ready and launches Resolve for conflicts. The
+  ticket view leaves out Resolve and Merge & Cleanup, which need the action
+  bar.
   Nothing merges without a click. The tab is disabled, with the reason shown,
   when the ticket has no build here with Notes; a ticket built on another
   machine says which.

@@ -350,7 +350,8 @@ or question). Under forced colours the sweep is removed. The row's
 
 The **Auto-merge** toggle in the action bar's PR section (shown while the PR
 is open; the ticket view's pull request bar has the same toggle) and the
-**Auto-merge & Cleanup** option of the Merge PR dialog set the environment's
+**Auto-merge & Cleanup** option of the Merge PR dialog (also offered from the
+ticket view's Merge button) set the environment's
 durable `autoMerge` flag through `set_environment_auto_merge`. While the flag is on, the sidebar row shows a
 white merge icon to the right of the environment name. Turning it off stores an
 explicit `false`, because renderers merge environment records field by field.

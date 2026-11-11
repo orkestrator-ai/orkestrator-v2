@@ -90,8 +90,8 @@ import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./Mobil
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { MergePrDialog, prMergeability } from "./MergePrDialog";
+import { armAutoMergeCleanup } from "./auto-merge-cleanup";
 import { useAutoMergeHold } from "@/hooks/useEnvironmentNameSignal";
-import { toast } from "sonner";
 import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -407,24 +407,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const autoMergeHold = useAutoMergeHold(selectedEnvironment?.id ?? "", selectedEnvironment);
   const mergeability = prMergeability(hasMergeConflicts);
 
-  // The Merge PR dialog's Auto-merge & Cleanup: arms the backend's auto-merge
-  // with cleanup, and says what it will wait for when that needs someone to act.
-  const armAutoMergeCleanup = async () => {
-    const environmentId = selectedEnvironment?.id;
-    if (!environmentId) return;
-    const on = await autoMerge.set(true, true);
-    if (!on) return;
-    if (autoMergeHold && !autoMergeHold.transient) {
-      toast.warning("Auto-merge & Cleanup is on", {
-        description: `Waiting: ${autoMergeHold.message}`,
-        id: `auto-merge-cleanup-${environmentId}`,
-      });
-    } else {
-      toast.success("Auto-merge & Cleanup is on", {
-        description: "Merges when ready and resolves conflicts, then deletes this environment.",
-        id: `auto-merge-cleanup-${environmentId}`,
-      });
-    }
+  // Every way the Merge PR dialog closes clears an earlier merge failure, so a
+  // reopened dialog (possibly for another environment) never shows a stale one.
+  const setMergeDialogOpenClearingError = (open: boolean) => {
+    setMergeDialogOpen(open);
+    if (!open) setMergeError(null);
   };
 
   // Configure dialogs open on the Settings action default, which is the same
@@ -1824,10 +1811,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       {/* Merge PR options: merge, merge & cleanup, resolve, auto-merge & cleanup */}
       <MergePrDialog
         open={mergeDialogOpen}
-        onOpenChange={(open) => {
-          setMergeDialogOpen(open);
-          if (!open) setMergeError(null); // Clear error when closing
-        }}
+        onOpenChange={setMergeDialogOpenClearingError}
         mergeability={mergeability}
         sourceBranch={<BranchName>{sourceBranch}</BranchName>}
         targetBranch={<BranchName>{targetBranch}</BranchName>}
@@ -1863,12 +1847,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   : null,
           busy: resolveLaunchInFlight,
           onResolve: () => {
-            setMergeDialogOpen(false);
+            setMergeDialogOpenClearingError(false);
             void handleResolveConflicts();
           },
           onConfigure: canConfigureResolve
             ? () => {
-                setMergeDialogOpen(false);
+                setMergeDialogOpenClearingError(false);
                 openResolveDialog();
               }
             : null,
@@ -1881,8 +1865,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           saving: autoMerge.saving,
           hold: autoMergeHold,
           onArm: () => {
-            setMergeDialogOpen(false);
-            void armAutoMergeCleanup();
+            setMergeDialogOpenClearingError(false);
+            if (selectedEnvironment) {
+              void armAutoMergeCleanup(selectedEnvironment.id, autoMerge.set, autoMergeHold);
+            }
           },
         }}
       />

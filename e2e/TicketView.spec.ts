@@ -46,7 +46,7 @@ test.describe("the ticket view", () => {
     await preview(page, testInfo, "ticket-tab-scrolled");
   });
 
-  test("a Review ticket with Notes opens on Notes, whose bar shows the PR and gates Merge", async ({
+  test("a Review ticket with Notes opens on Notes, whose bar shows the PR and gates merging", async ({
     page,
   }, testInfo) => {
     await page.goto("/ticket-view?column=review");
@@ -57,7 +57,6 @@ test.describe("the ticket view", () => {
     );
     const bar = dialog.getByRole("toolbar", { name: "Pull request actions" });
     await expect(bar.getByTestId("ticket-pr-state")).toHaveText("Checks running");
-    await expect(bar.getByRole("button", { name: "Merge", exact: true })).toBeDisabled();
     await expect(bar.getByRole("button", { name: "Auto-merge" })).toBeEnabled();
     await preview(page, testInfo, "notes-tab-review");
 
@@ -66,9 +65,20 @@ test.describe("the ticket view", () => {
     });
     await expect(bar).toBeInViewport();
     await preview(page, testInfo, "notes-tab-scrolled");
+
+    // Merge opens the options while checks run: merging waits, Auto-merge &
+    // Cleanup is offered.
+    await bar.getByRole("button", { name: "Merge", exact: true }).click();
+    const options = page
+      .getByRole("alertdialog", { name: "Merge Pull Request" })
+      .getByRole("group", { name: "Merge options" });
+    await expect(options.getByRole("button", { name: "Merge PR" })).toBeDisabled();
+    await expect(options.getByRole("button", { name: "Auto-merge & Cleanup" })).toBeEnabled();
+    await expect(options.getByRole("button", { name: "Resolve" })).toHaveCount(0);
+    await preview(page, testInfo, "notes-tab-merge-options");
   });
 
-  test("Merge is enabled when the pull request is ready, and asks before merging", async ({
+  test("Merge is enabled when the pull request is ready, and opens the options before merging", async ({
     page,
   }, testInfo) => {
     await page.goto("/ticket-view?column=review&ready");
@@ -77,7 +87,9 @@ test.describe("the ticket view", () => {
     await expect(bar.getByRole("button", { name: "Merge", exact: true })).toBeEnabled();
     await preview(page, testInfo, "notes-tab-ready");
     await bar.getByRole("button", { name: "Merge", exact: true }).click();
-    await expect(page.getByRole("alertdialog", { name: "Merge pull request" })).toBeVisible();
+    const dialog = page.getByRole("alertdialog", { name: "Merge Pull Request" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Merge PR" })).toBeEnabled();
   });
 
   test("a ticket with no build has Notes disabled with the reason", async ({ page }, testInfo) => {

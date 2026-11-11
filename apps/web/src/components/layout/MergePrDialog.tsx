@@ -39,14 +39,20 @@ export interface MergePrDialogProps {
     /** Why merging now is not possible, or null when it is. */
     disabledReason: string | null;
     onMerge: (cleanupAfterMerge: boolean) => void;
+    /**
+     * Whether to offer Merge & Cleanup. Off where the surface cannot show a
+     * failed cleanup's retry (the ticket view); defaults to on.
+     */
+    offerCleanup?: boolean;
   };
+  /** Resolve's option; null where the surface cannot launch Resolve (the ticket view). */
   resolve: {
     disabledReason: string | null;
     busy: boolean;
     onResolve: () => void;
     /** Opens the agent picker for Resolve; absent when it cannot open. */
     onConfigure: (() => void) | null;
-  };
+  } | null;
   autoMergeCleanup: {
     disabledReason: string | null;
     /** Auto-merge & Cleanup is already armed for this pull request. */
@@ -64,7 +70,8 @@ export interface MergePrDialogProps {
  * merge and delete the environment, launch Resolve for conflicts, and arm
  * Auto-merge & Cleanup, which merges whenever GitHub reports the PR ready,
  * resolving conflicts as needed, and then deletes the environment. Plain
- * auto-merge stays on its own toggle beside the button.
+ * auto-merge stays on its own toggle beside the button. The ticket view
+ * reuses it without Resolve and Merge & Cleanup, which need the action bar.
  */
 export function MergePrDialog({
   open,
@@ -125,64 +132,68 @@ export function MergePrDialog({
               Merge PR
             </Button>
           </MergeOption>
-          <MergeOption
-            description={
-              merge.disabledReason ??
-              "Merge now, then permanently delete this environment, but only after the merge is confirmed successful."
-            }
-          >
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              className="w-full shrink-0 justify-start gap-2 sm:w-52"
-              disabled={mergeDisabled}
-              onClick={() => merge.onMerge(true)}
+          {merge.offerCleanup !== false ? (
+            <MergeOption
+              description={
+                merge.disabledReason ??
+                "Merge now, then permanently delete this environment, but only after the merge is confirmed successful."
+              }
             >
-              <Trash2 className="h-4 w-4" />
-              Merge &amp; Cleanup
-            </Button>
-          </MergeOption>
-          <MergeOption
-            description={
-              resolve.disabledReason ??
-              (mergeability === "checking"
-                ? "Launch an agent to merge the target branch into this one and fix any conflicts, without waiting for GitHub's check."
-                : "Launch an agent to merge the target branch into this one and fix the conflicts.")
-            }
-            extra={
-              resolve.onConfigure ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-xs"
-                  onClick={resolve.onConfigure}
-                >
-                  Choose agent…
-                </Button>
-              ) : null
-            }
-          >
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className={cn(
-                "w-full shrink-0 justify-start gap-2 sm:w-52",
-                mergeability === "conflicts" && "border-destructive text-destructive",
-              )}
-              disabled={resolve.disabledReason !== null || resolve.busy}
-              onClick={resolve.onResolve}
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                className="w-full shrink-0 justify-start gap-2 sm:w-52"
+                disabled={mergeDisabled}
+                onClick={() => merge.onMerge(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                Merge &amp; Cleanup
+              </Button>
+            </MergeOption>
+          ) : null}
+          {resolve ? (
+            <MergeOption
+              description={
+                resolve.disabledReason ??
+                (mergeability === "checking"
+                  ? "Launch an agent to merge the target branch into this one and fix any conflicts, without waiting for GitHub's check."
+                  : "Launch an agent to merge the target branch into this one and fix the conflicts.")
+              }
+              extra={
+                resolve.onConfigure ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={resolve.onConfigure}
+                  >
+                    Choose agent…
+                  </Button>
+                ) : null
+              }
             >
-              {resolve.busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <AlertTriangle className="h-4 w-4" />
-              )}
-              Resolve
-            </Button>
-          </MergeOption>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className={cn(
+                  "w-full shrink-0 justify-start gap-2 sm:w-52",
+                  mergeability === "conflicts" && "border-destructive text-destructive",
+                )}
+                disabled={resolve.disabledReason !== null || resolve.busy}
+                onClick={resolve.onResolve}
+              >
+                {resolve.busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <AlertTriangle className="h-4 w-4" />
+                )}
+                Resolve
+              </Button>
+            </MergeOption>
+          ) : null}
           <MergeOption
             description={
               autoMergeCleanup.disabledReason ??

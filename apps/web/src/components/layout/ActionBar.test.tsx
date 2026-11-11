@@ -6464,6 +6464,160 @@ describe("ActionBar pull request actions", () => {
     expect(options.getByText(/^Already on:/)).toBeTruthy();
   });
 
+  test("a rejected Auto-merge & Cleanup save reports the error without a success toast", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    await act(async () => {
+      fireEvent.click(
+        within(mergeOptions()!).getByRole("button", { name: "Auto-merge & Cleanup" }),
+      );
+    });
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not turn on auto-merge", {
+        description: "backend unavailable",
+      }),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+  });
+
+  test("a backend that drops the cleanup choice gets no success toast", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => ({
+      ...currentEnvironment,
+      autoMerge: true,
+      autoMergeCleanup: false,
+    }));
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    await act(async () => {
+      fireEvent.click(
+        within(mergeOptions()!).getByRole("button", { name: "Auto-merge & Cleanup" }),
+      );
+    });
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Auto-merge options were not saved"),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(toastWarningMock).not.toHaveBeenCalled();
+  });
+
+  test("an armed Auto-merge & Cleanup that waits on someone to act warns instead of confirming", async () => {
+    // GitHub reports the PR cannot merge yet (a draft), on a confirmed reading.
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "unavailable",
+    };
+    appCommandStore(prMonitorStore).setState({
+      syncStatus: "current",
+      states: new Map([
+        [
+          currentEnvironment.id,
+          {
+            environmentId: currentEnvironment.id,
+            mode: "normal",
+            checkInProgress: false,
+            checkSummary: { passed: 3, total: 3, pending: 0 },
+            consecutiveErrors: 0,
+            lastCheckAt: "2026-01-01T00:00:00.000Z",
+            lastSuccessfulCheckAt: "2026-01-01T00:00:00.000Z",
+            prUrl: currentEnvironment.prUrl,
+            prState: "open",
+            hasMergeConflicts: false,
+          } as never,
+        ],
+      ]),
+    });
+    setEnvironmentAutoMergeMock.mockImplementationOnce(async () => ({
+      ...currentEnvironment,
+      autoMerge: true,
+      autoMergeCleanup: true,
+    }));
+    renderInAppCommandScope(<ActionBar />);
+
+    fireEvent.click(mergePrButton());
+    const options = within(mergeOptions()!);
+    expect(options.getByRole("note").textContent).toBe(
+      "Auto-merge will wait: The pull request is a draft.",
+    );
+    await act(async () => {
+      fireEvent.click(options.getByRole("button", { name: "Auto-merge & Cleanup" }));
+    });
+    await waitFor(() =>
+      expect(toastWarningMock).toHaveBeenCalledWith("Auto-merge & Cleanup is on", {
+        description: "Waiting: The pull request is a draft.",
+        id: "auto-merge-cleanup-env-1",
+      }),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("a stopped environment's Merge PR opens the options with merging and Resolve disabled", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+      status: "stopped",
+    };
+    renderInAppCommandScope(<ActionBar />);
+
+    const merge = mergePrButton();
+    expect(merge.disabled).toBe(false);
+    fireEvent.click(merge);
+    const options = within(mergeOptions()!);
+    for (const name of ["Merge PR", "Merge & Cleanup", "Resolve"]) {
+      expect((options.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(options.getAllByText("The container must be running to merge.")).toHaveLength(2);
+    expect(options.getByText("The container must be running to resolve conflicts.")).toBeTruthy();
+    expect(
+      (options.getByRole("button", { name: "Auto-merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  // The merge options close themselves when an option starts something else;
+  // a merge failure shown before must not come back when they are reopened.
+  for (const option of ["Resolve", "Choose agent…", "Auto-merge & Cleanup"] as const) {
+    test(`closing the merge options through ${option} clears an earlier merge error`, async () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+      mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("merge failed"));
+      const view = renderInAppCommandScope(<ActionBar />);
+
+      confirmMerge();
+      await waitFor(() => findErrorAlert("Failed to merge PR:"));
+
+      if (option !== "Auto-merge & Cleanup") {
+        // Resolve and its agent picker are offered once GitHub reports conflicts.
+        currentEnvironment = { ...currentEnvironment, hasMergeConflicts: true };
+        view.rerender(<ActionBar />);
+      }
+      await act(async () => {
+        fireEvent.click(within(mergeOptions()!).getByRole("button", { name: option }));
+      });
+      expect(mergeOptions() === null).toBe(true);
+      // Close whatever the option opened, then reopen the merge options.
+      if (option === "Choose agent…") {
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      }
+      await waitFor(() => expect(mergeOptions() === null).toBe(true));
+      fireEvent.click(mergePrButton());
+      expect(mergeOptions() !== null).toBe(true);
+      expect(
+        screen.queryByText(
+          (_content, element) => element?.textContent?.startsWith("Failed to merge PR:") ?? false,
+        ) === null,
+      ).toBe(true);
+    });
+  }
+
   test("opens the Resolve modal from a right-click while mergeability is pending", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

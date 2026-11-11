@@ -105,4 +105,21 @@ describe("MergePrDialog", () => {
     expect(button.disabled).toBe(true);
     expect(options().getByText("Never deleted.")).toBeTruthy();
   });
+
+  test("leaves out Resolve and Merge & Cleanup where the surface cannot offer them", () => {
+    const onMerge = mock(() => {});
+    render(
+      <MergePrDialog
+        {...props({
+          merge: { disabledReason: null, onMerge, offerCleanup: false },
+          resolve: null,
+        })}
+      />,
+    );
+    expect(options().queryByRole("button", { name: "Resolve" }) === null).toBe(true);
+    expect(options().queryByRole("button", { name: "Merge & Cleanup" }) === null).toBe(true);
+    expect(options().getByRole("button", { name: "Auto-merge & Cleanup" })).toBeTruthy();
+    fireEvent.click(options().getByRole("button", { name: "Merge PR" }));
+    expect(onMerge).toHaveBeenLastCalledWith(false);
+  });
 });

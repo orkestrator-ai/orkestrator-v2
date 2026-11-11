@@ -4,7 +4,11 @@ import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import { mockToastError as toastErrorMock } from "../../mocks/sonner";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+  mockToastWarning as toastWarningMock,
+} from "../../mocks/sonner";
 
 /**
  * The ticket view's tabs (`KanbanTaskDialog`, `ticket-view/`): which tab a
@@ -17,6 +21,13 @@ import { mockToastError as toastErrorMock } from "../../mocks/sonner";
 const startBuildMock = mock(async () => "pipeline-1" as string | undefined);
 const navigateToBuildMock = mock(() => {});
 const mergeEnvironmentPrMock = mock(async () => ({ outcome: "merged" as const }));
+const setEnvironmentAutoMergeMock = mock(
+  async (id: string, enabled: boolean, cleanupAfterMerge?: boolean) => ({
+    id,
+    autoMerge: enabled,
+    autoMergeCleanup: enabled && cleanupAfterMerge === true,
+  }),
+);
 
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realBackend from "@/lib/backend";
@@ -33,6 +44,7 @@ mock.module("@/lib/backend", () => ({
   getEnvironmentHead: mock(async () => null),
   getCachedOpenCodeModelCatalog: mock(async () => null),
   mergeEnvironmentPr: mergeEnvironmentPrMock,
+  setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
 }));
 
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
@@ -119,6 +131,13 @@ function withPullRequest(ready: boolean) {
   });
 }
 
+/** The ticket bar's Merge options, opened from its Merge button. */
+function openMergeOptions(bar: HTMLElement) {
+  fireEvent.click(within(bar).getByRole("button", { name: "Merge" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Merge Pull Request" });
+  return { dialog, options: within(within(dialog).getByRole("group", { name: "Merge options" })) };
+}
+
 function tab(name: "Ticket" | "Notes") {
   return screen.getByRole("tab", { name });
 }
@@ -132,7 +151,10 @@ describe("the ticket view's tabs", () => {
     startBuildMock.mockClear();
     navigateToBuildMock.mockClear();
     mergeEnvironmentPrMock.mockClear();
+    setEnvironmentAutoMergeMock.mockClear();
     toastErrorMock.mockClear();
+    toastSuccessMock.mockClear();
+    toastWarningMock.mockClear();
     appCommandStore(kanbanStore).setState({ ...initialKanbanState, tasks: [] });
     appCommandStore(environmentStore).setState({ ...initialEnvironmentState, environments: [] });
     appCommandStore(buildPipelineStore).setState({
@@ -280,7 +302,7 @@ describe("the ticket view's tabs", () => {
     ).toBe(true);
   });
 
-  test("the Notes tab's bar shows the PR state and keeps Merge disabled until it is ready", () => {
+  test("the Notes tab's bar shows the PR state, and its merge options hold merging until it is ready", () => {
     withNotes();
     withPullRequest(false);
     renderInAppCommandScope(
@@ -296,12 +318,57 @@ describe("the ticket view's tabs", () => {
     expect(column.contains(bar)).toBe(false);
     expect(within(bar).getByTestId("ticket-pr-state").textContent).toBe("Draft");
     expect(within(bar).getByTestId("ticket-pr-checks").textContent).toBe("3 checks passed");
-    expect((within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
     expect(within(bar).getByRole("button", { name: "Auto-merge" })).toBeTruthy();
     expect(within(bar).queryByRole("button", { name: /Integrate/ }) === null).toBe(true);
+    // Merge opens the options while checks are pending; merging now waits.
+    const merge = within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement;
+    expect(merge.disabled).toBe(false);
+    const { options } = openMergeOptions(bar);
+    expect((options.getByRole("button", { name: "Merge PR" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(options.getAllByText(/The pull request is a draft\./).length > 0).toBe(true);
+    expect(options.getByRole("note").textContent).toBe(
+      "Auto-merge will wait: The pull request is a draft.",
+    );
+    expect(
+      (options.getByRole("button", { name: "Auto-merge & Cleanup" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    // The ticket view cannot launch Resolve or retry a failed cleanup.
+    expect(options.queryByRole("button", { name: "Resolve" }) === null).toBe(true);
+    expect(options.queryByRole("button", { name: "Merge & Cleanup" }) === null).toBe(true);
     expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+  });
+
+  test("Auto-merge & Cleanup is offered from the ticket bar while checks are pending", async () => {
+    withNotes();
+    withPullRequest(false);
+    renderInAppCommandScope(
+      <KanbanTaskDialog
+        task={makeTask({ status: "review", environmentId: "env-1" })}
+        open
+        onOpenChange={() => {}}
+        openedFrom="review"
+      />,
+    );
+    const bar = screen.getByRole("toolbar", { name: "Pull request actions" });
+    const { options } = openMergeOptions(bar);
+    await act(async () => {
+      fireEvent.click(options.getByRole("button", { name: "Auto-merge & Cleanup" }));
+    });
+    expect(screen.queryByRole("alertdialog", { name: "Merge Pull Request" }) === null).toBe(true);
+    await waitFor(() =>
+      expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith("env-1", true, true),
+    );
+    expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+    // A draft needs someone to act, so the toast warns what it waits for.
+    await waitFor(() =>
+      expect(toastWarningMock).toHaveBeenCalledWith("Auto-merge & Cleanup is on", {
+        description: "Waiting: The pull request is a draft.",
+        id: "auto-merge-cleanup-env-1",
+      }),
+    );
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
   test("Merge is enabled when the PR is ready, and merges only after the click is confirmed", async () => {
@@ -319,11 +386,10 @@ describe("the ticket view's tabs", () => {
     expect(within(bar).getByTestId("ticket-pr-state").textContent).toBe("Ready to merge");
     const merge = within(bar).getByRole("button", { name: "Merge" }) as HTMLButtonElement;
     expect(merge.disabled).toBe(false);
-    fireEvent.click(merge);
+    const { options } = openMergeOptions(bar);
     expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
-    const confirm = screen.getByRole("alertdialog", { name: "Merge pull request" });
     await act(async () => {
-      fireEvent.click(within(confirm).getByRole("button", { name: "Merge" }));
+      fireEvent.click(options.getByRole("button", { name: "Merge PR" }));
     });
     await waitFor(() =>
       expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
@@ -364,10 +430,9 @@ describe("the ticket view's tabs", () => {
       />,
     );
     const bar = screen.getByRole("toolbar", { name: "Pull request actions" });
-    fireEvent.click(within(bar).getByRole("button", { name: "Merge" }));
-    const confirm = screen.getByRole("alertdialog", { name: "Merge pull request" });
+    const { options } = openMergeOptions(bar);
     await act(async () => {
-      fireEvent.click(within(confirm).getByRole("button", { name: "Merge" }));
+      fireEvent.click(options.getByRole("button", { name: "Merge PR" }));
     });
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith("The pull request could not be merged", {

@@ -24,13 +24,14 @@ const DAEMON_UNREACHABLE =
  * waiting for container: unexpected EOF" for one that is killed, both with
  * exit 125 and no output from the container's command. Only connection-loss
  * wording counts; a daemon that answered (`Error response from daemon: …`) is
- * not an outage. Without this, a copy helper cut off by a `systemctl restart
+ * not an outage, even when its answer itself names one of those words (the
+ * lookahead refuses the whole line). Without this, a copy helper cut off by a `systemctl restart
  * docker` read as files that failed verification: by the time the outage was
  * probed, systemd's socket activation held the probe until the new daemon
  * answered it (live C15 on GitHub's runners).
  */
 const DAEMON_LOST_WHILE_WAITING =
-  /error waiting for container: .*\b(?:unexpected EOF|context canceled|client connection is closing|connection reset by peer|connection refused|broken pipe)\b/i;
+  /error waiting for container: (?![^\n]*error response from daemon)[^\n]*\b(?:unexpected EOF|context canceled|client connection is closing|connection reset by peer|connection refused|broken pipe)\b/i;
 
 /**
  * Only the daemon's own answer that a container path does not exist. A CLI

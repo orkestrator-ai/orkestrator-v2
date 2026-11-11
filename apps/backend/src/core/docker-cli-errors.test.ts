@@ -40,6 +40,15 @@ describe("docker CLI error wording", () => {
         "Error waiting for container: Error response from daemon: No such container: abc",
       ),
     ).toBe(false);
+    // Even when the daemon's answer itself contains connection-loss wording.
+    for (const answered of [
+      "Error waiting for container: Error response from daemon: dial tcp 10.0.0.2:5000: connect: connection refused",
+      'time="2026-11-11T14:55:41Z" level=error msg="error waiting for container: Error response from daemon: read: connection reset by peer"',
+      "Error waiting for container: Error response from daemon: unexpected EOF",
+    ]) {
+      expect(isDockerDaemonUnreachable(answered)).toBe(false);
+      expect(operationFailureCode(new Error(answered))).not.toBe("daemon-unavailable");
+    }
     expect(operationFailureCode(new Error("something else"))).toBe("unknown");
   });
 });

@@ -1,9 +1,10 @@
 # MCP server management
 
 Status: living. Outstanding work is in
-[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md),
-[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md) and
-[0121-claude-plugin-mcp-servers.md](../todo/mcp/0121-claude-plugin-mcp-servers.md).
+[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md) and
+[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md);
+the human-only checks are in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 Users add, edit, rename, remove and (where the provider has a saved switch)
 enable or disable the MCP servers each agent platform connects to, without
@@ -187,8 +188,11 @@ is not permission to execute. The editor never changes an execution policy.
 - **Grok saved enable.** `enabled = false` and the top-level
   `disabled_mcp_servers` list are shown as disabled. The editor does not offer
   the switch (unverified) and never writes `enabled`.
-- **Claude plugins** (todo 0121, rules read from the pinned CLI 2.1.309 and
-  proven on it by `mise run verify:claude:plugin-mcp-live`):
+- **Claude plugins** (todo 0121 (retired 2026-11-11), rules read from the
+  pinned CLI 2.1.309 and proven by `mise run verify:claude:plugin-mcp-live`,
+  last on 2.1.319 on 2026-11-11, from a throwaway toolchain install through
+  `CLAUDE_CLI_PATH`: 2 pass, 64 expects; the probe refuses a
+  `CLAUDE_CLI_PATH` inside the real data directory, `live-cli-guard.ts`):
   - The plugin set is the bridge's (`getPluginsForSdk`): `plugins` in
     `~/.claude.json`, the installs in `installed_plugins.json` that Claude
     Code's own settings enable, remapped onto the local plugins folder (or,
@@ -877,7 +881,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge/mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | Apply (2026-10-25) | `service-apply.test.ts` (OpenCode idle-gated rebuild, its listing check, user files and containers kept on restart; Codex turn evidence, the open dispatch excluded, not-running, the evidence window), `commands-registry-mcp.test.ts` (OpenCode reload probe re-posts `orkestrator`), `opencode-capabilities.test.ts` (sign-in guidance, error redaction; retired with 1.x), `http-bridge/mcp-inventory.test.ts` (relay redaction), `apps/backend/tests/opencode-mcp-reload-live.test.ts` (OpenCode 1.19.4, credential-free; retired with 1.x: `git show 5f4e27b1c:apps/backend/tests/opencode-mcp-reload-live.test.ts`). OpenCode 2's reload and MCP rows: `opencode2/environment-provider.test.ts`, `opencode2-mcp.live.test.ts`, `opencode2-user-config.live.test.ts` |
-| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled, and installs whose marketplace id is turned off or never enabled not passed, not loaded and shown disabled with that reason (2026-10-26, todo 0151)); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
+| Claude plugins (2026-10-25) | `packages/protocol/src/node/claude-plugin-set.test.ts` (merge, remap, names, `enabledPlugins`, declarations), `service-claude-plugins.test.ts` (sources, names, precedence, disabled reasons, notes, values as written, refused writes, bounds, container), `claude-plugin-mcp-parity.test.ts` (the bridge's `getPluginsForSdk` and the catalogue over the same files), Claude bridge `mcp-runtime-status.test.ts` (plugin layer), `mcp-live-join.test.ts`, `McpStatusAndStates.test.tsx`; `apps/backend/tests/claude-plugin-mcp-live.test.ts` (`mise run verify:claude:plugin-mcp-live`: the pinned CLI 2.1.309, credential-free, editor rows = live rows = join across user, project and local settings, including the enabled installed marketplace copy with its inline copy disabled, and installs whose marketplace id is turned off or never enabled not passed, not loaded and shown disabled with that reason (2026-10-26, todo 0151)); `apps/backend/tests/claude-plugin-mcp-container.test.ts` (`RUN_LIVE_CLAUDE_PLUGIN_MCP_DOCKER=1`, optional `CLAUDE_PLUGIN_MCP_DOCKER_IMAGE`): real production container reader and directory listing with installed, absent and invalid installation state (rerun 2026-11-11 on a fresh image built from `14df96544`, which includes #1289: 3 pass, 19 expects; pass the image explicitly, because the default `orkestrator-v2:latest` may predate the code under test); a real-app pass on 2026-10-25 (`dev:test`, a real Claude session, 1440×900: the agent panel's "Saved configuration" link highlighted the session's plugin row, and rows turned off in user and project settings showed their reasons; record in Git history at `14df96544`, `docs/todo/mcp/0121-claude-plugin-mcp-servers.md`). The 390×844 layout was not exercised and is not planned: plugin rows add no layout, and `McpStatusAndStates.test.tsx` covers their rendering; bounded metadata, declaration omissions and merge winners, oversized manifests and discovery files, duplicate IDs, and rendered settings-now-off notice are regression-tested |
 | Codex and Grok parity (2026-10-31, todo 0039) | `apps/backend/tests/codex-mcp-parity-live.test.ts` (`mise run verify:codex:mcp-live`: pinned Codex 0.166.0, credential-free, `codex mcp list --json` against `codexProjectTrust` for 12 trust shapes, the field-by-field merge of same-name entries, and the sources read) and `apps/backend/tests/grok-mcp-parity-live.test.ts` (`mise run verify:grok:mcp-live`: pinned Grok 1.0.70, credential-free, `grok inspect` / `mcp doctor` / `mcp list` against `grokFolderTrust` for 14 trust shapes, the untrusted gate on every project-bound source, precedence across native, requirements, managed and compatibility files, the `[compat.*] mcps` switches and saved enable); unit cases in `providers.test.ts`, `service-grok.test.ts` and `service-sources.test.ts` |
 | UI | `mcp-live-join.test.ts`, `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
@@ -904,7 +908,9 @@ a cut stream, reload, bridge generation changes and a shared user file (see
 the live row above). Not yet verified: the remaining full-mode tool calls in
 that spec, the process-wide inactive variant for Codex or OpenCode, Grok and
 Pi live probes, the remaining real-browser matrix, container sessions adopting an
-environment-private save with real providers, and a remote browser. For
+environment-private save with real providers, a real Claude session in a
+container loading its plugins (with an install turned off on the host absent),
+and a remote browser. For
 those, treat `pending-next-turn` / `restart-required` as the backend's plan;
 `applied` is observed adoption per the evidence rule above.
 

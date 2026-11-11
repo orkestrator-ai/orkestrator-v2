@@ -1,6 +1,6 @@
 # Node reconnect wake mail not yet delivered under load
 
-- **ID:** 9937
+- **ID:** 9962
 - **Status:** open
 - **Date observed:** 2026-11-11
 - **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`.

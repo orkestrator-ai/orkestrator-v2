@@ -17,8 +17,8 @@ found. These tasks are what the review left for later.
 2. **Decide how renderer screens show a registered-code IPC error**: Status: done (2026-11-10).
 3. **Shared abort-aware timeout, sleep and retry in the backend**: Status: done (2026-11-10); the timeouts whose callee takes no signal are task 6.
 4. **One bounded-wait helper for the bridges**: Status: done (2026-11-10).
-5. **Parked cancels and prompt timeouts as `acquireUseRelease` in the Cursor bridge**: Status: open (depends on recurrence; see Decisions).
-6. **Give the remaining backend timeouts a signal to cancel**: Status: open; the content and media loads, the MCP apply reads and the MCP inventory reads were done 2026-11-11, and only the command invoker family is left (see its Decisions).
+5. **Parked cancels and prompt timeouts as `acquireUseRelease` in the Cursor bridge**: Status: open (depends on a parked-cancel or prompt-timeout bug recurring; see Decisions). The separate Pi bound was checked on 2026-11-11 and needs no change (see Assumptions and decisions, task 5).
+6. **Give the remaining backend timeouts a signal to cancel**: Status: done (2026-11-11); the content and media loads, the MCP apply reads, the MCP inventory reads and the command invoker family take a signal, and the races left are soft budgets or mutations, each with its reason.
 
 ### 1. Register the remaining message-marker error conventions
 
@@ -180,10 +180,16 @@ and its body read, not the bridge's own work. What each family got:
   every caller, bounded by its own 60 s git timeout, so one caller's short
   budget must not kill it); and the content and media `authorize` checks
   (in-process reads whose bound decides the answer).
-- **Left open:** the `ControlMcpInvoker` and `CommandInvoker` family
-  (`control-mcp-machine-load.ts`, `agent-accounts-machines.ts`,
-  `ticket-criteria-head.ts`). A command handler receives no signal, and a
-  command routed to another node has no cancel message on the node link.
+- **The command invoker family** (`ControlMcpInvoker`, `CommandInvoker`)
+  takes an optional `{ signal }` third argument, which reaches the handler as
+  `CommandInvocation.signal`. `invoke_on_node` passes it to
+  `NodePortal.invokeOnNode` and on to the node link's request, whose abort
+  ends the HTTP request; the gateway gives every invoke its own signal that
+  aborts when the client's connection closes before the answer, so the node
+  running the command sees the cancel too. `control-mcp-machine-load.ts` and
+  `agent-accounts-machines.ts` now bound their routed reads with
+  `runWithTimeout`. `ticket-criteria-head.ts` keeps its race as a soft budget
+  (see Assumptions and decisions).
 
 **Decisions.**
 
@@ -231,12 +237,18 @@ For the invoker family that is left:
   panel's MCP re-read after an action, the artifact content server's load
   (whose asset read honours the signal) and the media route's file open
   (`resolveMediaWithin`, which also closes a handle opened too late).
+- **Command invoker cancellation (task 6).** `CommandInvocation.signal`
+  (`commands-context.ts`) and `InvokeOptions` (`control-shared-actions.ts`)
+  carry a caller's signal into a command; the Control MCP coordinator scope
+  and operator node invokers pass it on. `routeToNode` hands it to the node
+  link for routed reads only. `GatewayHandlers` aborts each invoke's signal
+  when the client's connection closes before the answer is written. The
+  machine-load and machine-accounts reads abort their routed requests at their
+  deadline.
 
 ## Outstanding work
 
 - Task 5, only if parked-cancel or prompt-timeout bugs recur.
-- Task 6, the command invoker family only: a cancellation path through the
-  command registry and node links (see its Decisions).
 - Three bridge waits keep their own code on purpose (see Assumptions and
   decisions, task 4).
 - Non-invoke desktop IPC channels (`orkestrator:nodes:open`, `…:gateway` and
@@ -253,7 +265,13 @@ For the invoker family that is left:
   a local OpenCode 2.x HTTP stub and real files, not a running bridge. A desktop window showing a container lifecycle or
   MCP refusal after this change should show the text without a `[code …]`
   prefix; that was checked at the renderer client level, not in a running
-  Electron window.
+  Electron window. The window check needs a display, which the agent host
+  lacks, so it is on the manual-test checklist
+  ([7568](../manual-test/7568-manual-test-checklist.md), "7543 task 2: a coded
+  refusal in a running Electron window").
+- The invoker cancel was checked against the test node network (a routed read
+  aborted on the leaf, no outcome record) and a real gateway socket (a real
+  `fetch` abort aborts the call's signal), not across two running backends.
 
 ## Assumptions and decisions
 
@@ -353,6 +371,18 @@ that follow. Codex `process-supervisor.ts` races a shared unref'd sleep and is
 not a copy of the helper. Claude `rewindViaTransientQuery`'s timer aborts the
 query rather than ending a race.
 
+### Task 5: Pi's cancel acknowledgement is already bounded where it can be
+
+The third option under task 5 was to bound Pi's cancel acknowledgement like
+Cursor's. Checked on 2026-11-11: the cancel route already does
+(`cancelAckTimeoutMs` in `bridges/pi-bridge/src/http.ts`, 5 s by default,
+answering 202 `pending` past it, for a turn and for a compaction). The one
+unbounded `await state.cancelTurn?.(...)` is the turn's own failure path in
+`prompt.ts`, which waits so that the abort has landed before the session is
+reported idle. Bounding it would report idle while the run may still write
+to the transcript, which the bridge rules forbid, so it stays unbounded. No
+agent work is left in task 5 until the recurrence it waits on.
+
 ### Task 6: only reads take a signal
 
 `ProviderReadOptions` is accepted by `mcpServers` and `mcpConfigEvidence`
@@ -392,14 +422,47 @@ sessions, the environment record) and hold nothing to release. Their deadline
 decides the answer (deny) rather than cancelling work, so passing them a signal
 would gain nothing; a comment at each says so.
 
-### Task 6: the invoker family is left open
+### Task 6: the invoker cancel is the request ending, not a new message
 
-`ControlMcpInvoker` and `CommandInvoker` run registry commands that receive no
-signal, and a command routed to another node has no cancel message on the node
-link. Cancelling them means a `CommandContext` signal and a contract-declared
-cancel message with an older-peer fallback
-([version-compatibility.md](../../architecture/version-compatibility.md#domain-contracts)),
-which is a protocol change of its own rather than a follow-up to this one.
+The recommendation was a `CommandContext` signal plus a contract-declared
+cancel message on the node link. The signal went on `CommandInvocation`
+rather than `CommandContext`, because the context is shared by every call
+while the invocation is per call, and every registry wrapper already passes
+the invocation on unchanged. No cancel message was added: a routed command is
+one HTTP request on the node link, which already aborts its `fetch` on a
+signal, so the node's gateway sees the connection close and aborts that call's
+own signal. That needs no contract change and has its older-peer fallback for
+free: an older node ignores the closed connection and runs the command to its
+end, as every node did before. A separate message would have needed a
+request identity, a domain version and compatibility tests to say what the
+connection close already says.
+
+### Task 6: a routed write ignores the caller's signal
+
+`routeToNode` passes the signal to the link for reads only. A write that has
+reached the node is not undone by aborting its request; the abort would only
+turn its answer into an outcome-unknown record and skip the portal's
+post-steps (seed files, the profile record, the summary refresh). Before this
+change a client that left mid-write still got its write finished and
+recorded, and that stays true. The same reasoning kept provider `send` and
+the MCP reloads on plain bounded waits.
+
+### Task 6: every gateway invoke gets a signal
+
+`GatewayHandlers` creates one `AbortController` per invoke and aborts it when
+the response closes before it has finished, so in-process handlers and routed
+reads see a client that went away. Handlers that ignore it behave as before,
+and the answer to a closed socket is dropped as it was. The signal is not an
+envelope field: it never crosses the wire, and the registry's version and
+critical-field checks do not read it.
+
+### Task 6: the criteria head read stays a soft budget
+
+`criteriaEnvironmentHead` waits a short time for
+`get_environment_uncommitted_paths`, which runs one probe per environment
+shared by every caller (review, guards, this read) and bounded by its own
+30 s timeout. Aborting it for this caller's shorter wait would stop it for the
+others, so it keeps its race, with a comment saying so.
 
 ## Related
 

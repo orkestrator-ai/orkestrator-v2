@@ -247,7 +247,7 @@ export interface RoutableLink {
   invoke<T>(
     command: string,
     args?: Record<string, unknown>,
-    options?: { envelope?: ContractEnvelope },
+    options?: { envelope?: ContractEnvelope; signal?: AbortSignal },
   ): Promise<T>;
 }
 
@@ -270,6 +270,13 @@ export async function routeToNode<T>(input: {
   read?: boolean;
   /** The contract envelope a domain client picked for this peer (plan item 1010). */
   envelope?: ContractEnvelope;
+  /**
+   * Aborts the request to the node (`NodePortal.invokeOnNode`). Honoured for
+   * reads only: a write that may already have reached the node runs to its
+   * answer, since aborting would not undo it and would record its outcome
+   * unknown (and skip the portal's post-steps) for nothing.
+   */
+  signal?: AbortSignal;
 }): Promise<RoutedResult<T>> {
   if (isNodeRoutingExcludedCommand(input.command)) {
     throw new Error(`${input.command} cannot be run on another node from here.`);
@@ -283,9 +290,15 @@ export async function routeToNode<T>(input: {
     );
   }
   try {
-    const result = input.envelope
-      ? await input.link.invoke<T>(input.command, input.args, { envelope: input.envelope })
-      : await input.link.invoke<T>(input.command, input.args);
+    const signal = read ? input.signal : undefined;
+    const options = {
+      ...(input.envelope ? { envelope: input.envelope } : {}),
+      ...(signal ? { signal } : {}),
+    };
+    const result =
+      input.envelope || signal
+        ? await input.link.invoke<T>(input.command, input.args, options)
+        : await input.link.invoke<T>(input.command, input.args);
     return { outcome: "ok", result };
   } catch (error) {
     if (error instanceof NodeOutcomeUnknownError && !read) {

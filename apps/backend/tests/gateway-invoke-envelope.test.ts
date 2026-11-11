@@ -38,11 +38,17 @@ function contractBackend() {
   register(probe, (args) => ({ echoed: args.text, keys: Object.keys(args) }));
   register("get_plain_probe", (args) => ({ keys: Object.keys(args) }));
   const seen: unknown[][] = [];
+  const signals: AbortSignal[] = [];
   return {
     seen,
+    signals,
     backend: {
       invoke: (command: string, args: Record<string, unknown>, ...rest: unknown[]) => {
-        seen.push([command, args, ...rest]);
+        // `seen` records the envelope fields; every call also carries its
+        // own cancellation signal, recorded apart.
+        const { signal, ...envelope } = (rest[0] ?? {}) as { signal?: AbortSignal };
+        if (signal) signals.push(signal);
+        seen.push(Object.keys(envelope).length ? [command, args, envelope] : [command, args]);
         const handler = commands.get(command);
         // As `OrkestratorBackend.invoke` does (plan item 1005).
         if (!handler)
@@ -79,7 +85,7 @@ describe("HTTP invoke envelope", () => {
     ]);
   });
 
-  test("an older two-field body reaches the backend unchanged, with no invocation", async () => {
+  test("an older two-field body reaches the backend unchanged, with no envelope fields", async () => {
     const { backend, seen } = contractBackend();
     const { info } = await startGateway({ backend });
     const url = new URL("/__orkestrator/invoke", info.url).toString();
@@ -91,6 +97,53 @@ describe("HTTP invoke envelope", () => {
     expect(seen[0]).toEqual(["get_contract_probe", { text: "a" }]);
     const plain = await invoke(url, info.token, { command: "get_plain_probe", args: { x: 1 } });
     expect(plain).toEqual({ status: 200, body: { result: { keys: ["x"] } } });
+  });
+
+  test("every call gets a signal that aborts only when the client goes away", async () => {
+    const { backend, signals } = contractBackend();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const slow = {
+      ...backend,
+      invoke: (command: string, args: Record<string, unknown>, ...rest: unknown[]) => {
+        if (command !== "get_slow_probe") return backend.invoke(command, args, ...rest);
+        const signal = (rest[0] as { signal?: AbortSignal } | undefined)?.signal;
+        if (signal) signals.push(signal);
+        started();
+        // Settles only once the caller has gone, so nothing outlives the test.
+        return new Promise((resolve) =>
+          signal?.addEventListener("abort", () => resolve({ late: true }), { once: true }),
+        );
+      },
+    };
+    const { info } = await startGateway({ backend: slow });
+    const url = new URL("/__orkestrator/invoke", info.url).toString();
+
+    // An answered call's signal never aborts.
+    expect((await invoke(url, info.token, { command: "get_plain_probe", args: {} })).status).toBe(
+      200,
+    );
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+
+    // A caller that stops waiting (a node link past its deadline) aborts it.
+    const caller = new AbortController();
+    const request = fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ command: "get_slow_probe", args: {} }),
+      signal: caller.signal,
+    }).catch(() => "aborted");
+    await running;
+    caller.abort();
+    expect(await request).toBe("aborted");
+    const aborted = signals[1]!;
+    await new Promise<void>((resolve) => {
+      if (aborted.aborted) resolve();
+      else aborted.addEventListener("abort", () => resolve(), { once: true });
+    });
+    expect(aborted.aborted).toBe(true);
+    expect(signals[0]!.aborted).toBe(false);
   });
 
   test("a version outside the range answers unsupported-version with the range", async () => {

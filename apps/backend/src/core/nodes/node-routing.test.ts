@@ -117,3 +117,55 @@ test("outcome notifications name both affected nodes on eviction and skip no-op 
   expect(await ledger.dismiss(remaining.outcomeId)).toBe(true);
   expect(changed.mock.calls.at(-1)).toEqual(["bk_new"]);
 });
+
+test("the caller's signal reaches the link with the envelope, and nothing is added without one", async () => {
+  const calls: unknown[][] = [];
+  const link = {
+    connected: true,
+    invoke: async <T>(...call: unknown[]) => {
+      calls.push(call);
+      return "answer" as T;
+    },
+  };
+  const signal = new AbortController().signal;
+  const route = (extra: Record<string, unknown>) =>
+    routeToNode({
+      nodeId: "bk_leaf" as never,
+      link,
+      command: "get_machine_load",
+      args: { a: 1 },
+      outcomes: new NodeOutcomeLedger(),
+      ...extra,
+    });
+  await route({ signal });
+  await route({ signal, envelope: { domain: "system", version: 1 } });
+  await route({});
+  expect(calls).toEqual([
+    ["get_machine_load", { a: 1 }, { signal }],
+    ["get_machine_load", { a: 1 }, { envelope: { domain: "system", version: 1 }, signal }],
+    ["get_machine_load", { a: 1 }],
+  ]);
+});
+
+test("a routed write is not given the caller's signal, so it runs to its answer", async () => {
+  const calls: unknown[][] = [];
+  const link = {
+    connected: true,
+    invoke: async <T>(...call: unknown[]) => {
+      calls.push(call);
+      return "created" as T;
+    },
+  };
+  const caller = new AbortController();
+  caller.abort();
+  const routed = await routeToNode({
+    nodeId: "bk_leaf" as never,
+    link,
+    command: "create_environment",
+    args: { projectId: "p" },
+    outcomes: new NodeOutcomeLedger(),
+    signal: caller.signal,
+  });
+  expect(routed).toEqual({ outcome: "ok", result: "created" });
+  expect(calls).toEqual([["create_environment", { projectId: "p" }]]);
+});

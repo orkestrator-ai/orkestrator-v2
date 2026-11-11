@@ -36,7 +36,8 @@ import {
 export type BackendInvoker = {
   /**
    * Runs a command. `invocation` carries the invoke envelope's `domain`,
-   * `version` and `critical` (plan item 1003), only when the body had them.
+   * `version` and `critical` (plan item 1003), only when the body had them,
+   * and always the call's `signal`, which aborts when the client goes away.
    */
   invoke(
     command: string,

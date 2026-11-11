@@ -1,4 +1,5 @@
 import type { CommandInvocation } from "./core/commands-context.js";
+import { Base64FileReadSizeHistogram } from "./gateway-file-read-sizes.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -980,6 +981,7 @@ export class GatewayMetricsStore {
     GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
   );
   private readonly events = new BoundedMetricMap<GatewayEventMetrics>();
+  private readonly base64FileReads = new Base64FileReadSizeHistogram();
   private readonly recentRouteSamples: GatewayRouteSample[] = [];
   private readonly recentClientBootReports: GatewayClientBootReport[] = [];
   private readonly stream: GatewayStreamMetrics = {
@@ -1157,6 +1159,7 @@ export class GatewayMetricsStore {
     bucket.durationMs += durationMs;
     if (!success) bucket.failures += 1;
     this.commands.set(key, bucket);
+    this.base64FileReads.record(command, responseBytes, success);
   }
 
   recordEvent(event: string, serializedBytes: number): void {
@@ -1371,6 +1374,8 @@ export class GatewayMetricsStore {
       events: Object.fromEntries(
         [...this.events.entries()].sort(([left], [right]) => left.localeCompare(right)),
       ),
+      // Additive: answer sizes of the three whole-file base64 readers (5800).
+      base64FileReads: this.base64FileReads.snapshot(),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
       relayedReplay: { ...this.relayedReplay, reasons: { ...this.relayedReplay.reasons } },

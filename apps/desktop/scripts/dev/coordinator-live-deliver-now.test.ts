@@ -132,7 +132,7 @@ describe("deliver-now prompts", () => {
     expect(bodies.correction).toContain(bodies.corrected);
   });
 
-  test("the steering providers run it; Grok and OpenCode (1.x by default), which cannot steer, are skipped", () => {
+  test("the steering providers run it; Grok, which cannot steer, and OpenCode, whose steer is unqualified, are skipped", () => {
     for (const platform of ["claude", "codex", "pi", "cursor"] as const) {
       expect(deliverNowApplies(platform)).toBe(true);
     }

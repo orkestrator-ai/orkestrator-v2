@@ -26,6 +26,7 @@ import { defineCommand } from "../../command.js";
 import { openRecord } from "../../model-schema.js";
 import { KanbanTaskListSchema, KanbanTaskSchema } from "../kanban/schemas.js";
 import { ticketSyncDomain } from "./domain.js";
+import { LINEAR_SYNC_COMMANDS } from "./linear-sync-commands.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
 const optionalSequence = Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)));
@@ -282,4 +283,5 @@ export const TICKET_SYNC_COMMANDS = [
   getTicketSyncLeafStatusCommand,
   shareTicketsWithCommandNodeCommand,
   dismissTicketSyncConflictsCommand,
+  ...LINEAR_SYNC_COMMANDS,
 ] as const;

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import path from "node:path";
 import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import { lineChangeStatsFromSides } from "@orkestrator/protocol/tool-diff";
-import { OPENCODE_COMMAND_CHANGES_DIRECTORY } from "../opencode-command-changes.js";
-import { importOpenCodeCommandJournals } from "./legacy-import.js";
+import {
+  OPENCODE_COMMAND_CHANGES_DIRECTORY,
+  importOpenCodeCommandJournals,
+} from "./legacy-import.js";
 import { measureLegacyPayload } from "./legacy-payload.js";
 import { createHarness, type Harness } from "./service-test-support.js";
 import { toolResourceKeys, operationIdFor } from "./identities.js";

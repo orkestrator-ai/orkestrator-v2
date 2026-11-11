@@ -318,6 +318,60 @@ describe("turn and thread boundaries", () => {
     expect(history.kind === "page" && history.entries.length).toBe(2);
   });
 
+  test("history names no provisional measurement once the turn is terminal", async () => {
+    const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+    const requestId = "window";
+    const logicalSessionKey = "env-env-1:tab";
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey,
+      requestId,
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", logicalSessionKey, requestId, "accepted");
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    const owner = h.service.registry.owner(identity!);
+    const turnId = turnIdFor("env-1", logicalSessionKey, requestId);
+    const turnKey = `turn-net/turn/${encodeURIComponent(turnId)}/live`;
+    const entry = () => {
+      const history = h.service.getHistory({ environmentId: "env-1", logicalSessionKey });
+      if (history.kind !== "page") throw new Error("no history page");
+      return history.entries.find((item) => item.turnId === turnId)!;
+    };
+
+    writeFileSync(join(h.repo, "a.txt"), "one\nprovisional\n");
+    expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+    const provisionalId = h.service.ledger.selection(turnKey)!.measurement_id;
+    // While the turn runs its provisional measurement is named, as before.
+    expect(entry()).toMatchObject({ lifecycle: "running", measurementId: provisionalId });
+
+    // Read the history inside the window: the end capture's lifecycle is
+    // committed, the final turn-net comparison has not been selected yet.
+    let inWindow: ReturnType<typeof entry> | null = null;
+    const measure = h.service.measurements.measureSnapshots.bind(h.service.measurements);
+    const spy = spyOn(h.service.measurements, "measureSnapshots").mockImplementation(
+      async (input) => {
+        if (input.scope === "turn-net" && input.finality === "final" && !inWindow) {
+          inWindow = entry();
+          expect(h.service.ledger.selection(turnKey)!.measurement_id).toBe(provisionalId);
+        }
+        return measure(input);
+      },
+    );
+    try {
+      await h.service.finalizeTurn({ environmentId: "env-1", logicalSessionKey, requestId });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(inWindow).toMatchObject({ lifecycle: "finalized", measurementId: null });
+
+    const final = turnMeasurement(h, requestId);
+    expect(final.finality).toBe("final");
+    expect(entry()).toMatchObject({ lifecycle: "finalized", measurementId: final.measurementId });
+    const preview = await h.service.restore.prepare({ measurementId: final.measurementId });
+    expect(preview.kind).not.toBe("disabled");
+  });
+
   test("H09: a commit during a turn does not erase the physical turn delta", async () => {
     const h = harness();
     await runTurn(h, "r1", () => {

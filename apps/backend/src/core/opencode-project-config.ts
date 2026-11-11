@@ -2,14 +2,14 @@
  * The checkout's OpenCode configuration, filtered, for a server the launcher
  * starts (#2091; docs/architecture/agent-approvals.md).
  *
- * On an `opencode-launch=1` image the server runs with project configuration
+ * On an `opencode2-launch=1` image the server runs with project configuration
  * off, because the checkout's `opencode.json` is the agent's to write and its
  * `plugin` key loads code inside the server, beside the password. That also
  * dropped what projects legitimately keep there: agents, commands, MCP servers,
  * permission rules, models and instructions. Before each start the backend
  * reads `/workspace/opencode.json` and `/workspace/opencode.jsonc` (as `node`,
  * bounded), filters them here, and root writes the result where the launcher
- * passes it as `OPENCODE_CONFIG` on an `opencode2-launch=1` image:
+ * passes it as `OPENCODE_CONFIG`:
  *
  * - **No `plugin` or `plugins` key** (`mergeOpenCodeUserConfig` drops both).
  * - **No `{env:...}` reference.** OpenCode substitutes it from the server's
@@ -40,11 +40,7 @@ import path from "node:path";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { dockerExec } from "./commands-container-exec.js";
-import {
-  OPENCODE2_LAUNCH_PROJECT_CONFIG,
-  OPENCODE_LAUNCH_PROJECT_CONFIG,
-} from "./agent-credential-files.js";
-import type { OpenCodeServerKind } from "./opencode-listener-identity.js";
+import { OPENCODE2_LAUNCH_PROJECT_CONFIG } from "./agent-credential-files.js";
 import { mergeOpenCodeUserConfig } from "./opencode2/user-config.js";
 import { runCommand } from "./shell.js";
 
@@ -272,10 +268,9 @@ function boundedReadResult(output: string | undefined, maxBytes: number): string
   return Buffer.byteLength(content) > maxBytes ? undefined : content;
 }
 
-/** Read the checkout's project configuration as `node` and filter it for `kind`'s server. */
+/** Read the checkout's project configuration as `node` and filter it for the server. */
 export async function readFilteredProjectOpenCodeConfig(
   containerId: string,
-  kind: OpenCodeServerKind,
   exec: typeof dockerExec = dockerExec,
 ): Promise<FilteredProjectConfig> {
   const read = async (relative: string, maxBytes: number) =>
@@ -310,7 +305,7 @@ export async function readFilteredProjectOpenCodeConfig(
   const result = await filterProjectOpenCodeConfig(
     files,
     (relative) => read(relative, OPENCODE_PROJECT_FILE_REFERENCE_MAX_BYTES),
-    (index) => openCodeProjectInstructionPath(kind, index),
+    (index) => openCodeProjectInstructionPath(index),
     OPENCODE_PROJECT_DIRECTORY,
     async (relative) => {
       const output = await exec(
@@ -344,13 +339,9 @@ export async function readFilteredProjectOpenCodeConfig(
   return result;
 }
 
-export function openCodeProjectConfigPath(kind: OpenCodeServerKind): string {
-  return kind === "opencode2" ? OPENCODE2_LAUNCH_PROJECT_CONFIG : OPENCODE_LAUNCH_PROJECT_CONFIG;
-}
-
-/** Where root writes the `index`th instruction copy for `kind`'s server. */
-export function openCodeProjectInstructionPath(kind: OpenCodeServerKind, index: number): string {
-  return `${path.posix.dirname(openCodeProjectConfigPath(kind))}/instructions/${index}.md`;
+/** Where root writes the `index`th instruction copy for the server. */
+export function openCodeProjectInstructionPath(index: number): string {
+  return `${path.posix.dirname(OPENCODE2_LAUNCH_PROJECT_CONFIG)}/instructions/${index}.md`;
 }
 
 /**
@@ -358,8 +349,8 @@ export function openCodeProjectInstructionPath(kind: OpenCodeServerKind, index: 
  * it when stdin is empty): root-owned, readable by the server's uid, never a
  * link. The root directory must already be root's (the config script checks).
  */
-export function writeProjectOpenCodeConfigScript(kind: OpenCodeServerKind): string {
-  const file = openCodeProjectConfigPath(kind);
+export function writeProjectOpenCodeConfigScript(): string {
+  const file = OPENCODE2_LAUNCH_PROJECT_CONFIG;
   const directory = path.posix.dirname(file);
   return [
     "set -eu",
@@ -373,8 +364,8 @@ export function writeProjectOpenCodeConfigScript(kind: OpenCodeServerKind): stri
 }
 
 /** Root shell that writes stdin as the `index`th instruction copy, readable by the server. */
-export function writeProjectInstructionScript(kind: OpenCodeServerKind, index: number): string {
-  const file = openCodeProjectInstructionPath(kind, index);
+export function writeProjectInstructionScript(index: number): string {
+  const file = openCodeProjectInstructionPath(index);
   const directory = path.posix.dirname(file);
   return [
     "set -eu",
@@ -397,16 +388,12 @@ async function asRootWithStdin(containerId: string, script: string, stdin: strin
 
 /**
  * Read, filter and write the project configuration and its instruction
- * copies for the next start of `kind`. On an image whose launcher does not
- * pass it (`opencode2-launch` missing), the 1.x file is written and ignored.
+ * copies for the server's next start (`OPENCODE2_LAUNCH_PROJECT_CONFIG`).
  */
-export async function stageProjectOpenCodeConfig(
-  containerId: string,
-  kind: OpenCodeServerKind,
-): Promise<void> {
-  const filtered = await readFilteredProjectOpenCodeConfig(containerId, kind);
-  await asRootWithStdin(containerId, writeProjectOpenCodeConfigScript(kind), filtered.text ?? "");
+export async function stageProjectOpenCodeConfig(containerId: string): Promise<void> {
+  const filtered = await readFilteredProjectOpenCodeConfig(containerId);
+  await asRootWithStdin(containerId, writeProjectOpenCodeConfigScript(), filtered.text ?? "");
   for (const [index, content] of filtered.instructions.entries()) {
-    await asRootWithStdin(containerId, writeProjectInstructionScript(kind, index), content);
+    await asRootWithStdin(containerId, writeProjectInstructionScript(index), content);
   }
 }

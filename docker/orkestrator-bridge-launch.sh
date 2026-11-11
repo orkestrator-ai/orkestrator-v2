@@ -3,7 +3,6 @@
 #
 # Bridge launch contract (docker/image-manifest.ts):
 # ORKESTRATOR_CAPABILITY bridge-launch=1
-# ORKESTRATOR_CAPABILITY opencode-launch=1
 # ORKESTRATOR_CAPABILITY opencode2-launch=1
 #
 #   docker exec -i --user node --workdir / <container> \
@@ -27,28 +26,26 @@
 # spawns, where a loader variable can no longer reach it
 # (packages/protocol/src/node/bridge-launch-environment.ts).
 #
-# `opencode` starts the container's OpenCode server the same way, from the
-# root-owned /opt/opencode binary in /workspace, with only the configuration
-# the backend wrote as root to /run/orkestrator-opencode: no project
-# configuration (/workspace/.opencode, opencode.json), no ~/.config/opencode
-# and no ~/.opencode, all of which node can write and any of which could add a
-# plugin that runs inside the server. The OpenCode variables below are set
-# after the backend's, so stdin cannot change them. Its credential plugin
-# applies the snapshot for the tools the server runs
-# (agent-credential-files.ts).
+# `opencode2` starts the container's OpenCode 2.x server the same way, from
+# the root-owned /opt/opencode/bin/opencode2 in /workspace, with only the
+# configuration the backend wrote as root to /run/orkestrator-opencode2:
+# OPENCODE_CONFIG_DIR (which replaces 2.x's global directory), an empty
+# XDG_CONFIG_HOME and home, no project configuration (/workspace/.opencode,
+# opencode.json) and no ~/.opencode, all of which node can write and any of
+# which could add a plugin that runs inside the server. The OpenCode variables
+# below are set after the backend's, so stdin cannot change them. Its
+# credential plugin applies the snapshot for the tools the server runs
+# (opencode2/server.ts).
 #
-# Its package cache is root-owned /run/orkestrator-opencode/cache, which the
+# Its package cache is root-owned /run/orkestrator-opencode2/cache, which the
 # backend fills as root before the start: OpenCode imports the npm packages it
-# installs (providers it does not bundle, npm plugins), so a cache node could
-# write would let the agent change code the server runs. A project
-# configuration the backend read from the checkout and filtered (no plugins,
-# no {file:} or {env:} references) is passed as OPENCODE_CONFIG when there is
-# one.
+# installs (providers it does not bundle), so a cache node could write would
+# let the agent change code the server runs. A project configuration the
+# backend read from the checkout and filtered (no plugins, no {file:} or
+# {env:} references) is passed as OPENCODE_CONFIG when there is one.
 #
-# `opencode2` starts the OpenCode 2.x server the same way, from the root-owned
-# /opt/opencode/bin/opencode2, with its whole configuration in
-# /run/orkestrator-opencode2: OPENCODE_CONFIG_DIR (which replaces 2.x's global
-# directory), an empty XDG_CONFIG_HOME and home, and a root-owned cache.
+# The `opencode-launch=1` kind that started OpenCode 1.x on port 4096 was
+# retired with 1.x; an image that still declares it is never asked for it.
 #
 # /bin/sh is dash, which reads no startup file when non-interactive; bash
 # would source $BASH_ENV.
@@ -65,7 +62,7 @@ fail() {
 [ "$(id -u)" -ne 0 ] || fail "refusing to run a bridge as root"
 # OpenCode's server inherits this script's environment (see below), so it
 # starts again with nothing but its own arguments and stdin.
-case "${1:-}" in opencode | opencode2) restart_clean=1 ;; *) restart_clean=0 ;; esac
+case "${1:-}" in opencode2) restart_clean=1 ;; *) restart_clean=0 ;; esac
 if [ "$restart_clean" = 1 ] && [ "${ORKESTRATOR_BRIDGE_LAUNCH_CLEAN:-}" != 1 ]; then
     exec /usr/bin/env -i ORKESTRATOR_BRIDGE_LAUNCH_CLEAN=1 PATH=/usr/sbin:/usr/bin:/sbin:/bin \
         /bin/sh /usr/local/bin/orkestrator-bridge-launch "$@"
@@ -83,7 +80,6 @@ case "$kind" in
     grok) entry=/opt/acp-bridge/dist/index.js log=/tmp/grok-acp-bridge.log extra=--provider=grok ;;
     # The compiled binary reads no bunfig.toml or .env from its working
     # directory; OpenCode answers a request without one for its own.
-    opencode) entry="" log=/tmp/opencode-serve.log workdir=/workspace ;;
     opencode2) entry="" log=/tmp/opencode2-serve.log workdir=/workspace ;;
     *) fail "unknown bridge: $kind" ;;
 esac
@@ -112,7 +108,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done
 
 cd "$workdir"
-if [ "$kind" = opencode ] || [ "$kind" = opencode2 ]; then
+if [ "$kind" = opencode2 ]; then
     # OpenCode compares the plain password, so unlike a bridge's verifier it
     # can never be an argument: every process's argv is readable by node. It
     # goes into this short-lived script's environment, which re-ran itself
@@ -122,21 +118,13 @@ if [ "$kind" = opencode ] || [ "$kind" = opencode2 ]; then
     for line in "$@"; do export "$line"; done
     export ORKESTRATOR_BRIDGE_LAUNCH_ENVIRONMENT="$snapshot" ORKESTRATOR_BRIDGE_LAUNCH_KEYS="$keys"
     export PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/node USER=node LOGNAME=node LANG=C.UTF-8
-    if [ "$kind" = opencode ]; then
-        root=/run/orkestrator-opencode
-        export XDG_CONFIG_HOME=/run/orkestrator-opencode/config
-        export OPENCODE_SERVER_USERNAME=opencode
-        unset OPENCODE_CONFIG_DIR
-        binary=/opt/opencode/bin/opencode port=4096
-    else
-        root=/run/orkestrator-opencode2
-        export XDG_CONFIG_HOME=/run/orkestrator-opencode2/config
-        # Replaces 2.x's global directory: Orkestrator's plugins and the mirror
-        # of the user's configuration, both written by root.
-        export OPENCODE_CONFIG_DIR=/run/orkestrator-opencode2/opencode
-        unset OPENCODE_SERVER_PASSWORD OPENCODE_SERVER_USERNAME
-        binary=/opt/opencode/bin/opencode2 port=4102
-    fi
+    root=/run/orkestrator-opencode2
+    export XDG_CONFIG_HOME=/run/orkestrator-opencode2/config
+    # Replaces 2.x's global directory: Orkestrator's plugins and the mirror
+    # of the user's configuration, both written by root.
+    export OPENCODE_CONFIG_DIR=/run/orkestrator-opencode2/opencode
+    unset OPENCODE_SERVER_PASSWORD OPENCODE_SERVER_USERNAME
+    binary=/opt/opencode/bin/opencode2 port=4102
     export OPENCODE_TEST_HOME="$root/home"
     export XDG_CACHE_HOME="$root/cache"
     export OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_AUTOUPDATE=1

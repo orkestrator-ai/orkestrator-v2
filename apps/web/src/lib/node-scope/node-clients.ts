@@ -84,6 +84,7 @@ import {
   createMultiplexedRelayStreams,
   type MultiplexedRelayStreams,
 } from "./multiplexed-relay-stream";
+import type { ExternalLoopbackAddressing } from "./external-loopback";
 import type { NodeScope, NodeScopeTier } from "./node-scope";
 import { createSignal } from "./signal";
 import type { WindowScope } from "./window-scope";
@@ -102,7 +103,7 @@ export interface LeafRoute extends WorkspaceConnectionPath {
  * A leaf's client, as handed to one holder. Every `acquire` gets its own: its
  * listeners are its own, and `dispose()` releases exactly its reference.
  */
-export interface LeafNodeClient extends NodeClient {
+export interface LeafNodeClient extends NodeClient, ExternalLoopbackAddressing {
   readonly route: ReadableSignal<LeafRoute>;
   /** The current route's base URL (`route.get().baseUrl`). */
   readonly baseUrl: string;
@@ -359,6 +360,10 @@ function createLease(
     url: (pathname) => shared.current().url(pathname),
     resolveMediaUrl: (pathname) => resolveNodeGatewayUrl(relayBase(), pathname),
     resolveLoopbackUrl: (url) => resolveNodeLoopbackBaseUrl(relayBase(), url),
+    resolveExternalLoopbackUrl: async (url) => {
+      if (disposed) throw disposedError();
+      return resolveNodeLoopbackBaseUrl(relayBase(), url);
+    },
     resolvePreviewUrl: (url) => resolveNodeBrowserPreviewUrl(relayBase(), url),
     invoke: typedInvoke(invokeRaw),
     invokeRaw,

@@ -8,7 +8,6 @@ import {
   resolveBunBinary,
   resolveClaudeBinary,
   resolveCodexBinary,
-  resolveOpenCodeBinary,
   resolvePiBinary,
 } from "./commands-agent-support.js";
 import { checkHostTool } from "./host-tools.js";
@@ -63,7 +62,6 @@ describe("resolveBunBinary", () => {
 const PATH_FALLBACK_AGENTS = [
   ["claude", resolveClaudeBinary],
   ["codex", resolveCodexBinary],
-  ["opencode", resolveOpenCodeBinary],
   ["pi", resolvePiBinary],
 ] as const;
 
@@ -98,6 +96,20 @@ describe("PATH fallback for agent binaries", () => {
       expect(() => resolveAgentBinary(context, name)).toThrow(/agent-test profile/);
     },
   );
+
+  test("OpenCode is the managed 2.x binary only, with no PATH fallback anywhere", async () => {
+    for (const flavor of [undefined, "production", "agent-test"] as const) {
+      const managed = await contextWith(["opencode", "opencode2"], flavor);
+      expect(resolveAgentBinary(managed, "opencode")).toBe(
+        path.join(managed.resourceRoot, "bin", "opencode2"),
+      );
+      // A managed or PATH `opencode` is an OpenCode 1.x, never run.
+      const legacyOnly = await contextWith(["opencode"], flavor);
+      expect(() => resolveAgentBinary(legacyOnly, "opencode")).toThrow(
+        "OpenCode is not installed yet",
+      );
+    }
+  });
 
   test("availability reporting and spawning agree in an agent-test profile", async () => {
     // The profile provisioned Codex only. Claude may well be on the host's

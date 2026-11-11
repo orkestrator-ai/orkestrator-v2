@@ -229,7 +229,7 @@ if (result.text === undefined) {
   return `ORK_OPENCODE_USER_DIR=${quote(userDir)} ORK_OPENCODE_MIRROR=${quote(mirror)} ${bun} -e ${quote(program)}`;
 }
 
-/** `$XDG_CONFIG_HOME/opencode`, the directory a 1.x server reads as global. */
+/** `$XDG_CONFIG_HOME/opencode`, the user's global OpenCode configuration directory. */
 export function openCodeUserConfigDirectory(
   env: NodeJS.ProcessEnv,
   home = env.HOME?.trim() || os.homedir(),

@@ -4,9 +4,8 @@ import { Data } from "effect";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
-import type { OpenCode2RouteConnection } from "./opencode2/routing-provider.js";
+import type { OpenCode2ServerConnection } from "./opencode2/environment-provider.js";
 import type { PlanUsageState } from "./plan-usage-cache.js";
 import type {
   BuildPipelineAgent,
@@ -471,22 +470,14 @@ export interface NativeAgentServiceOptions {
   /** Graceful-interrupt window before provider hard-stop escalation. */
   abortGraceMs?: number;
   /**
-   * The environment's OpenCode 2.x preview server: the host one of a local
-   * environment (`opencode2-host-server.ts`) or the in-container one
-   * (`opencode2-container-server.ts`). `start: false` never spawns one. Absent
-   * (narrow tests, hosts without it) keeps every OpenCode session on 1.x.
+   * The environment's OpenCode server: the host one of a local environment
+   * (`opencode2-host-server.ts`) or the in-container one
+   * (`opencode2-container-server.ts`). `start: false` never spawns one.
    */
-  openCode2HostServer?: (
+  openCodeServer?: (
     environmentId: string,
     options: { start: boolean },
-  ) => Promise<OpenCode2RouteConnection | undefined>;
-  /**
-   * Whether a container environment's image runs OpenCode 2.x
-   * (`containerRunsOpenCode2`). Absent keeps container sessions on 1.x.
-   */
-  openCode2InContainer?: (
-    environment: Pick<Environment, "environmentType" | "containerId" | "containerLifecycle">,
-  ) => Promise<boolean>;
+  ) => Promise<OpenCode2ServerConnection | undefined>;
   /**
    * What a tab says instead of the bridge's sign-in message when a provider's
    * login lapses (`containerSignInGuidance`), or undefined to keep it.
@@ -557,20 +548,6 @@ export interface NativeAgentServiceOptions {
    * that nothing else closes.
    */
   environmentFence?: Pick<EnvironmentMutationFence, "beginAgentWork" | "assertAcceptsAgentWork">;
-  /**
-   * The backend's OpenCode coordinator research registrations
-   * (`runtime.localServers.openCodeAgentTools.research`), which a coordinator's
-   * OpenCode provider reads its research tool ids from. Without it a
-   * coordinator gets no research tools.
-   */
-  openCodeCoordinatorResearch?: NativeAgentProviderEnvironment["openCodeCoordinatorResearch"];
-  /**
-   * The environment's container OpenCode listener against its record
-   * (`recheckContainerOpenCodeListener`); undefined for a local environment.
-   */
-  openCodeListenerRecheck?: (
-    environmentId: string,
-  ) => ReturnType<NonNullable<NativeAgentProviderEnvironment["openCodeListenerRecheck"]>>;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */

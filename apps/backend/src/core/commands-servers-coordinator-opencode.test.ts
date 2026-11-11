@@ -6,18 +6,20 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
-import { readLocalServerStatus, startLocalServerUnlocked } from "./commands-servers.js";
+import { startLocalServerUnlocked } from "./commands-servers.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2-host-server.js";
 import { runCommand } from "./shell.js";
-import { createOpenCodeProviderLogin } from "./opencode-provider-login.js";
-import type { OpenCodeAgentToolsTuning } from "./opencode-agent-tools.js";
-import { createMcpRuntimeProbe } from "./commands-registry-mcp.js";
 import { createProject, StorageService } from "./storage.js";
 
 /**
- * An OpenCode coordinator's `orkestrator` MCP entry is its scoped Control MCP
- * credential, the only route to its delegation tools. These start a real
- * (fake) `opencode serve` that records each MCP configuration it is sent.
+ * An OpenCode coordinator's server is the conversation's `opencode` local
+ * server, launched from a stand-in `opencode2` that reports the environment
+ * it was given. Its scoped Control MCP credential is the only route to its
+ * delegation tools: the supervisor issues it for the launch and holds it in
+ * the backend, which attaches it per session (`opencode2/coordinator.ts`); it
+ * never reaches the server's environment, where the agent's tools could read
+ * it.
  */
 describe("Coordinator OpenCode server", () => {
   const SCOPED_URL = "http://127.0.0.1:1234/mcp";
@@ -37,47 +39,27 @@ describe("Coordinator OpenCode server", () => {
     await runCommand("git", ["add", "README.md"], { cwd: checkout });
     await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
     await fs.mkdir(path.join(root, "managed-bin"));
-    await fs.writeFile(path.join(root, "mode"), "ok\n");
-    await fs.writeFile(path.join(root, "login.json"), JSON.stringify({ key: "before" }));
     await fs.writeFile(
-      path.join(root, "managed-bin", "opencode"),
+      path.join(root, "managed-bin", "opencode2"),
       `#!${process.execPath}
-const fs = require("node:fs");
-const root = ${JSON.stringify(root)};
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
-const login = JSON.parse(fs.readFileSync(root + "/login.json", "utf8"));
-let finishWork;
+const expected = "Basic " + btoa("opencode:" + process.env.OPENCODE_PASSWORD);
+const launched = {
+  policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY ?? null,
+  protectedDataDir: process.env.ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR ?? null,
+  research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null,
+  projectConfig: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null,
+  mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null,
+  mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN ?? null,
+  cwd: process.cwd(),
+};
 Bun.serve({
   port,
   hostname: "127.0.0.1",
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname === "/auth/openai" && request.method === "PUT") {
-      fs.writeFileSync(root + "/login.json", JSON.stringify(await request.json()));
-      return Response.json(true);
-    }
-    if (url.pathname === "/auth/openai" && request.method === "DELETE") {
-      fs.writeFileSync(root + "/login.json", "{}");
-      return Response.json(true);
-    }
-    if (url.pathname === "/provider") return Response.json({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", source: "config", options: { timeout: 1000 } }] });
-    if (url.pathname === "/provider/auth") return Response.json({});
-    if (url.pathname === "/work") return Response.json({ pending: Boolean(finishWork) });
-    if (url.pathname === "/release") { finishWork?.(); finishWork = undefined; return Response.json(true); }
-    if (url.pathname === "/session/test/prompt" && request.method === "POST") {
-      const input = await request.json();
-      if (input.hold) await new Promise((resolve) => { finishWork = resolve; });
-      return Response.json({ credentialVersion: login.key });
-    }
-    if (url.pathname === "/mcp" && request.method === "POST") {
-      const body = await request.json();
-      fs.appendFileSync(root + "/mcp-posts.jsonl", JSON.stringify({ url: body.config.url }) + "\\n");
-      if (fs.readFileSync(root + "/mode", "utf8").trim() === "fail") {
-        return new Response("refused", { status: 500 });
-      }
-      return Response.json({ [body.name]: { status: "connected" } });
-    }
-    return Response.json({ healthy: true });
+  fetch(request) {
+    if (request.headers.get("authorization") !== expected) return new Response("no", { status: 401 });
+    if (new URL(request.url).pathname === "/api/credential") return Response.json({ data: [] });
+    return Response.json({ version: "2.2.6", pid: process.pid, launched });
   },
 });
 process.on("SIGTERM", () => process.exit(0));
@@ -100,12 +82,12 @@ process.on("SIGTERM", () => process.exit(0));
   });
 
   async function coordinatorContext(
-    options: OpenCodeAgentToolsTuning & {
-      mode?: "off" | "search-and-mcp";
+    options: {
+      mode?: "off" | "search";
       servers?: { name: string; url: string }[];
     } = {},
   ) {
-    const { mode = "off", servers, ...openCodeAgentTools } = options;
+    const { mode = "off", servers } = options;
     // Research off unless a test asks: a research server is contacted to list
     // its tools, and these tests never leave the machine.
     const config = await storage.loadConfig();
@@ -133,10 +115,7 @@ process.on("SIGTERM", () => process.exit(0));
       toolchainBinDir: path.join(root, "managed-bin"),
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({
-        emit: () => undefined,
-        localServers: { openCodeAgentTools },
-      }),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       // Present, as in production: an ordinary environment's ticket tools.
       agentTools: { connection: tabConnection } as unknown as CommandContext["agentTools"],
       controlMcp: {
@@ -148,181 +127,99 @@ process.on("SIGTERM", () => process.exit(0));
     } as unknown as CommandContext;
     const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     cleanup = { context, runtimeId };
-    return { context, runtimeId, tabConnection };
+    return { context, runtimeId, tabConnection, storageConfig: storage };
   }
 
-  async function posted(): Promise<string[]> {
-    const text = await fs.readFile(path.join(root, "mcp-posts.jsonl"), "utf8").catch(() => "");
-    return text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => (JSON.parse(line) as { url: string }).url);
+  async function launched(port: number, password: string) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/info`, {
+      headers: { authorization: `Basic ${btoa(`opencode:${password}`)}` },
+    });
+    return ((await response.json()) as { launched: Record<string, unknown> }).launched;
   }
 
-  test("registers the research servers after its Control MCP, and a dead one leaves no allowance", async () => {
-    // Nothing listens on port 1, so listing the server's tools fails at once.
-    const researchUrl = "https://127.0.0.1:1/mcp";
-    const { context, runtimeId } = await coordinatorContext({
-      mode: "search-and-mcp",
-      servers: [{ name: "docs", url: researchUrl }],
-    });
-
-    await startLocalServerUnlocked(runtimeId, context, "opencode");
-    expect(await posted()).toEqual([SCOPED_URL, researchUrl]);
-    expect(
-      context.runtime.localServers.openCodeAgentTools.research.toolIds(`local:${runtimeId}`),
-    ).toEqual([]);
-  });
-
-  test("starts only once its Control MCP is connected, and keeps it on every later reconcile", async () => {
-    // No memo window, so the healthy-reuse and status paths below both re-POST.
-    const { context, runtimeId, tabConnection } = await coordinatorContext({
-      connectedTtlMs: 0,
-      unavailableCooldownMs: 0,
-    });
-    const agentTools = context.runtime.localServers.openCodeAgentTools;
-
+  test("is launched with the coordinator's authority; its Control MCP credential stays in the backend", async () => {
+    const { context, runtimeId, tabConnection } = await coordinatorContext();
     const started = await startLocalServerUnlocked(runtimeId, context, "opencode");
     expect(started.wasRunning).toBe(false);
-    // Awaited, not merely scheduled: the first turn may follow at once.
-    expect(await posted()).toEqual([SCOPED_URL]);
-    expect(agentTools.state(`local:${runtimeId}`)).toBe("connected");
-
-    // The memo has expired, so the healthy-reuse and status paths both re-POST.
-    // Each schedules its re-POST without waiting, and a reconcile still in
-    // flight is joined rather than repeated, so settle one before starting the
-    // next. The fake server records each POST before it answers.
-    const reused = await startLocalServerUnlocked(runtimeId, context, "opencode");
-    expect(reused.wasRunning).toBe(true);
-    await agentTools.settled(`local:${runtimeId}`);
-    await readLocalServerStatus(runtimeId, context, "opencode");
-    await agentTools.settled(`local:${runtimeId}`);
-    const urls = await posted();
-    expect(urls).toHaveLength(3);
+    const answer = await launched(started.port, started.authToken!);
+    expect(answer).toMatchObject({
+      policy: "coordinator-read-only",
+      protectedDataDir: storage.getDataDir(),
+      research: "off",
+      projectConfig: "1",
+      mcpUrl: null,
+      mcpToken: null,
+      cwd: path.join(root, "checkout"),
+    });
+    const connection = peekOpenCode2HostServer(context, runtimeId)!;
+    expect(connection.coordinator?.policy.id).toBe("coordinator-read-only");
+    expect(connection.coordinator?.controlConnection()).toEqual({
+      url: SCOPED_URL,
+      token: "scoped-token",
+    });
     // Never the tab credential: it would leave the coordinator with mail and
     // ticket tools but none of its delegation tools.
-    expect(new Set(urls)).toEqual(new Set([SCOPED_URL]));
     expect(tabConnection).not.toHaveBeenCalled();
-  });
 
-  test("an MCP disposal forgets the memo and the real status path reposts the launch connection", async () => {
-    const { context, runtimeId, tabConnection } = await coordinatorContext();
-    await startLocalServerUnlocked(runtimeId, context, "opencode");
-    const tools = context.runtime.localServers.openCodeAgentTools;
-    expect(await posted()).toEqual([SCOPED_URL]);
-    context.nativeAgents = {
-      reloadMcpConfigurationIfRunning: async () => "reloaded",
-    } as unknown as CommandContext["nativeAgents"];
-    const probe = createMcpRuntimeProbe(context);
-    expect(await probe.reloadOpenCode!(runtimeId)).toEqual({ outcome: "reloaded" });
-    // Join the status operation queued by the production probe, then its actual HTTP POST.
-    await readLocalServerStatus(runtimeId, context, "opencode");
-    await tools.settled(`local:${runtimeId}`);
-    expect(await posted()).toEqual([SCOPED_URL, SCOPED_URL]);
-    expect(tools.state(`local:${runtimeId}`)).toBe("connected");
-    expect(tabConnection).not.toHaveBeenCalled();
-  });
-
-  test("a credential save preserves active work and the next idle prompt uses the replacement server", async () => {
-    const { context, runtimeId } = await coordinatorContext();
-    let liveWork = true;
-    context.nativeAgents = {
-      hasObservedLiveWork: async () => liveWork,
-    } as unknown as CommandContext["nativeAgents"];
-    const original = await startLocalServerUnlocked(runtimeId, context, "opencode");
-    const prompt = async (port: number, hold = false) => {
-      const response = await fetch(`http://127.0.0.1:${port}/session/test/prompt`, {
-        method: "POST",
-        body: JSON.stringify({ hold }),
-      });
-      return response.json();
-    };
-    expect(await prompt(original.port)).toEqual({ credentialVersion: "before" });
-    const runningPrompt = prompt(original.port, true);
-    // Attach a handler immediately: a killed server must fail this test, never reject unhandled.
-    const outcome = runningPrompt.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const work = (await fetch(`http://127.0.0.1:${original.port}/work`).then((response) =>
-        response.json(),
-      )) as { pending: boolean };
-      if (work.pending) break;
-      if (attempt === 99) throw new Error("The fixture prompt did not start");
-      await Bun.sleep(10);
-    }
-    // The production sign-in runner uses the hermetic fixture binary and its own private server.
-    await createOpenCodeProviderLogin().setApiKey(context, "openai", "after");
-    expect(context.runtime.localServers.hasStaleLogin(`opencode:${runtimeId}`)).toBe(true);
-    const active = await startLocalServerUnlocked(runtimeId, context, "opencode");
-    expect(active.wasRunning).toBe(true);
-    expect(active.pid).toBe(original.pid);
-    expect(await prompt(active.port)).toEqual({ credentialVersion: "before" });
-    await fetch(`http://127.0.0.1:${original.port}/release`);
-    expect(await outcome).toEqual({ value: { credentialVersion: "before" } });
-    liveWork = false;
-    const idle = await startLocalServerUnlocked(runtimeId, context, "opencode");
-    expect(idle.wasRunning).toBe(false);
-    expect(idle.pid).not.toBe(original.pid);
-    expect(context.runtime.localServers.hasStaleLogin(`opencode:${runtimeId}`)).toBe(false);
-    expect(await prompt(idle.port)).toEqual({ credentialVersion: "after" });
-  });
-
-  test.each(["api", "oauth"])(
-    "removes a configured provider's hidden %s login while keeping its configuration connection",
-    async (type) => {
-      const { context } = await coordinatorContext();
-      await fs.writeFile(
-        path.join(root, "login.json"),
-        JSON.stringify(
-          type === "api"
-            ? { type, key: "fixture-key" }
-            : { type, access: "fixture-access", refresh: "fixture-refresh" },
-        ),
-      );
-      const login = createOpenCodeProviderLogin();
-      expect((await login.listProviders(context)).providers[0]).toMatchObject({
-        id: "openai",
-        connected: true,
-        canRemoveStoredLogin: true,
-      });
-      await login.signOut(context, "openai");
-      expect(JSON.parse(await fs.readFile(path.join(root, "login.json"), "utf8"))).toEqual({});
-      expect((await login.listProviders(context)).providers[0]).toMatchObject({
-        id: "openai",
-        connected: true,
-        storedLogin: false,
-        canRemoveStoredLogin: true,
-      });
-    },
-  );
-
-  test("reconciliation without a recorded launch connection never falls back to tab tools", async () => {
-    const { context, runtimeId, tabConnection } = await coordinatorContext({
-      connectedTtlMs: 0,
-      unavailableCooldownMs: 0,
-    });
-    const agentTools = context.runtime.localServers.openCodeAgentTools;
-    await startLocalServerUnlocked(runtimeId, context, "opencode");
-    expect(await posted()).toEqual([SCOPED_URL]);
-    // Keep the healthy child but lose the in-memory launch connection and memo.
-    agentTools.cancelAll();
     const reused = await startLocalServerUnlocked(runtimeId, context, "opencode");
     expect(reused.wasRunning).toBe(true);
-    await readLocalServerStatus(runtimeId, context, "opencode");
-    expect(tabConnection).not.toHaveBeenCalled();
-    expect(await posted()).toEqual([SCOPED_URL]);
-    expect(agentTools.configurationCount()).toBe(0);
+    expect(reused.pid).toBe(started.pid);
   });
 
-  test("a coordinator whose Control MCP will not connect fails to start", async () => {
-    const { context, runtimeId } = await coordinatorContext({ retryDelaysMs: [] });
-    await fs.writeFile(path.join(root, "mode"), "fail\n");
-
-    await expect(startLocalServerUnlocked(runtimeId, context, "opencode")).rejects.toThrow(
-      "The OpenCode coordinator could not connect its Orkestrator tools",
-    );
+  test("stopping it revokes the credential and forgets the record", async () => {
+    const { context, runtimeId } = await coordinatorContext();
+    await startLocalServerUnlocked(runtimeId, context, "opencode");
+    const revoke = (
+      context.controlMcp as unknown as { revokeCoordinatorCredentials: ReturnType<typeof mock> }
+    ).revokeCoordinatorCredentials;
+    const before = revoke.mock.calls.length;
+    await stopLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(revoke.mock.calls.length).toBeGreaterThan(before);
+    expect(peekOpenCode2HostServer(context, runtimeId)).toBeUndefined();
     expect(context.runtime.localServers.process(`opencode:${runtimeId}`)).toBeUndefined();
+  });
+
+  test("a changed research setting replaces an idle server with one launched under it", async () => {
+    const { context, runtimeId } = await coordinatorContext();
+    context.nativeAgents = {
+      hasObservedLiveWork: async () => false,
+    } as unknown as CommandContext["nativeAgents"];
+    const first = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, coordinatorWebResearch: "search" });
+    const second = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(second.wasRunning).toBe(false);
+    expect(second.pid).not.toBe(first.pid);
+    expect((await launched(second.port, second.authToken!)).research).toBe("search");
+    expect(peekOpenCode2HostServer(context, runtimeId)?.coordinator?.research.mode).toBe("search");
+  });
+
+  test("a busy coordinator keeps its server across a research edit until its work settles", async () => {
+    const { context, runtimeId } = await coordinatorContext();
+    let busy = true;
+    context.nativeAgents = {
+      hasObservedLiveWork: async () => busy,
+    } as unknown as CommandContext["nativeAgents"];
+    const first = await ensureOpenCode2HostServer(context, runtimeId);
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({ ...config.global, coordinatorWebResearch: "search" });
+
+    // Mid-turn: every provider read (snapshot, status, interactive state)
+    // resolves the same generation under its original authority, rather than
+    // asking the supervisor for a replacement it must refuse.
+    const during = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(during.generation).toBe(first.generation);
+    expect(during.coordinator?.research.mode).toBe("off");
+    const again = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(again.generation).toBe(first.generation);
+
+    // Settled: the next call goes through the supervisor and gets an idle
+    // replacement launched under the new setting.
+    busy = false;
+    const after = await ensureOpenCode2HostServer(context, runtimeId);
+    expect(after.generation).not.toBe(first.generation);
+    expect(after.coordinator?.research.mode).toBe("search");
+    const port = Number(new URL(after.baseUrl).port);
+    expect((await launched(port, after.password)).research).toBe("search");
   });
 });

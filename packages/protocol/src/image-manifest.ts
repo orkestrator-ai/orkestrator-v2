@@ -122,28 +122,39 @@ export const IMAGE_CAPABILITIES = {
    */
   "bridge-launch": 1,
   /**
-   * `orkestrator-bridge-launch opencode` starts the container's OpenCode 1.x
-   * server from the root-owned `/opt/opencode` binary under `env -i`, with
-   * project configuration off and its global configuration and home in
-   * root-owned `/run/orkestrator-opencode`, so no plugin or configuration the
-   * agent's uid can write loads inside it. An older image keeps the login-shell
-   * start from node's own binary and configuration.
-   */
-  "opencode-launch": 1,
-  /**
-   * `orkestrator-bridge-launch opencode2` starts the container's OpenCode 2.x
-   * server the same way, from the root-owned `/opt/opencode/bin/opencode2`,
-   * with its configuration, home and package cache in root-owned
-   * `/run/orkestrator-opencode2`, and the backend records its listening
-   * socket. The same launcher points the 1.x server's package cache at
-   * root-owned `/run/orkestrator-opencode/cache` and reads a project
-   * configuration the backend filtered (`OPENCODE_CONFIG`). An older image
-   * keeps the 2.x login-shell start from node's own binary and configuration.
+   * `orkestrator-bridge-launch opencode2` starts the container's OpenCode
+   * server (2.x) the same way as a bridge, from the root-owned
+   * `/opt/opencode/bin/opencode2` under `env -i`, with project configuration
+   * off, its configuration, home and package cache in root-owned
+   * `/run/orkestrator-opencode2`, and a project configuration the backend
+   * filtered (`OPENCODE_CONFIG`); the backend records its listening socket.
+   * An older image keeps the login-shell start from node's own binary and
+   * configuration. (`opencode-launch`, the same contract for OpenCode 1.x,
+   * was retired with 1.x: a manifest that still declares it has it dropped
+   * as unknown.)
    */
   "opencode2-launch": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;
+
+/**
+ * Capability names this code no longer requires but that still appear on the
+ * wire. A backend in the Docker domain's support window may report one in
+ * `get_docker_image_status`'s `missingCapabilities`, so the response schema
+ * keeps accepting it. No image is checked for these, and
+ * `isImageCapability` rejects them, so a manifest that declares one has it
+ * dropped as unknown.
+ *
+ * - `opencode-launch`: the OpenCode 1.x container server launch, retired with
+ *   OpenCode 1.x on 2026-11-11.
+ */
+export const RETIRED_IMAGE_CAPABILITIES = ["opencode-launch"] as const;
+
+export type RetiredImageCapability = (typeof RETIRED_IMAGE_CAPABILITIES)[number];
+
+/** A capability name `ImageStatus.missingCapabilities` may carry. */
+export type ReportedImageCapability = ImageCapability | RetiredImageCapability;
 
 /**
  * Whether new containers may be created from this image: it takes staged
@@ -354,7 +365,11 @@ export interface ImageStatus {
     ImageManifest,
     "appVersion" | "sourceRevision" | "capabilities" | "agents" | "runtimes"
   > | null;
-  missingCapabilities: ImageCapability[];
+  /**
+   * Capabilities the image lacks. A backend in the support window may still
+   * name a retired one (`RETIRED_IMAGE_CAPABILITIES`).
+   */
+  missingCapabilities: ReportedImageCapability[];
   /** Fixed remediation text. */
   remediation: string | null;
 }

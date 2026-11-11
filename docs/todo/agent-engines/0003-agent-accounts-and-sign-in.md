@@ -80,7 +80,9 @@ is proving the usage-window gate for Claude (task 2; see
   `authStatus?`, `beginSignIn?`, `cancelSignIn?` and `signOut?` are on the
   provider contract (`agent-provider-contract.ts`). They are wired through
   `http-bridge-catalog.ts` and `native-agent-service.ts`, and OpenCode answers
-  through `OpenCodeCapabilities.authStatus` (`opencode-capabilities.ts`).
+  through `OpenCode2SessionFeatures.authStatus` (`opencode2/features.ts`,
+  since OpenCode 1.x and `opencode-capabilities.ts` were retired on
+  2026-11-11).
 - Bridge routes `GET /global/auth`, `POST /global/auth/login` and
   `POST /global/auth/logout` exist on Claude, Codex, Cursor, ACP and Pi, each
   with route tests. Codex also serves `POST /global/auth/login/cancel`.
@@ -614,6 +616,9 @@ Assumptions:
   human-readable `message`, as the generated protocol types say.
 - Pi's and OpenCode's `auth.json` keep one entry per provider id with a
   `type` field, as their bridges and `opencode-provider-login.ts` read them.
+  Since OpenCode 1.x was retired (2026-11-11), OpenCode's sign-ins live in its
+  2.x database (`/api/credential`), and the host `auth.json` is only the copy
+  `opencode2/credentials.ts` exports for containers.
 
 ## Constraints and rationale
 

@@ -53,6 +53,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "login-keeper.refresh-check-failed": "Checking the host Claude login after a refresh failed.",
       "login-watcher.pass-failed":
         "A container login file watcher pass failed; the next one retries.",
+      "login-watcher.opencode-renewal-failed":
+        "OAuth logins a host OpenCode server refreshed could not be copied into the `auth.json` containers are handed; the files are still delivered and the next pass retries. Error class only.",
       "lifecycle.record-failure-failed": "A failed container operation could not be recorded.",
       "lifecycle.reconcile-failed":
         "Reconciling one environment's container operation failed; the next pass retries.",

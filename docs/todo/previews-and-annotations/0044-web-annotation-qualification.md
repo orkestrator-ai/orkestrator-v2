@@ -862,8 +862,8 @@ Findings:
   unparseable logins dropped. When nothing usable remains, the launcher warns
   ("Grok is signed out in this profile: …") and seeds nothing. Containers
   now get the same access-only copy (2026-10-21; see "Single-use refresh
-  tokens" in
-  [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  tokens" in to-do 0018, retired 2026-11-11; now described in
+  [portable inputs](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)).
 - **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
   reporter writes after global teardown, so the sanitizer never saw
   `results.json`. A request that failed when the backend went away left

@@ -197,7 +197,8 @@ jobs:
         run: mise run test:logged -- --name firewall-without-seed -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1 --test-name-pattern 'restricted boot fetches GitHub ranges without a workflow seed'
 
       # IPv6 on an attached network and DNS rotation. The daemon-restart case
-      # needs a disposable daemon and stays a manual run (0018 task 3).
+      # needs a disposable daemon and stays a manual run (docs/development/
+      # container-qualification.md, "Egress gateway conditions on Linux Engine").
       - name: Live egress conditions (IPv6, DNS rotation)
         if: ${{ !cancelled() }}
         env:

@@ -2213,7 +2213,7 @@ adoption now rejects a renderer write-back.
   for batching the macOS, Electron, two-machine and Safari runs;
   0019 (retired 2026-11-11; see [container qualification](../../development/container-qualification.md))
   for Docker Desktop.
-- [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md):
+- [Environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2) (to-do 0018, retired 2026-11-11):
   egress policy must keep published loopback ports and relay stdio working.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window) (support
   window), [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md)

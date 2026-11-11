@@ -13,7 +13,7 @@ pushed warm start to 2.14 s (target at most 2 s), and fresh-to-ready is 3.04 to
 or its reason recorded before the change merges; neither happened for the
 egress gateway (#1279) or 0109 (#1307). The Linux arm64 figures 0022 lists as
 missing already exist as CI artefacts. Found in
-[0022](0022-container-resource-budgets-and-performance.md)'s task analysis.
+to-do 0022's task analysis (retired 2026-11-11).
 
 ## Task analysis
 
@@ -398,8 +398,8 @@ Took the recommended host, during todo
 
 ## Related
 
-- [0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)
-  (the source; its arm64 item)
+- To-do 0022 (retired 2026-11-11): the source; its arm64 item. Its measurements are in
+  [container-qualification.md](../../development/container-qualification.md#workload-budgets-and-the-built-in-default-2026-10-25)
 - Todo 0109 (retired on 2026-11-10): the staged-input relay and the gateway seed copy, described in [container lifecycle](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs) and [environment networks](../../architecture/container-lifecycle.md#environment-networks-network-policy2)
 - 0728 (retired 2026-11-11, once CI passed; see [C14 staged inputs on any host uid](../../development/container-qualification.md#c14-staged-inputs-on-any-host-uid-linux-engine-2026-10-28)) (the same uid difference on CI)
 - [0870-container-start-poll-quantisation.md](0870-container-start-poll-quantisation.md) (the start-time fix split from task 3)
@@ -408,5 +408,4 @@ Took the recommended host, during todo
 ## Replaces
 
 Nothing; new on 2026-10-27, split from
-[0022-container-resource-budgets-and-performance.md](0022-container-resource-budgets-and-performance.md)'s
-task analysis.
+to-do 0022's task analysis (retired 2026-11-11).

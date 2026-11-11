@@ -256,7 +256,7 @@ the transcript-scroll code.
 - **Suite counts:** web 14,571 pass, 10 skip, 8 fail (14,589 tests across
   1,008 files, 470.2 s); the eight failures are in this file and
   `useConversationScrollTarget.test.tsx` (case
-  [9979](9979-conversation-scroll-target-repeat-jump-highlight.md)).
+  [9981](9981-conversation-scroll-target-repeat-jump-highlight.md)).
 - **Isolated rerun:** `NODE_ENV=test bun test ./src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1`
   from `apps/web`, through `test:logged`: passed (0.4 s).
 

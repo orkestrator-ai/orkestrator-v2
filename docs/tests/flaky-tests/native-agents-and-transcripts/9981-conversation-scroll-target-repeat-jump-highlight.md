@@ -1,6 +1,6 @@
 # Conversation scroll target: repeat-jump highlight gone after a fixed sleep
 
-- **ID:** 9979
+- **ID:** 9981
 - **Status:** open
 - **Date observed:** 2026-11-11 (twice)
 - **Test:** `useConversationScrollTarget > a repeat jump to the same message restarts the highlight; another moves it`

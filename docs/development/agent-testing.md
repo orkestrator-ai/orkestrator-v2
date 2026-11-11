@@ -2340,6 +2340,64 @@ proves the plumbing and the wording the model receives, not that a real model
 obeys it; that needs the billed `routing` run. The content-free summary is
 `output/agent-testing/<profile>/coordinator-routing-fake/pi-routing-build.json`.
 
+### Coordinator worker surfaces (fake model)
+
+`mise run test:agent:coordinator:surfaces-fake` checks two coordinator worker
+surfaces ([coordinator.md, "Worker surfaces"](../architecture/coordinator.md#worker-surfaces))
+in the browser client on a loopback fake model, with no login and nothing
+billed. It starts a disposable `dev:test --fixture --fixture-environments
+local,container --headless --no-agent-credentials --agent-platforms pi`
+profile with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, runs
+`e2e/agent-testing/coordinator-surfaces-fake.spec.ts`, then stops and resets
+the profile. The first run on a host may build the workspace's development
+image. The spec points the profile's isolated Pi `models.json` and
+`settings.json` (never `~/.pi`) at `coordinator-surfaces-fake-model.ts`
+(script in `coordinator-surfaces-fake-model-script.ts`) and opens a fresh Pi
+main coordinator conversation. Each prompt carries one
+`surfaces-fake: <tool> {json}` line, which the fake turns into exactly that
+tool call, so the arguments are the spec's.
+
+The fixture created both workers, not the coordinator, so the spec turns on the
+project's "Let the coordinator use environments it did not create" setting
+(`coordinatorOtherEnvironments`) for the run and restores it afterwards;
+`open_worker_browser` is refused without it. Then:
+
+- **Root changes.** The fixture checkout gets one modified, one deleted and
+  one new file. The coordinator calls `request_root_changes` three times
+  naming the modified and new files. In the approval dialog the spec rejects
+  the first (the local worker stays clean), then approves for the local worker
+  and for the container worker after also ticking the deleted file. All three
+  changes must land in each worker, the container's through `docker exec`.
+  The checkout's status and `HEAD` must not change. Each outcome must wake the
+  coordinator exactly once with its state, checked over an 8-second quiet
+  window.
+- **Container browser.** A server inside the container and a decoy on the
+  host's loopback listen on the same port. The container's is registered as a
+  `container` preview service, and the coordinator calls
+  `open_worker_browser` at `http://localhost:<port>/surfaces`. The tab must be
+  stored as an `agent-link` intent. `resolve_preview_target` must name the
+  container service. After a reload the browser client must bind the tab to
+  that service's `orkestrator-preview://service/…` URL. `probe_preview_service`
+  must report a `container-relay` transport with TCP `ok`. The container
+  publishes only its bridge ports, so the backend reaches the service through
+  its in-container relay, which cannot see the host decoy. The browser client
+  in compatibility mode cannot embed a relayed service (it has no host port;
+  see [browser-previews.md, "Rollback"](../architecture/browser-previews.md#rollback)),
+  so the page text is checked only when an embedded frame exists. The
+  desktop-app half is on the manual-test checklist (7568).
+
+The fake calls each tool because the prompt names it, so a pass proves the
+product path, not that a real model chooses these tools. The billed run is on
+the manual-test checklist. Screenshots of the dialog and the bound tab and a
+content-free summary go to
+`output/agent-testing/<profile>/coordinator-surfaces-fake/` (`pi-surfaces.json`).
+To rerun the spec against a profile you started yourself with the same flags,
+pass `ORKESTRATOR_AGENT_TEST_PROFILE=<profile>
+ORKESTRATOR_AGENT_TEST_COORDINATOR_SURFACES_FAKE=1` to `bunx playwright test
+--config e2e/agent-testing/playwright.coordinator-surfaces-fake.config.ts`.
+Each rerun leaves its browser tab in the container worker, so reset the
+profile afterwards.
+
 ### Coordinator node mail between two profiles (fake model)
 
 `mise run test:agent:coordinator:node-mail-fake` qualifies mail between a

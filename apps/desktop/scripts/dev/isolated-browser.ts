@@ -86,7 +86,14 @@ const PROFILE_FLAGS = new Set([
   "--no-agent-credentials",
   "--use-dev-worktree-folder",
 ]);
-const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms", "--agent-tools-port"]);
+const PROFILE_OPTIONS = new Set([
+  "--credential-source",
+  "--agent-platforms",
+  "--agent-tools-port",
+  // A suite that needs the fixture's environments without the Docker
+  // qualification run (`docker`), for example a container worker.
+  "--fixture-environments",
+]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex
@@ -200,8 +207,10 @@ export function dockerFixtureShards(
 export function dockerProfileArguments(profileArgs: readonly string[]): string[] {
   return [
     ...profileArgs,
-    "--fixture-environments",
-    "local,container",
+    // A caller's own fixture selection wins over the Docker default.
+    ...(profileArgs.includes("--fixture-environments")
+      ? []
+      : ["--fixture-environments", "local,container"]),
     ...(agentToolsPortArgument(profileArgs) === undefined ? ["--agent-tools-port", "auto"] : []),
   ];
 }

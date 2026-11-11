@@ -220,10 +220,37 @@ function launchInput(text: string): Record<string, unknown> | undefined {
   }
 }
 
+/** What a `launch_environment` result said, as facts: never its text beyond an error line. */
+export interface LaunchOutcome {
+  status?: string;
+  environmentId: boolean;
+  error?: string;
+}
+
+export function launchOutcome(result: string): LaunchOutcome {
+  const start = result.indexOf("{");
+  const end = result.lastIndexOf("}");
+  let value: Record<string, unknown> = {};
+  try {
+    if (start >= 0 && end > start) value = JSON.parse(result.slice(start, end + 1)) as typeof value;
+  } catch {
+    value = {};
+  }
+  const error =
+    typeof value.error === "string" ? value.error : start < 0 ? result.trim() : undefined;
+  return {
+    ...(typeof value.status === "string" ? { status: value.status } : {}),
+    environmentId: typeof value.environmentId === "string",
+    ...(error ? { error: error.slice(0, 300) } : {}),
+  };
+}
+
 export interface PiTurn {
   step: PiStep;
   /** Usage-limit notices this request's prompt carried; set on a turn's first request only. */
   notices: NoticeFacts[];
+  /** The launch's result, on the request that follows it. */
+  launched?: LaunchOutcome;
 }
 
 /** The next step of a request from the leaf's Pi coordinator. */
@@ -237,13 +264,19 @@ export function piTurn(request: { messages: unknown; tools?: unknown }): PiTurn 
     }
   }
   const prompt = chatText(list[lastUser]);
-  const results =
-    lastUser < 0 ? 0 : list.slice(lastUser + 1).filter((m) => m?.role === "tool").length;
-  const firstRequest = results === 0;
+  const toolResults =
+    lastUser < 0 ? [] : list.slice(lastUser + 1).filter((m) => m?.role === "tool");
+  const firstRequest = toolResults.length === 0;
   const notices = firstRequest ? noticeFacts(prompt) : [];
   const input = launchInput(prompt);
   if (!input) return { step: { kind: "text", text: PI_REPLY }, notices };
-  if (!firstRequest) return { step: { kind: "text", text: PI_LAUNCHED_REPLY }, notices };
+  if (!firstRequest) {
+    return {
+      step: { kind: "text", text: PI_LAUNCHED_REPLY },
+      notices,
+      launched: launchOutcome(chatText(toolResults.at(-1))),
+    };
+  }
   const name = offeredName(offeredTools(request.tools), "launch_environment");
   return name
     ? { step: { kind: "tool", name, input }, notices }

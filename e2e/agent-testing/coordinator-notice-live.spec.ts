@@ -50,7 +50,7 @@
 import { expect, test, type BrowserContext } from "./browser-test";
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   coordinatorMainConversation,
@@ -113,6 +113,7 @@ type Calls = {
   wakes: Wake[];
   piCompletions: number;
   piToolCalls: Record<string, number>;
+  launches: Array<{ status?: string; environmentId: boolean; error?: string }>;
   usageReads: Record<string, number>;
   refused: number;
   hold: boolean;
@@ -481,16 +482,63 @@ async function startProfile(name: string): Promise<void> {
   );
 }
 
+const outputDirectory = path.join(
+  repositoryRoot,
+  "output",
+  "agent-testing",
+  runId,
+  "coordinator-notice-live",
+);
+
 function writeSummary(summary: Record<string, unknown>): void {
-  const directory = path.join(
-    repositoryRoot,
-    "output",
-    "agent-testing",
-    runId,
-    "coordinator-notice-live",
+  mkdirSync(outputDirectory, { recursive: true });
+  writeFileSync(
+    path.join(outputDirectory, "summary.json"),
+    `${JSON.stringify(summary, null, 2)}\n`,
   );
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(path.join(directory, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+/**
+ * Keeps both profiles' bounded launcher, backend and bridge logs after a
+ * failure: the runner resets the profiles, which removes them. They are
+ * content-free by the logging rules.
+ */
+function keepLogs(): void {
+  for (const name of [deskProfile, leafProfile]) {
+    try {
+      const logDir = (profileStatus(name) as { logDir?: string }).logDir;
+      if (logDir && existsSync(logDir)) {
+        cpSync(logDir, path.join(outputDirectory, "logs", name), { recursive: true });
+      }
+    } catch {
+      // Diagnostics only.
+    }
+  }
+}
+
+/** The leaf's environments of the shared project, as status facts only. */
+async function environmentStates(invoke: Invoke, projectId: string): Promise<unknown> {
+  const environments = await invoke<
+    Array<{ name: string; status: string; setupPhase?: string; error?: string }>
+  >("get_environments", { projectId });
+  return environments.map((entry) => ({
+    kind: /notice-(tab|worker)/.exec(entry.name)?.[1] ?? "other",
+    status: entry.status,
+    setupPhase: entry.setupPhase ?? null,
+  }));
+}
+
+/** Which kinds of each run reached the provider, and how. */
+function markerCallsSummary(fake: Calls): Record<string, Record<string, string[]>> {
+  const runs: Record<string, Record<string, string[]>> = {};
+  for (const call of fake.claude) {
+    if (!call.marker) continue;
+    const run = (runs[call.marker.run] ??= {});
+    (run[call.marker.kind] ??= []).push(
+      `${call.account}:${call.parked ? "parked" : call.refused ? "refused" : "answered"}`,
+    );
+  }
+  return runs;
 }
 
 const wakesOf = (fake: Calls, by: Wake["by"]) => fake.wakes.filter((wake) => wake.by === by);
@@ -530,6 +578,7 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
     const created: Array<{ profile: () => Profile; environmentId: string }> = [];
     const pipelines: string[] = [];
     let fake: Calls | undefined;
+    let leafProjectId: string | undefined;
     try {
       // Named before any Claude or Pi bridge starts, so the first one reads it.
       const restoreClaude = [pointClaudeAt(desk.status), pointClaudeAt(leaf.status)];
@@ -563,6 +612,7 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       const leafProject = await sharedProject(leaf, CHECKOUT, SHARED_GIT_URL, {
         localOrigin: true,
       });
+      leafProjectId = leafProject.id;
       let nodeId = "";
       nodeId = await attachLeaf(desk, leaf, (attached) => {
         nodeId = attached;
@@ -640,9 +690,14 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       fake = await until(
         "all three leaf sessions to reach the limited account",
         calls,
-        (counts) => parkedKinds(counts).size === 3,
+        (counts) =>
+          parkedKinds(counts).size === 3 ||
+          counts.launches.some((launch) => launch.error || launch.status !== "accepted"),
         600_000,
       );
+      expect(fake.launches, "the leaf coordinator's launch was not accepted").toEqual([
+        { status: "accepted", environmentId: true },
+      ]);
       const worker = (
         await leaf.invoke<Array<{ id: string; name: string }>>("get_environments", {
           projectId: leafProject.id,
@@ -848,6 +903,12 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       summary.verdict = "passed";
     } catch (error) {
       summary.reason = error instanceof Error ? error.message.slice(0, 2_000) : String(error);
+      if (leafProjectId) {
+        summary.leafEnvironments = await environmentStates(leaf.invoke, leafProjectId).catch(
+          (failure: unknown) => String(failure).slice(0, 300),
+        );
+      }
+      keepLogs();
       throw error;
     } finally {
       await control("release").catch(() => undefined);
@@ -870,6 +931,8 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       if (failures.length > 0) summary.cleanupFailures = failures;
       fake ??= await calls().catch(() => undefined);
       summary.usageReads = fake?.usageReads ?? null;
+      summary.launches = fake?.launches ?? null;
+      summary.parkedAtEnd = fake ? markerCallsSummary(fake) : null;
       summary.providerRefusedRequests = fake?.refused ?? null;
       summary.durationMs = Date.now() - started;
       writeSummary(summary);

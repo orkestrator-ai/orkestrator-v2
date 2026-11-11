@@ -10,6 +10,7 @@ import {
   claudeUserTexts,
   fixtureClaudeToken,
   isLimited,
+  launchOutcome,
   launchPrompt,
   markerOf,
   noticeFacts,
@@ -133,6 +134,20 @@ describe("the leaf's Pi coordinator", () => {
       tools,
     });
     expect(after.step.kind).toBe("text");
+    expect(after.launched).toEqual({ environmentId: false });
+    const accepted = piTurn({
+      messages: [
+        { role: "user", content: launchPrompt(input) },
+        { role: "assistant", content: null },
+        { role: "tool", content: '{"environmentId":"e1","status":"accepted"}' },
+      ],
+      tools,
+    });
+    expect(accepted.launched).toEqual({ status: "accepted", environmentId: true });
+    expect(launchOutcome("Coordinator launches require an explicit baseBranch")).toEqual({
+      environmentId: false,
+      error: "Coordinator launches require an explicit baseBranch",
+    });
   });
 
   test("a wake with a usage-limit notice is counted; anything else gets text", () => {

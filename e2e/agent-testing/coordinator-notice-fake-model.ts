@@ -31,6 +31,7 @@ import {
   noticeFacts,
   piTurn,
   type FixtureAccount,
+  type LaunchOutcome,
   type NoticeFacts,
   type PiStep,
   type SessionKind,
@@ -61,6 +62,7 @@ const state = {
   wakes: [] as Wake[],
   piCompletions: 0,
   piToolCalls: {} as Record<string, number>,
+  launches: [] as LaunchOutcome[],
   usageReads: {} as Record<string, number>,
   refused: 0,
   hold: false,
@@ -247,6 +249,7 @@ async function piCompletions(request: Request): Promise<Response> {
   state.piCompletions += 1;
   const messages = Array.isArray(body.messages) ? body.messages : [];
   noteWake("pi", JSON.stringify(messages.at(-1) ?? null), turn.notices);
+  if (turn.launched) track(state.launches, turn.launched);
   if (turn.step.kind === "tool") {
     state.piToolCalls[turn.step.name] = (state.piToolCalls[turn.step.name] ?? 0) + 1;
   }

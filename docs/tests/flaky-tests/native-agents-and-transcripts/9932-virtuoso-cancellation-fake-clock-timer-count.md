@@ -235,3 +235,32 @@ transcript-scroll code.
   `PASSED ALONE (851ms)`, and a later
   `bun --cwd=apps/web test src/lib/transcript-scroll/virtuoso-cancellation.test.tsx --parallel=1 --only-failures`
   (`NODE_ENV=test`, host load average about 4 on 16 cores) passed.
+
+## Recurrence — 2026-11-11 (CLI and slash-command qualification review repairs), fails alone under load
+
+Observed 2026-11-11 on `cli-slash-qualification-024da345b17c-r1` at
+`e3459a948`, base commit `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9932 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch changes the CLI scenario harness
+(`packages/cli/scenarios`, `packages/cli/scripts`), adds
+`scripts/qualify-slash-mixed-versions.ts` and edits to-do docs; it does not
+touch `apps/web`.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-fix-rerun -- mise run test`
+  (default suite, web package at its default worker count).
+- **Failure:** four cases failed with `expect(jest.getTimerCount()).toBe(0)`,
+  Expected 0, Received 1, at line 110 (`elapsePastEveryDeadline`):
+  - `a function follow prop that answers false is still truthy to the viewport-shrink path` (25.7 ms)
+  - `literal false: a detached reader is not moved when the viewport shrinks` (17.1 ms)
+  - `restored snapshot transitions from hidden to visible (cancel=%s)` (17.8 ms, 23.1 ms)
+- **Suite counts:** web 14,575 passed and 4 failed; backend 18,573 passed and
+  0 failed; the root, bridge and lockfile groups passed.
+- **Isolated rerun:** the aggregate runner's automatic rerun waited for host
+  capacity and ended `INCOMPLETE` after 600 s with no verdict. Three manual
+  runs of `bun test ./src/lib/transcript-scroll/virtuoso-cancellation.test.tsx`
+  from `apps/web` with `NODE_ENV=test`, at a host load average of about 74 on
+  16 cores, failed alone: 9, 5 and 9 of 14 cases, each with the same
+  Received 1 signature. This matches the earlier "fails alone under load"
+  recurrence. (Without `NODE_ENV=test` the shell's `NODE_ENV=production`
+  loads React's production build and every case fails with
+  `React.act is not a function`, which is unrelated to this flake.)

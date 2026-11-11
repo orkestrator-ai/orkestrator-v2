@@ -1643,6 +1643,14 @@ a non-default data directory and a bare loopback origin
 (`agentTestUsageOrigin` in `apps/backend/src/core/agent-test-fixtures.ts`);
 anything else reads the real endpoints.
 
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate
+(`agentTestAnthropicOrigin`), starts every Claude bridge of the isolated
+backend with `ANTHROPIC_BASE_URL` set to that loopback origin and the CLI's
+nonessential traffic off. A coordinator's Claude needs it: its private
+configuration directory never holds the profile's `settings.json`, so
+pointing that file at a fake model reaches every Claude session except the
+coordinator's.
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
@@ -2377,7 +2385,8 @@ on two real backends with no login and nothing billed. The runner
 `e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
 disposable `dev:test --fixture --headless --no-agent-credentials
 --agent-platforms claude,pi` profiles with
-`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` naming it (see
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` and
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN` naming it (see
 [Loopback plan-usage origin](#loopback-plan-usage-origin)) and
 `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
 `e2e/agent-testing/coordinator-notice-live.spec.ts` with

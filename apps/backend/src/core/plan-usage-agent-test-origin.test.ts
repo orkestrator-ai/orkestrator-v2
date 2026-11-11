@@ -3,7 +3,13 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
-import { AGENT_TEST_USAGE_ORIGIN_ENV, agentTestUsageOrigin } from "./agent-test-fixtures.js";
+import {
+  AGENT_TEST_ANTHROPIC_ORIGIN_ENV,
+  AGENT_TEST_USAGE_ORIGIN_ENV,
+  agentTestAnthropicOrigin,
+  agentTestUsageOrigin,
+  applyAgentTestAnthropicOrigin,
+} from "./agent-test-fixtures.js";
 import type { CommandContext } from "./commands-context.js";
 import { defaultDataDir } from "../data-dir.js";
 import {
@@ -16,7 +22,8 @@ import {
 
 /**
  * To-do 7542 task 1: an isolated agent-test profile's backend reads Claude
- * and Codex plan usage from a loopback server, and nothing else ever does.
+ * and Codex plan usage from a loopback server, and points its Claude bridges
+ * at a loopback model, and nothing else ever does.
  */
 
 const directories: string[] = [];
@@ -122,6 +129,66 @@ describe("agentTestUsageOrigin", () => {
           env: isolatedEnv(origin),
         }),
       ).toBeUndefined();
+    }
+  });
+});
+
+describe("agentTestAnthropicOrigin", () => {
+  const anthropicEnv = (origin: string): NodeJS.ProcessEnv => ({
+    ORKESTRATOR_AGENT_TEST_ISOLATED: "1",
+    [AGENT_TEST_ANTHROPIC_ORIGIN_ENV]: origin,
+  });
+
+  test("points a Claude bridge at the loopback model in an isolated agent-test profile", async () => {
+    const dataDir = await profileDir();
+    const bridgeEnv: NodeJS.ProcessEnv = { ANTHROPIC_BASE_URL: "https://api.anthropic.com" };
+    expect(
+      applyAgentTestAnthropicOrigin(bridgeEnv, {
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: anthropicEnv(ORIGIN),
+      }),
+    ).toBe(true);
+    expect(bridgeEnv).toEqual({
+      ANTHROPIC_BASE_URL: ORIGIN,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    });
+    // The usage origin is a different variable; neither stands in for the other.
+    expect(
+      agentTestAnthropicOrigin({
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: isolatedEnv(),
+      }),
+    ).toBeUndefined();
+  });
+
+  test("leaves a bridge alone everywhere else", async () => {
+    const dataDir = await profileDir();
+    const refused: Array<Parameters<typeof applyAgentTestAnthropicOrigin>[1]> = [
+      { runtimeFlavor: "production", dataDir: () => dataDir, env: anthropicEnv(ORIGIN) },
+      { runtimeFlavor: "development", dataDir: () => dataDir, env: anthropicEnv(ORIGIN) },
+      {
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: { [AGENT_TEST_ANTHROPIC_ORIGIN_ENV]: ORIGIN },
+      },
+      { runtimeFlavor: "agent-test", dataDir: () => defaultDataDir(), env: anthropicEnv(ORIGIN) },
+      {
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: anthropicEnv("https://api.anthropic.com"),
+      },
+      {
+        runtimeFlavor: "agent-test",
+        dataDir: () => dataDir,
+        env: anthropicEnv("http://127.0.0.1:4000/v1"),
+      },
+    ];
+    for (const options of refused) {
+      const bridgeEnv: NodeJS.ProcessEnv = {};
+      expect(applyAgentTestAnthropicOrigin(bridgeEnv, options)).toBe(false);
+      expect(bridgeEnv).toEqual({});
     }
   });
 });

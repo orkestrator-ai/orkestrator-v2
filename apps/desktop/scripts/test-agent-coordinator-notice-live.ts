@@ -14,8 +14,9 @@ import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/own
  * tasks 2 to 4): the main profile is the command node, the companion its
  * leaf, both with no agent credentials and only Claude and Pi enabled. It
  * first starts `coordinator-notice-fake-model.ts` on loopback and starts both
- * profiles with `ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` naming it, so their
- * plan usage reads never leave the machine. It runs
+ * profiles with `ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` and
+ * `ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN` naming it, so their plan usage
+ * reads and every Claude bridge's model calls stay on the machine. It runs
  * `coordinator-notice-live.spec.ts`, which stops and starts both profiles
  * once, then both profiles are stopped and reset and the provider is stopped.
  * Nothing logs in and nothing is billed; it is still not part of
@@ -79,6 +80,8 @@ if (supervised) {
         ...process.env,
         ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
         ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN: provider.origin,
+        // Coordinators' Claude reads no user settings, so the origin comes from the backend.
+        ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN: provider.origin,
       },
       suite: {
         label: "Coordinator notice hierarchy between two profiles (fixture accounts)",

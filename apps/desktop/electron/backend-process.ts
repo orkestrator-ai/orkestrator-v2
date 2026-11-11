@@ -138,6 +138,9 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   // only in an isolated agent-test profile, for a loopback origin
   // (`agentTestUsageOrigin`). An address, never a credential.
   "ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN",
+  // A loopback Anthropic origin every Claude bridge of the isolated backend
+  // is pointed at (to-do 7542), under the same gate (`agentTestAnthropicOrigin`).
+  "ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
   // `off` skips the startup container-to-host probe, as other disposable test

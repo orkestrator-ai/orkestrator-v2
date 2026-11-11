@@ -48,15 +48,24 @@ export const AGENT_TEST_USAGE_ORIGIN_ENV = "ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN"
 
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-export function agentTestUsageOrigin(options: {
+export interface AgentTestOriginOptions {
   runtimeFlavor?: string;
   dataDir: () => string;
   env?: NodeJS.ProcessEnv;
-}): string | undefined {
+}
+
+/**
+ * A loopback origin named by `name`, honoured only in an isolated agent-test
+ * backend (see `agentTestUsageOrigin`); `undefined` everywhere else.
+ */
+function agentTestLoopbackOrigin(
+  name: string,
+  options: AgentTestOriginOptions,
+): string | undefined {
   const env = options.env ?? process.env;
   if (options.runtimeFlavor !== "agent-test") return undefined;
   if (env.ORKESTRATOR_AGENT_TEST_ISOLATED !== "1") return undefined;
-  const raw = env[AGENT_TEST_USAGE_ORIGIN_ENV];
+  const raw = env[name];
   if (!raw) return undefined;
   if (isDefaultDataDir(options.dataDir(), process.platform, env)) return undefined;
   let url: URL;
@@ -71,4 +80,38 @@ export function agentTestUsageOrigin(options: {
   if (url.username || url.password || url.search || url.hash) return undefined;
   if (url.pathname !== "/" && url.pathname !== "") return undefined;
   return url.origin;
+}
+
+export function agentTestUsageOrigin(options: AgentTestOriginOptions): string | undefined {
+  return agentTestLoopbackOrigin(AGENT_TEST_USAGE_ORIGIN_ENV, options);
+}
+
+/**
+ * The loopback Anthropic Messages origin every Claude bridge an isolated
+ * agent-test backend starts is pointed at (`ANTHROPIC_BASE_URL`), so a
+ * coordinator's Claude, whose private configuration directory never holds the
+ * user's `settings.json`, runs on a scripted model too (to-do 7542). Set by
+ * the spec as `ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate as
+ * `agentTestUsageOrigin`.
+ */
+export const AGENT_TEST_ANTHROPIC_ORIGIN_ENV = "ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN";
+
+export function agentTestAnthropicOrigin(options: AgentTestOriginOptions): string | undefined {
+  return agentTestLoopbackOrigin(AGENT_TEST_ANTHROPIC_ORIGIN_ENV, options);
+}
+
+/**
+ * Points a Claude bridge's environment at the agent-test Anthropic origin,
+ * when there is one, and keeps the CLI's nonessential traffic off. Returns
+ * whether it did.
+ */
+export function applyAgentTestAnthropicOrigin(
+  env: NodeJS.ProcessEnv,
+  options: AgentTestOriginOptions,
+): boolean {
+  const origin = agentTestAnthropicOrigin(options);
+  if (!origin) return false;
+  env.ANTHROPIC_BASE_URL = origin;
+  env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  return true;
 }

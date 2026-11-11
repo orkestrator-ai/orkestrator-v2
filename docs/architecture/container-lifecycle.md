@@ -795,9 +795,23 @@ as links, within the revision bounds). `entrypoint.sh` and
 `workspace-setup.sh` read a relayed copy in place of its mount
 (`staged_input_path`), and the Claude key file is read from either. Nothing is
 widened on the host or for another user, and nothing is relayed on a rootful
-daemon, where `node` reads the mounts directly. The relay is rebuilt from the
-mounts on every boot, and revocation also removes the provider's relayed
-copies from the running container (`stagedInputRelayPaths`). On a rootless
+daemon, where `node` reads the mounts directly. Each boot checks the copies
+against the mounts: root keeps a digest of every mount it relayed (paths,
+types, modes, sizes, link targets and content, read from the read-only mount,
+never from `node`'s copy) in its own `0700` `/run/orkestrator-relay-state`, and
+a mount whose digest is unchanged and whose copy is still there is left as it
+is. Every other copy is removed and relayed again (or not at all, once the
+mount is readable, gone or over the bounds), and with no copy kept the whole
+relay directory is rebuilt, as it was before. `node` removes those copies,
+opening up any directory a workload left without write permission; if a copy
+still will not go, root rebuilds the whole relay rather than leave a stale copy
+at its live path, and a copy whose relay fails and cannot be removed takes the
+whole relay with it, so every input falls back to its unreadable mount. So the backend's rewrite of a
+login or a revocation's scrub reaches the copy at the next start, and
+revocation also removes the provider's relayed copies from the running
+container (`stagedInputRelayPaths`), which the next start relays again only if
+the mount still holds them. `node` owns its copy, so editing it changes only
+its own input, as editing its home does. On a rootless
 daemon an older image gets nothing readable: the backend logs it at creation
 and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 `imageRelaysStagedInputs`).
@@ -879,7 +893,33 @@ on revocation described above.
   made inside the container keeps its refresh token until the next restart and
   is kept, as is an API key. A host login that has only expired leaves the copy
   alone, since it has lapsed too. A container that used an added account
-  already had its copy removed by the account switch path.
+  already had its copy removed by the account switch path. Claude's host login
+  is removed at the next container start (`buildDropHostClaudeLoginCommand`):
+  host copies go, a login the container made itself (`claudeAiOauth` or
+  an `mcpOAuth` server) keeps its access token, and a file left with no login
+  is deleted. An entry carrying any token whose SHA-256 the backend saw on the
+  host for that slot (`HostClaudeTokenDigests`, in memory, handed to the drop,
+  restrict and merge commands on stdin) is a host copy, refresh token or not.
+  Otherwise a login the container made is one still holding a refresh token
+  (a push never carries one) or, once stripped, one whose access-token SHA-256
+  the strip recorded in `.credentials.json.orkestrator-owned`; the restrict
+  and drop commands write that record before stripping, and the merge carries
+  a recorded MCP login forward while the host's login has no entry for that
+  server, so the login survives later starts and pushes. Every merge, restrict
+  and drop writes the record, empty or not, so it also marks the container as
+  tracked. In a container no pass has touched since the record existed, an
+  older strip may have left the container's own logins access-only and
+  unrecorded, so a drop there keeps (and records) every entry it cannot name
+  as the host's: a host copy the backend never saw then stays until its access
+  token expires or the next push replaces it, as before this removal existed.
+  If `flock` or the locked pass fails, the drop falls back to the strip-only
+  pass rather than deleting the file. The host reads as signed out
+  (`hostClaudeSignedOut`) only when every place the login is looked up says
+  so: each `.credentials.json` absent or holding no login, and on macOS a
+  metadata-only `security find-generic-password` (no `-w`, so no access
+  prompt) exiting 44, item not found, for each keychain searched. An
+  unreadable file, an expired login or any other Keychain answer keeps the
+  older behaviour, stripping refresh tokens in place.
 - When a container's host-imported Codex or Grok login lapses, the tab's
   sign-in message (readiness `authentication-required`) is replaced by
   guidance to renew the login on the host (or the added Codex account in
@@ -940,7 +980,10 @@ on revocation described above.
   narrowed. It uses the cleanup review's evidence (`legacy-runtime-shape.ts`):
   no inputs-revision label *and* a bind at one of the old mount points. A
   runtime with no label and no such bind is `none`, and a failed inspect is
-  `unknown`, never `host-mounts`.
+  `unknown`, never `host-mounts`. A `staged` revision that holds no provider
+  and has nothing missing, disabled or revoked to report shows "Nothing was
+  staged into this container." in the environment's inputs section
+  (`EnvironmentInputsSection.tsx`), rather than an empty box.
 - Credentials (staged inputs, the staged Anthropic key, the Cursor key and the
   start-time Claude credential sync) go only to
   providers that are enabled, authorized for agent-test profiles and not
@@ -995,9 +1038,9 @@ full copy's, apart from the removal below.
   winning. Claude startup cleanup, publication and digest attribution share an
   exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
   publication commands. The lock file stays in place so concurrent writers always
-  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
-  but not removed after a host sign-out, as before
-  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+  lock the same inode. A Claude copy the backend pushed is left to the backend:
+  after a host sign-out the next start removes it (see the host sign-out item
+  under the access-only logins above).
 - **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
   layer, so a new runtime starts with a full copy. It holds names and digests,
   never contents. The workload can write it, so it is not a security boundary, and
@@ -1007,9 +1050,18 @@ full copy's, apart from the removal below.
   binds the same either way, so there is no gate to check.
 
 The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
-relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
-applies. Timings are in
-to-do 1202, task 15 (retired 2026-11-10).
+relay in `network-policy-entrypoint.sh` skips an unchanged mount the same way
+(see the relay above), and `copy_agent_directory` answers its entry bound, link
+check and size bound (allocated blocks, what `du -sk` sums) and the stamp's
+listing from one `find` walk, so a first start costs about five processes per
+copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
+where find lacks it (BSD find, when the helpers run on macOS) the first walk
+lists nothing and the rest of the boot uses a portable walk
+(`agent_input_directory_walk`): `find -print0` classified with shell tests, and
+one `du -sk`, with the same bounds and listing. Timings are in
+[4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
+and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
+tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 
 ### Project seed files
 

@@ -38,8 +38,12 @@ export type DevArguments = {
    * profile's agent tools server, recorded in the profile so later starts keep
    * it. Never 34121, 34122 or 45507; a busy port refuses the start instead of
    * falling back to a random one (`assertAgentToolsPortFree`).
+   * `--agent-tools-port auto` takes the first port of
+   * `AGENT_TEST_AGENT_TOOLS_PORT_RANGE` that no other live profile has
+   * claimed and nothing listens on (`chooseAgentToolsPort`), and records it
+   * the same way.
    */
-  agentToolsPort?: number;
+  agentToolsPort?: number | "auto";
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -108,10 +112,14 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--agent-tools-port is only supported by mise run dev:test");
       }
       const value = valueAfter(index++, argument);
-      const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-      const problem = agentToolsPortProblem(port);
-      if (problem) throw new Error(`--agent-tools-port ${problem}`);
-      result.agentToolsPort = port;
+      if (value === "auto") {
+        result.agentToolsPort = "auto";
+      } else {
+        const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+        const problem = agentToolsPortProblem(port);
+        if (problem) throw new Error(`--agent-tools-port ${problem} (or auto)`);
+        result.agentToolsPort = port;
+      }
     } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {

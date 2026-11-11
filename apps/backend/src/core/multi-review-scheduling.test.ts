@@ -7,6 +7,7 @@ import {
   resultKeysAwaitingTurnEnd,
   stableJitterMs,
   supervisionDemand,
+  validationRunJustStarted,
 } from "./multi-review-scheduling.js";
 
 function workflow(fields: Partial<MultiReviewWorkflow>): MultiReviewWorkflow {
@@ -109,6 +110,84 @@ describe("graph-engine reviews (item 301)", () => {
     ).toBeNull();
     expect(isGraphEngineProjection(workflow({ phase: "reviewing" }))).toBe(false);
     expect(multiReviewObligation(workflow({ phase: "reviewing" }), true)).toBe("reviewers");
+  });
+});
+
+describe("validation run fast window (todo 7564 task 3)", () => {
+  const NOW = Date.parse("2026-11-11T03:00:00.000Z");
+  const WINDOW = 3_000;
+  type Run = NonNullable<MultiReviewWorkflow["validationRun"]>;
+  const preparing = (
+    run: Partial<Run> = {},
+    fields: Partial<MultiReviewWorkflow> = {},
+  ): MultiReviewWorkflow =>
+    workflow({
+      phase: "preparing",
+      validationRun: {
+        status: "running",
+        startedAt: new Date(NOW - 1_000).toISOString(),
+        ...run,
+      } as Run,
+      ...fields,
+    });
+
+  test("a running bespoke run inside the window gets the fast cadence", () => {
+    expect(validationRunJustStarted(preparing(), NOW, WINDOW)).toBe(true);
+    // A settled graph review is bespoke again.
+    expect(
+      validationRunJustStarted(
+        preparing({}, { engine: "graph", graphRun: { runId: "r", settled: true } }),
+        NOW,
+        WINDOW,
+      ),
+    ).toBe(true);
+    // The window is half-open: exactly `windowMs` old is outside it.
+    expect(
+      validationRunJustStarted(
+        preparing({ startedAt: new Date(NOW - WINDOW + 1).toISOString() }),
+        NOW,
+        WINDOW,
+      ),
+    ).toBe(true);
+    expect(
+      validationRunJustStarted(
+        preparing({ startedAt: new Date(NOW - WINDOW).toISOString() }),
+        NOW,
+        WINDOW,
+      ),
+    ).toBe(false);
+  });
+
+  test("an unsettled graph-engine projection never gets it", () => {
+    const projection = preparing({}, { engine: "graph", graphRun: { runId: "r" } });
+    expect(isGraphEngineProjection(projection)).toBe(true);
+    expect(validationRunJustStarted(projection, NOW, WINDOW)).toBe(false);
+  });
+
+  test("a run being stopped never gets it", () => {
+    expect(
+      validationRunJustStarted(preparing({}, { validationStopRequested: true }), NOW, WINDOW),
+    ).toBe(false);
+    // Only an explicit request excludes the run.
+    expect(
+      validationRunJustStarted(preparing({}, { validationStopRequested: false }), NOW, WINDOW),
+    ).toBe(true);
+  });
+
+  test("an unreadable start time never gets it", () => {
+    for (const startedAt of ["", "not a date", undefined as unknown as string]) {
+      expect(validationRunJustStarted(preparing({ startedAt }), NOW, WINDOW)).toBe(false);
+    }
+  });
+
+  test("a run that is not running, or a workflow not preparing, never gets it", () => {
+    for (const status of ["planned", "completed", "failed", "cancelled"] as const) {
+      expect(validationRunJustStarted(preparing({ status }), NOW, WINDOW)).toBe(false);
+    }
+    expect(validationRunJustStarted(preparing({}, { phase: "reviewing" }), NOW, WINDOW)).toBe(
+      false,
+    );
+    expect(validationRunJustStarted(workflow({ phase: "preparing" }), NOW, WINDOW)).toBe(false);
   });
 });
 

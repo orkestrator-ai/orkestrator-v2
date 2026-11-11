@@ -113,7 +113,9 @@ const CASES: ReadonlyArray<Case<unknown>> = [
     def: coordinatorPaneLayoutStore,
     hook: useCoordinatorPaneLayoutStore,
     write: (store) =>
-      store.setState({ entries: { "project-a": { layout: undefined, revision: 3, ready: true } } }),
+      store.setState({
+        entries: { "project-a": { layout: undefined, revision: 3, ready: true, failed: false } },
+      }),
     read: (state) => String(state.entries["project-a"]?.revision ?? "none"),
   }),
   scopedCase({

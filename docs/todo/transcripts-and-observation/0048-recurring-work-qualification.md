@@ -787,7 +787,9 @@ retired paths and run the checks required for the files changed:
    replacement.
 3. `apps/backend/src/core/preview-verification-window.test.ts:11`: deleted
    `3230-restart-inside-verification-window.md` →
-   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3.
+   `docs/todo/previews-and-annotations/0045-preview-service-discovery.md` task 3
+   (0045 retired 2026-11-11; the comment now points at
+   `docs/architecture/browser-previews.md` and 0042's evidence log).
 4. `apps/desktop/electron/native-dialogs.ts:19`: deleted
    `0880-desktop-main-thread-held-by-modal-dialog.md` →
    `docs/todo/cross-cutting/0741-backend-responsiveness-under-load.md` task 7.
@@ -1446,7 +1448,7 @@ owners: the child's exit is the signal.
 | Web filtered streams, shared terminal and relayed (`web-gateway.ts`) | EventSource or SSE | none of their own | `createStreamBackoff`, jittered | Another layer: the main stream's watchdog drops them (`dropSilentStreams`) |
 | `FetchEventSource` polyfill (`gateway-auth-transport.ts`) | SSE | none; reports an error and closes | none | Another layer: `web-gateway.ts` owns reconnects |
 | Web terminal WebSocket (`terminal-websocket-client.ts`) | WebSocket | a pong probe when the page returns (2.5 s); since 2026-11-10 a ping after each quiet 10 s while the page is visible, replacing the socket after two unanswered; operation timeouts (30 s); the main stream's watchdog | 500 ms to 10 s, jittered | Covered; the visible-page stall was 7200 task 4, fixed |
-| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream has none: [7559](7559-opencode2-event-stream-silence.md) |
+| OpenCode event monitor (`opencode-provider.ts` `monitorRequests`) | SDK SSE | since 2026-11-10, 35 s silence once the stream has sent `server.heartbeat` (every 10 s from 1.19.5) | 1 to 30 s, jittered | Gap, fixed: 7200 task 1. The OpenCode 2.x provider's own stream (`opencode2/provider.ts`, `/api/event`) got the same watchdog on 2026-11-11, armed by its `: heartbeat` comment (every 15 s on 2.2.6) with a 50 s deadline: 7559 (retired; see [recurring-work.md](../../architecture/recurring-work.md) B22) |
 | Desktop `ReconnectScheduler` (`connection-scheduling.ts`) | route and handover attempts, not a stream | n/a | 1, 2, 5, 10, 30, 60 s, **no jitter** | Gap, fixed: 7200 task 2 |
 | Desktop preview tunnel, v1 stream and v2 session (`preview-tunnel-client.ts`, `preview-tunnel-session.ts`) | WebSocket | pinged every 15 s, **pong ignored**; a stream-open timeout retires only that stream | opened per request | Gap, fixed for v2: 7200 task 3 (v1 deliberately left, decision T3 there) |
 | Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |
@@ -1666,9 +1668,10 @@ ready local environment".
 - **Validation.** Still bimodal, 2312 to 2671 ms in four reviews and 5060
   and 5069 ms in two, with runs of 1132 to 1180 ms: the validation run's
   completion raises no wake and is read on the observation cadence. The row
-  has no budget; it is task 3 of
-  [7564](7564-graph-run-result-turn-end-tail.md), with graph runs, which
-  read their turns the way Multi Review did.
+  has no budget; it was task 3 of 7564 (retired 2026-11-11), with graph
+  runs, which read their turns the way Multi Review did. Both now follow
+  the step on a short cadence
+  ([recurring-work.md](../../architecture/recurring-work.md#latency-budgets)).
 
 ### Client-only and validation candidates (2026-11-11, Linux)
 
@@ -2011,6 +2014,23 @@ Both questions were answered on 2026-10-25; see "Assumptions and decisions".
   (identical counts on both fixtures, 1284 to 1347 ms → 785 to 881 ms per
   run) and the case has an explicit 30 s timeout. Evidence in
   [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md#resolution--2026-10-25).
+- Whether the counters now match Docker for an open claude-tmux tab, and
+  what one native Claude session costs the activity sweep, live. From
+  to-do 7567 (retired 2026-11-11), which added the `tmux-tab-loop` kind
+  (B30), stopped the change-evidence pull repeating an acknowledgment the
+  bridge had already accepted, and observed `change-evidence-pull` as its
+  own kind; each is proven by a deterministic test
+  (`tmux-exec-count.test.ts`, `service-evidence.test.ts`), not live. Rerun
+  `scripts/container-tmux-tab-live.ts` and `scripts/human-prompt-reads-live.ts`
+  ([testing guide](../../development/testing-guide.md#a-claude-tmux-tab-in-a-container-and-per-item-counts-on-a-busy-profile)):
+  `tmux-tab-loop` plus `tmux-poll` should account for Docker's
+  `docker exec` count within the tab cleanup's share (7531), and
+  `native-activity-sweep` should make about one provider request per read
+  pass (36 a minute idle and 89 to 90 working before), with
+  `change-evidence-pull` carrying about one more. Not run on 2026-11-11:
+  the build host's session could not reach the Docker socket (its user is
+  not in the `docker` group). This needs a host where the agent can reach
+  Docker, not the user.
 
 ## Assumptions and decisions
 
@@ -2678,7 +2698,7 @@ collide with other tasks' decisions.
 - [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md),
   retired `0051-client-reconnect-and-freshness.md` (deleted 2026-11-06;
   remaining checks are tasks 18 to 20 here, and tasks 16 and 17 in 7568) and
-  [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md): the client and
+  0052 (retired 2026-11-11; [remote-bandwidth.md](../../development/remote-bandwidth.md)): the client and
   observation halves of #852.
 - [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md): B18, the
   container Files panel status exec and `containerRevertFileCommand`'s inline

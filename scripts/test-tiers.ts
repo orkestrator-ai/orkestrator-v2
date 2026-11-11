@@ -88,6 +88,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/commands-files-remote-fetch.test.ts",
     "src/core/commands-project-creation.test.ts",
     "src/core/commands-registry-project-home.test.ts",
+    // Real fake-bridge processes and Git, like its coordinator siblings.
+    "src/core/commands-servers-agent-test-origin.test.ts",
     "src/core/commands-servers-coordinator-opencode.test.ts",
     "src/core/commands-servers-coordinator.test.ts",
     // Isolated Bun command sweep with per-call and process deadlines.

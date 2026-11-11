@@ -1017,7 +1017,18 @@ cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
 `<platform>=<model>` pairs. `ORKESTRATOR_AGENT_TEST_IDLE_FAKE_MODELS=1` runs
 Claude, Codex, Pi and OpenCode (the last through the same custom provider)
 against scripted loopback models instead, with no login and nothing billed
-(the profile setup is in the spec's header), and
+(the profile setup is in the spec's header).
+`ORKESTRATOR_AGENT_TEST_IDLE_OPENCODE_PROTOCOL=v2` runs the OpenCode cases on
+OpenCode 2: it turns the profile's preview setting on for the run and back off
+afterwards, and adds a `steer` case (a prompt queued from the composer while a
+turn runs is steered into it from its queue strip, then checked again after a
+reload) that every other platform records as skipped. `mise run
+verify:opencode2:real-stack` runs exactly that against the running profile
+named by `ORKESTRATOR_AGENT_TEST_PROFILE`: OpenCode only, on OpenCode 2, with
+scripted models and the `missed-final`, `approval`, `reconnect`, `hidden`,
+`no-renderer` and `steer` cases (`ORKESTRATOR_AGENT_TEST_IDLE_CASES`
+overrides the list). Start the profile with `--fixture --no-agent-credentials
+--agent-platforms opencode --headless`.
 `ORKESTRATOR_AGENT_TEST_IDLE_ENVIRONMENT=container` runs Claude in a new
 container environment from the profile's development image. Providers run in parallel with `--workers=4
 --fully-parallel`; run one provider alone to measure a lost announcement,
@@ -1265,8 +1276,8 @@ failure check looks for the startup heading's presence, not its visibility:
 headless Ozone ignores a window's constructor size, so until a spec sizes it
 the window is 1x1 and the heading has no box.
 
-`design-canvas-electron.spec.ts` and `web-annotations-electron.spec.ts` can run
-with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
+`design-canvas-electron.spec.ts`, `web-annotations-electron.spec.ts` and
+`service-preview-seeded-electron.spec.ts` can run with no display at all (`HEADLESS_CAPABLE_ELECTRON_SPECS` in
 `electron-launch-switches.ts`; the preflight admits a run with no display only
 when it is limited to those). Each reads
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its Electron
@@ -1433,6 +1444,33 @@ live tail for gaps, duplicates and order without reading model prose.
   `OPENAI_API_KEY` (`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-loopback"}`),
   so no real login is copied in:
   `CODEX_HOME=<that dir> mise run dev:test --profile <name> --fixture --headless --credential-source codex --agent-platforms codex`.
+- **In a container environment.** `ORKESTRATOR_AGENT_TEST_PAGING_ENVIRONMENT=container`
+  runs the native case in the profile's seeded `fixture-container`
+  environment, so every transcript read crosses the container bridge. Start
+  the profile with `--fixture-environments local,container` (on a host whose
+  user cannot reach the Docker daemon, with `DOCKER_HOST` from
+  `mise run docker:disposable -- env --name <n>`, which then builds the image
+  inside that daemon; see
+  [container-qualification.md](container-qualification.md#disposable-docker-daemon)),
+  and run the spec with the same `DOCKER_HOST`: it copies the trail into the
+  container's `/workspace` with `docker exec`, and restarts the container's
+  bridge (`stop_codex_server`, `start_codex_server`). With the loopback model
+  the model runs inside the container, which the restricted firewall admits
+  because it is the container's own loopback, and the container's Codex home
+  (`$HOME/.codex/config.toml`) is pointed at it and restored afterwards. The
+  fixture container is used, never deleted; the trail is removed from it.
+- **In the Electron window.** `ORKESTRATOR_AGENT_TEST_PAGING_CLIENT=electron`
+  renders the native tab in the profile's own Electron window, so the
+  transcript reads go through the preload and IPC path instead of the
+  gateway. Start the profile with `ORKESTRATOR_AGENT_TEST_ELECTRON_DEBUG=1`
+  (agent-test profiles only): its Electron then opens Chromium remote
+  debugging on an OS-chosen loopback port, and the spec attaches over CDP to
+  the endpoint recorded in the profile's `electron.log`, and only disconnects
+  afterwards. A headless profile is enough. Backend checks still go through
+  the gateway, and Playwright's automatic failure screenshot shows the
+  gateway page, not the window. Unlike the browser suite's headless
+  Chromium, which hides scrollbars, the window has classic ones, so
+  layout changes that add or remove a scrollbar happen there.
 - **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
   The trail protocol is in an `AGENTS.md` that is part of the change. Codex
   loads it as instructions; a Claude reviewer runs read-only without project
@@ -1667,6 +1705,27 @@ A spec that restarts a profile builds the launcher's arguments with
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
 
+### Loopback plan-usage origin
+
+A spec that scripts Claude or Codex account usage on a separate-process
+profile (to-do 7542 (retired), task 1) starts the profile with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN=http://127.0.0.1:<port>`. The launcher
+passes it to the isolated backend, which then reads `/api/oauth/usage`
+(Claude) and `/backend-api/codex/usage` (Codex) from that origin instead of
+the providers' hosts, so fixture tokens never leave the machine. The backend
+honours it only with flavor `agent-test`, `ORKESTRATOR_AGENT_TEST_ISOLATED=1`,
+a non-default data directory and a bare loopback origin
+(`agentTestUsageOrigin` in `apps/backend/src/core/agent-test-fixtures.ts`);
+anything else reads the real endpoints.
+
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`, under the same gate
+(`agentTestAnthropicOrigin`), starts every Claude bridge of the isolated
+backend with `ANTHROPIC_BASE_URL` set to that loopback origin and the CLI's
+nonessential traffic off. A coordinator's Claude needs it: its private
+configuration directory never holds the profile's `settings.json`, so
+pointing that file at a fake model reaches every Claude session except the
+coordinator's.
+
 ### Multi-client, restarts and an older backend (fake model)
 
 `e2e/agent-testing/multi-client-restarts-live.spec.ts` qualifies two headless
@@ -1719,6 +1778,55 @@ the two-client and queued cases for a p50/p95. Cases:
 Measurements land in `evidence-multi-client-*.json` beside the run, judged
 against the latency budgets in
 [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
+
+### Remote bandwidth matrix (fake model)
+
+`e2e/agent-testing/remote-bandwidth-live.spec.ts` runs the single-host remote
+bandwidth matrix ([remote-bandwidth.md](remote-bandwidth.md)): several headless browser clients on one
+Claude session and one environment's terminals, per gateway compression mode
+(`on`, `body`), terminal transport (the shared SSE stream, the opt-in
+WebSocket) and link (loopback, and a 512 kbit/s link with 40 ms each way). The
+provider is the profile's real Claude CLI sent to the loopback model
+(`fake-anthropic-model.ts`); a `[stream:<n>]` prompt streams `n` lines at
+25 ms and a `[bash:<word>]` prompt makes one `Bash` call, so a session under
+an "ask" policy parks a real approval. Nothing logs in and nothing is billed.
+
+Each client reaches the gateway through its own loopback link
+(`remote-bandwidth-meter.ts`), which counts exact wire bytes per request class
+(event streams, invokes, WebSocket, other) and shapes the slow-link cells in
+both directions. Setup invokes and `/metrics` reads go straight to the
+gateway URL, so they are neither counted nor shaped. The spec also diffs the gateway's `/metrics` per cell; its gzip counters cover
+browser listeners only, while its stream totals include the profile's own
+headless Electron window. It restarts the profile once per mode with
+`ORKESTRATOR_GATEWAY_COMPRESSION`, which agent-test backends accept for this.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile rbw52 --fixture --no-agent-credentials --agent-platforms claude --headless
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=rbw52 ORKESTRATOR_AGENT_TEST_LIVE_REMOTE_BANDWIDTH=1 \
+ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43252 \
+  mise run test:logged -- --name remote-bandwidth -- \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  remote-bandwidth-live.spec.ts --workers=1
+mise run dev:stop --profile rbw52
+mise run dev:reset --profile rbw52
+```
+
+`ORKESTRATOR_AGENT_TEST_BANDWIDTH_MODES` (default `on,body`), `_PARTS`
+(`matrix,data-saving`), `_CLIENTS` (3), `_ROUNDS` (3) and `_IDLE_MS` (20000)
+narrow or lengthen a run.
+Cells: idle, a streamed agent turn (first-update and completion latency per
+client), terminal bursts of redundant build output in the visible and in a
+background terminal tab and of random printable output, and, in `on` mode,
+data saving off and on side by side (a running turn, an idle view, the Files
+panel, completion and approval latency). Evidence lands in `evidence-remote-bandwidth-*.json`
+beside the run: numbers and cell labels only. Each cell carries an `outcome`
+(`qualified`, `incomplete` or `over-budget`) and its `problems`
+(`remote-bandwidth-qualification.ts`): a timed-out or missing sample, an
+unfinished or unsettled terminal burst, or a p95 past the 3 s completion or
+2 s approval budget. The test fails at the end of its run unless every cell
+qualified; the evidence file is written either way.
 
 ### Live second node scope (two profiles)
 
@@ -2446,7 +2554,56 @@ ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
 ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 --config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
 It attaches the leaf, adds projects and changes both profiles' messaging and
-Pi settings, so reset both afterwards.
+Pi settings, so reset both afterwards. The link setup it shares with the
+notice suite below is in `coordinator-two-node-support.ts`.
+
+### Coordinator usage-limit notices between two profiles (fixture accounts)
+
+`mise run test:agent:coordinator:notice-live` runs the coordinator notice
+hierarchy's live checks (to-do 7542 (retired), tasks 2 to 4) on two real
+backends with no login and nothing billed. The runner
+(`apps/desktop/scripts/test-agent-coordinator-notice-live.ts`) first starts
+`e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms claude,pi` profiles with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` and
+`ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN` naming it (see
+[Loopback plan-usage origin](#loopback-plan-usage-origin)) and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-notice-live.spec.ts` with
+`suiteRestartsProfiles` (the spec stops and starts both profiles itself),
+then stops and resets both and stops the provider.
+
+The spec writes, inside each profile only: Claude `settings.json` in
+`agent-credentials/claude/` (every account directory links it), which sends
+the pinned CLI's model calls to the provider and its other HTTPS traffic to
+a closed loopback proxy; fixture Claude accounts in `agent-accounts/claude/`
+with their registry (`backend-store.ts`); and, on the leaf, Pi's
+`models.json` for the leaf's Pi main coordinator. The provider
+(`coordinator-notice-fake-model-script.ts`) refuses a call that carries a
+run marker on a limited login with the API's plan-limit error, answers
+everything else with one line, scripts Pi's `launch_environment`, and
+answers usage reads per fixture token. Then:
+
+- **Task 2.** A leaf native tab, a delegated worker (launched by the leaf's
+  Pi coordinator) and a build pipeline on one limited account; the provider
+  parks their refusals until all three have asked. The command node's Claude
+  coordinator must be woken once with one notice listing one of each, and
+  the leaf's coordinator must get none.
+- **Task 3.** The command node's coordinator on its own entry of the leaf
+  tab's limited login, automatic switching on, a second account with
+  headroom. The command node must move there, unpinned, before the wake, and
+  no call may run on the limited login.
+- **Task 4.** The command node is stopped, a leaf tab stops on a third
+  limited login, the leaf profile is stopped and started, then the command
+  node is started. Its coordinator must be woken exactly once with that stop.
+
+The provider keeps counts and facts only (accounts, markers, session kinds
+each notice lists), never a prompt or token. A pass proves routing,
+grouping, the move and the outbox across restarts on real backends, not a
+real provider's refusal wording (the manual-test checklist holds that) or a
+link between two machines. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-notice-live/summary.json`.
 
 ### Coordinator gap tools on this node and a leaf (fake model)
 

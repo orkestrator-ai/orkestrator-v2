@@ -405,6 +405,15 @@ function goalProjectionField(session: PersistedNativeAgentSession) {
   return goal ? { goal: goalPublicView(goal) } : {};
 }
 
+/** One provider snapshot joined by the reads of a session that overlap it. */
+interface InteractiveSnapshotShare {
+  promise: Promise<ProviderInteractiveSnapshot>;
+  sessionKey: string;
+  epoch: number;
+  degraded: true;
+  settled?: true;
+}
+
 /**
  * Renderer views of provider sessions: the legacy full projection, its sync
  * deltas and history pages, the progressive transcript/state/discovery reads,
@@ -526,15 +535,7 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveReadEpochs = new Map<string, number>();
   private readonly progressiveDirtyFollowUps = new Map<string, number>();
   private readonly progressiveTrailing = new Map<string, Promise<unknown>>();
-  private readonly interactiveSnapshotShares = new Map<
-    string,
-    {
-      promise: Promise<ProviderInteractiveSnapshot>;
-      sessionKey: string;
-      epoch: number;
-      degraded: true;
-    }
-  >();
+  private readonly interactiveSnapshotShares = new Map<string, InteractiveSnapshotShare>();
   /** Bounded restart-preview checkpoints; see native-agent-display-tail-scheduler.ts. */
   private readonly displayTailScheduler: NativeAgentDisplayTailScheduler;
   /**
@@ -1769,7 +1770,14 @@ export class NativeAgentTranscriptProjection {
     if (sessionKey) this.progressiveReadEpochs.set(key, this.projectionEpochs.get(sessionKey) ?? 0);
     const operation = read();
     const tracked = operation.finally(() => {
-      if (this.progressiveReads.get(key) === tracked) this.progressiveReads.delete(key);
+      if (this.progressiveReads.get(key) !== tracked) return;
+      this.progressiveReads.delete(key);
+      // The epoch a read started at matters only while another caller can
+      // join it (`progressiveReadCovering`); once it settles nothing reads it,
+      // and keeping it grew the map by one key per session ever read (todo
+      // 7100 task 3).
+      this.progressiveReadEpochs.delete(key);
+      if (sessionKey) this.releaseSettledSnapshotShares(sessionKey);
     });
     this.progressiveReads.set(key, tracked);
     return tracked;
@@ -1847,8 +1855,36 @@ export class NativeAgentTranscriptProjection {
     const existing = this.interactiveSnapshotShares.get(key);
     if (existing && existing.epoch === epoch) return existing.promise;
     const promise = provider.interactiveSnapshot(sessionId);
-    this.interactiveSnapshotShares.set(key, { promise, sessionKey, epoch, degraded: true });
+    const share: InteractiveSnapshotShare = { promise, sessionKey, epoch, degraded: true };
+    this.interactiveSnapshotShares.set(key, share);
+    /*
+     * A share joins the transcript and state reads of one session that run
+     * together; it is not a cache. The epoch moves only on an invalidation,
+     * not on streamed rows, so a settled share kept for the rest of its epoch
+     * answered every later read with an older snapshot and held a whole
+     * snapshot per session ever read (todo 7100 task 3). Once it settles it is
+     * kept only while another read of the session is still in flight, which
+     * is what lets a state read join the transcript read it was issued with;
+     * the last of them to settle drops it (`releaseSettledSnapshotShares`).
+     */
+    const settle = () => {
+      share.settled = true;
+      this.releaseSettledSnapshotShares(sessionKey);
+    };
+    promise.then(settle, settle);
     return promise;
+  }
+
+  private releaseSettledSnapshotShares(sessionKey: string): void {
+    const sharePrefix = `${sessionKey}\0`;
+    const readPrefix = `${sessionKey}\0progressive-v1\0`;
+    for (const candidate of this.progressiveReads.keys()) {
+      if (candidate.startsWith(readPrefix)) return;
+    }
+    for (const [candidate, share] of Array.from(this.interactiveSnapshotShares)) {
+      if (share.settled && candidate.startsWith(sharePrefix))
+        this.interactiveSnapshotShares.delete(candidate);
+    }
   }
 
   private recordProgressiveMetric(
@@ -2046,6 +2082,18 @@ export class NativeAgentTranscriptProjection {
       if (entry) this.progressiveTranscriptBytes -= entry.bytes;
       this.progressiveTranscriptCache.delete(oldest);
       this.transcriptDeltaBases.forget(oldest);
+      /*
+       * The source token and any background recovery belong to the view just
+       * evicted: the next read has no base to send the token against, reads
+       * the whole window again and schedules its own recovery. Keeping them
+       * left one token per key ever read (todo 7100 task 3); a recovery still
+       * in flight finds its entry gone and drops its result.
+       */
+      this.progressiveSourceTokens.delete(oldest);
+      const timer = this.progressiveHydrationTimers.get(oldest);
+      if (timer) clearTimeout(timer);
+      this.progressiveHydrationTimers.delete(oldest);
+      this.progressiveHydrations.delete(oldest);
     }
   }
 

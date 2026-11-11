@@ -195,3 +195,98 @@ for (const mode of ["legacy", "sync-v1", "transcript", "state"] as const) {
     });
   }
 }
+
+/*
+ * Todo 7100 task 3: three per-session maps of the projection were emptied only
+ * by an invalidation, an environment deletion or shutdown, so every session a
+ * reader opened and left kept an entry. Each now lives as long as the thing it
+ * belongs to.
+ */
+const liveWindow = { messages: 40, targetBytes: 512 * 1024 };
+const row = (content: string) => ({
+  id: `row-${content}`,
+  role: "assistant" as const,
+  content,
+  parts: [{ type: "text", content }],
+  createdAt: "2026-11-11T00:00:00.000Z",
+});
+
+test("a settled progressive read keeps neither its epoch nor its snapshot share", async () => {
+  let content = "first reply";
+  const stub = createProviderStub("codex", {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [row(content)] }),
+  });
+  const gauges = () =>
+    recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!.gauges;
+  await withService(
+    { prefix: "orkestrator-native-settled-reads-", provider: async () => stub.provider },
+    async ({ service }) => {
+      await service.ensureSession(identity);
+      const transcript = () =>
+        service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+      const state = () =>
+        service.getSessionStateUpdate({ ...identity, viewVersion: 1, forceSnapshot: true });
+      const [first] = await Promise.all([transcript(), state()]);
+      if (first.status !== "snapshot") throw new Error("expected snapshot");
+      expect(JSON.stringify(first.value.messages)).toContain("first reply");
+      expect(gauges()).toMatchObject({
+        progressiveReads: 0,
+        progressiveReadEpochs: 0,
+        interactiveSnapshotShares: 0,
+      });
+
+      // A streamed row moves no epoch; a settled share kept for the epoch
+      // answered this read with the snapshot above.
+      content = "second reply";
+      const second = await transcript();
+      if (second.status !== "snapshot") throw new Error("expected snapshot");
+      expect(JSON.stringify(second.value.messages)).toContain("second reply");
+      expect(gauges()).toMatchObject({ progressiveReadEpochs: 0, interactiveSnapshotShares: 0 });
+      // Reads issued together still share one provider snapshot
+      // (native-agent-service-progressive.test.ts); this read had none to join.
+      expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
+test("an evicted transcript takes its source token with it", async () => {
+  const stub = createProviderStub("codex", {
+    transcriptSnapshot: async (sessionId) => ({
+      messages: [row(`reply for ${sessionId}`)],
+      complete: true,
+      sourceToken: `source-${sessionId}`,
+      historyEpoch: "1:1",
+      freshness: "current" as const,
+    }),
+  });
+  const gauges = () =>
+    recurringWorkDiagnostics().caches.find((cache) => cache.name === "native-projection")!.gauges;
+  let created = 0;
+  stub.createSession.mockImplementation(async () => `provider-session-${(created += 1)}`);
+  await withService(
+    { prefix: "orkestrator-native-source-tokens-", provider: async () => stub.provider },
+    async ({ service }) => {
+      // The progressive transcript cache keeps 128 views.
+      for (let index = 0; index < 136; index += 1) {
+        const session = { ...identity, logicalSessionKey: `env-env-1:tab-evict-${index}` };
+        await service.ensureSession(session);
+        const update = await service.getTranscriptUpdate({
+          ...session,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+      }
+      const held = gauges();
+      expect(held.progressiveTranscripts).toBe(128);
+      expect(held.progressiveSourceTokens).toBe(128);
+      expect(held.progressiveReadEpochs).toBe(0);
+    },
+  );
+});

@@ -33,3 +33,24 @@ changed.
 
 The full `mise run test:browser` (both configs, 1,848 tests) was not completed
 on this snapshot, and the public-site config did not run.
+
+## Second Find review repair: full browser suite rerun — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+port 1422 was free, so the recorded command was rerun unchanged:
+`mise run test:logged -- --name rerun-test-browser -- mise run test:browser`
+(default workers). It reached test 1,081 of 1,850 before the runner's
+1,800,000 ms group deadline terminated it (exit 1), so the public-site config
+did not run. Three tests had failed by then, all mobile:
+
+| Tests | Failure | Owner rerun alone |
+| --- | --- | --- |
+| `native: paging before prose holds the original tool position` in `e2e/TranscriptPaging.spec.ts` | Prepend index stayed 1 (`:138`) | `mise run test:logged -- --name browser-TranscriptPaging-alone -- bun scripts/loopback-network.ts -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=2` passed, exit 0, 133.0 s. Recurrence of [0483](../native-agents-and-transcripts/0483-transcript-paging-prepend-index-timing.md). |
+| `native: history pages in without a click, opening with a page and paging near the top` in `e2e/TranscriptPaging.spec.ts` | Equality assertion in the paging-near-the-top case | Same owner rerun passed. Recurrence of [1602](../native-agents-and-transcripts/1602-automatic-paging-reaches-first-row-timing.md). |
+| `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` in `e2e/DataSavingGateway.spec.ts` | `browserContext.close: Target page, context or browser has been closed` | With two workers both viewports failed (switch not found after reload); with one worker, as the case prescribes, `mise run test:logged -- --name data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1` passed, exit 0, 48.7 s. Recurrence of [1310](../previews-annotations-and-gateway/1310-data-saving-gateway-browser-timeout.md). |
+
+`mise run flaky:recurrence -- <case> --base 498b68766` reported 0483, 1602
+and 1310 open. This repair changed only static-document cards and Find's
+static-document index; the data-saving gateway path is untouched. No
+assertion, timeout or skip was changed. The full `mise run test:browser`
+remains not completed on this branch.

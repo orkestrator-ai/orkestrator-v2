@@ -273,3 +273,17 @@ The owning spec and its implementation were unchanged. No assertion, deadline,
 retry or skip was changed. This establishes intermittency, not its cause.
 The full run and remaining undetermined failures are recorded in
 [9924](../aggregate-validation-runs/9924-auto-pipeline-fix-browser-owners.md).
+
+## Find review repair — 2026-11-11
+
+On `document-find-bug-3a3f9ad04ef2-r1` at `fa5a841ca` (base `498b68766`),
+the recorded `mise run test:browser` rerun (default workers, stopped at its
+30-minute group deadline) failed the mobile case with
+`browserContext.close: Target page, context or browser has been closed`. A
+two-worker owner rerun failed both viewports (the switch was not found after
+reload); the complete unchanged owner then passed both viewports with one
+worker, as earlier recurrences did, in 48.7 s. `mise run flaky:recurrence --
+1310 --base 498b68766` reported the case open. The branch does not touch the
+gateway or data-saving code. Details:
+[9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
+No assertion, skip or timeout changed; root cause remains unconfirmed.

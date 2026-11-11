@@ -9,8 +9,8 @@
  * answers is `coordinator-surfaces-fake-model-script.ts`.
  *
  * Control route, loopback only: `GET /__calls` answers counts only
- * (completions, refusals, tool calls by name, tool results by outcome, and
- * the facts counted about each wake). No prompt, header, body or argument is
+ * (completions, refusals, tool calls by name, tool results by outcome, the
+ * number of wake turns, and the facts counted about each delivered carrier). No prompt, header, body or argument is
  * kept.
  */
 import { scriptedTurn, type WakeFacts } from "./coordinator-surfaces-fake-model-script";
@@ -19,7 +19,7 @@ export const FAKE_MODEL_ID = "surfaces-1";
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_TRACKED = 1_000;
 
-const counts = { completions: 0, refused: 0 };
+const counts = { completions: 0, refused: 0, wakeTurns: 0 };
 const toolCalls: Record<string, number> = {};
 const toolResults: Record<string, { ok: number; failed: number }> = {};
 const wakes: WakeFacts[] = [];
@@ -111,7 +111,10 @@ const server = Bun.serve({
     }
     counts.completions += 1;
     const turn = scriptedTurn({ messages: body.messages, tools: body.tools });
-    if (turn.wake && wakes.length < MAX_TRACKED) wakes.push(turn.wake);
+    if (turn.wakes) {
+      counts.wakeTurns += 1;
+      for (const wake of turn.wakes) if (wakes.length < MAX_TRACKED) wakes.push(wake);
+    }
     if (turn.result) {
       const entry = (toolResults[turn.result.tool] ??= { ok: 0, failed: 0 });
       if (turn.result.ok) entry.ok += 1;

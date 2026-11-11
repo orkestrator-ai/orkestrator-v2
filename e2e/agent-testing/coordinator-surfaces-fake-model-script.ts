@@ -13,9 +13,11 @@
  *   that tool with exactly that JSON as its input, then one line of text. The
  *   spec writes the line, so the arguments (environment, request ID, files,
  *   address) are the spec's, not a model's guess.
- * - A wake (a peer-message carrier): one line of text, and nothing else. What
- *   the wake said is counted (`WakeFacts`) so the spec can prove each
- *   root-changes outcome reached the model exactly once, with its state.
+ * - A wake (a prompt holding peer-message carriers): one line of text, and
+ *   nothing else. What each carrier said is counted (`WakeFacts`), one entry
+ *   per carrier, so the spec can prove each root-changes outcome reached the
+ *   model exactly once, with its state, even when the mail service batched
+ *   several carriers into one prompt.
  * - Anything else: one line of text.
  */
 import {
@@ -32,7 +34,7 @@ export type FakeStep =
 export const SURFACE_TOOLS = ["request_root_changes", "open_worker_browser"] as const;
 export type SurfaceTool = (typeof SURFACE_TOOLS)[number];
 
-/** Facts about one wake prompt, counted by the server. Never its text. */
+/** Facts about one delivered carrier, counted by the server. Never its text. */
 export interface WakeFacts {
   /** The wake is a node action outcome about uncommitted checkout changes. */
   rootChanges: boolean;
@@ -44,8 +46,12 @@ export interface WakeFacts {
 
 export interface ScriptedTurn {
   step: FakeStep;
-  /** Set on the first request of a wake turn only, so each wake counts once. */
-  wake?: WakeFacts;
+  /**
+   * One entry per carrier in the wake prompt (the mail service may batch
+   * several into one turn). Set on the first request of a wake turn only, so
+   * a carrier counts once however many requests its turn makes.
+   */
+  wakes?: WakeFacts[];
   /** The tool's result, on the request that follows the call. */
   result?: { tool: SurfaceTool; ok: boolean };
 }
@@ -55,6 +61,7 @@ export const FAKE_ASKED_REPLY = "Asked.";
 export const FAKE_WAKE_REPLY = "Noted.";
 
 const CARRIER = "<orkestrator-peer-message";
+const CARRIER_CLOSE = "</orkestrator-peer-message>";
 const REQUEST = /^surfaces-fake: (request_root_changes|open_worker_browser) (\{.*\})\s*$/m;
 const STATE = /Request (executed|rejected|failed|stale)\b/;
 const ACTION_ID = /node-action:([A-Za-z0-9_-]{1,200})/;
@@ -82,6 +89,21 @@ export function wakeFacts(prompt: string): WakeFacts {
     state: state ?? "other",
     ...(id ? { approvalRequestId: id } : {}),
   };
+}
+
+/**
+ * The facts of every carrier in a prompt, in order. A batched delivery joins
+ * carriers into one prompt; each is its own notice. The carrier's payload is
+ * escaped JSON, so its opening tag cannot appear inside another carrier.
+ */
+export function carrierWakeFacts(prompt: string): WakeFacts[] {
+  return prompt
+    .split(CARRIER)
+    .slice(1)
+    .map((segment) => {
+      const end = segment.indexOf(CARRIER_CLOSE);
+      return wakeFacts(end < 0 ? segment : segment.slice(0, end));
+    });
 }
 
 /**
@@ -113,7 +135,7 @@ export function scriptedTurn(request: { messages: unknown; tools?: unknown }): S
   if (prompt.includes(CARRIER)) {
     return {
       step: { kind: "text", text: FAKE_WAKE_REPLY },
-      ...(results.length === 0 ? { wake: wakeFacts(prompt) } : {}),
+      ...(results.length === 0 ? { wakes: carrierWakeFacts(prompt) } : {}),
     };
   }
   const scripted = parseSurfaceRequest(prompt);

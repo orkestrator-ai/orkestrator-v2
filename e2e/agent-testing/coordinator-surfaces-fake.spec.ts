@@ -97,6 +97,8 @@ const MODIFIED_SUFFIX = "\n<!-- surfaces-0142: an uncommitted edit -->\n";
 type Calls = {
   completions: number;
   refused: number;
+  /** Model turns that carried mail; `wakes` has one entry per carrier. */
+  wakeTurns: number;
   toolCalls: Record<string, number>;
   toolResults: Record<string, { ok: number; failed: number }>;
   wakes: WakeFacts[];
@@ -295,17 +297,36 @@ async function scriptedCall(
     .toBe("idle");
 }
 
-/** Waits for the wakes to reach `expected`, then checks no extra one follows. */
+/**
+ * Waits for the root-changes notices to reach `expected`, then checks no extra
+ * one follows. The fake counts each delivered carrier, so a duplicate batched
+ * into the same prompt as the original is counted too.
+ */
 async function expectWakes(origin: string, expected: WakeFacts["state"][]): Promise<void> {
-  const states = async () =>
-    (await calls(origin)).wakes.filter((wake) => wake.rootChanges).map((wake) => wake.state);
+  const notices = async () => (await calls(origin)).wakes.filter((wake) => wake.rootChanges);
+  const states = async () => (await notices()).map((wake) => wake.state);
   await expect
     .poll(states, { timeout: TURN_TIMEOUT_MS, message: "the root-changes wakes" })
     .toEqual(expected);
   await new Promise((resolve) => setTimeout(resolve, QUIET_MS));
-  expect(await states(), "a root-changes outcome woke the coordinator more than once").toEqual(
-    expected,
-  );
+  const settled = await notices();
+  expect(
+    settled.map((wake) => wake.state),
+    "a root-changes outcome woke the coordinator more than once",
+  ).toEqual(expected);
+  // A notice that names its approval request names it once.
+  const ids = settled.flatMap((wake) => (wake.approvalRequestId ? [wake.approvalRequestId] : []));
+  expect(
+    ids.filter((id, index) => ids.indexOf(id) !== index),
+    "an approval request's outcome was delivered more than once",
+  ).toEqual([]);
+}
+
+/** Runs a command for a cleanup step; a nonzero exit is a cleanup failure. */
+function cleanupCommand(command: string, args: string[]): void {
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${command} ${args[0]} exited ${result.status}`);
 }
 
 function rootChangesDialog(page: Page, worker: string) {
@@ -369,6 +390,8 @@ test.describe("coordinator worker surfaces on a fake model", () => {
     const started = Date.now();
     const model = await startFakeModel();
     const cleanup: Array<() => Promise<unknown> | unknown> = [];
+    // Collected in `finally`; thrown after it when the case itself passed.
+    const cleanupErrors: unknown[] = [];
     try {
       const restorePi = pointPiAt(status, `${model.origin}/v1`);
       cleanup.push(restorePi);
@@ -588,14 +611,15 @@ test.describe("coordinator worker surfaces on a fake model", () => {
       );
       expect(server.status, "the container server did not start").toBe(0);
       cleanup.push(() =>
-        spawnSync("docker", [
+        cleanupCommand("docker", [
           "exec",
           "--user",
           "node",
           container.containerId!,
           "sh",
           "-c",
-          `[ -s ${pidFile} ] && kill "$(cat ${pidFile})"; rm -f ${pidFile}`,
+          // Fails only when the server is still running after the kill.
+          `if [ -s ${pidFile} ]; then pid="$(cat ${pidFile})"; kill "$pid" 2>/dev/null || ! kill -0 "$pid" 2>/dev/null || exit 1; fi; rm -f ${pidFile}`,
         ]),
       );
       await expect
@@ -745,22 +769,31 @@ test.describe("coordinator worker surfaces on a fake model", () => {
       summary.reason ??= error instanceof Error ? error.message.slice(0, 2_000) : String(error);
       throw error;
     } finally {
-      let failures = 0;
+      // Every step runs even when an earlier one fails.
       for (const step of cleanup.toReversed()) {
         try {
           await step();
-        } catch {
-          failures += 1;
+        } catch (error) {
+          cleanupErrors.push(error);
         }
       }
-      if (failures > 0) {
+      if (cleanupErrors.length > 0) {
         summary.verdict = "failed";
-        summary.reason = `${summary.reason ? `${summary.reason}; ` : ""}${failures} cleanup steps failed`;
+        summary.reason = `${summary.reason ? `${summary.reason}; ` : ""}${cleanupErrors.length} cleanup steps failed`;
       }
       summary.fakeModel = await calls(model.origin).catch(() => null);
       summary.durationMs = Date.now() - started;
       writeSummary(summary);
       await stopChild(model.child);
+    }
+    // Reached only when the case passed (a failing case's error propagates
+    // past `finally`, and the summary records the cleanup failures with it). A
+    // failed cleanup may have left the fixture altered, so the run fails.
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        `${cleanupErrors.length} cleanup steps failed; the fixture may be left altered`,
+      );
     }
   });
 });

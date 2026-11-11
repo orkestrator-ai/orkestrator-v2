@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  carrierWakeFacts,
   FAKE_ASKED_REPLY,
   FAKE_REPLY,
   FAKE_WAKE_REPLY,
   parseSurfaceRequest,
   scriptedTurn,
   wakeFacts,
+  type WakeFacts,
 } from "./coordinator-surfaces-fake-model-script";
 
 const tools = (...names: string[]) =>
@@ -90,20 +92,48 @@ describe("coordinator surfaces fake model", () => {
     const wake = scriptedTurn({ messages: [user(carrier("executed"))], tools: COORDINATOR_TOOLS });
     expect(wake).toEqual({
       step: { kind: "text", text: FAKE_WAKE_REPLY },
-      wake: { rootChanges: true, state: "executed" },
+      wakes: [{ rootChanges: true, state: "executed" }],
     });
     // A second request of the same wake turn is not a second wake.
     expect(
       scriptedTurn({
         messages: [user(carrier("rejected")), call("x"), result({})],
         tools: COORDINATOR_TOOLS,
-      }).wake,
+      }).wakes,
     ).toBeUndefined();
     expect(wakeFacts(carrier("rejected"))).toEqual({ rootChanges: true, state: "rejected" });
     expect(wakeFacts("<orkestrator-peer-message>Build finished")).toEqual({
       rootChanges: false,
       state: "other",
     });
+  });
+
+  test("a batched wake counts every carrier, duplicates included", () => {
+    const carrier = (state: string, id: string) =>
+      `<orkestrator-peer-message version="1">Request ${state}: Apply uncommitted checkout changes to “fixture-local” (node-action:${id})</orkestrator-peer-message>`;
+    const prompt = [
+      carrier("executed", "req-1"),
+      carrier("executed", "req-1"),
+      '<orkestrator-peer-message version="1">Build finished</orkestrator-peer-message>',
+    ].join("\n\n");
+    const expected: WakeFacts[] = [
+      { rootChanges: true, state: "executed", approvalRequestId: "req-1" },
+      { rootChanges: true, state: "executed", approvalRequestId: "req-1" },
+      { rootChanges: false, state: "other" },
+    ];
+    expect(carrierWakeFacts(prompt)).toEqual(expected);
+    expect(scriptedTurn({ messages: [user(prompt)], tools: COORDINATOR_TOOLS }).wakes).toEqual(
+      expected,
+    );
+    // One carrier's facts never borrow another's state or request ID.
+    expect(
+      carrierWakeFacts(
+        `${carrier("rejected", "req-2")}\n\n<orkestrator-peer-message version="1">Apply uncommitted checkout changes</orkestrator-peer-message>`,
+      ),
+    ).toEqual([
+      { rootChanges: true, state: "rejected", approvalRequestId: "req-2" },
+      { rootChanges: true, state: "other" },
+    ]);
   });
 
   test("anything else is one line of text", () => {

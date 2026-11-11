@@ -566,6 +566,28 @@ exit 0
   },
 );
 
+test("a Docker run keeps the caller's --fixture-environments and adds no second pair", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.root, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFakeBun(f.root);
+  expect(
+    await runIsolatedBrowser({
+      ...f,
+      docker: true,
+      profileArgs: ["--fixture-environments", "container"],
+    }),
+  ).toBe(0);
+  const starts = (await f.events()).filter((event) => event.task === "dev:test");
+  expect(starts).toHaveLength(DOCKER_FIXTURE_SHARDS.length);
+  for (const start of starts) {
+    const flags = start.args.filter((arg) => arg === "--fixture-environments");
+    expect(flags).toHaveLength(1);
+    expect(start.args[start.args.indexOf("--fixture-environments") + 1]).toBe("container");
+    expect(start.args).not.toContain("local,container");
+  }
+});
+
 test("a failed image qualification stops the starting profiles before any test and cleans them up", async () => {
   const f = await fixture("startup-hang");
   await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });

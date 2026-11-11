@@ -164,6 +164,7 @@ let diskCache: { at: number; value: DockerCapacity["disk"] } | null = null;
 export function resetResourceCaches(): void {
   capacityCache = null;
   diskCache = null;
+  warnedRootlessLiveRestore = false;
 }
 
 function number(value: unknown): number | null {
@@ -278,6 +279,31 @@ export function parseSystemDf(text: string): DockerCapacity["disk"] {
   return disk;
 }
 
+let warnedRootlessLiveRestore = false;
+
+/**
+ * Warns once per process when a rootless daemon has `live-restore` on. A
+ * rootless restart replaces RootlessKit, its namespaces, containerd and the
+ * shims, so the new daemon reports every container exited while the old
+ * containers' processes keep running, unreachable by Docker and with no
+ * network, on the same volumes the restarted containers then mount (to-do
+ * 7390 task 1, 2026-11-11). Nothing in the backend can stop them, so the
+ * user is told to turn the setting off; the backend restarts containers as
+ * it does for any daemon whose live-restore is off.
+ */
+export function warnRootlessLiveRestore(infoText: string, rootless: boolean): void {
+  if (warnedRootlessLiveRestore || !rootless) return;
+  let info: Record<string, unknown>;
+  try {
+    info = JSON.parse(infoText) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  if (info.LiveRestoreEnabled !== true) return;
+  warnedRootlessLiveRestore = true;
+  resourcesLog.warn("daemon.rootless-live-restore");
+}
+
 export async function dockerCapacity(options: { refresh?: boolean } = {}): Promise<DockerCapacity> {
   const now = Date.now();
   if (!options.refresh && capacityCache && now - capacityCache.at < CAPACITY_TTL_MS) {
@@ -289,6 +315,7 @@ export async function dockerCapacity(options: { refresh?: boolean } = {}): Promi
       timeoutMs: 15_000,
     });
     base = parseDockerInfo(stdout.trim());
+    warnRootlessLiveRestore(stdout.trim(), base.rootless);
   } catch {
     const topology = await detectDockerTopology();
     base = { ...parseDockerInfo("{}"), rootless: topology.rootless };

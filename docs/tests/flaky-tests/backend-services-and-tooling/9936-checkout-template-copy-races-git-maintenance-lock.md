@@ -35,6 +35,32 @@ the aggregate runner reran it alone (0.6 to 2.2 s). A second complete
 `mise run test` on the same tree passed (exit 0, 265.4 s) with no
 `maintenance.lock` error.
 
+## Recurrence 2026-11-11
+
+- **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`; observed on branch
+  `macos-watch-churn-47b622d64a81-r1` at `ea553276d`, which changes the
+  worktree watcher and touches neither the fixture nor the failing tests.
+  `mise run flaky:recurrence -- 9936 --base 498b68766`: open, record it.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:logged -- --name
+  default-tests-skip-guards -- mise run test` on macOS, git 2.56.0, while
+  other worktrees' aggregate runs held the host (the groups queued 1,250 s).
+  Backend group: 18,340 pass, 200 skip, 5 fail. Four of the five failed with
+  this `maintenance.lock` error, at 290 to 400 ms:
+  `real scoped credentials prompt and launch jobs in leaf-only environments
+  with durable delegations` (`control-mcp-node-auth.test.ts`), `one failing
+  delegation > does not stop the wakes behind it`
+  (`coordinator-delegation-wakes.test.ts`), `a command node's coordinator
+  sending to a leaf > an agent tab there can open the image from the path its
+  own node wrote` (`coordinator-mail-attachments-nodes.test.ts`) and `backend
+  init resumes persisted AGENTS.md approval once and mails the result`
+  (`index-agents-md-recovery.test.ts`). The fifth was flake 4843's loopback
+  listener.
+- **Rerun alone:** the five owning files with `--parallel=1`: 85 pass, 1 fail.
+  `control-mcp-node-auth.test.ts` failed again with the same error (419 ms),
+  so a single file on a loaded host is enough; the other three passed.
+- **Evidence:** `orkestrator-test-run.tOQhj5` and `orkestrator-test-run.WIUK3M`
+  under the host temporary directory.
+
 ## Hypothesis
 
 `committedCheckoutTemplate` runs `git commit` in the template. Git then
@@ -49,3 +75,13 @@ A fix would disable auto-maintenance for the template (for example
 template's config before committing). Per the testing guide, reproduce the
 failure first (for example by copying while a held `maintenance.lock`
 appears and disappears) before changing the fixture.
+
+## Recurrence 2026-11-11
+
+- **Observing base:** `498b68766` (`main`), with the uncommitted renderer error ring changes of branch `renderer-error-ring-e3a48fce2746-r1` (no checkout-template or coordinator code changed). `mise run flaky:recurrence 9936 --base 498b68766` answered open.
+- **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:changed` on mini (macOS arm64, Bun 1.4.4), load average about 24 to 32 from other worktrees.
+- **Failures:** `ENOENT: no such file or directory, lstat '…/ork-checkout-template-…/.git/objects/maintenance.lock'` in `tickets on a leaf > a ticket created for a leaf is on the board and on the leaf under one id, and its build runs there` (`apps/backend/src/core/coordinator-node-tickets.test.ts`, 260.58 ms) and in a test not listed above, `on the real coordinator > a refused conversation is woken with one message when the node reconnects` (`apps/backend/src/core/coordinator-node-reconnect-wakes.test.ts`, 432.83 ms).
+- **Owning-file reruns:** the runner's isolated reruns passed unchanged: `coordinator-node-tickets.test.ts` in 1.4 s, `coordinator-node-reconnect-wakes.test.ts` in 1.0 s.
+- **Evidence:** `orkestrator-test-run.PS6O8Y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. The same run's CLI timeout is [9944](9944-cli-bash-completion-aggregate-timeout.md).
+
+The fix proposed under Hypothesis still applies; it was not attempted here.

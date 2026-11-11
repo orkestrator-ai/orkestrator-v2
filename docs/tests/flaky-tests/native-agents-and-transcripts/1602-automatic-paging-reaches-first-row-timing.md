@@ -132,4 +132,9 @@ hook's `viewKey` comparison (again only for callers that pass `viewKey`):
   `7fac685f4` (28.5 s), so the failure does not depend on that commit.
 - `mise run flaky:recurrence -- 1602 --base 498b68766f5c9f357a3a86782406d1e9e0977559` reported `open`.
 
+- A later complete `ORKESTRATOR_E2E_PORT=1498 mise run test:logged -- --name browser-rerun-3 -- mise run test:browser`
+  at `3430c8d13` (load about 11 to 21) failed only this case, on mobile:
+  1699 passed, 1 failed, 152 skipped (1284.6 s). The complete owner then
+  passed alone (`--name paging-owner-final`, exit 0, 53.4 s).
+
 Status stays open. No assertion, timeout or skip changed.

@@ -15,7 +15,8 @@ import { createPreviewHarness, type PreviewHarness } from "./preview-test-suppor
 
 /**
  * Local-environment discovery: seeded worktree services, managed-process
- * ownership, and the qualification cases from 0045 (two environments on one
+ * ownership, and the qualification cases from to-do 0045 (retired; see
+ * docs/architecture/browser-previews.md, "Local environments") (two environments on one
  * dev port, a restart on a reused port, an auto-incremented port).
  */
 describe("local preview service discovery", () => {
@@ -487,7 +488,7 @@ describe("local preview service discovery", () => {
 });
 
 /**
- * The 0045 qualification on this host's real `lsof`, `ps` and process tree.
+ * The to-do 0045 (retired) qualification on this host's real `lsof`, `ps` and process tree.
  * Each "terminal" is a shell this test started, standing in for the PTY shell
  * `TerminalRuntime.localProcessRoots()` reports; the dev server is its child,
  * as it is when run from an Orkestrator terminal. The servers bind like Vite:

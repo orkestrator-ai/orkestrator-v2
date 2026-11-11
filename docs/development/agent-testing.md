@@ -1798,6 +1798,51 @@ A spec that restarts a profile builds the launcher's arguments with
 credential-free profile records an empty credential list, which the launcher
 would otherwise read as "every host credential".
 
+### Live conditional reads (loopback models)
+
+`e2e/agent-testing/conditional-reads-live.spec.ts` measures what a streaming
+native tab costs the bridge and the renderer (efficiency batch E10, and the
+part-trimmed head of E11): requests, bytes and handler time per bridge route,
+whether state bodies repeat, what a transcript delta would have carried, and
+the renderer's answers by outcome. It is opt-in
+(`ORKESTRATOR_AGENT_TEST_E10_BASELINE=1`) and makes no billed turn. Start a
+credential-free profile (add `codex` to the platforms for the Codex runs):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile e10-qa \
+  --fixture --headless --no-agent-credentials --agent-platforms claude,codex
+ORKESTRATOR_AGENT_TEST_PROFILE=e10-qa ORKESTRATOR_AGENT_TEST_RUN_ID=e10-qa \
+  ORKESTRATOR_AGENT_TEST_E10_BASELINE=1 E10_SCENARIO=large-window \
+  mise run test:logged -- --name e10 -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts conditional-reads-live.spec.ts
+```
+
+For Claude the spec writes an `env` block into the profile's own Claude
+`settings.json` that points the real CLI at `conditional-reads-fake-model.ts`.
+For Codex (`E10_PLATFORM=codex`) it writes a made-up API key and an
+`openai_base_url` into the profile's own Codex home, pointing it at
+`conditional-reads-codex-model.ts`, a Bun loopback Responses WebSocket. A
+`bun` wrapper in the profile's toolchain directory preloads
+`conditional-reads-bridge-counter.ts` into every bridge the backend starts.
+All of these are removed or restored at the end. `E10_SCENARIO` picks the
+scripted turn:
+
+| Scenario | Turn | Measured from |
+| --- | --- | --- |
+| `baseline` (default) | 18 rounds of 5 s at 1.2 KB/s | 5 s after it starts |
+| `large-window` | 26 rounds of 30 KB | ten rounds in, when the window is near 512 KiB |
+| `trimmed-head` | one 150 s response at 20 KB/s | 600,000 characters (`E10_READY_CHARS` moves it) |
+
+Each run measures 20 s with one viewer, 20 s with a second page on the same
+tab and 30 s idle, and writes counts, bytes and milliseconds (no content,
+token or session id) to
+`output/agent-testing/<run id>/conditional-reads[-codex][-<scenario>].json`.
+Non-baseline scenarios add the whole turn's bridge totals and the exact
+head-row recovery reads (`/messages`); `trimmed-head` also captures the first
+viewer to `output/visual-previews/`. Stop and reset the profile afterwards.
+The latest figures are in
+[native-transcripts.md](../architecture/native-transcripts.md#one-request-per-round).
+
 ### Loopback plan-usage origin
 
 A spec that scripts Claude or Codex account usage on a separate-process

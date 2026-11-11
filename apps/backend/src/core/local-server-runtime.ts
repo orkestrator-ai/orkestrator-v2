@@ -70,7 +70,7 @@ export const LOCAL_SERVER_ORPHAN_GRACE_MS = 2_000;
  * How long a passed reuse health check stands for the same bridge process,
  * port and token. Every native-agent read resolves its provider through the
  * start command, and a live update makes two reads, so without this a viewer
- * cost the bridge two `/global/health` requests per poll (to-do 6680 task 6).
+ * cost the bridge two `/global/health` requests per poll (to-do 6680, retired, task 6).
  * A bridge that stops answering inside the window fails the read that follows
  * it, and the next start after the window probes again.
  */

@@ -136,7 +136,7 @@ function healthProbes(port: number): Promise<number> {
 describe("local bridge reuse under load", () => {
   test("a passed health check stands for the next starts inside its window", async () => {
     // Every native-agent read resolves its provider through the start command,
-    // two per live-update poll (to-do 6680 task 6).
+    // two per live-update poll (to-do 6680, retired, task 6).
     const { commands, context, environmentId, first } = await startControllableBridge(
       "env-bridge-reuse-recent-health",
       () => false,

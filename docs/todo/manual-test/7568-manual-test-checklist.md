@@ -12,7 +12,7 @@ work that is blocked ([Human-only work](../../README.md#human-only-work)).
 
 ### Tasks
 
-1. **Manual tests and live checks** (299 items): run each check under
+1. **Manual tests and live checks** (300 items): run each check under
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
 2. **Decisions, approvals and outward actions** (53 items): make each call
@@ -34,7 +34,9 @@ do, and ends with what to record. Items whose source to-do was retired on
 behaviour; the old file is in Git history at `53340356c`. Sources retired
 later say so where they are cited: 1021 was retired on 2026-11-11, once its
 fake-model qualification passed, and 0018 and 4680 were retired the same
-day; all three are in Git history at `498b68766`.
+day; all three are in Git history at `498b68766`. 6260 and 6680 were
+retired on 2026-11-11, once their loopback-model measurements were done;
+both are in Git history at `1fd391e3a`.
 
 **Investigation.** Every item was moved, not rewritten: its steps, hosts and
 expected outcomes come from the source to-do as it stood at `53340356c`.
@@ -81,8 +83,8 @@ agent can apply it.
 | Design canvas | 4 | 0 |
 | MCP | 6 | 2 |
 | Service previews and web annotations | 16 | 4 |
-| Transcripts, observation and bandwidth | 24 | 3 |
-| **Total** | 299 | 53 |
+| Transcripts, observation and bandwidth | 25 | 3 |
+| **Total** | 300 | 53 |
 
 ## Outstanding work
 
@@ -639,7 +641,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **[5340](../transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 3: how often a tool-detail miss happens.** During a long multi-session day of real turns (a `dev:test` profile with a small detail cache, or your own use), watch for the tool-detail "no longer available" reload message when expanding an old tool call (the cache holds 4,096 entries or 64 MiB; E9 recovers most misses without a raw read). Record: in 5340's Current state, how many times the message appeared and in which provider and session length; or record that you prefer a content-free miss counter instead.
 - [ ] **[5380](../transcripts-and-observation/5380-bearer-terminal-stream-live-evidence.md) task 2: which real routes still use HTTP/1.1.** Alongside the 0052 (retired) Tailscale Serve run above, open the web client through a real Tailscale Serve route and through the hosted client, and read `nextHopProtocol` from each client's boot metrics (`sendBootMetrics` in `apps/web/src/lib/native/web-gateway.ts`, posted to `/client-metrics`). Record: in 5380's Current state, the protocol each route negotiated (`http/1.1`, `h2` or `h3`).
 - [ ] **5700 (retired) task 1: one real Claude mail delivery into a tmux tab.** On an isolated profile (`mise run dev:test --profile tmux-mail-qa --fixture --credential-source claude --agent-platforms claude`), open a Claude tmux tab, let it go idle, and deliver one agent mail to it (for example `send_message` from a second tab's agent); this may spend one provider turn. Check that the tmux chat draws the delivered mail as a mail tile, and that the resume dialog does not title the session with the envelope. Record: reply to the coordinator with tile or raw text; if raw, the content-free shape of the stored row (for example a prefix before `<orkestrator-peer-message`). Behaviour: [agent-messaging.md](../../architecture/agent-messaging.md#budgets).
-- [ ] **[6260](../transcripts-and-observation/6260-projection-hashing-measurements.md) task 3: how often a part-trimmed head streams in real use.** On an isolated `dev:test` profile with Codex credentials, run one long real Codex turn whose head row grows past the 512 KiB window, count recovery reads per streaming turn (exact head-row recovery is limited to one provider read a second per view, `PROGRESSIVE_HYDRATION_SETTLE_MS`) and watch whether the view moves about once a second. Record: in 6260's task 3 Investigation, recovery reads per turn, what the view did, and how often your real sessions reach a part-trimmed head; or record that you prefer a content-free recovery-read counter instead of a billed turn.
+- [ ] **6260 (retired) task 3: how often a part-trimmed head streams in real use.** (Background: [exact recovery](../../architecture/native-transcripts.md#incomplete-previews-and-exact-recovery); the loopback-model check ran on 2026-11-11: one recovery read a second per view, and the view moves about once a second until the row passes about a million characters, which is [7845](../transcripts-and-observation/7845-trimmed-head-snapshots-and-stalled-view.md).) On an isolated `dev:test` profile with Codex credentials, run one long real Codex turn whose head row grows past the 512 KiB window, count recovery reads per streaming turn (exact head-row recovery is limited to one provider read a second per view, `PROGRESSIVE_HYDRATION_SETTLE_MS`) and watch whether the view moves about once a second. Record: in 7845's Current state, recovery reads per turn, what the view did, the size the head row reached, and how often your real sessions reach a part-trimmed head; or record that you prefer a content-free recovery-read counter instead of a billed turn.
+- [ ] **6680 (retired) task 1: Pi composer catalogue size on your logins.** (Background: the E10 baseline in [native-transcripts.md](../../architecture/native-transcripts.md#one-request-per-round); a credential-free profile has no Pi catalogue.) In a disposable profile with your Pi provider logins (`mise run dev:test --profile pi-catalogue-qa --fixture --credential-source pi --agent-platforms pi`), open a Pi tab and read the composer's model count and the size of one Pi bridge `GET /session/:id/status` body (for example from the gateway's `/__orkestrator/metrics`, or with the conditional-reads spec's bridge counter). Stop and reset the profile afterwards. Record: the number of models and the `/status` body size, beside the decision item for 6680 task 2 below (it decides the 130 KB Pi `/status` question).
 - [ ] **[7100](../transcripts-and-observation/7100-long-soak-follow-ups.md) task 2: a Linux node whose agent can reach Docker, for the container long soak.** beelink2's agent account cannot reach Docker (it is not in the `docker` group, and RootlessKit is not installed for `mise run docker:disposable`), so the soak cannot start there. Either let an agent use a Docker daemon (install RootlessKit on beelink2 so `docker:disposable` can start a rootless daemon, or name a fleet node whose agent already reaches Docker; adding an account to the `docker` group is root-equivalent, so decide that deliberately), or run the soak yourself with the command in 7100 task 2 on such a host and `mise run dev:stop`/`dev:reset` its `rw-ctrsoak` profiles if the driver did not. Record: the node (or "ran it myself" with the host), and for a run of your own its output JSON path, cycles completed, any failed steps and the footprint trend, in 7100 task 2's Investigation; an agent then runs or reads the soak.
 
 ### Decisions, approvals and outward actions
@@ -707,7 +710,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 - [ ] **1202 (retired) task 4: push or long-poll for the live agent view (maintainer's choice).** On 2026-11-01 the maintainer decided to choose only if the numbers still justify it. The numbers:
   - Since WEB-1/GW-1, a visible running Claude tab sends about 2.1 requests a second (down from 6.2), one combined read per 500 ms round.
   - When nothing moved, each `unchanged` answer is about 1.6 KB on the wire.
-  - The bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read (to-do 6680, E10).
+  - The bridge spends under 0.25 ms on a state read and about 1 ms on a transcript read (to-do 6680 (retired), E10), and 3.7–4.2 ms on a transcript read near the 512 KiB window bound.
 
   Options: push, long-poll, or neither (keep the polled round, see C01 in [recurring-work.md](../../architecture/recurring-work.md#renderer)). A recovery poll stays either way. Record: the choice and the reason, as a reply to the coordinator. If push or long-poll is chosen, the coordinator opens a new to-do to build it, with a baseline first per [efficiency-harness.md](../../development/efficiency-harness.md#rules-for-efficiency-changes).
 
@@ -762,7 +765,7 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 - [ ] **2681 (retired) task 5: delete the preview-worker leftovers on GitHub.** The pull route is gone (behaviour: [transcript-artifacts-runtime.md](../../architecture/transcript-artifacts-runtime.md#preview-worker)). Check `git ls-remote --heads origin 'preview-worker-pin/*'`, then decide whether to delete the remote branch `preview-worker-pin/cfbafc5d238e4eb3232bf` and, if nothing else uses it, the GHCR package `ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker` (needs package admin rights). Record: reply to the coordinator with deleted or kept for each, and the date.
 - [ ] **[4650](../transcripts-and-observation/4650-static-html-presentation-follow-ups.md) task 1: approve relaxing the hosted client's policy for the static document frame.** Decide whether `apps/web-public` may emit `static-html-frame.html` with its own header rule (`sandbox allow-scripts; frame-ancestors 'self'`, excluded from the stricter `/(.*)` rule) so hosted readers get selectable reports (recommended), or keep saved previews there. Record: in 4650's Assumptions and decisions, approved or keep saved previews; the agent part of task 1 waits on it.
-- [ ] **[6680](../transcripts-and-observation/6680-conditional-reads-and-deltas-measured.md) task 2: build a bridge state revision sent as `knownToken`?** Part 0180 task 2. On the real stack Claude's state body repeated on 35 of 39 streaming polls (one viewer) and 76 of 80 (two), but it is about 1 KB and costs the bridge 0.15–0.22 ms, and the poll's other four requests stay; building it adds an invariant in five bridges that every state change moves the revision. Recommended: not now. Record: in 6680's Assumptions and decisions, not now or build (if build, the coordinator reopens it as a task, and 6680 task 3's 130 KB Pi `/status` question is decided with it).
+- [ ] **6680 (retired) task 2: build a bridge state revision sent as `knownToken`?** Part 0180 task 2. On the real stack Claude's state body repeated on 35 of 39 streaming polls (one viewer) and 76 of 80 (two), but it is about 1 KB and costs the bridge 0.15–0.22 ms, and the poll's other three requests stay (the steer probe was cached on 2026-11-11). Codex's `/status` body changed on almost every streaming poll (0 of 40 repeated), so a revision would spare Codex little. Building it adds an invariant in five bridges that every state change moves the revision. Recommended: not now. Record: not now or build, as a reply to the coordinator. If build, the coordinator opens a new to-do for it, which also decides whether Pi's `/status` sends its composer only when it changed (130 KB a poll with 300 models on the fake bridge; your real size is the item for 6680 task 1 above).
 
 ## Constraints and rationale
 

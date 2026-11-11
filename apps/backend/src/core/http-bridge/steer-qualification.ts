@@ -20,7 +20,7 @@ export const STEER_QUALIFICATION_CACHE_MAX_SESSIONS = 256;
  * Qualification and failure logging for one bridge connection.
  *
  * `readProgressiveSessionState` asks on every state poll, and the answer only
- * changes when the bridge does (to-do 6680 task 5). A positive answer is
+ * changes when the bridge does (to-do 6680, retired, task 5). A positive answer is
  * cached per session for the connection's current bridge generation (its base
  * URL and token, read on every call because a workflow provider adopts a
  * refreshed connection in place) and for at most

@@ -2364,7 +2364,56 @@ ORKESTRATOR_AGENT_TEST_NODE_MAIL_LEAF_PROFILE=<leaf>
 ORKESTRATOR_AGENT_TEST_COORDINATOR_NODE_MAIL_FAKE=1` to `bunx playwright test
 --config e2e/agent-testing/playwright.coordinator-node-mail-fake.config.ts`.
 It attaches the leaf, adds projects and changes both profiles' messaging and
-Pi settings, so reset both afterwards.
+Pi settings, so reset both afterwards. The link setup it shares with the
+notice suite below is in `coordinator-two-node-support.ts`.
+
+### Coordinator usage-limit notices between two profiles (fixture accounts)
+
+`mise run test:agent:coordinator:notice-live` runs the coordinator notice
+hierarchy's live checks (to-do
+[7542](../todo/coordinator-and-multi-review/7542-coordinator-notice-hierarchy-live-checks.md))
+on two real backends with no login and nothing billed. The runner
+(`apps/desktop/scripts/test-agent-coordinator-notice-live.ts`) first starts
+`e2e/agent-testing/coordinator-notice-fake-model.ts` on loopback, then two
+disposable `dev:test --fixture --headless --no-agent-credentials
+--agent-platforms claude,pi` profiles with
+`ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN` naming it (see
+[Loopback plan-usage origin](#loopback-plan-usage-origin)) and
+`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`. It runs
+`e2e/agent-testing/coordinator-notice-live.spec.ts` with
+`suiteRestartsProfiles` (the spec stops and starts both profiles itself),
+then stops and resets both and stops the provider.
+
+The spec writes, inside each profile only: Claude `settings.json` in
+`agent-credentials/claude/` (every account directory links it), which sends
+the pinned CLI's model calls to the provider and its other HTTPS traffic to
+a closed loopback proxy; fixture Claude accounts in `agent-accounts/claude/`
+with their registry (`backend-store.ts`); and, on the leaf, Pi's
+`models.json` for the leaf's Pi main coordinator. The provider
+(`coordinator-notice-fake-model-script.ts`) refuses a call that carries a
+run marker on a limited login with the API's plan-limit error, answers
+everything else with one line, scripts Pi's `launch_environment`, and
+answers usage reads per fixture token. Then:
+
+- **Task 2.** A leaf native tab, a delegated worker (launched by the leaf's
+  Pi coordinator) and a build pipeline on one limited account; the provider
+  parks their refusals until all three have asked. The command node's Claude
+  coordinator must be woken once with one notice listing one of each, and
+  the leaf's coordinator must get none.
+- **Task 3.** The command node's coordinator on its own entry of the leaf
+  tab's limited login, automatic switching on, a second account with
+  headroom. The command node must move there, unpinned, before the wake, and
+  no call may run on the limited login.
+- **Task 4.** The command node is stopped, a leaf tab stops on a third
+  limited login, the leaf profile is stopped and started, then the command
+  node is started. Its coordinator must be woken exactly once with that stop.
+
+The provider keeps counts and facts only (accounts, markers, session kinds
+each notice lists), never a prompt or token. A pass proves routing,
+grouping, the move and the outbox across restarts on real backends, not a
+real provider's refusal wording (the manual-test checklist holds that) or a
+link between two machines. The content-free summary is
+`output/agent-testing/<desk-profile>/coordinator-notice-live/summary.json`.
 
 ### Coordinator checkout sync with a slow remote (fake model)
 

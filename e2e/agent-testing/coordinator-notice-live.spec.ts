@@ -560,7 +560,9 @@ test.describe("coordinator notice hierarchy between two profiles on fixture acco
       }
 
       const deskProject = await sharedProject(desk, CHECKOUT, SHARED_GIT_URL);
-      const leafProject = await sharedProject(leaf, CHECKOUT, SHARED_GIT_URL);
+      const leafProject = await sharedProject(leaf, CHECKOUT, SHARED_GIT_URL, {
+        localOrigin: true,
+      });
       let nodeId = "";
       nodeId = await attachLeaf(desk, leaf, (attached) => {
         nodeId = attached;

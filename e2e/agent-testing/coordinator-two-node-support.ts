@@ -59,16 +59,20 @@ function git(cwd: string, ...args: string[]) {
  * A checkout of the shared repository next to the profile's fixture, added
  * as a project of this profile. The same `gitUrl` on both profiles is how
  * each finds the other's copy; the fixture projects' local-path origins give
- * a command node nothing to match.
+ * a command node nothing to match. With `localOrigin`, the checkout's
+ * `origin` is a bare repository beside it, so the profile can create
+ * environments of the project (it fetches `origin` first).
  */
 export async function sharedProject(
   profile: Profile,
   checkoutName: string,
   gitUrl: string,
+  options: { localOrigin?: boolean } = {},
 ): Promise<{ id: string; checkout: string }> {
   const fixtureDir = path.dirname(profile.status.testProject!);
   const checkout = path.join(fixtureDir, checkoutName);
-  if (!existsSync(path.join(checkout, ".git"))) {
+  const created = !existsSync(path.join(checkout, ".git"));
+  if (created) {
     mkdirSync(checkout, { recursive: true });
     git(checkout, "init", "-q", "-b", "main");
     writeFileSync(path.join(checkout, "README.md"), `# ${checkoutName}\n`);
@@ -85,15 +89,21 @@ export async function sharedProject(
       "init",
     );
   }
+  if (options.localOrigin && created) {
+    const origin = path.join(fixtureDir, `${checkoutName}-origin.git`);
+    git(fixtureDir, "init", "-q", "--bare", "-b", "main", origin);
+    git(checkout, "remote", "add", "origin", origin);
+    git(checkout, "push", "-q", "-u", "origin", "main");
+  }
   const projects =
     await profile.invoke<Array<{ id: string; localPath: string | null }>>("get_projects");
   const existing = projects.find((project) => project.localPath === checkout);
   if (existing) return { id: existing.id, checkout };
-  const created = await profile.invoke<{ id: string }>("add_project", {
+  const project = await profile.invoke<{ id: string }>("add_project", {
     gitUrl,
     localPath: checkout,
   });
-  return { id: created.id, checkout };
+  return { id: project.id, checkout };
 }
 
 /**

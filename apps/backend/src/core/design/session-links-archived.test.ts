@@ -200,4 +200,92 @@ describe("design links to archived conversations", () => {
       },
     );
   });
+
+  test("several links over two agents: one read per agent, mapped back to each link", async () => {
+    const reads: Array<{ agent: string; ids: readonly string[] }> = [];
+    await withService({ prefix: "ork-design-archived-many-" }, async ({ storage }) => {
+      const design = new DesignService(storage.getDataDir(), () => undefined, createTestRenderer());
+      try {
+        const commands = new Map<string, Handler>();
+        registerDesignCommandHandlers((name, handler) => commands.set(name, handler), {
+          nativeSessionKey: nativeAgentSessionStorageKey,
+        });
+        const nativeAgents = {
+          resumeProjectionSession: async () => undefined,
+          archivedResumableSessionIdsIfRunning: async (
+            _environmentId: string,
+            agent: string,
+            ids: readonly string[],
+          ) => {
+            reads.push({ agent, ids });
+            // The same thread id under the other agent must not mark a link.
+            return new Set(agent === "codex" ? ["thread-a", "shared"] : ["opencode-c"]);
+          },
+        };
+        const context = { design, storage, nativeAgents } as unknown as DesignCommandContext;
+        const canvas = await design.create("env-1", "Linked", undefined, "user");
+        const link = (tabId: string, sessionId: string, platform: "codex" | "opencode") =>
+          design.linkSession("env-1", canvas.id, { tabId, sessionId, platform, role: "design" });
+        const codexArchived = await link("tab-1", "thread-a", "codex");
+        const codexLive = await link("tab-2", "thread-b", "codex");
+        const openCodeArchived = await link("tab-3", "opencode-c", "opencode");
+        const openCodeShared = await link("tab-4", "shared", "opencode");
+        const result = (await commands.get("design_session_link_states")!(
+          { environmentId: "env-1", canvasId: canvas.id },
+          context,
+        )) as { ok: boolean; value: { states: Array<{ linkId: string; archived?: boolean }> } };
+        expect(result.ok).toBe(true);
+        const archived = Object.fromEntries(
+          result.value.states.map((state) => [state.linkId, state.archived === true]),
+        );
+        expect(archived).toEqual({
+          [codexArchived.id]: true,
+          [codexLive.id]: false,
+          [openCodeArchived.id]: true,
+          [openCodeShared.id]: false,
+        });
+        expect(
+          reads
+            .map((read) => ({ agent: read.agent, ids: [...read.ids].sort() }))
+            .sort((a, b) => a.agent.localeCompare(b.agent)),
+        ).toEqual([
+          { agent: "codex", ids: ["thread-a", "thread-b"] },
+          { agent: "opencode", ids: ["opencode-c", "shared"] },
+        ]);
+      } finally {
+        await design.close();
+      }
+    });
+  });
+});
+
+describe("archivedResumableSessionIdsIfRunning", () => {
+  test("never starts a bridge: none running answers undefined", async () => {
+    const commands: string[] = [];
+    await withService(
+      {
+        prefix: "ork-design-archived-absent-",
+        invoke: async <T>(command: string): Promise<T> => {
+          commands.push(command);
+          if (command === "peek_local_agent_bridge") return null as T;
+          throw new Error(`Unexpected backend command: ${command}`);
+        },
+      },
+      async ({ service }) => {
+        await expect(
+          service.archivedResumableSessionIdsIfRunning("env-1", "codex", ["thread-a"]),
+        ).resolves.toBeUndefined();
+        expect(commands).toEqual(["peek_local_agent_bridge"]);
+        // Nothing to ask, or an agent that cannot archive: no bridge is consulted.
+        commands.length = 0;
+        await expect(
+          service.archivedResumableSessionIdsIfRunning("env-1", "codex", []),
+        ).resolves.toBeUndefined();
+        await expect(
+          service.archivedResumableSessionIdsIfRunning("env-1", "claude", ["thread-a"]),
+        ).resolves.toBeUndefined();
+        expect(commands).toEqual([]);
+      },
+    );
+  });
 });

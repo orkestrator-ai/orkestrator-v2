@@ -576,7 +576,14 @@ apart with no page action between them flip between the two values; every
 `addEventListener` registration in the page and every listener on its nodes
 (DOMDebugger, iframes included) stayed constant in every sample; and a heap
 snapshot taken at a high reading held the low number of registered
-listeners. A leak raises the floor and still fails the check. With the
+listeners. A leak raises the floor and still fails the check. A second half
+that read only the high value looks the same, so before failing on the floor
+the check takes up to eight more readings a second apart with no page action
+between them; noise drops one back to the floor and clears the verdict, a leak
+keeps every one raised. A false failure then needs all six late samples and all
+eight readings to be high (about one run in 16,000 at even odds, against about
+one in 65 for the floor rule alone; `tests/unit/design-canvas-leak-verdict.test.ts`
+simulates both). With the
 2026-10-22 parameters (3 runs × 1, 16 and 64 frames, 12 cycles) on beelink2 on
 2026-11-11, the floor rule passed all nine runs, including runs that read both
 values; one 16-frame run failed instead on `cdpFrames` reading 10 rather than 9

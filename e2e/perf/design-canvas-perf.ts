@@ -77,6 +77,7 @@ import { DESIGN_EVENT } from "../../packages/protocol/src/design-canvas";
 import { startDesignServiceHost, type DesignServiceHost } from "../design-service-client";
 import { DESIGN_FIXTURE_ENVIRONMENT } from "../design-service-protocol";
 
+import { confirmFloor, peakGrowth } from "./design-canvas-leak-verdict";
 import { startOwnedPreview } from "./preview-server";
 import { stopProcessGroup } from "../process-cleanup";
 
@@ -1196,6 +1197,8 @@ async function measurePan(page: Page) {
 }
 
 const CULL_DISTANCE = 12_000;
+/** Extra `jsEventListeners` readings taken before a raised floor fails the leak check. */
+const LISTENER_CONFIRMATIONS = 8;
 
 async function leakCycles(
   page: Page,
@@ -1285,35 +1288,50 @@ async function leakCycles(
   }
   // Converged: after the first cycle (warm-up), the second half of the cycles
   // does not exceed the first half beyond a small slack (for `jsEventListeners`,
-  // its lowest value; see `checkFloor`).
+  // its lowest value, confirmed by extra readings; see `floorGrowth`).
   const failures: string[] = [];
   const settled = samples.slice(1);
   const half = Math.floor(settled.length / 2);
   const early = settled.slice(0, half);
   const late = settled.slice(half);
   const check = (key: keyof Sample, absolute: number, relative: number) => {
-    if (early.length === 0 || late.length === 0) return;
-    const earlyMax = Math.max(...early.map((entry) => Number(entry[key])));
-    const lateMax = Math.max(...late.map((entry) => Number(entry[key])));
-    if (lateMax > earlyMax * (1 + relative) + absolute)
-      failures.push(`${String(key)} grew from ${earlyMax} to ${lateMax}`);
+    const grew = peakGrowth(
+      early.map((entry) => Number(entry[key])),
+      late.map((entry) => Number(entry[key])),
+      absolute,
+      relative,
+    );
+    if (grew) failures.push(`${String(key)} grew from ${grew.from} to ${grew.to}`);
   };
   // `jsEventListeners` compares the halves' floors, not their peaks. The CDP
   // counter also counts listener objects no event target holds any more until
   // Blink finalizes them, which the forced collection in `memory()` does not
   // wait for, so a sample reads one of two values at random (+25, +55 and +85
   // at 1, 16 and 64 frames on Linux in 2026-11). A leak raises the floor; a
-  // peak landing only in the second half is that noise. The listeners pages
-  // actually hold are covered by the window and document counts below, and
-  // `--listener-census` counts every registration.
-  const checkFloor = (key: keyof Sample, absolute: number) => {
-    if (early.length === 0 || late.length === 0) return;
-    const earlyMin = Math.min(...early.map((entry) => Number(entry[key])));
-    const lateMin = Math.min(...late.map((entry) => Number(entry[key])));
-    if (lateMin > earlyMin + absolute)
-      failures.push(`${String(key)} floor grew from ${earlyMin} to ${lateMin}`);
-  };
-  checkFloor("jsEventListeners", 2);
+  // peak landing only in the second half is that noise. A second half that
+  // read only the high value looks like a raised floor too, so before failing
+  // the check takes up to LISTENER_CONFIRMATIONS more readings with no page
+  // action between them (`floorGrowth`): noise drops one back to the floor, a
+  // leak does not. The listeners pages actually hold are covered by the window
+  // and document counts below, and `--listener-census` counts every
+  // registration.
+  const listenerFloor = await confirmFloor(
+    early.map((entry) => entry.jsEventListeners),
+    late.map((entry) => entry.jsEventListeners),
+    2,
+    LISTENER_CONFIRMATIONS,
+    async () => {
+      await sleep(1_000);
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.collectGarbage");
+      await sleep(200);
+      return (await cdpMetrics(cdp)).jsEventListeners;
+    },
+  );
+  if (listenerFloor.growth)
+    failures.push(
+      `jsEventListeners floor grew from ${listenerFloor.growth.from} to ${listenerFloor.growth.to}`,
+    );
   check("windowListeners", 0, 0);
   check("documentListeners", 0, 0);
   check("iframes", 0, 0);
@@ -1337,6 +1355,9 @@ async function leakCycles(
     samples,
     growthFromBaseline: growth,
     verdict: { converged: !failures.length, failures },
+    ...(listenerFloor.confirmations.length
+      ? { listenerFloorConfirmations: listenerFloor.confirmations }
+      : {}),
     ...(census
       ? { listenerCensus: summarizeCensus(samples, censuses, afterReactivate, settledReadings) }
       : {}),

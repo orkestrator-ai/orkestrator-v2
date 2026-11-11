@@ -1,7 +1,7 @@
 # Coordinator wake and git-mirror tests time out at 5 s under host load
 
 - **ID:** 9978
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-11
 - **Base:** `498b68766f5c9f357a3a86782406d1e9e0977559`.
 - **Observed head:** `4d294fd07` on branch
@@ -152,3 +152,84 @@ it does not touch the coordinator wake or git-mirror code.
   passed both owners (19.4 s).
 
 Status stays open; no assertion, timeout or skip changed.
+
+## Resolution (2026-11-11)
+
+Base commit `51456e887bcbb9b8389b67df257decf1ba13aa2f`.
+
+- **Root cause:** the tests were waiting on GitHub, not on the CPU. Every
+  pull-request notice the coordinator sends builds its card through
+  `CoordinatorStatusWakes.deliver` (`coordinator-status-wakes.ts`), which
+  awaits `options.pullRequestMetadata(prUrl)`. `MailWorld`
+  (`agent-mail-world-test-support.ts`) passed no such option, so
+  `CoordinatorService` fell back to `pullRequestWatches.metadata`, which ran
+  the host's real `gh auth token --hostname github.com`
+  (`github-credentials.ts`) and then a real
+  `GET https://api.github.com/repos/<owner>/<repo>/pulls/<n>`
+  (`github-pull-requests.ts`), inside the serialized status-wake pass the test
+  awaits. A spy preload counted 32 `gh` spawns and 32 GitHub requests in
+  `coordinator-status-wakes-pr.test.ts`, 8 and 8 in
+  `coordinator-worker-outcomes.test.ts`, and 2 and 2 in
+  `coordinator-pr-remote.test.ts`. Each GitHub request took 250 to 730 ms and
+  each `gh` spawn 70 to 330 ms, even with no artificial load. `a PR wakes once
+  per state change until merge` sends five notices, so about 3.5 of its 4.2 s
+  went to GitHub; a loaded host or a slow network pushed it past 5 s.
+  `tests/project-git-mirror-create.test.ts` had the same problem in another
+  place. Its two network-policy 2 and 3 cases, the only ones recorded as
+  failing, create restricted containers, and `createDockerContainer` then
+  calls `githubRangesSeed`. With no seed in the fresh data directory, that
+  fetches `https://api.github.com/meta` with a 15 s abort. Policy 1 and the
+  full-network cases never fetch, and they never failed. Sibling suites
+  (`container-rootless-host-ports-create`,
+  `container-data-directory-reach`) already seed `github-ranges.txt` for this
+  reason.
+
+  The `updateCoordinatorWorkflowAssociations is not a function` line is a
+  separate fault, and it does not cause any of the timeouts. The `followed-worker
+  filter` test builds `CoordinatorStatusWakes` over a hand-written storage fake
+  without that method, so the sweep's last step,
+  `CoordinatorWorkerOutcomes.reconcile`, threw on its empty batched write and
+  `reconcilePass` logged `wake.worker-outcomes-failed`. That test awaits no
+  wake (it checks the follow filter), so it passed every time. It logged once
+  per run of the file, which is why each failing log had one copy.
+- **Fix:** `MailWorld` now passes `offlinePullRequestMetadata` as the
+  status-wake `pullRequestMetadata` default, unless a test gives its own. It
+  returns what production returns on a host without a GitHub credential: the
+  URL and number, with no title. No assertion changed: GitHub answers 404 for
+  these fixture repositories, so no title was ever read before either.
+  `createCommand` in `tests/project-git-mirror-create.test.ts` now writes a
+  fresh `github-ranges.txt` seed (`formatGithubRangesSeed`) before
+  `createDockerContainer`, so restricted creates read it and never fetch. The
+  `followed-worker filter` fake gains
+  `updateCoordinatorWorkflowAssociations: async () => undefined`. No timeout,
+  retry, skip or assertion changed. With the spy preload, the four files now
+  make no `gh` spawns and no GitHub requests, and the `is not a function` line
+  is gone. All four files together take 14 s instead of about 36 s.
+- **Reproduced:** yes, with an injected delay on the side that has to lose. A
+  preload that delays every `api.github.com` fetch by 1 s
+  (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts --preload <slow-github.ts> <the four files> --parallel=1`,
+  through `test:logged`) failed 4 of 51 on unchanged code. The failures were
+  `a PR wakes once per state change until merge (hidden: %s)` (both, 5,009 and
+  5,004 ms), `a state that recurs after a fix wakes again…` (5,006 ms) and `a
+  follow that already ended still records the merge…` (5,005 ms). Mirror
+  policies 2 and 3 grew from about 0.5 s to 1.71 and 1.47 s while policy 1
+  stayed at 0.42 s. After the fix, the same command passed 51 of 51; the
+  slowest case took 1.02 s and policies 2 and 3 took 0.58 and 0.53 s. On this
+  macOS host (18 cores, unpinned burners, host load 50 to 180 from other
+  worktrees), CPU contention alone did not cross 5 s. Before the fix,
+  `mise run test:logged -- --name f9978-repro-before -- bun scripts/test-under-contention.ts --burners 100 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts <the four files> --parallel=1 --rerun-each=5`
+  passed 255 of 255 in 228 s, but the recorded case's worst time was 4.22 s
+  (mean 3.73 s), only 0.8 s inside the budget. After the fix, the same command
+  passed 255 of 255 in 91 s, with a worst time of 0.56 s (mean 0.35 s).
+- **Stress:** the same contention command with `--rerun-each=20`
+  (`f9978-stress-after`) passed 1,020 of 1,020 in 322 s. The slowest case took
+  1.51 s, the recorded case at most 0.76 s, and mirror policies 2 and 3 at most
+  0.79 and 0.93 s. All 39 backend test files that use `MailWorld` passed
+  (`--parallel=4`), and the backend typecheck passed.
+- **Left as is:** each `MailWorld` still runs production's
+  `git rev-parse --show-toplevel` once or twice (`resolveProjectGitRoot` on the
+  coordinator path; 82 cheap spawns across the four files). Each mirror case
+  still runs about nine fake-`docker` shell scripts, because that file reads the
+  `docker create` the backend actually issues. Neither appeared in any failure;
+  in the stress run the slowest of those cases stayed under 1.3 s.
+

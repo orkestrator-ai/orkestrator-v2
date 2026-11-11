@@ -167,6 +167,8 @@ describe("followed-worker filter", () => {
           if (reads === 1) await gate;
           return { workspaces: [], workflows: [] };
         },
+        // The sweep ends with the worker-outcome watch's one batched write.
+        updateCoordinatorWorkflowAssociations: async () => undefined,
       },
       loadConfig: async () => ({ global: {} }),
       addResourceChangeListener: () => () => undefined,

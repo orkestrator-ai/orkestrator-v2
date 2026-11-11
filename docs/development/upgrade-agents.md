@@ -496,8 +496,11 @@ through a proxy that records and refuses every connection, and checks the nine
 cases the keeper relies on: a refreshable login inside its last five minutes,
 or expired, contacts the token host before any API request; one with two
 hours left does not unless the API answers 401; an access-only login never
-does; with the API answering, the run exits 1; and the credential file is never
-rewritten. It exits non-zero on any mismatch, which means
+does; with the API answering, the run sends a `POST /v1/messages` carrying the
+fake login's access token and exits 1; and the credential file is never
+rewritten. A run that could not start or died on a signal counts as a
+mismatch, and an unknown or empty `--cases` selection is refused before
+anything runs. It exits non-zero on any mismatch, which means
 `refreshHostClaudeLogin` and `TOKEN_REPLACEMENT_LEAD_MS` need re-reading.
 
 On every Codex bump, run `bun scripts/codex-access-only-auth-probe.ts --codex

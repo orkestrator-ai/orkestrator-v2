@@ -26,7 +26,12 @@
  * or expired, contacts the token host first (A, E, F); one with two hours
  * left does not (B, G) unless the API answers 401 (H); an access-only login
  * never does (C, D, I); with the API answering, the run exits 1; and the fake
- * credential file is never rewritten (every refresh is refused).
+ * credential file is never rewritten (every refresh is refused). Where the
+ * fake API is up (F–I) the CLI must also send it a `POST /v1/messages` carrying
+ * the fake access token as its bearer, so a CLI that refuses the command or the
+ * login locally cannot pass. A run that could not be started, or that died on a
+ * signal, is an infrastructure failure, never an acceptable "no success". An
+ * unknown or empty `--cases` selection is refused before anything runs.
  *
  *   bun scripts/claude-host-refresh-trigger-probe.ts --claude <binary> [--json] [--cases A,F]
  */
@@ -145,6 +150,9 @@ export const TOKEN_HOSTS: ReadonlySet<string> = new Set([
 /** The Messages API host, reached through the proxy when no base URL is set. */
 const API_HOST = "api.anthropic.com";
 
+/** The request the refresher's command sends; recorded as `METHOD /path`. */
+export const MESSAGES_REQUEST = "POST /v1/messages";
+
 export interface ProbeEvent {
   atMs: number;
   kind: "connect" | "api";
@@ -159,7 +167,7 @@ export interface CaseResult {
   /** Whether the first token-host contact came before the first API request. */
   tokenHostBeforeApi: boolean | null;
   apiRequests: string[];
-  /** The fake API saw the fake access token as the bearer. */
+  /** A Messages request to the fake API carried the fake access token as its bearer. */
   usedOAuthLogin: boolean;
   exit: string;
   elapsedMs: number;
@@ -199,10 +207,19 @@ export function judge(
   probe: ProbeCase,
   observed: Pick<
     CaseResult,
-    "tokenHostContacted" | "tokenHostBeforeApi" | "exit" | "credentialFileUnchanged"
+    | "tokenHostContacted"
+    | "tokenHostBeforeApi"
+    | "exit"
+    | "credentialFileUnchanged"
+    | "apiRequests"
+    | "usedOAuthLogin"
   >,
 ): string[] {
   const mismatches: string[] = [];
+  // Not a verdict on the CLI at all: the run never happened or was killed from outside.
+  if (observed.exit === "spawn-error" || observed.exit.startsWith("signal")) {
+    mismatches.push(`the CLI did not run to an outcome (${observed.exit})`);
+  }
   if (observed.tokenHostContacted !== probe.expectTokenHost) {
     mismatches.push(
       probe.expectTokenHost
@@ -223,6 +240,15 @@ export function judge(
   }
   if (probe.expectExit === "no-success" && observed.exit === "0") {
     mismatches.push("exited 0 with no reachable API");
+  }
+  if (probe.api !== "unreachable") {
+    // Without this a CLI that rejects the command or the login before any
+    // request would pass G and I on its exit code alone.
+    if (!observed.apiRequests.includes(MESSAGES_REQUEST)) {
+      mismatches.push(`expected ${MESSAGES_REQUEST} to the fake API, saw none`);
+    } else if (!observed.usedOAuthLogin) {
+      mismatches.push("the Messages request did not carry the fake OAuth access token");
+    }
   }
   if (!observed.credentialFileUnchanged) mismatches.push("the fake credential file was rewritten");
   return mismatches;
@@ -304,12 +330,12 @@ async function runCase(binary: string, probe: ProbeCase, timeoutMs: number): Pro
           port: 0,
           fetch(request) {
             const url = new URL(request.url);
-            events.push({
-              atMs: Date.now() - startedAt,
-              kind: "api",
-              target: `${request.method} ${url.pathname}`,
-            });
-            if (request.headers.get("authorization") === `Bearer ${credentials.accessToken}`)
+            const target = `${request.method} ${url.pathname}`;
+            events.push({ atMs: Date.now() - startedAt, kind: "api", target });
+            if (
+              target === MESSAGES_REQUEST &&
+              request.headers.get("authorization") === `Bearer ${credentials.accessToken}`
+            )
               bearerSeen = true;
             return probe.api === "401"
               ? Response.json(
@@ -386,6 +412,10 @@ async function runCase(binary: string, probe: ProbeCase, timeoutMs: number): Pro
       tokenHostBeforeApi: firstToken ? (firstApi ? firstToken.atMs <= firstApi.atMs : true) : null,
       exit: run.exit,
       credentialFileUnchanged: readFileSync(credentialFile, "utf8") === credentials.text,
+      apiRequests: [
+        ...new Set(events.filter((event) => event.kind === "api").map((event) => event.target)),
+      ],
+      usedOAuthLogin: bearerSeen,
     };
     const mismatches = judge(probe, observed);
     return {
@@ -395,10 +425,6 @@ async function runCase(binary: string, probe: ProbeCase, timeoutMs: number): Pro
           events.filter((event) => event.kind === "connect").map((event) => hostOf(event.target)),
         ),
       ],
-      apiRequests: [
-        ...new Set(events.filter((event) => event.kind === "api").map((event) => event.target)),
-      ],
-      usedOAuthLogin: bearerSeen,
       elapsedMs: run.elapsedMs,
       refreshDebugLines,
       matches: mismatches.length === 0,
@@ -412,10 +438,29 @@ async function runCase(binary: string, probe: ProbeCase, timeoutMs: number): Pro
   }
 }
 
-function parseArgs(argv: string[]): {
+/**
+ * The cases a `--cases` list names, in table order; every case when there is
+ * no list. An unknown name or an empty list throws, so a mistyped selection
+ * cannot report a pass for cases that never ran.
+ */
+export function selectCases(requested: readonly string[] | undefined): ProbeCase[] {
+  if (requested === undefined) return [...PROBE_CASES];
+  const known = new Set(PROBE_CASES.map((probe) => probe.name));
+  const unknown = requested.filter((name) => !known.has(name));
+  if (unknown.length > 0) {
+    throw new Error(
+      `--cases names unknown case${unknown.length === 1 ? "" : "s"} ${unknown.map((name) => JSON.stringify(name)).join(", ")}; known: ${[...known].join(",")}`,
+    );
+  }
+  const selected = PROBE_CASES.filter((probe) => requested.includes(probe.name));
+  if (selected.length === 0) throw new Error("--cases selects no case");
+  return selected;
+}
+
+export function parseArgs(argv: string[]): {
   claude: string;
   json: boolean;
-  cases: string[] | undefined;
+  cases: ProbeCase[];
   timeoutMs: number;
 } {
   let claude: string | undefined;
@@ -423,22 +468,30 @@ function parseArgs(argv: string[]): {
   let cases: string[] | undefined;
   let timeoutMs = CLAUDE_HOST_REFRESH_TIMEOUT_MS;
   for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    if (flag === "--json") {
+      json = true;
+      continue;
+    }
+    if (flag !== "--claude" && flag !== "--cases" && flag !== "--timeout-ms") {
+      throw new Error(`unknown argument ${JSON.stringify(flag)}`);
+    }
     const value = argv[index + 1];
-    if (argv[index] === "--claude" && value) {
-      claude = resolve(value);
-      index += 1;
-    } else if (argv[index] === "--cases" && value) {
-      cases = value.split(",").map((entry) => entry.trim().toUpperCase());
-      index += 1;
-    } else if (argv[index] === "--timeout-ms" && value) {
-      timeoutMs = Number(value);
-      index += 1;
-    } else if (argv[index] === "--json") json = true;
+    // `--cases ""` must not fall back to every case, so only a missing value is refused here.
+    if (value === undefined || value.startsWith("--")) throw new Error(`${flag} needs a value`);
+    index += 1;
+    if (flag === "--claude") claude = resolve(value);
+    else if (flag === "--cases")
+      cases = value
+        .split(",")
+        .map((entry) => entry.trim().toUpperCase())
+        .filter((entry) => entry.length > 0);
+    else timeoutMs = Number(value);
   }
   if (!claude) throw new Error("--claude <path to the pinned claude binary> is required");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
     throw new Error("--timeout-ms must be positive");
-  return { claude, json, cases, timeoutMs };
+  return { claude, json, cases: selectCases(cases), timeoutMs };
 }
 
 async function main(): Promise<void> {
@@ -453,9 +506,7 @@ async function main(): Promise<void> {
     child.on("close", () => done(output.trim()));
     child.on("error", () => done("unknown"));
   });
-  const selected = PROBE_CASES.filter(
-    (probe) => !options.cases || options.cases.includes(probe.name),
-  );
+  const selected = options.cases;
   // Each case has its own proxy, API and directories, so they run together:
   // the unreachable-API cases otherwise cost the refresher's whole budget each.
   const results = await Promise.all(
@@ -473,7 +524,7 @@ async function main(): Promise<void> {
           `\n[${result.name}] ${probe.refreshable ? "refreshable" : "access-only"}, ${Math.round(probe.expiresInMs / MINUTE_MS)} min to expiry, API ${probe.api}`,
           `  token host contacted: ${result.tokenHostContacted}${result.tokenHostContacted ? ` (before any API request: ${result.tokenHostBeforeApi})` : ""}`,
           `  hosts tried through the proxy: ${result.hostsTried.join(", ") || "(none)"}`,
-          `  fake API requests: ${result.apiRequests.join(", ") || "(none)"}${result.apiRequests.length > 0 ? `; OAuth bearer used: ${result.usedOAuthLogin}` : ""}`,
+          `  fake API requests: ${result.apiRequests.join(", ") || "(none)"}${result.apiRequests.length > 0 ? `; Messages request carried the fake bearer: ${result.usedOAuthLogin}` : ""}`,
           `  exit: ${result.exit} after ${(result.elapsedMs / 1000).toFixed(1)} s; credential file unchanged: ${result.credentialFileUnchanged}`,
           `  refresh debug lines: ${result.refreshDebugLines.join(" | ") || "(none)"}`,
           `  ${result.matches ? "as expected" : `MISMATCH: ${result.mismatches.join("; ")}`}`,

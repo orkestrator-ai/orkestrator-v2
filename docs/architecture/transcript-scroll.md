@@ -394,11 +394,6 @@ runner read them; nothing else does.
   not searched, so inner virtualization cannot shift find's pairing.
 - Exact reading-line preservation inside a reflowed paragraph is block-level:
   a prose part keeps its top, not a specific word.
-- The native tab's background poll (every 500–1500 ms) retires a history page
-  still in flight (`useNativeAgentSession`'s refresh sequence), so a page
-  slower than the poll never lands and the reader has to ask again. That is the
-  session hook's paging policy, predating this design; the "reader moves while
-  a page loads" browser test therefore runs against the reviewer view.
 
 ## Maintaining the Virtuoso patch
 

@@ -357,6 +357,74 @@ describe("useNativeAgentSession history paging", () => {
     expect(result.current.projection?.title).toBe("stopped");
     expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
   });
+
+  /**
+   * Starts a page that is held until the returned release is called, and
+   * waits until its request has gone out.
+   */
+  async function holdPage(
+    result: Awaited<ReturnType<typeof renderConnectedSession>>["result"],
+    messages: TestMessage[],
+  ) {
+    const gate = Promise.withResolvers<void>();
+    messagePages = [
+      async () => {
+        await gate.promise;
+        return page(messages);
+      },
+    ];
+    let paging: Promise<unknown> = Promise.resolve();
+    act(() => {
+      paging = result.current.loadEarlierMessages();
+    });
+    await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+    return async () => {
+      await act(async () => {
+        gate.resolve();
+        await paging;
+      });
+    };
+  }
+
+  // The native tab polls every 500–1500 ms, so a page slower than that used to
+  // be retired by the poll and the reader's click did nothing (flakes 0483, 1602).
+  test("a background poll that lands while a page is in flight keeps the page", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The poll brings a new live row; the cursor the page was fetched behind holds.
+    transcriptUpdates = [() => tail("transcript-2", [...liveTail, message("m5")])];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+    expect(ids(result.current.projection)).toEqual(["m3", "m4", "m5"]);
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeUndefined();
+  });
+
+  test("a page fetched behind a cursor a poll has since replaced is discarded", async () => {
+    const { result } = await renderConnectedSession(tail("transcript-1", liveTail));
+    const release = await holdPage(result, [message("m1"), message("m2")]);
+    // The history rotated: the page describes rows of a history no longer shown.
+    transcriptUpdates = [
+      () =>
+        tail("transcript-2", liveTail, {
+          historyEpoch: "epoch-2",
+          cursor: "cursor-epoch-2",
+        }),
+    ];
+    await act(async () => {
+      await result.current.refresh({ manual: false });
+    });
+
+    await release();
+
+    expect(ids(result.current.projection)).toEqual(["m3", "m4"]);
+    expect(syncCache()?.historyCursor).toBe("cursor-epoch-2");
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
 });
 
 describe("useNativeAgentSession history client budgets", () => {

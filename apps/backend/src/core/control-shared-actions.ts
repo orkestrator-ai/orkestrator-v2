@@ -31,7 +31,19 @@ import {
   claudeModelReasoningIds,
 } from "@orkestrator/protocol/claude-model-catalog";
 
-export type ControlMcpInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+/**
+ * Per-call options of an invoker. `signal` reaches the command as its
+ * invocation's signal (`CommandInvocation.signal`); a read routed to
+ * another node aborts its request there, which the node sees as the client
+ * going away (a routed write runs to its answer). A wrapper that adds checks passes the options on unchanged.
+ */
+export type InvokeOptions = { readonly signal?: AbortSignal };
+
+export type ControlMcpInvoker = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+  options?: InvokeOptions,
+) => Promise<T>;
 /** Invokes a registered backend command. */
 export type CommandInvoker = ControlMcpInvoker;
 

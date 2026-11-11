@@ -28,6 +28,7 @@ import { randomBytes } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import { runWithTimeout } from "../abortable-timing.js";
 import {
   MEDIA_SNIFF_BYTES,
   isServedMediaMime,
@@ -80,8 +81,12 @@ export interface MintMediaInput {
   mimeType: string;
   byteLength: number;
   identity: string;
-  /** Re-opens the file through the authorized, confined reader. */
-  resolve: () => Promise<OpenedMediaFile>;
+  /**
+   * Re-opens the file through the authorized, confined reader. `signal`
+   * aborts when the route stops waiting; a handle opened after that is closed
+   * by the route, so a resolver need not close one itself.
+   */
+  resolve: (signal: AbortSignal) => Promise<OpenedMediaFile>;
   /** Re-checked before every response; `false`, a rejection or a timeout revokes. */
   authorize: () => Promise<boolean>;
   idleTtlMs?: number;
@@ -92,7 +97,7 @@ interface MediaCapability {
   mimeType: string;
   byteLength: number;
   identity: string;
-  resolve: () => Promise<OpenedMediaFile>;
+  resolve: (signal: AbortSignal) => Promise<OpenedMediaFile>;
   authorize: () => Promise<boolean>;
   idleTtlMs: number;
   expiresAt: number;
@@ -144,6 +149,42 @@ function token(bytes: number): string {
   return randomBytes(bytes).toString("base64url");
 }
 
+/**
+ * Opens a capability's file within `timeoutMs`. The deadline aborts the
+ * resolver's signal, and a handle that opens after the route gave up is
+ * closed rather than leaked.
+ */
+export async function resolveMediaWithin(
+  resolve: (signal: AbortSignal) => Promise<OpenedMediaFile>,
+  timeoutMs: number,
+): Promise<OpenedMediaFile> {
+  let gaveUp = false;
+  let opened: OpenedMediaFile | undefined;
+  try {
+    return await runWithTimeout(
+      async (signal) => {
+        const file = await resolve(signal);
+        if (gaveUp) {
+          await file.handle.close().catch(() => undefined);
+          throw new Error("opened after the deadline");
+        }
+        opened = file;
+        return file;
+      },
+      { timeoutMs, message: "timeout" },
+    );
+  } catch (error) {
+    gaveUp = true;
+    // Opened as the deadline fired: the route never sees this handle.
+    await opened?.handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Bounds an authorization check. It reads in-process state and holds nothing
+ * to release, so the bound decides the answer rather than cancelling work.
+ */
 async function withTimeout<T>(work: () => Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -335,7 +376,7 @@ export class MediaCapabilityTable {
         return;
       }
       try {
-        opened = await withTimeout(entry.resolve, MEDIA_RESOLVE_TIMEOUT_MS);
+        opened = await resolveMediaWithin(entry.resolve, MEDIA_RESOLVE_TIMEOUT_MS);
       } catch {
         // Moved, deleted, or no longer confined: an honest "gone".
         this.revoke(entry.generation);

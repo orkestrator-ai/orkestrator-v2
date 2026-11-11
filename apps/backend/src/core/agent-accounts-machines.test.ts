@@ -112,6 +112,39 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   expect(result.machines[1]?.snapshot).toEqual(LEAF_SNAPSHOT);
 });
 
+test("a machine past its deadline has both routed reads aborted", async () => {
+  const signals = new Map<string, AbortSignal | undefined>();
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "node-self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: [{ nodeId: "node-slow", displayName: "Slow", enabled: true }],
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: (args: { command: string }, options?: { signal?: AbortSignal }) => {
+          signals.set(args.command, options?.signal);
+          return new Promise(() => undefined);
+        },
+      } as never,
+    }),
+    { timeoutMs: 20, readSignIns },
+  );
+  expect(result.machines.map((machine) => machine.state)).toEqual(["ok", "unavailable"]);
+  expect([...signals.keys()].sort()).toEqual(["list_agent_accounts", "read_host_agent_sign_ins"]);
+  expect(signals.get("list_agent_accounts")?.aborted).toBe(true);
+  // The sign-in read has its own deadline; it is aborted once that passes.
+  const signIns = signals.get("read_host_agent_sign_ins")!;
+  if (!signIns.aborted) {
+    await new Promise<void>((resolve) =>
+      signIns.addEventListener("abort", () => resolve(), { once: true }),
+    );
+  }
+  expect(signIns.aborted).toBe(true);
+});
+
 test("a malformed peer row becomes an error cell instead of reaching Settings", async () => {
   const result = await listMachineAgentAccounts(
     context({

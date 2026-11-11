@@ -159,8 +159,8 @@ export class OpenCode2McpServers {
   }
 
   /** The user's servers on this location, in the shared shape; Orkestrator's are left out. */
-  async userServers(): Promise<NativeAgentMcpServer[]> {
-    const servers = await this.client.listMcpServers();
+  async userServers(signal?: AbortSignal): Promise<NativeAgentMcpServer[]> {
+    const servers = await this.client.listMcpServers(signal);
     return servers
       .filter((server) => !isOrkestratorOpenCode2McpServer(server.name))
       .slice(0, MAX_LISTED_SERVERS)

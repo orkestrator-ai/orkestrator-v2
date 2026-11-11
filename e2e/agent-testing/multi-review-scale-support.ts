@@ -5,9 +5,11 @@
  * model each platform runs, and how much memory the profile backend's whole
  * process tree holds (the backend plus the bridges and agent CLIs it started).
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { piProviderConfig, profilePiAgentDirectory } from "../../scripts/pi-fake-model-shared";
 
@@ -150,6 +152,84 @@ export interface FanoutStats {
 }
 
 /**
+ * The fan-out caps a profile runs with: `DEFAULT_REVIEW_ADMISSION_CONCURRENCY`
+ * and `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` in
+ * `apps/backend/src/core/review-fanout-scheduler.ts`. Copied for the same
+ * reason as the fixture paths; the support test pins them equal.
+ */
+export const SCALE_ADMISSION_CAP = 4;
+export const SCALE_PROVIDER_CAP = 4;
+
+/**
+ * The recorder's stats, or undefined when it wrote none. The recorder writes
+ * only after counting a pass, so a run that fails before its first pass
+ * (preparation failed, the settle wait ran out) leaves no file; that must
+ * surface as a named check after the run's diagnostics, not as ENOENT.
+ */
+export async function readFanoutStats(file: string): Promise<FanoutStats | undefined> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  return JSON.parse(text) as FanoutStats;
+}
+
+/** What the concurrency check reads from a settled scale run. */
+export interface ScaleConcurrencyInput {
+  stats: FanoutStats | undefined;
+  runId: string;
+  /** Each reviewer's platform, in panel order (`scalePanelPlatforms`). */
+  panel: readonly AgentPlatform[];
+  admissionCap?: number;
+  providerCap?: number;
+}
+
+/**
+ * Why the recorded scheduler peaks do not show the caps holding and the panel
+ * running in parallel, empty when they do. Both bounds are checked: a peak
+ * above a cap is a broken limit, and a peak below what the scheduler's
+ * synchronous first fill starts (`runBoundedTasks` starts every task that fits
+ * before any settles) means it serialized work or the recorder dropped events.
+ * Every panel platform ran at least one task, so each must have a peak.
+ */
+export function scaleConcurrencyProblems(input: ScaleConcurrencyInput): string[] {
+  const admissionCap = input.admissionCap ?? SCALE_ADMISSION_CAP;
+  const providerCap = input.providerCap ?? SCALE_PROVIDER_CAP;
+  const { stats } = input;
+  if (!stats) return ["the backend recorded no fan-out pass (no stats file)"];
+  const problems: string[] = [];
+  if (stats.runId !== input.runId) {
+    problems.push(`the fan-out stats belong to run ${stats.runId}, not ${input.runId}`);
+  }
+  if (!(stats.passes > 0)) problems.push("the backend recorded no fan-out pass");
+  const perPlatform = new Map<AgentPlatform, number>();
+  for (const platform of input.panel) {
+    perPlatform.set(platform, (perPlatform.get(platform) ?? 0) + 1);
+  }
+  const firstFill = Math.min(
+    admissionCap,
+    Array.from(perPlatform.values()).reduce((sum, count) => sum + Math.min(count, providerCap), 0),
+  );
+  if (stats.maxAdmission > admissionCap) {
+    problems.push(`admission peak ${stats.maxAdmission} exceeds the cap ${admissionCap}`);
+  }
+  if (stats.maxAdmission < firstFill) {
+    problems.push(`admission peak ${stats.maxAdmission} is below the first fill ${firstFill}`);
+  }
+  for (const platform of perPlatform.keys()) {
+    const peak = stats.maxByPlatform[platform] ?? 0;
+    if (peak > providerCap) {
+      problems.push(`${platform} peak ${peak} exceeds the provider cap ${providerCap}`);
+    }
+    if (peak < 1) problems.push(`${platform} has no recorded concurrency peak`);
+  }
+  return problems;
+}
+
+/**
  * The credential-free mode (`ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1`):
  * every reviewer, preparation, consolidation and Fix runs on the profile's
  * real Pi bridge and Pi SDK against the scripted loopback model
@@ -288,4 +368,58 @@ export async function runTeardown(
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "teardown failed");
+}
+
+/**
+ * Starts the scale case's loopback model (`auto-pipeline-fake-model.ts`, or
+ * `script` in tests) and waits for the origin it prints first. A model that
+ * stays alive without printing is killed at `startupTimeoutMs`, so the case
+ * fails fast rather than at the test's 45-minute timeout.
+ */
+export async function startScaleFakeModel(
+  options: { script?: string; startupTimeoutMs?: number } = {},
+): Promise<{ origin: string; child: ChildProcess }> {
+  const script = options.script ?? path.join(import.meta.dirname, "auto-pipeline-fake-model.ts");
+  const startupTimeoutMs = options.startupTimeoutMs ?? 30_000;
+  const child = spawn("bun", [script], { stdio: ["ignore", "pipe", "inherit"] });
+  const lines = createInterface({ input: child.stdout! });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const origin = await new Promise<string>((resolve, reject) => {
+      lines.once("line", resolve);
+      child.once("error", reject);
+      child.once("exit", () => reject(new Error("the fake model exited before it listened")));
+      timer = setTimeout(
+        () => reject(new Error(`the fake model printed no origin within ${startupTimeoutMs} ms`)),
+        startupTimeoutMs,
+      );
+    });
+    return { origin, child };
+  } catch (error) {
+    lines.close();
+    await stopChild(child);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Stops a child this case started through its own handle: SIGTERM, then
+ * SIGKILL after `graceMs`, so a child that ignores SIGTERM cannot stall the
+ * teardown.
+ */
+export function stopChild(child: ChildProcess, graceMs = 5_000): Promise<void> {
+  // A child that never spawned has no pid and emits no exit.
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const escalate = setTimeout(() => child.kill("SIGKILL"), graceMs);
+    child.once("exit", () => {
+      clearTimeout(escalate);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
 }

@@ -4,7 +4,7 @@ import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
-import { agentTestFanoutStats } from "./agent-test-fanout-stats.js";
+import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
 import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
@@ -1515,10 +1515,6 @@ export class OrkestratorBackend {
         setKeyInformationToolHost?: AgentToolsServer["setKeyInformationToolHost"];
       }
     ).setKeyInformationToolHost?.(this.buildPipelines.keyInformationHost());
-    const fanoutStats = agentTestFanoutStats({
-      dataDir: options.dataDir,
-      runtimeFlavor: options.runtimeFlavor,
-    });
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1531,7 +1527,10 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         // Agent-test profiles only: the fan-out's peak concurrency for the live
         // scale case. Undefined (the no-op observer) everywhere else.
-        ...(fanoutStats ? { efficiency: fanoutStats } : {}),
+        ...multiReviewEfficiencyOption({
+          dataDir: options.dataDir,
+          runtimeFlavor: options.runtimeFlavor,
+        }),
         providerDependencies: {
           planUsage: this.runtime.accounts.planUsage,
           usageLimitStops: this.accountAutoSwitch,

@@ -10,6 +10,10 @@ import {
   FANOUT_STATS_MARKER,
 } from "../../apps/backend/src/core/agent-test-fanout-stats";
 import {
+  DEFAULT_REVIEW_ADMISSION_CONCURRENCY,
+  DEFAULT_REVIEW_PROVIDER_CONCURRENCY,
+} from "../../apps/backend/src/core/review-fanout-scheduler";
+import {
   FANOUT_STATS_DIR,
   FANOUT_STATS_FILE_NAME,
   FANOUT_STATS_MARKER_NAME,
@@ -29,6 +33,13 @@ import {
   type ScaleFakeOutcome,
   scaleModelVariable,
   scalePanelPlatforms,
+  readFanoutStats,
+  SCALE_ADMISSION_CAP,
+  SCALE_PROVIDER_CAP,
+  scaleConcurrencyProblems,
+  type FanoutStats,
+  startScaleFakeModel,
+  stopChild,
 } from "./multi-review-scale-support";
 
 describe("scale panel platforms", () => {
@@ -117,6 +128,11 @@ describe("process-tree RSS", () => {
     expect(sample.backend).toBeGreaterThan(0);
     expect(sample.tree).toBeGreaterThanOrEqual(sample.backend);
   });
+});
+
+test("the spec's caps match the scheduler's defaults", () => {
+  expect(SCALE_ADMISSION_CAP).toBe(DEFAULT_REVIEW_ADMISSION_CONCURRENCY);
+  expect(SCALE_PROVIDER_CAP).toBe(DEFAULT_REVIEW_PROVIDER_CONCURRENCY);
 });
 
 test("the spec's fixture paths match the backend recorder's", () => {
@@ -279,4 +295,145 @@ describe("scale teardown", () => {
     expect((error as AggregateError).errors.map((item: Error) => item.message)).toEqual(["a", "b"]);
     await expect(runTeardown([() => undefined])).resolves.toBeUndefined();
   });
+});
+
+describe("fan-out stats", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  const stats = (overrides: Partial<FanoutStats> = {}): FanoutStats => ({
+    runId: "run",
+    passes: 2,
+    maxAdmission: 4,
+    maxByPlatform: { pi: 4 },
+    ...overrides,
+  });
+  const panel = scalePanelPlatforms(["pi"], 8);
+
+  test("reads a missing stats file as no stats, not a thrown ENOENT", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "mr-scale-stats-"));
+    roots.push(root);
+    const file = path.join(root, FANOUT_STATS_FILE_NAME);
+    expect(await readFanoutStats(file)).toBeUndefined();
+    writeFileSync(file, JSON.stringify(stats()));
+    expect(await readFanoutStats(file)).toEqual(stats());
+  });
+
+  test("accepts peaks at the caps and names missing stats", () => {
+    expect(scaleConcurrencyProblems({ stats: stats(), runId: "run", panel })).toEqual([]);
+    expect(scaleConcurrencyProblems({ stats: undefined, runId: "run", panel })).toEqual([
+      "the backend recorded no fan-out pass (no stats file)",
+    ]);
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ runId: "other", passes: 0 }),
+        runId: "run",
+        panel,
+      }),
+    ).toEqual([
+      "the fan-out stats belong to run other, not run",
+      "the backend recorded no fan-out pass",
+    ]);
+  });
+
+  test("fails a peak above either cap", () => {
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ maxAdmission: 5, maxByPlatform: { pi: 5 } }),
+        runId: "run",
+        panel,
+      }),
+    ).toEqual(["admission peak 5 exceeds the cap 4", "pi peak 5 exceeds the provider cap 4"]);
+  });
+
+  test("fails a serialized scheduler and a platform the recorder dropped", () => {
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ maxAdmission: 1, maxByPlatform: { pi: 1 } }),
+        runId: "run",
+        panel,
+      }),
+    ).toEqual(["admission peak 1 is below the first fill 4"]);
+    const mixed = scalePanelPlatforms(["claude", "codex"], 8);
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ maxByPlatform: { claude: 4 } }),
+        runId: "run",
+        panel: mixed,
+      }),
+    ).toEqual(["codex has no recorded concurrency peak"]);
+  });
+
+  test("the first fill is bounded by the panel and the per-provider cap", () => {
+    const small = scalePanelPlatforms(["pi"], 2);
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ maxAdmission: 2, maxByPlatform: { pi: 2 } }),
+        runId: "run",
+        panel: small,
+      }),
+    ).toEqual([]);
+    expect(
+      scaleConcurrencyProblems({
+        stats: stats({ maxAdmission: 2, maxByPlatform: { pi: 2 } }),
+        runId: "run",
+        panel,
+        admissionCap: 8,
+        providerCap: 2,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("fake model process", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  const script = (body: string) => {
+    const root = mkdtempSync(path.join(tmpdir(), "mr-scale-child-"));
+    roots.push(root);
+    const file = path.join(root, "model.ts");
+    writeFileSync(file, body);
+    return file;
+  };
+  const exited = (child: { exitCode: number | null; signalCode: string | null }) =>
+    child.exitCode !== null || child.signalCode !== null;
+
+  test("returns the origin the model prints first", async () => {
+    const started = await startScaleFakeModel({
+      script: script('console.log("http://127.0.0.1:1"); setInterval(() => {}, 1000);\n'),
+    });
+    expect(started.origin).toBe("http://127.0.0.1:1");
+    await stopChild(started.child);
+    expect(exited(started.child)).toBe(true);
+  }, 15_000);
+
+  test("a model that never prints fails fast and is stopped", async () => {
+    const startedAt = Date.now();
+    await expect(
+      startScaleFakeModel({
+        script: script("setInterval(() => {}, 1000);\n"),
+        startupTimeoutMs: 500,
+      }),
+    ).rejects.toThrow(/printed no origin within 500 ms/);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 15_000);
+
+  test("a model that exits early is reported, not awaited", async () => {
+    await expect(startScaleFakeModel({ script: script("process.exit(3);\n") })).rejects.toThrow(
+      /exited before it listened/,
+    );
+  }, 15_000);
+
+  test("stopping escalates to SIGKILL when the model ignores SIGTERM", async () => {
+    const started = await startScaleFakeModel({
+      script: script(
+        'process.on("SIGTERM", () => {}); console.log("http://127.0.0.1:2"); setInterval(() => {}, 1000);\n',
+      ),
+    });
+    await stopChild(started.child, 300);
+    expect(started.child.signalCode).toBe("SIGKILL");
+  }, 15_000);
 });

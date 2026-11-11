@@ -21,9 +21,11 @@ import { referenceConsolidation } from "./multi-review-evaluation.js";
 import {
   claudeConsolidationArgs,
   codexConsolidationArgs,
+  consolidationArgsProblem,
   executableVersion,
   parseClaudeResult,
   parseCodexResult,
+  resolveEvaluationExecutable,
   runConsolidation,
 } from "../../../../scripts/multi-review-evaluation-drivers.js";
 
@@ -57,6 +59,16 @@ function fakeCodex(directory: string, events: string): string {
     `#!/bin/sh
 set -eu
 if [ "$1" = "--version" ]; then echo "codex-cli 0.0.0-fake"; exit 0; fi
+for argument in "$@"; do
+  if [ "$argument" = "--help" ]; then
+    if [ -n "\${FAKE_REJECT:-}" ]; then
+      echo "error: unexpected argument '$FAKE_REJECT' found" >&2
+      exit 2
+    fi
+    echo "Usage: codex exec [OPTIONS] [PROMPT]"
+    exit 0
+  fi
+done
 out=""
 previous=""
 for argument in "$@"; do
@@ -231,6 +243,50 @@ async function waitUntilGone(pid: number): Promise<boolean> {
   return !processAlive(pid);
 }
 
+describe("argument check", () => {
+  test("passes when the CLI's parser accepts the argument set, and names a rejection", async () => {
+    const record = temporaryDirectory();
+    const codex = fakeCodex(temporaryDirectory(), COMPLETED_EVENTS);
+    const env = { ...process.env, FAKE_RECORD: record };
+    expect(await consolidationArgsProblem("codex", codex, { env })).toBeUndefined();
+    expect(
+      await consolidationArgsProblem("codex", codex, {
+        env: { ...env, FAKE_REJECT: "--strict-config" },
+      }),
+    ).toBe("exit 2: error: unexpected argument '--strict-config' found");
+    // The check prints usage only: no turn ran.
+    expect(readdirSync(record)).toEqual([]);
+  });
+
+  test("runs the exact consolidation arguments with --help in place of the prompt", async () => {
+    const bin = temporaryDirectory();
+    const file = path.join(bin, "codex");
+    writeFileSync(file, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$FAKE_RECORD/argv"\n');
+    chmodSync(file, 0o755);
+    const record = temporaryDirectory();
+    await consolidationArgsProblem("codex", file, {
+      model: "gpt-x",
+      env: { ...process.env, FAKE_RECORD: record },
+    });
+    const argv = readFileSync(path.join(record, "argv"), "utf8").trim().split("\n");
+    expect(argv.at(-1)).toBe("--help");
+    expect(argv).not.toContain("-");
+    const expected = codexConsolidationArgs({
+      cwd: "c",
+      model: "gpt-x",
+      schemaPath: "s",
+      outputPath: "o",
+    }).slice(0, -1);
+    // Same flags in the same order; only the path values differ.
+    const flags = (list: string[]) => list.filter((value) => value.startsWith("--"));
+    expect(flags(argv.slice(0, -1))).toEqual(flags(expected));
+  });
+
+  test("claude has no check and spawns nothing", async () => {
+    expect(await consolidationArgsProblem("claude", "/nonexistent/claude")).toBeUndefined();
+  });
+});
+
 describe("subprocess bounds", () => {
   for (const provider of ["claude", "codex"] as const) {
     test(`a ${provider} CLI that ignores SIGTERM times out, is killed and leaves no directory`, async () => {
@@ -393,6 +449,98 @@ describe("live subcommand", () => {
       expect(row.recalled).toBe(row.expected);
     }, 30_000);
   }
+
+  test("resolves a relative executable against the script's directory, not the turn's", () => {
+    expect(resolveEvaluationExecutable("codex", "/work")).toBe("codex");
+    expect(resolveEvaluationExecutable("./bin/codex", "/work")).toBe("/work/bin/codex");
+    expect(resolveEvaluationExecutable("bin/claude", "/work")).toBe("/work/bin/claude");
+    expect(resolveEvaluationExecutable("/opt/codex", "/work")).toBe("/opt/codex");
+  });
+
+  for (const [provider, via] of [
+    ["codex", "--bin"],
+    ["claude", "CLAUDE_CLI_PATH"],
+  ] as const) {
+    test(`runs a ${provider} turn from a relative ${via} path`, () => {
+      const bin = temporaryDirectory();
+      const record = temporaryDirectory();
+      const out = temporaryDirectory();
+      const answerPath = path.join(temporaryDirectory(), "answer.json");
+      writeFileSync(answerPath, JSON.stringify(reference));
+      const executable = provider === "codex" ? fakeCodex(bin, COMPLETED_EVENTS) : fakeClaude(bin);
+      const relative = `./${path.relative(bin, executable)}`;
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          path.join(repoRoot, "scripts/multi-review-evaluation.ts"),
+          "live",
+          "--provider",
+          provider,
+          ...(via === "--bin" ? ["--bin", relative] : []),
+          "--cases",
+          "late-unique",
+          "--variants",
+          "compact",
+          "--out",
+          out,
+        ],
+        {
+          cwd: bin,
+          env: {
+            ...process.env,
+            FAKE_RECORD: record,
+            FAKE_ANSWER: answerPath,
+            ...(via === "--bin" ? {} : { [via]: relative }),
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      const [row] = JSON.parse(
+        readFileSync(path.join(out, "live", provider, "scores.json"), "utf8"),
+      );
+      expect(row).toMatchObject({ provider, ok: true, schemaValid: true });
+      // The turn ran in its own temporary directory, not where the path was given.
+      expect(readFileSync(path.join(record, "cwd"), "utf8").trim()).not.toBe(bin);
+    }, 30_000);
+  }
+
+  test("stops before any turn when the native CLI rejects the argument set", () => {
+    const record = temporaryDirectory();
+    const out = temporaryDirectory();
+    const bin = fakeCodex(temporaryDirectory(), COMPLETED_EVENTS);
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "scripts/multi-review-evaluation.ts",
+        "live",
+        "--provider",
+        "codex",
+        "--bin",
+        bin,
+        "--cases",
+        "late-unique",
+        "--out",
+        out,
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          FAKE_RECORD: record,
+          FAKE_ANSWER: "/nonexistent",
+          FAKE_REJECT: "--ephemeral",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.toString()).toContain("unexpected argument '--ephemeral'");
+    expect(readdirSync(record)).toEqual([]);
+    expect(readdirSync(out)).toEqual([]);
+  }, 30_000);
 
   test("rejects an unknown provider or case before calling any CLI", () => {
     const record = temporaryDirectory();

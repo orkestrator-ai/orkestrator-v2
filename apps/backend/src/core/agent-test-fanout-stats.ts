@@ -59,6 +59,18 @@ export function agentTestFanoutStats(
   return createFanoutStatsRecorder(path.join(options.dataDir, FANOUT_STATS_FIXTURE_DIR));
 }
 
+/**
+ * Multi Review's `efficiency` option for this backend, as `index.ts` spreads
+ * it into `MultiReviewService`: the recorder in an isolated agent-test
+ * profile, nothing (the no-op observer) anywhere else.
+ */
+export function multiReviewEfficiencyOption(options: AgentTestFanoutStatsOptions): {
+  efficiency?: MultiReviewEfficiencyObserver;
+} {
+  const recorder = agentTestFanoutStats(options);
+  return recorder ? { efficiency: recorder } : {};
+}
+
 /** The recorder itself, writing under `directory`. Exported for tests. */
 export function createFanoutStatsRecorder(directory: string): MultiReviewEfficiencyObserver {
   const marker = path.join(directory, FANOUT_STATS_MARKER);

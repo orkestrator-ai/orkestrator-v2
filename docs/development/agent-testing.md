@@ -1028,8 +1028,12 @@ platform's model from `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL` (a
 picker label prefix) or its catalogue's first entry. It arms the backend's
 agent-test fan-out stats recorder (`agent-test-fanout-stats.ts`, a marker file
 under the profile's data directory, honoured only by an agent-test backend), so
-the scheduler's own per-pass peaks are asserted against the admission and
-per-provider caps (4 each), not sampled. Once a second it samples the
+the scheduler's own per-pass peaks are checked, not sampled, from both sides:
+no peak above the admission or per-provider cap (4 each, pinned to the
+scheduler's defaults by `multi-review-scale-support.test.ts`), an admission
+peak no lower than the scheduler's first fill, and a peak for every panel
+platform. A run that settles before any fan-out pass still writes
+`scale.json`, then fails naming the missing stats. Once a second it samples the
 backend's RSS, the RSS of the backend's whole process tree (bridges and agent
 CLIs included, read-only `ps`), and the reviewers setting up and running. It
 writes the platforms, models, reviewer latency (p50, p95, max, and the max per

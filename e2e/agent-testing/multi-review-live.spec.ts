@@ -28,7 +28,8 @@
  * default `claude,codex`; each must be enabled and signed in on the profile).
  * It arms the backend's agent-test fan-out stats recorder
  * (`apps/backend/src/core/agent-test-fanout-stats.ts`) and asserts the
- * scheduler's own per-pass peaks against the admission and per-provider caps.
+ * scheduler's own per-pass peaks against the admission and per-provider caps,
+ * from both sides (`scaleConcurrencyProblems`).
  * Once a second it samples the backend's RSS, the RSS of the backend's whole
  * process tree (bridges and agent CLIs included), and how many reviewers are
  * setting up and running. It records the platforms, models, tail latency,
@@ -54,7 +55,6 @@ import { expect, test, type Page } from "./browser-test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
@@ -65,16 +65,20 @@ import {
   FANOUT_STATS_DIR,
   FANOUT_STATS_FILE_NAME,
   FANOUT_STATS_MARKER_NAME,
-  type FanoutStats,
   parseScalePlatforms,
   pickScaleModel,
   profileRssMiB,
+  readFanoutStats,
   runTeardown,
+  SCALE_ADMISSION_CAP,
   SCALE_FAKE_PI_MODEL_REF,
   SCALE_FAKE_PLATFORMS,
+  scaleConcurrencyProblems,
   scaleFakeOutcomeProblems,
   scaleModelVariable,
   scalePanelPlatforms,
+  startScaleFakeModel,
+  stopChild,
   writeScaleFakePiModels,
 } from "./multi-review-scale-support";
 import { devTestRestartArgs } from "./profile-restart-args";
@@ -110,9 +114,6 @@ const CLAUDE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODE
 const CODEX_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL ?? "GPT-6-Luna";
 const SCALE_REVIEWERS = Number(process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE ?? "0");
 const SCALE_FAKE_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL === "1";
-/** `DEFAULT_REVIEW_ADMISSION_CONCURRENCY` and `DEFAULT_REVIEW_PROVIDER_CONCURRENCY`. */
-const SCALE_ADMISSION_CAP = 4;
-const SCALE_PROVIDER_CAP = 4;
 /** A real review on small models settles in a few minutes; allow for host load. */
 const SETTLE_TIMEOUT_MS = 8 * 60_000;
 const SETTLED_PHASES = new Set(["ready", "interactive", "completed", "failed", "cancelled"]);
@@ -121,26 +122,6 @@ test.describe.configure({ mode: "serial" });
 // A multi-minute live trace outgrows the artifact sanitizer's 16 MiB bound, and
 // an unsanitized trace may not be kept; failure screenshots still are.
 test.use({ trace: "off" });
-
-/** The scale case's loopback model; its own handle stops it. Counts only, never content. */
-async function startScaleFakeModel(): Promise<{ origin: string; child: ChildProcess }> {
-  const child = spawn("bun", [path.join(import.meta.dirname, "auto-pipeline-fake-model.ts")], {
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  const origin = await new Promise<string>((resolve, reject) => {
-    createInterface({ input: child.stdout! }).once("line", resolve);
-    child.once("exit", () => reject(new Error("the fake model exited before it listened")));
-  });
-  return { origin, child };
-}
-
-function stopChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
-    child.once("exit", () => resolve());
-    child.kill("SIGTERM");
-  });
-}
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -1079,9 +1060,8 @@ test.describe("live Multi Review inactive-environment cycle", () => {
           maxRunning[platform] = Math.max(maxRunning[platform] ?? 0, running);
         }
       }
-      const stats = JSON.parse(
-        await fs.readFile(path.join(statsDirectory, FANOUT_STATS_FILE_NAME), "utf8"),
-      ) as FanoutStats;
+      // Absent when no pass ran; checked after scale.json and the settle check.
+      const stats = await readFanoutStats(path.join(statsDirectory, FANOUT_STATS_FILE_NAME));
       const latencies = workflow.reviewers
         .filter((reviewer) => reviewer.startedAt && reviewer.completedAt)
         .map((reviewer) => Date.parse(reviewer.completedAt!) - Date.parse(reviewer.startedAt!))
@@ -1144,9 +1124,9 @@ test.describe("live Multi Review inactive-environment cycle", () => {
         peakTreeRssMiB: Math.round(peakTreeRssMiB),
         maxSettingUpObserved: maxSettingUp,
         maxRunningObserved: maxRunning,
-        fanoutPasses: stats.passes,
-        maxAdmissionConcurrency: stats.maxAdmission,
-        maxProviderConcurrency: stats.maxByPlatform,
+        fanoutPasses: stats?.passes ?? null,
+        maxAdmissionConcurrency: stats?.maxAdmission ?? null,
+        maxProviderConcurrency: stats?.maxByPlatform ?? null,
       };
       await fs.writeFile(testInfo.outputPath("scale.json"), `${JSON.stringify(result, null, 2)}\n`);
       test.info().annotations.push({ type: "scale", description: JSON.stringify(result) });
@@ -1164,15 +1144,11 @@ test.describe("live Multi Review inactive-environment cycle", () => {
           describeWorkflow(workflow),
         ).toEqual([]);
       }
-      expect(stats.runId, "the fan-out stats belong to another run").toBe(runId);
-      expect(stats.passes, "the backend recorded no fan-out pass").toBeGreaterThan(0);
-      // The scheduler's own peaks, recorded inside every pass: exact, not sampled.
-      expect(stats.maxAdmission).toBeLessThanOrEqual(SCALE_ADMISSION_CAP);
-      for (const platform of platforms) {
-        expect(stats.maxByPlatform[platform] ?? 0, `${platform} provider cap`).toBeLessThanOrEqual(
-          SCALE_PROVIDER_CAP,
-        );
-      }
+      // The scheduler's own peaks, recorded inside every pass: exact, not
+      // sampled, and checked from both sides (caps held, panel ran in parallel).
+      expect(scaleConcurrencyProblems({ stats, runId, panel }), describeWorkflow(workflow)).toEqual(
+        [],
+      );
       // Sampled once a second, so this can only catch a cap being exceeded.
       expect(maxSettingUp).toBeLessThanOrEqual(SCALE_ADMISSION_CAP);
       for (const reviewer of workflow.reviewers) {

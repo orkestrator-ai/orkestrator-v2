@@ -71,6 +71,17 @@ export function isEvaluationProvider(value: string): value is EvaluationProvider
   return (EVALUATION_PROVIDERS as readonly string[]).includes(value);
 }
 
+/**
+ * The executable to spawn for `--bin` or a `*_CLI_PATH` value. A bare name is
+ * left for PATH lookup. A path is made absolute against the script's own
+ * working directory: every consolidation turn runs in a fresh temporary
+ * directory, so a relative path such as `./bin/codex` would otherwise resolve
+ * there and fail every turn, while the version probe (no cwd) still passed.
+ */
+export function resolveEvaluationExecutable(value: string, cwd = process.cwd()): string {
+  return value.includes("/") || value.includes(path.sep) ? path.resolve(cwd, value) : value;
+}
+
 export function claudeConsolidationArgs(model: string | undefined): string[] {
   return [
     "-p",
@@ -210,6 +221,8 @@ export interface ConsolidationRunInput {
 
 interface ChildOutcome {
   stdout: string;
+  /** Only for a non-zero exit; never part of a scored result. */
+  stderr?: string;
   exitCode: number;
   /** The deadline passed; the child's process group was sent SIGTERM, then SIGKILL. */
   timedOut: boolean;
@@ -240,7 +253,12 @@ export async function runChild(
     if (!(error instanceof CommandFailedError)) throw error;
     if (error.timedOut) return { stdout: "", exitCode: -1, timedOut: true };
     if (error.executableMissing) return { stdout: "", exitCode: 127, timedOut: false };
-    return { stdout: error.stdout, exitCode: error.exitCode ?? -1, timedOut: false };
+    return {
+      stdout: error.stdout,
+      stderr: error.stderr,
+      exitCode: error.exitCode ?? -1,
+      timedOut: false,
+    };
   }
 }
 
@@ -282,6 +300,44 @@ export async function runConsolidation(input: ConsolidationRunInput): Promise<Co
   } finally {
     if (!input.fixedCwd) await rm(cwd, { recursive: true, force: true });
   }
+}
+
+/**
+ * A credential-free check that the installed CLI accepts the consolidation
+ * argument set, run before the first billed call. For Codex it runs the exact
+ * argument list with `--help` in place of the stdin prompt: the CLI's parser
+ * rejects an unknown flag or a misplaced option before it reads `--help`, and
+ * otherwise prints usage and exits 0 without a turn, a login or a network
+ * call. It checks flag names and their positions, not `--config` values or
+ * `--disable` feature names, which the CLI reads only when a turn starts.
+ * Claude's flags have run in billed rounds already, so it has no check.
+ * Answers undefined when accepted, or the reason.
+ */
+export async function consolidationArgsProblem(
+  provider: EvaluationProvider,
+  executable: string,
+  options: { model?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<string | undefined> {
+  if (provider !== "codex") return undefined;
+  const placeholder = path.join(tmpdir(), "mre-args-check");
+  const args = codexConsolidationArgs({
+    cwd: tmpdir(),
+    model: options.model,
+    schemaPath: path.join(placeholder, "report-schema.json"),
+    outputPath: path.join(placeholder, "answer.json"),
+  });
+  const { exitCode, stderr, timedOut } = await runChild(
+    [executable, ...args.slice(0, -1), "--help"],
+    { timeoutMs: options.timeoutMs ?? VERSION_TIMEOUT_MS, env: options.env },
+  );
+  if (timedOut) return "the argument check timed out";
+  if (exitCode === 0) return undefined;
+  const reason = (stderr ?? "")
+    .split("\n")
+    .find((line) => line.trim())
+    ?.trim()
+    .slice(0, 200);
+  return `exit ${exitCode}${reason ? `: ${reason}` : ""}`;
 }
 
 /** `<executable> --version`, first line, for the run record; undefined when it fails. */

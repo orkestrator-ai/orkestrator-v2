@@ -16,10 +16,12 @@ import {
   summarizePanelValue,
 } from "../apps/backend/src/core/multi-review-evaluation";
 import {
+  consolidationArgsProblem,
   DEFAULT_EVALUATION_MODEL,
   EVALUATION_EXECUTABLE_ENV,
   executableVersion,
   isEvaluationProvider,
+  resolveEvaluationExecutable,
   runConsolidation,
 } from "./multi-review-evaluation-drivers";
 
@@ -143,8 +145,9 @@ async function live(args: string[]): Promise<void> {
   const provider = option(args, "--provider") ?? "claude";
   if (!isEvaluationProvider(provider)) fail("--provider is claude or codex.");
   const model = option(args, "--model") ?? DEFAULT_EVALUATION_MODEL[provider];
-  const executable =
-    option(args, "--bin") ?? process.env[EVALUATION_EXECUTABLE_ENV[provider]] ?? provider;
+  const executable = resolveEvaluationExecutable(
+    option(args, "--bin") ?? process.env[EVALUATION_EXECUTABLE_ENV[provider]] ?? provider,
+  );
   const out = path.resolve(option(args, "--out") ?? DEFAULT_OUT, "live", provider);
   const cwdOption = option(args, "--cwd");
   const fixedCwd = cwdOption === undefined ? undefined : path.resolve(cwdOption);
@@ -158,6 +161,9 @@ async function live(args: string[]): Promise<void> {
     if (!entry) fail(`Unknown case ${JSON.stringify(caseId)}.`);
     return entry;
   });
+  // The native CLI must accept the argument set before anything is billed.
+  const argsProblem = await consolidationArgsProblem(provider, executable, { model });
+  if (argsProblem) fail(`${provider} rejected the consolidation arguments (${argsProblem}).`);
   await mkdir(out, { recursive: true });
   const cliVersion = await executableVersion(executable);
   const run = { provider, model: model ?? "(CLI default)", cliVersion, startedAt: new Date() };

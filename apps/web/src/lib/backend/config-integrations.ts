@@ -27,10 +27,14 @@ import type {
   CursorSdkLoginProgress,
 } from "@/types";
 import type {
+  LinearBoardLink,
+  LinearBoardOptions,
   LinearConnectionStatus,
   LinearIssueComment,
   LinearIssueDetail,
   LinearIssueListItem,
+  LinearNodeConnection,
+  LinearTeam,
 } from "@/types/linear";
 import type {
   GitHubIssue,
@@ -522,32 +526,127 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     });
   }
 
-  async function getLinearConnection(): Promise<LinearConnectionStatus> {
-    return asKanbanModel<LinearConnectionStatus>(kanban(client).get_linear_connection(NO_ARGS));
+  // Linear on this client's node or, for the connect dialog's other machines,
+  // on another one (`machineInvoke`: its scope, or the command scope's
+  // `invoke_on_node`). `undefined` is this client's node.
+  const kanbanOn = (machine: AccountMachine) =>
+    machine === undefined ? kanban(client) : kanban(machineBackendClient(client, machine));
+
+  async function getLinearConnection(machine?: AccountMachine): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(kanbanOn(machine).get_linear_connection(NO_ARGS));
   }
 
-  async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
-    return asKanbanModel<LinearConnectionStatus>(kanban(client).connect_linear({ apiKey }));
+  /** Sends the key to `machine` only; nothing here keeps or logs it. */
+  async function connectLinear(
+    apiKey: string,
+    machine?: AccountMachine,
+  ): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(kanbanOn(machine).connect_linear({ apiKey }));
   }
 
+  /** Disconnects this machine and, through sync, every machine holding the same key. */
   async function disconnectLinear(): Promise<LinearConnectionStatus> {
     return asKanbanModel<LinearConnectionStatus>(kanban(client).disconnect_linear(NO_ARGS));
   }
 
-  async function getLinearIssues(): Promise<LinearIssueListItem[]> {
-    return asKanbanModel<LinearIssueListItem[]>(kanban(client).get_linear_issues(NO_ARGS));
+  /** With `projectId`, only that project's linked board (refused when it has none). */
+  async function getLinearIssues(projectId?: string): Promise<LinearIssueListItem[]> {
+    return asKanbanModel<LinearIssueListItem[]>(
+      kanban(client).get_linear_issues(projectId === undefined ? NO_ARGS : { projectId }),
+    );
   }
 
-  async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
-    return asKanbanModel<LinearIssueDetail>(kanban(client).get_linear_issue({ issueId }));
+  async function getLinearIssue(issueId: string, projectId?: string): Promise<LinearIssueDetail> {
+    return asKanbanModel<LinearIssueDetail>(
+      kanban(client).get_linear_issue(
+        projectId === undefined ? { issueId } : { issueId, projectId },
+      ),
+    );
   }
 
   async function postLinearIssueComment(
     issueId: string,
     body: string,
+    projectId?: string,
   ): Promise<LinearIssueComment> {
     return asKanbanModel<LinearIssueComment>(
-      kanban(client).post_linear_issue_comment({ issueId, body }),
+      kanban(client).post_linear_issue_comment(
+        projectId === undefined ? { issueId, body } : { issueId, body, projectId },
+      ),
+    );
+  }
+
+  /** Every team the key can see, with its projects: the board picker's choices. */
+  async function getLinearTeams(): Promise<LinearTeam[]> {
+    return asKanbanModel<LinearTeam[]>(kanban(client).get_linear_teams({}));
+  }
+
+  /** The board `projectId` is linked to on `machine`, or none. */
+  async function getLinearBoardLink(
+    projectId: string,
+    machine?: AccountMachine,
+  ): Promise<LinearBoardLink | null> {
+    const result = await asKanbanModel<{ link?: LinearBoardLink }>(
+      kanbanOn(machine).get_linear_board_link({ projectId }),
+    );
+    return result.link && !result.link.cleared ? result.link : null;
+  }
+
+  async function setLinearBoardLink(
+    projectId: string,
+    teamId: string,
+    linearProjectId?: string,
+    machine?: AccountMachine,
+  ): Promise<LinearBoardLink> {
+    return asKanbanModel<LinearBoardLink>(
+      kanbanOn(machine).set_linear_board_link(
+        linearProjectId === undefined
+          ? { projectId, teamId }
+          : { projectId, teamId, linearProjectId },
+      ),
+    );
+  }
+
+  async function clearLinearBoardLink(projectId: string): Promise<{ cleared: boolean }> {
+    return kanban(client).clear_linear_board_link({ projectId });
+  }
+
+  /**
+   * Changes the named fields of an issue on the project's linked board (the
+   * board view moves a card with `stateId`). The backend refuses an issue that
+   * is not on that board.
+   */
+  async function updateLinearIssue(
+    projectId: string,
+    issueId: string,
+    fields: { stateId?: string },
+  ): Promise<LinearIssueDetail> {
+    return asKanbanModel<LinearIssueDetail>(
+      kanban(client).update_linear_issue({ projectId, issueId, ...fields }),
+    );
+  }
+
+  /** The linked board's workflow states (the board view's lanes), labels and members. */
+  async function getLinearBoardOptions(projectId: string): Promise<LinearBoardOptions> {
+    return asKanbanModel<LinearBoardOptions>(
+      kanban(client).get_linear_board_options({ projectId }),
+    );
+  }
+
+  /**
+   * On a command node: the other machines' Linear status as last synced.
+   * `null` asks the window's command scope from inside a leaf's workspace.
+   */
+  async function getLinearNodeConnections(
+    machine?: AccountMachine,
+  ): Promise<LinearNodeConnection[]> {
+    return asKanbanModel<LinearNodeConnection[]>(kanbanOn(machine).get_linear_node_connections({}));
+  }
+
+  /** On a command node: copies a connected machine's key here once, over the node link. */
+  async function copyLinearConnectionFromNode(nodeId: string): Promise<LinearConnectionStatus> {
+    return asKanbanModel<LinearConnectionStatus>(
+      kanban(client).copy_linear_connection_from_node({ nodeId }),
     );
   }
 
@@ -730,6 +829,14 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     getLinearIssues,
     getLinearIssue,
     postLinearIssueComment,
+    getLinearTeams,
+    getLinearBoardLink,
+    setLinearBoardLink,
+    clearLinearBoardLink,
+    getLinearBoardOptions,
+    updateLinearIssue,
+    getLinearNodeConnections,
+    copyLinearConnectionFromNode,
     getGitHubIssues,
     getGitHubIssue,
     updateGitHubIssue,
@@ -781,6 +888,14 @@ export const {
   getLinearIssues,
   getLinearIssue,
   postLinearIssueComment,
+  getLinearTeams,
+  getLinearBoardLink,
+  setLinearBoardLink,
+  clearLinearBoardLink,
+  getLinearBoardOptions,
+  updateLinearIssue,
+  getLinearNodeConnections,
+  copyLinearConnectionFromNode,
   getGitHubIssues,
   getGitHubIssue,
   updateGitHubIssue,

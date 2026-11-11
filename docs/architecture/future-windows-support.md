@@ -336,7 +336,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
 - 13 shortcuts are defined only for the Mac, and their handlers check
   `metaKey`, so on Windows they fire on the Win key. Examples are
   `useActionBarController.ts:1501` and `OpenFileDialog.tsx:79`. Linux has the
-  same gap ([0325](../todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md)).
+  same gap (0325 (retired), `git show 465c473d9^:docs/todo/cross-cutting/0325-keyboard-shortcuts-desktop-gaps.md`).
 - Windows gets both the native caption bar and the 37px drag bar
   (`title-bar-inset.ts:10`, `AppShell.tsx:238`).
 - **Already Windows-aware:**

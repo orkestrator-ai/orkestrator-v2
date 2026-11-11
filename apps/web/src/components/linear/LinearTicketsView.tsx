@@ -3,29 +3,35 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   AlertCircle,
   ArrowLeft,
+  Columns3,
+  List,
   CalendarClock,
   Check,
   ExternalLink,
   Hammer,
+  Link2,
   Loader2,
   MessageSquare,
   RefreshCw,
   Search,
   Send,
+  Unlink,
   Unplug,
 } from "lucide-react";
+import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -42,7 +48,7 @@ import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
-import { useNodeScope } from "@/lib/node-scope/providers";
+import { useNodeScope, useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import {
   buildPipelineStore,
   useBuildPipelineStore,
@@ -52,12 +58,32 @@ import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailab
 import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type {
+  LinearBoardLink,
   LinearConnectionStatus,
   LinearIssueComment,
   LinearIssueDetail,
   LinearIssueListItem,
+  LinearNodeConnection,
+  LinearWorkflowState,
 } from "@/types/linear";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { LinearBoardPicker, linearBoardName } from "./LinearBoardPicker";
+import { LinearConnectDialog } from "./LinearConnectDialog";
+import { LinearUseConnectionNotice } from "./LinearUseConnectionNotice";
+import {
+  type LinearLane,
+  buildLinearLanes,
+  buildStatusOrder,
+  compareIssueOrder,
+  compareStatusOrder,
+  type IssueOrder,
+} from "./linear-issue-order";
+import { LinearIssueBoard, LinearLanesMenu } from "./LinearIssueBoard";
+import {
+  DEFAULT_LINEAR_PROJECT_VIEW,
+  useLinearViewPreferencesStore,
+  type LinearIssueView,
+} from "@/stores/linearViewPreferencesStore";
 
 const log = createLogger("web.linear");
 
@@ -75,7 +101,11 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
-type IssueOrder = "manual" | "priority" | "createdAt" | "updatedAt";
+/**
+ * The project's Linear board: `unsupported` is a node from before board
+ * links, which lists every issue the key can see, as it always did.
+ */
+type BoardState = "unknown" | "linked" | "unlinked" | "unsupported";
 
 const isStringDraft = (value: unknown): value is string => typeof value === "string";
 const isBlankDraft = (value: string): boolean => value.length === 0;
@@ -110,105 +140,6 @@ function isActivePipeline(pipeline: BuildPipeline | undefined): boolean {
   return !!pipeline && !["complete", "failed"].includes(pipeline.phase);
 }
 
-const PRIORITY_BY_LABEL: Record<string, number> = {
-  urgent: 1,
-  high: 2,
-  medium: 3,
-  normal: 3,
-  low: 4,
-};
-
-const STATUS_TYPE_ORDER: Record<string, number> = {
-  triage: 0,
-  backlog: 1,
-  unstarted: 2,
-  started: 3,
-  completed: 4,
-  canceled: 5,
-  duplicate: 6,
-};
-
-type StatusOrderKey = { typeOrder: number; position?: number };
-
-// Workflow states belong to a team, so the same status name can arrive with a
-// different type or position per team. Collapse each name to its lowest key so
-// section order depends only on the loaded issues, never on which issue happens
-// to sort first under the current ticket order or status filter.
-function buildStatusOrder(issues: LinearIssueListItem[]): Map<string, StatusOrderKey> {
-  const statusOrder = new Map<string, StatusOrderKey>();
-  for (const issue of issues) {
-    const typeOrder = STATUS_TYPE_ORDER[issue.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
-    const current = statusOrder.get(issue.status);
-    if (!current || typeOrder < current.typeOrder) {
-      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
-      continue;
-    }
-    if (typeOrder !== current.typeOrder || issue.statusPosition === undefined) continue;
-    if (current.position === undefined || issue.statusPosition < current.position) {
-      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
-    }
-  }
-  return statusOrder;
-}
-
-function compareStatusOrder(
-  aStatus: string,
-  bStatus: string,
-  statusOrder: Map<string, StatusOrderKey>,
-): number {
-  const a = statusOrder.get(aStatus);
-  const b = statusOrder.get(bStatus);
-  const aTypeOrder = a?.typeOrder ?? Number.MAX_SAFE_INTEGER;
-  const bTypeOrder = b?.typeOrder ?? Number.MAX_SAFE_INTEGER;
-  if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
-
-  const aPosition = a?.position;
-  const bPosition = b?.position;
-  if (aPosition !== undefined && bPosition !== undefined && aPosition !== bPosition) {
-    return aPosition - bPosition;
-  }
-  if (aPosition !== undefined && bPosition === undefined) return -1;
-  if (aPosition === undefined && bPosition !== undefined) return 1;
-  return aStatus.localeCompare(bStatus);
-}
-
-function compareIssueOrder(
-  a: LinearIssueListItem,
-  b: LinearIssueListItem,
-  order: IssueOrder,
-): number {
-  if (order === "manual") return 0;
-
-  if (order === "priority") {
-    const aPriority =
-      a.priority && a.priority > 0
-        ? a.priority
-        : (PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""] ?? 5);
-    const bPriority =
-      b.priority && b.priority > 0
-        ? b.priority
-        : (PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""] ?? 5);
-    if (aPriority !== bPriority) return aPriority - bPriority;
-    if (
-      a.prioritySortOrder !== undefined &&
-      b.prioritySortOrder !== undefined &&
-      a.prioritySortOrder !== b.prioritySortOrder
-    ) {
-      return a.prioritySortOrder - b.prioritySortOrder;
-    }
-    if (a.prioritySortOrder !== undefined && b.prioritySortOrder === undefined) return -1;
-    if (a.prioritySortOrder === undefined && b.prioritySortOrder !== undefined) return 1;
-    return 0;
-  }
-
-  const aDate = a[order];
-  const bDate = b[order];
-  if (aDate && bDate) return bDate.localeCompare(aDate);
-  if (aDate) return -1;
-  if (bDate) return 1;
-  return 0;
-}
-
 function IssueMetadata({ issue }: { issue: LinearIssueListItem | LinearIssueDetail }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -241,88 +172,6 @@ function LinearCommentItem({ comment }: { comment: LinearIssueComment }) {
   );
 }
 
-function LinearConnectDialog({
-  open,
-  onOpenChange,
-  onConnected,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConnected: (status: LinearConnectionStatus) => void;
-}) {
-  const nodeBackend = useScopeBackend();
-  const [apiKey, setApiKey] = useState("");
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleConnect = async () => {
-    if (!apiKey.trim()) return;
-    setIsConnecting(true);
-    setError(null);
-    try {
-      const status = await nodeBackend.connectLinear(apiKey.trim());
-      onConnected(status);
-      setApiKey("");
-      onOpenChange(false);
-      toast.success("Linear connected");
-    } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : "Failed to connect Linear");
-    } finally {
-      setIsConnecting(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="[--modal-max-width:500px]">
-        <DialogHeader>
-          <DialogTitle>Connect Linear</DialogTitle>
-          <DialogDescription>
-            Paste a Linear personal API key. Orkestrator verifies it before loading tickets.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <Input
-            type="password"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            placeholder="lin_api_..."
-            autoComplete="off"
-          />
-          {error && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="break-words">{error}</span>
-            </div>
-          )}
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void openInBrowser("https://linear.app/settings/api")}
-          >
-            <ExternalLink className="h-4 w-4" />
-            API settings
-          </Button>
-          <Button
-            type="button"
-            onClick={() => void handleConnect()}
-            disabled={isConnecting || !apiKey.trim()}
-          >
-            {isConnecting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
-            Connect
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
   const buildPipeline = useBuildPipeline();
   return <LinearTicketsViewContent projectId={projectId} buildPipeline={buildPipeline} />;
@@ -333,10 +182,33 @@ export function LinearTicketsViewContent({
   buildPipeline,
 }: LinearTicketsViewContentProps) {
   const nodeBackend = useScopeBackend();
+  const onCommandNode = useScopesWithCommandFallback().scope.role === "command";
   const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
+  const [boardLink, setBoardLink] = useState<LinearBoardLink | null>(null);
+  const [boardState, setBoardState] = useState<BoardState>("unknown");
+  const [changingBoard, setChangingBoard] = useState(false);
+  const [unlinkOpen, setUnlinkOpen] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [nodeConnections, setNodeConnections] = useState<LinearNodeConnection[]>([]);
+  const [copyingFrom, setCopyingFrom] = useState<string | null>(null);
   // Both start loading: the first load begins on mount.
   const [connectionState, setConnectionState] = useState<LoadState>("loading");
   const [issues, setIssues] = useState<LinearIssueListItem[]>([]);
+  /** The linked board's workflow states: the board view's lanes, empty ones included. */
+  const [boardStates, setBoardStates] = useState<LinearWorkflowState[]>([]);
+  const viewPreference =
+    useLinearViewPreferencesStore((state) => state.projects[projectId]) ??
+    DEFAULT_LINEAR_PROJECT_VIEW;
+  const setView = useLinearViewPreferencesStore((state) => state.setView);
+  const setLaneHidden = useLinearViewPreferencesStore((state) => state.setLaneHidden);
+  const showAllLanes = useLinearViewPreferencesStore((state) => state.showAllLanes);
+  const issueView: LinearIssueView = viewPreference.view;
+  const hiddenLanes = useMemo(
+    () => new Set(viewPreference.hiddenLanes),
+    [viewPreference.hiddenLanes],
+  );
   const [issuesState, setIssuesState] = useState<LoadState>("loading");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
@@ -408,6 +280,39 @@ export function LinearTicketsViewContent({
     );
   }, [nodeBackend]);
 
+  /**
+   * On a command node that is not connected: which other machines are, so
+   * the tab can offer their connection here. An older node has no answer.
+   */
+  const loadNodeConnections = useCallback(
+    (requestId: number) =>
+      nodeBackend.getLinearNodeConnections().then(
+        (connections) => {
+          if (issuesRequestRef.current === requestId) setNodeConnections(connections);
+        },
+        () => {
+          if (issuesRequestRef.current === requestId) setNodeConnections([]);
+        },
+      ),
+    [nodeBackend],
+  );
+
+  /** The project's board link, or `unsupported` on a node from before board links. */
+  const fetchBoardLink = useCallback(async (): Promise<{
+    link: LinearBoardLink | null;
+    state: BoardState;
+  }> => {
+    try {
+      const link = await nodeBackend.getLinearBoardLink(projectId);
+      return { link, state: link ? "linked" : "unlinked" };
+    } catch (error) {
+      if (incompatibility(error, "get_linear_board_link")?.code === "unknown-command") {
+        return { link: null, state: "unsupported" };
+      }
+      throw error;
+    }
+  }, [nodeBackend, projectId]);
+
   /** Loads without marking the load as started; `loadIssues` does both. */
   const fetchIssues = useCallback(() => {
     const requestId = issuesRequestRef.current + 1;
@@ -418,11 +323,36 @@ export function LinearTicketsViewContent({
         if (!status?.connected) {
           setIssues([]);
           setIssuesState("loaded");
+          if (onCommandNode) void loadNodeConnections(requestId);
           return;
         }
-        const nextIssues = await nodeBackend.getLinearIssues();
+        setNodeConnections([]);
+        const board = await fetchBoardLink();
+        if (issuesRequestRef.current !== requestId) return;
+        setBoardLink(board.link);
+        setBoardState(board.state);
+        if (board.state === "unlinked") {
+          setIssues([]);
+          setBoardStates([]);
+          setIssuesState("loaded");
+          return;
+        }
+        // The board's states give the board view its empty lanes too; without
+        // them (an older node, or a failed read) lanes come from the issues.
+        const [nextIssues, states] = await Promise.all([
+          nodeBackend.getLinearIssues(board.state === "linked" ? projectId : undefined),
+          board.state === "linked"
+            ? Promise.resolve()
+                .then(() => nodeBackend.getLinearBoardOptions(projectId))
+                .then(
+                  (options) => options.states ?? [],
+                  () => [],
+                )
+            : Promise.resolve([]),
+        ]);
         if (issuesRequestRef.current !== requestId) return;
         setIssues(nextIssues);
+        setBoardStates(states);
         setIssuesState("loaded");
       })
       .catch((error: unknown) => {
@@ -430,7 +360,7 @@ export function LinearTicketsViewContent({
         setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
         setIssuesState("error");
       });
-  }, [loadConnection, nodeBackend]);
+  }, [fetchBoardLink, loadConnection, loadNodeConnections, nodeBackend, onCommandNode, projectId]);
 
   const loadIssues = useCallback(() => {
     setIssuesState("loading");
@@ -470,6 +400,55 @@ export function LinearTicketsViewContent({
     return Array.from(groups.entries()).sort(([a], [b]) => compareStatusOrder(a, b, statusOrder));
   }, [filteredIssues, issueOrder, statusOrder]);
 
+  const lanes = useMemo(
+    () => buildLinearLanes(issues, boardStates, issueOrder),
+    [issues, boardStates, issueOrder],
+  );
+
+  /**
+   * A card dropped on another lane: show it there at once, move the issue to
+   * that lane's workflow state in Linear, and put it back if Linear refuses.
+   * A refresh that lands meanwhile wins; it read Linear after the move began.
+   */
+  const handleMoveIssue = useCallback(
+    async (issue: LinearIssueListItem, to: LinearLane) => {
+      if (!to.stateId) return;
+      const before = {
+        status: issue.status,
+        statusType: issue.statusType,
+        statusPosition: issue.statusPosition,
+      };
+      const patch = (fields: Partial<LinearIssueListItem>, onlyIfStatus?: string) =>
+        setIssues((current) =>
+          current.map((candidate) =>
+            candidate.id === issue.id &&
+            (onlyIfStatus === undefined || candidate.status === onlyIfStatus)
+              ? { ...candidate, ...fields }
+              : candidate,
+          ),
+        );
+      patch({ status: to.status, statusType: to.type, statusPosition: to.position });
+      try {
+        const updated = await nodeBackend.updateLinearIssue(projectId, issue.id, {
+          stateId: to.stateId,
+        });
+        patch({
+          status: updated.status ?? to.status,
+          statusType: updated.statusType ?? to.type,
+          statusPosition: updated.statusPosition ?? to.position,
+          ...(updated.updatedAt ? { updatedAt: updated.updatedAt } : {}),
+        });
+        toast.success(`${issue.identifier} moved to ${to.status}`);
+      } catch (error) {
+        patch(before, to.status);
+        toast.error(`Could not move ${issue.identifier} to ${to.status}`, {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [nodeBackend, projectId],
+  );
+
   const selectedPipeline = selectedIssueId
     ? getIssuePipeline(pipelines, selectedIssueId)
     : undefined;
@@ -478,6 +457,10 @@ export function LinearTicketsViewContent({
     ? issues.find((issue) => issue.id === selectedIssueId)
     : undefined;
 
+  // Reads and comments name the project when it has a board, so the backend
+  // refuses an issue that is not on it.
+  const boardProjectId = boardState === "linked" ? projectId : undefined;
+
   const loadDetail = useCallback(
     async (issueId: string) => {
       const requestId = detailRequestRef.current + 1;
@@ -485,7 +468,7 @@ export function LinearTicketsViewContent({
       setDetailState("loading");
       setDetailError(null);
       try {
-        const nextDetail = await nodeBackend.getLinearIssue(issueId);
+        const nextDetail = await nodeBackend.getLinearIssue(issueId, boardProjectId);
         if (detailRequestRef.current !== requestId) return;
         setDetail(nextDetail);
         setDetailState("loaded");
@@ -497,7 +480,7 @@ export function LinearTicketsViewContent({
         setDetailState("error");
       }
     },
-    [nodeBackend],
+    [boardProjectId, nodeBackend],
   );
 
   const handleSelectIssue = (issueId: string) => {
@@ -567,7 +550,11 @@ export function LinearTicketsViewContent({
     setCommentState("loading");
     setCommentError(null);
     try {
-      const comment = await nodeBackend.postLinearIssueComment(submittedIssueId, body);
+      const comment = await nodeBackend.postLinearIssueComment(
+        submittedIssueId,
+        body,
+        boardProjectId,
+      );
       setDetail((current) => {
         if (!current || current.id !== submittedIssueId) return current;
         return {
@@ -890,19 +877,118 @@ export function LinearTicketsViewContent({
   }
 
   const connected = connection?.connected;
+  const showPicker = connected && (boardState === "unlinked" || changingBoard);
+  const ticketCount = `${issues.length} ticket${issues.length === 1 ? "" : "s"}`;
+
+  const handleLinked = (link: LinearBoardLink) => {
+    setChangingBoard(false);
+    setBoardLink(link);
+    setBoardState("linked");
+    setSelectedStatuses(new Set());
+    toast.success(`Linked to ${linearBoardName(link)}`);
+    void loadIssues();
+  };
+
+  const handleUnlink = async () => {
+    setUnlinking(true);
+    try {
+      await nodeBackend.clearLinearBoardLink(projectId);
+      setUnlinkOpen(false);
+      setChangingBoard(false);
+      setBoardLink(null);
+      setBoardState("unlinked");
+      setIssues([]);
+      setSelectedStatuses(new Set());
+      toast.success("Linear board unlinked");
+    } catch (error) {
+      toast.error("Failed to unlink the Linear board", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setUnlinking(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    try {
+      const status = await nodeBackend.disconnectLinear();
+      setDisconnectOpen(false);
+      connectionRequestRef.current += 1;
+      setConnection(status);
+      setConnectionState("loaded");
+      toast.success("Linear disconnected");
+      void loadIssues();
+    } catch (error) {
+      toast.error("Failed to disconnect Linear", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  const handleUseConnection = async (nodeId: string) => {
+    setCopyingFrom(nodeId);
+    try {
+      const status = await nodeBackend.copyLinearConnectionFromNode(nodeId);
+      if (!status.connected) throw new Error(status.error ?? "Linear did not accept the key");
+      toast.success("Linear connected");
+      void loadIssues();
+    } catch (error) {
+      toast.error("Failed to use that Linear connection", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setCopyingFrom(null);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <div>
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-6 py-4">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-foreground">Linear Tickets</h2>
-          <p className="text-sm text-muted-foreground">
-            {connected
-              ? `${issues.length} ticket${issues.length === 1 ? "" : "s"} available`
-              : "Linear is not connected"}
-          </p>
+          {!connected ? (
+            <p className="text-sm text-muted-foreground">Linear is not connected</p>
+          ) : boardState === "linked" && boardLink ? (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <span
+                className="inline-flex max-w-full items-center gap-1 rounded bg-muted px-2 py-0.5 text-xs font-medium text-foreground"
+                title="Linear board"
+              >
+                <Link2 className="h-3 w-3 shrink-0" />
+                <span className="truncate">{linearBoardName(boardLink)}</span>
+              </span>
+              <span>{ticketCount}</span>
+              {!changingBoard && (
+                <>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    onClick={() => setChangingBoard(true)}
+                  >
+                    Change board
+                  </Button>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs text-muted-foreground"
+                    onClick={() => setUnlinkOpen(true)}
+                  >
+                    Unlink
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : boardState === "unlinked" ? (
+            <p className="text-sm text-muted-foreground">No Linear board linked</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{ticketCount} available</p>
+          )}
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           {connection?.viewer && (
             <span className="hidden text-xs text-muted-foreground sm:inline">
               {connection.viewer.name}
@@ -929,6 +1015,12 @@ export function LinearTicketsViewContent({
             <Unplug className="h-3.5 w-3.5" />
             {connected ? "Reconnect" : "Connect"}
           </Button>
+          {connection?.hasToken && (
+            <Button variant="ghost" size="sm" onClick={() => setDisconnectOpen(true)}>
+              <Unlink className="h-3.5 w-3.5" />
+              Disconnect
+            </Button>
+          )}
         </div>
       </div>
 
@@ -943,43 +1035,99 @@ export function LinearTicketsViewContent({
             <Button className="mt-4" onClick={() => setConnectOpen(true)}>
               Connect Linear
             </Button>
+            {onCommandNode && (
+              <LinearUseConnectionNotice
+                connections={nodeConnections}
+                copyingFrom={copyingFrom}
+                onUse={(nodeId) => void handleUseConnection(nodeId)}
+              />
+            )}
           </div>
+        </div>
+      ) : showPicker ? (
+        <div className="flex flex-1 items-center justify-center overflow-auto p-6">
+          <LinearBoardPicker
+            projectId={projectId}
+            currentLink={changingBoard ? boardLink : null}
+            onLinked={handleLinked}
+            onCancel={changingBoard ? () => setChangingBoard(false) : undefined}
+          />
         </div>
       ) : (
         <>
           <div className="border-b border-border px-6 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-muted-foreground">Status</span>
-                {statusCounts.map(([status, count]) => {
-                  const checked = selectedStatuses.has(status);
-                  return (
-                    <label
-                      key={status}
+                <div
+                  role="radiogroup"
+                  aria-label="Linear view"
+                  className="inline-flex rounded-md border border-border p-0.5"
+                >
+                  {(
+                    [
+                      ["list", "List", List],
+                      ["board", "Board", Columns3],
+                    ] as const
+                  ).map(([value, label, Icon]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={issueView === value}
+                      onClick={() => setView(projectId, value)}
                       className={cn(
-                        "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
-                        checked
-                          ? "border-ring bg-primary/10 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:text-foreground",
+                        "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                        issueView === value
+                          ? "bg-primary/15 text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <Checkbox
-                        checked={checked}
-                        onCheckedChange={() => handleToggleStatus(status)}
-                        className="h-3.5 w-3.5"
-                      />
-                      <span>{status}</span>
-                      <span className="text-muted-foreground">{count}</span>
-                    </label>
-                  );
-                })}
-                {selectedStatuses.size > 0 && (
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {issueView === "list" && (
+                  <span className="text-xs font-medium text-muted-foreground">Status</span>
+                )}
+                {issueView === "list" &&
+                  statusCounts.map(([status, count]) => {
+                    const checked = selectedStatuses.has(status);
+                    return (
+                      <label
+                        key={status}
+                        className={cn(
+                          "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
+                          checked
+                            ? "border-ring bg-primary/10 text-foreground"
+                            : "border-border bg-background text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={() => handleToggleStatus(status)}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span>{status}</span>
+                        <span className="text-muted-foreground">{count}</span>
+                      </label>
+                    );
+                  })}
+                {issueView === "list" && selectedStatuses.size > 0 && (
                   <Button size="sm" variant="ghost" onClick={() => setSelectedStatuses(new Set())}>
                     Clear
                   </Button>
                 )}
               </div>
               <div className="ml-auto flex items-center gap-2">
+                {issueView === "board" && lanes.length > 0 && (
+                  <LinearLanesMenu
+                    lanes={lanes}
+                    hidden={hiddenLanes}
+                    onToggle={(status, visible) => setLaneHidden(projectId, status, !visible)}
+                    onShowAll={() => showAllLanes(projectId)}
+                  />
+                )}
                 <label
                   htmlFor="linear-ticket-order"
                   className="text-xs font-medium text-muted-foreground"
@@ -1009,93 +1157,110 @@ export function LinearTicketsViewContent({
             </div>
           </div>
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-5 p-6">
-              {issuesState === "loading" && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading Linear tickets
-                </div>
-              )}
-
-              {issuesState === "error" && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
-                  <div className="flex items-start gap-2 text-sm text-destructive">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{issuesError}</span>
+          {issueView === "board" && issuesState === "loaded" && lanes.length > 0 ? (
+            <LinearIssueBoard
+              lanes={lanes}
+              hidden={hiddenLanes}
+              onShowAll={() => showAllLanes(projectId)}
+              onSelectIssue={handleSelectIssue}
+              pipelinePhase={(issueId) => getIssuePipeline(pipelines, issueId)?.phase}
+              // Moves need the project's board: an older node lists issues unscoped.
+              onMoveIssue={
+                boardState === "linked" ? (issue, to) => void handleMoveIssue(issue, to) : undefined
+              }
+            />
+          ) : (
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="space-y-5 p-6">
+                {issuesState === "loading" && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading Linear tickets
                   </div>
-                  <Button
-                    className="mt-3"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void loadIssues()}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Retry
-                  </Button>
-                </div>
-              )}
+                )}
 
-              {issuesState === "loaded" && issues.length === 0 && (
-                <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
-                  <Search className="mb-2 h-6 w-6" />
-                  <p className="text-sm">No Linear tickets found</p>
-                </div>
-              )}
-
-              {issuesState === "loaded" && issues.length > 0 && filteredIssues.length === 0 && (
-                <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
-                  <Search className="mb-2 h-6 w-6" />
-                  <p className="text-sm">No tickets match the selected statuses</p>
-                </div>
-              )}
-
-              {groupedIssues.map(([status, group]) => (
-                <section key={status} className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-foreground">{status}</h3>
-                    <span className="text-xs text-muted-foreground">{group.length}</span>
+                {issuesState === "error" && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
+                    <div className="flex items-start gap-2 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{issuesError}</span>
+                    </div>
+                    <Button
+                      className="mt-3"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void loadIssues()}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Retry
+                    </Button>
                   </div>
-                  <div className="overflow-hidden rounded-md border border-border">
-                    {group.map((issue, index) => {
-                      const pipeline = getIssuePipeline(pipelines, issue.id);
-                      return (
-                        <button
-                          key={issue.id}
-                          type="button"
-                          className={cn(
-                            "block w-full p-3 text-left transition-colors hover:bg-muted/50",
-                            index > 0 && "border-t border-border",
-                          )}
-                          onClick={() => handleSelectIssue(issue.id)}
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0 space-y-1">
-                              <div className="truncate text-sm font-medium text-foreground">
-                                {issue.title}
-                              </div>
-                              <IssueMetadata issue={issue} />
-                            </div>
-                            {pipeline && (
-                              <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                {pipeline.phase}
-                              </span>
+                )}
+
+                {issuesState === "loaded" && issues.length === 0 && (
+                  <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
+                    <Search className="mb-2 h-6 w-6" />
+                    <p className="text-sm">No Linear tickets found</p>
+                  </div>
+                )}
+
+                {issuesState === "loaded" && issues.length > 0 && filteredIssues.length === 0 && (
+                  <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-border p-8 text-center text-muted-foreground">
+                    <Search className="mb-2 h-6 w-6" />
+                    <p className="text-sm">No tickets match the selected statuses</p>
+                  </div>
+                )}
+
+                {groupedIssues.map(([status, group]) => (
+                  <section key={status} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-foreground">{status}</h3>
+                      <span className="text-xs text-muted-foreground">{group.length}</span>
+                    </div>
+                    <div className="overflow-hidden rounded-md border border-border">
+                      {group.map((issue, index) => {
+                        const pipeline = getIssuePipeline(pipelines, issue.id);
+                        return (
+                          <button
+                            key={issue.id}
+                            type="button"
+                            className={cn(
+                              "block w-full p-3 text-left transition-colors hover:bg-muted/50",
+                              index > 0 && "border-t border-border",
                             )}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </ScrollArea>
+                            onClick={() => handleSelectIssue(issue.id)}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="min-w-0 space-y-1">
+                                <div className="truncate text-sm font-medium text-foreground">
+                                  {issue.title}
+                                </div>
+                                <IssueMetadata issue={issue} />
+                              </div>
+                              {pipeline && (
+                                <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                  {pipeline.phase}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
         </>
       )}
 
       <LinearConnectDialog
         open={connectOpen}
         onOpenChange={setConnectOpen}
+        projectId={projectId}
+        currentConnection={connection}
+        boardLink={boardState === "linked" ? boardLink : null}
         onConnected={(status) => {
           connectionRequestRef.current += 1;
           setConnection(status);
@@ -1108,6 +1273,61 @@ export function LinearTicketsViewContent({
           }
         }}
       />
+
+      <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disconnect Linear everywhere?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the Linear key from this machine and from every other machine that holds
+              the same key, including machines that are offline now (they disconnect when they next
+              sync). Machines connected with a different key stay connected. Board links are kept,
+              so reconnecting restores them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={disconnecting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={disconnecting}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDisconnect();
+              }}
+            >
+              {disconnecting && <Loader2 className="h-4 w-4 animate-spin" />}
+              Disconnect everywhere
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={unlinkOpen} onOpenChange={setUnlinkOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink the Linear board?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {boardLink
+                ? `${linearBoardName(boardLink)} will no longer be`
+                : "The board will no longer be"}{" "}
+              this project&apos;s Linear board, here and on every machine with this repository.
+              Nothing changes in Linear.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unlinking}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={unlinking}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleUnlink();
+              }}
+            >
+              {unlinking && <Loader2 className="h-4 w-4 animate-spin" />}
+              Unlink board
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

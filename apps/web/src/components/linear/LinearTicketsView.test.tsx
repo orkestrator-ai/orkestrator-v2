@@ -8,13 +8,20 @@ import {
 } from "../../../../../tests/mocks/sonner";
 import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { projectStore } from "@/stores/projectStore";
+import { linearViewPreferencesStore } from "@/stores/linearViewPreferencesStore";
+import { dragLinearCard, layOutLinearBoard } from "./linear-board-drag-test-support";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type {
+  LinearBoardLink,
+  LinearBoardOptions,
   LinearConnectionStatus,
   LinearIssueDetail,
   LinearIssueListItem,
+  LinearNodeConnection,
+  LinearTeam,
 } from "@/types/linear";
 import { appCommandStore } from "@/test/app-command-store";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -28,7 +35,69 @@ const getLinearConnectionMock = mock(async (): Promise<LinearConnectionStatus> =
   hasToken: true,
   viewer: { id: "viewer-1", name: "Ada" },
 }));
-const getLinearIssuesMock = mock(async (): Promise<LinearIssueListItem[]> => []);
+const getLinearIssuesMock = mock(async (_projectId?: string): Promise<LinearIssueListItem[]> => []);
+const boardLink: LinearBoardLink = {
+  key: "repo:github.com/acme/web",
+  teamId: "team-eng",
+  teamKey: "ENG",
+  teamName: "Engineering",
+  linearProjectId: "lp-web",
+  linearProjectName: "Website",
+  updatedAt: "2026-11-11T10:00:00.000Z",
+};
+const linearTeams: LinearTeam[] = [
+  {
+    id: "team-eng",
+    key: "ENG",
+    name: "Engineering",
+    projects: [
+      { id: "lp-web", name: "Website" },
+      { id: "lp-api", name: "API" },
+    ],
+  },
+  { id: "team-ops", key: "OPS", name: "Operations", projects: [] },
+];
+const getLinearBoardLinkMock = mock(
+  async (_projectId: string, _machine?: unknown): Promise<LinearBoardLink | null> => boardLink,
+);
+const setLinearBoardLinkMock = mock(
+  async (
+    _projectId: string,
+    teamId: string,
+    linearProjectId?: string,
+  ): Promise<LinearBoardLink> => ({
+    key: "repo:github.com/acme/web",
+    teamId,
+    teamKey: teamId === "team-ops" ? "OPS" : "ENG",
+    ...(linearProjectId ? { linearProjectId, linearProjectName: "API" } : {}),
+    updatedAt: "2026-11-11T11:00:00.000Z",
+  }),
+);
+const clearLinearBoardLinkMock = mock(async (_projectId: string) => ({ cleared: true }));
+const getLinearTeamsMock = mock(async (): Promise<LinearTeam[]> => linearTeams);
+const updateLinearIssueMock = mock(
+  async (
+    _projectId: string,
+    _issueId: string,
+    _fields: { stateId?: string },
+  ): Promise<LinearIssueDetail> => issueDetail,
+);
+const getLinearBoardOptionsMock = mock(async (_projectId: string): Promise<LinearBoardOptions> => ({
+  teamId: "team-1",
+  states: [],
+}));
+const getLinearNodeConnectionsMock = mock(async (): Promise<LinearNodeConnection[]> => []);
+const copyLinearConnectionFromNodeMock = mock(
+  async (_nodeId: string): Promise<LinearConnectionStatus> => ({
+    connected: true,
+    hasToken: true,
+    viewer: { id: "viewer-1", name: "Ada" },
+  }),
+);
+const disconnectLinearMock = mock(async (): Promise<LinearConnectionStatus> => ({
+  connected: false,
+  hasToken: false,
+}));
 const getLinearIssueMock = mock(
   async (_issueId: string): Promise<LinearIssueDetail> => issueDetail,
 );
@@ -77,6 +146,15 @@ mock.module("@/lib/backend", () => ({
   getLinearConnection: getLinearConnectionMock,
   getLinearIssues: getLinearIssuesMock,
   getLinearIssue: getLinearIssueMock,
+  getLinearBoardLink: getLinearBoardLinkMock,
+  setLinearBoardLink: setLinearBoardLinkMock,
+  clearLinearBoardLink: clearLinearBoardLinkMock,
+  getLinearTeams: getLinearTeamsMock,
+  getLinearBoardOptions: getLinearBoardOptionsMock,
+  updateLinearIssue: updateLinearIssueMock,
+  getLinearNodeConnections: getLinearNodeConnectionsMock,
+  copyLinearConnectionFromNode: copyLinearConnectionFromNodeMock,
+  disconnectLinear: disconnectLinearMock,
   postLinearIssueComment: postLinearIssueCommentMock,
   openInBrowser: openInBrowserMock,
   getComposeDraft: getComposeDraftMock,
@@ -177,6 +255,16 @@ describe("LinearTicketsView", () => {
     getLinearIssuesMock.mockResolvedValue(issues);
     getLinearIssueMock.mockReset();
     getLinearIssueMock.mockResolvedValue(issueDetail);
+    getLinearBoardLinkMock.mockReset();
+    getLinearBoardLinkMock.mockResolvedValue(boardLink);
+    setLinearBoardLinkMock.mockClear();
+    clearLinearBoardLinkMock.mockClear();
+    getLinearTeamsMock.mockReset();
+    getLinearTeamsMock.mockResolvedValue(linearTeams);
+    getLinearNodeConnectionsMock.mockReset();
+    getLinearNodeConnectionsMock.mockResolvedValue([]);
+    copyLinearConnectionFromNodeMock.mockClear();
+    disconnectLinearMock.mockClear();
     postLinearIssueCommentMock.mockReset();
     postLinearIssueCommentMock.mockResolvedValue({
       id: "comment-2",
@@ -210,6 +298,18 @@ describe("LinearTicketsView", () => {
       buildEnvironmentIds: new Set(),
     });
     appCommandStore(projectStore).setState({ projects: [] });
+    appCommandStore(linearViewPreferencesStore).setState({ projects: {} });
+    updateLinearIssueMock.mockReset();
+    getLinearBoardOptionsMock.mockReset();
+    getLinearBoardOptionsMock.mockResolvedValue({
+      teamId: "team-1",
+      states: [
+        { id: "s-backlog", name: "Backlog", type: "backlog", position: 0 },
+        { id: "s-todo", name: "Todo", type: "unstarted", position: 1 },
+        { id: "s-review", name: "In Review", type: "started", position: 3 },
+        { id: "s-done", name: "Done", type: "completed", position: 4 },
+      ],
+    });
   });
 
   function renderLinearTicketsView() {
@@ -863,6 +963,7 @@ describe("LinearTicketsView", () => {
       expect(postLinearIssueCommentMock).toHaveBeenCalledWith(
         "issue-1",
         "New note from Orkestrator",
+        "project-1",
       );
       expect(screen.getByText("New note from Orkestrator")).toBeTruthy();
       expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added");
@@ -1265,5 +1366,288 @@ describe("LinearTicketsView", () => {
 
     fireEvent.click(button);
     await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
+  });
+
+  test("an unlinked project shows the board picker and lists only the board it links", async () => {
+    getLinearBoardLinkMock.mockResolvedValue(null);
+    renderLinearTicketsView();
+
+    expect(await screen.findByText("Link a Linear board")).toBeTruthy();
+    expect(screen.getByText("No Linear board linked")).toBeTruthy();
+    expect(getLinearIssuesMock).not.toHaveBeenCalled();
+    expect(screen.queryByText("Add Linear integration") === null).toBe(true);
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Linear team" }));
+    fireEvent.click(await screen.findByRole("option", { name: "ENG · Engineering" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Linear project" }));
+    fireEvent.click(await screen.findByRole("option", { name: "API" }));
+    // The backend answers the new link from now on.
+    getLinearBoardLinkMock.mockResolvedValue({ ...boardLink, linearProjectId: "lp-api" });
+    fireEvent.click(screen.getByRole("button", { name: /link board/i }));
+
+    await waitFor(() => {
+      expect(setLinearBoardLinkMock).toHaveBeenCalledWith("project-1", "team-eng", "lp-api");
+      expect(getLinearIssuesMock).toHaveBeenCalledWith("project-1");
+    });
+    expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+  });
+
+  test("shows the refusal when another project already has that board", async () => {
+    getLinearBoardLinkMock.mockResolvedValue(null);
+    setLinearBoardLinkMock.mockRejectedValueOnce(
+      new Error("ENG is already the Linear board of Other project"),
+    );
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Linear team" }));
+    fireEvent.click(await screen.findByRole("option", { name: "ENG · Engineering" }));
+    fireEvent.click(screen.getByRole("button", { name: /link board/i }));
+
+    expect(
+      await screen.findByText("ENG is already the Linear board of Other project"),
+    ).toBeTruthy();
+    expect(screen.getByText("Link a Linear board")).toBeTruthy();
+  });
+
+  test("a linked project names its board, scopes reads to it, and can unlink it", async () => {
+    renderLinearTicketsView();
+
+    expect(await screen.findByText("ENG / Website")).toBeTruthy();
+    await waitFor(() => expect(getLinearIssuesMock).toHaveBeenCalledWith("project-1"));
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await waitFor(() => expect(getLinearIssueMock).toHaveBeenCalledWith("issue-1", "project-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Linear tickets" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Unlink" }));
+    expect(await screen.findByText(/every machine with this repository/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Unlink board" }));
+
+    await waitFor(() => expect(clearLinearBoardLinkMock).toHaveBeenCalledWith("project-1"));
+    expect(await screen.findByText("Link a Linear board")).toBeTruthy();
+  });
+
+  test("Change board preselects the current board and Cancel keeps it", async () => {
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Change board" }));
+    expect(await screen.findByText("Change Linear board")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Linear project" }).textContent).toContain(
+      "Website",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+    expect(setLinearBoardLinkMock).not.toHaveBeenCalled();
+  });
+
+  test("a node from before board links lists every issue, as it did", async () => {
+    getLinearBoardLinkMock.mockRejectedValue(
+      new Error(unknownBackendCommandMessage("get_linear_board_link")),
+    );
+    renderLinearTicketsView();
+
+    expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+    expect(getLinearIssuesMock).toHaveBeenCalledWith(undefined);
+    expect(screen.queryByText("Link a Linear board") === null).toBe(true);
+  });
+
+  test("offers a connected machine's Linear key on a command node that has none", async () => {
+    getLinearConnectionMock.mockResolvedValueOnce({ connected: false, hasToken: false });
+    getLinearNodeConnectionsMock.mockResolvedValue([
+      {
+        nodeId: "node-laptop",
+        nodeName: "Laptop",
+        connected: true,
+        viewerName: "Ada",
+        keyFingerprint: "0123456789abcdef",
+      },
+      { nodeId: "node-ci", nodeName: "CI box", connected: false },
+    ]);
+    renderLinearTicketsView();
+
+    expect(await screen.findByText("Laptop")).toBeTruthy();
+    expect(screen.getByText("(as Ada)")).toBeTruthy();
+    expect(screen.queryByText("CI box") === null).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Use the Linear connection from Laptop here" }),
+    );
+
+    await waitFor(() => {
+      expect(copyLinearConnectionFromNodeMock).toHaveBeenCalledWith("node-laptop");
+      expect(toastSuccessMock).toHaveBeenCalledWith("Linear connected");
+    });
+    expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+  });
+
+  test("disconnect says it disconnects every machine with the same key", async () => {
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByText(/every other machine that holds the same key/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect everywhere" }));
+
+    await waitFor(() => {
+      expect(disconnectLinearMock).toHaveBeenCalledTimes(1);
+      expect(toastSuccessMock).toHaveBeenCalledWith("Linear disconnected");
+    });
+  });
+
+  describe("board view", () => {
+    function openLanesMenu() {
+      const trigger = screen.getByRole("button", { name: "Choose board lanes" });
+      trigger.focus();
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    }
+
+    test("shows a lane per workflow state, empty ones included, in Linear's order", async () => {
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+
+      const board = await screen.findByTestId("linear-board");
+      const lanes = within(board)
+        .getAllByRole("region")
+        .map((lane) => lane.getAttribute("aria-label"));
+      expect(lanes).toEqual(["Backlog lane", "Todo lane", "In Review lane", "Done lane"]);
+      const todo = within(board).getByRole("region", { name: "Todo lane" });
+      expect(within(todo).getByText("Add Linear integration")).toBeTruthy();
+      const review = within(board).getByRole("region", { name: "In Review lane" });
+      expect(within(review).getByText("No issues")).toBeTruthy();
+      expect(getLinearBoardOptionsMock).toHaveBeenCalledWith("project-1");
+    });
+
+    test("hides and shows lanes, and remembers the view and the hidden lanes", async () => {
+      const first = renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+      await screen.findByTestId("linear-board");
+
+      openLanesMenu();
+      fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /Backlog/ }));
+      fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /Done/ }));
+      // The menu stays open for several switches; close it before reading the board.
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("region", { name: "Backlog lane" }) === null).toBe(true);
+        expect(screen.queryByRole("region", { name: "Done lane" }) === null).toBe(true);
+      });
+      expect(screen.getByRole("region", { name: "Todo lane" })).toBeTruthy();
+      expect(
+        appCommandStore(linearViewPreferencesStore).getState().projects["project-1"],
+      ).toMatchObject({ view: "board", hiddenLanes: ["Backlog", "Done"] });
+
+      // A new mount (switching tabs and back) keeps the board and the hidden lanes.
+      first.unmount();
+      renderLinearTicketsView();
+      expect(await screen.findByRole("region", { name: "Todo lane" })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Done lane" }) === null).toBe(true);
+
+      openLanesMenu();
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Show all lanes" }));
+      await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
+      expect(await screen.findByRole("region", { name: "Done lane" })).toBeTruthy();
+    });
+
+    test("says so when every lane is hidden", async () => {
+      appCommandStore(linearViewPreferencesStore).setState({
+        projects: {
+          "project-1": {
+            view: "board",
+            hiddenLanes: ["Backlog", "Todo", "In Review", "Done"],
+            updatedAt: 1,
+          },
+        },
+      });
+      renderLinearTicketsView();
+
+      expect(await screen.findByText("Every lane is hidden")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Show all lanes" }));
+      expect(await screen.findByRole("region", { name: "Todo lane" })).toBeTruthy();
+    });
+
+    test("opens an issue from its card", async () => {
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+
+      const todo = await screen.findByRole("region", { name: "Todo lane" });
+      fireEvent.click(within(todo).getByText("Add Linear integration"));
+      await waitFor(() => expect(getLinearIssueMock).toHaveBeenCalled());
+      expect(getLinearIssueMock.mock.calls[0]?.[0]).toBe("issue-1");
+    });
+
+    test("falls back to lanes from the issues when the board's states cannot be read", async () => {
+      getLinearBoardOptionsMock.mockRejectedValue(new Error("unknown command"));
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+
+      const board = await screen.findByTestId("linear-board");
+      expect(
+        within(board)
+          .getAllByRole("region")
+          .map((lane) => lane.getAttribute("aria-label")),
+        // These issues carry no state type, so the lanes sort by name, as the
+        // list's sections do.
+      ).toEqual(["Done lane", "Todo lane"]);
+    });
+
+    test("dragging a card to another lane moves the issue to that state in Linear", async () => {
+      updateLinearIssueMock.mockImplementation(async () => ({
+        ...issueDetail,
+        status: "In Review",
+        statusType: "started",
+        statusPosition: 3,
+      }));
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+      await screen.findByRole("region", { name: "In Review lane" });
+
+      const restore = layOutLinearBoard();
+      try {
+        await dragLinearCard("Add Linear integration", "In Review");
+      } finally {
+        restore();
+      }
+
+      await waitFor(() => {
+        expect(updateLinearIssueMock).toHaveBeenCalledWith("project-1", "issue-1", {
+          stateId: "s-review",
+        });
+        expect(toastSuccessMock).toHaveBeenCalledWith("ENG-123 moved to In Review");
+      });
+      const review = screen.getByRole("region", { name: "In Review lane" });
+      expect(within(review).getByText("Add Linear integration")).toBeTruthy();
+      const todo = screen.getByRole("region", { name: "Todo lane" });
+      expect(within(todo).queryByText("Add Linear integration") === null).toBe(true);
+    });
+
+    test("a move Linear refuses puts the card back and says why", async () => {
+      updateLinearIssueMock.mockImplementation(async () => {
+        throw new Error("Linear issue ENG-123 is not on this project's Linear board (ENG).");
+      });
+      renderLinearTicketsView();
+      expect(await screen.findByText("Add Linear integration")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "Board" }));
+      await screen.findByRole("region", { name: "In Review lane" });
+
+      const restore = layOutLinearBoard();
+      try {
+        await dragLinearCard("Add Linear integration", "In Review");
+      } finally {
+        restore();
+      }
+
+      await waitFor(() =>
+        expect(toastErrorMock).toHaveBeenCalledWith("Could not move ENG-123 to In Review", {
+          description: "Linear issue ENG-123 is not on this project's Linear board (ENG).",
+        }),
+      );
+      const todo = screen.getByRole("region", { name: "Todo lane" });
+      expect(within(todo).getByText("Add Linear integration")).toBeTruthy();
+    });
   });
 });

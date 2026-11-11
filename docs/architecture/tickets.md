@@ -545,3 +545,95 @@ work on its own board as before (see
 **Detaching.** When a command node detaches, the leaf's copies of its tickets
 become the leaf's own, keeping what they say, and nothing more is queued for
 it.
+
+## Linear
+
+A project uses Kanban or a Linear board, not both for one ticket: nothing
+links a Kanban ticket to a Linear issue. Kanban stays the default, and the
+coordinator's Linear tools say so.
+
+**The connection is per machine.** A Linear connection is a personal API key,
+stored on each machine that uses it (`linear-auth`, sensitive). It is never
+returned to a renderer, a log or the model. Connection status carries a
+16-character SHA-256 fingerprint of the key (`keyFingerprint`, from
+`linearKeyFingerprint` in `linear-boards.ts`) so machines can tell whether
+they hold the same key without exposing it. The connect dialog in a
+project's Linear tab lists the machines the window can reach that have a
+project for the same repository, and the window sends the key to each one
+the user ticks (`connect_linear` through `invokeOnMachine`); each machine
+checks the key with Linear itself.
+
+**A key copied from a machine the window cannot reach.** A leaf never reaches
+its command node, so a window on a laptop cannot connect the home server. The
+command node's Linear tab then shows which machines are connected
+(`get_linear_node_connections`, read during sync), and Use it here copies that
+machine's key once over the node link (`copy_linear_connection_from_node`,
+which calls the leaf's link-only `export_linear_connection`). This is the one
+exception to "credentials never travel"
+([command-nodes.md](command-nodes.md#settings)): it runs only when the user
+asks, only over the authenticated link, and the key is verified and stored
+here like a typed one.
+
+**Disconnecting disconnects everywhere.** `disconnect_linear` records the key's
+fingerprint and the time (`linear-sync`), and sync carries it to every
+machine. A machine clears its key when the fingerprint matches and its key was
+connected before the disconnect, so a machine connected again afterwards
+stays connected and a different key is left alone. Disconnects are kept for
+180 days, at most 50.
+
+**One board per project, by repository.** A project links to one Linear team
+(its board), optionally narrowed to one Linear project in that team
+(`set_linear_board_link`). The link is keyed by the project's repository
+(`repo:<host/owner/name>`, `linearBoardLinkKey` in `storage-linear.ts`), so the
+same repository's project on every machine uses it; a project with no Git
+remote is keyed by its id and stays on its machine. A machine refuses a second
+of its projects on a board another one already has. The Linear tab of an
+unlinked project shows a board picker instead of every issue the key can see,
+and a linked one lists only that board's issues (`get_linear_issues` with
+`projectId`).
+
+**List and board views.** The Linear tab shows a project's issues as a list
+grouped by workflow state, or as a board with one vertical lane per workflow
+state, like the Kanban board. Lanes come from the board's states
+(`get_linear_board_options`), so empty stages still show; an older node, or a
+failed read, falls back to the states the issues are in. The Lanes menu hides
+and shows individual lanes. The chosen view and hidden lanes are a renderer
+preference per project and node (`linearViewPreferencesStore`); they change
+nothing in Linear. Cards open the same issue detail as the list.
+
+**Moving a card.** Dragging a card to another lane moves the issue to that
+lane's workflow state in Linear (`update_linear_issue` with `stateId`, which
+the backend refuses for an issue not on the project's board). The card moves
+at once and goes back, with the reason, if Linear refuses. Only lanes read from
+the board's states take a card, so a board whose states could not be read, or
+a node from before board links, shows the lanes without dragging. While a card
+is held the board stops snapping to lanes, because snapping fights the drag's
+edge scrolling.
+
+**Sync.** `NodeLinearSync` (`nodes/node-linear-sync.ts`) runs on the command
+node beside Kanban sync, at the same moments: a (re)connect, a leaf's project
+list being read, shortly after a change here, and the minute reconcile. For
+each connected leaf it reads the leaf's links, disconnects and connection
+(`get_linear_sync_state`), merges them here (for each link the side that
+changed it last wins; a clear is a tombstone), and sends the merged set back
+(`apply_linear_sync_state`). A change made on a leaf therefore reaches the
+command node within a minute, and other leaves on the pass after. These link
+commands and `export_linear_connection` are link-only
+(`NODE_ROUTING_EXCLUDED_COMMANDS`) and check the caller is an attached command
+node. An older leaf answers `unknown-command` and keeps its own links.
+
+**Writes stay on the board.** `create_linear_issue`, `update_linear_issue` and,
+with a `projectId`, `get_linear_issue` and `post_linear_issue_comment` refuse
+an issue that is not on the project's linked board (its team, and its Linear
+project when the link names one). `create_linear_issue` records its
+`requestKey` and the issue it made (`linear-issue-creates`, at most 500), so a
+retry returns that issue instead of creating another; Linear has no
+idempotency key of its own.
+
+**Coordinator tools.** `list_linear_issues`, `get_linear_issue`,
+`create_linear_issue`, `update_linear_issue`, `add_linear_comment` and
+`list_linear_board_options` (`control-mcp-linear-tools.ts`) are offered to
+coordinators, not to operator credentials. They run on the coordinator's own
+machine with its own key; with a `nodeId` they act on the coordinator's
+project on that machine through `invoke_on_node`. `add_linear_comment` is not
+idempotent: a retry posts again.

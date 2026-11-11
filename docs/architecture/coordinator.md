@@ -653,6 +653,11 @@ optional `nodeId` (`coordinator-node-tickets.ts`):
 | `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
 | `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
 
+The Linear tools (`list_linear_issues` and the rest, [tickets.md](tickets.md#linear))
+act on the project's linked Linear board with this machine's own key; with a
+`nodeId` they run on the coordinator's project on that machine through
+`invoke_on_node`, which reads the same board with that machine's key.
+
 The label tools (`list_ticket_labels`, `create_ticket_label`, `set_ticket_label`)
 take no `nodeId`: they act on this board, whose labels sync with the tickets.
 To label a ticket that exists only on a leaf, pass `labels` to `update_ticket`

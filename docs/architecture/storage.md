@@ -37,7 +37,7 @@ namespace), their per-file lock files and five-deep backup ladders.
   holding that repository (`storage.kanban.addKanbanTask()`, where
   `KanbanStorage = Pick<KanbanRepository, "addKanbanTask" | …>`).
 
-The area fields are `kanban` (`KanbanStorage`), `coordinators`
+The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coordinators`
 (`CoordinatorsStorage`), `publicOperations` (`PublicOperationsStorage`),
 `nodes` (`NodesStorage`), `previewServices` (`PreviewServicesStorage`),
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
@@ -74,6 +74,7 @@ the change journal.
 | `AgentMailInjects` | `storage-agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
 | `AgentMailBudgets` | `storage-agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
 | `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
+| `LinearRepository` | `storage-linear.ts` | Linear board links per repository, disconnects to apply on other machines, and `create_linear_issue` request keys ([tickets.md](tickets.md#linear)), reached as `storage.linear` |
 | `KanbanSyncRepository` | `storage-kanban-sync-repository.ts` | Kanban sync across machines ([tickets.md](tickets.md#sync-across-machines)), reached as `storage.ticketSync`; shares `KanbanBoardStore` (`storage-kanban-board.ts`: the Kanban lease, its reads and the commit that stamps each change for sync) with `KanbanRepository` |
 | `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
 | `NodesRepository` | `storage-nodes.ts` | Command-node stores |

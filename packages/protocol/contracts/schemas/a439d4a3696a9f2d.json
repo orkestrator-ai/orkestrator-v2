@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a439d4a3696a9f2de9a896f439f6e3bc6d6f2a35538724421b58a531c743b8af",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "linearProjectId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        }
+      },
+      "required": ["projectId", "teamId"],
+      "type": "object"
+    }
+  }
+}

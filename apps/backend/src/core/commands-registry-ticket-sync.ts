@@ -62,7 +62,7 @@ function sequence(value: unknown, name: string): number {
 }
 
 /** The calling command node, which must be attached to this node. */
-function attachedController(
+export function attachedController(
   args: { readonly controllerId?: unknown },
   context: CommandContext,
 ): string {

@@ -1169,10 +1169,15 @@ export class KanbanRepository {
     return auth?.apiKey ? auth : null;
   }
 
-  async saveLinearAuth(apiKey: string, viewer?: LinearAuth["viewer"]): Promise<LinearAuth> {
+  /** `connectedAt` is kept when given: refreshing who the key signs in as is not a new connection. */
+  async saveLinearAuth(
+    apiKey: string,
+    viewer?: LinearAuth["viewer"],
+    connectedAt?: string,
+  ): Promise<LinearAuth> {
     const auth: LinearAuth = {
       apiKey,
-      connectedAt: nowIso(),
+      connectedAt: connectedAt ?? nowIso(),
       viewer,
     };
     await this.enqueueLinearAuthMutation(() =>

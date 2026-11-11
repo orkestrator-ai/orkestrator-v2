@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:7287f6941afb269d2cd04cabb9cccc90c19b47af9b3293bba3fde88390985d24",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "assigneeId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "estimate": {
+          "type": "number"
+        },
+        "labelIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "maximum": 4,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "requestKey": {
+          "type": "string"
+        },
+        "stateId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": ["projectId", "requestKey", "title"],
+      "type": "object"
+    }
+  }
+}

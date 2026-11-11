@@ -153,3 +153,135 @@ test("settling a turn's outcome records its usage without any view read", async 
     },
   );
 });
+
+const cliIdentity = {
+  environmentId: "env-1",
+  agent: "claude" as const,
+  logicalSessionKey: "env-env-1:cli-start",
+};
+
+function markIdle(service: Parameters<typeof launchInternals>[0], key: string, id: string) {
+  launchInternals(service).observedSessionActivity.set(key, {
+    providerSessionId: id,
+    state: "idle",
+  });
+}
+
+function turn(turnId: string, inputTokens: number) {
+  return { turnId, inputTokens, outputTokens: 1, modelId: "fake" };
+}
+
+function settledHelper(service: unknown) {
+  return (service as { settledTurnUsage: { owes(key: string): boolean } }).settledTurnUsage;
+}
+
+test("a turn that settles while the previous turn's usage read is in flight is still counted", async () => {
+  let gate: Promise<void> | undefined;
+  let turns = [turn("turn-1", 100)];
+  const stub = createProviderStub("claude", {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    sessionStateSnapshot: async () => {
+      // Captured before the read waits: turn 2 has not happened yet.
+      const seen = turns;
+      if (gate) await gate;
+      return { status: "idle", contextUsage: { usedTokens: 1, turns: seen } };
+    },
+  });
+  await withService(
+    { prefix: "orkestrator-native-usage-overlap-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const first = await service.dispatchPrompt({ ...cliIdentity, prompt: "1", requestId: "r-1" });
+      markIdle(service, first.key, first.providerSessionId);
+      let release!: () => void;
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reads = stub.sessionStateSnapshot!.mock.calls.length;
+      await service.sessionTurnOutcome({ ...cliIdentity, requestId: "r-1" });
+      await waitForCondition(() => stub.sessionStateSnapshot!.mock.calls.length === reads + 1);
+
+      // Turn 2 runs and settles while turn 1's read is still waiting.
+      gate = undefined;
+      const second = await service.dispatchPrompt({
+        ...cliIdentity,
+        prompt: "2",
+        requestId: "r-2",
+      });
+      turns = [...turns, turn("turn-2", 7)];
+      markIdle(service, second.key, second.providerSessionId);
+      expect(await service.sessionTurnOutcome({ ...cliIdentity, requestId: "r-2" })).toEqual({
+        outcome: "completed",
+      });
+      release();
+      await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 2);
+      expect(storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(107);
+    },
+  );
+});
+
+test("a failed settled usage read is retried by the next outcome call", async () => {
+  let fail = true;
+  const stub = createProviderStub("claude", {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    sessionStateSnapshot: async () => {
+      if (fail) throw new Error("bridge restarting");
+      return { status: "idle", contextUsage: { usedTokens: 1, turns: [turn("turn-1", 123)] } };
+    },
+  });
+  await withService(
+    { prefix: "orkestrator-native-usage-retry-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const session = await service.dispatchPrompt({
+        ...cliIdentity,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      markIdle(service, session.key, session.providerSessionId);
+      expect(await service.sessionTurnOutcome({ ...cliIdentity, requestId: "r-1" })).toEqual({
+        outcome: "completed",
+      });
+      await waitForCondition(() => settledHelper(service).owes(session.key));
+      expect(storage.getAgentUsageHistory({ days: 1 }).totals.turns).toBe(0);
+
+      fail = false;
+      // Answered from the recorded outcome, and the owed read rides on it.
+      await service.sessionTurnOutcome({ ...cliIdentity, requestId: "r-1" });
+      await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 1);
+      expect(settledHelper(service).owes(session.key)).toBe(false);
+    },
+  );
+});
+
+test("the queue drain settles the previous turn with the usage its own status read carried", async () => {
+  const usage = { usedTokens: 1, turns: [turn("turn-1", 55)] };
+  const stub = createProviderStub("claude", {
+    interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    sessionStateSnapshot: async () => ({ status: "idle" }),
+  });
+  (stub.provider as { observeSession?: unknown }).observeSession = async () => ({
+    status: "idle",
+    contextUsage: usage,
+  });
+  await withService(
+    { prefix: "orkestrator-native-usage-drain-", provider: async () => stub.provider },
+    async ({ service, storage }) => {
+      const session = await service.dispatchPrompt({
+        ...cliIdentity,
+        prompt: "first",
+        requestId: "r-1",
+      });
+      markIdle(service, session.key, session.providerSessionId);
+      const reads = stub.sessionStateSnapshot!.mock.calls.length;
+      const queueKey = `claude\0${cliIdentity.logicalSessionKey}`;
+      await storage.enqueuePromptQueueMessage(queueKey, "env-1", { id: "u-2", text: "next" });
+      service.notifyPromptQueueChanged(queueKey);
+      await waitForCondition(
+        async () => (await storage.getNativeAgentSession(session.key))?.turnOutcomes?.length === 1,
+      );
+      await waitForCondition(() => storage.getAgentUsageHistory({ days: 1 }).totals.turns === 1);
+      expect(storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(55);
+      // The settle reused the drain's observation instead of reading again.
+      expect(stub.sessionStateSnapshot!.mock.calls.length).toBe(reads);
+    },
+  );
+});

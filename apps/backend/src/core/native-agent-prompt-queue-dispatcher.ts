@@ -23,7 +23,10 @@ import {
   QUEUE_RETRY_CEILING_MS,
   assertValidPromptAttachments,
 } from "./native-agent-service-shared.js";
-import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAsyncQuestionItemId,
+  type NativeAgentContextUsage,
+} from "@orkestrator/protocol/native-agent";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { PromptRejectedError } from "./agent-provider-contract.js";
@@ -83,10 +86,12 @@ export interface NativeAgentPromptQueueDispatcherHost {
     detail: string | undefined,
     provider?: Pick<
       NativeAgentRuntimeProvider,
-      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage"
+      "turnTerminalError" | "sessionStateSnapshot" | "refreshUsage" | "recentTurnUsage"
     >,
     /** The bridge's structured kind for an `error` status, when it sent one. */
     failureKind?: TurnFailureKind,
+    /** Usage the same status read carried, so settling the turn need not read again. */
+    usage?: NativeAgentContextUsage,
   ): Promise<number | void>;
   /** A usage-limit stop is being decided; its resend goes ahead of the queue. */
   usageLimitResendPending?(key: string): boolean;
@@ -621,6 +626,7 @@ export class NativeAgentPromptQueueDispatcher {
       status,
       error: statusDetail,
       failureKind,
+      contextUsage,
     } = await readProviderStatus(provider, session.providerSessionId);
     // This read is the last look at the previous turn before the next prompt
     // replaces its status; keep its content-free outcome for observers.
@@ -630,6 +636,7 @@ export class NativeAgentPromptQueueDispatcher {
       statusDetail,
       provider,
       failureKind,
+      contextUsage,
     );
     if (outcomeRetryMs !== undefined) {
       this.queueRetryAt.set(queueKey, Date.now() + outcomeRetryMs);

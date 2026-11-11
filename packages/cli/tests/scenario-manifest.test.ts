@@ -2,8 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { recordResolvedModel } from "../scenarios/cases.js";
-import { RunManifest, type CliDriver, type CliResult } from "../scenarios/harness.js";
+import { recordResolvedModel, recordSettledStartUsage } from "../scenarios/cases.js";
+import {
+  RunManifest,
+  type CliDriver,
+  type CliResult,
+  type IsolatedBackend,
+} from "../scenarios/harness.js";
+import { summarizeUsageReport } from "../scenarios/usage.js";
 
 /**
  * A live run's manifest says which model the turn ran on, including an
@@ -154,5 +160,40 @@ describe("scenario manifest model record", () => {
       resolved: null,
       readError: "no-session",
     });
+  });
+});
+
+describe("scenario manifest settled usage record", () => {
+  const backend = {} as IsolatedBackend;
+
+  test("records the turns counted straight after session start --wait", async () => {
+    const target = await manifest();
+    await startEntry(target);
+    const reads: unknown[] = [];
+    const settled = await recordSettledStartUsage(
+      { name: "live-session", backend, manifest: target },
+      "session start --wait",
+      async (read) => {
+        reads.push(read);
+        return { usage: summarizeUsageReport({ totals: { turns: 1 } as never, sessions: 1 }) };
+      },
+    );
+    expect(settled).toEqual({ turns: 1 });
+    expect(reads).toEqual([backend]);
+    const entry = (await written(target)).entries[0] as { settledUsage?: unknown };
+    expect(entry.settledUsage).toEqual({ turns: 1 });
+  });
+
+  test("a failed usage read counts no turns and says why", async () => {
+    const target = await manifest();
+    await startEntry(target);
+    const settled = await recordSettledStartUsage(
+      { name: "live-session", backend, manifest: target },
+      "session start --wait",
+      async () => ({ usage: null, readError: "usage read answered HTTP 503" }),
+    );
+    expect(settled).toEqual({ turns: 0, readError: "usage read answered HTTP 503" });
+    const entry = (await written(target)).entries[0] as { settledUsage?: unknown };
+    expect(entry.settledUsage).toEqual(settled);
   });
 });

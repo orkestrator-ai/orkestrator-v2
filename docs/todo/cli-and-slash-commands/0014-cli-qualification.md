@@ -154,7 +154,10 @@ own completion and every public read do not, so a run whose last turn is a
 `session start` records nothing for it; `live-session` ends with prompts, so
 its count is whole. That backend gap was to-do 7815 (retired), fixed on
 2026-11-11: the backend now records a turn's usage when it records the turn's
-outcome and on every session-state read. The paid run that reads a
+outcome and on every session-state read. `live-session` now also reads the
+usage report straight after `session start --wait`, before any other read of
+the session, records the count on that stage's manifest entry
+(`settledUsage`) and fails when it is 0. The paid run that reads a
 real provider's cost stays on the checklist (7568: 0014 task 4).
 
 ### 5. Fresh Linux evidence

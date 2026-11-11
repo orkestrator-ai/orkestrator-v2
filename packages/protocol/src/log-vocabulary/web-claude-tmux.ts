@@ -14,7 +14,7 @@ export const WEB_CLAUDE_TMUX_LOG_AREAS = defineLogAreas({
       "terminal.resize-failed": "Resizing the interactive terminal's session failed.",
       "terminal.recover-failed": "The interactive terminal could not reattach to its session.",
       "terminal.lease-lapsed":
-        "The backend had dropped the interactive terminal after missed renewals; a new one is attached.",
+        "The backend had dropped the interactive terminal after missed renewals; a new one is attached (once the page is visible).",
       "terminal.renew-failed":
         "Renewing the interactive terminal's lease failed; the next renewal retries.",
     },

@@ -1409,8 +1409,11 @@ never detaches them, and counts Docker's `exec_start` events and the
 `tmux-interactive-capture` attempts in four windows: the tab alone, an
 unleased terminal (what every client left before the lease), a leased
 terminal renewed every 15 s, and a leased terminal nobody renews, measured
-from 50 s after it was created. It detaches every terminal it made and stops
-the tab afterwards. On a host whose own Docker the session cannot reach, run
+from 50 s after it was created. It exits 1 unless the last window counted no
+capture at all while the unleased and renewed windows counted some, and the
+orphan's late renewal was refused; a refused late renewal alone proves
+nothing, because a renewal detaches a lapsed terminal itself. It detaches
+every terminal it made and stops the tab afterwards. On a host whose own Docker the session cannot reach, run
 the profile on a disposable rootless daemon with the image built inside it:
 
 ```bash

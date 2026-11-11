@@ -66,6 +66,10 @@ export function ClaudeTmuxInteractiveTerminal({
   // Bumped when the backend reports that it dropped this terminal (its lease
   // lapsed while the page slept or was throttled), to attach a new one.
   const [attachGeneration, setAttachGeneration] = useState(0);
+  // Set when a lapse triggers that reattach: the generation it replaces and
+  // whether the lapsed terminal held keyboard focus. A recovery is not a user
+  // attaching the terminal, so it must not take focus from wherever it is.
+  const leaseRecoveryRef = useRef<{ fromGeneration: number; hadFocus: boolean } | null>(null);
 
   useEffect(() => {
     isMobileRef.current = isMobile;
@@ -140,6 +144,10 @@ export function ClaudeTmuxInteractiveTerminal({
   useEffect(() => {
     const host = terminalHostRef.current;
     if (!host) return;
+    const recovery =
+      leaseRecoveryRef.current?.fromGeneration === attachGeneration - 1
+        ? leaseRecoveryRef.current
+        : null;
 
     const terminal = new Terminal({
       linkHandler: {
@@ -273,6 +281,22 @@ export function ClaudeTmuxInteractiveTerminal({
       renewTimer = null;
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
+    const reattach = () => {
+      const focused = document.activeElement;
+      leaseRecoveryRef.current = {
+        fromGeneration: attachGeneration,
+        hadFocus: focused !== null && host.contains(focused),
+      };
+      setAttachGeneration((generation) => generation + 1);
+    };
+    // A hidden page's timers are throttled to about one a minute, longer than
+    // the lease, so a terminal attached while hidden would lapse again before
+    // its first renewal and cycle. Reattach once the page is visible instead.
+    const onVisibleReattach = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onVisibleReattach);
+      if (!cancelled) reattach();
+    };
     // The backend stops capturing a terminal whose client stops renewing, so a
     // reload, a closed window or a cut link no longer leaves its capture loop
     // running for nobody (to-do 7745, retired). Unmount still detaches at once.
@@ -289,7 +313,11 @@ export function ClaudeTmuxInteractiveTerminal({
         } else if (renewal === "lapsed") {
           stopRenewing();
           log.info("terminal.lease-lapsed", { sessionId });
-          setAttachGeneration((generation) => generation + 1);
+          if (document.visibilityState === "hidden") {
+            document.addEventListener("visibilitychange", onVisibleReattach);
+          } else {
+            reattach();
+          }
         }
       } catch (renewError) {
         // Transient (a reconnecting link): the next renewal retries well
@@ -394,7 +422,20 @@ export function ClaudeTmuxInteractiveTerminal({
         setConnected(true);
         setError(null);
         fit();
-        if (!isMobileRef.current) {
+        if (recovery) {
+          if (leaseRecoveryRef.current === recovery) leaseRecoveryRef.current = null;
+          // Only give focus back to a terminal that had it, in a pane that is
+          // still active, and only if nothing else took it meanwhile.
+          const focused = document.activeElement;
+          const focusIsFree =
+            focused === null ||
+            focused === document.body ||
+            !focused.isConnected ||
+            host.contains(focused);
+          if (recovery.hadFocus && isActiveRef.current && !isMobileRef.current && focusIsFree) {
+            terminal.focus();
+          }
+        } else if (!isMobileRef.current) {
           terminal.focus();
         }
       } catch (e) {
@@ -407,6 +448,7 @@ export function ClaudeTmuxInteractiveTerminal({
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibleReattach);
       cleanupCreatedSession();
       setConnected(false);
       dataDisposable.dispose();

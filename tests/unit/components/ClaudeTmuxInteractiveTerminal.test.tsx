@@ -1,5 +1,6 @@
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { CLAUDE_TMUX_INTERACTIVE_RENEW_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
@@ -63,6 +64,8 @@ class MockTerminal {
   disposed = false;
   dataHandlers: Array<(data: string) => void> = [];
   keyHandler: KeyHandler | null = null;
+  /** Stands in for xterm's helper textarea, so focus moves in the DOM. */
+  textarea: HTMLTextAreaElement | null = null;
 
   constructor(public options: ITerminalOptions = {}) {
     terminalInstances.push(this);
@@ -70,7 +73,10 @@ class MockTerminal {
 
   loadAddon() {}
 
-  open() {}
+  open(parent: HTMLElement) {
+    this.textarea = document.createElement("textarea");
+    parent.appendChild(this.textarea);
+  }
 
   onData(handler: (data: string) => void) {
     this.dataHandlers.push(handler);
@@ -103,10 +109,12 @@ class MockTerminal {
 
   focus() {
     this.focused = true;
+    this.textarea?.focus();
   }
 
   dispose() {
     this.disposed = true;
+    this.textarea?.remove();
   }
 }
 
@@ -980,6 +988,210 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       act(() => {
         document.dispatchEvent(new Event("visibilitychange"));
       });
+
+    // The renewal interval, captured so a test fires its ticks by hand. Every
+    // other interval (testing-library's polling) runs on the real timers.
+    type RenewInterval = { fire: () => void; cleared: boolean };
+    let renewIntervals: RenewInterval[] = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const visibilityDescriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    const liveRenewIntervals = () => renewIntervals.filter((entry) => !entry.cleared);
+    const tick = () =>
+      act(async () => {
+        for (const entry of liveRenewIntervals()) entry.fire();
+        await Promise.resolve();
+      });
+    const setVisibility = (value: DocumentVisibilityState) =>
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+
+    beforeEach(() => {
+      renewIntervals = [];
+      globalThis.setInterval = ((callback: (...args: unknown[]) => void, delayMs?: number) => {
+        if (delayMs !== CLAUDE_TMUX_INTERACTIVE_RENEW_MS) return realSetInterval(callback, delayMs);
+        const entry: RenewInterval = { fire: () => callback(), cleared: false };
+        renewIntervals.push(entry);
+        return entry as unknown as ReturnType<typeof setInterval>;
+      }) as unknown as typeof setInterval;
+      globalThis.clearInterval = ((id?: unknown) => {
+        const entry = renewIntervals.find((candidate) => candidate === id);
+        if (entry) entry.cleared = true;
+        else realClearInterval(id as ReturnType<typeof setInterval>);
+      }) as typeof clearInterval;
+    });
+
+    afterEach(() => {
+      cleanup();
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      if (visibilityDescriptor)
+        Object.defineProperty(document, "visibilityState", visibilityDescriptor);
+      else delete (document as { visibilityState?: unknown }).visibilityState;
+      document.body.querySelectorAll("[data-lease-focus-probe]").forEach((node) => node.remove());
+    });
+
+    test("renews on its interval while attached and stops when unmounted", async () => {
+      const { unmount } = renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      expect(liveRenewIntervals()).toHaveLength(1);
+
+      await tick();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+      await tick();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(2));
+      expect(renewInteractiveTerminalMock).toHaveBeenLastCalledWith("pty-1");
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+      expect(renewIntervals).toHaveLength(1);
+
+      unmount();
+      expect(liveRenewIntervals()).toHaveLength(0);
+      expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
+    });
+
+    test("never overlaps renewals while one is still in flight", async () => {
+      const pending = deferred<"renewed" | "lapsed" | "unsupported">();
+      renewInteractiveTerminalMock.mockImplementationOnce(() => pending.promise);
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      await tick();
+      await tick();
+      becomeVisible();
+      expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        pending.resolve("renewed");
+        await pending.promise;
+      });
+      await tick();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(2));
+      expect(liveRenewIntervals()).toHaveLength(1);
+    });
+
+    test("clears its interval when the backend predates leases", async () => {
+      renewInteractiveTerminalMock.mockResolvedValue("unsupported");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      await tick();
+      await waitFor(() => expect(liveRenewIntervals()).toHaveLength(0));
+      await tick();
+      expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("lease recovery leaves keyboard focus where the user put it", async () => {
+      createInteractiveTerminalMock.mockResolvedValueOnce("pty-1").mockResolvedValueOnce("pty-2");
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(terminalInstances[0]?.focused).toBe(true));
+      const input = document.createElement("input");
+      input.setAttribute("data-lease-focus-probe", "");
+      document.body.appendChild(input);
+      input.focus();
+      expect(document.activeElement).toBe(input);
+
+      await tick();
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-2"));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(terminalInstances[1]!.focused).toBe(false);
+      expect(document.activeElement).toBe(input);
+    });
+
+    test("lease recovery gives focus back to a terminal that had it", async () => {
+      createInteractiveTerminalMock.mockResolvedValueOnce("pty-1").mockResolvedValueOnce("pty-2");
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(terminalInstances[0]?.focused).toBe(true));
+      expect(document.activeElement).toBe(terminalInstances[0]!.textarea);
+
+      await tick();
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-2"));
+      await waitFor(() => expect(terminalInstances[1]!.focused).toBe(true));
+      expect(document.activeElement).toBe(terminalInstances[1]!.textarea);
+    });
+
+    test("lease recovery in an inactive pane does not take focus", async () => {
+      createInteractiveTerminalMock.mockResolvedValueOnce("pty-1").mockResolvedValueOnce("pty-2");
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal
+          tabId="tab-1"
+          environmentId={environmentId}
+          isActive={false}
+        />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+      await tick();
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-2"));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(terminalInstances[1]!.focused).toBe(false);
+    });
+
+    test("a lapse while the page is hidden reattaches only once it is visible", async () => {
+      createInteractiveTerminalMock.mockResolvedValueOnce("pty-1").mockResolvedValueOnce("pty-2");
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      setVisibility("hidden");
+
+      await tick();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      // Throttled timers would let a terminal attached now lapse again.
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+      expect(terminalInstances[0]!.disposed).toBe(false);
+      expect(liveRenewIntervals()).toHaveLength(0);
+      becomeVisible();
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+
+      setVisibility("visible");
+      becomeVisible();
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-2"));
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(2);
+      expect(liveRenewIntervals()).toHaveLength(1);
+    });
+
+    test("a deferred reattach is dropped when the terminal unmounts", async () => {
+      renewInteractiveTerminalMock.mockResolvedValueOnce("lapsed");
+      const { unmount } = renderInAppCommandScope(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      setVisibility("hidden");
+      await tick();
+      await waitFor(() => expect(renewInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      unmount();
+      setVisibility("visible");
+      becomeVisible();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+    });
 
     test("renews the lease when the page becomes visible", async () => {
       const { unmount } = renderInAppCommandScope(

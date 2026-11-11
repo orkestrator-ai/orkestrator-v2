@@ -391,6 +391,30 @@ describe("interactive tmux terminal snapshots", () => {
     );
   });
 
+  test("a write or resize on a lapsed but still-held terminal detaches it and refuses", async () => {
+    // The lease ran out between two capture ticks, so the terminal is still
+    // in the map when a late write or resize reaches it.
+    for (const operation of ["write", "resize"] as const) {
+      const harness = createInteractiveHarness(["initial"], [], { leased: true });
+      await harness.manager.start(harness.id, harness.context);
+      const resizesBefore = harness.resizeCalls.length;
+      harness.advance(LEASE_MS);
+      expect(harness.manager.size()).toBe(1);
+
+      const late =
+        operation === "write"
+          ? harness.manager.write(harness.id, "ls\r", harness.context)
+          : harness.manager.resize(harness.id, 80, 20);
+      await expect(late).rejects.toThrow("tmux interactive terminal session not found");
+
+      expect(harness.manager.size()).toBe(0);
+      expect(harness.cancelled).toContain(harness.scheduled[0]!.timer);
+      expect(harness.writeCount()).toBe(0);
+      expect(harness.resizeCalls).toHaveLength(resizesBefore);
+      expect(harness.manager.renew(harness.id)).toBe(false);
+    }
+  });
+
   test("renewals keep a leased terminal capturing", async () => {
     const harness = createInteractiveHarness(["initial", "next", "again"], [], { leased: true });
     await harness.manager.start(harness.id, harness.context);

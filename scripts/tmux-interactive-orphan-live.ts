@@ -50,6 +50,11 @@ import { gatewayFor } from "./tmux-mail-inject-live";
  *    lease ({@link CLAUDE_TMUX_INTERACTIVE_LEASE_MS}) and one capture tick
  *    have passed.
  *
+ * It exits 1 unless the leased orphan's window counted no capture at all,
+ * the unleased and renewed windows each counted some, no renewal of the
+ * renewed terminal was refused and the orphan's late renewal was
+ * ({@link orphanFailures}).
+ *
  * Every terminal it creates is detached afterwards, the tab's tmux session is
  * stopped and the fake model undone; stopping and resetting the profile is
  * the caller's.
@@ -124,6 +129,35 @@ export function interactiveCaptures(kinds: Record<string, KindRate>): {
 } {
   const kind = kinds["tmux-interactive-capture"];
   return { started: kind?.started ?? 0, dockerExec: kind?.units["docker-exec"] ?? 0 };
+}
+
+/**
+ * Why a run fails, from what it measured; empty when the lease did its job.
+ * The late renewal alone cannot prove the orphan stopped: `renew()` detaches a
+ * lapsed terminal itself, so it answers `false` even when the capture tick
+ * never reaped it and the orphan captured throughout its window. The windows'
+ * own capture counts carry that proof, and the two capturing windows show the
+ * counter was live at all.
+ */
+export function orphanFailures(
+  windows: OrphanWindow[],
+  outcome: { lapsedWhileRenewed: boolean; orphanRenewAfterLapse: boolean | undefined },
+): string[] {
+  const failures: string[] = [];
+  const captures = (name: string) =>
+    windows.find((window) => window.name === name)?.interactiveCapturesPerMinute;
+  const leasedOrphan = captures("leased-orphan");
+  if (leasedOrphan === undefined) failures.push("leased-orphan window missing");
+  else if (leasedOrphan !== 0) failures.push("leased orphan kept capturing after its lease");
+  for (const name of ["unleased-orphan", "leased-renewed"]) {
+    const rate = captures(name);
+    if (rate === undefined) failures.push(`${name} window missing`);
+    else if (!(rate > 0)) failures.push(`${name} window counted no captures`);
+  }
+  if (outcome.lapsedWhileRenewed) failures.push("a renewed lease lapsed");
+  if (outcome.orphanRenewAfterLapse !== false)
+    failures.push("late renewal of the orphan was not refused");
+  return failures;
 }
 
 const log = (message: string) => console.error(`[tmux-interactive-orphan-live] ${message}`);
@@ -271,8 +305,14 @@ export async function runOrphanBenchmark(options: Options, signal: AbortSignal):
       [{ leased: true, renewed: false }],
       `one leased terminal never renewed, measured from ${CLAUDE_TMUX_INTERACTIVE_LEASE_MS + 5_000} ms after it was created`,
     );
-    result.orphanRenewAfterLapse = (await renew(orphan)).renewed;
-    if (lapsedWhileRenewed || result.orphanRenewAfterLapse !== false) exitCode = 1;
+    const orphanRenewAfterLapse = (await renew(orphan)).renewed;
+    result.orphanRenewAfterLapse = orphanRenewAfterLapse;
+    const failures = orphanFailures(windows, { lapsedWhileRenewed, orphanRenewAfterLapse });
+    if (failures.length) {
+      exitCode = 1;
+      result.failures = failures;
+      for (const failure of failures) log(`failed: ${failure}`);
+    }
   } catch (error) {
     exitCode = 1;
     result.error = error instanceof Error ? error.message : "failed";

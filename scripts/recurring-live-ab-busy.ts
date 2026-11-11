@@ -252,6 +252,12 @@ export type BusyResult = {
   };
   /** Held turns that had `busyTurnFiles` files written while they ran. */
   turnFileRounds: number;
+  /**
+   * Each round's burst as the backend saw it (to-do 7765): how far the
+   * `diff-scan` changed counter moved by the end of the wait, and every
+   * environment's stats read just before the burst and when the wait ended.
+   */
+  burstRescans: BurstRescan[];
   failures: BusyFailure[];
   /** `recurringWork` kinds and process totals, sampled at each round boundary. */
   windowSamples: LiveSample[];
@@ -271,6 +277,25 @@ export type BusyResult = {
   reviewViews: { watched: number; sampled: number; unobserved: number };
   modelRequests: number;
   durationMs: number;
+};
+
+/** One environment's backend diff stats: files and added lines, or null when unread. */
+export type BurstStats = { files: number; additions: number } | null;
+
+export type BurstRescan = {
+  clients: number;
+  round: number;
+  /** The `burst-backend` wait ran out. */
+  timedOut: boolean;
+  /** How far the `diff-scan` changed counter moved by the end of the wait. */
+  changed: number | null;
+  environments: Array<{
+    name: string;
+    /** The environment whose held turn wrote (and then removed) its own files. */
+    turn: boolean;
+    before: BurstStats;
+    after: BurstStats;
+  }>;
 };
 
 export type BusyRuntime = {
@@ -522,6 +547,7 @@ export async function measureBusy(
     timeouts: {},
     obligations: { turns: 0, queued: 0, approvals: 0, mails: 0, workflows: 0, duplicates: 0 },
     turnFileRounds: 0,
+    burstRescans: [],
     failures: [],
     windowSamples: [],
     admission: {},
@@ -562,6 +588,28 @@ export async function measureBusy(
     return metrics;
   };
   const readMetrics = async () => noteAdmission(await gateway.metrics());
+  /** Every environment's backend diff stats, by environment id; null when unreadable. */
+  const readDiffStats = async (): Promise<Map<string, BurstStats> | null> => {
+    try {
+      const snapshot = (await gateway.invoke("get_environment_diff_stats", {})) as {
+        entries?: unknown;
+      } | null;
+      const stats = new Map<string, BurstStats>();
+      for (const raw of Array.isArray(snapshot?.entries) ? snapshot.entries : []) {
+        const entry = raw as { environmentId?: unknown; stats?: Record<string, unknown> };
+        const files = entry.stats?.filesChanged;
+        const additions = entry.stats?.additions;
+        if (typeof entry.environmentId !== "string") continue;
+        stats.set(
+          entry.environmentId,
+          typeof files === "number" && typeof additions === "number" ? { files, additions } : null,
+        );
+      }
+      return stats;
+    } catch {
+      return null;
+    }
+  };
   const elapsed = () => runtime.now() - startedAt;
   const sampleWindow = async () => {
     const metrics = await readMetrics();
@@ -834,6 +882,7 @@ export async function measureBusy(
               }),
             );
           const changedBefore = diffChanged(await readMetrics());
+          const statsBefore = await readDiffStats();
           const burstAt = runtime.now();
           runtime.writeBurst(worktrees, burstPath, options.busyBurstFiles);
           const backendBurst =
@@ -852,7 +901,27 @@ export async function measureBusy(
             (additions, base) =>
               additions !== null && additions >= base + burstBadgeLines(options.busyBurstFiles),
           );
-          record("burst-backend", await backendBurst);
+          const burstBackend = await backendBurst;
+          record("burst-backend", burstBackend);
+          if (changedBefore !== null) {
+            // Which environments' scans the backend reflected by the end of the
+            // wait, so a timeout can tell a lost rescan from one that found
+            // nothing new to count (to-do 7765).
+            const changedAfter = diffChanged(await readMetrics());
+            const statsAfter = await readDiffStats();
+            result.burstRescans.push({
+              clients: clientCount,
+              round,
+              timedOut: burstBackend === null,
+              changed: changedAfter === null ? null : changedAfter - changedBefore,
+              environments: environments.map((entry) => ({
+                name: entry.name,
+                turn: entry.id === turnEnvironment.id,
+                before: statsBefore?.get(entry.id) ?? null,
+                after: statsAfter?.get(entry.id) ?? null,
+              })),
+            });
+          }
           const clearAt = runtime.now();
           runtime.removeBurst(worktrees, burstPath);
           await watchBadges("burst-clear", clearAt, (additions, base) => (additions ?? 0) <= base);
@@ -1283,6 +1352,42 @@ export function busyRowSummary(result: BusyResult) {
 }
 
 /** Markdown lines for the busy phase, appended to the driver's summary. */
+/**
+ * The burst rounds whose `burst-backend` wait ran out, and in each the
+ * environments whose backend stats read the same before the burst and when
+ * the wait ended: either never rescanned, or rescanned to the very numbers
+ * they already showed (a diff scan counts as changed only when the numbers
+ * move).
+ */
+export function burstRescanLine(result: BusyResult): string | null {
+  const rounds = result.burstRescans ?? [];
+  if (rounds.length === 0) return null;
+  const same = (a: BurstStats, b: BurstStats) =>
+    a !== null && b !== null && a.files === b.files && a.additions === b.additions;
+  const timedOut = rounds.filter((entry) => entry.timedOut);
+  let turnUnmoved = 0;
+  let otherUnmoved = 0;
+  for (const entry of timedOut) {
+    for (const environment of entry.environments) {
+      if (!same(environment.before, environment.after)) continue;
+      if (environment.turn) turnUnmoved += 1;
+      else otherUnmoved += 1;
+    }
+  }
+  const short = timedOut
+    .map((entry) =>
+      entry.changed === null ? null : rounds[0]!.environments.length - entry.changed,
+    )
+    .filter((value): value is number => value !== null);
+  return `Burst rescans: ${timedOut.length} of ${rounds.length} rounds timed out${
+    timedOut.length > 0
+      ? `; the changed counter fell ${short.length > 0 ? Math.min(...short) : "?"} to ${
+          short.length > 0 ? Math.max(...short) : "?"
+        } short; environments whose stats did not move: the held turn's in ${turnUnmoved} of them, others ${otherUnmoved} times`
+      : ""
+  }.`;
+}
+
 export function busySummaryLines(label: string, result: BusyResult): string[] {
   const lines = [
     "",
@@ -1317,6 +1422,7 @@ export function busySummaryLines(label: string, result: BusyResult): string[] {
     } results timed in a view, ${
       result.reviewViews.unobserved
     } reached the backend before the view showed the review (not sampled).`,
+    ...(burstRescanLine(result) === null ? [] : [burstRescanLine(result)!]),
     `Validation runs (queue/commands/run ms): ${
       result.validationRuns
         .map((run) => `${run.queuedMs}/${run.commandMs}/${run.runMs}`)

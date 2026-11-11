@@ -213,6 +213,8 @@ test("headless config selects only the supported specs", async () => {
     "electron-cleanup.spec.ts",
     "web-annotations-electron.spec.ts",
     "service-preview-seeded-electron.spec.ts",
+    "terminal-input-resume-electron.spec.ts",
+    "local-gateway-transport-electron.spec.ts",
   ]);
 });
 
@@ -240,6 +242,19 @@ test("global setup keeps a mixed Electron suite guarded despite the opt-in", () 
     displaySetup(config(["service-preview-seeded-electron.spec.ts", "electron-main.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config(["web-annotations-electron.spec.ts", "electron-main.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
+    displaySetup(config(["terminal-input-resume-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["local-gateway-transport-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(
+      config([
+        "terminal-input-resume-electron.spec.ts",
+        "local-gateway-transport-electron.spec.ts",
+      ]),
+    );
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
+    displaySetup(config(["local-gateway-transport-electron.spec.ts", "electron-main.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
     displaySetup(config([]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);

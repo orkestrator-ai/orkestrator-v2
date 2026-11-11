@@ -28,7 +28,7 @@
  * 5. **Close and resume.** Closing the design conversation's tab records its
  *    session on the link; after a reload, Ask agent offers Resume, which
  *    reopens the same conversation in a new tab without sending anything
- *    (docs/todo/design-canvas/0038-design-agent-conversation-links.md).
+ *    (docs/architecture/design-canvas.md, "Agent context").
  *
  * Nonces exist only in the prompts, so finding one in the canvas proves the
  * agent wrote it. The MCP call count and response bytes for the cycle are

@@ -254,7 +254,7 @@ describe("OpenCode reload probe", () => {
     return { probe: createMcpRuntimeProbe(context), calls, forgotten, statusReads };
   }
 
-  test("a rebuilt instance gets Orkestrator's entry back and reports its listing", async () => {
+  test("a reload is the provider's own and the listing is read from the running server", async () => {
     const { probe, calls, forgotten, statusReads } = openCodeContext("reloaded", ["fixture"]);
     await expect(probe.reloadOpenCode!("env-1")).resolves.toEqual({
       outcome: "reloaded",
@@ -266,9 +266,10 @@ describe("OpenCode reload probe", () => {
     // The caller's deadline signal reaches the service, so it can cancel the read.
     expect(calls[1]).toEqual(["names", "env-1", { signal }]);
     expect((calls[1]![2] as { signal: AbortSignal }).signal).toBe(signal);
-    // Disposal dropped the runtime-only entry; it is posted again at once.
-    expect(forgotten).toEqual(["local:env-1"]);
-    expect(statusReads).toEqual(["env-1"]);
+    // Each session's Orkestrator entry comes back with its next dispatch
+    // (`opencode2/mcp.ts`), so nothing environment-wide is reposted.
+    expect(forgotten).toEqual([]);
+    expect(statusReads).toEqual([]);
   });
 
   test("anything but a reload touches nothing else", async () => {

@@ -97,6 +97,38 @@ function fakeTransport(options?: {
   };
 }
 
+test("convert_to_pipeline is auto-allowed under an asking policy, because it only records a draft", async () => {
+  const root = await tempRoot("pi-auto-pipeline-policy-");
+  setPiMcpTransportForTests({
+    async connect() {
+      return connectionFor([{ name: "convert_to_pipeline" }], {
+        async call() {
+          return { content: [{ type: "text", text: "saved" }] };
+        },
+      });
+    },
+  });
+  const state = newSessionState();
+  state.status = "running";
+  state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "test-token" };
+  state.policy = {
+    id: "interactive-host",
+    sandbox: "provider",
+    approvals: "ask",
+    projectResources: false,
+    networkAccess: "restricted",
+  };
+  await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+  try {
+    expect(registeredTools(state).some((tool) => tool.name === "convert_to_pipeline")).toBe(true);
+    expect(await requestToolApproval(state, "ask", "convert_to_pipeline", {})).toEqual({
+      block: false,
+    });
+  } finally {
+    await closePiMcp(state);
+  }
+});
+
 test("native ask_agents is registered and auto-allowed; result-only credentials refuse nesting", async () => {
   const root = await tempRoot("pi-subork-policy-");
   for (const resultOnly of [false, true]) {

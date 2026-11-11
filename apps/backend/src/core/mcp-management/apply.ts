@@ -275,11 +275,10 @@ export async function planRuntimes(
   savedRevision?: string,
   options: {
     /**
-     * OpenCode: the saved file is one each directory instance reads when it
-     * is built (project files, `.opencode` and config directories,
-     * `OPENCODE_CONFIG`), so rebuilding the instance loads it. OpenCode 1.19
-     * caches the user files in `$XDG_CONFIG_HOME/opencode` for the server's
-     * lifetime, so those still need a restart.
+     * OpenCode: the saved file is one each location reads when it is built
+     * (project files, `.opencode` and config directories, `OPENCODE_CONFIG`),
+     * so rebuilding the locations (`POST /api/location/reload`, after the
+     * user files are mirrored again) loads it.
      */
     openCodeInstanceSource?: boolean;
   } = {},

@@ -138,8 +138,6 @@ export interface ProviderSessionRegistration {
   workflowId?: string;
   provider?: ProviderAgent;
   fence?: string | number;
-  /** The record's OpenCode line, so the routing provider need not look it up. */
-  openCodeProtocol?: "v2";
 }
 
 export interface AgentInteractionProviderCapability {
@@ -468,13 +466,6 @@ export interface ProviderCreateSessionOptions {
   interaction?: ProviderSessionRegistration;
   /** Immutable backend-owned execution policy for this provider session. */
   policy?: NativeAgentExecutionPolicy;
-  /**
-   * Create the session on OpenCode 2.x (the preview). Only the OpenCode
-   * routing provider reads it; the backend sets it only for new interactive
-   * host sessions while the setting asks for 2.x, and persists the same
-   * marker on the session record.
-   */
-  openCodeProtocol?: "v2";
 }
 
 /**
@@ -1015,11 +1006,7 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * stage creation and never write the answer back to the user's
    * configuration.
    */
-  resolveDefaultModel?(
-    modelId: string | undefined,
-    /** The OpenCode line a new session will run on, so its own catalogue answers. */
-    options?: { openCodeProtocol?: "v2" },
-  ): Promise<NativeAgentDefaultModelResolution>;
+  resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
   /**
    * `limit` asks for only the newest messages. A provider with its own history
    * bound may ignore it, so the caller still applies its own window.
@@ -1074,18 +1061,8 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * while idle). Session-free, so it survives a bridge restart.
    */
   reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported" | "busy">;
-  /**
-   * `sessionId` names the session a tab is asking for, when there is one: a
-   * provider serving two lines (OpenCode 1.x and 2.x) answers for that
-   * session's line. Others ignore it.
-   */
+  /** `sessionId` names the session a tab is asking for, when there is one. */
   authStatus?(sessionId?: string): Promise<NativeAgentAuthStatus>;
-  /**
-   * The OpenCode line a session runs on, for a provider that routes between
-   * them. Adoption (resume, fork) records `"v2"` on the session so the
-   * marker survives a restart.
-   */
-  sessionProtocol?(sessionId: string): Promise<"v2" | undefined>;
   /**
    * `deviceCode` asks for a flow without a loopback callback, for a browser
    * that is not on the agent's machine. A platform without one ignores it.

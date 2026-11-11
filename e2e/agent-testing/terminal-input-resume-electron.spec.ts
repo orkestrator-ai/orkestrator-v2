@@ -13,7 +13,12 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { electronSpecEnvironment } from "./electron-spec-environment";
@@ -143,14 +148,16 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     ownProcessGroup(vite);
     recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
+    const headless = headlessElectronRequested();
     app = await electron.launch({
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
-      env: electronSpecEnvironment(process.env, {
+      env: electronSpecEnvironment(headless ? withoutDisplay(process.env) : process.env, {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
@@ -167,6 +174,13 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     // host load that startup takes longer than expect's 5 s default. A start
     // that lost its modules to ERR_NETWORK_CHANGED is reloaded (flake 2340).
     await startup.waitForTitle(window, profile.electronTitle, { timeoutMs: 60_000 });
+    if (headless) {
+      // Headless Ozone ignores the constructor size and starts at 1x1, so the
+      // native resize below would have nothing to shrink.
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.setSize(1280, 860);
+      });
+    }
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
         ({ command, args }) =>

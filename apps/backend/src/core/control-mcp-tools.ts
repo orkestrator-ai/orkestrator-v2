@@ -56,6 +56,7 @@ import {
   registerPromptTool,
 } from "./control-mcp-environment-tools.js";
 import { registerTicketTools } from "./control-mcp-ticket-tools.js";
+import { registerLinearTools } from "./control-mcp-linear-tools.js";
 import { registerMailTools } from "./control-mcp-mail-tools.js";
 import { coordinatorNodeRefused, type ControlMcpToolContext } from "./control-mcp-tools-shared.js";
 
@@ -84,6 +85,13 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["list_ticket_labels", "tickets"],
   ["create_ticket_label", "tickets"],
   ["set_ticket_label", "tickets"],
+  // A project's linked Linear board (docs/architecture/tickets.md, "Linear").
+  ["list_linear_issues", "tickets"],
+  ["get_linear_issue", "tickets"],
+  ["create_linear_issue", "tickets"],
+  ["update_linear_issue", "tickets"],
+  ["add_linear_comment", "tickets"],
+  ["list_linear_board_options", "tickets"],
   ["launch_job", "jobs"],
   ["send_prompt_to_tab", "jobs"],
   ["start_build_pipeline", "build-pipelines"],
@@ -446,6 +454,8 @@ export async function createControlMcp(
   registerLaunchOptionsTool(server, tools);
   registerEnvironmentTools(server, tools);
   registerTicketTools(server, tools);
+  // Coordinators only: an operator credential has no Linear surface.
+  if (!operator) registerLinearTools(server, tools);
   registerLaunchTools(server, tools);
   registerPromptTool(server, tools);
 

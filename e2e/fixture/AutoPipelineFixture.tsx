@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
+import { useEffect, useState } from "react";
 import { AutoPipelineTab } from "../../apps/web/src/components/review/AutoPipelineTab";
+import { ToPipelineButton } from "../../apps/web/src/components/review/ToPipelineButton";
+import { useNodeScope } from "../../apps/web/src/lib/node-scope/providers";
+import { paneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { AutoPipelineTabData } from "../../apps/web/src/types/paneLayout";
 
 const LONG_CRITERIA = [
@@ -94,7 +96,10 @@ export function installAutoPipelineFixture() {
         await new Promise((resolve) => setTimeout(resolve, draftMs));
         if (current !== generation) throw new Error("Auto-pipeline drafting cancelled");
         if (params.has("failure")) {
-          state = { phase: "failed", error: "The drafting session failed. No ticket was created." };
+          state = {
+            phase: "failed",
+            error: "The agent finished without submitting a draft. No ticket was created.",
+          };
           throw new Error(state.error);
         }
         const draft = fixtureDraft(params, `draft-${current}`);
@@ -135,13 +140,34 @@ export function installAutoPipelineFixture() {
 }
 
 /**
- * The Multi Review dialog's Auto-pipeline section, and the environment's tab
- * strip it opens the Auto-pipeline tab in. The Agent tab stands for "somewhere
- * else": choosing it unmounts the Auto-pipeline tab, as switching environments
- * does.
+ * The toolbar's "To pipeline" button, and the environment's tab strip it opens
+ * the Auto-pipeline tab in. The Agent tab stands for "somewhere else": choosing
+ * it unmounts the Auto-pipeline tab, as switching environments does. The pane
+ * layout holds one interactive tab, `original`, as the active tab, which is the
+ * source the stand-in backend offers.
  */
 export function AutoPipelineFixture() {
-  const [open, setOpen] = useState(true);
+  const scope = useNodeScope();
+  useEffect(() => {
+    scope.store(paneLayoutStore).setState({
+      environments: new Map([
+        [
+          "fixture",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "original", type: "agent-native" }],
+              activeTabId: "original",
+            },
+            activePaneId: "default",
+            containerId: null,
+            backendRevision: 0,
+          },
+        ],
+      ]) as never,
+    });
+  }, [scope]);
   const [tab, setTab] = useState<AutoPipelineTabData | null>(null);
   const [active, setActive] = useState<"agent" | "auto-pipeline">("agent");
   return (
@@ -163,13 +189,17 @@ export function AutoPipelineFixture() {
             {id === "agent" ? "Codex 1" : "Auto-pipeline 2"}
           </button>
         ))}
-        <button
-          type="button"
-          className="ml-auto rounded px-3 py-1 text-xs text-muted-foreground"
-          onClick={() => setOpen(true)}
-        >
-          Multi Review
-        </button>
+        <div className="ml-auto">
+          <ToPipelineButton
+            environmentId="fixture"
+            createTab={(_type, options) => {
+              if (!options?.autoPipeline) return false;
+              setTab(options.autoPipeline);
+              setActive("auto-pipeline");
+              return true;
+            }}
+          />
+        </div>
       </div>
       <div className="relative min-h-0 flex-1">
         {active === "agent" && (
@@ -181,19 +211,6 @@ export function AutoPipelineFixture() {
           <AutoPipelineTab environmentId="fixture" data={tab} isActive />
         )}
       </div>
-      <MultiReviewLaunchDialog
-        open={open}
-        onOpenChange={setOpen}
-        defaultAgent="codex"
-        catalog={{ claude: [], codex: [], opencode: [] }}
-        autoPipelineEnvironmentId="fixture"
-        onOpenAutoPipelineTab={(target) => {
-          setTab(target);
-          setActive("auto-pipeline");
-          return true;
-        }}
-        onConfirm={() => setOpen(false)}
-      />
     </main>
   );
 }

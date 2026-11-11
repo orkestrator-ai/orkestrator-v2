@@ -1,5 +1,4 @@
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { expect, test, spyOn, setDefaultTimeout } from "bun:test";
 
@@ -55,10 +54,71 @@ function seed(storage: StorageService) {
     },
   });
 }
+/**
+ * The native-agent service as the drafting request sees it: a message sent to
+ * the tab (`dispatchIntent`), the outcome of the turn it starts, and the
+ * request-scoped stop. `onDispatch` stands in for the agent, which may call
+ * `convert_to_pipeline` during its turn.
+ *
+ * With `storage`, an accepted message joins the tab's `dispatchedRequestIds`
+ * before the agent runs, as the real service records it, so a draft submitted
+ * inside the turn carries that turn's request id. `stopRequest` stops (through
+ * `abort`) only while the request is still the tab's newest one; the real
+ * service's ownership rules are covered by native-agent-session-operations.test.ts.
+ */
+function fakeNativeAgents(
+  options: {
+    onDispatch?: (input: { prompt: string; requestId: string }) => Promise<void> | void;
+    turn?: () => { outcome: "completed" | "failed" | "pending" | "unknown"; error?: string };
+    storage?: StorageService;
+    abort?: (providerSessionId: string) => Promise<void>;
+    /** The backend's last observed turn activity, by provider-agnostic tab key. */
+    activity?: (logicalSessionKey: string) => string;
+  } = {},
+) {
+  const dispatched: { prompt: string; requestId: string }[] = [];
+  const stops: { requestId: string; stopped: boolean }[] = [];
+  return {
+    dispatched,
+    stops,
+    hasActiveCheckoutWork: async () => false,
+    sessionTurnActivitySnapshot: (_environmentId: string, _agent: string, key: string) =>
+      options.activity?.(key) ?? "unknown",
+    dispatchIntent: async (input: { prompt: string; requestId: string }) => {
+      dispatched.push({ prompt: input.prompt, requestId: input.requestId });
+      if (options.storage) await tabRecordsRequest(options.storage, input.requestId);
+      await options.onDispatch?.(input);
+      return { outcome: "accepted" as const };
+    },
+    sessionTurnOutcome: async () => options.turn?.() ?? { outcome: "completed" as const },
+    stopRequest: async (input: { logicalSessionKey: string; requestId: string }) => {
+      const session = options.storage
+        ? (await options.storage.listNativeAgentSessions()).find(
+            (entry) => entry.logicalSessionKey === input.logicalSessionKey,
+          )
+        : undefined;
+      const stopped = !options.storage || session?.dispatchedRequestIds?.at(-1) === input.requestId;
+      stops.push({ requestId: input.requestId, stopped });
+      if (stopped) await options.abort?.(session?.providerSessionId ?? "original-session");
+      return { stopped };
+    },
+  };
+}
+/** The tab's session records a dispatched request, as the native-agent service does. */
+async function tabRecordsRequest(storage: StorageService, requestId: string) {
+  const [session] = await storage.listNativeAgentSessions();
+  seedStore(storage.getDataDir(), "native-agent-sessions.json", {
+    original: {
+      ...session!,
+      dispatchedRequestIds: [...(session!.dispatchedRequestIds ?? []), requestId],
+    },
+  });
+}
 function draftContext(
   storage: StorageService,
   buildPipelines: CommandContext["buildPipelines"],
   fence = new EnvironmentMutationFence(),
+  nativeAgents: ReturnType<typeof fakeNativeAgents> = fakeNativeAgents(),
 ): CommandContext {
   return {
     storage,
@@ -72,12 +132,23 @@ function draftContext(
         terminateSessionsForEnvironment: async () => [],
       },
     },
-    nativeAgents: { hasActiveCheckoutWork: async () => false },
-    workflowResults: new WorkflowResultService(storage.getDataDir()),
-    agentTools: {
-      workflowResultConnection: () => ({ url: "http://127.0.0.1:1/mcp", token: "fixture" }),
-    },
+    nativeAgents,
   } as unknown as CommandContext;
+}
+/** What the tab's agent does: submits a draft, as `convert_to_pipeline` would. */
+async function submitFixture(auto: AutoPipelineService, value: unknown = result) {
+  const { draftId } = await auto.submitDraft("env-1", "original-tab", value);
+  const state = auto.state("env-1", "original-tab");
+  if (state.phase !== "ready") throw new Error(`Expected a ready draft, got ${state.phase}`);
+  expect(state.draft.id).toBe(draftId);
+  return state.draft;
+}
+/** The tab takes another message after the draft was written. */
+async function tabReceivesAnotherMessage(storage: StorageService) {
+  const [session] = await storage.listNativeAgentSessions();
+  seedStore(storage.getDataDir(), "native-agent-sessions.json", {
+    original: { ...session!, dispatchedRequestIds: ["a-later-message"] },
+  });
 }
 function gitPorts(provider: AutoPipelinePorts["provider"]): AutoPipelinePorts {
   return {
@@ -123,46 +194,47 @@ test("manual prompt draft confirms through normal Review, Verify and PR without 
           },
         },
       });
-      const context = draftContext(storage, buildPipelines);
-      const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
+      // The tab's own agent drafts: it is sent a message and calls the tool during its turn.
+      const agents = fakeNativeAgents({
+        storage,
+        onDispatch: async () => {
+          await auto.submitDraft("env-1", "original-tab", result);
+        },
+      });
+      const context = draftContext(storage, buildPipelines, undefined, agents);
+      const auto: AutoPipelineService = new AutoPipelineService(context, () =>
+        gitPorts(async () => provider),
+      );
       expect(await auto.sources("env-1")).toMatchObject({
         available: true,
         sources: [{ tabId: "original-tab" }],
       });
-      const sendOriginal = provider.send.bind(provider);
-      const structured = spyOn(provider, "send").mockImplementation(
-        async (sessionId, prompt, options) => {
-          await sendOriginal(sessionId, prompt, options);
-          expect(
-            await context.workflowResults!.submit(
-              { environmentId: "env-1", projectId: "project-1" },
-              options.requestId,
-              result,
-            ),
-          ).toMatchObject({ ok: true });
-        },
-      );
       expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
-      let draft;
-      try {
-        const drafting = auto.draft("env-1", "original-tab");
-        // The tab reads progress without joining or restarting the operation.
-        expect(auto.state("env-1", "original-tab")).toEqual({ phase: "drafting" });
-        draft = await drafting;
-      } finally {
-        structured.mockRestore();
-      }
+      const drafting = auto.draft("env-1", "original-tab");
+      // The tab reads progress without joining or restarting the operation.
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "drafting" });
+      const draft = await drafting;
       expect(auto.state("env-1", "original-tab")).toEqual({ phase: "ready", draft });
+      // Submitted inside the drafting turn, the draft is marked with that turn's
+      // request, which is what confirmation below checks the tab against.
+      expect(storage.getAutoPipelineDraft(draft.id)?.sourceMark).toBe(
+        agents.dispatched[0]?.requestId,
+      );
       const edits = { title: "", description: "Half typed", acceptanceCriteria: ["", "x"] };
       auto.saveEdits(draft.id, edits);
       expect(auto.state("env-1", "original-tab")).toEqual({ phase: "ready", draft, edits });
-      expect(provider.sent).toHaveLength(1);
-      expect(provider.sent[0]?.sessionId).not.toBe("original-session");
-      expect(provider.sent[0]?.prompt).toContain("submit_auto_pipeline_draft");
-      expect(provider.created[0]?.options?.readOnly).toBe(true);
-      expect(provider.created[0]?.options?.model).toBe("draft-model");
-      expect(provider.created[0]?.options?.effort).toBe("high");
-      expect(provider.created[0]?.options?.policy?.approvals).toBe("deny");
+      // One message went to the user's own tab. No second session was created
+      // and no transcript or diff was copied into a prompt.
+      expect(agents.dispatched).toHaveLength(1);
+      expect(agents.dispatched[0]?.prompt).toContain("convert_to_pipeline");
+      expect(agents.dispatched[0]?.prompt).not.toContain("diff --git");
+      expect(provider.created).toHaveLength(0);
+      expect(provider.sent).toHaveLength(0);
+      // The pipeline's Build step keeps the saved defaults, not the tab's controls.
+      expect(storage.getAutoPipelineDraft(draft.id)?.input.steps?.build).toMatchObject({
+        model: "draft-model",
+        reasoningEffort: "high",
+      });
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
       // A new service represents backend restart; the reviewed draft remains authoritative.
       const restarted = new AutoPipelineService(context, () =>
@@ -172,8 +244,9 @@ test("manual prompt draft confirms through normal Review, Verify and PR without 
           return provider;
         }),
       );
+      // Nothing changed since the draft, so asking again returns it without asking the agent.
       expect((await restarted.draft("env-1", "original-tab")).id).toBe(draft.id);
-      expect(provider.sent).toHaveLength(1);
+      expect(agents.dispatched).toHaveLength(1);
       const terminate = spyOn(context.runtime.terminals, "terminateSessionsForEnvironment");
       const record = (await restarted.confirm(draft.id, {
         ...result,
@@ -211,13 +284,21 @@ test("running source is disabled and cannot draft", async () => {
     seed(storage);
     const status = spyOn(provider, "status").mockResolvedValue("running");
     try {
-      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+      const agents = fakeNativeAgents({ activity: () => "working" });
+      const auto = new AutoPipelineService(
+        draftContext(storage, buildPipelines, undefined, agents),
+        () => gitPorts(async () => provider),
+      );
+      // The toolbar's read uses the backend's observed activity, not the provider.
+      expect((await auto.sources("env-1")).sources[0]?.disabledReason).toContain("finish");
+      expect(status).not.toHaveBeenCalled();
+      // Drafting asks the provider itself, so a turn the observation missed is refused too.
+      const unobserved = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
         gitPorts(async () => provider),
       );
-      expect((await auto.sources("env-1")).sources[0]?.disabledReason).toContain("finish");
-      await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("finish");
+      await expect(unobserved.draft("env-1", "original-tab")).rejects.toThrow("finish");
       expect(provider.sent).toHaveLength(0);
-      expect(auto.state("env-1", "original-tab")).toEqual({
+      expect(unobserved.state("env-1", "original-tab")).toEqual({
         phase: "failed",
         error: "Wait for this tab's turn to finish",
       });
@@ -259,7 +340,8 @@ test("sources exclude foreign environment keys and sessions without an open pane
         available: true,
         sources: [{ tabId: "original-tab", label: "codex" }],
       });
-      expect(status.mock.calls).toEqual([["original-session"]]);
+      // Listing tabs reads no provider; drafting is what checks the tab's status.
+      expect(status).not.toHaveBeenCalled();
     } finally {
       status.mockRestore();
     }
@@ -272,24 +354,36 @@ test("malformed and failed drafting leave the prompt environment without a ticke
     await storage.updateEnvironment("env-1", {
       createdFromCommit: "1111111111111111111111111111111111111111",
     });
-    const context = draftContext(storage, buildPipelines);
-    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
-    const structured = spyOn(context.workflowResults!, "structured").mockResolvedValue({
-      ok: true,
-      provider: "codex",
-      value: {},
+    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+      gitPorts(async () => provider),
+    );
+    // A malformed submission is refused with a reason the agent can correct, and stores nothing.
+    for (const value of [{}, { ...result, title: "" }, { ...result, acceptanceCriteria: [] }])
+      await expect(auto.submitDraft("env-1", "original-tab", value)).rejects.toThrow();
+    expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
+    // The agent's turn ends without calling the tool.
+    await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("without submitting a draft");
+    expect(auto.state("env-1", "original-tab")).toEqual({
+      phase: "failed",
+      error: expect.stringContaining("without submitting a draft"),
     });
-    try {
-      await expect(auto.draft("env-1", "original-tab")).rejects.toThrow();
-    } finally {
-      structured.mockRestore();
-    }
-    const send = spyOn(provider, "send").mockRejectedValue(new Error("Failed draft"));
-    try {
-      await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("Failed draft");
-    } finally {
-      send.mockRestore();
-    }
+    // The turn fails outright.
+    const failing = fakeNativeAgents({
+      turn: () => ({ outcome: "failed", error: "Failed draft" }),
+    });
+    const failed = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, failing),
+      () => gitPorts(async () => provider),
+    );
+    await expect(failed.draft("env-1", "original-tab")).rejects.toThrow("Failed draft");
+    // The tab refuses the message.
+    const refusing = fakeNativeAgents();
+    refusing.dispatchIntent = async () => ({ outcome: "rejected" as never });
+    const refused = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, refusing),
+      () => gitPorts(async () => provider),
+    );
+    await expect(refused.draft("env-1", "original-tab")).rejects.toThrow("did not accept");
     expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
     expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
   });
@@ -319,19 +413,7 @@ test("confirmation commits reviewed pending work once and rejects changed confir
       return baseGit(id, args);
     };
     const auto = new AutoPipelineService(context, () => ports);
-    const send = spyOn(provider, "send").mockImplementation(async (_session, _prompt, options) => {
-      await context.workflowResults!.submit(
-        { environmentId: "env-1", projectId: "project-1" },
-        options.requestId,
-        result,
-      );
-    });
-    let draft;
-    try {
-      draft = await auto.draft("env-1", "original-tab");
-    } finally {
-      send.mockRestore();
-    }
+    const draft = await submitFixture(auto);
     expect(draft.uncommittedFiles).toEqual([" M fixture.ts"]);
     const first = (await auto.confirm(draft.id, result)) as { id: string };
     const replay = (await auto.confirm(draft.id, result)) as { id: string };
@@ -354,19 +436,7 @@ test("confirmation replay repairs failed tab publication without another ticket"
       });
       const context = draftContext(storage, buildPipelines);
       const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
-      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-        await context.workflowResults!.submit(
-          { environmentId: "env-1", projectId: "project-1" },
-          options.requestId,
-          result,
-        );
-      });
-      let draft;
-      try {
-        draft = await auto.draft("env-1", "original-tab");
-      } finally {
-        send.mockRestore();
-      }
+      const draft = await submitFixture(auto);
       const publishOriginal = storage.ensureBuildPipelineTab.bind(storage);
       const publish = spyOn(storage, "ensureBuildPipelineTab").mockRejectedValueOnce(
         new Error("publication unavailable"),
@@ -397,19 +467,7 @@ test("draft retention prunes superseded rows and deletes environment-owned recei
     });
     const context = draftContext(storage, buildPipelines);
     const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
-    const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-      await context.workflowResults!.submit(
-        { environmentId: "env-1", projectId: "project-1" },
-        options.requestId,
-        result,
-      );
-    });
-    let draft;
-    try {
-      draft = await auto.draft("env-1", "original-tab");
-    } finally {
-      send.mockRestore();
-    }
+    const draft = await submitFixture(auto);
     const record = storage.getAutoPipelineDraft(draft.id)!;
     storage.putAutoPipelineDraft({ ...record, draft: { ...draft, id: "replacement" } });
     expect(storage.getAutoPipelineDraft(draft.id)).toBeNull();
@@ -419,7 +477,7 @@ test("draft retention prunes superseded rows and deletes environment-owned recei
   });
 });
 
-test("changed checkout or transcript and stopped environment reject before ticket creation", async () => {
+test("changed checkout, a newer message in the tab and a stopped environment reject before ticket creation", async () => {
   await withService(
     async (buildPipelines, storage, provider) => {
       seed(storage);
@@ -429,31 +487,13 @@ test("changed checkout or transcript and stopped environment reject before ticke
       const context = draftContext(storage, buildPipelines);
       const ports = gitPorts(async () => provider);
       const auto = new AutoPipelineService(context, () => ports);
-      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-        await context.workflowResults!.submit(
-          { environmentId: "env-1", projectId: "project-1" },
-          options.requestId,
-          result,
-        );
-      });
-      let draft;
-      try {
-        draft = await auto.draft("env-1", "original-tab");
-      } finally {
-        send.mockRestore();
-      }
+      const draft = await submitFixture(auto);
       const base = ports.git;
       ports.git = async (id, args) => (args[0] === "diff" ? "later work" : base(id, args));
       await expect(auto.confirm(draft.id, result)).rejects.toThrow("Work changed");
       ports.git = base;
-      const messages = spyOn(provider, "messages").mockResolvedValue([
-        { role: "assistant", content: "later response" },
-      ] as never);
-      try {
-        await expect(auto.confirm(draft.id, result)).rejects.toThrow("transcript changed");
-      } finally {
-        messages.mockRestore();
-      }
+      await tabReceivesAnotherMessage(storage);
+      await expect(auto.confirm(draft.id, result)).rejects.toThrow("new message");
       await storage.updateEnvironment("env-1", { status: "stopped" });
       await expect(auto.confirm(draft.id, result)).rejects.toThrow("must be running");
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
@@ -498,19 +538,7 @@ test("promotion commits real Git work once and commit failure creates no ticket"
           return git(args);
         };
         const auto = new AutoPipelineService(context, () => ports);
-        const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-          await context.workflowResults!.submit(
-            { environmentId: "env-1", projectId: "project-1" },
-            options.requestId,
-            result,
-          );
-        });
-        let draft;
-        try {
-          draft = await auto.draft("env-1", "original-tab");
-        } finally {
-          send.mockRestore();
-        }
+        const draft = await submitFixture(auto);
         await writeFile(join(cwd, "feature.txt"), "unreviewed later work\n");
         await expect(auto.confirm(draft.id, result)).rejects.toThrow("Work changed");
         expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
@@ -519,20 +547,7 @@ test("promotion commits real Git work once and commit failure creates no ticket"
         expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
         // A failed commit stages the same work. Re-draft to review that index state.
         failCommit = false;
-        const sendAgain = spyOn(provider, "send").mockImplementation(
-          async (_id, _prompt, options) => {
-            await context.workflowResults!.submit(
-              { environmentId: "env-1", projectId: "project-1" },
-              options.requestId,
-              result,
-            );
-          },
-        );
-        try {
-          draft = await auto.draft("env-1", "original-tab");
-        } finally {
-          sendAgain.mockRestore();
-        }
+        const redraft = await submitFixture(auto);
         const persist = storage.putAutoPipelineDraft.bind(storage);
         let crashed = false;
         const receipt = spyOn(storage, "putAutoPipelineDraft").mockImplementation((record) => {
@@ -543,13 +558,13 @@ test("promotion commits real Git work once and commit failure creates no ticket"
           persist(record);
         });
         try {
-          await expect(auto.confirm(draft.id, result)).rejects.toThrow("receipt unavailable");
+          await expect(auto.confirm(redraft.id, result)).rejects.toThrow("receipt unavailable");
         } finally {
           receipt.mockRestore();
         }
         // Recover the real trailer-bearing commit without committing a second time.
-        const admitted = (await auto.confirm(draft.id, result)) as { id: string };
-        await auto.confirm(draft.id, result);
+        const admitted = (await auto.confirm(redraft.id, result)) as { id: string };
+        await auto.confirm(redraft.id, result);
         expect((await git(["rev-list", "--count", "HEAD"])).trim()).toBe("2");
         expect((await git(["status", "--porcelain"])).trim()).toBe("");
         expect((await pipeline(storage, admitted.id)).sessions[0]?.headAtStart).toBe(
@@ -610,19 +625,7 @@ test("admission rejection removes its unpublished ticket and permits same-draft 
       });
       const context = draftContext(storage, buildPipelines);
       const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
-      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-        await context.workflowResults!.submit(
-          { environmentId: "env-1", projectId: "project-1" },
-          options.requestId,
-          result,
-        );
-      });
-      let draft;
-      try {
-        draft = await auto.draft("env-1", "original-tab");
-      } finally {
-        send.mockRestore();
-      }
+      const draft = await submitFixture(auto);
       const admission = spyOn(buildPipelines, "startFromCompletedBuild").mockRejectedValueOnce(
         new Error("admission rejected"),
       );
@@ -653,26 +656,30 @@ test("admission rejection removes its unpublished ticket and permits same-draft 
   );
 });
 
-test("a hung drafting send times out, releases its session and permits retry", async () => {
+test("a request the agent never answers times out and permits retry", async () => {
   await withService(async (buildPipelines, storage, provider) => {
     seed(storage);
     await storage.updateEnvironment("env-1", {
       createdFromCommit: "1111111111111111111111111111111111111111",
     });
-    const context = draftContext(storage, buildPipelines);
-    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider), 20);
-    const send = spyOn(provider, "send").mockImplementation(() => new Promise(() => {}));
-    const abort = spyOn(provider, "abort");
-    try {
-      await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("timed out");
-      expect(abort).toHaveBeenCalledTimes(1);
-      await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("timed out");
-      expect(abort).toHaveBeenCalledTimes(2);
-      expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
-    } finally {
-      send.mockRestore();
-      abort.mockRestore();
-    }
+    const agents = fakeNativeAgents({ turn: () => ({ outcome: "pending" }) });
+    const auto = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, agents),
+      () => gitPorts(async () => provider),
+      20,
+      5,
+    );
+    await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("timed out");
+    expect(auto.state("env-1", "original-tab")).toEqual({
+      phase: "failed",
+      error: expect.stringContaining("timed out"),
+    });
+    await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("timed out");
+    expect(agents.dispatched).toHaveLength(2);
+    // A draft the agent submits late still reaches the tab, replacing the failure.
+    const draft = await submitFixture(auto);
+    expect(auto.state("env-1", "original-tab")).toEqual({ phase: "ready", draft });
+    expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
   });
 });
 
@@ -709,19 +716,7 @@ for (const boundary of ["add", "commit", "admission"] as const) {
           return git(id, args);
         };
         const auto = new AutoPipelineService(context, () => ports);
-        const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-          await context.workflowResults!.submit(
-            { environmentId: "env-1", projectId: "project-1" },
-            options.requestId,
-            result,
-          );
-        });
-        let draft;
-        try {
-          draft = await auto.draft("env-1", "original-tab");
-        } finally {
-          send.mockRestore();
-        }
+        const draft = await submitFixture(auto);
         const admission =
           boundary === "admission"
             ? spyOn(buildPipelines, "startFromCompletedBuild").mockImplementation(stopAtBoundary)
@@ -774,19 +769,7 @@ test("promotion refuses an in-flight submission, another active agent and a term
       const context = draftContext(storage, buildPipelines);
       const ports = gitPorts(async () => provider);
       const auto = new AutoPipelineService(context, () => ports);
-      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-        await context.workflowResults!.submit(
-          { environmentId: "env-1", projectId: "project-1" },
-          options.requestId,
-          result,
-        );
-      });
-      let draft;
-      try {
-        draft = await auto.draft("env-1", "original-tab");
-      } finally {
-        send.mockRestore();
-      }
+      const draft = await submitFixture(auto);
       const release = context.runtime.environments.fence.beginAgentWork("env-1");
       try {
         await expect(auto.confirm(draft.id, result)).rejects.toThrow("submission");
@@ -824,30 +807,63 @@ test("promotion refuses an in-flight submission, another active agent and a term
   );
 });
 
-test("source discovery isolates a failed session and retains healthy tabs", async () => {
+test("source discovery never starts or contacts a provider, however often it is read", async () => {
   await withService(async (buildPipelines, storage, provider) => {
     seed(storage);
     const sessions = await storage.listNativeAgentSessions();
     const first = sessions[0]!;
     seedStore(storage.getDataDir(), "native-agent-sessions.json", {
-      broken: { ...first, key: "broken", providerSessionId: "broken" },
-      healthy: { ...first, key: "healthy", providerSessionId: "healthy" },
+      busy: { ...first, key: "busy", providerSessionId: "busy" },
+      pending: {
+        ...first,
+        key: "pending",
+        providerSessionId: "pending",
+        logicalSessionKey: "env-env-1:pending-tab",
+        pendingDispatch: { requestId: "queued", prompt: "x", createdAt: new Date(0).toISOString() },
+      },
+      idle: {
+        ...first,
+        key: "idle",
+        providerSessionId: "idle",
+        logicalSessionKey: "env-env-1:idle-tab",
+      },
     });
-    const status = spyOn(provider, "status").mockImplementation(async (id) => {
-      if (id === "broken") throw new Error("Unavailable");
-      return "idle";
+    seedStore(storage.getDataDir(), "pane-layouts.json", {
+      "env-1": {
+        root: {
+          kind: "leaf",
+          id: "leaf",
+          tabs: [
+            { id: "original-tab", type: "agent-native" },
+            { id: "pending-tab", type: "agent-native" },
+            { id: "idle-tab", type: "agent-native" },
+          ],
+          activeTabId: "original-tab",
+        },
+        activePaneId: "leaf",
+      },
     });
-    try {
-      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
-        gitPorts(async () => provider),
-      );
+    let acquired = 0;
+    const agents = fakeNativeAgents({
+      activity: (key) => (key === "env-env-1:original-tab" ? "working" : "idle"),
+    });
+    const auto = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, agents),
+      () =>
+        gitPorts(async () => {
+          acquired += 1;
+          return provider;
+        }),
+    );
+    for (let read = 0; read < 5; read++) {
       const sources = await auto.sources("env-1");
-      expect(sources.sources).toHaveLength(2);
-      expect(sources.sources[0]?.disabledReason).toContain("unavailable");
-      expect(sources.sources[1]?.disabledReason).toBeUndefined();
-    } finally {
-      status.mockRestore();
+      expect(Object.fromEntries(sources.sources.map((s) => [s.tabId, s.disabledReason]))).toEqual({
+        "original-tab": "Wait for this tab's turn to finish",
+        "pending-tab": "Wait for this tab's turn to finish",
+        "idle-tab": undefined,
+      });
     }
+    expect(acquired).toBe(0);
   });
 });
 
@@ -864,52 +880,119 @@ test("draft rejects more than 1000 total pending paths before model dispatch", a
             ...Array.from({ length: 200 }, (_, i) => ` M modified-${i}`),
           ].join("\n")
         : git(id, args);
-    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () => ports);
+    const agents = fakeNativeAgents();
+    const auto = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, agents),
+      () => ports,
+    );
     await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("Too many pending files");
-    expect(provider.sent).toHaveLength(0);
+    // The agent is not asked to describe a checkout that could never be promoted.
+    expect(agents.dispatched).toHaveLength(0);
   });
 });
 
-test("explicit draft cancellation aborts the separate session and releases the pending request", async () => {
+test("explicit draft cancellation stops the tab's turn and releases the pending request", async () => {
   await withService(async (buildPipelines, storage, provider) => {
     seed(storage);
     await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
-    let started!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    let resultKey = "";
-    const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-      resultKey = options.requestId!;
-      started();
-      return new Promise(() => {});
-    });
     const abort = spyOn(provider, "abort");
-    const context = draftContext(storage, buildPipelines);
-    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
+    const agents = fakeNativeAgents({
+      storage,
+      turn: () => ({ outcome: "pending" }),
+      abort: (id) => provider.abort(id),
+    });
+    const context = draftContext(storage, buildPipelines, undefined, agents);
+    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider), 60_000, 5);
     const pending = auto.draft("env-1", "original-tab");
     const outcome = pending.catch((error: Error) => error.message);
     try {
-      await ready;
+      await until(() => agents.dispatched.length === 1);
       // Separate service instances share the backend-owned operation registry.
       new AutoPipelineService(context, () => gitPorts(async () => provider)).cancelDraft(
         "env-1",
         "original-tab",
       );
       expect(await outcome).toContain("cancelled");
-      expect(
-        await context.workflowResults!.status(
-          { environmentId: "env-1", projectId: "project-1" },
-          resultKey,
-        ),
-      ).toMatchObject({ lifecycle: "cancelled" });
-      expect(abort).toHaveBeenCalled();
-      expect(abort.mock.calls.every(([id]) => id !== "original-session")).toBe(true);
+      // The agent would otherwise carry on drafting something nobody is waiting
+      // for. Only the drafting request's own turn is stopped.
+      expect(agents.stops).toEqual([{ requestId: agents.dispatched[0]!.requestId, stopped: true }]);
+      expect(abort).toHaveBeenCalledWith("original-session");
       expect(storage.latestAutoPipelineDraft("env-1", "original-tab")).toBeNull();
       // A cancelled draft is a deliberate stop, not a failure the tab shows.
       expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
     } finally {
-      send.mockRestore();
+      abort.mockRestore();
+    }
+  });
+});
+
+test("cancelling during preparation never stops the tab: its turn may be the user's", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const abort = spyOn(provider, "abort");
+    const agents = fakeNativeAgents({ storage, abort: (id) => provider.abort(id) });
+    const context = draftContext(storage, buildPipelines, undefined, agents);
+    // Fingerprinting the checkout is held until the test releases it.
+    let fingerprinting = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ports = gitPorts(async () => provider);
+    const git = ports.git;
+    ports.git = async (id, args) => {
+      if (args[0] === "status") {
+        fingerprinting = true;
+        await held;
+      }
+      return git(id, args);
+    };
+    const auto = new AutoPipelineService(context, () => ports, 60_000, 5);
+    const outcome = auto.draft("env-1", "original-tab").catch((error: Error) => error.message);
+    try {
+      await until(() => fingerprinting);
+      // Meanwhile the user sends the tab a message of their own.
+      await tabRecordsRequest(storage, "user-turn");
+      auto.cancelDraft("env-1", "original-tab");
+      release();
+      expect(await outcome).toContain("cancelled");
+      expect(agents.dispatched).toHaveLength(0);
+      expect(agents.stops).toHaveLength(0);
+      expect(abort).not.toHaveBeenCalled();
+      expect(auto.state("env-1", "original-tab")).toEqual({ phase: "idle" });
+    } finally {
+      release();
+      abort.mockRestore();
+    }
+  });
+});
+
+test("cancelling after a newer user turn replaced the drafting turn leaves that turn running", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const abort = spyOn(provider, "abort");
+    const agents = fakeNativeAgents({
+      storage,
+      turn: () => ({ outcome: "pending" }),
+      abort: (id) => provider.abort(id),
+    });
+    const context = draftContext(storage, buildPipelines, undefined, agents);
+    const auto = new AutoPipelineService(context, () => gitPorts(async () => provider), 60_000, 5);
+    const outcome = auto.draft("env-1", "original-tab").catch((error: Error) => error.message);
+    try {
+      await until(() => agents.dispatched.length === 1);
+      // The user takes the tab over with a turn of their own.
+      await tabRecordsRequest(storage, "user-turn");
+      auto.cancelDraft("env-1", "original-tab");
+      expect(await outcome).toContain("cancelled");
+      // The stop names the drafting request, and the newer turn does not match it.
+      expect(agents.stops).toEqual([
+        { requestId: agents.dispatched[0]!.requestId, stopped: false },
+      ]);
+      expect(abort).not.toHaveBeenCalled();
+    } finally {
       abort.mockRestore();
     }
   });
@@ -934,7 +1017,7 @@ test("drafting refused at the session cap is recorded for the tab that asked", a
     await expect(auto.draft("env-1", "original-tab")).rejects.toThrow("Too many drafting");
     expect(auto.state("env-1", "original-tab")).toEqual({
       phase: "failed",
-      error: expect.stringContaining("Too many drafting sessions"),
+      error: expect.stringContaining("Too many drafting requests"),
     });
     await Promise.all(filling);
     expect(provider.sent).toHaveLength(0);
@@ -950,19 +1033,7 @@ test("a promotion in flight is reported, and locks edits, for its own draft only
       });
       const context = draftContext(storage, buildPipelines);
       const auto = new AutoPipelineService(context, () => gitPorts(async () => provider));
-      const send = spyOn(provider, "send").mockImplementation(async (_id, _prompt, options) => {
-        await context.workflowResults!.submit(
-          { environmentId: "env-1", projectId: "project-1" },
-          options.requestId,
-          result,
-        );
-      });
-      let draft;
-      try {
-        draft = await auto.draft("env-1", "original-tab");
-      } finally {
-        send.mockRestore();
-      }
+      const draft = await submitFixture(auto);
       const edits = { title: "Edited", description: "Typed", acceptanceCriteria: ["One"] };
       let openTerminals!: () => void;
       const terminalsClosed = new Promise<void>((resolve) => {
@@ -1024,6 +1095,112 @@ test("a promotion in flight is reported, and locks edits, for its own draft only
         admit();
         terminate.mockRestore();
         admission.mockRestore();
+      }
+    },
+    { realKanban: true },
+  );
+});
+
+test("a very large diff no longer stops a draft: it is only hashed, never sent anywhere", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const ports = gitPorts(async () => provider);
+    const git = ports.git;
+    ports.git = async (id, args) =>
+      args[0] === "diff" ? `diff --git a/lock b/lock\n${"+x\n".repeat(2_000_000)}` : git(id, args);
+    const agents = fakeNativeAgents();
+    const auto = new AutoPipelineService(
+      draftContext(storage, buildPipelines, undefined, agents),
+      () => ports,
+    );
+    const draft = await submitFixture(auto);
+    expect(draft.id).toBeTruthy();
+  });
+});
+
+test("a draft with no recorded tab message, as an earlier version wrote, expires", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    await storage.updateEnvironment("env-1", { createdFromCommit: "1".repeat(40) });
+    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+      gitPorts(async () => provider),
+    );
+    const draft = await submitFixture(auto);
+    const { sourceMark: _mark, ...legacy } = storage.getAutoPipelineDraft(draft.id)!;
+    storage.putAutoPipelineDraft(legacy);
+    await expect(auto.confirm(draft.id, result)).rejects.toThrow("expired");
+    expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
+  });
+});
+
+test("the tool is offered only to an open interactive tab of a prompt environment", async () => {
+  await withService(async (buildPipelines, storage, provider) => {
+    seed(storage);
+    const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+      gitPorts(async () => provider),
+    );
+    expect(await auto.offered("env-1", "original-tab")).toBe(true);
+    expect(await auto.offered("env-1", "unknown-tab")).toBe(false);
+    expect(await auto.offered("missing-environment", "original-tab")).toBe(false);
+    await expect(auto.submitDraft("env-1", "unknown-tab", result)).rejects.toThrow("not an open");
+  });
+});
+
+test("a tab that was promoted can submit no further draft", async () => {
+  await withService(
+    async (buildPipelines, storage, provider) => {
+      seed(storage);
+      await storage.updateEnvironment("env-1", {
+        createdFromCommit: "1111111111111111111111111111111111111111",
+      });
+      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+        gitPorts(async () => provider),
+      );
+      const draft = await submitFixture(auto);
+      await auto.confirm(draft.id, result);
+      // The environment now belongs to the pipeline, so the tool is no longer offered.
+      expect(await auto.offered("env-1", "original-tab")).toBe(false);
+      await expect(auto.submitDraft("env-1", "original-tab", result)).rejects.toThrow(
+        "already belongs to a pipeline",
+      );
+    },
+    { realKanban: true },
+  );
+});
+
+test("a session longer than adoption accepts still confirms, keeping a bounded transcript", async () => {
+  await withService(
+    async (buildPipelines, storage, provider) => {
+      seed(storage);
+      await storage.updateEnvironment("env-1", {
+        createdFromCommit: "1111111111111111111111111111111111111111",
+      });
+      const auto = new AutoPipelineService(draftContext(storage, buildPipelines), () =>
+        gitPorts(async () => provider),
+      );
+      const draft = await submitFixture(auto);
+      // 12,000 messages of 10 KiB each: past both the 10,000-message and 8 MiB adoption limits.
+      const long = Array.from({ length: 12_000 }, (_, index) => ({
+        id: `m${index}`,
+        role: index % 2 ? "assistant" : "user",
+        content: "c".repeat(10 * 1024),
+        parts: [],
+      }));
+      const messages = spyOn(provider, "messages").mockResolvedValue(long as never);
+      try {
+        const record = (await auto.confirm(draft.id, result)) as { id: string };
+        // Confirming succeeded, so adoption accepted what the draft record now holds.
+        expect(record.id).toBeTruthy();
+        const kept = storage.getAutoPipelineDraft(draft.id)!.attempt.messages as {
+          id: string;
+        }[];
+        expect(kept.length).toBeGreaterThan(0);
+        expect(kept.length).toBeLessThanOrEqual(5_000);
+        expect(kept[0]?.id).toBe("m0");
+        expect(kept.at(-1)?.id).toBe("m11999");
+      } finally {
+        messages.mockRestore();
       }
     },
     { realKanban: true },

@@ -29,7 +29,8 @@ export default function (pi) {
 
 /*
  * Pins the headless extension semantics this bridge relies on, against the
- * real SDK rather than a fake (0016 item 4). `bindSessionExtensions` binds no
+ * real SDK rather than a fake (decided in to-do 0016 item 4, since retired;
+ * see the Pi note in docs/architecture/native-agent-commands.md). `bindSessionExtensions` binds no
  * UI context, so an extension command must see `ctx.hasUI === false` and get
  * "no answer" from every dialog at once, never a hang and never a fake
  * answer. Pi also gives a registered command no way to say it needs a UI, so

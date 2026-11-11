@@ -28,6 +28,11 @@ export function hasNativeBrowserPreview(): boolean {
   return Boolean(api());
 }
 
+/** Whether main can open a registered service in the user's own browser (`openServiceExternally`). */
+export function hasNativeServiceExternalOpen(): boolean {
+  return typeof api()?.openServiceExternally === "function";
+}
+
 export function attachBrowserPreview(
   input: BrowserPreviewAttachInput,
 ): Promise<BrowserPreviewState> {

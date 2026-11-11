@@ -67,7 +67,14 @@ const KEYS: Record<string, readonly string[]> = {
   design_capture: ["environmentId", "canvasId", "frameId", "priority"],
   design_session_link: ["environmentId", "canvasId", "link", "replaceId"],
   design_session_link_states: ["environmentId", "canvasId"],
-  design_session_resume: ["environmentId", "canvasId", "linkId", "expectedTabId", "tabId"],
+  design_session_resume: [
+    "environmentId",
+    "canvasId",
+    "linkId",
+    "expectedTabId",
+    "tabId",
+    "restoreArchived",
+  ],
   design_session_unlink: ["environmentId", "canvasId", "linkId"],
 };
 

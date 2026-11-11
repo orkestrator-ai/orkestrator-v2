@@ -6,7 +6,6 @@ export * from "./commands-container-exec.js";
 export * from "./container-scripts.js";
 export * from "./agent-credential-files.js";
 export * from "./local-server-runtime.js";
-export * from "./opencode-agent-tools.js";
 export * from "./environment-operations.js";
 export * from "./commands-pr-monitor.js";
 export * from "./commands-validation.js";

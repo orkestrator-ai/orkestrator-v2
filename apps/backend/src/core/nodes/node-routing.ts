@@ -68,6 +68,10 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "read_ticket_image",
   "put_ticket_image",
   "sync_node_tickets",
+  // Linear board links and disconnects, and the one user-initiated key copy.
+  "get_linear_sync_state",
+  "apply_linear_sync_state",
+  "export_linear_connection",
   // Shared usage readings move over the link between a command node and its leaf only.
   "collect_shared_usage_readings",
   "apply_shared_usage_readings",

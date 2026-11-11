@@ -32,9 +32,8 @@ import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
 import { AmbiguousPromptDispatchError } from "./native-agent-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
-import { openCodeFake } from "./agent-provider-test-support.js";
-import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
-import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
+import { FakeOpenCode2Server, fakeOpenCode2Model } from "./opencode2/fake-server.test-support.js";
+import { OpenCode2Provider } from "./opencode2/provider.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 
@@ -58,6 +57,51 @@ import { collaborators, interactionInternals } from "./native-agent-service-test
 
 /** The model earlier releases shipped as the OpenCode default. */
 const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
+
+/**
+ * An OpenCode provider over a fake OpenCode server whose login serves only
+ * `opencode-go`, with `opencode-go/gpt-5.6-luna` as the server's default.
+ * `allowed` is the user's provider allowlist (empty: every provider).
+ */
+function goOnlyOpenCode(allowed: readonly string[] = []) {
+  const server = new FakeOpenCode2Server();
+  server.models = [
+    fakeOpenCode2Model("opencode-go", "deepseek-v4.1-flash", [], { name: "DeepSeek V4.1 Flash" }),
+    fakeOpenCode2Model("opencode-go", "gpt-5.6-luna", [], { name: "GPT-5.6 Luna" }),
+    fakeOpenCode2Model("opencode-go", "mimo-v2.6-pro", [], { name: "MiMo V2.6 Pro" }),
+  ];
+  server.defaultModel = server.models[1]!;
+  const provider = createNativeAgentProvider(
+    {
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    },
+    {
+      openCode: {
+        connection: async () => ({
+          baseUrl: "http://127.0.0.1:1",
+          password: "pw",
+          directory: "/workspace",
+          generation: "g1",
+        }),
+        createProvider: () =>
+          new OpenCode2Provider(server.client(), {
+            monitorEvents: false,
+            allowedModelProviders: async () => allowed,
+          }),
+      },
+    },
+  );
+  const prompts = () =>
+    server.calls.filter((call) => call.method === "POST" && call.path.endsWith("/prompt"));
+  const close = async () => {
+    await provider.dispose?.();
+    server.stop();
+  };
+  return { server, provider, prompts, close };
+}
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -200,7 +244,6 @@ async function withService(
     toolDetailCacheMaxBytes?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
     localBridgeAccountId?: NativeAgentServiceOptions["localBridgeAccountId"];
-    openCodeListenerRecheck?: NativeAgentServiceOptions["openCodeListenerRecheck"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -209,9 +252,6 @@ async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
-    ...(setup.openCodeListenerRecheck
-      ? { openCodeListenerRecheck: setup.openCodeListenerRecheck }
-      : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),
     ...(setup.interactionMonitorMode
@@ -371,89 +411,45 @@ describe("NativeAgentService", () => {
   });
 
   test("rejects a disconnected OpenCode model on the interactive tab path", async () => {
-    const messageCalls = mock(async () => ({ data: [] }));
-    const promptCalls = mock(async () => ({ data: true }));
-    const client = {
-      provider: {
-        async list() {
-          return {
-            data: {
-              all: [
-                {
-                  id: "hpc-ai",
-                  models: {
-                    "deepseek/deepseek-v4-flash": { name: "DeepSeek V4 Flash" },
-                  },
-                },
-                {
-                  id: "opencode",
-                  models: { "kimi-k2.7": { name: "Kimi K2.7" } },
-                },
-              ],
-              connected: ["opencode"],
-            },
-          };
-        },
-      },
-      session: {
-        async create() {
-          return { data: { id: "provider-session" } };
-        },
-        async get() {
-          return { data: { id: "provider-session", directory: "/workspace" } };
-        },
-        async status() {
-          return { data: { "provider-session": { type: "idle" } } };
-        },
-        messages: messageCalls,
-        promptAsync: promptCalls,
-      },
-    };
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: client as never,
-        resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
-      },
-    );
-
+    const { server, provider, prompts, close } = goOnlyOpenCode();
     await withService(
       {
         prefix: "orkestrator-native-opencode-disconnected-model-",
         provider: async () => provider,
       },
       async ({ service }) => {
-        const input = {
+        const identity = {
           environmentId: "env-1",
           agent: "opencode" as const,
           logicalSessionKey: "env-env-1:tab-opencode",
           origin: "interactive-native" as const,
           interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        };
+        await service.ensureSession(identity);
+        const input = {
+          ...identity,
           prompt: "Please continue",
           requestId: "request-1",
           model: "hpc-ai/deepseek/deepseek-v4-flash",
           mode: "build" as const,
         };
 
-        await expect(service.dispatchIntent(input)).resolves.toEqual({
+        await expect(service.dispatchIntent(input)).resolves.toMatchObject({
           outcome: "rejected",
-          error:
-            "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
+          error: expect.stringContaining("cannot serve"),
         });
-        // `promptAsync` would persist the user message before resolving the model.
-        // The interactive path must reject before either transcript or dispatch.
-        expect(messageCalls).not.toHaveBeenCalled();
-        expect(promptCalls).not.toHaveBeenCalled();
-        await expect(service.listProjectionModels(input)).resolves.toEqual([
-          expect.objectContaining({ id: "opencode/kimi-k2.7" }),
-        ]);
+        // Refused before anything reached the session: no prompt, no model switch.
+        expect(prompts()).toHaveLength(0);
+        expect(
+          server.calls.some(
+            (call) => call.method === "POST" && /^\/api\/session\/[^/]+\/model$/.test(call.path),
+          ),
+        ).toBe(false);
+        await expect(service.listProjectionModels(input)).resolves.toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: "opencode-go/gpt-5.6-luna" })]),
+        );
       },
-    );
+    ).finally(close);
   });
 
   // A login with only `opencode-go` connected, against the shipped default
@@ -461,22 +457,7 @@ describe("NativeAgentService", () => {
   // session's controls, outranking OpenCode's own default, so the picker
   // preselected a model the dispatch preflight then rejected.
   test("starts a new OpenCode tab on the connected default when the configured one is not connected", async () => {
-    const fake = openCodeFake();
-    Object.assign(fake.client as object, {
-      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
-    });
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      },
-    );
+    const { server, provider, prompts, close } = goOnlyOpenCode();
 
     await withService(
       {
@@ -507,7 +488,9 @@ describe("NativeAgentService", () => {
         expect(session.modelSubstitution).toEqual({
           requestedModelId: "opencode/claude-sonnet-5",
           modelId: "opencode-go/gpt-5.6-luna",
-          message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+          message: expect.stringMatching(
+            /^claude-sonnet-5 isn't available.*using GPT-5\.6 Luna\.$/,
+          ),
         });
         // Persisted controls only; the substitution is reported, not stored,
         // and the user's configuration keeps their choice.
@@ -539,13 +522,13 @@ describe("NativeAgentService", () => {
             { storage, nativeAgents: service } as unknown as CommandContext,
           ),
         ).resolves.toEqual({ outcome: "accepted", requestId: "request-1" });
-        expect(fake.promptCalls).toHaveLength(1);
-        expect(fake.promptCalls[0]?.model).toMatchObject({
+        expect(prompts()).toHaveLength(1);
+        expect(server.sessions.get(session.providerSessionId)?.model).toMatchObject({
           providerID: "opencode-go",
-          modelID: "gpt-5.6-luna",
+          id: "gpt-5.6-luna",
         });
       },
-    ).finally(() => provider.dispose?.());
+    ).finally(close);
   });
 
   // A new install's Codex default is `gpt-5.4`, which a ChatGPT login's
@@ -644,23 +627,11 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("keeps an explicit disconnected initial model without reporting a substitution", async () => {
-    const fake = openCodeFake();
-    Object.assign(fake.client as object, {
-      provider: { list: async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE }) },
-    });
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      },
-    );
+  // OpenCode lists only what its sign-ins can serve, so even an explicit model
+  // it cannot serve is replaced when the session is created, and the tab says
+  // so. A later dispatch that still names it is refused before anything is sent.
+  test("replaces an explicit OpenCode model the login cannot serve, and says so", async () => {
+    const { server, provider, prompts, close } = goOnlyOpenCode();
     await withService(
       { prefix: "ork-explicit-model-", provider: async () => provider },
       async ({ service }) => {
@@ -674,8 +645,11 @@ describe("NativeAgentService", () => {
           model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
           modelSource: "explicit",
         });
-        expect(session.controls?.modelId).toBe(LEGACY_OPENCODE_DEFAULT_MODEL_ID);
-        expect(session.modelSubstitution).toBeUndefined();
+        expect(session.controls?.modelId).toBe("opencode-go/gpt-5.6-luna");
+        expect(session.modelSubstitution).toMatchObject({
+          requestedModelId: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
+          modelId: "opencode-go/gpt-5.6-luna",
+        });
         expect(
           await service.dispatchIntent({
             ...identity,
@@ -683,30 +657,19 @@ describe("NativeAgentService", () => {
             prompt: "Go",
             requestId: "explicit-1",
           }),
-        ).toMatchObject({ outcome: "rejected", error: expect.stringContaining("not connected") });
-        expect(fake.promptCalls).toHaveLength(0);
+        ).toMatchObject({ outcome: "rejected", error: expect.stringContaining("cannot serve") });
+        expect(prompts()).toHaveLength(0);
+        expect(server.sessions.get(session.providerSessionId)?.model).toMatchObject({
+          providerID: "opencode-go",
+          id: "gpt-5.6-luna",
+        });
       },
-    ).finally(() => provider.dispose?.());
+    ).finally(close);
   });
 
   for (const ambiguous of [false, true]) {
     test(`native job dispatch retains its resolved inherited selection (ambiguous=${ambiguous})`, async () => {
-      const fake = openCodeFake();
-      Object.assign(fake.client as object, {
-        provider: { list: async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE }) },
-      });
-      const provider = createNativeAgentProvider(
-        {
-          agent: "opencode",
-          baseUrl: "http://opencode.test",
-          authToken: "test-token",
-          directory: "/workspace",
-        },
-        {
-          openCodeClient: fake.client,
-          openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-        },
-      );
+      const { server, provider, prompts, close } = goOnlyOpenCode();
       const send = provider.send.bind(provider);
       let loseResponse = ambiguous;
       provider.send = async (id, prompt, options) => {
@@ -756,33 +719,22 @@ describe("NativeAgentService", () => {
               service.retryRecoverableDispatch({ ...identity, requestId: "job-1" }),
             ).resolves.toEqual({ outcome: "accepted", requestId: "job-1" });
           } else expect(result.status).toBe("accepted");
-          expect(fake.promptCalls[0]?.model).toMatchObject({
+          expect(prompts()).toHaveLength(1);
+          const stored = await storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey("env-1", "opencode", result.logicalSessionKey),
+          );
+          expect(server.sessions.get(stored!.providerSessionId)?.model).toMatchObject({
             providerID: "opencode-go",
-            modelID: "gpt-5.6-luna",
+            id: "gpt-5.6-luna",
           });
           expect(await storage.loadConfig()).toEqual(savedConfig);
         },
-      ).finally(() => provider.dispose?.());
+      ).finally(close);
     });
   }
 
   test("keeps a configured OpenCode model whose provider is connected", async () => {
-    const fake = openCodeFake();
-    Object.assign(fake.client as object, {
-      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
-    });
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      },
-    );
+    const { provider, close } = goOnlyOpenCode();
 
     await withService(
       {
@@ -802,29 +754,14 @@ describe("NativeAgentService", () => {
         expect(session.controls?.modelId).toBe("opencode-go/deepseek-v4.1-flash");
         expect(session.modelSubstitution).toBeUndefined();
       },
-    ).finally(() => provider.dispose?.());
+    ).finally(close);
   });
 
   // Nothing ships as the OpenCode default any more: unset is the effective
   // default, resolved here rather than left to OpenCode's server, whose own
   // default ignores the provider allowlist.
   test("starts an OpenCode tab with no configured model on the connected default", async () => {
-    const fake = openCodeFake();
-    Object.assign(fake.client as object, {
-      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
-    });
-    const provider = createNativeAgentProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      {
-        openCodeClient: fake.client,
-        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
-      },
-    );
+    const { provider, close } = goOnlyOpenCode();
 
     await withService(
       {
@@ -843,7 +780,7 @@ describe("NativeAgentService", () => {
         expect(session.controls?.modelId).toBe("opencode-go/gpt-5.6-luna");
         expect(session.modelSubstitution).toBeUndefined();
       },
-    ).finally(() => provider.dispose?.());
+    ).finally(close);
   });
 
   test("gives every provider creation site the live settings reader", async () => {
@@ -1785,19 +1722,4 @@ describe("OpenCode MCP listing observation", () => {
       },
     );
   });
-});
-
-test("providerEnvironment forwards the listener check with its environment id", async () => {
-  const recheck = mock(async (_id: string) => "ours" as const);
-  await withService(
-    { prefix: "ork-listener-forward-", openCodeListenerRecheck: recheck },
-    async ({ service }) => {
-      const environment = (
-        service as unknown as { providerEnvironment(id: string): NativeAgentProviderEnvironment }
-      ).providerEnvironment("env-1");
-      expect(recheck).not.toHaveBeenCalled();
-      await expect(environment.openCodeListenerRecheck?.()).resolves.toBe("ours");
-      expect(recheck).toHaveBeenCalledWith("env-1");
-    },
-  );
 });

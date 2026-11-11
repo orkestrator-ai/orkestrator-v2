@@ -10,22 +10,17 @@ const PROVIDER_SOURCE_FILES = [
   "http-bridge/runtime-health.ts",
   "http-bridge/transport.ts",
   "native-agent-provider.ts",
-  "opencode-commands.ts",
   "opencode-display-transcript.ts",
-  "opencode-events.ts",
-  "opencode-execution-profiles.ts",
-  "opencode-interactions.ts",
-  "opencode-messages.ts",
-  "opencode-model-catalog.ts",
-  "opencode-provider.ts",
-  "opencode-revert.ts",
-  "opencode-provider-environment.ts",
-  "opencode-review-session-permissions.ts",
-  "opencode-workflow-result-broker.ts",
-  "opencode-session-lifecycle.ts",
-  "opencode-session-policy.ts",
-  "opencode-snapshots.ts",
 ] as const;
+
+/** The neutral modules above plus every OpenCode 2.x provider module. */
+async function providerSourceFiles(): Promise<string[]> {
+  const openCode2 = (await readdir(path.join(import.meta.dir, "opencode2")))
+    .filter((file) => file.endsWith(".ts") && !/\.test(-support)?\.ts$/.test(file))
+    .map((file) => `opencode2/${file}`);
+  expect(openCode2.length).toBeGreaterThan(0);
+  return [...PROVIDER_SOURCE_FILES, ...openCode2];
+}
 
 async function source(filename: string): Promise<string> {
   return Bun.file(path.join(import.meta.dir, filename)).text();
@@ -33,7 +28,7 @@ async function source(filename: string): Promise<string> {
 
 describe("agent provider module boundaries", () => {
   test("keeps every provider implementation module within 1,500 lines", async () => {
-    for (const filename of PROVIDER_SOURCE_FILES) {
+    for (const filename of await providerSourceFiles()) {
       const contents = await source(filename);
       expect(
         contents.split("\n").length - 1,
@@ -66,7 +61,7 @@ describe("agent provider module boundaries", () => {
   });
 
   test("keeps neutral and provider modules independent of pipeline contracts", async () => {
-    for (const filename of PROVIDER_SOURCE_FILES) {
+    for (const filename of await providerSourceFiles()) {
       expect(await source(filename), filename).not.toContain(
         "@orkestrator/protocol/build-pipeline",
       );

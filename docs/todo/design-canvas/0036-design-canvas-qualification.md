@@ -26,7 +26,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
 3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle. The macOS menu-key pass needs a person at an unshared macOS desktop and moved to 7568 on 2026-11-10.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures are a false reading, to-do 7440. The Electron decision stays open. The slower-machine run needs hardware the fleet lacks (beelink is not a slow laptop) and moved to 7568 on 2026-11-10.
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, fixed under to-do 2140 (deleted 2026-11-06), with the rerun left as task 12. Linux rerun done (2026-11-06): structural results unchanged; the 12-cycle leak verdict's `jsEventListeners` failures were a false reading: to-do 7440 (retired 2026-11-11) found the counter also counts listener objects Blink has not finalized yet, and the check now compares that signal's floor ([`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)). The Electron decision stays open. The slower-machine run needs hardware the fleet lacks (beelink is not a slow laptop) and moved to 7568 on 2026-11-10.
 6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open. The v1 renderer fallback is retired (2026-11-06, decision 21); the run of a published v2.22.3 desktop build against this backend, and the reverse, is still open.
 7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
 8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
@@ -162,8 +162,8 @@ The structural results matched again: no iframe replacement on any edit,
 one in-place render per HTML edit, live iframes capped at 8. The 12-cycle
 leak check reported `jsEventListeners` failures at every size; the counts
 alternate between two fixed values without growing, so this is the
-check's false reading, new to-do
-[7440](7440-design-perf-listener-count-two-states.md), not a client leak.
+check's false reading, to-do 7440 (retired 2026-11-11; explained and fixed
+in [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)), not a client leak.
 Still open: the Electron decision. The slower machine moved to the
 manual-test checklist on 2026-11-10.
 
@@ -551,8 +551,9 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   Chromium (see [Client performance on Linux](#client-performance-on-linux)),
   and on 2026-11-06 again, with the 64-frame retention run converging (see
   [Qualification evidence (2026-11-06)](#qualification-evidence-2026-11-06)).
-  Still open: the Electron renderer decision (task 5) and
-  [7440](7440-design-perf-listener-count-two-states.md). A slower machine and
+  Still open: the Electron renderer decision (task 5). The false
+  `jsEventListeners` verdict was explained and the check fixed on 2026-11-11
+  (to-do 7440, retired; [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)). A slower machine and
   the M5 Max retention run moved to the manual-test checklist on 2026-11-10.
 - **Mixed versions and migration on real binaries.** The backend half is
   done on 2026-10-25 with the published `orkestrator@2.22.3` (the oldest
@@ -1187,8 +1188,8 @@ record version was exercised on the new backend instead.
 `mise run typecheck` passed. The web package's native-agent, design and
 action-bar tests passed (1,030). `mise run test` passed every group except
 root/support, which failed two cases of
-`scripts/opencode-live-compatibility-probe.test.ts` on the shared temporary
-directory; the file passed alone three times, recorded as a recurrence of
+`scripts/opencode-live-compatibility-probe.test.ts` (removed with OpenCode
+1.x on 2026-11-11) on the shared temporary directory; the file passed alone three times, recorded as a recurrence of
 flake [0242](../../tests/flaky-tests/agent-bridges/0242-opencode-probe-shared-temp-root.md).
 The flake-index, doc and mise-task unit tests passed. Electron, iOS and the
 full `test:agent:browser` suite were not run: the change is renderer
@@ -1457,7 +1458,8 @@ retention-100 -- mise exec -- bun e2e/perf/design-canvas-perf.ts --frames
   under to-do 2140 is gone. The heap rose about 1 MiB over the first cycles
   and held there, within the check's 10% slack. `jsEventListeners`
   alternated between two fixed values at each size (258 or 283, 354 or 439)
-  without growing; that is [7440](7440-design-perf-listener-count-two-states.md).
+  without growing; that is to-do 7440 (retired 2026-11-11; see
+  [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests)).
 - **Not covered.** The Apple M5 Max half of task 12.
 
 ### Client performance on Linux, rerun
@@ -1515,9 +1517,9 @@ invocations, as on 2026-11-01. Both passed (974 s and 265 s). Reports
   second half of a run, while window and document listeners, CDP frames,
   iframes and nodes were flat and every run ended where it began. The
   100-cycle run above shows the same two values without growth. This is a
-  false failure of the check, recorded as
-  [7440](7440-design-perf-listener-count-two-states.md); no client
-  regression.
+  false failure of the check, recorded as to-do 7440 (retired 2026-11-11;
+  explained and fixed in [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests));
+  no client regression.
 - **Decision.** Unchanged: nothing here argues for a client optimisation,
   and [Deferred until measured](#deferred-until-measured) stays deferred.
   Not covered: a slower machine and the Electron renderer (task 5's second
@@ -1859,14 +1861,16 @@ Made on 2026-11-06 while working tasks 12, 6 and 5.
 
 ## Related
 
-- [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
+- To-do 0038 (retired 2026-11-11): design-to-agent conversation links, Resume
+  and the archived link state, now described in
+  [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context).
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, the macOS menu-key pass of task 3, the slower-machine run of task 5, the Apple M5 Max run of task 12) moved there on 2026-11-10.
 - `2140-design-frame-bridge-growth-under-culling.md` (deleted 2026-11-06):
   the window listener and frame growth the 2026-11-01 Linux leak check found
   at 64 frames. Its Linux rerun converged on 2026-11-06 (task 12).
-- [7440-design-perf-listener-count-two-states.md](7440-design-perf-listener-count-two-states.md):
-  the 12-cycle leak check's false `jsEventListeners` failures, found on
-  2026-11-06.
+- To-do 7440 (retired 2026-11-11): the 12-cycle leak check's false
+  `jsEventListeners` failures, found on 2026-11-06; the cause and the floor
+  rule are in [`design-canvas.md` → Tests](../../architecture/design-canvas.md#tests).
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and
   "Client"): the operation recovery edges and accessibility fixes, moved there
   when todos 0037 and 0054 were retired on 2026-10-29.
@@ -1896,8 +1900,8 @@ Made on 2026-11-06 while working tasks 12, 6 and 5.
 ## Replaces
 
 - `docs/improvements/design-space.md` (assessment; all twelve findings are
-  implemented, the U4 remainder is in
-  [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md))
+  implemented; the U4 remainder was to-do 0038, retired 2026-11-11, see
+  [`design-canvas.md` → Agent context](../../architecture/design-canvas.md#agent-context))
 - `docs/improvements/design-space/plan/00-index.md` (qualification gaps,
   deferred items, non-goals, capability decision, measurements and
   deviations; the residual edges went to todo 0037, retired on 2026-10-29)

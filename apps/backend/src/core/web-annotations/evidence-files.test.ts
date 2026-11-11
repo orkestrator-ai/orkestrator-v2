@@ -1,0 +1,284 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
+import { CommandFailedError, runCommand } from "../command-capture.js";
+import {
+  CONTAINER_EVIDENCE_REMOVER,
+  CONTAINER_EVIDENCE_TIMEOUT_MS,
+  CONTAINER_EVIDENCE_WRITER,
+  isAnnotationEvidencePath,
+  removeLocalEvidence,
+  runContainerEvidenceScript,
+} from "./evidence-files.js";
+import { makePng } from "./test-support.js";
+
+let workspace: string;
+let outside: string;
+
+beforeEach(async () => {
+  workspace = await mkdtemp(join(tmpdir(), "ork-wa-ws-"));
+  outside = await mkdtemp(join(tmpdir(), "ork-wa-out-"));
+});
+afterEach(async () => {
+  await rm(workspace, { recursive: true, force: true });
+  await rm(outside, { recursive: true, force: true });
+});
+
+/** Run a container script locally the way `docker exec -i ... node -e` would. */
+function runScript(
+  script: string,
+  args: string[],
+  stdin = "",
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", ["-e", script, "--", ...args], { stdio: "pipe" });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(stdin);
+  });
+}
+
+const RELATIVE = ".orkestrator/annotations/req-1-abc.png";
+const png = makePng(4, 3, 5);
+const digest = createHash("sha256").update(png).digest("hex");
+
+describe("evidence path policy", () => {
+  test("only app-generated PNG paths under the evidence directory qualify", () => {
+    expect(isAnnotationEvidencePath(RELATIVE)).toBe(true);
+    expect(isAnnotationEvidencePath("src/app.ts")).toBe(false);
+    expect(isAnnotationEvidencePath(".orkestrator/annotations/../../etc/passwd.png")).toBe(false);
+    expect(isAnnotationEvidencePath(".orkestrator/annotations/.hidden.png")).toBe(false);
+    expect(isAnnotationEvidencePath(".orkestrator/annotations/x.txt")).toBe(false);
+  });
+});
+
+describe("container evidence writer", () => {
+  test("creates the directory and writes the exact bytes atomically", async () => {
+    const result = await runScript(
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "100000"],
+      png.toString("base64"),
+    );
+    expect(result.code).toBe(0);
+    expect((await readFile(join(workspace, RELATIVE))).equals(png)).toBe(true);
+    // No temp files are left behind.
+    expect(await readdir(join(workspace, ".orkestrator", "annotations"))).toEqual([
+      "req-1-abc.png",
+    ]);
+  });
+
+  test("refuses a symlinked evidence directory and never writes outside the workspace", async () => {
+    await mkdir(join(workspace, ".orkestrator"), { recursive: true });
+    await symlink(outside, join(workspace, ".orkestrator", "annotations"));
+    const result = await runScript(
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "100000"],
+      png.toString("base64"),
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("Symbolic links are not allowed");
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  test("replaces a symlink planted at the file name instead of following it", async () => {
+    await mkdir(join(workspace, ".orkestrator", "annotations"), { recursive: true });
+    const victim = join(outside, "victim.txt");
+    await writeFile(victim, "keep");
+    await symlink(victim, join(workspace, RELATIVE));
+    const result = await runScript(
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "100000"],
+      png.toString("base64"),
+    );
+    // Either refused or the link name was replaced; the target is untouched.
+    expect(await readFile(victim, "utf8")).toBe("keep");
+    if (result.code === 0) {
+      expect((await readFile(join(workspace, RELATIVE))).equals(png)).toBe(true);
+    }
+  });
+
+  test("refuses a path that escapes the workspace and oversized payloads", async () => {
+    const escape = await runScript(
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, "../escape.png", "100000"],
+      png.toString("base64"),
+    );
+    expect(escape.code).not.toBe(0);
+    expect(existsSync(join(workspace, "..", "escape.png"))).toBe(false);
+    const oversized = await runScript(
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "10"],
+      png.toString("base64"),
+    );
+    expect(oversized.code).not.toBe(0);
+    expect(existsSync(join(workspace, RELATIVE))).toBe(false);
+  });
+});
+
+describe("evidence removal", () => {
+  async function place() {
+    await mkdir(join(workspace, ".orkestrator", "annotations"), { recursive: true });
+    await writeFile(join(workspace, RELATIVE), png);
+  }
+
+  test("the container remover deletes only a regular file with the recorded digest", async () => {
+    await place();
+    const mismatch = await runScript(CONTAINER_EVIDENCE_REMOVER, [
+      workspace,
+      RELATIVE,
+      "0".repeat(64),
+      "100000",
+    ]);
+    expect(mismatch.stdout).toBe("mismatch");
+    expect(existsSync(join(workspace, RELATIVE))).toBe(true);
+    const removed = await runScript(CONTAINER_EVIDENCE_REMOVER, [
+      workspace,
+      RELATIVE,
+      digest,
+      "100000",
+    ]);
+    expect(removed.stdout).toBe("removed");
+    expect(existsSync(join(workspace, RELATIVE))).toBe(false);
+    const missing = await runScript(CONTAINER_EVIDENCE_REMOVER, [
+      workspace,
+      RELATIVE,
+      digest,
+      "100000",
+    ]);
+    expect(missing.stdout).toBe("missing");
+  });
+
+  test("the container remover never follows a symlinked directory", async () => {
+    await mkdir(join(workspace, ".orkestrator"), { recursive: true });
+    await writeFile(join(outside, "req-1-abc.png"), png);
+    await symlink(outside, join(workspace, ".orkestrator", "annotations"));
+    const result = await runScript(CONTAINER_EVIDENCE_REMOVER, [
+      workspace,
+      RELATIVE,
+      digest,
+      "100000",
+    ]);
+    expect(result.stdout).toBe("mismatch");
+    expect(existsSync(join(outside, "req-1-abc.png"))).toBe(true);
+  });
+
+  test("the local remover applies the same ownership and link rules", async () => {
+    await place();
+    expect(await removeLocalEvidence(workspace, RELATIVE, "0".repeat(64), 100_000)).toBe(
+      "mismatch",
+    );
+    expect(await removeLocalEvidence(workspace, RELATIVE, digest, 100_000)).toBe("removed");
+    expect(await removeLocalEvidence(workspace, RELATIVE, digest, 100_000)).toBe("missing");
+    await rm(join(workspace, ".orkestrator"), { recursive: true });
+    await mkdir(join(workspace, ".orkestrator"));
+    await writeFile(join(outside, "req-1-abc.png"), png);
+    await symlink(outside, join(workspace, ".orkestrator", "annotations"));
+    expect(await removeLocalEvidence(workspace, RELATIVE, digest, 100_000)).toBe("mismatch");
+    expect(existsSync(join(outside, "req-1-abc.png"))).toBe(true);
+    await expect(removeLocalEvidence(workspace, "src/app.ts", digest, 100_000)).rejects.toThrow(
+      "not an app-generated evidence path",
+    );
+  });
+});
+
+describe("runContainerEvidenceScript", () => {
+  /** Stands in for `docker exec -i <id> node -e SCRIPT -- ...` with a local `sh`. */
+  const running =
+    (script: string): typeof runCommand =>
+    (_command, _args, options) =>
+      runCommand("sh", ["-c", script], options);
+
+  test("runs the script through docker exec with its stdin", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const run: typeof runCommand = (command, args = [], options) => {
+      calls.push({ command, args });
+      const script = args[args.indexOf("-e") + 1]!;
+      return runCommand(
+        "node",
+        ["-e", script, "--", ...args.slice(args.indexOf("--") + 1)],
+        options,
+      );
+    };
+    const output = await runContainerEvidenceScript(
+      run,
+      "c1",
+      CONTAINER_EVIDENCE_WRITER,
+      [workspace, RELATIVE, "100000"],
+      png.toString("base64"),
+    );
+    expect(output).toEndWith(RELATIVE);
+    expect((await readFile(join(workspace, RELATIVE))).equals(png)).toBe(true);
+    expect(calls[0]?.command).toBe("docker");
+    expect(calls[0]?.args.slice(0, 5)).toEqual(["exec", "-i", "c1", "node", "-e"]);
+  });
+
+  test("a failure surfaces the first line the script wrote, or the status", async () => {
+    await expect(
+      runContainerEvidenceScript(running("echo 'first\nsecond' >&2; exit 3"), "c1", "", [], ""),
+    ).rejects.toThrow(/^first$/);
+    await expect(runContainerEvidenceScript(running("exit 3"), "c1", "", [], "")).rejects.toThrow(
+      "docker exec exited with 3",
+    );
+  });
+
+  test("always passes a deadline", async () => {
+    const seen: Array<number | undefined> = [];
+    const run: typeof runCommand = (_command, _args, options) => {
+      seen.push(options?.timeoutMs);
+      return runCommand("true", [], options);
+    };
+    await runContainerEvidenceScript(run, "c1", "", [], "");
+    expect(seen).toEqual([CONTAINER_EVIDENCE_TIMEOUT_MS]);
+    expect(CONTAINER_EVIDENCE_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  test("a hung exec can no longer wait forever", async () => {
+    await expect(
+      runContainerEvidenceScript(running("exec sleep 30"), "c1", "", [], "", { timeoutMs: 100 }),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("a lost completion event fails at the deadline, never as a success", async () => {
+    const restore = loseBunExitEvents();
+    try {
+      await expect(
+        runContainerEvidenceScript(running("printf removed"), "c1", "", [], "", {
+          timeoutMs: 200,
+        }),
+      ).rejects.toThrow("timed out");
+    } finally {
+      restore();
+    }
+  });
+
+  test("output past its bound is a failure, never a truncated answer", async () => {
+    await expect(
+      runContainerEvidenceScript(running("head -c 70000 /dev/zero"), "c1", "", [], ""),
+    ).rejects.toThrow("wrote too much");
+  });
+});
+
+test("signal termination never exposes the evidence argv", async () => {
+  await expect(
+    runContainerEvidenceScript(
+      async () => {
+        throw new CommandFailedError("docker exec private-id secret-script /private/path", {
+          signal: "SIGKILL",
+        });
+      },
+      "private-id",
+      "secret-script",
+      ["/private/path"],
+      "",
+    ),
+  ).rejects.toThrow(/^Container evidence script terminated without an exit status$/);
+});

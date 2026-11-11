@@ -68,6 +68,62 @@ testing guide, reproduce first (for example by stressing the file with
 passes to the worker-outcome reconciler) before changing a budget or the
 fixture.
 
+## Recurrence — 2026-11-11 (backend domain restructure review repairs)
+
+Observed 2026-11-11 on `backend-domain-restructure-13639d788e59-r1` at
+`98f77e1d0`, base `14df965440e658e09a7b3ce03530bc1781ac2b01`
+(`mise run flaky:recurrence -- 9978 --base 14df96544` answered "open. Record
+the failure as a recurrence"). The branch fixes `scripts/move-backend-modules.ts`
+and moves the `core/web-annotation-*` modules into `core/web-annotations/`;
+none of the four owning files imports a web-annotation module directly.
+
+- **Command:** `mise run test:logged -- --name review-default-tests-rerun -- mise run test`
+  (Linux x86_64, Bun 1.4.4). Another worktree held an exclusive scheduler
+  resource and the host reported 14 to 16 of 16 slots reserved; the 15-minute
+  load average was about 45 on 16 cores when the run ended.
+- **Failure:** 21 backend cases, each at the 5,000 ms default timeout:
+  `coordinator-status-wakes-pr.test.ts` 11, `coordinator-worker-outcomes.test.ts` 7,
+  `project-git-mirror-create.test.ts` 2 (`mirror mount respects policy 2/3
+  port semantics`), `coordinator-pr-remote.test.ts` 1. The
+  `updateCoordinatorWorkflowAssociations is not a function` line appeared once
+  in the backend log again.
+- **Suite counts:** backend 18,552 pass, 153 skip, 21 fail, 2 errors (18,726
+  tests across 1,291 files, 404.9 s). The root, bridge and lockfile groups
+  passed. The runner's own solo rerun of `coordinator-status-wakes-pr` waited
+  435 s for capacity and was cut off by the 1,800 s group deadline.
+- **Isolated reruns** (`NODE_ENV=test bun test --preload ../../tests/setup-node.ts <path> --parallel=1`
+  from `apps/backend`, through `test:logged`): all four passed
+  (`coordinator-pr-remote` 3.4 s, `coordinator-status-wakes-pr` 9.4 s,
+  `coordinator-worker-outcomes` 2.9 s, `project-git-mirror-create` 1.0 s).
+
+Status stays open; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-11-11 (terminal visible-text review repairs)
+
+- **Base:** `14df965440e658e09a7b3ce03530bc1781ac2b01`; `mise run flaky:recurrence 9978 --base 14df96544…` answered `open`.
+- **Observed head:** `terminal-event-reproduction-58a6a9a0fc85-r1` at
+  `e4777ac3a`. The branch changes only documentation, two agent-testing
+  Electron specs, the headless Electron spec list and its unit test; it
+  touches none of the owning files or anything they import.
+- **Command:** `env -u NODE_ENV mise run test:logged -- --name review-default-tests-rerun2 -- mise run test`
+  on beelink2 (Linux x86_64, 16 cores), with the browser suite running
+  alongside it and a host load average of 35 to 67.
+- **Failure:** 21 backend cases in the same four files, among them `pull
+  request status wakes > a PR wakes once per state change until merge
+  (hidden: %s)` at 5,007 ms, plus `a queued Resolve remains pending beyond the
+  start grace` and `released outcome owner does not suppress a returned
+  worker's merge notice`. The backend log has the same
+  `updateCoordinatorWorkflowAssociations is not a function` reconcile error.
+- **Suite counts:** backend 18,552 pass and 21 fail; CLI 516 pass and 1 fail
+  ([9982](../backend-services-and-tooling/9982-scenario-provider-homes-mise-warning-under-load.md));
+  web 14,569 pass and 10 fail ([9932](../native-agents-and-transcripts/9932-virtuoso-cancellation-fake-clock-timer-count.md)).
+  The root, bridge, guard and lockfile groups passed.
+- **Isolated rerun:** the runner's own reruns of all four files reported
+  `FAILED ALONE` while the host was still loaded. A later
+  `bun test --preload ../../tests/setup-node.ts` run of the four files from
+  `apps/backend` (`--parallel=2`) passed (7.9 s) at a load average of about 35
+  and falling.
+
 ## Recurrence — 2026-11-11 (Effect adoption follow-ups review repairs)
 
 Observed 2026-11-11 on `adoption-follow-ups-0b2001052718-r1` at `da475cb5e`,

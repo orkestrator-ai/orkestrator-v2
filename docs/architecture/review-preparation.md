@@ -993,7 +993,8 @@ perform these checks before drafting and again before confirmation.
 ### Auto-pipeline Build handoff
 
 Manual Auto-pipeline drafting returns the ticket and Build key-information patch
-in one read-only session through `submit_auto_pipeline_draft`. The patch records
+from the source tab's own agent through its `convert_to_pipeline` tool
+([build-pipeline-view.md](build-pipeline-view.md#manual-auto-pipeline-promotion)). The patch records
 observed work and files, decisions, checks with their results, and unfinished
 work. Confirmation keeps the generated handoff authoritative while accepting the
 user's edited ticket and criteria. It enters the completed-Build admission path

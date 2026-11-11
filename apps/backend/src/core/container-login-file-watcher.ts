@@ -8,6 +8,11 @@ import {
   type PushedLoginProvider,
 } from "./agent-accounts-containers.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
+import {
+  exportOpenCode2Refreshes,
+  openCode2RefreshLineageFile,
+  runningOpenCode2HostClient,
+} from "./opencode2/credentials.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");
@@ -30,6 +35,11 @@ const log = createLogger("docker");
  * change too: a host
  * signed out of Grok has the container's imported copy removed.
  *
+ * OpenCode's host logins live in the OpenCode 2.x database, where 2.x
+ * refreshes them; each pass first renews the file's older OAuth copies of the
+ * same login from a running host 2.x server (`exportOpenCode2Refreshes`), so
+ * a refresh reaches containers as a file change like any other.
+ *
  * Pi reloads its auth file and OpenCode's OAuth plugins re-read theirs on
  * every request, so a running bridge uses the pushed login without a restart.
  * Whether Grok's agent re-reads `~/.grok/auth.json` during a session is not
@@ -50,6 +60,8 @@ export interface ContainerLoginFileWatcherOptions {
   /** A file's identity, or `absent`; any change triggers a push. */
   fingerprint?: (file: string) => Promise<string>;
   syncContainer?: (provider: PushedLoginProvider, containerId: string) => Promise<unknown>;
+  /** Renew the OpenCode file from the 2.x store before it is fingerprinted. */
+  renewOpenCodeLogins?: () => Promise<unknown>;
   timers?: {
     setTimeout(callback: () => void, delayMs: number): unknown;
     clearTimeout(handle: unknown): void;
@@ -66,6 +78,21 @@ const systemTimers = {
     clearTimeout(handle as ReturnType<typeof setTimeout>);
   },
 };
+
+/** Bounds the renewal's read of a running host server's credential list. */
+const OPENCODE_RENEWAL_TIMEOUT_MS = 10_000;
+
+/** OAuth logins a running host 2.x server refreshed, into the file containers are handed. */
+async function renewOpenCodeLoginsFromStore(context: CommandContext): Promise<void> {
+  const file = pushedLoginHostFile(context, "opencode");
+  const localServers = context.runtime?.localServers;
+  const client = file && localServers ? runningOpenCode2HostClient(localServers) : undefined;
+  if (!file || !client) return;
+  await exportOpenCode2Refreshes(client, file, {
+    signal: AbortSignal.timeout(OPENCODE_RENEWAL_TIMEOUT_MS),
+    lineageFile: openCode2RefreshLineageFile(context.storage.getDataDir()),
+  });
+}
 
 async function fileFingerprint(file: string): Promise<string> {
   try {
@@ -151,6 +178,13 @@ export class ContainerLoginFileWatcher {
       this.options.syncContainer ??
       ((provider: PushedLoginProvider, containerId: string) =>
         syncContainerLogin(this.context, provider, containerId));
+    await (
+      this.options.renewOpenCodeLogins ?? (() => renewOpenCodeLoginsFromStore(this.context))
+    )().catch((error: unknown) => {
+      log.warn("login-watcher.opencode-renewal-failed", {
+        error: formatLogError(error, { message: false }),
+      });
+    });
     for (const provider of PUSHED_LOGIN_PROVIDERS) {
       const file = pushedLoginHostFile(this.context, provider);
       if (!file) continue;

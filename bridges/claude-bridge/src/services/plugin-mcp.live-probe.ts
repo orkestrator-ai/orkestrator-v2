@@ -10,6 +10,7 @@
 import { query, type SDKUserMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 
 import { setClaudeHomeForTesting } from "./claude-home.js";
+import { refuseRealDataDirClaudeCli } from "./live-cli-guard.js";
 import { mcpScope } from "./mcp-runtime-status.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 
@@ -25,6 +26,7 @@ const READY_TIMEOUT_MS = 30_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
+  refuseRealDataDirClaudeCli();
   const input = JSON.parse(process.argv[2] ?? "{}") as ProbeInput;
   setClaudeHomeForTesting(input.home);
   // Exactly what a turn passes: project plugin layers only with project

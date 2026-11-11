@@ -356,7 +356,16 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
   ambiguous port opens a preview tab, where the user registers or picks it.
   With preview access off, an older backend, or a failed forward, the link
   falls back to the gateway path proxy (`/__orkestrator/proxy/loopback/<port>`)
-  and a toast says why (including unavailable capabilities or failed resolution).
+  of the node running the environment and a toast says why (including
+  unavailable capabilities or failed resolution). A leaf's link goes through
+  the leaf's own proxy on its current route (`resolveExternalLoopbackUrl`: the
+  browser lease's relay, or the route main reports in `nodes.gateway`), never
+  the command node's; with no route it is not opened and a toast says so. A
+  worktree link (or one from an environment the window does not know) whose
+  node is this computer (`backendOnThisDevice`) opens as written: its port is
+  already reachable here, and the command node's proxy would reach that
+  machine's port instead. A container's link still resolves to its service,
+  because the container's port is published on a different host port.
 - **Port.** On platforms with exclusive loopback binding, the forward prefers a
   browser-safe application port, so absolute `localhost:<port>` URLs and OAuth
   callbacks keep working. It binds 127.0.0.1 and ::1 together on one port, so

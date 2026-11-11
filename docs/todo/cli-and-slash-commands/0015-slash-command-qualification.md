@@ -19,12 +19,23 @@ exist, and the renderer error now sits at
 decisions, so their recommendations stand as written. Flake 0710 is still
 open.
 
+Rechecked 2026-11-11 against `main` at `14df96544` on beelink2 (Linux,
+credential-free, fake models only): task 4 is done (its outcome below). Task 1
+made progress but is not finished (its progress below): the floor is still
+v2.21.0, a current-stack control pairing passed, and the container pairing
+(a v2.21.0 image with a current backend) is unproved for want of a rootful
+Docker daemon. Later the same day, `scripts/qualify-slash-mixed-versions.ts`
+was written and both other pairings passed credential-free: the v2.21.0
+backend with the current Pi bridge, and the current backend read through the
+v2.21.0 renderer's own calls and validators. Task 2 (flake 0710) is
+unchanged.
+
 ### Tasks
 
-1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones, credential-free. Status: open (unblocked). The Claude and Codex pairings that spend live model turns moved to the manual-test checklist.
+1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones, credential-free. Status: open (unblocked on a host with a rootful Docker daemon; progress 2026-11-11: v2.21.0 builds from its tag, a control pairing passed, the v2.21.0 backend with the current Pi bridge and the current backend under the v2.21.0 renderer's calls both passed through `scripts/qualify-slash-mixed-versions.ts`, and a local v2.21.0 bridge cannot run beside a current backend, so the bridge pairing needs a container on a v2.21.0 image and a rootful daemon). The Claude and Codex pairings that spend live model turns moved to the manual-test checklist; the qualifier has no opt-in for them yet.
 2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
 3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in 2170, deleted 2026-11-06; its live check is task 4).
-4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and the login-free catalogue reads list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: open. The logged-in Grok and Cursor picker check moved to the manual-test checklist.
+4. **Shared and linked skills in a live container**: `~/.agents/skills` and linked Claude skills reach a container as real directories, and the login-free catalogue reads list them there. Moved from to-do 2170 (deleted 2026-11-06). Status: done (2026-11-11, credential-free, on a disposable rootless daemon; see its outcome). The logged-in Grok and Cursor picker check stays on the manual-test checklist (7568: 0015 task 4).
 
 ### 1. Mixed versions against real v2.21.0 builds
 
@@ -60,6 +71,90 @@ open.
   - **Manual run recorded in this file.**
     - Pros: least code.
     - Cons: has to be redone by hand on 2026-12-15 and each later floor move.
+
+**Progress (2026-11-11).** On beelink2 (Linux x86_64) at `14df96544`, with no
+login and no billed turn: Pi was the only provider used, through the packaged
+CLI and scenario backends (`startIsolatedBackend`, ad hoc probes, not
+committed), with a placeholder `api_key` for a loopback chat-completions fake
+and a user prompt template carrying a random nonce. Project resources were
+turned on through `update_environment_agent_settings` (a host Pi session loads
+no templates without them, and the public CLI has no setting for it).
+
+- **Builds.** `git archive v2.21.0` into a private temporary directory,
+  `bun install --frozen-lockfile --ignore-scripts` (Bun 1.4.4; the tag pins
+  1.4.3) and `bun run --cwd bridges/pi-bridge build` built the v2.21.0 Pi
+  bridge (Pi SDK 1.2.0). The tag's `apps/desktop/scripts/dev-build-image.ts`
+  built `orkestrator-v2:dev-d3a6e91f03f0` in a disposable rootless daemon
+  (capabilities `boot-status`, `bounded-logs`, `graceful-shutdown`,
+  `network-policy=3`, `network-refresh`, `persistent-workspace`,
+  `staged-inputs=1`, `workspace-prepare`; no `bridge-credential`). The tree,
+  both daemons and every image were removed afterwards.
+- **Control: current backend, current Pi bridge (passed).** `session commands
+  --refresh` answered `ready` (revision 2) with the template as
+  `pi:template:ork-mv-template` and a binding revision. An unknown command was
+  refused with exit 3 (`not-found`) and a stale binding with exit 8
+  (`revision-conflict`), neither admitted. The selected template reached the
+  model expanded (the nonce, not the slash text); `--literal` reached it as
+  the slash text. No backend log line mentioned "Invalid native agent
+  projection". Each turn ended `unknown` (exit 7), because Pi is not qualified
+  for completion (0014 task 1). The catalogue also listed the operator's own
+  `~/.agents/skills`, which is to-do
+  [7816](7816-cli-scenario-host-shared-skills.md).
+- **Current backend, v2.21.0 Pi bridge, local (cannot run).** Session
+  creation answered HTTP 401. A current backend gives a bridge it launches
+  only the token's SHA-256 (`PI_BRIDGE_TOKEN_SHA256`,
+  `packages/protocol/src/node/bridge-credential.ts`); the v2.21.0 bridge reads
+  only `PI_BRIDGE_TOKEN`, so it minted a token of its own. No shipped install
+  pairs a local bridge with another release's backend (the app and the npm
+  package carry their own bridges), so this is not a defect. The pairing that
+  does occur is a container on an older image, whose bridge credential the
+  backend handles separately (`container-bridge-credential.ts`).
+- **Current backend, container on the v2.21.0 image (blocked here).** On a
+  disposable rootless daemon with host loopback (so the container's Pi could
+  reach the fake), `environment start --wait ready` failed while cloning: the
+  v2.21.0 `docker/workspace-setup.sh` clones the agent-test fixture origin
+  mount `/orkestrator-agent-test-origin.git` without a `safe.directory`
+  exception (the current script has two), and under a rootless daemon that
+  mount is not owned by `node`, so Git refused it ("detected dubious
+  ownership"). It needs a rootful daemon, where the mount keeps its owner, or
+  a fixture origin served over a protocol instead of a mount. beelink2's host
+  daemon is not open to this user, and the nested rootful mode runs on the
+  host daemon.
+- **The v2.21.0 backend with the current Pi bridge, and the v2.21.0
+  renderer against a current backend (both passed).** The v2.21.0 CLI has no
+  catalogue verbs (`session commands` and `session command` came with 0017
+  after the tag), so `scripts/qualify-slash-mixed-versions.ts` drives both
+  backends with the v2.21.0 renderer's own registry calls
+  (`dispatch_native_agent_intent` with a command intent,
+  `refresh_native_agent_commands`, `get_native_agent_discovery_update`) and
+  checks every progressive read with the v2.21.0 renderer's validators,
+  imported from the tag (`packages/protocol/src/native-agent.ts`), which are
+  what raise "Invalid native agent ... update response" in that renderer. It
+  builds the tag (`git archive`, `bun install --frozen-lockfile
+  --ignore-scripts`), gives each backend its own temporary data directory,
+  worktree directory and HOME on loopback, and stands a loopback
+  chat-completions fake in for Pi's model with a placeholder key; a user
+  prompt template carries a random nonce. Run on beelink2 at `48245abdb`
+  (`bun scripts/qualify-slash-mixed-versions.ts --report <file>`, exit 0,
+  no failures):
+  - `floor-backend` (backend 2.21.0, this checkout's Pi bridge, launched
+    from the floor's resource root): the first turn reached the model; after
+    `refresh_native_agent_commands` (`reloaded`) the discovery section read
+    `loading` once, then `ready` (revision 1, 3 rows) with the template as
+    `pi:template:ork-mv-template` and a binding revision; the selected
+    template reached the model expanded (the nonce, not the slash text); a
+    stale binding and an unknown command were `rejected` and reached no
+    model; a literal `/ork-mv-template` reached it as the slash text; the
+    projection and transcript updates passed the v2.21.0 validators.
+  - `floor-renderer` (backend 2.37.6-beta with its own Pi bridge): the same
+    outcomes, with the catalogue `ready` on the first read (revision 2, 5
+    rows); every session-state, discovery, projection and transcript update
+    passed the v2.21.0 validators, and the backend logged no invalid
+    projection.
+
+  Not covered: the v2.21.0 renderer bundle drawn in a browser (the check is
+  its wire handling, not its rendering), and the older backend read by the
+  current renderer.
 
 ### 2. Container picker lag under host load
 
@@ -162,6 +257,32 @@ Unit tests prove it; no live container has shown them in a catalogue.
 4. Check that a link pointing outside an allowed root is still skipped and
    counted as `symlink`.
 
+**Outcome (2026-11-11).** Done on beelink2 (Linux x86_64) at `14df96544`,
+credential-free, through the packaged CLI and a scenario backend
+(`startIsolatedBackend`, ad hoc probe, not committed) on a disposable rootless
+daemon (`mise run docker:disposable -- start --name s15`; the host's Docker
+socket is not open to this user). Image `orkestrator-v2:dev-071fd7fcfdae`,
+built in that daemon with `mise run docker:build:dev` (capability
+`staged-inputs=5`, input staging spec 6, Grok 1.0.77). Container
+environment with `--network full`, started with `--wait ready`. The fixture
+skills were written into the scenario's disposable provider home, which is
+the staging home of an agent-test backend (`ORKESTRATOR_AGENT_TEST_HOST_HOME`):
+
+| Run (selected input provider) | Staged as real directories | Skipped | Login-free catalogue reads in the container |
+| --- | --- | --- | --- |
+| Pi (`--credential-source pi`, a placeholder `api_key`, no model turn) | `~/.agents/skills/ork-shared-skill`, `~/.agents/skills/ork-linked-target`, `~/.pi/agent/skills/ork-pi-own`, `~/.pi/agent/skills/ork-linked-skill` (a link into `~/.agents/skills`) | staging manifest `pi` `{"symlink":1}` and `shared-skills` `{"symlink":1}`: the two links into a directory outside every allowed root; neither exists in the container | `grok inspect` (pinned 1.0.77, no login): `ork-linked-target` and `ork-shared-skill` as `user` skills |
+| Claude (`--credential-source claude` with a placeholder `ANTHROPIC_API_KEY`, so no host login was read; no model turn) | `~/.claude/skills/ork-claude-own`, `~/.claude/skills/ork-claude-linked` (a link into `~/.agents/skills`) | `claude` `{"symlink":1}`: the outside link, absent in the container. `~/.agents/skills` was not staged: Claude does not read it | Claude Agent SDK `supportedCommands()` against the image's `claude`, with every Anthropic credential variable unset: `ork-linked-target`, `ork-claude-own`; `grok inspect`: both as `user [claude]` |
+
+Each run deleted its environment and project and stopped its backend; the
+disposable daemon listed no container, volume or extra network afterwards.
+The credential-free route needs a provider selected for staging: an
+agent-test backend stages inputs only for providers it has a credential
+source for (`selectedInputProviders`), so a `dev:test --no-agent-credentials`
+profile stages nothing and could not run step 1 as written; the placeholder
+key selects the provider without any login. Not covered: Cursor's read of
+`~/.agents/skills` (it needs a login) and the logged-in pickers, which stay on
+the checklist (7568: 0015 task 4).
+
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
 execution path with transport-level fakes. The live provider probes and the
@@ -169,8 +290,9 @@ inactive-environment browser scenario then ran on 2026-10-17, and Pi, Codex
 disabled skills, the container paths, the mixed-version matrix and the
 performance harness on 2026-10-23 (records below). This file collects the
 evidence still needed before the feature can be called complete. Failures
-found here become code items in
-[0016-slash-command-catalogue.md](0016-slash-command-catalogue.md).
+found here become new to-dos (0016, which held the code items, was retired
+on 2026-11-11; its decisions are in
+[native-agent-commands.md](../../architecture/native-agent-commands.md)).
 
 ## Current state
 
@@ -891,6 +1013,17 @@ file passed in containers at low load earlier the same day.
      on the old ACP bridge could not be created against today's Grok CLI
      ("Invalid params"), and the Claude probe, the renderer bundle and sync-v1
      are still unrun.
+   - Progress (2026-11-11, task 1): v2.21.0 builds from its tag, including its
+     image; a current-stack Pi control pairing passed through the packaged
+     CLI; a local v2.21.0 Pi bridge cannot run beside a current backend (it
+     predates the bridge credential verifier); a container on the v2.21.0
+     image could not clone the fixture origin on a rootless daemon.
+     `scripts/qualify-slash-mixed-versions.ts` then passed the v2.21.0
+     backend with the current Pi bridge and the current backend under the
+     v2.21.0 renderer's calls and validators. What is left: the container
+     pairing on a host with a rootful daemon, and an opt-in for the
+     credentialed Claude and Codex pairings in the qualifier. See task 1's
+     progress.
 
 ## Constraints and rationale
 
@@ -920,7 +1053,8 @@ file passed in containers at low load earlier the same day.
 ## Assumptions and decisions
 
 Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
-Decisions 11 to 14 were made on 2026-11-01 for task 3.
+Decisions 11 to 14 were made on 2026-11-01 for task 3, and 15 and 16 on
+2026-11-11 for tasks 4 and 1.
 
 1. **Mixed-version window.** No support window is agreed (0034).
    - Options: wait for 0034; test only the previous release; test the shapes
@@ -1059,6 +1193,57 @@ Decisions 11 to 14 were made on 2026-11-01 for task 3.
     nothing tells a user that an environment on an older image needs a
     rebuild to get these rows.
 
+15. **Container staging check without a login (task 4, 2026-11-11).**
+    - Options: a `dev:test --fixture --no-agent-credentials` profile with
+      container fixtures, as step 1 describes; the CLI scenario backend with a
+      placeholder provider credential; a backend live test calling the
+      staging code directly against a fixture container.
+    - Chosen: the scenario backend, once with a placeholder Pi `api_key` and
+      once with a placeholder `ANTHROPIC_API_KEY`.
+    - Why: an agent-test backend stages inputs only for providers it holds a
+      credential source for (`selectedInputProviders`), so a credential-free
+      profile stages nothing and could not show the result. A placeholder key
+      selects the provider without any login, and the scenario's disposable
+      provider home is the staging home. The direct test would skip the real
+      container start and entrypoint copy.
+    - Pros: the real backend, staging, image and entrypoint, with no login,
+      no model turn and no host provider directory read. Cons: one provider
+      per run, so Claude and the shared-skill readers needed two runs; Cursor
+      was not covered; the probe is ad hoc rather than a committed scenario.
+16. **Mixed versions: local pairings first, no qualifier script yet (task 1,
+    2026-11-11).**
+    - Options: write `scripts/qualify-slash-mixed-versions.ts` first; run the
+      pairing the current CLI can already drive (current backend, v2.21.0
+      bridge) by hand.
+    - Chosen: the hand run, with a current-stack control.
+    - Why: it is the only pairing the packaged CLI can read without new code,
+      and it tests the premise the script would rest on. It showed that the
+      local form of that pairing cannot exist and that the container form
+      needs a rootful daemon here.
+    - Pros: two facts any qualifier must account for, found without new
+      harness code. Cons: the v2.21.0 backend and renderer pairings were left
+      unproved until decision 17.
+17. **Mixed versions: the qualifier checks the floor renderer's wire, not its
+    drawing (task 1, 2026-11-11).**
+    - Options: serve the v2.21.0 renderer bundle against a current backend in
+      a browser and open the picker; or drive each backend with the v2.21.0
+      renderer's own registry calls and check every response with its own
+      validators, imported from the tag, headless.
+    - Chosen: the headless reader, in `scripts/qualify-slash-mixed-versions.ts`
+      (decision "Script it or run it by hand?" above), with Pi and a loopback
+      model fake as the only provider.
+    - Why: the failure the item watches for ("Invalid native agent projection
+      update response") is raised by exactly those validators, and the
+      catalogue, selection and refusal outcomes are backend answers the
+      renderer only displays. Pi runs its SDK in process, so a placeholder key
+      and a fake endpoint give real turns with no login. The floor backend
+      launches whichever bridge sits in its resource root, which is how it is
+      paired with this checkout's bridge.
+    - Pros: repeatable on any host without a display, credentials or Docker;
+      JSON evidence; one flag (`--tag`) to follow the floor. Cons: the old
+      bundle's rendering is not exercised, only Pi is paired, and the Claude
+      and Codex opt-in the decision above asked for is still to add.
+
 ## Open questions
 
 None. Re-probing after an upgrade is decided above (decision 8) and written into
@@ -1071,8 +1256,9 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
 
 ## Related
 
-- [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md) for code items and
-  the legacy-route retirement this matrix gates.
+- [native-agent-commands.md](../../architecture/native-agent-commands.md#lifecycle) for
+  the legacy-route retirement this matrix gates (from to-do 0016, retired on
+  2026-11-11).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for credentials, profiles and batching with other provider runs.
 - [`version-compatibility.md`](../../architecture/version-compatibility.md#the-support-window)
@@ -1080,6 +1266,9 @@ the 2026-10-17 and 2026-10-23 records above are the qualification.
 - [`native-agent-commands.md`](../../architecture/native-agent-commands.md),
   [`agent-testing.md`](../../development/agent-testing.md),
   [`testing-guide.md`](../../development/testing-guide.md).
+- [7816-cli-scenario-host-shared-skills.md](7816-cli-scenario-host-shared-skills.md):
+  scenario sessions read the operator's own `~/.agents/skills`, found by the
+  2026-11-11 task 1 run.
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the Claude and Codex live pairings of task 1, the logged-in Grok and Cursor picker check of task 4) moved there on 2026-11-10.
 
 ## Replaces

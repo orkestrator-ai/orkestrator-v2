@@ -802,7 +802,11 @@ never from `node`'s copy) in its own `0700` `/run/orkestrator-relay-state`, and
 a mount whose digest is unchanged and whose copy is still there is left as it
 is. Every other copy is removed and relayed again (or not at all, once the
 mount is readable, gone or over the bounds), and with no copy kept the whole
-relay directory is rebuilt, as it was before. So the backend's rewrite of a
+relay directory is rebuilt, as it was before. `node` removes those copies,
+opening up any directory a workload left without write permission; if a copy
+still will not go, root rebuilds the whole relay rather than leave a stale copy
+at its live path, and a copy whose relay fails and cannot be removed takes the
+whole relay with it, so every input falls back to its unreadable mount. So the backend's rewrite of a
 login or a revocation's scrub reaches the copy at the next start, and
 revocation also removes the provider's relayed copies from the running
 container (`stagedInputRelayPaths`), which the next start relays again only if
@@ -891,14 +895,25 @@ on revocation described above.
   alone, since it has lapsed too. A container that used an added account
   already had its copy removed by the account switch path. Claude's host login
   is removed at the next container start (`buildDropHostClaudeLoginCommand`):
-  every host copy goes, a login the container made itself (`claudeAiOauth` or
+  host copies go, a login the container made itself (`claudeAiOauth` or
   an `mcpOAuth` server) keeps its access token, and a file left with no login
-  is deleted. A login the container made is one still holding a refresh token
+  is deleted. An entry carrying any token whose SHA-256 the backend saw on the
+  host for that slot (`HostClaudeTokenDigests`, in memory, handed to the drop,
+  restrict and merge commands on stdin) is a host copy, refresh token or not.
+  Otherwise a login the container made is one still holding a refresh token
   (a push never carries one) or, once stripped, one whose access-token SHA-256
   the strip recorded in `.credentials.json.orkestrator-owned`; the restrict
-  and drop commands write that record before stripping, so the login survives
-  every later start. If `flock` or the locked pass fails, the drop falls back
-  to the strip-only pass rather than deleting the file. The host reads as signed out
+  and drop commands write that record before stripping, and the merge carries
+  a recorded MCP login forward while the host's login has no entry for that
+  server, so the login survives later starts and pushes. Every merge, restrict
+  and drop writes the record, empty or not, so it also marks the container as
+  tracked. In a container no pass has touched since the record existed, an
+  older strip may have left the container's own logins access-only and
+  unrecorded, so a drop there keeps (and records) every entry it cannot name
+  as the host's: a host copy the backend never saw then stays until its access
+  token expires or the next push replaces it, as before this removal existed.
+  If `flock` or the locked pass fails, the drop falls back to the strip-only
+  pass rather than deleting the file. The host reads as signed out
   (`hostClaudeSignedOut`) only when every place the login is looked up says
   so: each `.credentials.json` absent or holding no login, and on macOS a
   metadata-only `security find-generic-password` (no `-w`, so no access
@@ -1036,7 +1051,11 @@ relay in `network-policy-entrypoint.sh` skips an unchanged mount the same way
 (see the relay above), and `copy_agent_directory` answers its entry bound, link
 check and size bound (allocated blocks, what `du -sk` sums) and the stamp's
 listing from one `find` walk, so a first start costs about five processes per
-copied directory rather than about fifteen. Timings are in
+copied directory rather than about fifteen. The walk uses GNU find's `-printf`;
+where find lacks it (BSD find, when the helpers run on macOS) the first walk
+lists nothing and the rest of the boot uses a portable walk
+(`agent_input_directory_walk`): `find -print0` classified with shell tests, and
+one `du -sk`, with the same bounds and listing. Timings are in
 [4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md) tasks 2
 and 3 and [6740](../todo/containers-and-environments/6740-input-staging-follow-ups.md)
 tasks 3 and 5; the earlier ones in to-do 1202, task 15 (retired 2026-11-10).

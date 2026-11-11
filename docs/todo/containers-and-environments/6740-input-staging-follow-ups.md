@@ -126,6 +126,10 @@ An image built from this branch's base (`498b68766`) was already on the host wit
 
 The recommended design summed apparent sizes, which would have changed what the size bound means. Summing find's `%b` (allocated 512-byte blocks) keeps `du -sk`'s meaning, so a sparse file is bounded as before and the existing size tests stand. The summary is read by `awk` rather than by a shell loop, because bash reads a pipe one byte at a time; `awk` is already in the image and used by the root entrypoint. Skipping the link search of a destination the call itself created relies on nothing else writing the home during the entrypoint, which runs before the workload; a destination that already existed is searched as before.
 
+### Task 5: a find without -printf (review round 2)
+
+The walk needs GNU find's `-printf` and `-fprintf`. The image's find is GNU, but the helpers also run on a developer's Mac in `tests/unit/runtime-env-wiring.test.ts`, where BSD find refused them and every directory input was skipped as "Failed to inspect". `agent_input_directory_walk` now counts entries from `NR`, so a walk that listed nothing (find refused before walking: it always lists the directory itself) reads as -1, and `copy_agent_directory` then sets `AGENT_COPY_PORTABLE_WALK=1` and walks again with `find -print0`, classifying each name with shell tests, writing the same `%y%p\0` listing with builtin `printf` and taking blocks from one `du -sk`. Detecting the refusal costs nothing on GNU find; a probe at start would have added a process to every boot. A genuine find failure (the listing file cannot be opened) also switches the rest of that boot to the portable walk, which is slower but bounds and lists the same. The process-count test runs only where find has `-printf`; two new tests run the bounds and the listing with a find that refuses `-printf`, as BSD find does.
+
 ## Related
 
 - to-do 1202 efficiency follow-ups, task 15 (retired 2026-11-10).

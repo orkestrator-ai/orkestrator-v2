@@ -156,3 +156,13 @@ unchanged owner passed alone with two workers in 133.0 s. `mise run
 flaky:recurrence -- 0483 --base 498b68766` reported the case open. Details:
 [9954](../aggregate-validation-runs/9954-find-review-targeted-browser-run-under-host-load.md).
 No assertion, skip or timeout changed; root cause remains unconfirmed.
+
+## Launch-override marker review repair — 2026-11-11
+
+On `launch-override-marker-043a84998c41-r1` (base `498b68766`), the desktop
+case failed in a multi-worker run of the desktop specs the deadline-killed
+component suite had not reached (686 passed, 30 skipped, two failed):
+`expect(received).toBeGreaterThan(1)` received 1. The complete unchanged owner
+passed with one worker (with `DataSavingGateway.spec.ts`, 129.4 s).
+`flaky:recurrence 0483` reported `open`. The branch does not change the
+transcript. Full run: [9953](../aggregate-validation-runs/9953-launch-override-marker-browser-owners.md).

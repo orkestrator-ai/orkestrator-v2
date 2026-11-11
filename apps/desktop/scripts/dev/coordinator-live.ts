@@ -53,8 +53,11 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
  * on Claude, a tmux worker that cannot take it mid-turn); `goal` gives a worker
  * a goal and expects one wake when it completes; `routing` sends plain
  * requests that name no workflow and checks which one the coordinator chose;
- * `gap-tools` calls each tool from the coordinator gap review once against one
- * worker (`coordinator-live-gap-tools.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * `surfaces` calls each worker-surface tool once on a worker of this node and
+ * has the root-changes approval accepted in the dialog (Claude only, see
+ * `coordinator-live-surfaces.ts`); `gap-tools` calls each tool from the
+ * coordinator gap review once against one worker
+ * (`coordinator-live-gap-tools.ts`); `peer` drives two ordinary environments' mail with Wake peers on, and runs
  * last because it is the one case that changes the messaging defaults. Each
  * writes its own summary, and the platform's verdict combines them.
  */
@@ -67,6 +70,7 @@ export const COORDINATOR_LIVE_SCENARIOS = [
   "deliver-now",
   "goal",
   "routing",
+  "surfaces",
   "gap-tools",
   "peer",
 ] as const;

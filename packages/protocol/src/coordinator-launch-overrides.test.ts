@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordinatorDelegation, CoordinatorWorkflowAssociation } from "./coordinator.js";
 import {
+  coordinatorLaunchOverrideKey,
   coordinatorLaunchOverrides,
+  coordinatorLaunchOverridesSnapshot,
   coordinatorTabLaunchRequest,
   parseCoordinatorLaunchOverrides,
 } from "./coordinator-launch-overrides.js";
@@ -83,16 +85,54 @@ describe("coordinatorLaunchOverrides", () => {
     expect(overrides).toEqual([{ environmentId: "worker", tabId: "job-tab", model: "gpt-5" }]);
   });
 
-  test("a worker on another node, a reservation and other kinds are not listed", () => {
+  test("a reservation and other kinds are not listed", () => {
     const requested = launched("requested");
     expect(
       coordinatorLaunchOverrides([
-        { ...requested, nodeId: "bk_leaf" },
         { ...requested, pending: true },
         { ...requested, kind: "build-pipeline" },
         association(),
       ]),
     ).toEqual([]);
+  });
+
+  test("a worker on another node is listed with that node, apart from a local one", () => {
+    const requested = launched("requested");
+    // The same environment and tab ids on another node are another tab.
+    const remoteDefault = { ...launched("default"), id: "remote-default", nodeId: "bk_other" };
+    expect(
+      coordinatorLaunchOverrides([
+        { ...requested, nodeId: "bk_leaf" },
+        requested,
+        remoteDefault,
+        { ...requested, nodeId: "bk_leaf", pending: true },
+      ]),
+    ).toEqual([
+      {
+        nodeId: "bk_leaf",
+        environmentId: "worker",
+        tabId: "startup-agent",
+        model: "opus",
+        reasoning: "max",
+      },
+      { environmentId: "worker", tabId: "startup-agent", model: "opus", reasoning: "max" },
+    ]);
+  });
+
+  test("a remote tab's newest launch decides, as a local one's does", () => {
+    const first = association({
+      nodeId: "bk_leaf",
+      delegation: delegation({ request: { model: "opus", source: "requested" } }),
+    });
+    const relaunch = association({
+      id: "relaunch",
+      nodeId: "bk_leaf",
+      delegation: delegation({
+        requestedAt: "2026-11-05T12:00:00.000Z",
+        request: { source: "default" },
+      }),
+    });
+    expect(coordinatorLaunchOverrides([first, relaunch])).toEqual([]);
   });
 });
 
@@ -123,5 +163,68 @@ describe("parseCoordinatorLaunchOverrides", () => {
         ],
       }),
     ).toEqual({ overrides: [{ environmentId: "worker", tabId: "tab", reasoning: "max" }] });
+  });
+
+  test("reads other nodes' rows apart, and drops a row whose node is wrong for its list", () => {
+    expect(
+      parseCoordinatorLaunchOverrides({
+        overrides: [
+          { environmentId: "worker", tabId: "tab" },
+          { nodeId: "bk_leaf", environmentId: "worker", tabId: "stray" },
+        ],
+        remoteOverrides: [
+          { nodeId: "bk_leaf", environmentId: "worker", tabId: "tab", model: "opus" },
+          { nodeId: "", environmentId: "worker", tabId: "tab" },
+          { nodeId: 7, environmentId: "worker", tabId: "tab" },
+          { environmentId: "worker", tabId: "tab" },
+        ],
+      }),
+    ).toEqual({
+      overrides: [{ environmentId: "worker", tabId: "tab" }],
+      remoteOverrides: [
+        { nodeId: "bk_leaf", environmentId: "worker", tabId: "tab", model: "opus" },
+      ],
+    });
+    expect(parseCoordinatorLaunchOverrides({ overrides: [], remoteOverrides: "nope" })).toEqual({
+      overrides: [],
+    });
+  });
+});
+
+describe("coordinatorLaunchOverridesSnapshot", () => {
+  test("keeps every row naming another node out of the list an older renderer reads", () => {
+    const requested = launched("requested");
+    expect(
+      coordinatorLaunchOverridesSnapshot([requested, { ...requested, id: "r", nodeId: "bk_leaf" }]),
+    ).toEqual({
+      overrides: [
+        { environmentId: "worker", tabId: "startup-agent", model: "opus", reasoning: "max" },
+      ],
+      remoteOverrides: [
+        {
+          nodeId: "bk_leaf",
+          environmentId: "worker",
+          tabId: "startup-agent",
+          model: "opus",
+          reasoning: "max",
+        },
+      ],
+    });
+    expect(coordinatorLaunchOverridesSnapshot([requested])).toEqual({
+      overrides: [
+        { environmentId: "worker", tabId: "startup-agent", model: "opus", reasoning: "max" },
+      ],
+    });
+  });
+});
+
+describe("coordinatorLaunchOverrideKey", () => {
+  test("a node-qualified key never equals a local one", () => {
+    expect(coordinatorLaunchOverrideKey("bk_leaf", "worker", "tab")).not.toBe(
+      coordinatorLaunchOverrideKey(undefined, "worker", "tab"),
+    );
+    expect(coordinatorLaunchOverrideKey(undefined, "worker", "tab")).toBe(
+      coordinatorLaunchOverrideKey(undefined, "worker", "tab"),
+    );
   });
 });
